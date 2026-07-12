@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::Deserialize;
-
 use crate::{
-    Error, KeyValue, Package, PackageSpec, sequence_of_key_value,
+    KeyValue, Package, PackageSpec,
     spec::KeyValueSpec,
     tuning::{TuningFlag, TuningFlagSpec, TuningGroup, TuningGroupSpec},
 };
@@ -16,33 +14,21 @@ pub use self::gluon::{
     encode_gluon_spec, evaluate_gluon, evaluate_gluon_with,
 };
 
-pub fn from_slice(bytes: &[u8]) -> Result<Macros, Error> {
-    serde_yaml::from_slice(bytes)
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct Macros {
-    #[serde(default, deserialize_with = "sequence_of_key_value")]
     pub actions: Vec<KeyValue<Action>>,
-    #[serde(default, deserialize_with = "sequence_of_key_value")]
     pub definitions: Vec<KeyValue<String>>,
-    #[serde(default, deserialize_with = "sequence_of_key_value")]
     pub flags: Vec<KeyValue<TuningFlag>>,
-    #[serde(default, deserialize_with = "sequence_of_key_value")]
     pub tuning: Vec<KeyValue<TuningGroup>>,
-    #[serde(default, deserialize_with = "sequence_of_key_value")]
     pub packages: Vec<KeyValue<Package>>,
-    #[serde(default)]
     pub default_tuning_groups: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Action {
     pub description: String,
     pub example: Option<String>,
     pub command: String,
-    #[serde(default)]
     pub dependencies: Vec<String>,
 }
 
@@ -94,20 +80,6 @@ impl From<ActionSpec> for Action {
 mod test {
     use super::*;
     use crate::tuning::{CompilerFlag, Toolchain, TuningOptionSpec};
-
-    #[test]
-    fn deserialize() {
-        let inputs = [
-            &include_bytes!("../../../test/base.yml")[..],
-            &include_bytes!("../../../test/x86_64.yml")[..],
-            &include_bytes!("../../../test/cmake.yml")[..],
-        ];
-
-        for input in inputs {
-            let recipe = from_slice(input).unwrap();
-            dbg!(&recipe);
-        }
-    }
 
     #[test]
     fn format_neutral_spec_converts_to_macro_domain() {
