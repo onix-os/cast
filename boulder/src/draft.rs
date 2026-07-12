@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::path::Path;
-use std::{io, path::PathBuf};
+use std::{io, path::Path, path::PathBuf};
 
-use chrono::{Datelike, Utc};
 use itertools::Itertools;
 use licenses::match_licences;
 use moss::{Dependency, util};
+use stone_recipe::{BuildSpec, PackageSpec, RecipeSpec, SourceSpec, encode_recipe_gluon_spec};
 use thiserror::Error;
 use tui::Styled;
 use url::Url;
@@ -15,13 +14,11 @@ use url::Url;
 use crate::Env;
 
 use self::metadata::Metadata;
-use self::monitoring::Monitoring;
 use self::upstream::Upstream;
 
 mod build;
 mod licenses;
 mod metadata;
-mod monitoring;
 pub mod upstream;
 
 pub struct Drafter {
@@ -31,7 +28,6 @@ pub struct Drafter {
 
 pub struct Draft {
     pub stone: String,
-    pub monitoring: String,
 }
 
 impl Drafter {
@@ -49,9 +45,6 @@ impl Drafter {
         // Build metadata from extracted upstreams
         let metadata = Metadata::new(extracted);
 
-        let monitoring = Monitoring::new(&metadata.source.name, &metadata.source.homepage);
-        let monitoring_result = monitoring.run()?;
-
         // Enumerate all extracted files
         let files = util::enumerate_files(extract_root, |_| true)?
             .into_iter()
@@ -62,8 +55,6 @@ impl Drafter {
         let build = build::analyze(&files).map_err(Error::AnalyzeBuildSystem)?;
 
         let licences_dir = &self.env.data_dir.join("licenses");
-
-        let year = Utc::now().year();
 
         let licenses = format_licenses(match_licences(extract_root, licences_dir).unwrap_or_default());
 
@@ -78,57 +69,63 @@ impl Drafter {
             build::System::Autotools
         });
 
-        let builddeps = builddeps(build.dependencies);
-        let environment = build_system
-            .environment()
-            .map(|env| format!("environment : |\n    {env}\n"))
-            .unwrap_or_default();
-        let phases = build_system.phases();
-        let options = build_system.options();
+        let spec = draft_recipe_spec(&metadata, build_system, build.dependencies, licenses);
+        let stone = encode_recipe_gluon_spec(&spec)?;
 
-        #[rustfmt::skip]
-        let template = format!(
-"# SPDX-FileCopyrightText: {year} AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
-
-name        : {}
-version     : \"{}\"
-release     : 1
-homepage    : {}
-upstreams   :
-{}
-summary     : UPDATE SUMMARY
-description : |
-    UPDATE DESCRIPTION
-license     : {licenses}
-{options}{builddeps}{environment}{phases}",
-            metadata.source.name,
-            metadata.source.version,
-            metadata.source.homepage,
-            metadata.upstreams(),
-        );
-
-        Ok(Draft {
-            stone: template,
-            monitoring: monitoring_result,
-        })
+        Ok(Draft { stone })
     }
 }
 
-fn builddeps(deps: impl IntoIterator<Item = Dependency>) -> String {
-    let deps = deps.into_iter().map(|dep| format!("    - {dep}")).sorted().join("\n");
+fn draft_recipe_spec(
+    metadata: &Metadata,
+    build_system: build::System,
+    dependencies: impl IntoIterator<Item = Dependency>,
+    licenses: Vec<String>,
+) -> RecipeSpec {
+    let source = SourceSpec {
+        name: placeholder(&metadata.source.name, "UPDATE-NAME"),
+        version: placeholder(&metadata.source.version, "0.0.0"),
+        release: 1,
+        homepage: placeholder(&metadata.source.homepage, "https://example.invalid/UPDATE-HOMEPAGE"),
+        license: licenses,
+    };
+    let phases = build_system.phases();
+    let mut recipe = RecipeSpec::new(source);
+    recipe.upstreams = metadata.upstream_specs();
+    recipe.build = BuildSpec {
+        setup: phases.setup.map(str::to_owned),
+        build: phases.build.map(str::to_owned),
+        install: phases.install.map(str::to_owned),
+        check: phases.check.map(str::to_owned),
+        workload: None,
+        environment: build_system.environment().map(str::to_owned),
+        build_deps: builddeps(dependencies),
+        check_deps: Vec::new(),
+    };
+    recipe.package = PackageSpec {
+        summary: Some("UPDATE SUMMARY".to_owned()),
+        description: Some("UPDATE DESCRIPTION".to_owned()),
+        ..PackageSpec::default()
+    };
+    recipe.options.networking = build_system.options().networking;
+    recipe
+}
 
-    if deps.is_empty() {
-        String::default()
+fn placeholder(value: &str, fallback: &str) -> String {
+    if value.is_empty() {
+        fallback.to_owned()
     } else {
-        format!("builddeps   :\n{deps}\n")
+        value.to_owned()
     }
 }
 
-fn format_licenses(licenses: Vec<String>) -> String {
-    let formatted = licenses
+fn builddeps(deps: impl IntoIterator<Item = Dependency>) -> Vec<String> {
+    deps.into_iter().map(|dep| dep.to_string()).sorted().collect()
+}
+
+fn format_licenses(licenses: Vec<String>) -> Vec<String> {
+    let mut formatted = licenses
         .into_iter()
-        .map(|license| format!("    - {license}"))
         .sorted_by(|a, b| {
             // HACK: Ensure -or-later for GNU licenses comes before -only
             //       to match 90% of cases. We need to read the standard license
@@ -141,12 +138,11 @@ fn format_licenses(licenses: Vec<String>) -> String {
                 a.cmp(b)
             }
         })
-        .join("\n");
+        .collect::<Vec<_>>();
     if formatted.is_empty() {
-        "UPDATE LICENSE".to_owned()
-    } else {
-        format!("\n{formatted}")
+        formatted.push("UPDATE LICENSE".to_owned());
     }
+    formatted
 }
 
 pub struct File<'a> {
@@ -174,8 +170,8 @@ pub enum Error {
     AnalyzeBuildSystem(#[source] build::Error),
     #[error("upstream")]
     Upstream(#[from] upstream::Error),
-    #[error("monitoring")]
-    Monitoring(#[from] monitoring::Error),
+    #[error("encode canonical Gluon recipe")]
+    EncodeRecipe(#[from] stone_recipe::RecipeConversionError),
     #[error("licensing")]
     Licenses(#[from] licenses::Error),
     #[error("io")]
@@ -186,7 +182,10 @@ pub enum Error {
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
+    use std::{collections::BTreeSet, path::Path};
+
+    use gluon_config::Source as GluonSource;
+    use stone_recipe::evaluate_gluon;
 
     use super::*;
 
@@ -200,5 +199,29 @@ mod test {
         };
 
         assert_eq!(file.depth(), 0);
+    }
+
+    #[test]
+    fn generated_draft_is_a_valid_standalone_gluon_recipe() {
+        let metadata = Metadata::new(vec![Upstream {
+            uri: Url::parse("https://example.com/example-1.2.3.tar.xz").unwrap(),
+            hash: "0123456789abcdef".to_owned(),
+        }]);
+        let spec = draft_recipe_spec(
+            &metadata,
+            build::System::Cargo,
+            BTreeSet::<Dependency>::new(),
+            vec!["MPL-2.0".to_owned()],
+        );
+
+        let source = encode_recipe_gluon_spec(&spec).unwrap();
+        let evaluated = evaluate_gluon(&GluonSource::new("stone.glu", source.clone())).unwrap();
+
+        assert!(source.contains("Canonical standalone Boulder recipe"));
+        assert!(source.contains("UPDATE SUMMARY"));
+        assert_eq!(evaluated.recipe.source.name, "example");
+        assert_eq!(evaluated.recipe.source.version, "1.2.3");
+        assert_eq!(evaluated.recipe.upstreams.len(), 1);
+        assert!(evaluated.recipe.options.networking);
     }
 }

@@ -10,32 +10,30 @@ use crate::{
     Env, Macros, architecture,
     draft::{self, Drafter, upstream::fetched_upstream_cache_path},
     macros, recipe,
+    source_lock::SOURCE_LOCK_FILE_NAME,
 };
 use clap::Parser;
-use ent_core::{data::updates::get_latest_version, recipes::ParserRegistration};
 use fs_err::{self as fs};
 use itertools::Itertools;
 use moss::{request, runtime, util};
-use similar::TextDiff;
 use stone_recipe::upstream;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tui::{
     MultiProgress, ProgressBar, ProgressStyle, Styled,
-    dialoguer::{Confirm, theme::ColorfulTheme},
     pretty::{self, ColumnDisplay},
 };
 use url::Url;
 use version_parse::VersionExtractor;
 
 const LONG_UPDATE_ABOUT: &str = concat!(
-    "Update a recipe file\n\n",
-    "If no version or upstreams are provided, boulder will attempt to autoupdate the\n",
-    "recipe, using the release information supplied in the monitoring.yaml file.\n\n",
-    "If a version is passed but no upstream is passed, boulder will attempt to guess\n",
-    "the new url from the existing url.\n\n",
-    "If an upstream is passed but no version is passed, boulder will parse the new\n",
-    "version from the new upstream."
+    "Suggest authored changes for a Gluon recipe\n\n",
+    "Boulder typechecks the recipe and reports explicit field changes, but never\n",
+    "rewrites authored Gluon. Apply the suggestions to stone.glu manually.\n\n",
+    "Provide --ver and/or one or more --upstream values. When only a plain archive\n",
+    "upstream is supplied, Boulder derives the version from its URL. After applying\n",
+    "upstream edits, remove the stale generated sources.lock.glu; the next build\n",
+    "refreshes it and asks you to rerun with the new provenance."
 );
 
 #[derive(Debug, Parser)]
@@ -55,9 +53,14 @@ pub enum Subcommand {
         )]
         recipe: PathBuf,
     },
-    #[command(about = "Bump a recipe's release")]
+    #[command(about = "Suggest a release bump without rewriting authored Gluon")]
     Bump {
-        #[arg(short, long, default_value = "./stone.yaml", help = "The recipe file to update")]
+        #[arg(
+            short,
+            long,
+            default_value = "./stone.glu",
+            help = "Authored Gluon recipe to validate and inspect"
+        )]
         recipe: PathBuf,
         #[arg(
             short = 'n',
@@ -67,7 +70,7 @@ pub enum Subcommand {
         )]
         release: Option<u64>,
     },
-    #[command(about = "Create skeletal stone.yaml recipe from source archive URIs")]
+    #[command(about = "Create a skeletal stone.glu recipe from source archive URIs")]
     New {
         #[arg(short, long, default_value = ".", help = "Location to output generated files")]
         output: PathBuf,
@@ -92,11 +95,16 @@ pub enum Subcommand {
                 " -u \"https://some.plan/file.tar.gz\" -u \"git|v1.1\"")
         )]
         upstreams: Vec<UpdatedSource>,
-        #[arg(default_value = "./stone.yaml", help = "Recipe input path.")]
+        #[arg(
+            default_value = "./stone.glu",
+            help = "Authored Gluon recipe to validate and inspect"
+        )]
         recipe: PathBuf,
-        #[arg(short, long, help = "Recipe output path. If omitted, overwrites the input recipe.")]
-        output: Option<PathBuf>,
-        #[arg(long, default_value = "false", help = "Don't increment the release number")]
+        #[arg(
+            long,
+            default_value = "false",
+            help = "Don't suggest incrementing the release number"
+        )]
         no_bump: bool,
     },
     #[command(about = "Print macro definitions")]
@@ -124,27 +132,17 @@ fn parse_updated_source(s: &str) -> Result<UpdatedSource, String> {
     }
 }
 
-pub fn handle(command: Command, env: Env, yes: bool, verbose: bool) -> Result<(), Error> {
+pub fn handle(command: Command, env: Env, _yes: bool, _verbose: bool) -> Result<(), Error> {
     match command.subcommand {
         Subcommand::Check { recipe } => check(recipe),
         Subcommand::Bump { recipe, release } => bump(recipe, release),
         Subcommand::New { output, upstreams } => new(env, output, upstreams),
         Subcommand::Update {
             recipe,
-            output,
             version,
             upstreams,
             no_bump,
-        } => update(
-            env,
-            &recipe,
-            output.as_deref(),
-            version,
-            upstreams,
-            no_bump,
-            yes,
-            verbose,
-        ),
+        } => update(env, &recipe, version, upstreams, no_bump),
         Subcommand::Macros { _macro } => macros(_macro, env),
     }
 }
@@ -164,150 +162,29 @@ fn check(path: PathBuf) -> Result<(), Error> {
     Ok(())
 }
 
-fn detect_update(recipe_path: &Path, parsed_recipe: &recipe::Parsed, verbose: bool) -> Result<DetectedUpdate, Error> {
-    // Set up reqwest client for retries
-    let client = reqwest::ClientBuilder::new()
-        .timeout(Duration::from_secs(30))
-        .connect_timeout(Duration::from_secs(10))
-        .build()?;
-
-    // Setup ent parser
-    // TODO: Can we avoid the inventory dep and parse the stone directly?
-    let registration = inventory::iter::<ParserRegistration>
-        .into_iter()
-        .find(|p| p.name == "stone_recipe")
-        .expect("Stone parser registration missing");
-    let ent_parser = (registration.parser)();
-
-    // Parse our recipe with ent
-    let ent_parsed = ent_parser.parse(recipe_path)?;
-
-    let Some(monitoring) = ent_parsed.monitoring else {
-        return Err(Error::AutoupdateMissingMonitoringFile);
-    };
-
-    // Call the release-monitoring.org API using the ID found in monitoring.yaml
-    let response = runtime::block_on(get_latest_version(&client, monitoring.project_id))?;
-
-    let current_version = &parsed_recipe.source.version;
-
-    let newest = response
-        .stable_versions
-        .first()
-        .cloned()
-        .unwrap_or_else(|| response.latest_version.unwrap_or_default());
-
-    println!("Newest version found: {newest}, current version: {current_version}");
-
-    if newest == *current_version {
-        println!("Already up-to-date!");
-        return Ok(DetectedUpdate::AlreadyUpToDate);
-    }
-
-    // Only parse the first upstream source for now...
-    let (first_upstream, _) = parsed_recipe
-        .upstreams
-        .split_first()
-        .expect("upstreams must not be empty");
-
-    if matches!(first_upstream.props, upstream::Props::Git { .. }) {
-        return Err(Error::GitUpstreamMustProvideVersion);
-    }
-
-    let new_url = guess_new_url(newest.as_str(), first_upstream.url.as_str(), verbose)?;
-
-    let updated_source = parse_updated_source(new_url.as_str()).unwrap();
-
-    Ok(DetectedUpdate::UpdateRequired {
-        version: newest,
-        sources: vec![updated_source],
-    })
-}
-
-enum DetectedUpdate {
-    AlreadyUpToDate,
-    UpdateRequired {
-        version: String,
-        sources: Vec<UpdatedSource>,
-    },
-}
-
-fn guess_new_url(new_version: &str, current_url: &str, verbose: bool) -> Result<String, Error> {
-    let upstreams_parser = VersionExtractor::new();
-    let parsed_upstream = upstreams_parser.extract(current_url)?;
-
-    if verbose {
-        println!(
-            "Parsed URI: name = {}, version = {}, release-series = {:?}",
-            parsed_upstream.name, parsed_upstream.version, parsed_upstream.release_series
-        );
-    }
-
-    let current_version = &parsed_upstream.version;
-
-    let new_release_series = parsed_upstream
-        .release_series
-        .as_deref()
-        .map(|sv| (sv, derive_release_series(sv, new_version)));
-
-    Ok(current_url
-        .split('/')
-        .map(|segment| {
-            if let Some((old_sv, ref new_sv)) = new_release_series {
-                let segment_stripped = segment.trim_start_matches('v');
-                if segment_stripped == old_sv {
-                    // Preserve the v prefix if the segment had one
-                    return if segment.starts_with('v') {
-                        format!("v{new_sv}")
-                    } else {
-                        new_sv.clone()
-                    };
-                }
-            }
-            if segment.contains(current_version.as_str()) {
-                segment.replace(current_version.as_str(), new_version)
-            } else {
-                segment.to_owned()
-            }
-        })
-        .join("/"))
-}
-
-fn derive_release_series(old_release_series: &str, new_version: &str) -> String {
-    let segment_count = old_release_series.split('.').count();
-
-    new_version.split('.').take(segment_count).join(".")
-}
-
 fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
-    let path = recipe::resolve_path(&recipe).map_err(Error::ResolvePath)?;
-    let input = fs::read_to_string(path).map_err(Error::Read)?;
+    let recipe = load_authored_gluon(&recipe)?;
+    let previous = recipe.parsed.source.release;
+    let proposed = match release {
+        Some(release) => release,
+        None => previous.checked_add(1).ok_or(Error::ReleaseOverflow)?,
+    };
+    if proposed == 0 {
+        return Err(Error::InvalidRelease(proposed));
+    }
+    if proposed == previous {
+        println!("{} already has release {previous}", recipe.path.display());
+        return Ok(());
+    }
 
-    // Parsed allows us to access known values in a type safe way
-    let parsed: recipe::Parsed = serde_yaml::from_str(&input)?;
-
-    // Bump op
-    let prev = parsed.source.release;
-    let next = release.unwrap_or(parsed.source.release + 1);
-    let mut updater = yaml::Updater::new();
-    updater.update_value(next, |root| root / "release");
-
-    // Apply updates
-    let updated = updater.apply(input);
-
-    fs::write(&recipe, updated.as_bytes()).map_err(Error::Write)?;
-    println!(
-        "{}: {} release updated from {prev} to {next}",
-        recipe.display(),
-        parsed.source.name,
-    );
-
-    Ok(())
+    require_manual_edit(
+        &recipe.path,
+        vec![SuggestedChange::new("source.release", previous, proposed)],
+    )
 }
 
 fn new(env: Env, output: PathBuf, upstreams: Vec<Url>) -> Result<(), Error> {
-    const RECIPE_FILE: &str = "stone.yaml";
-    const MONITORING_FILE: &str = "monitoring.yaml";
+    const RECIPE_FILE: &str = "stone.glu";
 
     let drafter = Drafter::new(env, upstreams);
     let draft = drafter.run()?;
@@ -316,164 +193,166 @@ fn new(env: Env, output: PathBuf, upstreams: Vec<Url>) -> Result<(), Error> {
         fs::create_dir_all(&output).map_err(Error::CreateDir)?;
     }
 
-    fs::write(PathBuf::from(&output).join(RECIPE_FILE), draft.stone).map_err(Error::Write)?;
-    fs::write(PathBuf::from(&output).join(MONITORING_FILE), draft.monitoring).map_err(Error::Write)?;
+    fs::write(output.join(RECIPE_FILE), draft.stone).map_err(Error::Write)?;
 
-    println!("Saved {RECIPE_FILE} & {MONITORING_FILE} to {output:?}");
+    println!("Saved {RECIPE_FILE} to {output:?}");
 
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn update(
     env: Env,
     recipe_path: &Path,
-    output_path: Option<&Path>,
-    mut version: Option<String>,
-    mut sources: Vec<UpdatedSource>,
+    version: Option<String>,
+    sources: Vec<UpdatedSource>,
     no_bump: bool,
-    yes: bool,
-    verbose: bool,
 ) -> Result<(), Error> {
-    // Resolve & canonicalize input recipe path
-    let recipe_path = recipe::resolve_path(recipe_path).map_err(Error::ResolvePath)?;
-    // Overwrite recipe if no explicit output path is supplied
-    let output_path = output_path.unwrap_or(&recipe_path);
-
-    let recipe_content = fs::read_to_string(&recipe_path).map_err(Error::Read)?;
-    // Parsed allows us to access known values in a type safe way
-    let recipe: recipe::Parsed = serde_yaml::from_str(&recipe_content)?;
-    // Value allows us to access map keys in their original form
-    let recipe_yaml: serde_yaml::Value = serde_yaml::from_str(&recipe_content)?;
-
-    // If no version or source are supplied, attempt to detect
-    // them automatically
+    let recipe = load_authored_gluon(recipe_path)?;
     if version.is_none() && sources.is_empty() {
-        match detect_update(&recipe_path, &recipe, verbose)? {
-            DetectedUpdate::UpdateRequired {
-                version: auto_version,
-                sources: auto_sources,
-            } => {
-                version = Some(auto_version);
-                sources = auto_sources;
-            }
-            DetectedUpdate::AlreadyUpToDate => {
-                return Ok(());
-            }
-        }
+        return Err(Error::ExplicitUpdateRequired);
     }
 
-    // If version isn't specified guess it from parsing the first upstream url
-    let version = if let Some(v) = version {
-        v
-    } else {
-        let (first_upstream, _) = sources.split_first().expect("sources must not be empty");
-        let ver_ext = VersionExtractor::new();
-        match first_upstream {
-            UpdatedSource::Git(_) => return Err(Error::GitUpstreamMustProvideVersion),
-            UpdatedSource::Plain(new_uri) => {
-                let parsed_upstream = ver_ext.extract(new_uri.as_str())?;
-                println!("No version provided, guessed: {}", parsed_upstream.version);
-                parsed_upstream.version
-            }
+    if sources.len() > recipe.parsed.upstreams.len() {
+        return Err(Error::TooManyUpstreamUpdates {
+            supplied: sources.len(),
+            available: recipe.parsed.upstreams.len(),
+        });
+    }
+
+    let proposed_version = match (version, sources.first()) {
+        (Some(version), _) => version,
+        (None, Some(UpdatedSource::Plain(new_uri))) => {
+            let parsed = VersionExtractor::new().extract(new_uri.as_str())?;
+            println!(
+                "No version provided; derived {} from the first upstream URL",
+                parsed.version
+            );
+            parsed.version
         }
+        (None, Some(UpdatedSource::Git(_))) => return Err(Error::GitUpstreamMustProvideVersion),
+        (None, None) => unreachable!("an explicit version or upstream was checked above"),
     };
 
-    #[derive(Debug)]
-    enum Update {
-        Release(u64),
-        Version(String),
-        PlainUpstream(usize, serde_yaml::Value, Url),
-        GitUpstream(usize, serde_yaml::Value, String),
+    let mut changes = Vec::new();
+    if proposed_version != recipe.parsed.source.version {
+        changes.push(SuggestedChange::new(
+            "source.version",
+            &recipe.parsed.source.version,
+            proposed_version,
+        ));
     }
-
-    let mut updates = vec![Update::Version(version)];
     if !no_bump {
-        updates.push(Update::Release(recipe.source.release + 1));
-    }
-
-    for (i, (original, update)) in recipe.upstreams.into_iter().zip(sources).enumerate() {
-        match (original.props, update) {
-            (upstream::Props::Plain { .. }, UpdatedSource::Git(_)) => {
-                return Err(Error::UpstreamMismatch(i, "Plain", "Git"));
-            }
-            (upstream::Props::Git { .. }, UpdatedSource::Plain(_)) => {
-                return Err(Error::UpstreamMismatch(i, "Git", "Plain"));
-            }
-            (upstream::Props::Plain { .. }, UpdatedSource::Plain(new_uri)) => {
-                let key = recipe_yaml["upstreams"][i]
-                    .as_mapping()
-                    .and_then(|map| map.keys().next())
-                    .cloned();
-                if let Some(key) = key {
-                    updates.push(Update::PlainUpstream(i, key, new_uri));
-                }
-            }
-            (upstream::Props::Git { .. }, UpdatedSource::Git(new_ref)) => {
-                let key = recipe_yaml["upstreams"][i]
-                    .as_mapping()
-                    .and_then(|map| map.keys().next())
-                    .cloned();
-                if let Some(key) = key {
-                    updates.push(Update::GitUpstream(i, key, new_ref));
-                }
-            }
-        }
+        let proposed_release = recipe
+            .parsed
+            .source
+            .release
+            .checked_add(1)
+            .ok_or(Error::ReleaseOverflow)?;
+        changes.push(SuggestedChange::new(
+            "source.release",
+            recipe.parsed.source.release,
+            proposed_release,
+        ));
     }
 
     let mpb = MultiProgress::new();
-
-    // Add all update operations
-    let mut updater = yaml::Updater::new();
-    for update in updates {
-        match update {
-            Update::Release(release) => {
-                updater.update_value(release, |root| root / "release");
+    for (index, (original, update)) in recipe.parsed.upstreams.iter().zip(sources).enumerate() {
+        match (&original.props, update) {
+            (upstream::Props::Plain { .. }, UpdatedSource::Git(_)) => {
+                return Err(Error::UpstreamMismatch(index, "Plain", "Git"));
             }
-            Update::Version(version) => {
-                updater.update_value(format!("\"{version}\""), |root| root / "version");
+            (upstream::Props::Git { .. }, UpdatedSource::Plain(_)) => {
+                return Err(Error::UpstreamMismatch(index, "Git", "Plain"));
             }
-            Update::PlainUpstream(i, key, new_uri) => {
-                let hash = runtime::block_on(fetch_and_cache_upstream(&env, new_uri.clone(), &mpb))?;
-
-                let path = |root| root / "upstreams" / i / key.as_str().unwrap_or_default();
-
-                // Update hash as either scalar or inner map "hash" value
-                updater.update_value(&hash, path);
-                updater.update_value(&hash, |root| path(root) / "hash");
-                // Update from old to new uri
-                updater.update_key(new_uri, path);
+            (upstream::Props::Plain { hash, .. }, UpdatedSource::Plain(new_uri)) => {
+                let new_hash = runtime::block_on(fetch_and_cache_upstream(&env, new_uri.clone(), &mpb))?;
+                if original.url != new_uri {
+                    changes.push(SuggestedChange::new(
+                        format!("upstreams[{index}].url"),
+                        original.url.as_str(),
+                        new_uri.as_str(),
+                    ));
+                }
+                if *hash != new_hash {
+                    changes.push(SuggestedChange::new(format!("upstreams[{index}].hash"), hash, new_hash));
+                }
             }
-            Update::GitUpstream(i, key, new_ref) => {
-                let path = |root| root / "upstreams" / i / key.as_str().unwrap_or_default();
-
-                // Update ref as either scalar or inner map "ref" value
-                updater.update_value(&new_ref, path);
-                updater.update_value(&new_ref, |root| path(root) / "ref");
+            (upstream::Props::Git { git_ref, .. }, UpdatedSource::Git(new_ref)) => {
+                if *git_ref != new_ref {
+                    changes.push(SuggestedChange::new(
+                        format!("upstreams[{index}].git_ref"),
+                        git_ref,
+                        new_ref,
+                    ));
+                }
             }
         }
     }
-
     let _ = mpb.clear();
 
-    // Apply updates
-    let updated_content = updater.apply(recipe_content.clone());
-
-    print_diff(&recipe_content, &updated_content);
-
-    let write_updated_recipe = yes
-        || Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(" Do you wish to write the above changes? ")
-            .default(false)
-            .interact()?;
-    if !write_updated_recipe {
+    if changes.is_empty() {
+        println!(
+            "{} already matches the requested authored values",
+            recipe.path.display()
+        );
         return Ok(());
     }
 
-    fs::write(output_path, updated_content.as_bytes()).map_err(Error::Write)?;
-    println!("{} updated", output_path.display());
+    require_manual_edit(&recipe.path, changes)
+}
 
-    Ok(())
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SuggestedChange {
+    field: String,
+    current: String,
+    proposed: String,
+}
+
+impl SuggestedChange {
+    fn new(field: impl Into<String>, current: impl ToString, proposed: impl ToString) -> Self {
+        Self {
+            field: field.into(),
+            current: current.to_string(),
+            proposed: proposed.to_string(),
+        }
+    }
+}
+
+fn load_authored_gluon(path: &Path) -> Result<recipe::Recipe, Error> {
+    let recipe = match recipe::Recipe::load(path) {
+        Ok(recipe) => recipe,
+        Err(recipe::Error::StaleSourceLock { path, source }) => {
+            return Err(Error::StaleGeneratedLock { path, source });
+        }
+        Err(error) => return Err(Error::LoadRecipe(error)),
+    };
+    if recipe.is_yaml_compatibility() {
+        return Err(Error::AuthoredGluonRequired(recipe.path));
+    }
+    Ok(recipe)
+}
+
+fn require_manual_edit(path: &Path, changes: Vec<SuggestedChange>) -> Result<(), Error> {
+    let lock_refresh_required = changes.iter().any(|change| change.field.starts_with("upstreams["));
+    println!("suggested_authored_changes {{");
+    println!("  recipe = {:?}", path.display().to_string());
+    for change in changes {
+        println!("  change {{");
+        println!("    field = {:?}", change.field);
+        println!("    current = {:?}", change.current);
+        println!("    proposed = {:?}", change.proposed);
+        println!("  }}");
+    }
+    if lock_refresh_required {
+        println!("  generated_lock_remediation {{");
+        println!("    artifact = {SOURCE_LOCK_FILE_NAME:?}");
+        println!(
+            "    action = \"remove after applying the upstream edits; the next build refreshes it and asks you to rerun\""
+        );
+        println!("  }}");
+    }
+    println!("}}");
+    Err(Error::ManualEditRequired(path.to_owned()))
 }
 
 /// Fetches the upstream at `uri` and caches it so it doesn't need to be refetched
@@ -526,7 +405,7 @@ async fn fetch_and_cache_upstream(env: &Env, uri: Url, mpb: &MultiProgress) -> R
 }
 
 fn macros(_macro: Option<String>, env: Env) -> Result<(), Error> {
-    let macros = Macros::load(&env)?;
+    let macros = Macros::load(&env).map_err(|error| Error::LoadMacros(Box::new(error)))?;
 
     let mut items = macros
         .actions
@@ -606,46 +485,44 @@ impl ColumnDisplay for PrintMacro<'_> {
     }
 }
 
-fn print_diff(a: &str, b: &str) {
-    let diff = TextDiff::from_lines(a, b);
-
-    for line in diff.unified_diff().to_string().lines() {
-        let colored = if line.starts_with('-') {
-            line.red()
-        } else if line.starts_with('+') {
-            line.green()
-        } else {
-            line.dim()
-        };
-
-        println!("{colored}");
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("check recipe")]
     CheckRecipe(#[source] recipe::Error),
+    #[error("load and validate authored recipe")]
+    LoadRecipe(#[source] recipe::Error),
     #[error(
-        "Missing monitoring file, cannot autoupdate. Either add a monitoring file or supply an explicit --ver or --upstream."
+        "generated source lock {path:?} is stale; remove it after reviewing authored upstream edits, then build once to refresh it and rerun for bound provenance"
     )]
-    AutoupdateMissingMonitoringFile,
+    StaleGeneratedLock {
+        path: PathBuf,
+        #[source]
+        source: Box<crate::source_lock::ValidationError>,
+    },
+    #[error("{0} is a deprecated YAML compatibility recipe; bump/update require authored stone.glu")]
+    AuthoredGluonRequired(PathBuf),
+    #[error(
+        "manual authored edit required for {0}; Boulder validated the recipe and intentionally left it byte-for-byte unchanged"
+    )]
+    ManualEditRequired(PathBuf),
+    #[error("recipe update requires an explicit --ver and/or --upstream; automatic update detection was removed")]
+    ExplicitUpdateRequired,
+    #[error("release cannot be incremented beyond the u64 range")]
+    ReleaseOverflow,
+    #[error("release must be greater than zero (found {0})")]
+    InvalidRelease(u64),
+    #[error("received {supplied} upstream updates but the recipe declares only {available} upstreams")]
+    TooManyUpstreamUpdates { supplied: usize, available: usize },
     #[error("Mismatch for upstream[{0}], expected {1} got {2}")]
     UpstreamMismatch(usize, &'static str, &'static str),
     #[error("load macros")]
-    LoadMacros(#[from] macros::Error),
+    LoadMacros(#[source] Box<macros::Error>),
     #[error("Macro doesn't exist: {0}")]
     MacroNotFound(String),
-    #[error("resolve recipe path")]
-    ResolvePath(#[source] recipe::Error),
-    #[error("reading recipe")]
-    Read(#[source] io::Error),
     #[error("writing recipe")]
     Write(#[source] io::Error),
     #[error("creating output directory")]
     CreateDir(#[source] io::Error),
-    #[error("deserializing recipe")]
-    Deser(#[from] serde_yaml::Error),
     #[error("create temp file")]
     CreateTempFile(#[source] io::Error),
     #[error("move temp file")]
@@ -656,16 +533,10 @@ pub enum Error {
     Utf8(#[from] std::string::FromUtf8Error),
     #[error("draft")]
     Draft(#[from] draft::Error),
-    #[error("statuscode")]
-    StatusCode(#[from] reqwest::Error),
     #[error("version parse")]
     Upstreams(#[from] version_parse::VersionError),
     #[error("Must provide version if first upstream provided is of type git")]
     GitUpstreamMustProvideVersion,
-    #[error("ent recipe parse failure")]
-    Ent(#[from] ent_core::recipes::RecipeError),
-    #[error("string processing")]
-    Dialog(#[from] tui::dialoguer::Error),
     #[error("io")]
     Io(#[from] io::Error),
 }
@@ -674,8 +545,43 @@ pub enum Error {
 mod tests {
     use super::*;
 
+    const AUTHORED_EXPRESSION: &str = r#"let boulder = import! boulder.recipe.v1
+let release = 1
+let version = "1.2.3"
+boulder.recipe (boulder.source {
+    name = "example",
+    version,
+    release,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+})
+"#;
+
+    const AUTHORED_WITH_ARCHIVE: &str = r#"let boulder = import! boulder.recipe.v1
+let base = boulder.recipe (boulder.source {
+    name = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+})
+{
+    upstreams = [boulder.upstream.archive "https://example.com/source.tar.xz" "aaaaaaaa"],
+    .. base
+}
+"#;
+
+    fn environment(root: &Path) -> Env {
+        Env {
+            cache_dir: root.join("cache"),
+            data_dir: root.join("data"),
+            moss_dir: root.join("moss"),
+            config: config::Manager::custom(root),
+        }
+    }
+
     #[test]
-    fn check_defaults_to_gluon_without_changing_yaml_mutator_defaults() {
+    fn all_recipe_inputs_default_to_gluon() {
         let check = Command::try_parse_from(["recipe", "check"]).unwrap();
         assert!(matches!(
             check.subcommand,
@@ -685,60 +591,71 @@ mod tests {
         let bump = Command::try_parse_from(["recipe", "bump"]).unwrap();
         assert!(matches!(
             bump.subcommand,
-            Subcommand::Bump { recipe, .. } if recipe == Path::new("./stone.yaml")
+            Subcommand::Bump { recipe, .. } if recipe == Path::new("./stone.glu")
         ));
 
         let update = Command::try_parse_from(["recipe", "update"]).unwrap();
         assert!(matches!(
             update.subcommand,
-            Subcommand::Update { recipe, .. } if recipe == Path::new("./stone.yaml")
+            Subcommand::Update { recipe, .. } if recipe == Path::new("./stone.glu")
         ));
     }
 
     #[test]
-    fn test_guess_new_url() {
-        let new_url = guess_new_url(
-            "1.52.7",
-            "https://download.gnome.org/sources/NetworkManager/1.50/NetworkManager-1.50.0.tar.xz",
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            new_url,
-            "https://download.gnome.org/sources/NetworkManager/1.52/NetworkManager-1.52.7.tar.xz"
+    fn bump_suggests_a_manual_change_without_mutating_authored_expression() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("stone.glu");
+        fs::write(&path, AUTHORED_EXPRESSION).unwrap();
+
+        let error = bump(path.clone(), None).unwrap_err();
+
+        assert!(
+            matches!(error, Error::ManualEditRequired(ref error_path) if error_path == &path.canonicalize().unwrap())
         );
+        assert_eq!(fs::read_to_string(path).unwrap(), AUTHORED_EXPRESSION);
+    }
 
-        let new_url = guess_new_url("9.0.1", "https://www.nano-editor.org/dist/v8/nano-8.7.1.tar.xz", false).unwrap();
-        assert_eq!(new_url, "https://www.nano-editor.org/dist/v9/nano-9.0.1.tar.xz");
+    #[test]
+    fn update_suggests_manual_changes_without_mutating_authored_expression() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("stone.glu");
+        fs::write(&path, AUTHORED_EXPRESSION).unwrap();
 
-        let new_url = guess_new_url(
-            "50.0",
-            "https://download.gnome.org/sources/ghex/48/ghex-48.3.tar.xz",
+        let error = update(
+            environment(root.path()),
+            &path,
+            Some("2.0.0".to_owned()),
+            Vec::new(),
             false,
         )
-        .unwrap();
-        assert_eq!(new_url, "https://download.gnome.org/sources/ghex/50/ghex-50.0.tar.xz");
+        .unwrap_err();
 
-        let new_url = guess_new_url(
-            "1.91.2",
-            "https://gitlab.freedesktop.org/upower/upower/-/archive/v1.90.10/upower-v1.90.10.tar.gz",
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            new_url,
-            "https://gitlab.freedesktop.org/upower/upower/-/archive/v1.91.2/upower-v1.91.2.tar.gz"
+        assert!(
+            matches!(error, Error::ManualEditRequired(ref error_path) if error_path == &path.canonicalize().unwrap())
         );
+        assert_eq!(fs::read_to_string(path).unwrap(), AUTHORED_EXPRESSION);
+    }
 
-        let new_url = guess_new_url(
-            "260.1",
-            "https://github.com/systemd/systemd/archive/refs/tags/v257.13.tar.gz",
-            false,
-        )
-        .unwrap();
-        assert_eq!(
-            new_url,
-            "https://github.com/systemd/systemd/archive/refs/tags/v260.1.tar.gz"
+    #[test]
+    fn stale_generated_lock_reports_refresh_remediation_without_mutating_source() {
+        use crate::source_lock::{ArchiveResolution, SourceLock, SourceResolution, encode_source_lock};
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("stone.glu");
+        fs::write(&path, AUTHORED_WITH_ARCHIVE).unwrap();
+        let lock = SourceLock::new(vec![SourceResolution::Archive(ArchiveResolution {
+            order: 0,
+            url: "https://example.com/source.tar.xz".to_owned(),
+            sha256: "different-hash".to_owned(),
+        })]);
+        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), encode_source_lock(&lock)).unwrap();
+
+        let error = bump(path.clone(), None).unwrap_err();
+
+        assert!(
+            matches!(&error, Error::StaleGeneratedLock { path: lock_path, .. } if lock_path.ends_with(SOURCE_LOCK_FILE_NAME))
         );
+        assert!(error.to_string().contains("build once to refresh"));
+        assert_eq!(fs::read_to_string(path).unwrap(), AUTHORED_WITH_ARCHIVE);
     }
 }

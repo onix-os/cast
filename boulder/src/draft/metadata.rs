@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use itertools::Itertools;
+use stone_recipe::UpstreamSpec;
 
 use super::Upstream;
 
@@ -48,7 +48,7 @@ impl Metadata {
         Self { source, upstreams }
     }
 
-    pub fn upstreams(&self) -> String {
+    pub fn upstream_specs(&self) -> Vec<UpstreamSpec> {
         self.upstreams
             .iter()
             .enumerate()
@@ -58,9 +58,16 @@ impl Metadata {
                 } else {
                     uri.as_str()
                 };
-                format!("    - {uri_to_use} : {hash}")
+                UpstreamSpec::Archive {
+                    url: uri_to_use.to_owned(),
+                    hash: hash.clone(),
+                    rename: None,
+                    strip_dirs: None,
+                    unpack: true,
+                    unpack_dir: None,
+                }
             })
-            .join("\n")
+            .collect()
     }
 }
 
