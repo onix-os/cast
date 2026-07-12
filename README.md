@@ -144,6 +144,11 @@ $ just fix
 
 Then create a Pull Request with your changes.
 
+## 🙏 Acknowledgments
+
+See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the project's origins and
+the people and communities who built it.
+
 ## ⚖️ License
 
 `moss` & `boulder` are available under the terms of the [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html)
