@@ -20,6 +20,8 @@ pub const SYSTEM_INTENT_PATH: &str = "etc/moss/system.glu";
 /// Moss-generated normalized state snapshot, relative to a state root.
 pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.glu";
 
+const SOURCE_FINGERPRINT_PREFIX: &str = "// Authored source fingerprint: ";
+
 pub fn intent_path(root: &Path) -> PathBuf {
     root.join(SYSTEM_INTENT_PATH)
 }
@@ -41,6 +43,7 @@ pub struct SystemModel {
     pub packages: BTreeSet<dependency::Provider>,
     generated_snapshot: String,
     fingerprint: EvaluationFingerprint,
+    source_fingerprint: Option<String>,
 }
 
 impl SystemModel {
@@ -53,6 +56,12 @@ impl SystemModel {
         &self.fingerprint
     }
 
+    /// Evaluation fingerprint of the authored intent from which this snapshot
+    /// was derived, when the state was created from authored intent.
+    pub fn source_fingerprint(&self) -> Option<&str> {
+        self.source_fingerprint.as_deref()
+    }
+
     pub(super) fn from_generated(
         parts: SystemParts,
         generated_snapshot: String,
@@ -62,6 +71,7 @@ impl SystemModel {
             disable_warning: parts.disable_warning,
             repositories: parts.repositories,
             packages: parts.packages,
+            source_fingerprint: embedded_source_fingerprint(&generated_snapshot),
             generated_snapshot,
             fingerprint,
         }
@@ -89,6 +99,7 @@ struct LoadedProvenance {
     authored_fingerprint: EvaluationFingerprint,
     generated_snapshot: String,
     generated_fingerprint: EvaluationFingerprint,
+    source_fingerprint: Option<String>,
 }
 
 impl LoadedSystemModel {
@@ -114,21 +125,32 @@ impl LoadedSystemModel {
         &self.provenance.generated_fingerprint
     }
 
+    pub fn source_fingerprint(&self) -> Option<&str> {
+        self.provenance.source_fingerprint.as_deref()
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
-impl From<LoadedSystemModel> for SystemModel {
-    fn from(system_model: LoadedSystemModel) -> Self {
+impl TryFrom<LoadedSystemModel> for SystemModel {
+    type Error = gluon::EvaluationError;
+
+    fn try_from(system_model: LoadedSystemModel) -> Result<Self, Self::Error> {
         let provenance = *system_model.provenance;
 
-        SystemModel {
+        let model = SystemModel {
             disable_warning: system_model.disable_warning,
             repositories: system_model.repositories,
             packages: system_model.packages,
             generated_snapshot: provenance.generated_snapshot,
             fingerprint: provenance.generated_fingerprint,
+            source_fingerprint: None,
+        };
+        match provenance.source_fingerprint {
+            Some(fingerprint) => model.with_source_fingerprint(fingerprint),
+            None => Ok(model),
         }
     }
 }
@@ -160,7 +182,13 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
         packages,
         generated_snapshot,
         fingerprint: generated_fingerprint,
+        ..
     } = evaluated.model;
+    let source_fingerprint = if authored_source.starts_with(spec::GENERATED_GLUON_MARKER) {
+        embedded_source_fingerprint(&authored_source)
+    } else {
+        Some(authored_fingerprint.sha256.clone())
+    };
 
     Ok(Some(LoadedSystemModel {
         disable_warning,
@@ -171,6 +199,7 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
             authored_fingerprint,
             generated_snapshot,
             generated_fingerprint,
+            source_fingerprint,
         }),
         path: path.to_owned(),
     }))
@@ -195,9 +224,33 @@ pub(super) fn create_with_options(
 }
 
 impl SystemModel {
+    fn with_source_fingerprint(self, source_fingerprint: String) -> Result<Self, gluon::EvaluationError> {
+        let generated = self
+            .generated_snapshot
+            .strip_prefix(spec::GENERATED_GLUON_MARKER)
+            .expect("Moss-generated system snapshots always carry the generated marker");
+        let snapshot = format!(
+            "{}{SOURCE_FINGERPRINT_PREFIX}{source_fingerprint}\n{generated}",
+            spec::GENERATED_GLUON_MARKER
+        );
+        gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", snapshot))
+    }
+
+    fn regenerate_with_source(
+        parts: SystemParts,
+        source_fingerprint: Option<String>,
+    ) -> Result<Self, gluon::EvaluationError> {
+        let model = Self::regenerate(parts)?;
+        match source_fingerprint {
+            Some(fingerprint) => model.with_source_fingerprint(fingerprint),
+            None => Ok(model),
+        }
+    }
+
     /// Sync package selections through domain values and regenerate a
     /// canonical snapshot. No authored Gluon source is modified.
     pub fn sync_packages(self, packages: &[Package]) -> Result<SystemModel, UpdateError> {
+        let source_fingerprint = self.source_fingerprint;
         let selected = self.packages;
         let mut updated = selected
             .iter()
@@ -216,28 +269,43 @@ impl SystemModel {
             }
         }
 
-        Ok(Self::regenerate(SystemParts {
-            disable_warning: self.disable_warning,
-            repositories: self.repositories,
-            packages: updated,
-        })?)
+        Ok(Self::regenerate_with_source(
+            SystemParts {
+                disable_warning: self.disable_warning,
+                repositories: self.repositories,
+                packages: updated,
+            },
+            source_fingerprint,
+        )?)
     }
 
     /// Replace matching repository domain values and regenerate a canonical
     /// snapshot. Repositories absent from this model are not added.
     pub fn update_repositories(mut self, repositories: &repository::Map) -> Result<SystemModel, UpdateError> {
+        let source_fingerprint = self.source_fingerprint.take();
         for (id, repository) in repositories {
             if self.repositories.contains_id(id) {
                 self.repositories.add(id.clone(), repository.clone());
             }
         }
 
-        Ok(Self::regenerate(SystemParts {
-            disable_warning: self.disable_warning,
-            repositories: self.repositories,
-            packages: self.packages,
-        })?)
+        Ok(Self::regenerate_with_source(
+            SystemParts {
+                disable_warning: self.disable_warning,
+                repositories: self.repositories,
+                packages: self.packages,
+            },
+            source_fingerprint,
+        )?)
     }
+}
+
+fn embedded_source_fingerprint(source: &str) -> Option<String> {
+    source
+        .lines()
+        .find_map(|line| line.strip_prefix(SOURCE_FINGERPRINT_PREFIX))
+        .filter(|fingerprint| fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug, Error)]
@@ -358,12 +426,40 @@ let moss = import! moss.system.v1
         fs::write(&path, model.encoded()).unwrap();
 
         let loaded = load(&path).unwrap().unwrap();
-        let round_trip = SystemModel::from(loaded.clone());
+        let round_trip = SystemModel::try_from(loaded.clone()).unwrap();
 
         assert_eq!(loaded.authored_source(), model.encoded());
         assert_eq!(round_trip.encoded(), model.encoded());
         assert_eq!(round_trip.fingerprint(), model.fingerprint());
         assert!(round_trip.packages.contains(&Provider::package_name("alpha")));
+    }
+
+    #[test]
+    fn authored_fingerprint_is_embedded_and_preserved_across_updates() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("system.glu");
+        fs::write(&path, authored_source()).unwrap();
+        let loaded = load(&path).unwrap().unwrap();
+        let authored_fingerprint = loaded.fingerprint().sha256.clone();
+
+        let snapshot = SystemModel::try_from(loaded)
+            .unwrap()
+            .sync_packages(&[package("alpha", [Provider::package_name("alpha")])])
+            .unwrap();
+
+        assert_eq!(snapshot.source_fingerprint(), Some(authored_fingerprint.as_str()));
+        assert!(
+            snapshot
+                .encoded()
+                .contains(&format!("{SOURCE_FINGERPRINT_PREFIX}{authored_fingerprint}"))
+        );
+
+        fs::write(&path, snapshot.encoded()).unwrap();
+        let reloaded = load(&path).unwrap().unwrap();
+        assert_eq!(reloaded.source_fingerprint(), Some(authored_fingerprint.as_str()));
+        let round_trip = SystemModel::try_from(reloaded).unwrap();
+        assert_eq!(round_trip.encoded(), snapshot.encoded());
+        assert_eq!(round_trip.fingerprint(), snapshot.fingerprint());
     }
 
     #[test]

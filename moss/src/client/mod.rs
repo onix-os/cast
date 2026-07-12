@@ -855,7 +855,9 @@ impl Client {
 
     fn load_or_create_system_snapshot(&self, path: PathBuf, state: &State) -> Result<SystemModel, Error> {
         match system_model::load(&path).map_err(Error::LoadSystemModel)? {
-            Some(system_model) => Ok(system_model.into()),
+            Some(system_model) => SystemModel::try_from(system_model)
+                .map_err(system_model::UpdateError::from)
+                .map_err(Error::UpdateSystemModel),
             None => {
                 let active_repos = self
                     .repositories
@@ -1274,7 +1276,8 @@ fn generate_system_snapshot(
 
     match current {
         // Update existing w/ incoming packages
-        Some(existing) => SystemModel::from(existing)
+        Some(existing) => SystemModel::try_from(existing)
+            .map_err(system_model::UpdateError::from)?
             .sync_packages(packages)
             .map_err(Error::UpdateSystemModel),
 
@@ -1539,16 +1542,18 @@ let moss = import! moss.system.v1
         assert_eq!(imported.authored_source(), authored);
         assert!(imported.packages.contains(&Provider::package_name("alpha")));
 
-        record_system_snapshot(&blit_root, SystemModel::from(imported.clone())).unwrap();
+        let imported_fingerprint = imported.fingerprint().sha256.clone();
+        record_system_snapshot(&blit_root, SystemModel::try_from(imported.clone()).unwrap()).unwrap();
         let snapshot_path = system_model::snapshot_path(&blit_root);
         let snapshot = fs::read_to_string(&snapshot_path).unwrap();
         let evaluated =
             system_model::gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", snapshot.clone()))
                 .unwrap();
         let loaded_snapshot = system_model::load(&snapshot_path).unwrap().unwrap();
-        let round_trip = SystemModel::from(loaded_snapshot);
+        let round_trip = SystemModel::try_from(loaded_snapshot).unwrap();
 
         assert!(snapshot.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+        assert!(snapshot.contains(&format!("// Authored source fingerprint: {imported_fingerprint}")));
         assert!(!snapshot.contains("This authored source must never be copied into state"));
         assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
         assert_eq!(round_trip.encoded(), snapshot);
