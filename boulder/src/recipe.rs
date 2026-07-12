@@ -254,6 +254,21 @@ let base = boulder.recipe (boulder.source {SOURCE_SPEC})
         )
     }
 
+    #[test]
+    fn documented_recipe_examples_remain_loadable() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/examples/gluon");
+
+        let minimal = Recipe::load(examples.join("stone.glu")).unwrap();
+        assert_eq!(minimal.parsed.source.name, "hello");
+
+        let composed = Recipe::load(examples.join("composed-stone.glu")).unwrap();
+        assert_eq!(composed.parsed.source.name, "composed-hello");
+        assert_eq!(
+            composed.parsed.package.summary.as_deref(),
+            Some("Recipe composed with an imported policy")
+        );
+    }
+
     fn matching_source_lock() -> SourceLock {
         SourceLock::new(vec![
             source_lock::SourceResolution::Archive(source_lock::ArchiveResolution {

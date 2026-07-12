@@ -12,6 +12,18 @@ fn authored(body: &str) -> Source {
 }
 
 #[test]
+fn documented_trigger_example_remains_loadable() {
+    let source = Source::new(
+        "docs/examples/gluon/trigger.glu",
+        include_str!("../../../docs/examples/gluon/trigger.glu"),
+    );
+    let evaluated = evaluate_gluon(&source).unwrap();
+
+    assert_eq!(evaluated.trigger.name, "refresh-example");
+    Collection::new([&evaluated.trigger]).unwrap();
+}
+
+#[test]
 fn constructors_cover_run_delete_inhibitors_patterns_and_path_kinds() {
     let source = authored(
         r#"

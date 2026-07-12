@@ -190,6 +190,24 @@ mod tests {
     }
 
     #[test]
+    fn documented_system_example_remains_loadable() {
+        let source = Source::new(
+            "docs/examples/gluon/system.glu",
+            include_str!("../../../docs/examples/gluon/system.glu"),
+        );
+        let evaluated = evaluate(&source).unwrap();
+
+        assert!(
+            evaluated
+                .model
+                .repositories
+                .get(&repository::Id::new("local"))
+                .is_some()
+        );
+        assert!(evaluated.model.packages.contains(&Provider::package_name("editor")));
+    }
+
+    #[test]
     fn evaluates_empty_and_populated_system_intent() {
         let empty = evaluate(&authored("moss.system")).unwrap();
         assert!(empty.model.repositories.iter().next().is_none());

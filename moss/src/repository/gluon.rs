@@ -371,6 +371,18 @@ mod tests {
     }
 
     #[test]
+    fn documented_repository_example_remains_loadable() {
+        let source = GluonSource::new(
+            "docs/examples/gluon/repositories.glu",
+            include_str!("../../../docs/examples/gluon/repositories.glu"),
+        );
+        let decoded = RepositoryCodec.decode(&Evaluator::default(), &source).unwrap();
+
+        assert!(decoded.value.contains_id(&repository::Id::new("local")));
+        assert!(decoded.value.contains_id(&repository::Id::new("volatile")));
+    }
+
+    #[test]
     fn manager_loads_direct_root_and_repository_defaults() {
         let temporary = tempfile::tempdir().unwrap();
         let manager = Manager::custom(temporary.path());
