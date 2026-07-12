@@ -208,9 +208,8 @@ fn list(manager: repository::Manager) -> Result<(), Error> {
             String::new()
         };
 
-        // TODO: Refactor this in future unit of work to print KDL encoded
-        // documents for each repo. The below addition of `RootIndexSource`
-        // is a temporary fix, not the desired future state
+        // TODO: Print the canonical Gluon fragment for each repository. The
+        // human-readable summary remains useful, but is not round-trippable.
         match &repo.source {
             repository::Source::DirectIndex(uri) => println!(" - {id} = {uri} [{}]{disabled}", repo.priority),
             repository::Source::RootIndex(repository::RootIndexSource {

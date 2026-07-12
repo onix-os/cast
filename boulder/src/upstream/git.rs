@@ -19,8 +19,6 @@ pub struct Git {
     pub url: Url,
     /// Revision to fetch, pinned to the full commit when a source lock exists.
     pub commit: String,
-    /// Reference authored in the recipe and retained in generated provenance.
-    pub requested_ref: String,
     pub original_index: usize,
 }
 

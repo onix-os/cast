@@ -54,7 +54,6 @@ impl Upstream {
                 Ok(Self::Git(Git {
                     url: upstream.url,
                     commit,
-                    requested_ref: git_ref,
                     original_index,
                 }))
             }
@@ -385,7 +384,7 @@ let base = boulder.recipe (boulder.source {{
         assert!(matches!(
             &parsed[1],
             Upstream::Git(source)
-                if source.requested_ref == "main" && source.commit == FULL_COMMIT
+                if source.commit == FULL_COMMIT
         ));
 
         let before = fs::metadata(&lock_path).unwrap();
