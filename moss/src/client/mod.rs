@@ -1529,6 +1529,49 @@ mod tests {
         )
     }
 
+    #[test]
+    fn state_creation_records_and_exports_the_generated_snapshot() {
+        let temporary = tempfile::tempdir().unwrap();
+        let intent_path = system_model::intent_path(temporary.path());
+        fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        fs::write(
+            &intent_path,
+            r#"// Authored intent must remain unchanged.
+let moss = import! moss.system.v1
+moss.system
+"#,
+        )
+        .unwrap();
+        let authored = fs::read_to_string(&intent_path).unwrap();
+
+        let client = stateful_test_client(temporary.path());
+        fs::create_dir_all(client.installation.assets_path("v2")).unwrap();
+        let authored_fingerprint = client
+            .installation
+            .system_model
+            .as_ref()
+            .unwrap()
+            .fingerprint()
+            .sha256
+            .clone();
+
+        let created = client.new_state(&[], "Gluon state creation").unwrap().unwrap();
+        let snapshot_path = system_model::snapshot_path(temporary.path());
+        let recorded = fs::read_to_string(&snapshot_path).unwrap();
+        assert!(recorded.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+        assert!(recorded.contains(&format!("// Authored source fingerprint: {authored_fingerprint}")));
+        assert_eq!(fs::read_to_string(&intent_path).unwrap(), authored);
+
+        drop(client);
+        let reopened = stateful_test_client(temporary.path());
+        assert_eq!(reopened.installation.active_state, Some(created.id));
+        let exported = reopened.export_state(created.id).unwrap();
+
+        assert_eq!(exported.encoded(), recorded);
+        assert_eq!(exported.source_fingerprint(), Some(authored_fingerprint.as_str()));
+        assert_eq!(fs::read_to_string(intent_path).unwrap(), authored);
+    }
+
     fn assert_generated_snapshot(path: &Path, expected: &str, package: &str) {
         let encoded = fs::read_to_string(path).unwrap();
         let evaluated =
