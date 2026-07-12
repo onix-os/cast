@@ -187,21 +187,24 @@ void process_records(StonePayload *payload, StonePayloadHeader *payload_header,
 
   void *record;
   int i = 0;
+  size_t allocation_size =
+      (size_t)record_size * (*num_records + payload_header->num_records);
 
-  *records =
-      realloc(*records, sizeof(StonePayloadLayoutRecord) *
-                            (*num_records + payload_header->num_records));
-  if (records == NULL) {
-    exit(1);
+  if (allocation_size > 0) {
+    void *resized = realloc(*records, allocation_size);
+    if (resized == NULL) {
+      exit(1);
+    }
+    *records = resized;
   }
 
-  while (next_record(payload, record = *records +
+  while (next_record(payload, record = (char *)*records +
                                        (*num_records + i) * record_size) >= 0) {
     print_record(record);
     i++;
   }
 
-  *num_records += payload_header->num_records;
+  *num_records += i;
 }
 
 void process_reader(StoneReader *reader, StoneHeaderVersion version) {
