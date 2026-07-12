@@ -89,7 +89,7 @@ impl Builder {
 
         let upstreams = upstream::parse_recipe(&recipe)?;
 
-        let profiles = profile::Manager::new(&env);
+        let profiles = profile::Manager::new(&env)?;
         let repos = profiles.repositories(&profile)?.clone();
 
         Ok(Self {

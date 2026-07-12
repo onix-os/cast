@@ -118,7 +118,7 @@ fn parse_repository(s: &str) -> Result<(repository::Id, Repository), String> {
 }
 
 pub fn handle(command: Command, env: Env) -> Result<(), Error> {
-    let manager = profile::Manager::new(&env);
+    let manager = profile::Manager::new(&env)?;
 
     match command.subcommand {
         Subcommand::List => list(manager),
@@ -147,9 +147,6 @@ pub fn list(manager: profile::Manager<'_>) -> Result<(), Error> {
                 String::new()
             };
 
-            // TODO: Refactor this in future unit of work to print KDL encoded
-            // documents for each repo. The below addition of `RootIndexSource`
-            // is a temporary fix, not the desired future state
             match &repo.source {
                 repository::Source::DirectIndex(uri) => println!(" - {id} = {uri} [{}]{disabled}", repo.priority),
                 repository::Source::RootIndex(repository::RootIndexSource {
@@ -206,8 +203,6 @@ pub fn update<'a>(env: &'a Env, manager: profile::Manager<'a>, profile: &profile
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("config")]
-    Config(#[from] config::SaveError),
     #[error("profile")]
     Profile(#[from] profile::Error),
     #[error("moss client")]
