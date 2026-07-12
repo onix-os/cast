@@ -3,8 +3,8 @@
 
 use gluon_config::{DiagnosticCategory, Evaluator, Source};
 use stone_recipe::{
-    PathKind, RECIPE_ABI_VERSION, RecipeEvaluationError, Tuning, evaluate_gluon, evaluate_gluon_with_inputs,
-    tuning::Toolchain, upstream::Props,
+    PathKind, RECIPE_ABI_VERSION, RecipeConversionError, RecipeEvaluationError, Tuning, ValidationError,
+    evaluate_gluon, evaluate_gluon_with_inputs, tuning::Toolchain, upstream::Props,
 };
 
 const SOURCE: &str = r#"{
@@ -291,6 +291,80 @@ boulder.recipe (boulder.source {
         error,
         RecipeEvaluationError::Conversion(ref error) if error.field() == "source.release"
     ));
+}
+
+#[test]
+fn invalid_dependencies_and_providers_report_indexed_conversion_fields() {
+    let cases = [
+        (
+            format!(
+                r#"
+let base = boulder.recipe (boulder.source {SOURCE})
+{{
+    build = {{ build_deps = ["valid", "unknown(target)"], .. boulder.defaults.build }},
+    .. base
+}}
+"#
+            ),
+            "build.build_deps[1]",
+            false,
+        ),
+        (
+            format!(
+                r#"
+let base = boulder.recipe (boulder.source {SOURCE})
+{{
+    package = {{ conflicts = ["valid", "binary(unclosed"], .. boulder.defaults.package }},
+    .. base
+}}
+"#
+            ),
+            "package.conflicts[1]",
+            true,
+        ),
+        (
+            format!(
+                r#"
+let base = boulder.recipe (boulder.source {SOURCE})
+{{
+    profiles = [boulder.named "native" {{
+        check_deps = ["valid", "unknown(target)"],
+        .. boulder.defaults.build
+    }}],
+    .. base
+}}
+"#
+            ),
+            "profiles[0].value.check_deps[1]",
+            false,
+        ),
+        (
+            format!(
+                r#"
+let base = boulder.recipe (boulder.source {SOURCE})
+{{
+    sub_packages = [boulder.named "example-devel" {{
+        run_deps = ["valid", "binary(unclosed"],
+        .. boulder.defaults.package
+    }}],
+    .. base
+}}
+"#
+            ),
+            "sub_packages[0].value.run_deps[1]",
+            false,
+        ),
+    ];
+
+    for (body, expected_field, provider) in cases {
+        let error = evaluate_gluon(&authored(&body)).unwrap_err();
+        let RecipeEvaluationError::Conversion(RecipeConversionError::Validation(error)) = error else {
+            panic!("expected a relation conversion error, found {error}");
+        };
+        assert_eq!(error.field(), expected_field);
+        assert_eq!(matches!(error, ValidationError::InvalidProvider { .. }), provider);
+        assert_eq!(matches!(error, ValidationError::InvalidDependency { .. }), !provider);
+    }
 }
 
 #[test]

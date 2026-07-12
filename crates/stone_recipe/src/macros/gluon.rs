@@ -9,9 +9,10 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 
 use super::{Action, ActionSpec, Macros, MacrosSpec};
 use crate::{
-    Package, PackageSpec, PathKind, PathSpec,
+    Package, PackageSpec, PathKind, PathSpec, ValidationError,
     spec::KeyValueSpec,
     tuning::{CompilerFlagsSpec, TuningFlagSpec, TuningGroupSpec, TuningOptionSpec},
+    validation,
 };
 
 /// Version of the embedded macro-policy language boundary.
@@ -129,6 +130,7 @@ pub enum MacrosConversionError {
     EmptyKey { field: String },
     UnknownTuningDefault { field: String, value: String },
     EmptyPackagePath { field: String },
+    InvalidRelation(ValidationError),
 }
 
 impl MacrosConversionError {
@@ -137,6 +139,7 @@ impl MacrosConversionError {
             Self::EmptyKey { field } | Self::UnknownTuningDefault { field, .. } | Self::EmptyPackagePath { field } => {
                 field
             }
+            Self::InvalidRelation(error) => error.field(),
         }
     }
 }
@@ -149,6 +152,7 @@ impl fmt::Display for MacrosConversionError {
                 write!(formatter, "{field}: default `{value}` is not one of the tuning choices")
             }
             Self::EmptyPackagePath { field } => write!(formatter, "{field}: package path must not be empty"),
+            Self::InvalidRelation(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -395,6 +399,13 @@ impl MacrosSpec {
         validate_keys("tuning", &self.tuning)?;
         validate_keys("packages", &self.packages)?;
 
+        for (index, action) in self.actions.iter().enumerate() {
+            validation::validate_dependencies(
+                &action.value.dependencies,
+                &format!("actions[{index}].value.dependencies"),
+            )
+            .map_err(MacrosConversionError::InvalidRelation)?;
+        }
         for (index, tuning) in self.tuning.iter().enumerate() {
             if let Some(default) = tuning.value.default.as_ref()
                 && !tuning.value.choices.iter().any(|choice| choice.key == *default)
@@ -406,6 +417,11 @@ impl MacrosSpec {
             }
         }
         for (package_index, package) in self.packages.iter().enumerate() {
+            validation::validate_package_templates(
+                &Package::from(package.value.clone()),
+                &format!("packages[{package_index}].value"),
+            )
+            .map_err(MacrosConversionError::InvalidRelation)?;
             for (path_index, path) in package.value.paths.iter().enumerate() {
                 let path = match path {
                     PathSpec::Any { path }
@@ -901,6 +917,57 @@ boulder.set.actions actions definitions"#,
             out_of_range,
             MacrosEvaluationError::Evaluation(ref error)
                 if error.limit == Some(LimitKind::SourceSize)
+        ));
+    }
+
+    #[test]
+    fn macro_relations_distinguish_strict_actions_from_deferred_packages() {
+        let deferred_package = evaluate_gluon(&authored(
+            r#"{
+    packages = [boulder.named "devel" (boulder.package.from_record {
+        run_deps = ["%(name)", "binary(%(tool))"],
+        .. boulder.package.default
+    })],
+    .. boulder.macros
+}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            deferred_package.macros.packages[0].value.run_deps,
+            ["%(name)", "binary(%(tool))"]
+        );
+
+        let invalid_action = evaluate_gluon(&authored(
+            r#"{
+    actions = [boulder.named "build" (boulder.action.with_dependencies
+        ["valid", "unknown(target)"]
+        (boulder.action.new "Build" "make"))],
+    .. boulder.macros
+}"#,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            invalid_action,
+            MacrosEvaluationError::Conversion(MacrosConversionError::InvalidRelation(
+                ValidationError::InvalidDependency { ref field, .. }
+            )) if field == "actions[0].value.dependencies[1]"
+        ));
+
+        let invalid_package = evaluate_gluon(&authored(
+            r#"{
+    packages = [boulder.named "devel" (boulder.package.from_record {
+        conflicts = ["valid", "binary(unclosed"],
+        .. boulder.package.default
+    })],
+    .. boulder.macros
+}"#,
+        ))
+        .unwrap_err();
+        assert!(matches!(
+            invalid_package,
+            MacrosEvaluationError::Conversion(MacrosConversionError::InvalidRelation(
+                ValidationError::InvalidProvider { ref field, .. }
+            )) if field == "packages[0].value.conflicts[1]"
         ));
     }
 
