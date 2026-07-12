@@ -33,6 +33,7 @@
 - **Depends on**: none
 - **Category**: architecture, migration, security, tests, DX
 - **Planned at**: commit `80d7ac5`, 2026-07-12
+- **Implementation**: complete, 2026-07-13
 
 ## Goal
 
@@ -732,24 +733,24 @@ Where practical, test that:
 
 All items must hold before declaring the migration complete:
 
-- [ ] One shared restricted Gluon evaluator is used by all consumers.
-- [ ] Forbidden host capabilities and ambient imports have negative tests.
-- [ ] Evaluations have memory, time and import-size limits.
-- [ ] Gluon-facing DTOs are versioned and separated from domain structs.
-- [ ] `stone.glu` is the canonical Boulder recipe.
-- [ ] Resolved sources live in a generated lock; authored recipes are not edited.
-- [ ] YAML macros and KDL control files are replaced by Gluon modules/functions.
-- [ ] Profiles, repositories and triggers load through Gluon with visible errors.
-- [ ] Moss separates `/etc` system intent from generated per-state snapshots.
-- [ ] State sync/export/verify/activation behavior is covered without KDL.
-- [ ] `serde_yaml`, `kdl` and `crates/yaml` are absent from the workspace.
-- [ ] No OS Tools configuration fixtures remain in YAML/KDL.
-- [ ] GitHub-required YAML remains unchanged.
-- [ ] `cargo fmt --all -- --check` passes.
-- [ ] `cargo clippy --workspace -- --no-deps` passes without new warnings.
-- [ ] `cargo test --all` passes.
-- [ ] `just test` passes in an environment with Rust >=1.91 and `typos`.
-- [ ] No file under `../bedrock` was modified.
+- [x] One shared restricted Gluon evaluator is used by all consumers.
+- [x] Forbidden host capabilities and ambient imports have negative tests.
+- [x] Evaluations have memory, time and import-size limits.
+- [x] Gluon-facing DTOs are versioned and separated from domain structs.
+- [x] `stone.glu` is the canonical Boulder recipe.
+- [x] Resolved sources live in a generated lock; authored recipes are not edited.
+- [x] YAML macros and KDL control files are replaced by Gluon modules/functions.
+- [x] Profiles, repositories and triggers load through Gluon with visible errors.
+- [x] Moss separates `/etc` system intent from generated per-state snapshots.
+- [x] State sync/export/verify/activation behavior is covered without KDL.
+- [x] `serde_yaml`, `kdl` and `crates/yaml` are absent from the workspace.
+- [x] No OS Tools configuration fixtures remain in YAML/KDL.
+- [x] GitHub-required YAML remains unchanged.
+- [x] `cargo fmt --all -- --check` passes.
+- [x] `cargo clippy --workspace -- --no-deps` passes without new warnings.
+- [x] `cargo test --all` passes.
+- [x] `just test` passes in an environment with Rust >=1.91 and `typos`.
+- [x] No file under `../bedrock` was modified.
 
 ## STOP conditions
 
