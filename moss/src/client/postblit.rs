@@ -173,12 +173,14 @@ pub(super) fn triggers<'a>(
     // Load appropriate triggers from their locations and convert back to a vec of Trigger
     let triggers = match scope {
         TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
-            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)?
+            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
+            .map_err(|error| Error::Config(Box::new(error)))?
             .into_iter()
             .map(|l| l.value.0)
             .collect_vec(),
         TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
-            .load_gluon(&Evaluator::default(), &SystemTriggerCodec)?
+            .load_gluon(&Evaluator::default(), &SystemTriggerCodec)
+            .map_err(|error| Error::Config(Box::new(error)))?
             .into_iter()
             .map(|l| l.value.0)
             .collect_vec(),
@@ -275,7 +277,7 @@ fn execute_trigger_directly(trigger: &CompiledHandler) -> Result<(), Error> {
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("load Gluon trigger configuration")]
-    Config(#[from] config::LoadGluonError),
+    Config(#[source] Box<config::LoadGluonError>),
 
     #[error("container")]
     Container(#[from] container::Error),

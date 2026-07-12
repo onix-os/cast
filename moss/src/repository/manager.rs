@@ -110,7 +110,7 @@ impl Manager {
             {
                 config
                     .load_gluon(&Evaluator::default(), &repository::RepositoryCodec)
-                    .map_err(Error::LoadConfig)?
+                    .map_err(|error| Error::LoadConfig(Box::new(error)))?
                     .into_iter()
                     .map(|loaded| (Some(loaded.path), loaded.value))
                     .collect()
@@ -163,7 +163,7 @@ impl Manager {
         let map = repository::Map::with([(id.clone(), repository.clone())]);
         let config_path = config
             .save_gluon(&id, &map, &repository::RepositoryCodec)
-            .map_err(Error::SaveConfig)?;
+            .map_err(|error| Error::SaveConfig(Box::new(error)))?;
 
         let db = open_meta_db(self.source.identifier(), &repository, &self.installation)?;
 
@@ -360,7 +360,7 @@ impl Manager {
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
             config
                 .save_gluon(id, &map, &repository::RepositoryCodec)
-                .map_err(Error::SaveConfig)?;
+                .map_err(|error| Error::SaveConfig(Box::new(error)))?;
         }
 
         Ok(())
@@ -570,9 +570,9 @@ pub enum Error {
     #[error("meta db")]
     Database(#[from] meta::Error),
     #[error("save config")]
-    SaveConfig(#[source] config::SaveGluonError),
+    SaveConfig(#[source] Box<config::SaveGluonError>),
     #[error("load config")]
-    LoadConfig(#[source] config::LoadGluonError),
+    LoadConfig(#[source] Box<config::LoadGluonError>),
     #[error("unknown repo")]
     UnknownRepo(repository::Id),
     #[error("resolve history index uri from root index")]
