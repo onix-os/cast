@@ -39,6 +39,9 @@ itertools.workspace = true
 fnmatch = { path = "../crates/fnmatch" }
 fs-err.workspace = true
 futures-util.workspace = true
+gluon.workspace = true
+gluon_codegen.workspace = true
+gluon_config = { path = "../crates/gluon_config" }
 hex.workspace = true
 indexmap.workspace = true
 kdl.workspace = true

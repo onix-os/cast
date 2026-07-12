@@ -14,6 +14,7 @@ use self::encode::encode;
 
 mod decode;
 mod encode;
+pub mod gluon;
 pub mod spec;
 mod update;
 
