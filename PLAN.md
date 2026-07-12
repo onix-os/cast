@@ -1,0 +1,449 @@
+<!--
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+-->
+
+# Plan: Make Stone a Fully Declarative Package Function
+
+> **Executor instructions:** Follow this plan in order and keep the repository
+> buildable between slices. This work is limited to `os-tools`: never edit,
+> generate files in, or otherwise modify `../bedrock`. Do not use Python to edit
+> files. Use patch/edit tools and the repository Makefile for relevant build,
+> check, lint, and test work. Commit every few cohesive changes; do not wait
+> until the end of a phase. Do not push unless the user explicitly requests it.
+>
+> The completed Gluon-only format migration in
+> [`docs/plans/gluon-migration.md`](docs/plans/gluon-migration.md) is the
+> foundation for this plan. Preserve its evaluator, provenance, and complete
+> YAML/KDL removal guarantees rather than reopening the format migration.
+
+## Goal
+
+Make a Stone recipe behave like a pure package declaration rather than a
+manifest that Boulder completes through hidden Rust policy.
+
+The target pipeline is:
+
+```text
+pure Gluon package factory
+    -> concrete typed PackageSpec
+    -> source, policy, and dependency resolution
+    -> canonical DerivationPlan
+    -> one or more .stone packages
+```
+
+The `.stone` file remains the package artifact. `DerivationPlan` is the
+Nix-like build description and reproducibility boundary.
+
+## Non-negotiable constraints
+
+- Gluon is the only OS Tools configuration language.
+- YAML and KDL support must be completely absent from owned configuration,
+  including loaders, fallback paths, compatibility shims, dual writes, and
+  documentation. YAML required by external services such as GitHub is not OS
+  Tools configuration.
+- `../bedrock` is outside this plan and must not be modified.
+- Gluon evaluation remains pure and capability-restricted: no network,
+  processes, host filesystem discovery, environment reads, or wall-clock time.
+- Generated locks and plans are distinct from authored package modules.
+- The final architecture must have one source of truth. Versioned migration
+  code may exist while a phase is being implemented, but the old recipe ABI,
+  macro language, and compatibility paths must be removed before completion.
+- Work lands as small, reviewable commits. Each implementation slice below
+  should normally be one commit, with tests committed beside the behavior.
+  Commit after every few cohesive changes rather than accumulating an entire
+  phase in the working tree.
+- Use the repository Makefile for build, check, lint, and test operations.
+- Do not use Python to edit repository files.
+- Do not change release/version metadata or the `.stone` archive format as part
+  of this work.
+
+## Current foundation
+
+- [x] `stone.glu` is executable Gluon rather than decoded data.
+- [x] Recipes can import local modules, call functions, and update immutable
+  records.
+- [x] The evaluator restricts capabilities and applies resource limits.
+- [x] Recipe source, imports, ABI modules, and explicit inputs participate in
+  evaluation fingerprints.
+- [x] Sources can be represented by an authored recipe plus a generated
+  `sources.lock.glu`.
+- [x] YAML and KDL configuration paths have been removed from OS Tools.
+
+The remaining problem is architectural: `boulder.recipe.v1` produces one
+closed `RecipeSpec`, while Boulder later adds build policy, dependencies,
+macros, tuning, package templates, and environment in Rust. A recipe is
+therefore functional at its boundary but is not yet a complete declaration of
+the build that will run.
+
+### Current blockers
+
+- `crates/stone_recipe/src/gluon.rs` evaluates the root directly as one closed
+  recipe DTO. Package factories can be called by authored Gluon today, but the
+  public ABI does not model a package function or package graph.
+- `crates/stone_recipe/gluon/recipe.glu` and
+  `crates/stone_recipe/src/spec.rs` still model phases and dependency providers
+  primarily as strings.
+- `bin/boulder/src/macros.rs` discovers, sorts, and merges policy files from the
+  filesystem rather than evaluating one explicit policy root; individual
+  policy fingerprints are not retained through the build.
+- `bin/boulder/src/build/job/phase.rs` expands `%action` and definition strings
+  and applies target/tuning behavior after recipe evaluation.
+- `bin/boulder/src/package.rs` performs architecture-template, root-package,
+  and subpackage merging after evaluation with host-side precedence rules.
+- `sources.lock.glu` freezes sources, but exact package inputs, base state,
+  target, profile, toolchain, builder, and policy are not yet captured by one
+  reproducible build identity.
+- build time can fall back to Git or wall-clock time instead of being a stable
+  explicit derivation input.
+
+## Target semantics
+
+### Package factories
+
+The documented authoring unit will be a pure Gluon function:
+
+```text
+PackageInputs -> PackageSpec
+```
+
+`PackageInputs` contains only explicit, immutable values such as dependency
+references, platform information, selected features, and builder functions.
+The package factory is called inside Gluon; Rust receives a concrete DTO, not
+a VM closure.
+
+Conceptually:
+
+```gluon
+// package.glu
+let b = import! boulder.package.v2
+let builders = import! boulder.builders.v1
+
+\deps ->
+    b.mk_package {
+        pname = "hello",
+        version = "1.0.0",
+        release = 1,
+        sources = [
+            b.source.archive {
+                url = "https://example.invalid/hello-1.0.0.tar.xz",
+                hash = "sha256-...",
+            },
+        ],
+        native_build_inputs = [deps.cmake, deps.pkgconf],
+        build_inputs = [deps.zlib.output "lib"],
+        builder = builders.cmake {
+            flags = ["-DBUILD_TESTS=ON"],
+            run_tests = True,
+        },
+        outputs = [
+            b.output "out" [b.path.any "*"],
+            b.output "dev" [
+                b.path.any "/usr/include",
+                b.path.any "/usr/lib/*.so",
+            ],
+        ],
+    }
+```
+
+The root explicitly supplies the scope:
+
+```gluon
+let make = import! "./package.glu"
+let pkgs = import! "./package-set.glu"
+
+make {
+    cmake = pkgs.cmake,
+    pkgconf = pkgs.pkgconf,
+    zlib = pkgs.zlib,
+}
+```
+
+There is no automatic argument-name reflection in the first implementation.
+Explicit records preserve Gluon's type checking and make missing dependencies
+visible.
+
+### Three specification layers
+
+1. **`PackageSpec`** records authored package intent: metadata, sources,
+   symbolic inputs, builder selection, hooks, outputs, and package rules.
+2. **`PolicySpec`** records explicit repository policy: platforms, toolchains,
+   builders, tuning, environment, and package templates.
+3. **`DerivationPlan`** is the fully resolved, target-specific, canonical data
+   consumed by the executor.
+
+The executor must not discover dependencies, reload policies, infer builder
+tools, or mutate package outputs after `DerivationPlan` has been frozen.
+
+### Typed package relations
+
+Dependencies must become typed values rather than unvalidated strings:
+
+```gluon
+b.dep.package "zlib"
+b.dep.binary "cmake"
+b.dep.pkgconfig "openssl"
+b.dep.soname "libz.so.1"
+deps.zlib.output "dev"
+```
+
+The first implementation may lower these variants into the current provider
+syntax. The final implementation must share one dependency representation
+between Boulder and Moss rather than maintaining separate parsers.
+
+Inputs are separated by purpose:
+
+- `native_build_inputs`: programs executed by the builder;
+- `build_inputs`: libraries and headers used for the target output;
+- `check_inputs`: dependencies needed only by checks;
+- output-specific runtime dependencies.
+
+The data model must leave room for build, host, and target platform roles
+without making cross compilation implicit.
+
+### Structured builders and hooks
+
+Build systems become pure Gluon modules such as:
+
+```text
+boulder.builders.cmake.v1
+boulder.builders.meson.v1
+boulder.builders.cargo.v1
+boulder.builders.autotools.v1
+```
+
+A builder returns structural data containing its tools, environment, phases,
+and hooks. Boulder must not learn that CMake or Ninja is required by expanding
+a `%cmake` string.
+
+Standard builders should expose typed configuration and pre/post hooks. A
+deliberate `custom` or `shell` escape hatch remains available; declarative
+construction requires explicit inputs and effects, not the elimination of
+shell commands.
+
+### Overrides and policy composition
+
+Two different operations remain explicit:
+
+1. **Package argument override:** call a package factory with a different
+   dependency, feature, builder, or platform value.
+2. **Typed attribute override:** transform an already produced `PackageSpec`
+   through a total `PackagePatch`.
+
+Patch operations use strict semantics:
+
+```text
+Keep
+Set value
+Replace values
+Prepend values
+Append values
+```
+
+Policy composition initially uses ordered one-way transformations:
+
+```text
+PolicySpec -> PolicySpec
+```
+
+Policy maps use explicit `add`, `replace`, and `modify` operations. Duplicate
+unqualified additions are errors. Recursive Nix-style `final: prev:` fixed
+points are deferred until a concrete requirement justifies their additional
+cycle and diagnostic complexity.
+
+### Frozen derivation plan
+
+`DerivationPlan` must include every input that can change the build:
+
+- schema version and Boulder implementation version;
+- recipe and imported-module fingerprints;
+- locked sources and source-lock digest;
+- exact Moss-resolved package and output identities;
+- build, host, and target platform values;
+- selected policy, profile, toolchain, and builder fingerprints;
+- all resolved phases, hooks, arguments, and environment values;
+- networking, cache, PGO, emulation, and tuning choices;
+- package outputs and path-selection rules;
+- the chosen reproducible source timestamp.
+
+Canonical encoding produces the identity:
+
+```text
+derivation_id = hash(canonical_encode(DerivationPlan))
+```
+
+Every emitted Stone and manifest records this ID. Stone payload hashes remain
+output-integrity checks; they do not replace the derivation identity.
+
+## Implementation phases
+
+### Phase 1: Freeze the contracts
+
+- [ ] Document `PackageSpec`, `PolicySpec`, and `DerivationPlan` ownership and
+  invariants in the code that will own them.
+- [ ] Inventory every value Boulder currently adds after recipe evaluation.
+- [ ] Classify each value as authored intent, repository policy, resolved
+  dependency, executor-only state, or forbidden ambient state.
+- [ ] Add regression tests proving that the same explicit inputs evaluate to
+  the same result and fingerprint.
+- [ ] Rework or remove breakpoint source-line recovery that still assumes
+  legacy YAML block syntax.
+
+**Exit gate:** every current hidden input has an assigned destination in one
+of the three specification layers.
+
+### Phase 2: Make policy explicit
+
+- [ ] Create one Gluon policy root that explicitly imports the base policy,
+  actions, architecture definitions, tuning, and package templates.
+- [ ] Replace directory enumeration and filesystem-order merging in
+  `Macros::load` with evaluation of that root.
+- [ ] Implement strict `add`, `replace`, and `modify` composition.
+- [ ] Retain and propagate policy and profile fingerprints.
+- [ ] Include selected target and policy inputs in evaluation provenance.
+- [ ] Add diagnostics showing which module introduced or modified a policy
+  value.
+
+**Exit gate:** policy order is visible in Gluon, duplicate semantics are
+explicit, and no macro/profile fingerprint is discarded.
+
+### Phase 3: Introduce `boulder.package.v2`
+
+- [ ] Add the versioned `PackageSpec` ABI without changing the executor yet.
+- [ ] Establish `PackageInputs -> PackageSpec` as the package authoring
+  convention.
+- [ ] Add defaults and a complete typed patch algebra covering every field.
+- [ ] Lower v2 deterministically into the current validated recipe/domain
+  model.
+- [ ] Add imported-package, dependency-override, attribute-override, and error
+  diagnostic examples.
+- [ ] Add an evaluation command that prints the concrete normalized
+  `PackageSpec`.
+
+**Exit gate:** real fixtures are authored as package factories and Rust only
+receives concrete, validated package data.
+
+### Phase 4: Type dependencies and outputs
+
+- [ ] Introduce `DependencySpec`, `PackageRef`, and `OutputRef` variants.
+- [ ] Separate native build, target build, check, and runtime relations.
+- [ ] Move the canonical provider parser and representation into a shared
+  crate used by both Boulder and Moss.
+- [ ] Make root and split outputs explicit in `PackageSpec`.
+- [ ] Detect missing references, duplicate output names, and dependency cycles
+  before execution.
+- [ ] Remove duplicated shallow dependency-string validation.
+
+**Exit gate:** no package relationship depends on an opaque, independently
+validated recipe string.
+
+### Phase 5: Add structured builders
+
+- [ ] Implement CMake, Meson, Cargo, and Autotools builder modules.
+- [ ] Make each builder return its required tools, environment, phases, and
+  supported hooks.
+- [ ] Initially lower structured builders into the current shell pipeline.
+- [ ] Preserve an explicit custom builder for packages outside standard build
+  systems.
+- [ ] Add equivalence tests against representative existing macro-driven
+  recipes.
+
+**Exit gate:** standard recipes do not use `%action` strings and their build
+dependencies are structural.
+
+### Phase 6: Normalize and freeze `DerivationPlan`
+
+- [ ] Resolve sources, dependencies, target, policy, builder, profile, and
+  reproducibility inputs into one canonical plan.
+- [ ] Add generated `build.lock.glu` data for the exact package/output closure,
+  base build state, repository snapshot, toolchain, target, and policy
+  identities; define explicit missing, stale, and update behavior.
+- [ ] Keep authored package modules separate from `sources.lock.glu` and
+  `build.lock.glu`; Gluon evaluation describes requests while Rust performs and
+  freezes I/O-backed resolution.
+- [ ] Eliminate wall-clock fallback or bind an explicitly selected timestamp
+  into the plan.
+- [ ] Implement stable canonical encoding and derivation hashing.
+- [ ] Add `boulder recipe plan` and `boulder recipe explain` commands.
+- [ ] Record the derivation ID in manifests and emitted Stones.
+- [ ] Change the build executor to consume only the frozen plan.
+- [ ] Prove that changing any source, dependency, target, policy, builder, or
+  phase changes the derivation ID.
+
+**Exit gate:** after plan creation, Boulder performs execution but no semantic
+composition.
+
+### Phase 7: Package scopes and controlled policy layers
+
+- [ ] Add explicit reusable dependency scopes backed by Moss provider
+  resolution.
+- [ ] Support ordinary Gluon package-argument overrides.
+- [ ] Support typed whole-package patches analogous to attribute overrides.
+- [ ] Allow configured, ordered policy layers only when they are visible in
+  `recipe explain` and included in the derivation identity.
+- [ ] Detect missing scope entries and cycles with actionable diagnostics.
+
+**Exit gate:** packages are reusable functions without creating a second
+recursive package universe inside Gluon.
+
+### Phase 8: Retire the transitional model
+
+- [ ] Replace phase strings with typed `StepSpec` sequences where structural
+  steps are possible.
+- [ ] Remove `%action` and `%(definition)` parsing after golden parity tests.
+- [ ] Remove filesystem-discovered macro composition.
+- [ ] Remove `boulder.recipe.v1`, its standalone encoders, and conversion-only
+  compatibility code after all tracked recipes and fixtures use v2.
+- [ ] Remove obsolete defaults and duplicated Rust/Gluon wire definitions.
+- [ ] Audit the repository for YAML/KDL loaders, fallbacks, compatibility
+  paths, examples, and documentation; remove any reintroduced occurrence.
+- [ ] Update the Gluon configuration contract and package-authoring guide.
+
+**Exit gate:** only the package-function ABI, explicit Gluon policy, and frozen
+plan model remain.
+
+## Validation gates
+
+Every phase must add focused tests and finish with the relevant Make targets.
+Before merging a phase:
+
+```sh
+make check
+make test
+```
+
+The final architecture must demonstrate:
+
+- identical explicit inputs produce byte-identical canonical plans and equal
+  derivation IDs;
+- source, dependency, target, builder, policy, profile, and environment
+  changes invalidate the derivation ID;
+- evaluator code cannot access the network, process environment, arbitrary
+  host paths, processes, or time;
+- the executor cannot add undeclared packages or policy after plan freezing;
+- package overrides and policy composition have deterministic precedence;
+- standard builders declare all tools structurally;
+- generated plans explain the provenance of every resolved input;
+- no OS Tools YAML/KDL compatibility path remains;
+- existing `.stone` reading and package-management behavior remains covered by
+  regression tests.
+
+## Explicit non-goals
+
+- Reimplementing the Nix language or Nix store.
+- Building a lazy recursive Nixpkgs clone inside Gluon.
+- Automatic `callPackage` argument-name reflection in the initial design.
+- Evaluation-time fetching or import-from-derivation.
+- Unrestricted global overlays or user-home policy discovery.
+- Removing Moss provider resolution in favor of a second dependency solver.
+- Eliminating all shell execution.
+- Changing workspace release/version metadata or the `.stone` archive format.
+- Modifying or migrating `../bedrock`.
+
+## Completion definition
+
+This plan is complete when a Stone package is authored as a reusable pure
+Gluon function, all policy and package relationships are typed and explicit, a
+canonical target-specific `DerivationPlan` fully describes the build before it
+runs, Boulder executes only that plan, and no YAML, KDL, v1 recipe, or legacy
+macro compatibility path remains.
