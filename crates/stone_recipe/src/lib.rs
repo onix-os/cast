@@ -11,14 +11,21 @@ use crate::serde_util::{default_true, stringy_bool};
 pub use self::control_file::ControlFile;
 pub use self::macros::Macros;
 pub use self::script::Script;
+pub use self::spec::{
+    BuildSpec, KeyValueSpec, OptionsSpec, PackageSpec, PathSpec, RecipeConversionError, RecipeSpec, SourceSpec,
+    ToolchainSpec, TuningSpec, UpstreamSpec,
+};
 pub use self::tuning::Tuning;
 pub use self::upstream::Upstream;
+pub use self::validation::ValidationError;
 
 pub mod control_file;
 pub mod macros;
 pub mod script;
+pub mod spec;
 pub mod tuning;
 pub mod upstream;
+pub mod validation;
 
 mod serde_util;
 
@@ -54,6 +61,13 @@ pub struct Recipe {
     pub emul32: bool,
     #[serde(default, deserialize_with = "stringy_bool")]
     pub mold: bool,
+}
+
+impl Recipe {
+    /// Validate the format-independent invariants of a recipe.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validation::validate(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
