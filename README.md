@@ -3,155 +3,134 @@
 # SPDX-License-Identifier: MPL-2.0
 -->
 
-# 🛠️ OS Tools - Modern System State Management
+# OS Tools
 
-## 📦 Core Tools
+OS Tools is the package-building and system-state toolkit used by Onix OS. The
+workspace contains Moss, Boulder, the `.stone` libraries, and the restricted
+Gluon evaluator shared by their declarative interfaces.
 
-This repository provides two powerful Rust-based tools for managing `.stone` packages, the native package format for AerynOS:
+This repository is an intentional hard fork of
+[AerynOS OS Tools](https://github.com/AerynOS/os-tools). It keeps the original
+Git history and a great deal of the original architecture, but it is no longer
+a drop-in configuration-compatible AerynOS client.
 
-- **moss**: Advanced package & system state manager with atomic transactions and content deduplication
-- **boulder**: Modern package building tool with containerized builds and intelligent package splitting
+## Why this is a hard fork
 
-## 🔧 Technical Overview
+Onix is being built as a declarative Linux userspace. Package recipes, Boulder
+policy and profiles, Moss repositories, transaction triggers, and desired
+system state are all authored in one language: Gluon.
 
-### .stone Package Format
-The `.stone` format is a structured binary package format designed for modern, rolling-release systems. It features:
+This is a breaking architecture decision, not a file-extension change. YAML
+and KDL loaders, fallbacks, dual writes, and intermediate representations have
+been removed. Gluon programs cross a typed and versioned ABI, run inside a
+restricted evaluator, and produce fingerprints used for provenance. Authored
+programs remain separate from generated source locks and normalized state
+snapshots.
 
-- Explicit versioning for seamless format changes
-- `zstd` compression for optimal storage
-- Content-addressable storage via `xxhash`
-- Smart payload separation:
-  - 📋 Metadata: Package info and licensing with strong typing
-  - 🗂️ Layout: Filesystem structure definitions
-  - 📑 Index: Content payload access mapping
-  - 📦 Content: Deduplicated file storage
+Keeping the old configuration paths would leave two sources of truth and two
+different composition models. It would also make compatibility promises
+unclear for both projects. The hard fork makes ownership explicit: AerynOS can
+develop OS Tools for its own system and release cycle, while Onix can accept
+the breakage required by its Gluon-only model.
 
-### System Architecture
-- Content-addressable `/usr` with atomic updates via `renameat2`
-- Private store and roots in `/.moss`
-- Container-based transaction triggers
-- Full USR merge compliance
-- Stateless system design with clear separation of OS and local system configuration
-- Quick system rollbacks through atomic operations
-- Restricted, deterministic [Gluon](https://gluon-lang.org/) evaluation for declarative configuration
+This is not a claim that the inherited work has been replaced. Moss, Boulder,
+the `.stone` format, and most of the package and state-management foundation
+came from the Serpent OS and AerynOS contributors. Please read
+[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the full credit.
 
-### Boulder Features
-- Typed, composable Gluon recipes (`stone.glu`)
-- Automatic subpackage splitting
-- Automatic provider emission (e.g. `soname()`) and dependency use
-- Uniform format for repos, manifests and packages
-- Integrated build sandboxing (also supports rootless builds)
-- Advanced compiler optimization profiles
-- Support for architecture-specific tuning
+## Components
 
-**Note**: Using latest Rust via `rustup` is recommended.
+- **Moss** manages packages and system states. It builds content-addressed
+  states and activates them atomically.
+- **Boulder** builds `.stone` packages in an isolated build environment from
+  `stone.glu` recipes.
+- **stone** and **libstone** provide Rust and C interfaces for the `.stone`
+  package format.
+- **gluon_config** is the common evaluator boundary. It controls imports,
+  capabilities, resource limits, diagnostics, and evaluation fingerprints.
 
-## 📊 Status
+The workspace is organized by role:
 
- - [x] Read support for `.stone`
- - [x] Repository manipulation
- - [x] Plugin system for layered graph of dependencies
- - [x] Search support
- - [x] Transactions
- - [x] Installation support
- - [x] Removal support
- - [x] `sync` support
- - [x] Triggers
- - [x] GC / cleanups of latent states
- - [ ] System model
- - [ ] Subscriptions (named dependency paths and providers to augment the model)
+```text
+bin/       Moss and Boulder
+crates/    shared Rust libraries
+docs/      contracts, examples, and design notes
+tests/     repository-wide fixtures
+misc/      boot integration, MIME data, scripts, and notices
+```
 
+## Declarative configuration
 
-## 🚀 Onboarding
+Gluon is the only OS Tools configuration language. The main authored entry
+points are:
 
-```bash
-# clone the AerynOS os-tools repo somewhere reasonable
-mkdir -pv ~/repos/aos/
-cd ~/repos/aos/
-git clone https://github.com/AerynOS/os-tools.git
-cd tools/
+- `stone.glu` for Boulder recipes;
+- `profile.glu` and `profile.d/*.glu` for Boulder profiles;
+- `repo.glu` and `repo.d/*.glu` for Moss repositories;
+- `*.glu` modules for packaged transaction triggers;
+- `/etc/moss/system.glu` for desired system state.
 
-# Install a few prerequisites (this how you'd do it on AerynOS)
-sudo moss it binutils glibc-devel linux-headers clang bsdtar-static cpio
+OS Tools does not fall back to YAML or KDL. YAML files under `.github/` belong
+to GitHub's own interfaces and are not OS Tools configuration.
 
-# remember to add ~/.cargo/bin to your $PATH if this is how you installed rustfmt
-cargo install rustfmt
+Read the [Gluon configuration contract](docs/gluon-configuration.md) for the
+typed ABI, evaluator restrictions, generated-state rules, and CLI workflow.
+Runnable source examples live in [docs/examples/gluon](docs/examples/gluon).
 
-cargo install typos-cli --locked
+## Development
 
-# from inside the moss clone, this will build boulder and moss
-# and install them to ${HOME}/.local/bin/ by default
+The tracked Nix shell contains Rust, Clang, CMake, Diesel, Valgrind, and the
+tools used by the Makefile.
+
+```sh
+git clone https://github.com/onix-os/os-tools.git
+cd os-tools
+direnv allow
+
+make check
+make test
+```
+
+Without direnv:
+
+```sh
+nix develop
+make check
+make test
+```
+
+`make test` runs Clippy, the formatting check, typos, and all Cargo tests.
+Use `make help` to list the other supported targets.
+
+## Local installation
+
+```sh
 make get-started
-
-# boulder and moss rely on so-called subuid and subgid support.
-# IFF you do not already have this set up for your ${USER} in /etc/subuid and /etc/subuid
-# you might want to do something similar to this:
-sudo touch /etc/sub{uid,gid}
-sudo usermod --add-subuids 1000000-1065535 --add-subgids 1000000-1065535 root
-sudo usermod --add-subuids 1065536-1131071 --add-subgids 1065536-1131071 ${USER}
 ```
 
-**NB:** If you want to build .stones with boulder on your _non-aeryn_ host system, you will need to specify the
-location of the boulder data files (which live in ${HOME}/.local/share/boulder if you used `make get-started` like above):
+This builds Moss and Boulder, fetches the SPDX license list used by Boulder,
+and installs the binaries and shared data below `$HOME/.local`. Override the
+prefix when needed:
 
-```bash
-alias boulder="${HOME}/.local/bin/boulder --data-dir=${HOME}/.local/share/boulder/ --config-dir=${HOME}/.config/boulder/ --moss-root=${HOME}/.cache/boulder/"
+```sh
+PREFIX=/opt/onix-tools make get-started
 ```
 
-## 📚 Documentation
+Make sure the selected `bin` directory is in `PATH`.
 
-See the [Gluon configuration contract](docs/gluon-configuration.md) for recipe,
-repository, trigger and system-intent examples. The completed
-[migration plan](docs/plans/gluon-migration.md) and
-[software-delivery notes](docs/architecture/software-delivery.md) record the
-design background. General project documentation lives at
-[aerynos.dev](https://aerynos.dev/).
+## Safety
 
-## 🧪 Experiment
+Moss uses `/` when no alternate root is provided. Do not experiment against
+your host system. Create a disposable root and pass it explicitly:
 
-**NB:** Remember to use the `-D aosroot/` argument to specify a root directory, otherwise moss will happily
-eat your current operating system.
-
-```bash
-make get-started
-
-# create the aosroot/ directory
-mkdir -pv aosroot/
-
-# Add the unstable repo
-moss -D aosroot/ repo add unstable https://cdn.aerynos.dev/stream/unstable/x86_64/stone.index
-
-# List packages
-moss -D aosroot/ list available
-
-# Install something
-moss -D aosroot/ install systemd bash libx11-32bit
+```sh
+mkdir -p aosroot
+moss -D "$PWD/aosroot" list installed
 ```
 
-If you want to create systemd-nspawn roots or bootable VMs, please check out the [img-tests](https://github.com/AerynOS/img-tests) repository.
+Full Boulder builds also depend on Linux user namespaces and configured
+`subuid`/`subgid` ranges.
 
+## License
 
-## 🤝 Contributing changes
-
-Please ensure all tests are running locally without issue:
-
-```bash
-$ make test
-
-# Prior to committing a change:
-$ make test # includes the lint target
-
-# Prior to pushing anything, apply clippy fixes:
-$ make fix
-```
-
-Then create a Pull Request with your changes.
-
-## 🙏 Acknowledgments
-
-See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the project's origins and
-the people and communities who built it.
-
-## ⚖️ License
-
-`moss` & `boulder` are available under the terms of the [MPL-2.0](LICENSE).
+OS Tools is available under the [Mozilla Public License 2.0](LICENSE).
