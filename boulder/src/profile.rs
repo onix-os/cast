@@ -619,9 +619,21 @@ pub enum Error {
     #[error("cannot find the provided profile: {0}")]
     MissingProfile(Id),
     #[error("load profiles")]
-    LoadProfiles(#[from] config::LoadGluonError),
+    LoadProfiles(#[source] Box<config::LoadGluonError>),
     #[error("save profile")]
-    SaveProfile(#[from] config::SaveGluonError),
+    SaveProfile(#[source] Box<config::SaveGluonError>),
+}
+
+impl From<config::LoadGluonError> for Error {
+    fn from(error: config::LoadGluonError) -> Self {
+        Self::LoadProfiles(Box::new(error))
+    }
+}
+
+impl From<config::SaveGluonError> for Error {
+    fn from(error: config::SaveGluonError) -> Self {
+        Self::SaveProfile(Box::new(error))
+    }
 }
 
 #[cfg(test)]
@@ -741,10 +753,13 @@ mod tests {
             Ok(_) => panic!("malformed profile should fail"),
             Err(error) => error,
         };
-        let Error::LoadProfiles(LoadGluonError::Evaluation {
+        let Error::LoadProfiles(error) = error else {
+            panic!("expected visible evaluation error");
+        };
+        let LoadGluonError::Evaluation {
             path: error_path,
             source,
-        }) = error
+        } = *error
         else {
             panic!("expected visible evaluation error");
         };

@@ -44,7 +44,7 @@ impl Macros {
 
         let source_root = SourceRoot::new(macros_dir).map_err(|source| Error::SourceRoot {
             path: macros_dir.to_path_buf(),
-            source,
+            source: Box::new(source),
         })?;
         let evaluator = Evaluator::default().with_source_root(source_root.clone());
 
@@ -85,13 +85,13 @@ fn evaluate_file(
         .load(relative, evaluator.limits().max_source_bytes)
         .map_err(|source| Error::Load {
             path: path.to_path_buf(),
-            source,
+            source: Box::new(source),
         })?;
     stone_recipe::evaluate_macros_gluon_with(evaluator, &source)
         .map(|evaluated| evaluated.macros)
         .map_err(|source| Error::Evaluate {
             path: path.to_path_buf(),
-            source,
+            source: Box::new(source),
         })
 }
 
@@ -113,7 +113,7 @@ pub enum Error {
     SourceRoot {
         path: PathBuf,
         #[source]
-        source: Diagnostic,
+        source: Box<Diagnostic>,
     },
     #[error("macro Gluon module {path:?} is outside source root {root:?}")]
     OutsideSourceRoot { path: PathBuf, root: PathBuf },
@@ -121,13 +121,13 @@ pub enum Error {
     Load {
         path: PathBuf,
         #[source]
-        source: Diagnostic,
+        source: Box<Diagnostic>,
     },
     #[error("evaluate macro Gluon module {path:?}")]
     Evaluate {
         path: PathBuf,
         #[source]
-        source: stone_recipe::MacrosEvaluationError,
+        source: Box<stone_recipe::MacrosEvaluationError>,
     },
 }
 
