@@ -358,30 +358,8 @@ mod tests {
     use super::*;
 
     use fs_err as fs;
-    const ARCHIVE_URL: &str = "https://example.com/source.tar.xz";
-    const ARCHIVE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const GIT_URL: &str = "https://example.com/source.git";
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-
-    fn gluon_recipe() -> String {
-        format!(
-            r#"let boulder = import! boulder.recipe.v1
-let base = boulder.recipe (boulder.source {{
-    name = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.com",
-    license = ["MPL-2.0"],
-}})
-{{
-    upstreams = [
-        boulder.upstream.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
-        boulder.upstream.git "{GIT_URL}" "main",
-    ],
-    .. base
-}}"#
-        )
-    }
+    const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../test/fixtures/gluon/authored-source.glu");
 
     fn gluon_git_recipe(url: &str) -> String {
         format!(
@@ -444,7 +422,7 @@ let base = boulder.recipe (boulder.source {{
         let directory = tempfile::tempdir().unwrap();
         let recipe_path = directory.path().join("stone.glu");
         let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
-        let authored = gluon_recipe();
+        let authored = AUTHORED_SOURCE_FIXTURE.to_owned();
         fs::write(&recipe_path, &authored).unwrap();
 
         let recipe = Recipe::load(directory.path()).unwrap();
