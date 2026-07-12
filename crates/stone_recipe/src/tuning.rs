@@ -102,6 +102,27 @@ pub struct CompilerFlags {
     ld: Option<String>,
 }
 
+/// Format-neutral compiler flag record used by declarative policy modules.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompilerFlagsSpec {
+    pub c: Option<String>,
+    pub cxx: Option<String>,
+    pub f: Option<String>,
+    pub d: Option<String>,
+    pub rust: Option<String>,
+    pub vala: Option<String>,
+    pub go: Option<String>,
+    pub ld: Option<String>,
+}
+
+/// Format-neutral root/toolchain-specific flag definition.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TuningFlagSpec {
+    pub root: CompilerFlagsSpec,
+    pub gnu: CompilerFlagsSpec,
+    pub llvm: CompilerFlagsSpec,
+}
+
 impl CompilerFlags {
     fn get(&self, flag: CompilerFlag) -> Option<&str> {
         match flag {
@@ -133,6 +154,13 @@ pub struct TuningOption {
     pub disabled: Vec<String>,
 }
 
+/// Format-neutral set of flags enabled or disabled by a tuning choice.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TuningOptionSpec {
+    pub enabled: Vec<String>,
+    pub disabled: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TuningGroup {
     #[serde(flatten, default)]
@@ -140,6 +168,58 @@ pub struct TuningGroup {
     pub default: Option<String>,
     #[serde(default, rename = "options", deserialize_with = "sequence_of_key_value")]
     pub choices: Vec<KeyValue<TuningOption>>,
+}
+
+/// Format-neutral tuning group and its named choices.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TuningGroupSpec {
+    pub root: TuningOptionSpec,
+    pub default: Option<String>,
+    pub choices: Vec<crate::spec::KeyValueSpec<TuningOptionSpec>>,
+}
+
+impl From<CompilerFlagsSpec> for CompilerFlags {
+    fn from(spec: CompilerFlagsSpec) -> Self {
+        Self {
+            c: spec.c,
+            cxx: spec.cxx,
+            f: spec.f,
+            d: spec.d,
+            rust: spec.rust,
+            vala: spec.vala,
+            go: spec.go,
+            ld: spec.ld,
+        }
+    }
+}
+
+impl From<TuningFlagSpec> for TuningFlag {
+    fn from(spec: TuningFlagSpec) -> Self {
+        Self {
+            root: spec.root.into(),
+            gnu: spec.gnu.into(),
+            llvm: spec.llvm.into(),
+        }
+    }
+}
+
+impl From<TuningOptionSpec> for TuningOption {
+    fn from(spec: TuningOptionSpec) -> Self {
+        Self {
+            enabled: spec.enabled,
+            disabled: spec.disabled,
+        }
+    }
+}
+
+impl From<TuningGroupSpec> for TuningGroup {
+    fn from(spec: TuningGroupSpec) -> Self {
+        Self {
+            root: spec.root.into(),
+            default: spec.default,
+            choices: spec.choices.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]

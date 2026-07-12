@@ -13,13 +13,13 @@ pub use self::gluon::{
     EvaluatedRecipe, GLUON_RECIPE_ABI, RECIPE_ABI_VERSION, RecipeEvaluationError, evaluate_gluon, evaluate_gluon_with,
     evaluate_gluon_with_inputs,
 };
-pub use self::macros::Macros;
+pub use self::macros::{ActionSpec, Macros, MacrosSpec};
 pub use self::script::Script;
 pub use self::spec::{
     BuildSpec, KeyValueSpec, OptionsSpec, PackageSpec, PathSpec, RecipeConversionError, RecipeSpec, SourceSpec,
     ToolchainSpec, TuningSpec, UpstreamSpec,
 };
-pub use self::tuning::Tuning;
+pub use self::tuning::{CompilerFlagsSpec, Tuning, TuningFlagSpec, TuningGroupSpec, TuningOptionSpec};
 pub use self::upstream::Upstream;
 pub use self::validation::ValidationError;
 
