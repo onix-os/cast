@@ -289,7 +289,7 @@ let base = boulder.recipe (boulder.source {SOURCE_SPEC})
 
     #[test]
     fn documented_recipe_examples_remain_loadable() {
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/examples/gluon");
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
 
         let minimal = Recipe::load(examples.join("stone.glu")).unwrap();
         assert_eq!(minimal.parsed.source.name, "hello");

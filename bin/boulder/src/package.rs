@@ -269,7 +269,7 @@ mod tests {
     fn repository_package_policy_expands_and_merges_for_x86_64() {
         let macros = Macros::repository_for_tests();
         let recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/examples/gluon/stone.glu")).unwrap();
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         let install = tempfile::tempdir().unwrap();
         let mut collector = Collector::new(install.path());
 
@@ -348,7 +348,7 @@ mod tests {
     fn invalid_relation_after_macro_expansion_is_a_structured_error() {
         let macros = Macros::repository_for_tests();
         let mut recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/examples/gluon/stone.glu")).unwrap();
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         recipe.parsed.source.name = "unknown(target)".to_owned();
         let install = tempfile::tempdir().unwrap();
         let mut collector = Collector::new(install.path());

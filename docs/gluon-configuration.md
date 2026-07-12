@@ -22,7 +22,7 @@ constructed only during that conversion.
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
 | Boulder recipe | `stone.glu` | `boulder.recipe.v1` |
-| Boulder macro policy | `boulder/data/macros/**/*.glu` | `boulder.macros.v1` |
+| Boulder macro policy | `bin/boulder/data/macros/**/*.glu` | `boulder.macros.v1` |
 | Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
 | Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
 | Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |

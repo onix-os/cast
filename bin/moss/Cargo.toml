@@ -15,15 +15,15 @@ ignored = ["libsqlite3-sys"]
 testing = []
 
 [dependencies]
-config = { path = "../crates/config" }
-container = { path = "../crates/container" }
-dag = { path = "../crates/dag" }
-tools_buildinfo = { path = "../crates/tools_buildinfo" }
-stone = { path = "../crates/stone" }
-tracing_common = { path = "../crates/tracing_common" }
-triggers = { path = "../crates/triggers" }
-tui = { path = "../crates/tui" }
-vfs = { path = "../crates/vfs" }
+config = { path = "../../crates/config" }
+container = { path = "../../crates/container" }
+dag = { path = "../../crates/dag" }
+tools_buildinfo = { path = "../../crates/tools_buildinfo" }
+stone = { path = "../../crates/stone" }
+tracing_common = { path = "../../crates/tracing_common" }
+triggers = { path = "../../crates/triggers" }
+tui = { path = "../../crates/tui" }
+vfs = { path = "../../crates/vfs" }
 
 blsforme.workspace = true
 bytes.workspace = true
@@ -36,12 +36,12 @@ derive_more.workspace = true
 diesel.workspace = true
 diesel_migrations.workspace = true
 itertools.workspace = true
-fnmatch = { path = "../crates/fnmatch" }
+fnmatch = { path = "../../crates/fnmatch" }
 fs-err.workspace = true
 futures-util.workspace = true
 gluon.workspace = true
 gluon_codegen.workspace = true
-gluon_config = { path = "../crates/gluon_config" }
+gluon_config = { path = "../../crates/gluon_config" }
 hex.workspace = true
 indexmap.workspace = true
 libsqlite3-sys.workspace = true

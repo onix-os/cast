@@ -193,7 +193,7 @@ mod tests {
     fn documented_system_example_remains_loadable() {
         let source = Source::new(
             "docs/examples/gluon/system.glu",
-            include_str!("../../../docs/examples/gluon/system.glu"),
+            include_str!("../../../../docs/examples/gluon/system.glu"),
         );
         let evaluated = evaluate(&source).unwrap();
 

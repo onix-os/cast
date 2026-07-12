@@ -10,7 +10,7 @@ version = 1
 path = [
     "Cargo.lock",
     "funding.json",
-    "moss/src/db/*/schema.rs",
+    "bin/moss/src/db/*/schema.rs",
     "test/**/*.stone",
 ]
 SPDX-FileCopyrightText = "AerynOS Developers"

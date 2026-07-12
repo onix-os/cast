@@ -102,7 +102,7 @@ pub fn from_str(s: &str) -> Result<Recipe, Error> {
 }
 ```
 
-`boulder/src/recipe.rs:30-45` loads `stone.yaml` and then optionally applies a
+`bin/boulder/src/recipe.rs:30-45` loads `stone.yaml` and then optionally applies a
 KDL control file:
 
 ```rust
@@ -113,17 +113,17 @@ let mut parsed = stone_recipe::from_str(&source)?;
 ```
 
 Directory resolution is hard-coded to `stone.yaml` at
-`boulder/src/recipe.rs:136-147`. CLI defaults in
-`boulder/src/cli/build.rs` and `boulder/src/cli/chroot.rs` do the same.
+`bin/boulder/src/recipe.rs:136-147`. CLI defaults in
+`bin/boulder/src/cli/build.rs` and `bin/boulder/src/cli/chroot.rs` do the same.
 
 ### Source mutation boundary
 
 Boulder edits YAML text in place:
 
-- `boulder/src/upstream.rs:188-193` rewrites Git refs after resolution.
-- `boulder/src/upstream.rs:224-280` uses `yaml::Updater` for those edits.
-- `boulder/src/cli/recipe.rs:258-274` edits release fields.
-- `boulder/src/cli/recipe.rs:319-436` edits versions, URLs, hashes and refs.
+- `bin/boulder/src/upstream.rs:188-193` rewrites Git refs after resolution.
+- `bin/boulder/src/upstream.rs:224-280` uses `yaml::Updater` for those edits.
+- `bin/boulder/src/cli/recipe.rs:258-274` edits release fields.
+- `bin/boulder/src/cli/recipe.rs:319-436` edits versions, URLs, hashes and refs.
 - `crates/yaml/src/updater.rs` is a line-oriented YAML source updater.
 
 Arbitrary Gluon expressions cannot be safely or generally rewritten this way.
@@ -131,7 +131,7 @@ Machine-resolved source information must move into a generated lock artifact.
 
 ### Macro and configuration boundaries
 
-- `boulder/src/macros.rs:20-49` scans only `*.yaml` files and deserializes them
+- `bin/boulder/src/macros.rs:20-49` scans only `*.yaml` files and deserializes them
   into `stone_recipe::Macros`.
 - `crates/stone_recipe/src/control_file.rs` implements append/prepend/override
   recipe changes in KDL.
@@ -143,15 +143,15 @@ Machine-resolved source information must move into a generated lock artifact.
 
 ### System-model boundary
 
-- `moss/src/installation.rs:105-106` loads
+- `bin/moss/src/installation.rs:105-106` loads
   `/etc/moss/system-model.kdl` as declarative system intent.
-- `moss/src/system_model/decode.rs` manually parses repositories and packages.
-- `moss/src/system_model/encode.rs` generates KDL snapshots.
-- `moss/src/system_model/update.rs` edits KDL while trying to retain comments
+- `bin/moss/src/system_model/decode.rs` manually parses repositories and packages.
+- `bin/moss/src/system_model/encode.rs` generates KDL snapshots.
+- `bin/moss/src/system_model/update.rs` edits KDL while trying to retain comments
   and formatting.
-- `moss/src/client/mod.rs:1267-1303` records an updated
+- `bin/moss/src/client/mod.rs:1267-1303` records an updated
   `/usr/lib/system-model.kdl` in every produced system state.
-- `moss/src/cli/sync.rs:37-42` and `moss/src/cli/state.rs:79-89` expose KDL in the
+- `bin/moss/src/cli/sync.rs:37-42` and `bin/moss/src/cli/state.rs:79-89` expose KDL in the
   CLI import/export contract.
 
 User-authored Gluon intent and Moss-generated state snapshots must be separate.
@@ -304,8 +304,8 @@ verified Cargo, formatting and Clippy lanes.
 - `crates/config/**`
 - `crates/triggers/**`
 - `crates/yaml/**` for eventual deletion
-- `boulder/Cargo.toml`, `boulder/src/**`, `boulder/data/**`
-- `moss/Cargo.toml`, `moss/src/**`
+- `bin/boulder/Cargo.toml`, `bin/boulder/src/**`, `bin/boulder/data/**`
+- `bin/moss/Cargo.toml`, `bin/moss/src/**`
 - `test/**` and new format fixtures
 - repository-owned examples required to prove the new language
 
@@ -398,7 +398,7 @@ Expected: exit 0 and all positive, security and determinism tests pass.
    shapes such as untagged maps, scalar-or-sequence coercions and YAML stringy
    booleans.
 3. Add `TryFrom<RecipeSpec> for Recipe` and conversion errors with field paths.
-4. Move existing invariant checks currently in `boulder/src/recipe.rs:57-71`
+4. Move existing invariant checks currently in `bin/boulder/src/recipe.rs:57-71`
    into reusable recipe validation so every caller receives the same result.
 5. Define an ABI version and embedded Gluon modules containing constructors,
    defaults and explicit variants for:
@@ -529,7 +529,7 @@ Required equivalence tests:
 
 ```sh
 env RUSTUP_TOOLCHAIN=1.93.0 cargo test -p boulder -p stone_recipe
-find boulder/data -type f \( -name '*.yaml' -o -name '*.kdl' \) -print
+find bin/boulder/data -type f \( -name '*.yaml' -o -name '*.kdl' \) -print
 ```
 
 Expected before final removal: tests pass and remaining YAML/KDL files are

@@ -36,10 +36,10 @@ get-started: (build "boulder") (build "moss") (licenses)
   cp "{{ root-dir }}/target/{{ build-mode }}"/moss "{{ executable_dir() }}/"
   rm -rf "{{ data_dir() }}/boulder"
   mkdir -p "{{ data_dir() }}/boulder/licenses"
-  cp -R "{{ root-dir }}/boulder/data/macros" "{{ data_dir() }}/boulder/"
+  cp -R "{{ root-dir }}/bin/boulder/data/macros" "{{ data_dir() }}/boulder/"
   cp "{{ root-dir }}/license-list-data/text"/* "{{ data_dir() }}/boulder/licenses"
   mkdir -p "{{ config_dir() }}/boulder/"
-  cp -R "{{ root-dir }}/boulder/data"/profile.d "{{ config_dir() }}/boulder/"
+  cp -R "{{ root-dir }}/bin/boulder/data"/profile.d "{{ config_dir() }}/boulder/"
   echo ""
   echo "Listing installed files…"
   ls -hlF "{{ executable_dir() }}"/{boulder,moss} "{{ data_dir() }}/boulder" "{{ config_dir() }}/boulder"
@@ -91,8 +91,8 @@ migrate-redo: (diesel "meta" "migration redo") (diesel "layout" "migration redo"
 [private]
 diesel db +ARGS:
   diesel \
-    --config-file {{ root-dir }}/moss/src/db/{{ db }}/diesel.toml \
-    --database-url sqlite://{{ root-dir }}/moss/src/db/{{ db }}/test.db \
+    --config-file {{ root-dir }}/bin/moss/src/db/{{ db }}/diesel.toml \
+    --database-url sqlite://{{ root-dir }}/bin/moss/src/db/{{ db }}/test.db \
     {{ ARGS }}
 
 # Run libstone example

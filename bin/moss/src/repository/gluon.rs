@@ -374,7 +374,7 @@ mod tests {
     fn documented_repository_example_remains_loadable() {
         let source = GluonSource::new(
             "docs/examples/gluon/repositories.glu",
-            include_str!("../../../docs/examples/gluon/repositories.glu"),
+            include_str!("../../../../docs/examples/gluon/repositories.glu"),
         );
         let decoded = RepositoryCodec.decode(&Evaluator::default(), &source).unwrap();
 

@@ -138,8 +138,8 @@ mod test {
                 include_str!("../../../test/conflicts/pineapple.glu"),
             ),
             (
-                "boulder/boulder-concurrency-test.glu",
-                include_str!("../../../boulder/boulder-concurrency-test.glu"),
+                "bin/boulder/boulder-concurrency-test.glu",
+                include_str!("../../../bin/boulder/boulder-concurrency-test.glu"),
             ),
         ];
 

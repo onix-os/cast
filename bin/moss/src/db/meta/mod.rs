@@ -483,7 +483,7 @@ mod test {
     fn create_insert_select() {
         let db = Database::new(":memory:").unwrap();
 
-        let bash_completion = include_bytes!("../../../../test/bash-completion-2.11-1-1-x86_64.stone");
+        let bash_completion = include_bytes!("../../../../../test/bash-completion-2.11-1-1-x86_64.stone");
 
         let mut stone = stone::read_bytes(bash_completion).unwrap();
 
@@ -524,7 +524,7 @@ mod test {
 
         // See `test/conflicts/italian-pizza.glu` for the recipe file that produced this stone.
         // It should be obvious that this package conflicts with `name(pineapple)`.
-        let italian_pizza = include_bytes!("../../../../test/conflicts/italian-pizza-1-1-1-x86_64.stone");
+        let italian_pizza = include_bytes!("../../../../../test/conflicts/italian-pizza-1-1-1-x86_64.stone");
         let pineapple_provider = Provider {
             kind: Kind::PackageName,
             name: "pineapple".to_owned(),

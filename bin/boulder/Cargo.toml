@@ -10,16 +10,16 @@ rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-config = { path = "../crates/config" }
-container = { path = "../crates/container" }
-gitwrap = { path = "../crates/gitwrap" }
-gluon_config = { path = "../crates/gluon_config" }
+config = { path = "../../crates/config" }
+container = { path = "../../crates/container" }
+gitwrap = { path = "../../crates/gitwrap" }
+gluon_config = { path = "../../crates/gluon_config" }
 moss = { path = "../moss" }
-tools_buildinfo = { path = "../crates/tools_buildinfo" }
-stone = { path = "../crates/stone" }
-stone_recipe = { path = "../crates/stone_recipe" }
-tui = { path = "../crates/tui" }
-version_parse = { path = "../crates/version_parse" }
+tools_buildinfo = { path = "../../crates/tools_buildinfo" }
+stone = { path = "../../crates/stone" }
+stone_recipe = { path = "../../crates/stone_recipe" }
+tui = { path = "../../crates/tui" }
+version_parse = { path = "../../crates/version_parse" }
 
 chrono.workspace = true
 clap.workspace = true
