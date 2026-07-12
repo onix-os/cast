@@ -223,6 +223,12 @@ temporary build output is not committed.
 
 | Measurement | Before Gluon linkage | After migration and dependency cleanup |
 |---|---:|---:|
-| Boulder binary | 122,949,288 bytes | **TODO: final measurement** |
-| Moss binary | 111,252,744 bytes | **TODO: final measurement** |
-| Combined build wall time | 22.28 s | **TODO: final measurement** |
+| Boulder binary | 122,949,288 bytes | 146,606,848 bytes |
+| Moss binary | 111,252,744 bytes | 136,772,392 bytes |
+| Combined build wall time | 22.28 s | 27.86 s |
+
+The final debug measurement increases Boulder by 23,657,560 bytes (19.2%),
+Moss by 25,519,648 bytes (22.9%), and the clean combined build by 5.58 seconds
+(25.0%). This is the cost of linking the restricted Gluon runtime into both
+tools; YAML/KDL and their compatibility dependencies are absent from the final
+graph.
