@@ -5,7 +5,7 @@
 //! Note that we support transaction scope and system scope triggers, invoked
 //! before `/usr` is activated and after, respectively.
 //!
-//! Note that currently we only load from `/usr/share/moss/triggers/{tx,sys.d}/*.yaml`
+//! Trigger intent is loaded from `/usr/share/moss/triggers/{tx,sys.d}/*.glu`
 //! and do not yet support local triggers
 use std::{
     path::{Path, PathBuf},
@@ -13,9 +13,10 @@ use std::{
 };
 
 use crate::Installation;
+use config::{DecodedGluon, GluonCodec, GluonCodecError};
 use container::Container;
+use gluon_config::{Evaluator, Source};
 use itertools::Itertools;
-use serde::Deserialize;
 use thiserror::Error;
 use tracing::{error, warn};
 use triggers::format::{CompiledHandler, Handler, Trigger};
@@ -23,8 +24,8 @@ use triggers::format::{CompiledHandler, Handler, Trigger};
 use super::PendingFile;
 
 /// Transaction trigger wrapper
-/// These are loaded from `/usr/share/moss/triggers/tx.d/*.yaml`
-#[derive(Deserialize, Debug)]
+/// These are loaded from `/usr/share/moss/triggers/tx.d/*.glu`
+#[derive(Debug)]
 struct TransactionTrigger(Trigger);
 
 impl config::Config for TransactionTrigger {
@@ -34,13 +35,55 @@ impl config::Config for TransactionTrigger {
 }
 
 /// System trigger wrapper
-/// These triggers are loaded from `/usr/share/moss/triggers/sys.d/*.yaml`
-#[derive(Deserialize, Debug)]
+/// These triggers are loaded from `/usr/share/moss/triggers/sys.d/*.glu`
+#[derive(Debug)]
 struct SystemTrigger(Trigger);
 
 impl config::Config for SystemTrigger {
     fn domain() -> String {
         "sys".into()
+    }
+}
+
+struct TransactionTriggerCodec;
+
+impl GluonCodec for TransactionTriggerCodec {
+    type Config = TransactionTrigger;
+
+    fn decode(&self, evaluator: &Evaluator, source: &Source) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
+        let evaluated = triggers::evaluate_gluon_with(evaluator, source).map_err(GluonCodecError::conversion)?;
+        Ok(DecodedGluon {
+            value: TransactionTrigger(evaluated.trigger),
+            fingerprint: evaluated.fingerprint,
+        })
+    }
+
+    fn encode(&self, _config: &Self::Config) -> Result<String, GluonCodecError> {
+        Err(GluonCodecError::conversion(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "packaged transaction triggers are read-only",
+        )))
+    }
+}
+
+struct SystemTriggerCodec;
+
+impl GluonCodec for SystemTriggerCodec {
+    type Config = SystemTrigger;
+
+    fn decode(&self, evaluator: &Evaluator, source: &Source) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
+        let evaluated = triggers::evaluate_gluon_with(evaluator, source).map_err(GluonCodecError::conversion)?;
+        Ok(DecodedGluon {
+            value: SystemTrigger(evaluated.trigger),
+            fingerprint: evaluated.fingerprint,
+        })
+    }
+
+    fn encode(&self, _config: &Self::Config) -> Result<String, GluonCodecError> {
+        Err(GluonCodecError::conversion(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "packaged system triggers are read-only",
+        )))
     }
 }
 
@@ -130,12 +173,12 @@ pub(super) fn triggers<'a>(
     // Load appropriate triggers from their locations and convert back to a vec of Trigger
     let triggers = match scope {
         TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
-            .load::<TransactionTrigger>()
+            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)?
             .into_iter()
             .map(|l| l.value.0)
             .collect_vec(),
         TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
-            .load::<SystemTrigger>()
+            .load_gluon(&Evaluator::default(), &SystemTriggerCodec)?
             .into_iter()
             .map(|l| l.value.0)
             .collect_vec(),
@@ -231,6 +274,9 @@ fn execute_trigger_directly(trigger: &CompiledHandler) -> Result<(), Error> {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("load Gluon trigger configuration")]
+    Config(#[from] config::LoadGluonError),
+
     #[error("container")]
     Container(#[from] container::Error),
 
@@ -239,4 +285,45 @@ pub enum Error {
 
     #[error("io")]
     IO(#[from] std::io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packaged_transaction_triggers_load_from_gluon_fragments() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("tx.d/depmod.glu");
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+        fs_err::write(
+            &path,
+            r#"let moss = import! moss.trigger.v1
+let base = moss.trigger "depmod" "Update kernel module dependencies"
+{
+    paths = [moss.path
+        "/usr/lib/modules/(version:*)/kernel"
+        ["depmod"]
+        (moss.optional.set moss.path_kind.directory)],
+    handlers = [moss.handler.named "depmod" (moss.handler.run
+        "/sbin/depmod"
+        ["-a", "$(version)"])],
+    .. base
+}
+"#,
+        )
+        .unwrap();
+
+        let loaded = config::Manager::custom(temporary.path())
+            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
+            .unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].value.0.name, "depmod");
+        let (pattern, _) = loaded[0].value.0.paths.iter().next().unwrap();
+        let matched = pattern
+            .match_path("/usr/lib/modules/6.12.1/kernel")
+            .expect("kernel path must match");
+        assert_eq!(matched.variables.get("version").map(String::as_str), Some("6.12.1"));
+    }
 }
