@@ -10,7 +10,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
-use stone_recipe::{control_file, evaluate_gluon_with_inputs};
+use stone_recipe::evaluate_gluon_with_inputs;
 use thiserror::Error;
 use tui::Styled;
 
@@ -66,8 +66,7 @@ impl Recipe {
                     path.display()
                 );
                 let source = fs::read_to_string(&path).map_err(Error::LoadRecipe)?;
-                let mut parsed = stone_recipe::from_str(&source)?;
-                apply_legacy_control_file(&path, &mut parsed)?;
+                let parsed = stone_recipe::from_str(&source)?;
                 (source, parsed, None, None)
             }
         };
@@ -192,27 +191,6 @@ fn load_gluon(path: &Path) -> Result<(String, Parsed, Option<SourceLock>, Evalua
     ))
 }
 
-fn apply_legacy_control_file(path: &Path, parsed: &mut Parsed) -> Result<(), Error> {
-    let control_file_path = path.with_file_name("control.kdl");
-    if !control_file_path.exists() {
-        return Ok(());
-    }
-
-    let content = fs::read_to_string(&control_file_path).map_err(Error::LoadControlFile)?;
-    let control_file =
-        control_file::decode(&content).map_err(|error| Error::DecodeControlFile(error, control_file_path.clone()))?;
-
-    control_file
-        .apply_to_recipe(parsed)
-        .map_err(|error| Error::ApplyControlFile(error, control_file_path.clone()))?;
-
-    println!(
-        "{} | Applied modifications from {control_file_path:?}",
-        "Control File".green()
-    );
-    Ok(())
-}
-
 pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     let path = path.as_ref();
 
@@ -292,16 +270,10 @@ pub enum Error {
     },
     #[error("evaluate Gluon recipe")]
     EvaluateGluon(#[from] stone_recipe::RecipeEvaluationError),
-    #[error("load control file")]
-    LoadControlFile(#[source] io::Error),
     #[error("decode recipe")]
     Decode(#[from] stone_recipe::Error),
     #[error("invalid recipe")]
     Validation(#[from] stone_recipe::ValidationError),
-    #[error("failed to decode control file {1:?}")]
-    DecodeControlFile(#[source] control_file::decode::Error, PathBuf),
-    #[error("failed to modify recipe with control file {1:?}")]
-    ApplyControlFile(#[source] control_file::ModificationError, PathBuf),
 }
 
 #[cfg(test)]
@@ -447,32 +419,12 @@ boulder.recipe (boulder.source source)
     fn yaml_directory_remains_legacy_read_only_compatibility() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.yaml"), YAML_RECIPE).unwrap();
-        fs::write(
-            root.path().join("control.kdl"),
-            r#"
-override {
-    setup "controlled"
-}
-"#,
-        )
-        .unwrap();
 
         let recipe = Recipe::load(root.path()).unwrap();
 
         assert!(recipe.is_yaml_compatibility());
         assert!(recipe.source_lock.is_none());
         assert!(recipe.fingerprint.is_none());
-        assert_eq!(recipe.parsed.build.setup.as_deref(), Some("controlled"));
-    }
-
-    #[test]
-    fn gluon_never_applies_legacy_control_file() {
-        let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
-        fs::write(root.path().join("control.kdl"), "not valid kdl {").unwrap();
-
-        let recipe = Recipe::load(root.path()).unwrap();
-
         assert!(recipe.parsed.build.setup.is_none());
     }
 
