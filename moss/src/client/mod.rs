@@ -1632,26 +1632,41 @@ let moss = import! moss.system.v1
     }
 
     #[test]
-    fn verify_reblit_loads_and_records_the_existing_normalized_snapshot() {
+    fn verify_reblits_and_preserves_the_existing_normalized_snapshot() {
         let temporary = tempfile::tempdir().unwrap();
         let mut client = stateful_test_client(temporary.path());
-        let state = client.state_db.add(&[], Some("active"), None).unwrap();
+        fs::create_dir_all(client.installation.assets_path("v2")).unwrap();
+
+        let package = package::Id::from("verify-package");
+        let layout = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFDIR | 0o755,
+            tag: 0,
+            file: StonePayloadLayoutFile::Directory("share/verify-proof".into()),
+        };
+        client.layout_db.add(&package, &layout).unwrap();
+        let state = client
+            .state_db
+            .add(&[Selection::explicit(package)], Some("active"), None)
+            .unwrap();
         client.installation.active_state = Some(state.id);
+        record_state_id(&client.installation.root, state.id).unwrap();
 
         let original = generated_system_snapshot("active-package");
         let expected = original.encoded().to_owned();
         record_system_snapshot(&client.installation.root, original).unwrap();
+        let restored_path = client.installation.root.join("usr/share/verify-proof");
+        assert!(!restored_path.exists());
 
-        // This is the exact load operation used by verify before it reblits an
-        // affected active state. Recording it in the replacement tree must not
-        // turn the generated state snapshot back into authored intent.
-        let reblit_snapshot = client
-            .load_or_create_system_snapshot(system_model::snapshot_path(&client.installation.root), &state)
-            .unwrap();
-        let replacement = temporary.path().join("replacement");
-        record_system_snapshot(&replacement, reblit_snapshot).unwrap();
+        client.verify(true, false).unwrap();
 
-        assert_generated_snapshot(&system_model::snapshot_path(&replacement), &expected, "active-package");
+        assert!(restored_path.is_dir());
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&client.installation.root),
+            &expected,
+            "active-package",
+        );
     }
 
     #[test]
