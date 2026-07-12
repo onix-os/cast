@@ -10,8 +10,8 @@ use std::{
 mod gluon;
 
 pub use self::gluon::{
-    DecodedGluon, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError, LoadGluonError,
-    LoadedGluonConfig, SaveGluonError,
+    DecodedGluon, DeleteGluonError, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError,
+    LoadGluonError, LoadedGluonConfig, SaveGluonError,
 };
 
 pub trait Config {

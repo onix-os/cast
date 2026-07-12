@@ -220,6 +220,36 @@ impl Error for SaveGluonError {
     }
 }
 
+#[derive(Debug)]
+pub enum DeleteGluonError {
+    ReadExisting { path: PathBuf, source: io::Error },
+    AuthoredFragment { path: PathBuf },
+    Remove { path: PathBuf, source: io::Error },
+}
+
+impl fmt::Display for DeleteGluonError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReadExisting { path, .. } => {
+                write!(formatter, "read existing Gluon fragment {}", path.display())
+            }
+            Self::AuthoredFragment { path } => {
+                write!(formatter, "refuse to delete authored Gluon fragment {}", path.display())
+            }
+            Self::Remove { path, .. } => write!(formatter, "delete generated Gluon fragment {}", path.display()),
+        }
+    }
+}
+
+impl Error for DeleteGluonError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ReadExisting { source, .. } | Self::Remove { source, .. } => Some(source),
+            Self::AuthoredFragment { .. } => None,
+        }
+    }
+}
+
 impl Manager {
     /// Load only `.glu` fragments using explicit vendor, admin, and user
     /// precedence. Higher-priority fragments replace lower-priority fragments
@@ -310,12 +340,26 @@ impl Manager {
 
     /// Delete only the named generated Gluon fragment, leaving unrelated
     /// files untouched.
-    pub fn delete_gluon<T: Config>(&self, name: impl fmt::Display) -> io::Result<()> {
+    pub fn delete_gluon<T: Config>(&self, name: impl fmt::Display) -> Result<(), DeleteGluonError> {
         let path = self.scope.save_dir(&T::domain()).join(format!("{name}.glu"));
-        match fs::remove_file(path) {
+        let existing = match fs::read_to_string(&path) {
+            Ok(existing) => existing,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(DeleteGluonError::ReadExisting {
+                    path: path.clone(),
+                    source,
+                });
+            }
+        };
+        if !existing.starts_with(GENERATED_GLUON_MARKER) {
+            return Err(DeleteGluonError::AuthoredFragment { path });
+        }
+
+        match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
+            Err(source) => Err(DeleteGluonError::Remove { path, source }),
         }
     }
 }
@@ -653,6 +697,19 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, SaveGluonError::AuthoredFragment { path: ref found } if found == &path));
+        assert_eq!(fs::read_to_string(path).unwrap(), "\"user expression\"\n");
+    }
+
+    #[test]
+    fn delete_never_removes_an_authored_fragment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let manager = Manager::custom(temporary.path());
+        let path = temporary.path().join("dummy.d/authored.glu");
+        write(&path, "\"user expression\"\n");
+
+        let error = manager.delete_gluon::<String>("authored").unwrap_err();
+
+        assert!(matches!(error, DeleteGluonError::AuthoredFragment { path: ref found } if found == &path));
         assert_eq!(fs::read_to_string(path).unwrap(), "\"user expression\"\n");
     }
 }
