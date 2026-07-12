@@ -1,0 +1,244 @@
+type Optional a =
+    | None
+    | Some a
+
+type ActionSpec = {
+    description : String,
+    example : Optional String,
+    command : String,
+    dependencies : Array String,
+}
+
+type ActionEntry = {
+    key : String,
+    value : ActionSpec,
+}
+
+type CompilerFlagsSpec = {
+    c : Optional String,
+    cxx : Optional String,
+    f : Optional String,
+    d : Optional String,
+    rust : Optional String,
+    vala : Optional String,
+    go : Optional String,
+    ld : Optional String,
+}
+
+type TuningFlagSpec = {
+    root : CompilerFlagsSpec,
+    gnu : CompilerFlagsSpec,
+    llvm : CompilerFlagsSpec,
+}
+
+type TuningOptionSpec = {
+    enabled : Array String,
+    disabled : Array String,
+}
+
+type TuningChoice = {
+    key : String,
+    value : TuningOptionSpec,
+}
+
+type TuningGroupSpec = {
+    root : TuningOptionSpec,
+    default : Optional String,
+    choices : Array TuningChoice,
+}
+
+type PathSpec =
+    | Any { path : String }
+    | Exe { path : String }
+    | Symlink { path : String }
+    | Special { path : String }
+
+type PackageSpec = {
+    summary : Optional String,
+    description : Optional String,
+    provides_exclude : Array String,
+    run_deps : Array String,
+    run_deps_exclude : Array String,
+    paths : Array PathSpec,
+    conflicts : Array String,
+}
+
+type DefinitionEntry = {
+    key : String,
+    value : String,
+}
+
+type FlagEntry = {
+    key : String,
+    value : TuningFlagSpec,
+}
+
+type TuningEntry = {
+    key : String,
+    value : TuningGroupSpec,
+}
+
+type PackageEntry = {
+    key : String,
+    value : PackageSpec,
+}
+
+type MacrosSpec = {
+    actions : Array ActionEntry,
+    definitions : Array DefinitionEntry,
+    flags : Array FlagEntry,
+    tuning : Array TuningEntry,
+    packages : Array PackageEntry,
+    default_tuning_groups : Array String,
+}
+
+{
+    actions = [
+        {
+            key = "export_docbook_catalogs",
+            value = {
+                description = "Ensure that builds using docbook can find XML catalogs locally",
+                example = Some r"environment: |
+    %export_docbook_catalogs
+builddeps:
+    - (... remember to add docbook related packages here ...)
+",
+                command = r#"[[ -d /usr/share/defaults/docbook ]] || \
+{ echo "No /usr/share/defaults/docbook dir found, exiting..." && exit 1 ;}
+_catalogs=()
+for c in $(find /usr/share/defaults/docbook -type f -name 'catalog')
+do
+    _catalogs+=("file://${c}")
+done
+XML_CATALOG_FILES=${_catalogs[@]}; export XML_CATALOG_FILES
+unset _catalogs
+"#,
+                dependencies = [
+                ],
+            },
+        },
+        {
+            key = "gtk_update_icon_cache",
+            value = {
+                description = "Pregenerate icon cache at build time",
+                example = Some r"%gtk_update_icon_cache
+",
+                command = r"for i in %(installroot)%(datadir)/icons/*/; do
+    gtk-update-icon-cache -f $i
+done
+",
+                dependencies = [
+                    "binary(gtk-update-icon-cache)",
+                ],
+            },
+        },
+        {
+            key = "install_bin",
+            value = {
+                description = "Install files to %(bindir)",
+                example = Some r"%install_bin nano
+",
+                command = r"install -Dm00755 -t %(installroot)%(bindir)
+",
+                dependencies = [
+                ],
+            },
+        },
+        {
+            key = "install_dir",
+            value = {
+                description = "Create a new empty directory with the default permissions",
+                example = Some r"%install_dir %(installroot)%(datadir)/pkgname/docs
+",
+                command = r"install -dm00755
+",
+                dependencies = [
+                ],
+            },
+        },
+        {
+            key = "install_exe",
+            value = {
+                description = "Macro to install a file with default executable permissions",
+                example = Some r"%install_exe executable-file %(installroot)%(libexec)/%(name)/executable-file
+",
+                command = r"install -Dm00755
+",
+                dependencies = [
+                ],
+            },
+        },
+        {
+            key = "install_file",
+            value = {
+                description = "Macro to install a file without executable permissions",
+                example = Some r"%install_file %(pkgdir)/helper.file %(installroot)%(datadir)/%(name)/pkgfile
+",
+                command = r"install -Dm00644
+",
+                dependencies = [
+                ],
+            },
+        },
+        {
+            key = "patch",
+            value = {
+                description = "Patch the upstream sources using an input patch file.",
+                example = Some r"%patch %(pkgdir)/some.patch
+
+# If you need to override the default -p1, add it after the patch file
+%patch %(pkgdir)/some.patch -p3
+",
+                command = r"patch --force --forward --remove-empty-files --no-backup-if-mismatch -p1 -i
+",
+                dependencies = [
+                    "binary(patch)",
+                ],
+            },
+        },
+        {
+            key = "tmpfiles",
+            value = {
+                description = "Create a tmpfiles.d file for the package with given content",
+                example = None,
+                command = r#"create_tmpfiles(){
+    if [ -z "%(libsuffix)" ]; then
+        mkdir -p %(installroot)%(tmpfilesdir)
+        echo "$@" >> %(installroot)%(tmpfilesdir)/%(name).conf
+    fi
+}
+create_tmpfiles
+"#,
+                dependencies = [
+                ],
+            },
+        },
+        {
+            key = "sysusers",
+            value = {
+                description = "Create a sysusers.d file for the package with given content",
+                example = None,
+                command = r#"create_sysusers(){
+    if [ -z "%(libsuffix)" ]; then
+        mkdir -p %(installroot)%(sysusersdir)
+        echo "$@" >> %(installroot)%(sysusersdir)/%(name).conf
+    fi
+}
+create_sysusers
+"#,
+                dependencies = [
+                ],
+            },
+        },
+    ],
+    definitions = [
+    ],
+    flags = [
+    ],
+    tuning = [
+    ],
+    packages = [
+    ],
+    default_tuning_groups = [
+    ],
+}

@@ -1,0 +1,218 @@
+type Optional a =
+    | None
+    | Some a
+
+type ActionSpec = {
+    description : String,
+    example : Optional String,
+    command : String,
+    dependencies : Array String,
+}
+
+type ActionEntry = {
+    key : String,
+    value : ActionSpec,
+}
+
+type CompilerFlagsSpec = {
+    c : Optional String,
+    cxx : Optional String,
+    f : Optional String,
+    d : Optional String,
+    rust : Optional String,
+    vala : Optional String,
+    go : Optional String,
+    ld : Optional String,
+}
+
+type TuningFlagSpec = {
+    root : CompilerFlagsSpec,
+    gnu : CompilerFlagsSpec,
+    llvm : CompilerFlagsSpec,
+}
+
+type TuningOptionSpec = {
+    enabled : Array String,
+    disabled : Array String,
+}
+
+type TuningChoice = {
+    key : String,
+    value : TuningOptionSpec,
+}
+
+type TuningGroupSpec = {
+    root : TuningOptionSpec,
+    default : Optional String,
+    choices : Array TuningChoice,
+}
+
+type PathSpec =
+    | Any { path : String }
+    | Exe { path : String }
+    | Symlink { path : String }
+    | Special { path : String }
+
+type PackageSpec = {
+    summary : Optional String,
+    description : Optional String,
+    provides_exclude : Array String,
+    run_deps : Array String,
+    run_deps_exclude : Array String,
+    paths : Array PathSpec,
+    conflicts : Array String,
+}
+
+type DefinitionEntry = {
+    key : String,
+    value : String,
+}
+
+type FlagEntry = {
+    key : String,
+    value : TuningFlagSpec,
+}
+
+type TuningEntry = {
+    key : String,
+    value : TuningGroupSpec,
+}
+
+type PackageEntry = {
+    key : String,
+    value : PackageSpec,
+}
+
+type MacrosSpec = {
+    actions : Array ActionEntry,
+    definitions : Array DefinitionEntry,
+    flags : Array FlagEntry,
+    tuning : Array TuningEntry,
+    packages : Array PackageEntry,
+    default_tuning_groups : Array String,
+}
+
+{
+    actions = [
+        {
+            key = "qmake_qt5",
+            value = {
+                description = "Invokes Qt5 with the correct default values",
+                example = Some r"%qmake_qt5 -other-qmake-flag
+",
+                command = r#"_ccache_arg=""
+if [[ " ${PATH[*]} " =~ "ccache" ]]; then
+    _ccache_arg="CONFIG+=ccache"
+fi
+qmake %(options_qmake_qt5) ${_ccache_arg}
+"#,
+                dependencies = [
+                    "binary(qmake)",
+                ],
+            },
+        },
+        {
+            key = "cmake_qt6",
+            value = {
+                description = "Perform cmake with the default options for Qt6 builds",
+                example = Some r"%cmake_qt6 -DQt_Feature_So_and_So=ON
+",
+                command = r#"_ccache_arg="-DQT_USE_CCACHE=OFF"
+if [[ " ${PATH[*]} " =~ "ccache" ]]; then
+    _ccache_arg="-DQT_USE_CCACHE=ON"
+fi
+cmake %(options_cmake_qt6) ${_ccache_arg}
+"#,
+                dependencies = [
+                    "binary(cmake)",
+                    "binary(ninja)",
+                ],
+            },
+        },
+        {
+            key = "cmake_kf6",
+            value = {
+                description = "Perform cmake with the default options for KF6/Qt6 builds. This includes KDE Frameworks, Plasma, and KDE Gear",
+                example = Some r"%cmake_kf6 -DSO_AND_SO=ON
+",
+                command = r"cmake %(options_cmake_kf6)
+",
+                dependencies = [
+                    "binary(cmake)",
+                    "binary(ninja)",
+                    "cmake(ECM)",
+                ],
+            },
+        },
+        {
+            key = "qt_user_facing_links",
+            value = {
+                description = "Setup user-facing binaries (DEPRECATED)",
+                example = Some r"%qt_user_facing_links
+",
+                command = r"function qt_user_facing_links() {
+    %install_dir %(installroot)/%(bindir)
+    pushd %(installroot)
+    while read _line; do
+        read -r _source _dest <<< ${_line}
+        ln -srv %(installroot)/${_source} %(installroot)/${_dest}
+    done < %(workdir)/%(builddir)/user_facing_tool_links.txt
+    popd
+}
+qt_user_facing_links
+",
+                dependencies = [
+                ],
+            },
+        },
+    ],
+    definitions = [
+        {
+            key = "options_qmake_qt5",
+            value = r#"CONFIG+=release \
+QMAKE_CFLAGS_RELEASE="${CFLAGS}" \
+QMAKE_CXXFLAGS_RELEASE="${CXXFLAGS}" \
+QMAKE_LFLAGS="${LDFLAGS}"
+"#,
+        },
+        {
+            key = "options_cmake_qt6",
+            value = r"%(options_cmake_ninja) \
+-DCMAKE_INSTALL_LIBEXECDIR=%(libdir)/qt6 \
+-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+-DCMAKE_MESSAGE_LOG_LEVEL=STATUS \
+-DINSTALL_ARCHDATADIR=%(libdir)/qt6 \
+-DINSTALL_BINDIR=%(libdir)/qt6/bin \
+-DINSTALL_DATADIR=share/qt6 \
+-DINSTALL_DOCDIR=share/doc/qt6 \
+-DINSTALL_EXAMPLESDIR=%(libdir)/qt6/examples \
+-DINSTALL_INCLUDEDIR=include/qt6 \
+-DINSTALL_LIBDIR=%(libdir) \
+-DINSTALL_LIBEXECDIR=%(libdir)/qt6 \
+-DINSTALL_MKSPECSDIR=%(libdir)/qt6/mkspecs \
+-DINSTALL_PUBLICBINDIR=bin \
+-DQT_BUILD_EXAMPLES=ON \
+-DQT_FEATURE_rpath=OFF
+",
+        },
+        {
+            key = "options_cmake_kf6",
+            value = r"%(options_cmake_ninja) \
+-DCMAKE_INSTALL_LIBEXECDIR=%(libdir)/kf6 \
+-DCMAKE_INSTALL_LIBEXECDIR_kf6:PATH=%(libdir)/kf6 \
+-DKDE_INSTALL_LIBEXECDIR:PATH=%(libdir)/kf6 \
+-DKDE_INSTALL_USE_QT_SYS_PATHS:BOOL=ON \
+-DBUILD_QCH=ON \
+-DBUILD_TESTING=OFF
+",
+        },
+    ],
+    flags = [
+    ],
+    tuning = [
+    ],
+    packages = [
+    ],
+    default_tuning_groups = [
+    ],
+}

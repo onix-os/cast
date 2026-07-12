@@ -1,0 +1,3524 @@
+type Optional a =
+    | None
+    | Some a
+
+type ActionSpec = {
+    description : String,
+    example : Optional String,
+    command : String,
+    dependencies : Array String,
+}
+
+type ActionEntry = {
+    key : String,
+    value : ActionSpec,
+}
+
+type CompilerFlagsSpec = {
+    c : Optional String,
+    cxx : Optional String,
+    f : Optional String,
+    d : Optional String,
+    rust : Optional String,
+    vala : Optional String,
+    go : Optional String,
+    ld : Optional String,
+}
+
+type TuningFlagSpec = {
+    root : CompilerFlagsSpec,
+    gnu : CompilerFlagsSpec,
+    llvm : CompilerFlagsSpec,
+}
+
+type TuningOptionSpec = {
+    enabled : Array String,
+    disabled : Array String,
+}
+
+type TuningChoice = {
+    key : String,
+    value : TuningOptionSpec,
+}
+
+type TuningGroupSpec = {
+    root : TuningOptionSpec,
+    default : Optional String,
+    choices : Array TuningChoice,
+}
+
+type PathSpec =
+    | Any { path : String }
+    | Exe { path : String }
+    | Symlink { path : String }
+    | Special { path : String }
+
+type PackageSpec = {
+    summary : Optional String,
+    description : Optional String,
+    provides_exclude : Array String,
+    run_deps : Array String,
+    run_deps_exclude : Array String,
+    paths : Array PathSpec,
+    conflicts : Array String,
+}
+
+type DefinitionEntry = {
+    key : String,
+    value : String,
+}
+
+type FlagEntry = {
+    key : String,
+    value : TuningFlagSpec,
+}
+
+type TuningEntry = {
+    key : String,
+    value : TuningGroupSpec,
+}
+
+type PackageEntry = {
+    key : String,
+    value : PackageSpec,
+}
+
+type MacrosSpec = {
+    actions : Array ActionEntry,
+    definitions : Array DefinitionEntry,
+    flags : Array FlagEntry,
+    tuning : Array TuningEntry,
+    packages : Array PackageEntry,
+    default_tuning_groups : Array String,
+}
+
+{
+    actions = [
+        {
+            key = "scriptBase",
+            value = {
+                description = "scriptBase is merged to the top of all newly generated build scripts.",
+                example = None,
+                command = r#"#!/usr/bin/bash
+set -o xtrace
+set -o errexit
+set -o pipefail
+set -o nounset
+TERM="dumb"; export TERM
+SOURCE_DATE_EPOCH="%(sourcedateepoch)"; export SOURCE_DATE_EPOCH
+PGO_STAGE="%(pgo_stage)"; export PGO_STAGE
+PKG_CONFIG_PATH="%(pkgconfigpath)"; export PKG_CONFIG_PATH
+CFLAGS="%(cflags)"; export CFLAGS
+CGO_CFLAGS="%(cflags)"; export CGO_CFLAGS
+CXXFLAGS="%(cxxflags)"; export CXXFLAGS
+CGO_CXXFLAGS="%(cxxflags)"; export CGO_CXXFLAGS
+FFLAGS="%(fflags)"; export FFLAGS
+LDFLAGS="%(ldflags)"; export LDFLAGS
+CGO_LDFLAGS="%(ldflags) -Wl,--no-gc-sections"; export CGO_LDFLAGS
+DFLAGS="%(dflags)"; export DFLAGS
+RUSTFLAGS="%(rustflags)"; export RUSTFLAGS
+VALAFLAGS="%(valaflags)"; export VALAFLAGS
+GOFLAGS="%(goflags)"; export GOFLAGS
+CC="%(cc)"; export CC
+CXX="%(cxx)"; export CXX
+OBJC="%(objc)"; export OBJC
+OBJCXX="%(objcxx)"; export OBJCXX
+CPP="%(cpp)"; export CPP
+OBJCPP="%(objcpp)"; export OBJCPP
+OBJCXXCPP="%(objcxxcpp)"; export OBJCXXCPP
+AR="%(ar)"; export AR
+LD="%(ld)"; export LD
+OBJCOPY="%(objcopy)"; export OBJCOPY
+NM="%(nm)"; export NM
+RANLIB="%(ranlib)"; export RANLIB
+STRIP="%(strip)"; export STRIP
+PATH="%(path)"; export PATH
+GOAMD64="%(goamd64_arch)"; export GOAMD64
+test -z "$GOAMD64" && unset GOAMD64;
+CCACHE_DIR="%(ccachedir)"; export CCACHE_DIR;
+CCACHE_BASEDIR="%(workdir)"; export CCACHE_BASEDIR
+test -z "$CCACHE_DIR" && unset CCACHE_DIR;
+export NINJA_STATUS="[%%f/%%t %%es (%%P)] ";
+%cargo_set_environment
+RUSTC_WRAPPER="%(rustc_wrapper)"; export RUSTC_WRAPPER;
+test -z "$RUSTC_WRAPPER" && unset RUSTC_WRAPPER;
+GOCACHE="%(gocachedir)"; export GOCACHE;
+test -z "$GOCACHE" && unset GOCACHE;
+GOMODCACHE="%(gomodcachedir)"; export GOMODCACHE;
+test -z "$GOMODCACHE" && unset GOMODCACHE;
+CARGO_HOME="%(cargocachedir)"; export CARGO_HOME;
+test -z "$CARGO_HOME" && unset CARGO_HOME;
+ZIG_GLOBAL_CACHE_DIR="%(zigcachedir)"; export ZIG_GLOBAL_CACHE_DIR;
+test -z "$ZIG_GLOBAL_CACHE_DIR" && unset ZIG_GLOBAL_CACHE_DIR;
+ZIG_LOCAL_CACHE_DIR="%(zigcachedir)"; export ZIG_LOCAL_CACHE_DIR;
+test -z "$ZIG_LOCAL_CACHE_DIR" && unset ZIG_LOCAL_CACHE_DIR;
+SCCACHE_DIR="%(sccachedir)"; export SCCACHE_DIR;
+test -z "$SCCACHE_DIR" && unset SCCACHE_DIR;
+LANG="en_US.UTF-8"; export LANG
+LC_ALL="en_US.UTF-8"; export LC_ALL
+test -d "%(workdir)" || (echo "The work directory %(workdir) does not exist"; exit 1)
+cd "%(workdir)" && echo "The work directory %%(workdir) is ${PWD}"
+"#,
+                dependencies = [
+                ],
+            },
+        },
+    ],
+    definitions = [
+        {
+            key = "libsuffix",
+            value = "",
+        },
+        {
+            key = "prefix",
+            value = "/usr",
+        },
+        {
+            key = "bindir",
+            value = "%(prefix)/bin",
+        },
+        {
+            key = "includedir",
+            value = "%(prefix)/include",
+        },
+        {
+            key = "sysusersdir",
+            value = "%(prefix)/lib/sysusers.d",
+        },
+        {
+            key = "tmpfilesdir",
+            value = "%(prefix)/lib/tmpfiles.d",
+        },
+        {
+            key = "udevrulesdir",
+            value = "%(prefix)/lib/udev/rules.d",
+        },
+        {
+            key = "sbindir",
+            value = "%(prefix)/sbin",
+        },
+        {
+            key = "datadir",
+            value = "%(prefix)/share",
+        },
+        {
+            key = "vendordir",
+            value = "%(datadir)/defaults",
+        },
+        {
+            key = "docdir",
+            value = "%(datadir)/doc",
+        },
+        {
+            key = "infodir",
+            value = "%(datadir)/info",
+        },
+        {
+            key = "localedir",
+            value = "%(datadir)/locale",
+        },
+        {
+            key = "mandir",
+            value = "%(datadir)/man",
+        },
+        {
+            key = "bashcompletionsdir",
+            value = "%(datadir)/bash-completion/completions",
+        },
+        {
+            key = "completionsdir",
+            value = "%(bashcompletionsdir)",
+        },
+        {
+            key = "fishcompletionsdir",
+            value = "%(datadir)/fish/vendor_completions.d",
+        },
+        {
+            key = "elvishcompletionsdir",
+            value = "%(datadir)/elvish/lib",
+        },
+        {
+            key = "zshcompletionsdir",
+            value = "%(datadir)/zsh/site-functions",
+        },
+        {
+            key = "libdir",
+            value = "%(prefix)/lib%(libsuffix)",
+        },
+        {
+            key = "libexecdir",
+            value = "%(libdir)/%(name)",
+        },
+        {
+            key = "localstatedir",
+            value = "/var",
+        },
+        {
+            key = "sharedstatedir",
+            value = "%(localstatedir)/lib",
+        },
+        {
+            key = "runstatedir",
+            value = "/run",
+        },
+        {
+            key = "sysconfdir",
+            value = "/etc",
+        },
+        {
+            key = "builddir",
+            value = "aerynos-builddir",
+        },
+        {
+            key = "vendorID",
+            value = "aerynos-linux",
+        },
+        {
+            key = "cc",
+            value = "%(compiler_c)",
+        },
+        {
+            key = "cxx",
+            value = "%(compiler_cxx)",
+        },
+        {
+            key = "objc",
+            value = "%(compiler_objc)",
+        },
+        {
+            key = "objcxx",
+            value = "%(compiler_objcxx)",
+        },
+        {
+            key = "cpp",
+            value = "%(compiler_cpp)",
+        },
+        {
+            key = "objcpp",
+            value = "%(compiler_objcpp)",
+        },
+        {
+            key = "objcxxcpp",
+            value = "%(compiler_objcxxcpp)",
+        },
+        {
+            key = "d",
+            value = "%(compiler_d)",
+        },
+        {
+            key = "ar",
+            value = "%(compiler_ar)",
+        },
+        {
+            key = "ld",
+            value = "%(compiler_ld)",
+        },
+        {
+            key = "objcopy",
+            value = "%(compiler_objcopy)",
+        },
+        {
+            key = "nm",
+            value = "%(compiler_nm)",
+        },
+        {
+            key = "ranlib",
+            value = "%(compiler_ranlib)",
+        },
+        {
+            key = "strip",
+            value = "%(compiler_strip)",
+        },
+        {
+            key = "path",
+            value = "%(compiler_path)",
+        },
+        {
+            key = "ccachedir",
+            value = "%(compiler_cache)",
+        },
+        {
+            key = "gocachedir",
+            value = "%(compiler_go_cache)",
+        },
+        {
+            key = "gomodcachedir",
+            value = "%(compiler_go_mod_cache)",
+        },
+        {
+            key = "cargocachedir",
+            value = "%(compiler_cargo_cache)",
+        },
+        {
+            key = "zigcachedir",
+            value = "%(compiler_zig_cache)",
+        },
+        {
+            key = "sccachedir",
+            value = "%(scompiler_cache)",
+        },
+        {
+            key = "pkgconfigpath",
+            value = "%(libdir)/pkgconfig:/usr/share/pkgconfig",
+        },
+    ],
+    flags = [
+        {
+            key = "architecture",
+            value = {
+                root = {
+                    c = Some "",
+                    cxx = Some "",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "base",
+            value = {
+                root = {
+                    c = Some "-pipe -Wformat -Wformat-security -Wno-error -fPIC",
+                    cxx = Some "-pipe -Wformat -Wformat-security -Wno-error -fPIC",
+                    f = Some "",
+                    d = Some "-release -Hkeep-all-bodies -relocation-model=pic -wi",
+                    rust = Some "-C strip=none",
+                    vala = None,
+                    go = Some "-trimpath",
+                    ld = Some "-Wl,-O2,--gc-sections",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "omit-frame-pointer",
+            value = {
+                root = {
+                    c = Some "-fomit-frame-pointer -momit-leaf-frame-pointer",
+                    cxx = Some "-fomit-frame-pointer -momit-leaf-frame-pointer",
+                    f = Some "-fomit-frame-pointer",
+                    d = Some "-frame-pointer=none",
+                    rust = Some "",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "no-omit-frame-pointer",
+            value = {
+                root = {
+                    c = Some "-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer",
+                    cxx = Some "-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer",
+                    f = Some "-fno-omit-frame-pointer",
+                    d = Some "-frame-pointer=all",
+                    rust = Some "-C force-frame-pointers",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "bindnow",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-z,relro,-z,now",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "symbolic-all",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-Bsymbolic",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "symbolic-functions",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-Bsymbolic-functions",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "symbolic-nonweak",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-Bsymbolic-non-weak-functions",
+                },
+            },
+        },
+        {
+            key = "fortify-lvl1",
+            value = {
+                root = {
+                    c = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=1",
+                    cxx = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=1",
+                    f = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=1",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "fortify-lvl2",
+            value = {
+                root = {
+                    c = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=2",
+                    cxx = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=2",
+                    f = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=2",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "fortify-lvl3",
+            value = {
+                root = {
+                    c = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3",
+                    cxx = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3",
+                    f = Some "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "harden-none",
+            value = {
+                root = {
+                    c = Some "-fno-stack-protector",
+                    cxx = Some "-fno-stack-protector",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "harden-lvl1",
+            value = {
+                root = {
+                    c = Some "-fstack-protector --param ssp-buffer-size=32",
+                    cxx = Some "-fstack-protector --param ssp-buffer-size=32",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = Some "-buildmode=pie",
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "harden-lvl2",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-fstack-protector-strong -fstack-clash-protection -fPIE --param ssp-buffer-size=4",
+                    cxx = Some "-fstack-protector-strong -fstack-clash-protection -fPIE --param ssp-buffer-size=4",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = Some "-buildmode=pie",
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fstack-protector-strong -fstack-clash-protection -fPIE --param ssp-buffer-size=4",
+                    cxx = Some "-fstack-protector-strong -fstack-clash-protection -fPIE --param ssp-buffer-size=4",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = Some "-buildmode=pie",
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "control-flow",
+            value = {
+                root = {
+                    c = Some "-fcf-protection",
+                    cxx = Some "-fcf-protection",
+                    f = Some "-fcf-protection",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "libstdc-assertions",
+            value = {
+                root = {
+                    c = Some "-Wp,-D_GLIBCXX_ASSERTIONS",
+                    cxx = Some "-Wp,-D_GLIBCXX_ASSERTIONS",
+                    f = Some "-Wp,-D_GLIBCXX_ASSERTIONS",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "thread-exceptions",
+            value = {
+                root = {
+                    c = Some "-fexceptions",
+                    cxx = Some "-fexceptions",
+                    f = Some "-fexceptions",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "sections",
+            value = {
+                root = {
+                    c = Some "-ffunction-sections -fdata-sections",
+                    cxx = Some "-ffunction-sections -fdata-sections",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "optimize-fast",
+            value = {
+                root = {
+                    c = Some "-Ofast",
+                    cxx = Some "-Ofast",
+                    f = Some "-Ofast",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "optimize-generic",
+            value = {
+                root = {
+                    c = Some "-O2",
+                    cxx = Some "-O2",
+                    f = Some "-O2",
+                    d = Some "-O2",
+                    rust = Some "-C opt-level=3 -C codegen-units=1",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "optimize-size",
+            value = {
+                root = {
+                    c = Some "-Os",
+                    cxx = Some "-Os",
+                    f = None,
+                    d = Some "-Os",
+                    rust = Some "-C opt-level=s -C codegen-units=1",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-Os",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "optimize-speed",
+            value = {
+                root = {
+                    c = Some "-O3",
+                    cxx = Some "-O3",
+                    f = Some "-O3",
+                    d = Some "-O3",
+                    rust = Some "-C opt-level=3 -C codegen-units=1",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "lto-full",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C lto=fat -C linker-plugin-lto -C embed-bitcode=yes",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-flto=%(jobs) -flto-partition=one",
+                    cxx = Some "-flto=%(jobs) -flto-partition=one",
+                    f = Some "-flto=%(jobs) -flto-partition=one",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-flto=%(jobs) -flto-partition=one",
+                },
+                llvm = {
+                    c = Some "-flto=full",
+                    cxx = Some "-flto=full",
+                    f = Some "-flto=full",
+                    d = Some "-flto=full",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-flto=full",
+                },
+            },
+        },
+        {
+            key = "lto-thin",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C lto=thin -C linker-plugin-lto -C embed-bitcode=yes",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-flto=%(jobs)",
+                    cxx = Some "-flto=%(jobs)",
+                    f = Some "-flto=%(jobs)",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-flto=%(jobs)",
+                },
+                llvm = {
+                    c = Some "-flto=thin",
+                    cxx = Some "-flto=thin",
+                    f = Some "-flto=thin",
+                    d = Some "-flto=thin",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-flto=thin",
+                },
+            },
+        },
+        {
+            key = "ltoextra-full",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-fdevirtualize-at-ltrans",
+                    cxx = Some "-fdevirtualize-at-ltrans",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fwhole-program-vtables -fvirtual-function-elimination",
+                    cxx = Some "-fwhole-program-vtables -fvirtual-function-elimination",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "ltoextra-thin",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fwhole-program-vtables",
+                    cxx = Some "-fwhole-program-vtables",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "fat-lto",
+            value = {
+                root = {
+                    c = Some "-ffat-lto-objects",
+                    cxx = Some "-ffat-lto-objects",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-ffat-lto-objects",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "fat-lto-none",
+            value = {
+                root = {
+                    c = Some "-fno-fat-lto-objects",
+                    cxx = Some "-fno-fat-lto-objects",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-fno-fat-lto-objects",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "lto-errors",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-Werror=odr -Werror=lto-type-mismatch -Werror=strict-aliasing",
+                    cxx = Some "-Werror=odr -Werror=lto-type-mismatch -Werror=strict-aliasing",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-Werror=odr -Werror=strict-aliasing",
+                    cxx = Some "-Werror=odr -Werror=strict-aliasing",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "build-id",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C link-args=-Wl,--build-id=sha1",
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--build-id=sha1",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "compress-debug-zstd",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C link-args=-Wl,--compress-debug-sections=zstd",
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--compress-debug-sections=zstd",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "compress-debug-zlib",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C link-args=-Wl,--compress-debug-sections=zlib",
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--compress-debug-sections=zlib",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "compress-debug-none",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C link-args=-Wl,--compress-debug-sections=none",
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--compress-debug-sections=none",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "icf-all",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--icf=all",
+                },
+            },
+        },
+        {
+            key = "icf-safe",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--icf=safe",
+                },
+            },
+        },
+        {
+            key = "idae",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--ignore-data-address-equality",
+                },
+            },
+        },
+        {
+            key = "polly",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fplugin=LLVMPolly.so -fpass-plugin=LLVMPolly.so -Xclang -mllvm -Xclang -polly -Xclang -mllvm -Xclang -polly-vectorizer=stripmine",
+                    cxx = Some "-fplugin=LLVMPolly.so -fpass-plugin=LLVMPolly.so -Xclang -mllvm -Xclang -polly -Xclang -mllvm -Xclang -polly-vectorizer=stripmine",
+                    f = Some "-fpass-plugin=LLVMPolly.so",
+                    d = Some "-polly -polly-vectorizer=stripmine",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "bolt",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-fno-reorder-blocks-and-partition",
+                    cxx = Some "-fno-reorder-blocks-and-partition",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-q",
+                },
+                llvm = {
+                    c = Some "-fno-split-machine-functions",
+                    cxx = Some "-fno-split-machine-functions",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-q",
+                },
+            },
+        },
+        {
+            key = "common",
+            value = {
+                root = {
+                    c = Some "-fcommon",
+                    cxx = Some "-fcommon",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-fcommon",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "debug-lines",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = Some "-C debuginfo=line-tables-only -C split-debuginfo=off",
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-gline-tables-only -fasynchronous-unwind-tables",
+                    cxx = Some "-gline-tables-only -fasynchronous-unwind-tables",
+                    f = None,
+                    d = Some "-gline-tables-only -gc",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "debug-std",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-g",
+                    d = Some "-g -gc -d-debug",
+                    rust = Some "-C debuginfo=2 -C split-debuginfo=off",
+                    vala = Some "-g",
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-g -feliminate-unused-debug-types -fasynchronous-unwind-tables",
+                    cxx = Some "-g -feliminate-unused-debug-types -fasynchronous-unwind-tables",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-g -fasynchronous-unwind-tables",
+                    cxx = Some "-g -fasynchronous-unwind-tables",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "math",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-ffast-math",
+                    d = Some "-ffast-math -fp-contract=fast",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-fno-math-errno -fno-trapping-math",
+                    cxx = Some "-fno-math-errno -fno-trapping-math",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fno-math-errno -fno-trapping-math -ffp-contract=fast -ffp-model=fast",
+                    cxx = Some "-fno-math-errno -fno-trapping-math -ffp-contract=fast -ffp-model=fast",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "noplt",
+            value = {
+                root = {
+                    c = Some "-fno-plt",
+                    cxx = Some "-fno-plt",
+                    f = None,
+                    d = Some "-fno-plt",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-fno-plt",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "nosemantic",
+            value = {
+                root = {
+                    c = Some "-fno-semantic-interposition",
+                    cxx = Some "-fno-semantic-interposition",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "nodaed",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fno-direct-access-external-data",
+                    cxx = Some "-fno-direct-access-external-data",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "avxwidth-128",
+            value = {
+                root = {
+                    c = Some "-mprefer-vector-width=128",
+                    cxx = Some "-mprefer-vector-width=128",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-mprefer-vector-width=128",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "pch-instantiate",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = Some "-fpch-instantiate-templates",
+                    cxx = Some "-fpch-instantiate-templates",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "asneeded",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--as-needed",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "runpath",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--enable-new-dtags",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "sse2avx",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = Some "-msse2avx",
+                    cxx = Some "-msse2avx",
+                    f = Some "-msse2avx",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "visibility-hidden",
+            value = {
+                root = {
+                    c = Some "-fvisibility=hidden",
+                    cxx = Some "-fvisibility-inlines-hidden -fvisibility=hidden",
+                    f = None,
+                    d = Some "-fvisibility=hidden",
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = Some "-fvisibility=hidden",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "visibility-inline",
+            value = {
+                root = {
+                    c = None,
+                    cxx = Some "-fvisibility-inlines-hidden",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "relative-vtables",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = Some "-fexperimental-library -fexperimental-relative-c++-abi-vtables",
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "relr",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,-z,pack-relative-relocs",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "tls-gnu",
+            value = {
+                root = {
+                    c = Some "-mtls-dialect=gnu2",
+                    cxx = Some "-mtls-dialect=gnu2",
+                    f = Some "-mtls-dialect=gnu2",
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "version-allow-undefined",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--undefined-version",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "version-no-undefined",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = Some "-Wl,--no-undefined-version",
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "golang-modflags",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = Some "-mod=readonly -modcacherw",
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+        {
+            key = "golang-ldflags",
+            value = {
+                root = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = Some "-ldflags=-linkmode=external",
+                    ld = None,
+                },
+                gnu = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+                llvm = {
+                    c = None,
+                    cxx = None,
+                    f = None,
+                    d = None,
+                    rust = None,
+                    vala = None,
+                    go = None,
+                    ld = None,
+                },
+            },
+        },
+    ],
+    tuning = [
+        {
+            key = "architecture",
+            value = {
+                root = {
+                    enabled = [
+                        "architecture",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "base",
+            value = {
+                root = {
+                    enabled = [
+                        "base",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "debug",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "std",
+                choices = [
+                    {
+                        key = "lines",
+                        value = {
+                            enabled = [
+                                "debug-lines",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "std",
+                        value = {
+                            enabled = [
+                                "debug-std",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "compress-debug",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "zstd",
+                choices = [
+                    {
+                        key = "none",
+                        value = {
+                            enabled = [
+                                "compress-debug-none",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "zlib",
+                        value = {
+                            enabled = [
+                                "compress-debug-zlib",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "zstd",
+                        value = {
+                            enabled = [
+                                "compress-debug-zstd",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "frame-pointer",
+            value = {
+                root = {
+                    enabled = [
+                        "no-omit-frame-pointer",
+                    ],
+                    disabled = [
+                        "omit-frame-pointer",
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "build-id",
+            value = {
+                root = {
+                    enabled = [
+                        "build-id",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "bindnow",
+            value = {
+                root = {
+                    enabled = [
+                        "bindnow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "symbolic",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "functions",
+                choices = [
+                    {
+                        key = "all",
+                        value = {
+                            enabled = [
+                                "symbolic-all",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "functions",
+                        value = {
+                            enabled = [
+                                "symbolic-functions",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "nonweak",
+                        value = {
+                            enabled = [
+                                "symbolic-nonweak",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "fortify",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "lvl3",
+                choices = [
+                    {
+                        key = "lvl1",
+                        value = {
+                            enabled = [
+                                "fortify-lvl1",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "lvl2",
+                        value = {
+                            enabled = [
+                                "fortify-lvl2",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "lvl3",
+                        value = {
+                            enabled = [
+                                "fortify-lvl3",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "harden",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                        "harden-none",
+                    ],
+                },
+                default = Some "lvl1",
+                choices = [
+                    {
+                        key = "none",
+                        value = {
+                            enabled = [
+                                "harden-none",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "lvl1",
+                        value = {
+                            enabled = [
+                                "harden-lvl1",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "lvl2",
+                        value = {
+                            enabled = [
+                                "harden-lvl2",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "control-flow",
+            value = {
+                root = {
+                    enabled = [
+                        "control-flow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "libstdc-assertions",
+            value = {
+                root = {
+                    enabled = [
+                        "libstdc-assertions",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "thread-exceptions",
+            value = {
+                root = {
+                    enabled = [
+                        "thread-exceptions",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "optimize",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "generic",
+                choices = [
+                    {
+                        key = "fast",
+                        value = {
+                            enabled = [
+                                "optimize-fast",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "generic",
+                        value = {
+                            enabled = [
+                                "optimize-generic",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "size",
+                        value = {
+                            enabled = [
+                                "optimize-size",
+                                "sections",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "speed",
+                        value = {
+                            enabled = [
+                                "optimize-speed",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "lto",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "thin",
+                choices = [
+                    {
+                        key = "full",
+                        value = {
+                            enabled = [
+                                "lto-full",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "thin",
+                        value = {
+                            enabled = [
+                                "lto-thin",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "ltoextra",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "thin",
+                choices = [
+                    {
+                        key = "full",
+                        value = {
+                            enabled = [
+                                "ltoextra-full",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "thin",
+                        value = {
+                            enabled = [
+                                "ltoextra-thin",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "lto-errors",
+            value = {
+                root = {
+                    enabled = [
+                        "lto-errors",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "fat-lto",
+            value = {
+                root = {
+                    enabled = [
+                        "fat-lto",
+                    ],
+                    disabled = [
+                        "fat-lto-none",
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "icf",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "safe",
+                choices = [
+                    {
+                        key = "safe",
+                        value = {
+                            enabled = [
+                                "icf-safe",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "all",
+                        value = {
+                            enabled = [
+                                "icf-all",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "idae",
+            value = {
+                root = {
+                    enabled = [
+                        "idae",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "polly",
+            value = {
+                root = {
+                    enabled = [
+                        "polly",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "sections",
+            value = {
+                root = {
+                    enabled = [
+                        "sections",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "common",
+            value = {
+                root = {
+                    enabled = [
+                        "common",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "math",
+            value = {
+                root = {
+                    enabled = [
+                        "math",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "noplt",
+            value = {
+                root = {
+                    enabled = [
+                        "noplt",
+                        "bindnow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "nosemantic",
+            value = {
+                root = {
+                    enabled = [
+                        "nosemantic",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "nodaed",
+            value = {
+                root = {
+                    enabled = [
+                        "nodaed",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "asneeded",
+            value = {
+                root = {
+                    enabled = [
+                        "asneeded",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "avxwidth",
+            value = {
+                root = {
+                    enabled = [
+                        "avxwidth-128",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "bolt",
+            value = {
+                root = {
+                    enabled = [
+                        "bolt",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "runpath",
+            value = {
+                root = {
+                    enabled = [
+                        "runpath",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "sse2avx",
+            value = {
+                root = {
+                    enabled = [
+                        "sse2avx",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "pch-instantiate",
+            value = {
+                root = {
+                    enabled = [
+                        "pch-instantiate",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "visibility",
+            value = {
+                root = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = Some "inline",
+                choices = [
+                    {
+                        key = "inline",
+                        value = {
+                            enabled = [
+                                "visibility-inline",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    {
+                        key = "hidden",
+                        value = {
+                            enabled = [
+                                "visibility-hidden",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            key = "relative-vtables",
+            value = {
+                root = {
+                    enabled = [
+                        "relative-vtables",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "relr",
+            value = {
+                root = {
+                    enabled = [
+                        "relr",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "tls-gnu",
+            value = {
+                root = {
+                    enabled = [
+                        "tls-gnu",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "version-allow-undefined",
+            value = {
+                root = {
+                    enabled = [
+                        "version-allow-undefined",
+                    ],
+                    disabled = [
+                        "version-no-undefined",
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "golang-ldflags",
+            value = {
+                root = {
+                    enabled = [
+                        "golang-ldflags",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+        {
+            key = "golang-modflags",
+            value = {
+                root = {
+                    enabled = [
+                        "golang-modflags",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = None,
+                choices = [
+                ],
+            },
+        },
+    ],
+    packages = [
+        {
+            key = "%(name)",
+            value = {
+                summary = None,
+                description = None,
+                provides_exclude = [
+                ],
+                run_deps = [
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "*" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-docs",
+            value = {
+                summary = Some "Documentation for %(name)",
+                description = Some r"Documentation files for the %(name) package
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/share/gtk-doc" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-devel",
+            value = {
+                summary = Some "Development files for %(name)",
+                description = Some r"Install this package if you intend to build software against
+the %(name) package.
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                    "%(name)",
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/include" },
+                    Any { path = "/usr/lib/*.a" },
+                    Any { path = "/usr/lib/cmake" },
+                    Any { path = "/usr/lib/lib*.so" },
+                    Any { path = "/usr/lib/pkgconfig" },
+                    Any { path = "/usr/share/aclocal" },
+                    Any { path = "/usr/share/cmake" },
+                    Any { path = "/usr/share/man/man2" },
+                    Any { path = "/usr/share/man/man3" },
+                    Any { path = "/usr/share/man/man9" },
+                    Any { path = "/usr/share/pkgconfig" },
+                    Any { path = "/usr/share/gir-1.0/*.gir" },
+                    Any { path = "/usr/share/vala/vapi/*.deps" },
+                    Any { path = "/usr/share/vala/vapi/*.vapi" },
+                    Any { path = "/usr/lib/*.prl" },
+                    Any { path = "/usr/lib/metatypes" },
+                    Any { path = "/usr/lib/qt*/metatypes/qt*.json" },
+                    Any { path = "/usr/lib/qt*/mkspecs" },
+                    Any { path = "/usr/lib/qt*/modules/*.json" },
+                    Any { path = "/usr/lib/qt*/sbom" },
+                    Any { path = "/usr/lib/qt*/plugins/designer/*.so" },
+                    Any { path = "/usr/share/doc/qt5/*.qch" },
+                    Any { path = "/usr/share/doc/qt5/*.tags" },
+                    Any { path = "/usr/share/doc/qt6/*.qch" },
+                    Any { path = "/usr/share/doc/qt6/*.tags" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-dbginfo",
+            value = {
+                summary = Some "Debugging symbols for %(name)",
+                description = Some r"Install this package if you need debugging information + symbols
+for the %(name) package.
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/lib/debug" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-libs",
+            value = {
+                summary = Some "Library files for %(name)",
+                description = Some r"Library files for %(name), typically pulled in as a dependency of another package.
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-32bit",
+            value = {
+                summary = Some "Provides 32-bit runtime libraries for %(name)",
+                description = Some r"Install this package if you need the 32-bit versions of the
+%(name) package libraries.
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                    "%(name)",
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/lib32" },
+                    Any { path = "/usr/lib32/lib*.so.*" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-32bit-devel",
+            value = {
+                summary = Some "Provides development files for %(name)-32bit",
+                description = Some r"Install this package if you need to build software against
+the 32-bit version of %(name), %(name)-32bit.
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                    "%(name)-32bit",
+                    "%(name)-devel",
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/lib32/*.a" },
+                    Any { path = "/usr/lib32/cmake" },
+                    Any { path = "/usr/lib32/lib*.so" },
+                    Any { path = "/usr/lib32/pkgconfig" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-32bit-dbginfo",
+            value = {
+                summary = Some "Debugging symbols for %(name)-32bit",
+                description = Some r"Install this package if you need debugging information + symbols
+for the %(name)-32bit package.
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/lib32/debug" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+        {
+            key = "%(name)-demos",
+            value = {
+                summary = Some "Example files for %(name)",
+                description = Some r"Example files for the %(name) package
+",
+                provides_exclude = [
+                ],
+                run_deps = [
+                ],
+                run_deps_exclude = [
+                ],
+                paths = [
+                    Any { path = "/usr/lib/qt*/examples" },
+                ],
+                conflicts = [
+                ],
+            },
+        },
+    ],
+    default_tuning_groups = [
+        "asneeded",
+        "avxwidth",
+        "base",
+        "bindnow",
+        "build-id",
+        "compress-debug",
+        "control-flow",
+        "debug",
+        "fat-lto",
+        "fortify",
+        "frame-pointer",
+        "golang-ldflags",
+        "golang-modflags",
+        "harden",
+        "icf",
+        "libstdc-assertions",
+        "lto",
+        "lto-errors",
+        "optimize",
+        "relr",
+        "symbolic",
+        "thread-exceptions",
+        "tls-gnu",
+        "version-allow-undefined",
+    ],
+}
