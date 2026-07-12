@@ -15,7 +15,6 @@ use moss::{
 use snafu::{ResultExt, Snafu};
 use stone::{
     StoneDecodedPayload, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneReadError,
-    StoneWriteError,
 };
 use tempfile::NamedTempFile;
 
@@ -65,7 +64,7 @@ impl<'a> Manifest<'a> {
         let mut output =
             fs::File::create(self.output_dir.join(format!("manifest.{}.bin", self.arch))).context(IoSnafu)?;
 
-        binary::write(&mut output, &self.packages, &self.build_deps).context(StoneWriterSnafu)
+        binary::write(&mut output, &self.packages, &self.build_deps).context(BinarySnafu)
     }
 
     pub fn write_json(&self) -> Result<(), Error> {
@@ -92,7 +91,7 @@ impl<'a> Manifest<'a> {
 
             let mut writer = util::Sha256Wrapper::new(&mut temp_file);
 
-            binary::write(&mut writer, &self.packages, &self.build_deps).context(StoneWriterSnafu)?;
+            binary::write(&mut writer, &self.packages, &self.build_deps).context(BinarySnafu)?;
 
             let hash = writer.finalize();
 
@@ -154,8 +153,8 @@ pub enum Verification {
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("stone binary writer"))]
-    StoneWriter { source: StoneWriteError },
+    #[snafu(display("encode binary manifest"))]
+    Binary { source: binary::Error },
     #[snafu(display("encode json"))]
     Json { source: serde_json::Error },
     #[snafu(display("io"))]

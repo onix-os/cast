@@ -26,6 +26,40 @@ mod manifest;
 
 const RECIPE_FINGERPRINT_SOURCE_REF_PREFIX: &str = "gluon-evaluation-sha256:";
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MetadataError {
+    #[error("{field}: invalid dependency `{value}`")]
+    InvalidDependency {
+        field: String,
+        value: String,
+        #[source]
+        source: moss::dependency::ParseError,
+    },
+    #[error("{field}: invalid provider `{value}`")]
+    InvalidProvider {
+        field: String,
+        value: String,
+        #[source]
+        source: moss::dependency::ParseError,
+    },
+}
+
+fn parse_dependency(field: String, value: &str) -> Result<Dependency, MetadataError> {
+    Dependency::from_name(value).map_err(|source| MetadataError::InvalidDependency {
+        field,
+        value: value.to_owned(),
+        source,
+    })
+}
+
+fn parse_provider(field: String, value: &str) -> Result<Provider, MetadataError> {
+    Provider::from_name(value).map_err(|source| MetadataError::InvalidProvider {
+        field,
+        value: value.to_owned(),
+        source,
+    })
+}
+
 #[derive(Debug)]
 pub struct Package<'a> {
     pub name: &'a str,
@@ -68,8 +102,23 @@ impl<'a> Package<'a> {
         )
     }
 
-    pub fn meta(&self) -> Meta {
-        Meta {
+    pub fn meta(&self) -> Result<Meta, MetadataError> {
+        let authored_dependencies = self
+            .definition
+            .run_deps
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_dependency(format!("packages[{}].run_deps[{index}]", self.name), value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let conflicts = self
+            .definition
+            .conflicts
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_provider(format!("packages[{}].conflicts[{index}]", self.name), value))
+            .collect::<Result<_, _>>()?;
+
+        Ok(Meta {
             name: self.name.to_owned().into(),
             version_identifier: self.source.version.clone(),
             source_release: self.source.release,
@@ -84,12 +133,7 @@ impl<'a> Package<'a> {
                 .analysis
                 .dependencies()
                 .cloned()
-                .chain(
-                    self.definition
-                        .run_deps
-                        .iter()
-                        .filter_map(|name| Dependency::from_name(name).ok()),
-                )
+                .chain(authored_dependencies)
                 .filter(|dep| {
                     for exclude_filter in self.definition.run_deps_exclude.iter() {
                         if let Ok(re) = Regex::new(exclude_filter)
@@ -116,20 +160,15 @@ impl<'a> Package<'a> {
                 })
                 .cloned()
                 .collect(),
-            conflicts: self
-                .definition
-                .conflicts
-                .iter()
-                .filter_map(|name| Provider::from_name(name).ok())
-                .collect(),
+            conflicts,
             uri: None,
             hash: None,
             download_size: None,
-        }
+        })
     }
 
-    fn meta_payload(&self) -> Vec<StonePayloadMetaRecord> {
-        self.with_recipe_provenance(self.meta().to_stone_payload())
+    fn meta_payload(&self) -> Result<Vec<StonePayloadMetaRecord>, MetadataError> {
+        Ok(self.with_recipe_provenance(self.meta()?.to_stone_payload()))
     }
 
     fn with_recipe_provenance(&self, mut payload: Vec<StonePayloadMetaRecord>) -> Vec<StonePayloadMetaRecord> {
@@ -267,7 +306,7 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
     // Add metadata
     {
         writer
-            .add_payload(package.meta_payload().as_slice())
+            .add_payload(package.meta_payload().context(MetadataSnafu)?.as_slice())
             .context(StoneBinaryWriterSnafu)?;
     }
 
@@ -331,6 +370,8 @@ pub enum Error {
     StoneBinaryWriter { source: StoneWriteError },
     #[snafu(display("manifest"))]
     Manifest { source: manifest::Error },
+    #[snafu(display("construct package metadata"))]
+    Metadata { source: MetadataError },
     #[snafu(display("io"))]
     Io { source: io::Error },
     #[snafu(display("Built manifest does not match verification manifest {host_path:?}"))]

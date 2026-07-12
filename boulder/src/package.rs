@@ -153,6 +153,11 @@ fn resolve_packages(
             .map(|dep| parser.parse_content(&dep))
             .collect::<Result<_, _>>()?;
         package.run_deps_exclude = package.run_deps_exclude.into_iter().collect();
+        package.conflicts = package
+            .conflicts
+            .into_iter()
+            .map(|provider| parser.parse_content(&provider))
+            .collect::<Result<_, _>>()?;
         package.paths = package
             .paths
             .into_iter()
@@ -161,6 +166,9 @@ fn resolve_packages(
                 Ok(path)
             })
             .collect::<Result<_, Error>>()?;
+
+        stone_recipe::validation::validate_package(&package, &format!("packages[{name}]"))
+            .map_err(Error::InvalidPackageRelation)?;
 
         // Add each path to collector
         for path in &package.paths {
@@ -247,6 +255,8 @@ pub enum Error {
     Emit(#[from] emit::Error),
     #[error("container")]
     Container(#[from] container::Error),
+    #[error("invalid fully expanded package relation")]
+    InvalidPackageRelation(#[source] stone_recipe::ValidationError),
 }
 
 #[cfg(test)]
@@ -332,5 +342,23 @@ mod tests {
                 "/usr/share/doc/qt6/*.tags",
             ]
         );
+    }
+
+    #[test]
+    fn invalid_relation_after_macro_expansion_is_a_structured_error() {
+        let macros = Macros::repository_for_tests();
+        let mut recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/examples/gluon/stone.glu")).unwrap();
+        recipe.parsed.source.name = "unknown(target)".to_owned();
+        let install = tempfile::tempdir().unwrap();
+        let mut collector = Collector::new(install.path());
+
+        let error = resolve_packages(["base".to_owned()], &macros, &recipe, &mut collector).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::InvalidPackageRelation(stone_recipe::ValidationError::InvalidDependency { ref field, .. })
+                if field == "packages[unknown(target)-devel].run_deps[0]"
+        ));
     }
 }
