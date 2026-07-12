@@ -81,7 +81,7 @@ cargo install typos-cli --locked
 
 # from inside the moss clone, this will build boulder and moss
 # and install them to ${HOME}/.local/bin/ by default
-just get-started
+make get-started
 
 # boulder and moss rely on so-called subuid and subgid support.
 # IFF you do not already have this set up for your ${USER} in /etc/subuid and /etc/subuid
@@ -92,7 +92,7 @@ sudo usermod --add-subuids 1065536-1131071 --add-subgids 1065536-1131071 ${USER}
 ```
 
 **NB:** If you want to build .stones with boulder on your _non-aeryn_ host system, you will need to specify the
-location of the boulder data files (which live in ${HOME}/.local/share/boulder if you used `just get-started` like above):
+location of the boulder data files (which live in ${HOME}/.local/share/boulder if you used `make get-started` like above):
 
 ```bash
 alias boulder="${HOME}/.local/bin/boulder --data-dir=${HOME}/.local/share/boulder/ --config-dir=${HOME}/.config/boulder/ --moss-root=${HOME}/.cache/boulder/"
@@ -101,8 +101,11 @@ alias boulder="${HOME}/.local/bin/boulder --data-dir=${HOME}/.local/share/boulde
 ## 📚 Documentation
 
 See the [Gluon configuration contract](docs/gluon-configuration.md) for recipe,
-repository, trigger and system-intent examples. General project documentation
-lives at [aerynos.dev](https://aerynos.dev/).
+repository, trigger and system-intent examples. The completed
+[migration plan](docs/plans/gluon-migration.md) and
+[software-delivery notes](docs/architecture/software-delivery.md) record the
+design background. General project documentation lives at
+[aerynos.dev](https://aerynos.dev/).
 
 ## 🧪 Experiment
 
@@ -110,7 +113,7 @@ lives at [aerynos.dev](https://aerynos.dev/).
 eat your current operating system.
 
 ```bash
-just get-started
+make get-started
 
 # create the aosroot/ directory
 mkdir -pv aosroot/
@@ -133,13 +136,13 @@ If you want to create systemd-nspawn roots or bootable VMs, please check out the
 Please ensure all tests are running locally without issue:
 
 ```bash
-$ just test
+$ make test
 
 # Prior to committing a change:
-$ just test # includes the just lint target
+$ make test # includes the lint target
 
 # Prior to pushing anything, apply clippy fixes:
-$ just fix
+$ make fix
 ```
 
 Then create a Pull Request with your changes.
