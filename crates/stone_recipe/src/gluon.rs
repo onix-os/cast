@@ -14,18 +14,12 @@ use crate::{
 /// Version of the authored recipe API exposed through [`GLUON_RECIPE_ABI`].
 pub const RECIPE_ABI_VERSION: u32 = 1;
 
-/// Pure Gluon definitions prepended to every authored recipe expression.
+/// Pure Gluon definitions exposed as the embedded `boulder.recipe.v1` module.
 ///
 /// The prelude exposes a `boulder` record containing the ABI version,
 /// constructors, defaults and explicit variants. Keeping it checked in makes
-/// an ABI change reviewable and includes its content in every evaluation
-/// fingerprint.
-///
-/// Until the shared evaluator exposes versioned embedded modules, the prelude
-/// and authored expression are evaluated as one composed source. Consequently
-/// `root_source_sha256` identifies that complete program rather than the
-/// authored expression alone. The fingerprint is deterministic, but callers
-/// must not yet treat that field as an authored-source-only digest.
+/// an ABI change reviewable; the restricted importer records it independently
+/// from the authored root in every evaluation fingerprint.
 pub const GLUON_RECIPE_ABI: &str = include_str!("../gluon/recipe.glu");
 
 /// A validated domain recipe together with its reproducibility metadata.
@@ -349,19 +343,14 @@ pub fn evaluate_gluon_with_inputs(
     source: &GluonSource,
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedRecipe, RecipeEvaluationError> {
-    let source = source_with_abi(source);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonRecipeSpec>(&source, explicit_inputs)?;
+    let mut import_policy = evaluator.import_policy().clone();
+    import_policy.insert_embedded_module("boulder.recipe.v1", GLUON_RECIPE_ABI)?;
+    let evaluator = evaluator.clone().with_import_policy(import_policy);
+    let evaluation = evaluator.evaluate_with_inputs::<GluonRecipeSpec>(source, explicit_inputs)?;
     let recipe = Recipe::try_from(RecipeSpec::from(evaluation.value))?;
 
     Ok(EvaluatedRecipe {
         recipe,
         fingerprint: evaluation.fingerprint,
     })
-}
-
-fn source_with_abi(source: &GluonSource) -> GluonSource {
-    GluonSource::new(
-        source.logical_name(),
-        format!("{GLUON_RECIPE_ABI}\n{}\n", source.text()),
-    )
 }

@@ -16,7 +16,7 @@ const SOURCE: &str = r#"{
 }"#;
 
 fn authored(body: &str) -> Source {
-    Source::new("stone.glu", body)
+    Source::new("stone.glu", format!("let boulder = import! boulder.recipe.v1\n{body}"))
 }
 
 #[test]
@@ -34,8 +34,8 @@ let source = {SOURCE}
     upstreams = [],
     architectures = [],
     tuning = [],
-    emul32 = False,
-    mold = False,
+    emul32 = boulder.boolean.false,
+    mold = boulder.boolean.false,
 }}
 "#
     ));
@@ -84,13 +84,13 @@ let base = boulder.recipe (boulder.source {SOURCE})
     }},
     options = boulder.options {{
         toolchain = boulder.toolchain.gnu,
-        cspgo = True,
-        samplepgo = True,
-        debug = False,
-        strip = False,
-        networking = True,
-        compressman = True,
-        lastrip = False,
+        cspgo = boulder.boolean.true,
+        samplepgo = boulder.boolean.true,
+        debug = boulder.boolean.false,
+        strip = boulder.boolean.false,
+        networking = boulder.boolean.true,
+        compressman = boulder.boolean.true,
+        lastrip = boulder.boolean.false,
     }},
     profiles = [
         boulder.named "x86_64" {{
@@ -112,7 +112,7 @@ let base = boulder.recipe (boulder.source {SOURCE})
             hash = "archive-hash",
             rename = boulder.optional.set "renamed.tar.xz",
             strip_dirs = boulder.optional.set 2,
-            unpack = False,
+            unpack = boulder.boolean.false,
             unpack_dir = boulder.optional.set "archive",
         }},
         boulder.upstream.git_with {{
@@ -129,8 +129,8 @@ let base = boulder.recipe (boulder.source {SOURCE})
         boulder.named "lto" boulder.tuning.disable,
         boulder.named "optimize" (boulder.tuning.config "speed"),
     ],
-    emul32 = True,
-    mold = True,
+    emul32 = boulder.boolean.true,
+    mold = boulder.boolean.true,
     .. base
 }}
 "#
@@ -239,7 +239,7 @@ let base = boulder.recipe (boulder.source {SOURCE})
         hash = "archive-hash",
         rename = boulder.optional.unset,
         strip_dirs = boulder.optional.set {value},
-        unpack = True,
+        unpack = boulder.boolean.true,
         unpack_dir = boulder.optional.unset,
     }}],
     .. base
@@ -303,4 +303,13 @@ fn evaluation_fingerprint_is_deterministic_and_binds_explicit_inputs() {
     assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
     assert_eq!(RECIPE_ABI_VERSION, 1);
     assert_eq!(first.fingerprint.configuration_abi_version, RECIPE_ABI_VERSION);
+    assert_eq!(
+        first
+            .fingerprint
+            .imported_modules
+            .iter()
+            .map(|module| module.logical_name.as_str())
+            .collect::<Vec<_>>(),
+        ["boulder.recipe.v1"]
+    );
 }

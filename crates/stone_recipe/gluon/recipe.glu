@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-// This is a source prelude, not a standalone configuration. `stone_recipe`
-// appends an authored expression after these versioned types and constructors.
+// Embedded, pure module imported by authored recipes as `boulder.recipe.v1`.
 
 type SourceSpec = {
     name: String,
@@ -177,7 +176,7 @@ let recipe: SourceSpec -> RecipeSpec = \source -> {
     mold = False,
 }
 
-let boulder = {
+{
     abi_version = 1,
     recipe,
     source,
@@ -192,6 +191,10 @@ let boulder = {
     optional = {
         unset = Unset,
         set = \value -> Set value,
+    },
+    boolean = {
+        false = False,
+        true = True,
     },
     named,
     upstream = {
