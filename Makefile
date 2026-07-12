@@ -53,7 +53,7 @@ get-started: boulder moss licenses
 	echo "The AerynOS documentation lives at https://aerynos.dev"
 
 licenses:
-	@"$(TOP_DIR)/scripts/fetch-licenses.sh" "$(LICENSE_DIR)"
+	@"$(TOP_DIR)/misc/scripts/fetch-licenses.sh" "$(LICENSE_DIR)"
 
 fix:
 	@echo "Applying clippy fixes..."
