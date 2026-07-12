@@ -8,7 +8,7 @@ use std::{
 };
 
 use elf::{
-    abi::{DT_NEEDED, DT_RPATH, DT_RUNPATH, DT_SONAME},
+    abi::{DT_NEEDED, DT_RPATH, DT_RUNPATH, DT_SONAME, ET_DYN},
     endian::AnyEndian,
     file::Class,
     note::Note,
@@ -44,6 +44,20 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
         .unwrap_or_default()
         .to_lowercase();
     let bit_size = elf.ehdr.class;
+    let has_interp = elf.section_header_by_name(".interp").ok().flatten().is_some();
+
+    // A package-private dynamic loader satisfies the exact PT_INTERP path used
+    // by executables in the same stone. musl's loader advertises a libc SONAME,
+    // so it cannot be identified reliably from its file name or SONAME alone.
+    // Restrict this provider to executable ET_DYN objects without an interpreter
+    // of their own: dynamic loaders have that shape, while PIE executables and
+    // ordinary shared libraries do not.
+    if is_interpreter_candidate(elf.ehdr.e_type, info.layout.mode, has_interp) {
+        bucket.providers.insert(Provider {
+            kind: dependency::Kind::Interpreter,
+            name: format!("{}({machine_isa})", info.target_path.display()),
+        });
+    }
 
     parse_dynamic_section(&mut elf, bucket, &machine_isa, bit_size, info, file_name);
     parse_interp_section(&mut elf, bucket, &machine_isa);
@@ -78,6 +92,54 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
         decision: Decision::IncludeFile,
         generated_paths,
     })
+}
+
+fn is_interpreter_candidate(elf_type: u16, mode: u32, has_interp: bool) -> bool {
+    elf_type == ET_DYN && mode & 0o111 != 0 && !has_interp
+}
+
+fn package_private_rpath_dependency(rpath: &str, name: &str) -> Option<PathBuf> {
+    if !rpath.starts_with("/usr/lib/onix/stones/") || !rpath.ends_with("/lib") || name.contains('/') {
+        return None;
+    }
+
+    Some(Path::new(rpath).components().skip(3).collect::<PathBuf>().join(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_interpreter_candidate, package_private_rpath_dependency};
+    use elf::abi::{ET_DYN, ET_EXEC};
+    use std::path::PathBuf;
+
+    #[test]
+    fn executable_dynamic_object_without_interp_is_interpreter_candidate() {
+        assert!(is_interpreter_candidate(ET_DYN, 0o100755, false));
+    }
+
+    #[test]
+    fn ordinary_shared_library_is_not_interpreter_candidate() {
+        assert!(!is_interpreter_candidate(ET_DYN, 0o100644, false));
+    }
+
+    #[test]
+    fn pie_with_own_interp_is_not_interpreter_candidate() {
+        assert!(!is_interpreter_candidate(ET_DYN, 0o100755, true));
+    }
+
+    #[test]
+    fn fixed_address_executable_is_not_interpreter_candidate() {
+        assert!(!is_interpreter_candidate(ET_EXEC, 0o100755, false));
+    }
+
+    #[test]
+    fn onix_private_runpath_qualifies_needed_soname() {
+        assert_eq!(
+            package_private_rpath_dependency("/usr/lib/onix/stones/rootasrole/4.0.0-5/lib", "libpam.so.0"),
+            Some(PathBuf::from("onix/stones/rootasrole/4.0.0-5/lib/libpam.so.0"))
+        );
+        assert_eq!(package_private_rpath_dependency("/usr/lib", "libpam.so.0"), None);
+    }
 }
 
 fn parse_elf(path: &Path) -> Result<elf::ElfStream<AnyEndian, File>, BoxError> {
@@ -151,6 +213,10 @@ fn parse_dynamic_section(
         for offset in needed_offsets {
             if let Ok(name) = strtab.get(offset) {
                 let rpath_name = rpaths.iter().find_map(|rpath| {
+                    if let Some(private_name) = package_private_rpath_dependency(rpath, name) {
+                        return Some(private_name);
+                    }
+
                     let local_p = root_dir.to_owned() + "/" + rpath + "/" + name;
                     let native_p = rpath.to_owned() + "/" + name;
                     let path = Path::new(&local_p);
