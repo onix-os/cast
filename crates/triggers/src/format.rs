@@ -8,19 +8,16 @@
 use std::{collections::BTreeMap, fmt};
 
 use fnmatch::Pattern;
-use serde::Deserialize;
 
 /// Filter matched paths to a specific kind
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug)]
 pub enum PathKind {
     Directory,
     Symlink,
 }
 
 /// Execution handlers for a trigger
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Handler {
     Run { run: String, args: Vec<String> },
     Delete { delete: Vec<String> },
@@ -48,7 +45,7 @@ impl fmt::Display for Handler {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CompiledHandler(Handler);
 
 impl CompiledHandler {
@@ -84,22 +81,21 @@ impl Handler {
 }
 
 /// Inhibitors prevent handlers from running based on some constraints
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct Inhibitors {
     pub paths: Vec<String>,
     pub environment: Vec<String>,
 }
 
 /// Map handlers to a path pattern and kind filter
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct PathDefinition {
     pub handlers: Vec<String>,
-    #[serde(rename = "type")]
     pub kind: Option<PathKind>,
 }
 
 /// Serialization format of triggers
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct Trigger {
     /// Unique (global scope) identifier
     pub name: String,
@@ -121,23 +117,4 @@ pub struct Trigger {
 
     /// Named handlers within this trigger scope
     pub handlers: BTreeMap<String, Handler>,
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::format::Trigger;
-
-    #[test]
-    fn test_trigger_file() {
-        let trigger: Trigger = serde_yaml::from_str(include_str!("../../../test/trigger.yml")).unwrap();
-
-        let (pattern, _) = trigger.paths.iter().next().expect("Missing path entry");
-        let result = pattern
-            .match_path("/usr/lib/modules/6.6.7-267.current/kernel")
-            .expect("Couldn't match path");
-        let version = result.variables.get("version").expect("Missing kernel version");
-        assert_eq!(version, "6.6.7-267.current", "Wrong kernel version match");
-        eprintln!("trigger: {trigger:?}");
-        eprintln!("match: {result:?}");
-    }
 }
