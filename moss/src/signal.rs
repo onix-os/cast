@@ -41,23 +41,25 @@ pub fn inhibit(what: Vec<&str>, who: String, why: String, mode: String) -> Resul
         // a host logind service. Production builds still acquire and retain
         // the real inhibitor body below.
         let _ = (what, who, why, mode);
-        return Ok(Inhibitor {});
+        Ok(Inhibitor {})
     }
 
     #[cfg(not(test))]
-    runtime::block_on(async {
-        let conn = zbus::Connection::system().await?;
-        let msg = conn
-            .call_method(
-                Some("org.freedesktop.login1"),
-                "/org/freedesktop/login1",
-                Some("org.freedesktop.login1.Manager"),
-                "Inhibit",
-                &(what.join(":"), who, why, mode),
-            )
-            .await?;
-        Ok(Inhibitor { _body: msg.body() })
-    })
+    {
+        runtime::block_on(async {
+            let conn = zbus::Connection::system().await?;
+            let msg = conn
+                .call_method(
+                    Some("org.freedesktop.login1"),
+                    "/org/freedesktop/login1",
+                    Some("org.freedesktop.login1.Manager"),
+                    "Inhibit",
+                    &(what.join(":"), who, why, mode),
+                )
+                .await?;
+            Ok(Inhibitor { _body: msg.body() })
+        })
+    }
 }
 
 /// Retains a logind inhibitor for the duration of a transaction.
