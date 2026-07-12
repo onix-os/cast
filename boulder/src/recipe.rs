@@ -34,8 +34,29 @@ impl Recipe {
     /// Desired recipe value invariants are checked here
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, parsed, source_lock, fingerprint) = load_gluon(&path)?;
+        let (source, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
 
+        Self::from_loaded(path, source, parsed, source_lock, fingerprint)
+    }
+
+    /// Load only the authored expression, ignoring any generated source lock.
+    ///
+    /// This is reserved for lock regeneration: stale or malformed generated
+    /// state must not prevent Boulder from evaluating the authoritative source.
+    pub(crate) fn load_authored(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let path = resolve_path(path)?;
+        let (source, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
+
+        Self::from_loaded(path, source, parsed, source_lock, fingerprint)
+    }
+
+    fn from_loaded(
+        path: PathBuf,
+        source: String,
+        parsed: Parsed,
+        source_lock: Option<SourceLock>,
+        fingerprint: EvaluationFingerprint,
+    ) -> Result<Self, Error> {
         let build_time = resolve_build_time(&path);
 
         parsed.validate()?;
@@ -103,7 +124,16 @@ impl Recipe {
     }
 }
 
-fn load_gluon(path: &Path) -> Result<(String, Parsed, Option<SourceLock>, EvaluationFingerprint), Error> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceLockPolicy {
+    RequireCurrent,
+    Ignore,
+}
+
+fn load_gluon(
+    path: &Path,
+    source_lock_policy: SourceLockPolicy,
+) -> Result<(String, Parsed, Option<SourceLock>, EvaluationFingerprint), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
@@ -114,23 +144,26 @@ fn load_gluon(path: &Path) -> Result<(String, Parsed, Option<SourceLock>, Evalua
     let evaluator = evaluator.with_source_root(source_root);
 
     let lock_path = path.with_file_name(SOURCE_LOCK_FILE_NAME);
-    let (explicit_inputs, source_lock) = match fs::read(&lock_path) {
-        Ok(bytes) => {
-            let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &bytes).map_err(|source| {
-                Error::DecodeSourceLock {
-                    path: lock_path.clone(),
-                    source: Box::new(source),
-                }
-            })?;
-            (bytes, Some(lock))
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => (Vec::new(), None),
-        Err(source) => {
-            return Err(Error::LoadSourceLock {
-                path: lock_path,
-                source,
-            });
-        }
+    let (explicit_inputs, source_lock) = match source_lock_policy {
+        SourceLockPolicy::Ignore => (Vec::new(), None),
+        SourceLockPolicy::RequireCurrent => match fs::read(&lock_path) {
+            Ok(bytes) => {
+                let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &bytes).map_err(|source| {
+                    Error::DecodeSourceLock {
+                        path: lock_path.clone(),
+                        source: Box::new(source),
+                    }
+                })?;
+                (bytes, Some(lock))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (Vec::new(), None),
+            Err(source) => {
+                return Err(Error::LoadSourceLock {
+                    path: lock_path,
+                    source,
+                });
+            }
+        },
     };
 
     let evaluated = evaluate_gluon_with_inputs(&evaluator, &source, &explicit_inputs)?;
@@ -425,6 +458,21 @@ boulder.recipe (boulder.source {
             assert_eq!(path, lock_path);
             assert!(source.to_string().contains(expected), "{source}");
         }
+    }
+
+    #[test]
+    fn authored_load_ignores_generated_lock_bytes_without_mutating_them() {
+        let root = tempfile::tempdir().unwrap();
+        let recipe_path = root.path().join("stone.glu");
+        let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
+        fs::write(&recipe_path, gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(&lock_path, "not valid Gluon").unwrap();
+
+        let recipe = Recipe::load_authored(root.path()).unwrap();
+
+        assert_eq!(recipe.parsed.source.name, "example");
+        assert!(recipe.source_lock.is_none());
+        assert_eq!(fs::read_to_string(lock_path).unwrap(), "not valid Gluon");
     }
 
     #[test]

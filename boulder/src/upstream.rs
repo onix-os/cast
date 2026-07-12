@@ -146,6 +146,45 @@ pub fn parse_recipe(recipe: &Recipe) -> Result<Vec<Upstream>, Error> {
         .collect()
 }
 
+/// Resolve every authored upstream and atomically refresh its generated lock.
+///
+/// Callers must load the recipe through [`Recipe::load_authored`] so an old or
+/// malformed generated lock cannot pin Git resolution or block regeneration.
+pub(crate) fn refresh_source_lock(recipe: &Recipe, storage_dir: &Path) -> Result<WriteOutcome, Error> {
+    let upstreams = parse_recipe(recipe)?;
+    println!();
+    println!("Resolving {} upstream(s) for {SOURCE_LOCK_FILE_NAME}:", upstreams.len());
+
+    let progress = MultiProgress::new();
+    let stored = runtime::block_on(
+        stream::iter(&upstreams)
+            .map(|upstream| {
+                let progress = &progress;
+                async move {
+                    let bar = progress.add(
+                        ProgressBar::new(u64::MAX)
+                            .with_message(format!("{} {}", "Resolving".blue(), upstream.name().bold()))
+                            .with_style(
+                                ProgressStyle::with_template(" {spinner} {wide_msg} {binary_bytes_per_sec:>.dim} ")
+                                    .unwrap()
+                                    .tick_chars("--=≡■≡=--"),
+                            ),
+                    );
+                    bar.enable_steady_tick(Duration::from_millis(150));
+                    let stored = upstream.store(storage_dir, &bar).await;
+                    bar.finish_and_clear();
+                    progress.remove(&bar);
+                    stored
+                }
+            })
+            .buffer_unordered(moss::environment::MAX_NETWORK_CONCURRENCY)
+            .try_collect::<Vec<_>>(),
+    )?;
+    progress.clear()?;
+
+    write_resolved_source_lock(recipe, &stored)
+}
+
 /// Helper that stores and shares a list of [Upstream]s.
 pub fn sync(
     recipe: &Recipe,
