@@ -14,6 +14,7 @@ use self::encode::encode;
 
 mod decode;
 mod encode;
+pub mod spec;
 mod update;
 
 #[derive(Debug, Clone)]
@@ -86,10 +87,23 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
 
 /// Creates a new [`SystemModel`] with the given items
 pub fn create(repositories: repository::Map, packages: BTreeSet<dependency::Provider>) -> SystemModel {
+    create_with_options(false, repositories, packages)
+}
+
+pub(super) fn create_with_options(
+    disable_warning: bool,
+    repositories: repository::Map,
+    packages: BTreeSet<dependency::Provider>,
+) -> SystemModel {
     let encoded = encode(&repositories, &packages);
+    let encoded = if disable_warning {
+        format!("disable_warning #true\n{encoded}")
+    } else {
+        encoded
+    };
 
     SystemModel {
-        disable_warning: false,
+        disable_warning,
         repositories,
         packages,
         encoded,
