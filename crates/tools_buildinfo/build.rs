@@ -138,9 +138,9 @@ fn get_build_time() -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // This should include all top-level directories that contain source code or otherwise modify the build in meaningful ways
     let top_level = std::path::PathBuf::from("../..").canonicalize()?;
-    println!("cargo::rerun-if-changed={}/boulder", top_level.display());
+    println!("cargo::rerun-if-changed={}/bin/boulder", top_level.display());
     println!("cargo::rerun-if-changed={}/crates", top_level.display());
-    println!("cargo::rerun-if-changed={}/moss", top_level.display());
+    println!("cargo::rerun-if-changed={}/bin/moss", top_level.display());
     println!("cargo::rerun-if-changed={}/tests", top_level.display());
     println!("cargo::rerun-if-changed={}/Cargo.toml", top_level.display());
 
