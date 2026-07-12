@@ -13,7 +13,12 @@ pub use self::gluon::{
     EvaluatedRecipe, GLUON_RECIPE_ABI, RECIPE_ABI_VERSION, RecipeEvaluationError, evaluate_gluon, evaluate_gluon_with,
     evaluate_gluon_with_inputs,
 };
-pub use self::macros::{ActionSpec, Macros, MacrosSpec};
+pub use self::macros::{
+    ActionSpec, EvaluatedMacros, GLUON_MACROS_ABI, MACROS_ABI_VERSION, Macros, MacrosConversionError,
+    MacrosEvaluationError, MacrosSpec, encode_gluon as encode_macros_gluon,
+    encode_gluon_spec as encode_macros_gluon_spec, evaluate_gluon as evaluate_macros_gluon,
+    evaluate_gluon_with as evaluate_macros_gluon_with,
+};
 pub use self::script::Script;
 pub use self::spec::{
     BuildSpec, KeyValueSpec, OptionsSpec, PackageSpec, PathSpec, RecipeConversionError, RecipeSpec, SourceSpec,

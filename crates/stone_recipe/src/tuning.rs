@@ -193,12 +193,37 @@ impl From<CompilerFlagsSpec> for CompilerFlags {
     }
 }
 
+impl From<&CompilerFlags> for CompilerFlagsSpec {
+    fn from(flags: &CompilerFlags) -> Self {
+        Self {
+            c: flags.c.clone(),
+            cxx: flags.cxx.clone(),
+            f: flags.f.clone(),
+            d: flags.d.clone(),
+            rust: flags.rust.clone(),
+            vala: flags.vala.clone(),
+            go: flags.go.clone(),
+            ld: flags.ld.clone(),
+        }
+    }
+}
+
 impl From<TuningFlagSpec> for TuningFlag {
     fn from(spec: TuningFlagSpec) -> Self {
         Self {
             root: spec.root.into(),
             gnu: spec.gnu.into(),
             llvm: spec.llvm.into(),
+        }
+    }
+}
+
+impl From<&TuningFlag> for TuningFlagSpec {
+    fn from(flag: &TuningFlag) -> Self {
+        Self {
+            root: (&flag.root).into(),
+            gnu: (&flag.gnu).into(),
+            llvm: (&flag.llvm).into(),
         }
     }
 }
@@ -212,12 +237,38 @@ impl From<TuningOptionSpec> for TuningOption {
     }
 }
 
+impl From<&TuningOption> for TuningOptionSpec {
+    fn from(option: &TuningOption) -> Self {
+        Self {
+            enabled: option.enabled.clone(),
+            disabled: option.disabled.clone(),
+        }
+    }
+}
+
 impl From<TuningGroupSpec> for TuningGroup {
     fn from(spec: TuningGroupSpec) -> Self {
         Self {
             root: spec.root.into(),
             default: spec.default,
             choices: spec.choices.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&TuningGroup> for TuningGroupSpec {
+    fn from(group: &TuningGroup) -> Self {
+        Self {
+            root: (&group.root).into(),
+            default: group.default.clone(),
+            choices: group
+                .choices
+                .iter()
+                .map(|choice| crate::spec::KeyValueSpec {
+                    key: choice.key.clone(),
+                    value: (&choice.value).into(),
+                })
+                .collect(),
         }
     }
 }

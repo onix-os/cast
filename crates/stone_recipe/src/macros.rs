@@ -9,6 +9,13 @@ use crate::{
     tuning::{TuningFlag, TuningFlagSpec, TuningGroup, TuningGroupSpec},
 };
 
+mod gluon;
+
+pub use self::gluon::{
+    EvaluatedMacros, GLUON_MACROS_ABI, MACROS_ABI_VERSION, MacrosConversionError, MacrosEvaluationError, encode_gluon,
+    encode_gluon_spec, evaluate_gluon, evaluate_gluon_with,
+};
+
 pub fn from_slice(bytes: &[u8]) -> Result<Macros, Error> {
     serde_yaml::from_slice(bytes)
 }
