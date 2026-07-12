@@ -52,8 +52,8 @@ evaluation.
 
 - Migrating or editing `../bedrock`; its recipes, scripts, documentation and
   generated artifacts are explicitly owned by the user and out of scope.
-- Removing YAML required by external platforms such as GitHub Actions,
-  Dependabot or funding metadata.
+- Removing YAML required by external platforms such as GitHub Actions or
+  Dependabot.
 - Replacing Boulder's build sandbox, Moss's transaction engine, the `.stone`
   archive format, or shell as the initial execution language for build phases.
 - Changing workspace release/version metadata.
@@ -313,7 +313,6 @@ verified Cargo, formatting and Clippy lanes.
 - `../bedrock/**` in all phases, including read-time generation, documentation,
   scripts, recipes, artifacts and pins
 - `.github/workflows/*.yaml`, `.github/dependabot.yml`
-- `funding.json`
 - `.stone` binary/archive format changes
 - unrelated transaction, VFS, package analysis, database or boot work
 - workspace package version changes
