@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{fs, time::Duration};
+use std::{env, path::Path, time::Duration};
 
-use gluon_config::{DiagnosticCategory, Evaluator, LimitKind, Limits, Source, SourceRoot};
+use fs_err as fs;
+use gluon_config::{DiagnosticCategory, Evaluator, ImportPolicy, LimitKind, Limits, Source, SourceRoot};
 
 #[test]
 fn evaluates_a_string_literal() {
@@ -105,4 +106,286 @@ fn source_size_is_checked_before_evaluation() {
 
     assert_eq!(error.category, DiagnosticCategory::Limit);
     assert_eq!(error.limit, Some(LimitKind::SourceSize));
+}
+
+#[test]
+fn evaluates_a_contained_relative_import() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("answer.glu"), "42").unwrap();
+    let evaluator = rooted_evaluator(directory.path());
+    let source = Source::new("root.glu", "let answer = import! \"./answer.glu\"\nanswer");
+
+    let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
+
+    assert_eq!(evaluation.value, 42);
+    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
+    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+}
+
+#[test]
+fn nested_relative_imports_resolve_from_the_importing_module() {
+    let directory = tempfile::tempdir().unwrap();
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    fs::write(nested.join("answer.glu"), "42").unwrap();
+    fs::write(nested.join("module.glu"), "import! \"answer.glu\"").unwrap();
+    let evaluator = rooted_evaluator(directory.path());
+
+    let evaluation = evaluator
+        .evaluate::<i64>(&Source::new("root.glu", "import! \"nested/module.glu\""))
+        .unwrap();
+
+    assert_eq!(evaluation.value, 42);
+    assert_eq!(
+        evaluation
+            .fingerprint
+            .imported_modules
+            .iter()
+            .map(|module| module.logical_name.as_str())
+            .collect::<Vec<_>>(),
+        ["nested/answer.glu", "nested/module.glu"]
+    );
+}
+
+#[test]
+fn evaluates_an_explicit_embedded_module() {
+    let policy = ImportPolicy::new()
+        .with_embedded_module("boulder.answer", "42")
+        .unwrap();
+    let source = Source::new("root.glu", "let answer = import! boulder.answer\nanswer");
+
+    let evaluation = Evaluator::default()
+        .with_import_policy(policy)
+        .evaluate::<i64>(&source)
+        .unwrap();
+
+    assert_eq!(evaluation.value, 42);
+    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
+    assert_eq!(
+        evaluation.fingerprint.imported_modules[0].logical_name,
+        "boulder.answer"
+    );
+}
+
+#[test]
+fn duplicate_embedded_module_is_rejected_without_replacing_the_first() {
+    let mut policy = ImportPolicy::new();
+    policy.insert_embedded_module("moss.value", "41").unwrap();
+    let error = policy.insert_embedded_module("moss.value", "42").unwrap_err();
+    let evaluation = Evaluator::default()
+        .with_import_policy(policy)
+        .evaluate::<i64>(&Source::new("root.glu", "import! moss.value"))
+        .unwrap();
+
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert_eq!(evaluation.value, 41);
+}
+
+#[test]
+fn parent_traversal_and_absolute_imports_are_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::write(directory.path().join("outside.glu"), "42").unwrap();
+    let evaluator = rooted_evaluator(&root);
+
+    let traversal = evaluator
+        .evaluate::<i64>(&Source::new("root.glu", "import! \"../outside.glu\""))
+        .unwrap_err();
+    assert_eq!(traversal.category, DiagnosticCategory::Import);
+    assert!(traversal.message.contains("parent traversal"));
+
+    let absolute_path = directory.path().join("outside.glu");
+    let absolute = evaluator
+        .evaluate::<i64>(&Source::new(
+            "root.glu",
+            format!("import! {:?}", absolute_path.display().to_string()),
+        ))
+        .unwrap_err();
+    assert_eq!(absolute.category, DiagnosticCategory::Import);
+    assert!(absolute.message.contains("absolute"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_escape_is_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::write(directory.path().join("outside.glu"), "42").unwrap();
+    symlink(directory.path().join("outside.glu"), root.join("escape.glu")).unwrap();
+
+    let error = rooted_evaluator(&root)
+        .evaluate::<i64>(&Source::new("root.glu", "import! \"escape.glu\""))
+        .unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert!(error.message.contains("escapes"));
+}
+
+#[test]
+fn ambient_current_directory_is_not_an_import_root() {
+    let ambient = tempfile::tempdir_in(env::current_dir().unwrap()).unwrap();
+    fs::write(ambient.path().join("answer.glu"), "42").unwrap();
+    let relative = ambient
+        .path()
+        .strip_prefix(env::current_dir().unwrap())
+        .unwrap()
+        .join("answer.glu");
+    let source = Source::new("root.glu", format!("import! {:?}", portable_path(&relative)));
+
+    let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert!(error.message.contains("explicit SourceRoot"));
+}
+
+#[test]
+fn gluon_path_does_not_affect_import_resolution() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("ambient.glu"), "42").unwrap();
+    let previous = env::var_os("GLUON_PATH");
+    // SAFETY: This test restores the variable before returning. The evaluator
+    // never reads it, so concurrent evaluator tests are unaffected.
+    unsafe { env::set_var("GLUON_PATH", directory.path()) };
+
+    let result = Evaluator::default().evaluate::<i64>(&Source::new("root.glu", "import! \"ambient.glu\""));
+
+    // SAFETY: Restore the process environment to its pre-test value.
+    unsafe {
+        match previous {
+            Some(value) => env::set_var("GLUON_PATH", value),
+            None => env::remove_var("GLUON_PATH"),
+        }
+    }
+    let error = result.unwrap_err();
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert!(error.message.contains("explicit SourceRoot"));
+}
+
+#[test]
+fn imported_file_size_is_bounded() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("large.glu"), "123").unwrap();
+    let limits = Limits {
+        max_imported_file_bytes: 2,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+
+    let error = evaluator
+        .evaluate::<i64>(&Source::new("root.glu", "import! \"large.glu\""))
+        .unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportedFileSize));
+}
+
+#[test]
+fn import_count_is_bounded() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("one.glu"), "1").unwrap();
+    fs::write(directory.path().join("two.glu"), "2").unwrap();
+    let limits = Limits {
+        max_imports: 1,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let source = Source::new(
+        "root.glu",
+        "let one = import! \"one.glu\"\nlet two = import! \"two.glu\"\none + two",
+    );
+
+    let error = evaluator.evaluate::<i64>(&source).unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportCount));
+}
+
+#[test]
+fn total_import_graph_size_is_bounded() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("answer.glu"), "42").unwrap();
+    let root_text = "import! \"answer.glu\"";
+    let limits = Limits {
+        max_import_graph_bytes: root_text.len() + 1,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+
+    let error = evaluator
+        .evaluate::<i64>(&Source::new("root.glu", root_text))
+        .unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportGraphSize));
+}
+
+#[test]
+fn imported_content_changes_the_evaluation_fingerprint() {
+    let directory = tempfile::tempdir().unwrap();
+    let imported = directory.path().join("answer.glu");
+    fs::write(&imported, "41").unwrap();
+    let evaluator = rooted_evaluator(directory.path());
+    let source = Source::new("root.glu", "import! \"answer.glu\"");
+
+    let first = evaluator.evaluate::<i64>(&source).unwrap();
+    fs::write(&imported, "42").unwrap();
+    let changed = evaluator.evaluate::<i64>(&source).unwrap();
+
+    assert_eq!(first.value, 41);
+    assert_eq!(changed.value, 42);
+    assert_ne!(
+        first.fingerprint.imported_modules[0].sha256,
+        changed.fingerprint.imported_modules[0].sha256
+    );
+    assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+}
+
+#[test]
+fn import_aliases_share_a_stable_logical_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("answer.glu"), "42").unwrap();
+    let evaluator = rooted_evaluator(directory.path());
+    let source = Source::new(
+        "root.glu",
+        "let first = import! \"answer.glu\"\nlet second = import! \"./answer.glu\"\nsecond",
+    );
+
+    let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
+
+    assert_eq!(evaluation.value, 42);
+    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
+    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_aliases_share_the_canonical_logical_identity() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("answer.glu"), "42").unwrap();
+    symlink("answer.glu", directory.path().join("alias.glu")).unwrap();
+    let evaluator = rooted_evaluator(directory.path());
+    let source = Source::new(
+        "root.glu",
+        "let direct = import! \"answer.glu\"\nlet alias = import! \"alias.glu\"\nalias",
+    );
+
+    let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
+
+    assert_eq!(evaluation.value, 42);
+    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
+    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+}
+
+fn rooted_evaluator(path: &Path) -> Evaluator {
+    Evaluator::default().with_source_root(SourceRoot::new(path).unwrap())
+}
+
+fn portable_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }

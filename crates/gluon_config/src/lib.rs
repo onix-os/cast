@@ -17,6 +17,7 @@ mod source;
 pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluator::{Evaluation, Evaluator};
 pub use fingerprint::{EvaluationFingerprint, ModuleFingerprint};
+pub use import::ImportPolicy;
 pub use limits::Limits;
 pub use source::{Source, SourceRoot};
 

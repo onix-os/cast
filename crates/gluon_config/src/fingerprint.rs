@@ -11,6 +11,15 @@ pub struct ModuleFingerprint {
     pub sha256: String,
 }
 
+impl ModuleFingerprint {
+    pub(crate) fn new(logical_name: impl Into<String>, source: &str) -> Self {
+        Self {
+            logical_name: logical_name.into(),
+            sha256: sha256(source.as_bytes()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationFingerprint {
     pub root_source_sha256: String,
@@ -23,20 +32,23 @@ pub struct EvaluationFingerprint {
 }
 
 impl EvaluationFingerprint {
-    pub(crate) fn new(source: &Source, explicit_inputs: &[u8]) -> Self {
+    pub(crate) fn new(source: &Source, mut imported_modules: Vec<ModuleFingerprint>, explicit_inputs: &[u8]) -> Self {
         let root_source_sha256 = sha256(source.text().as_bytes());
         let explicit_inputs_sha256 = sha256(explicit_inputs);
-        let imported_modules = Vec::new();
+        imported_modules.sort();
+        imported_modules.dedup_by(|left, right| left.logical_name == right.logical_name);
         let mut digest = Sha256::new();
         digest.update(b"os-tools-gluon-evaluation\0");
-        digest.update(source.logical_name().as_bytes());
-        digest.update([0]);
-        digest.update(root_source_sha256.as_bytes());
-        digest.update([0]);
-        digest.update(GLUON_VERSION.as_bytes());
+        update_field(&mut digest, source.logical_name().as_bytes());
+        update_field(&mut digest, root_source_sha256.as_bytes());
+        update_field(&mut digest, GLUON_VERSION.as_bytes());
         digest.update(CONFIGURATION_ABI_VERSION.to_le_bytes());
         digest.update(EVALUATOR_POLICY_VERSION.to_le_bytes());
-        digest.update(explicit_inputs_sha256.as_bytes());
+        update_field(&mut digest, explicit_inputs_sha256.as_bytes());
+        for module in &imported_modules {
+            update_field(&mut digest, module.logical_name.as_bytes());
+            update_field(&mut digest, module.sha256.as_bytes());
+        }
         let sha256 = format!("{:x}", digest.finalize());
 
         Self {
@@ -49,6 +61,11 @@ impl EvaluationFingerprint {
             sha256,
         }
     }
+}
+
+fn update_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value);
 }
 
 fn sha256(bytes: &[u8]) -> String {

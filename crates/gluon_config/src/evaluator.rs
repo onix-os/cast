@@ -14,13 +14,17 @@ use std::{
 use gluon::{
     RootedThread, ThreadExt,
     import::Import,
+    query::CompilationBase,
     vm::{
         api::{Getable, VmType},
         thread::ThreadInternal,
     },
 };
 
-use crate::{Diagnostic, EvaluationFingerprint, LimitKind, Limits, Source, SourceRoot, import::RestrictedImporter};
+use crate::{
+    Diagnostic, EvaluationFingerprint, ImportPolicy, LimitKind, Limits, Source, SourceRoot,
+    import::{PreparedImports, RestrictedImporter, prepare_imports},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Evaluation<T> {
@@ -32,6 +36,7 @@ pub struct Evaluation<T> {
 pub struct Evaluator {
     limits: Limits,
     source_root: Option<SourceRoot>,
+    import_policy: ImportPolicy,
 }
 
 impl Default for Evaluator {
@@ -45,12 +50,22 @@ impl Evaluator {
         Self {
             limits,
             source_root: None,
+            import_policy: ImportPolicy::default(),
         }
     }
 
     pub fn with_source_root(mut self, source_root: SourceRoot) -> Self {
         self.source_root = Some(source_root);
         self
+    }
+
+    pub fn with_import_policy(mut self, import_policy: ImportPolicy) -> Self {
+        self.import_policy = import_policy;
+        self
+    }
+
+    pub fn import_policy(&self) -> &ImportPolicy {
+        &self.import_policy
     }
 
     pub fn limits(&self) -> Limits {
@@ -78,8 +93,16 @@ impl Evaluator {
             ));
         }
 
-        let fingerprint = EvaluationFingerprint::new(source, explicit_inputs);
-        let vm = self.build_vm();
+        let parser_vm = self.build_vm(&PreparedImports::empty());
+        let imports = prepare_imports(
+            &parser_vm,
+            &self.import_policy,
+            self.source_root.as_ref(),
+            self.limits,
+            source,
+        )?;
+        let fingerprint = EvaluationFingerprint::new(source, imports.fingerprints(), explicit_inputs);
+        let vm = self.build_vm(&imports);
         let timed_out = Arc::new(AtomicBool::new(false));
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         let watchdog_vm = vm.clone();
@@ -135,9 +158,9 @@ impl Evaluator {
         self.evaluate(&source)
     }
 
-    fn build_vm(&self) -> RootedThread {
+    fn build_vm(&self, imports: &PreparedImports) -> RootedThread {
         let vm = RootedThread::new();
-        let import = Import::new(RestrictedImporter::closed());
+        let import = Import::new(RestrictedImporter::allowing(imports.allowed_modules()));
         import.set_paths(Vec::new());
         vm.get_macros().insert("import".to_owned(), import);
         {
@@ -145,6 +168,9 @@ impl Evaluator {
             database.set_implicit_prelude(false);
             database.set_use_standard_lib(false);
             database.set_run_io(false);
+            for (logical_name, source) in imports.module_sources() {
+                database.add_module(logical_name.to_owned(), source);
+            }
         }
         vm.set_memory_limit(self.limits.memory_bytes);
         vm.context().set_max_stack_size(self.limits.max_stack_size);

@@ -19,6 +19,9 @@ pub enum DiagnosticCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimitKind {
     SourceSize,
+    ImportedFileSize,
+    ImportCount,
+    ImportGraphSize,
     Memory,
     Stack,
     Time,
@@ -66,6 +69,17 @@ impl Diagnostic {
             span: None,
             message: error.to_string(),
             source: Some(DiagnosticSource::Io(Arc::new(error))),
+        }
+    }
+
+    pub(crate) fn import(source_name: Option<String>, message: impl Into<String>) -> Self {
+        Self {
+            category: DiagnosticCategory::Import,
+            limit: None,
+            source_name,
+            span: None,
+            message: message.into(),
+            source: None,
         }
     }
 
