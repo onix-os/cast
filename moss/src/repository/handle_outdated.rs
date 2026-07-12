@@ -164,3 +164,63 @@ fn print_diff(a: &str, b: &str, header: Option<(&str, &str)>) {
         println!("{colored}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use fs_err as fs;
+
+    use super::*;
+    use crate::{db, system_model};
+
+    #[test]
+    fn system_intent_suggestion_never_mutates_authored_source() {
+        let temporary = tempfile::tempdir().unwrap();
+        let intent_path = system_model::intent_path(temporary.path());
+        fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        let legacy_uri = Url::parse("https://cdn.aerynos.dev/stream/volatile/x86_64/stone.index").unwrap();
+        let authored = format!(
+            r#"// Keep this comment and expression byte-for-byte.
+let moss = import! moss.system.v1
+{{
+    repositories = [
+        moss.repository.direct "volatile" "{legacy_uri}",
+    ],
+    .. moss.system
+}}
+"#
+        );
+        fs::write(&intent_path, &authored).unwrap();
+        let loaded = system_model::load(&intent_path).unwrap().unwrap();
+        let source = manager::Source::SystemModel {
+            identifier: "system-intent-test".to_owned(),
+            system_model: loaded,
+        };
+        let repository = Repository {
+            description: "volatile".to_owned(),
+            source: repository::Source::DirectIndex(legacy_uri.clone()),
+            priority: repository::Priority::new(0),
+            active: true,
+        };
+        let outdated = OutdatedRepoIndexUri {
+            repository: repository::Cached::new(
+                repository::Id::new("volatile"),
+                repository,
+                db::meta::Database::new(":memory:").unwrap(),
+                None,
+                Some(legacy_uri.clone()),
+            ),
+            legacy_index_uri: legacy_uri,
+            compatible_root_index_source: repository::RootIndexSource {
+                base_uri: Url::parse("https://cdn.aerynos.dev").unwrap(),
+                channel: repository::DEFAULT_CHANNEL.try_into().unwrap(),
+                version: "stream/volatile".parse().unwrap(),
+                arch: repository::DEFAULT_ARCH.to_owned(),
+            },
+        };
+
+        handle_outdated_index_uris(&source, vec![outdated]);
+
+        assert_eq!(fs::read_to_string(&intent_path).unwrap(), authored);
+        assert!(!system_model::snapshot_path(temporary.path()).exists());
+    }
+}
