@@ -118,9 +118,18 @@ impl Recipe {
 pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     let path = path.as_ref();
 
-    // Resolve dir to dir + stone.yaml
+    // Resolve a recipe directory without silently shadowing either format
+    // during the short YAML compatibility window.
     let path = if path.is_dir() {
-        path.join("stone.yaml")
+        let gluon = path.join("stone.glu");
+        let yaml = path.join("stone.yaml");
+
+        match (gluon.exists(), yaml.exists()) {
+            (true, false) => gluon,
+            (false, true) => yaml,
+            (true, true) => return Err(Error::AmbiguousRecipe { gluon, yaml }),
+            (false, false) => gluon,
+        }
     } else {
         path.to_path_buf()
     };
@@ -159,6 +168,8 @@ fn resolve_build_time(path: &Path) -> DateTime<Utc> {
 pub enum Error {
     #[error("recipe file does not exist: {0:?}")]
     MissingRecipe(PathBuf),
+    #[error("recipe directory contains both {gluon:?} and {yaml:?}")]
+    AmbiguousRecipe { gluon: PathBuf, yaml: PathBuf },
     #[error("load recipe")]
     LoadRecipe(#[source] io::Error),
     #[error("load control file")]
@@ -171,4 +182,37 @@ pub enum Error {
     DecodeControlFile(#[source] control_file::decode::Error, PathBuf),
     #[error("failed to modify recipe with control file {1:?}")]
     ApplyControlFile(#[source] control_file::ModificationError, PathBuf),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recipe_directory_resolves_each_format_without_shadowing() {
+        let root = tempfile::tempdir().unwrap();
+
+        let missing = resolve_path(root.path()).unwrap_err();
+        assert!(matches!(missing, Error::MissingRecipe(path) if path.ends_with("stone.glu")));
+
+        let yaml = root.path().join("stone.yaml");
+        fs::write(&yaml, "name: compatibility").unwrap();
+        assert_eq!(resolve_path(root.path()).unwrap(), yaml.canonicalize().unwrap());
+
+        fs::remove_file(&yaml).unwrap();
+        let gluon = root.path().join("stone.glu");
+        fs::write(&gluon, "{}").unwrap();
+        assert_eq!(resolve_path(root.path()).unwrap(), gluon.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn recipe_directory_rejects_ambiguous_formats() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), "{}").unwrap();
+        fs::write(root.path().join("stone.yaml"), "name: compatibility").unwrap();
+
+        let error = resolve_path(root.path()).unwrap_err();
+
+        assert!(matches!(error, Error::AmbiguousRecipe { .. }));
+    }
 }
