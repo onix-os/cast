@@ -68,7 +68,15 @@ fn source_root_loads_only_contained_root_files() {
 
 #[test]
 fn host_and_nondeterministic_modules_are_denied() {
-    for module in ["std.fs", "std.io", "std.process", "std.env", "std.random"] {
+    for module in [
+        "std.fs",
+        "std.io",
+        "std.process",
+        "std.env",
+        "std.random",
+        "std.http",
+        "std.time",
+    ] {
         let source = Source::new(format!("deny-{module}.glu"), format!("let _ = import! {module} in 0"));
         let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
         assert_eq!(error.category, DiagnosticCategory::Import, "{module}: {error}");
