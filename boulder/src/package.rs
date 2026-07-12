@@ -97,6 +97,7 @@ impl<'a> Packager<'a> {
                     package,
                     bucket,
                     self.build_release,
+                    &self.recipe.fingerprint.sha256,
                 ))
             })
             .collect::<Vec<_>>();

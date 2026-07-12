@@ -86,6 +86,7 @@ pub fn write(
     let content = Content {
         manifest_version: "0.2".to_owned(),
         packages,
+        recipe_fingerprint: recipe.fingerprint.sha256.clone(),
         source_name: recipe.parsed.source.name.clone(),
         source_release: recipe.parsed.source.release.to_string(),
         source_version: recipe.parsed.source.version.clone(),
@@ -113,6 +114,7 @@ pub fn write(
 struct Content {
     manifest_version: String,
     packages: BTreeMap<String, Package>,
+    recipe_fingerprint: String,
     source_name: String,
     source_release: String,
     source_version: String,
@@ -130,4 +132,60 @@ struct Package {
     name: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     provides: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use fs_err as fs;
+
+    use super::*;
+    use crate::source_lock::{SOURCE_LOCK_FILE_NAME, SourceLock, encode_source_lock};
+
+    const RECIPE_SOURCE: &str = r#"let boulder = import! boulder.recipe.v1
+boulder.recipe (boulder.source {
+    name = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.invalid",
+    license = ["MPL-2.0"],
+})
+"#;
+
+    #[test]
+    fn emitted_fingerprint_changes_with_source_lock_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), RECIPE_SOURCE).unwrap();
+        let lock = encode_source_lock(&SourceLock::default());
+        let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
+        fs::write(&lock_path, &lock).unwrap();
+
+        let first_recipe = Recipe::load(root.path()).unwrap();
+        let first_path = root.path().join("first.jsonc");
+        write(&first_path, &first_recipe, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        let first_manifest = read_jsonc(&first_path);
+
+        fs::write(&lock_path, format!("{lock}// semantically inert provenance change\n")).unwrap();
+        let changed_recipe = Recipe::load(root.path()).unwrap();
+        let changed_path = root.path().join("changed.jsonc");
+        write(&changed_path, &changed_recipe, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        let changed_manifest = read_jsonc(&changed_path);
+
+        assert_eq!(first_manifest["recipe-fingerprint"], first_recipe.fingerprint.sha256);
+        assert_eq!(
+            changed_manifest["recipe-fingerprint"],
+            changed_recipe.fingerprint.sha256
+        );
+        assert_ne!(
+            first_manifest["recipe-fingerprint"],
+            changed_manifest["recipe-fingerprint"]
+        );
+    }
+
+    fn read_jsonc(path: &Path) -> serde_json::Value {
+        let content = fs::read_to_string(path).unwrap();
+        let (_, json) = content.split_once('\n').unwrap();
+        serde_json::from_str(json).unwrap()
+    }
 }

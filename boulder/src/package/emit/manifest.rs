@@ -13,7 +13,10 @@ use moss::{
     util,
 };
 use snafu::{ResultExt, Snafu};
-use stone::{StoneDecodedPayload, StoneReadError, StoneWriteError};
+use stone::{
+    StoneDecodedPayload, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneReadError,
+    StoneWriteError,
+};
 use tempfile::NamedTempFile;
 
 use crate::{Architecture, Paths, Recipe};
@@ -121,7 +124,7 @@ impl<'a> Manifest<'a> {
             let metas = payloads
                 .iter()
                 .filter_map(StoneDecodedPayload::meta)
-                .map(|payload| Meta::from_stone_payload(&payload.body).map(OrderedMeta))
+                .map(|payload| OrderedMeta::from_stone_payload(&payload.body))
                 .collect::<Result<BTreeSet<_>, _>>()
                 .context(ManifestMissingMetaFieldSnafu)?;
 
@@ -168,7 +171,25 @@ pub enum Error {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct OrderedMeta(Meta);
+struct OrderedMeta {
+    meta: Meta,
+    source_refs: BTreeSet<String>,
+}
+
+impl OrderedMeta {
+    fn from_stone_payload(payload: &[StonePayloadMetaRecord]) -> Result<Self, MissingMetaFieldError> {
+        let meta = Meta::from_stone_payload(payload)?;
+        let source_refs = payload
+            .iter()
+            .filter_map(|record| match (&record.tag, &record.primitive) {
+                (StonePayloadMetaTag::SourceRef, StonePayloadMetaPrimitive::String(value)) => Some(value.clone()),
+                _ => None,
+            })
+            .collect();
+
+        Ok(Self { meta, source_refs })
+    }
+}
 
 impl PartialOrd for OrderedMeta {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -178,6 +199,9 @@ impl PartialOrd for OrderedMeta {
 
 impl Ord for OrderedMeta {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.name.cmp(&other.0.name)
+        self.meta
+            .name
+            .cmp(&other.meta.name)
+            .then_with(|| self.source_refs.cmp(&other.source_refs))
     }
 }

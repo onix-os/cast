@@ -12,7 +12,10 @@ use itertools::Itertools;
 use moss::{Dependency, Provider, package::Meta, util};
 use regex::Regex;
 use snafu::{ResultExt, Snafu};
-use stone::{StoneHeaderV1FileType, StoneWriteError, StoneWriter};
+use stone::{
+    StoneHeaderV1FileType, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneWriteError,
+    StoneWriter,
+};
 use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::manifest::Manifest;
@@ -20,6 +23,8 @@ use super::analysis;
 use crate::{Architecture, Paths, Recipe, architecture};
 
 mod manifest;
+
+const RECIPE_FINGERPRINT_SOURCE_REF_PREFIX: &str = "gluon-evaluation-sha256:";
 
 #[derive(Debug)]
 pub struct Package<'a> {
@@ -29,6 +34,7 @@ pub struct Package<'a> {
     pub source: &'a stone_recipe::Source,
     pub definition: &'a stone_recipe::Package,
     pub analysis: analysis::Bucket,
+    recipe_fingerprint: &'a str,
 }
 
 impl<'a> Package<'a> {
@@ -38,6 +44,7 @@ impl<'a> Package<'a> {
         template: &'a stone_recipe::Package,
         analysis: analysis::Bucket,
         build_release: NonZeroU64,
+        recipe_fingerprint: &'a str,
     ) -> Self {
         Self {
             name,
@@ -46,6 +53,7 @@ impl<'a> Package<'a> {
             definition: template,
             analysis,
             build_release,
+            recipe_fingerprint,
         }
     }
 
@@ -118,6 +126,24 @@ impl<'a> Package<'a> {
             hash: None,
             download_size: None,
         }
+    }
+
+    fn meta_payload(&self) -> Vec<StonePayloadMetaRecord> {
+        self.with_recipe_provenance(self.meta().to_stone_payload())
+    }
+
+    fn with_recipe_provenance(&self, mut payload: Vec<StonePayloadMetaRecord>) -> Vec<StonePayloadMetaRecord> {
+        // SourceRef is an existing, optional stone metadata extension point. The
+        // namespaced value is ignored by older package readers but retained in
+        // package and build-manifest payloads for provenance-aware tooling.
+        payload.push(StonePayloadMetaRecord {
+            tag: StonePayloadMetaTag::SourceRef,
+            primitive: StonePayloadMetaPrimitive::String(format!(
+                "{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{}",
+                self.recipe_fingerprint
+            )),
+        });
+        payload
     }
 }
 
@@ -240,9 +266,8 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
 
     // Add metadata
     {
-        let meta = package.meta();
         writer
-            .add_payload(meta.to_stone_payload().as_slice())
+            .add_payload(package.meta_payload().as_slice())
             .context(StoneBinaryWriterSnafu)?;
     }
 
