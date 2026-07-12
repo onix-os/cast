@@ -124,22 +124,25 @@ mod test {
     #[test]
     fn evaluate_repository_gluon_fixtures() {
         let inputs = [
-            ("test/llvm-stone.glu", include_str!("../../../test/llvm-stone.glu")),
             (
-                "test/boulder-stone.glu",
-                include_str!("../../../test/boulder-stone.glu"),
+                "tests/fixtures/llvm-stone.glu",
+                include_str!("../../../tests/fixtures/llvm-stone.glu"),
             ),
             (
-                "test/conflicts/italian-pizza.glu",
-                include_str!("../../../test/conflicts/italian-pizza.glu"),
+                "tests/fixtures/boulder-stone.glu",
+                include_str!("../../../tests/fixtures/boulder-stone.glu"),
             ),
             (
-                "test/conflicts/pineapple.glu",
-                include_str!("../../../test/conflicts/pineapple.glu"),
+                "tests/fixtures/conflicts/italian-pizza.glu",
+                include_str!("../../../tests/fixtures/conflicts/italian-pizza.glu"),
             ),
             (
-                "bin/boulder/boulder-concurrency-test.glu",
-                include_str!("../../../bin/boulder/boulder-concurrency-test.glu"),
+                "tests/fixtures/conflicts/pineapple.glu",
+                include_str!("../../../tests/fixtures/conflicts/pineapple.glu"),
+            ),
+            (
+                "tests/fixtures/boulder-concurrency-test.glu",
+                include_str!("../../../tests/fixtures/boulder-concurrency-test.glu"),
             ),
         ];
 

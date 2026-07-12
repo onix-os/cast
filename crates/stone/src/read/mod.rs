@@ -390,8 +390,10 @@ mod test {
 
     #[test]
     fn read_bash_completion() {
-        let mut stone =
-            read_bytes(include_bytes!("../../../../test/bash-completion-2.11-1-1-x86_64.stone")).expect("valid stone");
+        let mut stone = read_bytes(include_bytes!(
+            "../../../../tests/fixtures/bash-completion-2.11-1-1-x86_64.stone"
+        ))
+        .expect("valid stone");
         assert_eq!(stone.header.version(), StoneHeaderVersion::V1);
 
         let payloads = stone

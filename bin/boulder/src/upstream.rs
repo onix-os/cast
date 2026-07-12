@@ -359,7 +359,7 @@ mod tests {
 
     use fs_err as fs;
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-    const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../test/fixtures/gluon/authored-source.glu");
+    const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
 
     fn gluon_git_recipe(url: &str) -> String {
         format!(

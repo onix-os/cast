@@ -141,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo::rerun-if-changed={}/boulder", top_level.display());
     println!("cargo::rerun-if-changed={}/crates", top_level.display());
     println!("cargo::rerun-if-changed={}/moss", top_level.display());
-    println!("cargo::rerun-if-changed={}/test", top_level.display());
+    println!("cargo::rerun-if-changed={}/tests", top_level.display());
     println!("cargo::rerun-if-changed={}/Cargo.toml", top_level.display());
 
     let version = env("CARGO_PKG_VERSION")?;

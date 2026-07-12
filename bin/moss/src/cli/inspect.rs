@@ -221,7 +221,7 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    const VALID_STONE_BYTES: &[u8] = include_bytes!("../../../../test/bash-completion-2.11-1-1-x86_64.stone");
+    const VALID_STONE_BYTES: &[u8] = include_bytes!("../../../../tests/fixtures/bash-completion-2.11-1-1-x86_64.stone");
 
     #[test]
     fn test_check_valid_stone() {
