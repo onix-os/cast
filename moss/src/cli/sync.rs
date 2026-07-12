@@ -72,3 +72,51 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use fs_err as fs;
+    use moss::system_model;
+
+    use super::*;
+
+    #[test]
+    fn sync_import_cli_evaluates_authored_intent_for_an_ephemeral_target() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("installation");
+        let target = temporary.path().join("ephemeral-target");
+        let intent = temporary.path().join("import.glu");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&target).unwrap();
+        let authored = r#"// This source is owned by the caller.
+let moss = import! moss.system.v1
+{
+    disable_warning = moss.boolean.true,
+    .. moss.system
+}
+"#;
+        fs::write(&intent, authored).unwrap();
+
+        let matches = super::super::command()
+            .try_get_matches_from([
+                "moss",
+                "--directory",
+                root.to_str().unwrap(),
+                "sync",
+                "--import",
+                intent.to_str().unwrap(),
+                "--to",
+                target.to_str().unwrap(),
+                "--dry-run",
+            ])
+            .unwrap();
+        let sync = matches.subcommand_matches("sync").unwrap();
+        let installation = Installation::open(&root, None).unwrap();
+
+        handle(sync, installation).unwrap();
+
+        assert_eq!(fs::read_to_string(&intent).unwrap(), authored);
+        assert!(!system_model::snapshot_path(&root).exists());
+        assert!(!system_model::snapshot_path(&target).exists());
+    }
+}
