@@ -12,6 +12,13 @@ use itertools::Itertools;
 use serde_core::{Serialize, de::DeserializeOwned};
 use snafu::{ResultExt, Snafu};
 
+mod gluon;
+
+pub use self::gluon::{
+    DecodedGluon, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError, LoadGluonError,
+    LoadedGluonConfig, SaveGluonError,
+};
+
 pub trait Config {
     fn domain() -> String;
 }
@@ -38,6 +45,7 @@ impl Manager {
     pub fn user(program: impl ToString) -> Result<Self, CreateUserError> {
         Ok(Self {
             scope: Scope::User {
+                root: PathBuf::from("/"),
                 config: dirs::config_dir().ok_or(CreateUserError)?,
                 program: program.to_string(),
             },
@@ -248,8 +256,15 @@ fn read_kdl<T: DeserializeOwned>(path: &Path) -> Option<T> {
 #[derive(Debug, Clone)]
 
 enum Scope {
-    System { program: String, root: PathBuf },
-    User { program: String, config: PathBuf },
+    System {
+        program: String,
+        root: PathBuf,
+    },
+    User {
+        root: PathBuf,
+        program: String,
+        config: PathBuf,
+    },
     Custom(PathBuf),
 }
 
@@ -261,7 +276,7 @@ impl Scope {
                 base: SystemBase::Admin,
                 program,
             },
-            Scope::User { config, program } => Resolve::User { config, program },
+            Scope::User { config, program, .. } => Resolve::User { config, program },
             Scope::Custom(dir) => Resolve::Custom(dir),
         }
         .dir(domain)
@@ -306,46 +321,42 @@ impl Scope {
                 ),
             ],
             // System (root = "/") + User
-            Scope::User { config, program } => {
-                let root = Path::new("/");
-
-                vec![
-                    (
-                        Entry::File,
-                        Resolve::System {
-                            root,
-                            base: SystemBase::Vendor,
-                            program,
-                        },
-                    ),
-                    (
-                        Entry::Directory,
-                        Resolve::System {
-                            root,
-                            base: SystemBase::Vendor,
-                            program,
-                        },
-                    ),
-                    (
-                        Entry::File,
-                        Resolve::System {
-                            root,
-                            base: SystemBase::Admin,
-                            program,
-                        },
-                    ),
-                    (
-                        Entry::Directory,
-                        Resolve::System {
-                            root,
-                            base: SystemBase::Admin,
-                            program,
-                        },
-                    ),
-                    (Entry::File, Resolve::User { config, program }),
-                    (Entry::Directory, Resolve::User { config, program }),
-                ]
-            }
+            Scope::User { root, config, program } => vec![
+                (
+                    Entry::File,
+                    Resolve::System {
+                        root,
+                        base: SystemBase::Vendor,
+                        program,
+                    },
+                ),
+                (
+                    Entry::Directory,
+                    Resolve::System {
+                        root,
+                        base: SystemBase::Vendor,
+                        program,
+                    },
+                ),
+                (
+                    Entry::File,
+                    Resolve::System {
+                        root,
+                        base: SystemBase::Admin,
+                        program,
+                    },
+                ),
+                (
+                    Entry::Directory,
+                    Resolve::System {
+                        root,
+                        base: SystemBase::Admin,
+                        program,
+                    },
+                ),
+                (Entry::File, Resolve::User { config, program }),
+                (Entry::Directory, Resolve::User { config, program }),
+            ],
             Scope::Custom(root) => vec![
                 (Entry::File, Resolve::Custom(root)),
                 (Entry::Directory, Resolve::Custom(root)),
