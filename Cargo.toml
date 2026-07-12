@@ -13,6 +13,7 @@ rust-version = "1.91"
 
 [workspace.dependencies]
 astr.path = "crates/astr"
+async-trait = "0.1.89"
 blsforme = { git = "https://github.com/AerynOS/blsforme.git", rev = "680720545303e123e47e0df07a8a85178c9f5c19" }
 bytes = "1.6.0"
 camino = "1.1.10"
@@ -46,6 +47,9 @@ fs-err = { version = "3.3.0", features = ["tokio"] }
 
 futures-util = "0.3.31"
 glob = "0.3.1"
+# Configuration evaluation is synchronous and deterministic. Gluon's default
+# async, regex, and random facilities are deliberately not linked.
+gluon = { version = "=0.18.3", default-features = false }
 hex = "0.4.3"
 humansize = "2.1.3"
 indextree = "4.6.1"
