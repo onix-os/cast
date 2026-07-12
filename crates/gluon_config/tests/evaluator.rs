@@ -6,12 +6,24 @@ use std::{env, path::Path, time::Duration};
 use fs_err as fs;
 use gluon_config::{DiagnosticCategory, Evaluator, ImportPolicy, LimitKind, Limits, Source, SourceRoot};
 
-#[test]
-fn evaluates_a_string_literal() {
-    let source = Source::new("literal.glu", r#""declarative""#);
-    let evaluation = Evaluator::default().evaluate::<String>(&source).unwrap();
+#[derive(Debug, PartialEq, Eq, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct LiteralRecord {
+    name: String,
+    generation: i64,
+}
 
-    assert_eq!(evaluation.value, "declarative");
+#[test]
+fn evaluates_a_typed_record_literal() {
+    let source = Source::new("literal.glu", r#"{ name = "declarative", generation = 1 }"#);
+    let evaluation = Evaluator::default().evaluate::<LiteralRecord>(&source).unwrap();
+
+    assert_eq!(
+        evaluation.value,
+        LiteralRecord {
+            name: "declarative".to_owned(),
+            generation: 1,
+        }
+    );
     assert_eq!(evaluation.fingerprint.gluon_version, "0.18.3");
     assert!(evaluation.fingerprint.imported_modules.is_empty());
 }
@@ -126,6 +138,16 @@ fn malformed_programs_have_a_source_span() {
 
     assert_eq!(error.category, DiagnosticCategory::Parse);
     assert_eq!(error.source_name.as_deref(), Some("malformed.glu"));
+    assert!(error.span.is_some());
+}
+
+#[test]
+fn ill_typed_programs_have_a_source_span() {
+    let source = Source::new("ill-typed.glu", r#""not an integer""#);
+    let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Type);
+    assert_eq!(error.source_name.as_deref(), Some("ill-typed.glu"));
     assert!(error.span.is_some());
 }
 

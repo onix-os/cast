@@ -14,6 +14,7 @@ gluon.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+gluon_codegen.workspace = true
 tempfile.workspace = true
 
 [lints]
