@@ -246,3 +246,18 @@ Moss by 25,519,648 bytes (22.9%), and the clean combined build by 5.58 seconds
 (25.0%). This is the cost of linking the restricted Gluon runtime into both
 tools; YAML/KDL and their compatibility dependencies are absent from the final
 graph.
+
+## Toolchain compatibility
+
+The completed migration is checked with the workspace MSRV and the release
+target, not only the developer toolchain:
+
+| Toolchain and target | Validation |
+|---|---|
+| Rust 1.91.0, `x86_64-unknown-linux-gnu` | `cargo check --workspace` |
+| Rust 1.93.0, `x86_64-unknown-linux-gnu` | full formatting, Clippy, and workspace tests |
+| Rust 1.93.0, `x86_64-unknown-linux-musl` | linked Boulder and Moss debug binaries |
+
+Gluon is pinned to `0.18.3` for all three lanes. Its default feature set is
+disabled; OS Tools does not enable Gluon's async, regex, or random runtime
+facilities.
