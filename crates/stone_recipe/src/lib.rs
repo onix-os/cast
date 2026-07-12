@@ -10,8 +10,8 @@ use crate::serde_util::{default_true, stringy_bool};
 
 pub use self::control_file::ControlFile;
 pub use self::gluon::{
-    EvaluatedRecipe, GLUON_RECIPE_ABI, RECIPE_ABI_VERSION, RecipeEvaluationError, evaluate_gluon, evaluate_gluon_with,
-    evaluate_gluon_with_inputs,
+    EvaluatedRecipe, GLUON_RECIPE_ABI, RECIPE_ABI_VERSION, RecipeEvaluationError, encode_gluon as encode_recipe_gluon,
+    encode_gluon_spec as encode_recipe_gluon_spec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 pub use self::macros::{
     ActionSpec, EvaluatedMacros, GLUON_MACROS_ABI, MACROS_ABI_VERSION, Macros, MacrosConversionError,

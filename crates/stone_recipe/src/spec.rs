@@ -188,6 +188,17 @@ pub enum RecipeConversionError {
         value: i64,
         expected: &'static str,
     },
+    /// An unsigned domain integer could not be represented by the declarative
+    /// input ABI.
+    #[error("{field}: `{value}` is outside the valid {expected} range")]
+    UnsignedIntegerOutOfRange {
+        field: String,
+        value: u64,
+        expected: &'static str,
+    },
+    /// A domain path could not be represented by Gluon's UTF-8 string type.
+    #[error("{field}: path is not valid UTF-8: `{}`", value.display())]
+    NonUtf8Path { field: String, value: PathBuf },
     /// The converted recipe violated a format-independent invariant.
     #[error(transparent)]
     Validation(#[from] ValidationError),
@@ -198,7 +209,9 @@ impl RecipeConversionError {
     pub fn field(&self) -> &str {
         match self {
             Self::InvalidUrl { field, .. } => field,
-            Self::IntegerOutOfRange { field, .. } => field,
+            Self::IntegerOutOfRange { field, .. }
+            | Self::UnsignedIntegerOutOfRange { field, .. }
+            | Self::NonUtf8Path { field, .. } => field,
             Self::Validation(error) => error.field(),
         }
     }
@@ -244,6 +257,184 @@ impl TryFrom<RecipeSpec> for Recipe {
 
         recipe.validate()?;
         Ok(recipe)
+    }
+}
+
+impl TryFrom<&Recipe> for RecipeSpec {
+    type Error = RecipeConversionError;
+
+    fn try_from(recipe: &Recipe) -> Result<Self, Self::Error> {
+        // Keep the reverse conversion on the same semantic boundary as every
+        // authored input. This prevents the canonical encoder from emitting a
+        // domain value that the recipe evaluator would reject on the way back.
+        recipe.validate()?;
+
+        let release =
+            i64::try_from(recipe.source.release).map_err(|_| RecipeConversionError::UnsignedIntegerOutOfRange {
+                field: "source.release".to_owned(),
+                value: recipe.source.release,
+                expected: "signed 64-bit integer",
+            })?;
+
+        let upstreams = recipe
+            .upstreams
+            .iter()
+            .enumerate()
+            .map(|(index, upstream)| upstream_to_spec(upstream, index))
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            source: SourceSpec {
+                name: recipe.source.name.clone(),
+                version: recipe.source.version.clone(),
+                release,
+                homepage: recipe.source.homepage.clone(),
+                license: recipe.source.license.clone(),
+            },
+            build: (&recipe.build).into(),
+            package: (&recipe.package).into(),
+            options: (&recipe.options).into(),
+            profiles: recipe.profiles.iter().map(Into::into).collect(),
+            sub_packages: recipe.sub_packages.iter().map(Into::into).collect(),
+            upstreams,
+            architectures: recipe.architectures.clone(),
+            tuning: recipe.tuning.iter().map(Into::into).collect(),
+            emul32: recipe.emul32,
+            mold: recipe.mold,
+        })
+    }
+}
+
+impl From<&Build> for BuildSpec {
+    fn from(build: &Build) -> Self {
+        Self {
+            setup: build.setup.clone(),
+            build: build.build.clone(),
+            install: build.install.clone(),
+            check: build.check.clone(),
+            workload: build.workload.clone(),
+            environment: build.environment.clone(),
+            build_deps: build.build_deps.clone(),
+            check_deps: build.check_deps.clone(),
+        }
+    }
+}
+
+impl From<&Options> for OptionsSpec {
+    fn from(options: &Options) -> Self {
+        Self {
+            toolchain: options.toolchain.into(),
+            cspgo: options.cspgo,
+            samplepgo: options.samplepgo,
+            debug: options.debug,
+            strip: options.strip,
+            networking: options.networking,
+            compressman: options.compressman,
+            lastrip: options.lastrip,
+        }
+    }
+}
+
+impl From<&Package> for PackageSpec {
+    fn from(package: &Package) -> Self {
+        Self {
+            summary: package.summary.clone(),
+            description: package.description.clone(),
+            provides_exclude: package.provides_exclude.clone(),
+            run_deps: package.run_deps.clone(),
+            run_deps_exclude: package.run_deps_exclude.clone(),
+            paths: package.paths.iter().map(Into::into).collect(),
+            conflicts: package.conflicts.clone(),
+        }
+    }
+}
+
+impl<'a, T, U> From<&'a KeyValue<T>> for KeyValueSpec<U>
+where
+    U: From<&'a T>,
+{
+    fn from(value: &'a KeyValue<T>) -> Self {
+        Self {
+            key: value.key.clone(),
+            value: (&value.value).into(),
+        }
+    }
+}
+
+fn upstream_to_spec(upstream: &Upstream, index: usize) -> Result<UpstreamSpec, RecipeConversionError> {
+    let path_to_string = |path: &PathBuf, field: &'static str| {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| RecipeConversionError::NonUtf8Path {
+                field: format!("upstreams[{index}].{field}"),
+                value: path.clone(),
+            })
+    };
+
+    Ok(match &upstream.props {
+        Props::Plain {
+            hash,
+            rename,
+            strip_dirs,
+            unpack,
+            unpack_dir,
+        } => UpstreamSpec::Archive {
+            url: upstream.url.as_str().to_owned(),
+            hash: hash.clone(),
+            rename: rename.clone(),
+            strip_dirs: strip_dirs.map(i64::from),
+            unpack: *unpack,
+            unpack_dir: unpack_dir
+                .as_ref()
+                .map(|path| path_to_string(path, "unpack_dir"))
+                .transpose()?,
+        },
+        Props::Git { git_ref, clone_dir } => UpstreamSpec::Git {
+            url: upstream.url.as_str().to_owned(),
+            git_ref: git_ref.clone(),
+            clone_dir: clone_dir
+                .as_ref()
+                .map(|path| path_to_string(path, "clone_dir"))
+                .transpose()?,
+        },
+    })
+}
+
+impl From<&Path> for PathSpec {
+    fn from(value: &Path) -> Self {
+        match value.kind {
+            PathKind::Any => Self::Any {
+                path: value.path.clone(),
+            },
+            PathKind::Exe => Self::Exe {
+                path: value.path.clone(),
+            },
+            PathKind::Symlink => Self::Symlink {
+                path: value.path.clone(),
+            },
+            PathKind::Special => Self::Special {
+                path: value.path.clone(),
+            },
+        }
+    }
+}
+
+impl From<&Tuning> for TuningSpec {
+    fn from(value: &Tuning) -> Self {
+        match value {
+            Tuning::Enable => Self::Enable,
+            Tuning::Disable => Self::Disable,
+            Tuning::Config(value) => Self::Config { value: value.clone() },
+        }
+    }
+}
+
+impl From<Toolchain> for ToolchainSpec {
+    fn from(value: Toolchain) -> Self {
+        match value {
+            Toolchain::Llvm => Self::Llvm,
+            Toolchain::Gnu => Self::Gnu,
+        }
     }
 }
 
