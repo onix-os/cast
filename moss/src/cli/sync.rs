@@ -34,11 +34,11 @@ pub struct Command {
     #[arg(long)]
     dry_run: bool,
 
-    /// Sync against the provided system-model.kdl
+    /// Sync against the provided Gluon system intent
     ///
-    /// Only the repositories and packages from the provided file
+    /// The supplied .glu expression is evaluated, and only its repositories and packages
     /// will be used to create the new state
-    #[arg(value_name = "file", long)]
+    #[arg(value_name = "system.glu", long)]
     import: Option<PathBuf>,
 }
 
@@ -53,7 +53,7 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
     let mut client_builder = Client::builder(environment::NAME, installation);
 
     if let Some(path) = &command.import {
-        client_builder = client_builder.system_model_path(path);
+        client_builder = client_builder.system_intent_path(path);
     }
 
     // Make ephemeral if a blit target was provided

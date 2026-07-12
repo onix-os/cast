@@ -73,7 +73,7 @@ pub struct ClientBuilder {
     client_name: String,
     installation: Installation,
     repositories: Option<repository::Map>,
-    system_model_path: Option<PathBuf>,
+    system_intent_path: Option<PathBuf>,
     blit_root: Option<PathBuf>,
 }
 
@@ -84,9 +84,9 @@ impl ClientBuilder {
         self
     }
 
-    /// Set system model path
-    pub fn system_model_path(mut self, path: impl Into<PathBuf>) -> ClientBuilder {
-        self.system_model_path = Some(path.into());
+    /// Import user-authored Gluon system intent from the provided path.
+    pub fn system_intent_path(mut self, path: impl Into<PathBuf>) -> ClientBuilder {
+        self.system_intent_path = Some(path.into());
         self
     }
 
@@ -105,9 +105,9 @@ impl ClientBuilder {
 
     /// Build the [`Client`]
     pub fn build(mut self) -> Result<Client, Error> {
-        if let Some(path) = self.system_model_path {
+        if let Some(path) = self.system_intent_path {
             self.installation.system_model =
-                Some(system_model::load(&path)?.ok_or(Error::ImportSystemModelDoesntExist(path.to_owned()))?);
+                Some(system_model::load(&path)?.ok_or(Error::ImportSystemIntentDoesntExist(path.to_owned()))?);
         }
 
         let config = config::Manager::system(&self.installation.root, "moss");
@@ -170,7 +170,7 @@ impl Client {
             client_name: client_name.to_string(),
             installation,
             repositories: None,
-            system_model_path: None,
+            system_intent_path: None,
             blit_root: None,
         }
     }
@@ -405,7 +405,7 @@ impl Client {
 
         let explicit_packages =
             self.resolve_packages(selections.iter().filter_map(|s| s.explicit.then_some(&s.package)))?;
-        let system_model = update_or_create_system_model(
+        let system_snapshot = generate_system_snapshot(
             self.installation.system_model.clone(),
             &self.repositories,
             &explicit_packages,
@@ -434,12 +434,12 @@ impl Client {
                 // Add to db
                 let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
 
-                self.apply_stateful_blit(fstree, &state, old_state, system_model)?;
+                self.apply_stateful_blit(fstree, &state, old_state, system_snapshot)?;
 
                 Ok(Some(state))
             }
             Scope::Ephemeral { blit_root } => {
-                self.apply_ephemeral_blit(fstree, blit_root, system_model)?;
+                self.apply_ephemeral_blit(fstree, blit_root, system_snapshot)?;
 
                 Ok(None)
             }
@@ -516,11 +516,11 @@ impl Client {
         fstree: vfs::Tree<PendingFile>,
         state: &State,
         old_state: Option<state::Id>,
-        system_model: SystemModel,
+        system_snapshot: SystemModel,
     ) -> Result<(), Error> {
         record_state_id(&self.installation.staging_dir(), state.id)?;
         record_os_release(&self.installation.staging_dir())?;
-        record_system_model(&self.installation.staging_dir(), system_model)?;
+        record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
 
         create_root_links(&self.installation.isolation_dir())?;
 
@@ -556,10 +556,10 @@ impl Client {
         &self,
         fstree: vfs::Tree<PendingFile>,
         blit_root: &Path,
-        system_model: SystemModel,
+        system_snapshot: SystemModel,
     ) -> Result<(), Error> {
         record_os_release(blit_root)?;
-        record_system_model(blit_root, system_model)?;
+        record_system_snapshot(blit_root, system_snapshot)?;
 
         create_root_links(blit_root)?;
         create_root_links(&self.installation.isolation_dir())?;
@@ -853,7 +853,7 @@ impl Client {
         Ok(fstree)
     }
 
-    fn load_or_create_system_model(&self, path: PathBuf, state: &State) -> Result<SystemModel, Error> {
+    fn load_or_create_system_snapshot(&self, path: PathBuf, state: &State) -> Result<SystemModel, Error> {
         match system_model::load(&path).map_err(Error::LoadSystemModel)? {
             Some(system_model) => Ok(system_model.into()),
             None => {
@@ -880,14 +880,12 @@ impl Client {
         let is_active = self.installation.active_state == Some(state.id);
 
         let path = if is_active {
-            self.installation.root.join("usr/lib/system-model.kdl")
+            system_model::snapshot_path(&self.installation.root)
         } else {
-            self.installation
-                .root_path(state.id.to_string())
-                .join("usr/lib/system-model.kdl")
+            system_model::snapshot_path(&self.installation.root_path(state.id.to_string()))
         };
 
-        self.load_or_create_system_model(path, &state)
+        self.load_or_create_system_snapshot(path, &state)
     }
 
     /// Print boot status to stdout
@@ -1264,7 +1262,7 @@ fn record_os_release(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn update_or_create_system_model(
+fn generate_system_snapshot(
     current: Option<LoadedSystemModel>,
     repositories: &repository::Manager,
     packages: &[Package],
@@ -1280,7 +1278,7 @@ fn update_or_create_system_model(
             .sync_packages(packages)
             .map_err(Error::UpdateSystemModel),
 
-        // Generate a fresh system-model file
+        // Generate a fresh normalized state snapshot.
         None => {
             let packages = packages
                 .iter()
@@ -1292,14 +1290,11 @@ fn update_or_create_system_model(
     }
 }
 
-fn record_system_model(root: &Path, system_model: SystemModel) -> Result<(), Error> {
-    let dir = root.join("usr").join("lib");
-
-    if !dir.exists() {
-        fs::create_dir(&dir)?;
-    }
-
-    fs::write(dir.join("system-model.kdl"), system_model.encoded())?;
+fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(), Error> {
+    let path = system_model::snapshot_path(root);
+    let dir = path.parent().expect("system snapshot path has a parent");
+    fs::create_dir_all(dir)?;
+    fs::write(path, system_snapshot.encoded())?;
 
     Ok(())
 }
@@ -1492,7 +1487,7 @@ pub enum Error {
     Cancelled,
     #[error("ignore signals during blit")]
     BlitSignalIgnore(#[from] signal::Error),
-    #[error("load system model")]
+    #[error("load Gluon system intent or generated state snapshot")]
     LoadSystemModel(#[from] system_model::LoadError),
     #[error("update system model")]
     UpdateSystemModel(#[from] system_model::UpdateError),
@@ -1504,6 +1499,59 @@ pub enum Error {
     Fetch(#[source] Box<fetch::Error>),
     #[error("sync")]
     Sync(#[source] Box<sync::Error>),
-    #[error("system model doesn't exist at {0:?}")]
-    ImportSystemModelDoesntExist(PathBuf),
+    #[error("Gluon system intent doesn't exist at {0:?}")]
+    ImportSystemIntentDoesntExist(PathBuf),
+}
+
+#[cfg(test)]
+mod tests {
+    use gluon_config::Source;
+
+    use super::*;
+
+    #[test]
+    fn ephemeral_import_evaluates_intent_and_records_only_a_generated_snapshot() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("ephemeral-root");
+        let intent_path = temporary.path().join("import.glu");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+
+        let authored = r#"// This authored source must never be copied into state.
+let moss = import! moss.system.v1
+{
+    packages = ["alpha"],
+    .. moss.system
+}
+"#;
+        fs::write(&intent_path, authored).unwrap();
+
+        let installation = Installation::open(&installation_root, None).unwrap();
+        let client = Client::builder("ephemeral-import-test", installation)
+            .system_intent_path(&intent_path)
+            .ephemeral(&blit_root)
+            .build()
+            .unwrap();
+        let imported = client.installation.system_model.as_ref().unwrap();
+
+        assert!(client.is_ephemeral());
+        assert_eq!(imported.authored_source(), authored);
+        assert!(imported.packages.contains(&Provider::package_name("alpha")));
+
+        record_system_snapshot(&blit_root, SystemModel::from(imported.clone())).unwrap();
+        let snapshot_path = system_model::snapshot_path(&blit_root);
+        let snapshot = fs::read_to_string(&snapshot_path).unwrap();
+        let evaluated =
+            system_model::gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", snapshot.clone()))
+                .unwrap();
+        let loaded_snapshot = system_model::load(&snapshot_path).unwrap().unwrap();
+        let round_trip = SystemModel::from(loaded_snapshot);
+
+        assert!(snapshot.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+        assert!(!snapshot.contains("This authored source must never be copied into state"));
+        assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
+        assert_eq!(round_trip.encoded(), snapshot);
+        assert_eq!(fs::read_to_string(intent_path).unwrap(), authored);
+    }
 }

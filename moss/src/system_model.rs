@@ -14,6 +14,20 @@ use crate::{Package, dependency, repository};
 pub mod gluon;
 pub mod spec;
 
+/// User-authored desired system intent, relative to an installation root.
+pub const SYSTEM_INTENT_PATH: &str = "etc/moss/system.glu";
+
+/// Moss-generated normalized state snapshot, relative to a state root.
+pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.glu";
+
+pub fn intent_path(root: &Path) -> PathBuf {
+    root.join(SYSTEM_INTENT_PATH)
+}
+
+pub fn snapshot_path(root: &Path) -> PathBuf {
+    root.join(SYSTEM_SNAPSHOT_PATH)
+}
+
 pub(super) struct SystemParts {
     pub disable_warning: bool,
     pub repositories: repository::Map,
@@ -294,6 +308,15 @@ let moss = import! moss.system.v1
             priority: repository::Priority::new(priority),
             active: true,
         }
+    }
+
+    #[test]
+    fn canonical_paths_separate_authored_intent_from_generated_state() {
+        let root = Path::new("/target");
+
+        assert_eq!(intent_path(root), root.join("etc/moss/system.glu"));
+        assert_eq!(snapshot_path(root), root.join("usr/lib/system-model.glu"));
+        assert_ne!(intent_path(root), snapshot_path(root));
     }
 
     #[test]

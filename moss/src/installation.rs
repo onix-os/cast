@@ -44,7 +44,7 @@ pub struct Installation {
     /// otherwise derived from root
     pub cache_dir: Option<PathBuf>,
 
-    /// If defined, the system model of the installation
+    /// If defined, the user-authored desired system intent of the installation.
     pub system_model: Option<LoadedSystemModel>,
 
     /// Acquired locks that guarantee exclusive access
@@ -102,8 +102,7 @@ impl Installation {
             warn!("Unable to discover Active State ID");
         }
 
-        let system_model =
-            system_model::load(&root.join("etc/moss/system-model.kdl")).map_err(Error::LoadSystemModel)?;
+        let system_model = system_model::load(&system_model::intent_path(&root)).map_err(Error::LoadSystemModel)?;
 
         Ok(Self {
             root,
@@ -175,9 +174,9 @@ impl Installation {
         self.root_path("isolation").join(path)
     }
 
-    /// Path to the system model file
-    pub fn system_model_path(&self) -> PathBuf {
-        self.root.join("etc/moss/system-model.kdl")
+    /// Path to the user-authored desired system intent.
+    pub fn system_intent_path(&self) -> PathBuf {
+        system_model::intent_path(&self.root)
     }
 }
 
@@ -273,6 +272,35 @@ pub enum Error {
     CacheInvalid,
     #[error("acquiring lockfile")]
     Lockfile(#[from] lockfile::Error),
-    #[error("load system model")]
+    #[error("load authored Gluon system intent")]
     LoadSystemModel(#[from] system_model::LoadError),
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Provider;
+
+    use super::*;
+
+    #[test]
+    fn open_loads_only_the_canonical_authored_system_intent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = system_model::intent_path(temporary.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let authored = r#"let moss = import! moss.system.v1
+{
+    packages = ["alpha"],
+    .. moss.system
+}
+"#;
+        fs::write(&path, authored).unwrap();
+
+        let installation = Installation::open(temporary.path(), None).unwrap();
+        let intent = installation.system_model.as_ref().unwrap();
+
+        assert_eq!(installation.system_intent_path(), path);
+        assert_eq!(intent.authored_source(), authored);
+        assert!(intent.packages.contains(&Provider::package_name("alpha")));
+        assert!(!system_model::snapshot_path(temporary.path()).exists());
+    }
 }

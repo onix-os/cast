@@ -10,7 +10,7 @@ use chrono::Local;
 use clap::{ArgAction, ArgMatches, Command, CommandFactory, FromArgMatches, Parser, arg};
 use fs_err as fs;
 use moss::{
-    Installation, State,
+    Installation, State, SystemModel,
     client::{self, Client, prune},
     environment, state,
 };
@@ -77,13 +77,16 @@ pub fn command() -> Command {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "export", about = "Export a state as a system-model.kdl file")]
+#[command(
+    name = "export",
+    about = "Export a state as a standalone generated system-model.glu snapshot"
+)]
 struct Export {
     /// State id to export or current state if omitted
     id: Option<i32>,
     /// Export to the provided path or stdout if not supplied
     ///
-    /// If supplied without a path or path is a directory, outputs to "system-model-{hostname}-fstxn-{id}.kdl"
+    /// If supplied without a path or path is a directory, outputs to "system-model-{hostname}-fstxn-{id}.glu"
     #[arg(short, long)]
     output: Option<Option<PathBuf>>,
 }
@@ -237,35 +240,41 @@ fn export(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
 
     match export.output {
         Some(maybe_path) => {
-            let format_filename = || {
-                if let Some(hostname) = gethostname().ok().and_then(|s| s.into_string().ok()) {
-                    format!("system-model-{hostname}-fstxn-{id}.kdl")
-                } else {
-                    format!("system-model-fstxn-{id}.kdl")
-                }
-            };
+            let hostname = gethostname().ok().and_then(|hostname| hostname.into_string().ok());
+            let filename = export_filename(id, hostname.as_deref());
 
             let path = match maybe_path {
                 Some(path) => {
                     if path.is_dir() {
-                        path.join(format_filename())
+                        path.join(&filename)
                     } else {
                         path
                     }
                 }
-                None => Path::new(".").join(format_filename()),
+                None => Path::new(".").join(filename),
             };
 
-            fs::write(&path, system_model.encoded())?;
+            fs::write(&path, snapshot_content(&system_model))?;
 
             println!("Exported to {path:?}");
         }
         None => {
-            println!("{}", system_model.encoded());
+            println!("{}", snapshot_content(&system_model));
         }
     }
 
     Ok(())
+}
+
+fn export_filename(id: state::Id, hostname: Option<&str>) -> String {
+    match hostname {
+        Some(hostname) => format!("system-model-{hostname}-fstxn-{id}.glu"),
+        None => format!("system-model-fstxn-{id}.glu"),
+    }
+}
+
+fn snapshot_content(system_model: &SystemModel) -> &str {
+    system_model.encoded()
 }
 
 /// Emit a state description for the TUI
@@ -362,4 +371,35 @@ pub enum Error {
     NoActiveState,
     #[error("invalid state id or range: {0}")]
     InvalidRange(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use gluon_config::Source;
+    use moss::{Provider, repository, system_model};
+
+    use super::*;
+
+    #[test]
+    fn export_filename_uses_the_gluon_snapshot_extension() {
+        let id = state::Id::from(42);
+
+        assert_eq!(export_filename(id, Some("host")), "system-model-host-fstxn-42.glu");
+        assert_eq!(export_filename(id, None), "system-model-fstxn-42.glu");
+    }
+
+    #[test]
+    fn exported_content_is_a_standalone_generated_snapshot() {
+        let model = system_model::create(
+            repository::Map::default(),
+            [Provider::package_name("alpha")].into_iter().collect(),
+        );
+        let content = snapshot_content(&model);
+        let evaluated =
+            system_model::gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", content)).unwrap();
+
+        assert!(content.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+        assert!(!content.contains("import!"));
+        assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
+    }
 }

@@ -26,7 +26,7 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
     let mut timing = Timing::default();
     let mut instant = Instant::now();
 
-    // Grab the system model from the installation
+    // Grab the authored system intent from the installation.
     let system_model = client.installation.system_model.clone();
 
     // Grab all the existing installed packages
@@ -150,7 +150,7 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
     instant = Instant::now();
 
     let new_selections = if let Some(system_model) = &system_model {
-        // For system model, "explicit" is what was defined in the system model file
+        // With declarative intent, "explicit" means selected by the authored expression.
 
         finalized
             .iter()
@@ -160,7 +160,7 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
                 Selection {
                     package: p.id.clone(),
                     explicit: is_explicit,
-                    // TODO: We can map the "why" of system-model packages to this? Or
+                    // TODO: We can map the "why" of system-intent packages to this? Or
                     // can we remove "reason" entirely, we haven't used it to-date
                     reason: None,
                 }
@@ -255,9 +255,9 @@ fn resolve_with_installed(client: &Client, packages: &[Package]) -> Result<Vec<P
     Ok(client.resolve_packages(tx.finalize())?)
 }
 
-/// Returns the resolved package set based on the packages defined in the system model
+/// Returns the resolved package set based on packages defined by the system intent.
 ///
-/// System model is the source of truth here vs "implicit" mode which relies on the active
+/// System intent is the source of truth here vs "implicit" mode which relies on the active
 /// state + configured repos as the source of truth
 #[tracing::instrument(skip_all)]
 fn resolve_with_system_model(client: &Client, system_model: &LoadedSystemModel) -> Result<Vec<Package>, Error> {
@@ -292,7 +292,7 @@ pub struct Timing {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Package defined in system-model does not exist in any repository: {0}")]
+    #[error("Package defined by system intent does not exist in any repository: {0}")]
     MissingSystemModelPackage(Provider),
 
     #[error("cancelled")]
@@ -313,6 +313,6 @@ pub enum Error {
     #[error("io")]
     Io(#[from] std::io::Error),
 
-    #[error("load system model")]
+    #[error("load Gluon system intent")]
     LoadSystemModel(#[from] system_model::LoadError),
 }

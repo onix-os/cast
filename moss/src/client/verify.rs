@@ -263,19 +263,16 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
         let fstree = client.blit_root(state.selections.iter().map(|s| &s.package))?;
 
         if is_active {
-            let system_model =
-                client.load_or_create_system_model(client.installation.root.join("usr/lib/system-model.kdl"), state)?;
+            let system_model = client
+                .load_or_create_system_snapshot(crate::system_model::snapshot_path(&client.installation.root), state)?;
 
             // Override install root with the newly blitted active state
             client.apply_stateful_blit(fstree, state, None, system_model)?;
             // Remove corrupt (swapped) state from staging directory
             fs::remove_dir_all(client.installation.staging_dir())?;
         } else {
-            let system_model = client.load_or_create_system_model(
-                client
-                    .installation
-                    .root_path(state.id.to_string())
-                    .join("usr/lib/system-model.kdl"),
+            let system_model = client.load_or_create_system_snapshot(
+                crate::system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
                 state,
             )?;
 

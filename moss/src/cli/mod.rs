@@ -271,20 +271,25 @@ fn replace_aliases(args: env::Args) -> Vec<String> {
 }
 
 fn print_system_model_warning(installation: &Installation, first_line_only: bool) {
-    let path = installation.system_model_path();
+    let path = installation.system_intent_path();
 
-    eprintln!("{}: {path:?} is present & therefore active.", "INFO".green());
+    eprintln!(
+        "{}: authored Gluon system intent at {path:?} is active.",
+        "INFO".green()
+    );
 
     if !first_line_only {
         eprintln!(
             "Hence:
-- The system-model is the source of truth and defines all
+- This system intent is the source of truth and defines all
   repositories & installed packages.
 - Any changes made via `moss` commands will be temporary
-  until the system-model is updated.
-- The system state can be reverted to match the system-model state
+  until the authored intent is updated.
+- The system state can be reverted to match the declared intent
   by doing a `moss sync`.
-- To disable the system-model, remove or rename {path:?}.",
+- Each state stores a generated `/usr/lib/system-model.glu` snapshot;
+  it is not the authored source and should not be edited.
+- To disable declarative system intent, remove or rename {path:?}.",
         );
     }
 }

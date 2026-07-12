@@ -111,10 +111,10 @@ pub fn command() -> Command {
 pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
     let config = config::Manager::system(&installation.root, "moss");
 
-    let system_model = system_model::load(&installation.system_model_path())?;
+    let system_intent = system_model::load(&installation.system_intent_path())?;
 
-    let manager = if let Some(system_model) = &system_model {
-        repository::Manager::with_system_model(environment::NAME, system_model.clone(), installation.clone())?
+    let manager = if let Some(system_intent) = &system_intent {
+        repository::Manager::with_system_model(environment::NAME, system_intent.clone(), installation.clone())?
     } else {
         repository::Manager::with_config_manager(config, installation.clone())?
     };
@@ -122,10 +122,10 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
     let handler = match args.subcommand() {
         Some(("list", _)) => Action::List,
         Some(("update", cmd_args)) => Action::Update(cmd_args.get_one::<String>("NAME").cloned()),
-        Some((command, _)) if system_model.is_some() => {
-            return Err(Error::SystemModelDisallowed {
+        Some((command, _)) if system_intent.is_some() => {
+            return Err(Error::SystemIntentDisallowed {
                 command: command.to_owned(),
-                path: installation.system_model_path(),
+                path: installation.system_intent_path(),
             });
         }
         Some(("add", cmd_args)) => Action::Add(
@@ -321,10 +321,10 @@ fn parse_root_index_options(s: &str) -> Result<RootIndexOptions, String> {
 pub enum Error {
     #[error("repo manager")]
     RepositoryManager(#[from] repository::manager::Error),
-    #[error("load system model")]
+    #[error("load authored Gluon system intent")]
     LoadSystemModel(#[from] system_model::LoadError),
     #[error(
-        "`moss repo {command}` is not allowed with system-model enabled. Repos must be manually edited from {path:?}"
+        "`moss repo {command}` is not allowed while authored Gluon system intent is active; edit repositories in {path:?}"
     )]
-    SystemModelDisallowed { command: String, path: PathBuf },
+    SystemIntentDisallowed { command: String, path: PathBuf },
 }
