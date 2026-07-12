@@ -69,6 +69,12 @@ impl Macros {
 
         Ok(Self { arch, actions })
     }
+
+    #[cfg(test)]
+    pub(crate) fn repository_for_tests() -> Self {
+        let macros_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/macros");
+        Self::load_from(&macros_dir).unwrap()
+    }
 }
 
 fn evaluate_file(
@@ -134,6 +140,7 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use fs_err as fs;
+    use stone_recipe::script::Parser;
 
     use super::*;
 
@@ -216,9 +223,7 @@ boulder.macros
 
     #[test]
     fn repository_macro_modules_all_evaluate() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/macros");
-
-        let macros = Macros::load_from(&root).unwrap();
+        let macros = Macros::repository_for_tests();
 
         assert_eq!(macros.actions.len(), 14);
         assert_eq!(
@@ -242,5 +247,76 @@ boulder.macros
                 || !macros.tuning.is_empty()
                 || !macros.packages.is_empty()
         }));
+    }
+
+    #[test]
+    fn repository_meson_action_and_nested_arch_definitions_match_legacy_policy() {
+        let macros = Macros::repository_for_tests();
+        let meson = macros
+            .actions
+            .iter()
+            .flat_map(|module| &module.actions)
+            .find(|action| action.key == "meson")
+            .map(|action| &action.value)
+            .unwrap();
+
+        // Exact policy carried by actions/meson.yaml at the planning baseline
+        // (80d7ac5), now decoded from the migrated repository Gluon module.
+        assert_eq!(
+            meson.command,
+            r#"test -e ./meson.build || ( echo "%%meson: The ./meson.build script could not be found" ; exit 1 )
+meson setup %(options_meson) "%(builddir)"
+"#
+        );
+        assert_eq!(
+            meson.dependencies,
+            ["binary(cmake)", "binary(meson)", "binary(pkgconf)"]
+        );
+
+        // Production adds base policy before target policy, then action
+        // modules. Keep that order here so this is a golden test of the real
+        // migrated data rather than only of the Gluon DTO constructors.
+        let mut parser = Parser::new();
+        for policy in [&macros.arch["base"], &macros.arch["x86_64"]] {
+            for definition in &policy.definitions {
+                parser.add_definition(&definition.key, &definition.value);
+            }
+        }
+        let meson_policy = macros
+            .actions
+            .iter()
+            .find(|module| module.actions.iter().any(|action| action.key == "meson"))
+            .unwrap();
+        for definition in &meson_policy.definitions {
+            parser.add_definition(&definition.key, &definition.value);
+        }
+        parser.add_action("meson", meson.clone());
+        parser.add_definition("name", "hello");
+
+        assert_eq!(
+            parser
+                .parse_content("%(build_platform)|%(libdir)|%(libexecdir)")
+                .unwrap(),
+            "x86_64-aerynos-linux|/usr/lib|/usr/lib/hello"
+        );
+
+        assert_eq!(
+            parser.parse_content("%meson").unwrap(),
+            r#"test -e ./meson.build || ( echo "%meson: The ./meson.build script could not be found" ; exit 1 )
+meson setup --buildtype="plain" \
+--prefix="/usr" \
+--libdir="lib" \
+--bindir="/usr/bin" \
+--sbindir="/usr/sbin" \
+--libexecdir="lib/hello" \
+--includedir="/usr/include" \
+--datadir="/usr/share" \
+--mandir="/usr/share/man" \
+--infodir="/usr/share/info" \
+--localedir="/usr/share/locale" \
+--sysconfdir="/etc" \
+--localstatedir="/var" \
+--wrap-mode="nodownload" "aerynos-builddir""#
+        );
     }
 }

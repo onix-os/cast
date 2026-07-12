@@ -427,3 +427,64 @@ fn default_tuning_groups(target: BuildTarget, macros: &Macros) -> &[String] {
 
     &[]
 }
+
+#[cfg(test)]
+mod tests {
+    use stone_recipe::tuning::{Builder, CompilerFlag, Toolchain};
+
+    use super::*;
+    use crate::Architecture;
+
+    #[test]
+    fn repository_architecture_tuning_overrides_base_and_selects_base_defaults() {
+        let macros = Macros::repository_for_tests();
+        let target = BuildTarget::Native(Architecture::X86_64);
+
+        let mut tuning = Builder::new();
+        tuning.add_macros(macros.arch["base"].clone());
+        tuning.add_macros(macros.arch["x86_64"].clone());
+        tuning.enable("architecture", None).unwrap();
+        let flags = tuning.build().unwrap();
+
+        // These are the target override and base defaults from the YAML policy
+        // at 80d7ac5, asserted through the production merge order.
+        assert_eq!(flags.len(), 1);
+        assert_eq!(
+            flags[0].get(CompilerFlag::C, Toolchain::Llvm),
+            Some("-march=x86-64-v2 -mtune=ivybridge")
+        );
+        assert_eq!(
+            flags[0].get(CompilerFlag::Rust, Toolchain::Llvm),
+            Some("-C target-cpu=x86-64-v2")
+        );
+        assert_eq!(
+            default_tuning_groups(target, &macros),
+            [
+                "asneeded",
+                "avxwidth",
+                "base",
+                "bindnow",
+                "build-id",
+                "compress-debug",
+                "control-flow",
+                "debug",
+                "fat-lto",
+                "fortify",
+                "frame-pointer",
+                "golang-ldflags",
+                "golang-modflags",
+                "harden",
+                "icf",
+                "libstdc-assertions",
+                "lto",
+                "lto-errors",
+                "optimize",
+                "relr",
+                "symbolic",
+                "thread-exceptions",
+                "tls-gnu",
+                "version-allow-undefined",
+            ]
+        );
+    }
+}

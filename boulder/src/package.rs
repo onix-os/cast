@@ -248,3 +248,89 @@ pub enum Error {
     #[error("container")]
     Container(#[from] container::Error),
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn repository_package_policy_expands_and_merges_for_x86_64() {
+        let macros = Macros::repository_for_tests();
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/examples/gluon/stone.glu")).unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let mut collector = Collector::new(install.path());
+
+        let packages = resolve_packages(
+            ["base".to_owned(), "x86_64".to_owned()],
+            &macros,
+            &recipe,
+            &mut collector,
+        )
+        .unwrap();
+
+        // Golden package templates from arch/base.yaml at 80d7ac5, expanded
+        // and merged through the same boundary used by the packager.
+        assert_eq!(
+            packages.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "hello",
+                "hello-32bit",
+                "hello-32bit-dbginfo",
+                "hello-32bit-devel",
+                "hello-dbginfo",
+                "hello-demos",
+                "hello-devel",
+                "hello-docs",
+                "hello-libs",
+            ]
+        );
+
+        let root = &packages["hello"];
+        assert_eq!(root.summary.as_deref(), Some("Minimal Gluon recipe example"));
+        assert_eq!(
+            root.paths.iter().map(|path| path.path.as_str()).collect::<Vec<_>>(),
+            ["*"]
+        );
+
+        let devel = &packages["hello-devel"];
+        assert_eq!(devel.summary.as_deref(), Some("Development files for hello"));
+        assert_eq!(
+            devel.description.as_deref(),
+            Some("Install this package if you intend to build software against\nthe hello package.")
+        );
+        assert_eq!(devel.run_deps, ["hello"]);
+        assert_eq!(
+            devel.paths.iter().map(|path| path.path.as_str()).collect::<Vec<_>>(),
+            [
+                "/usr/include",
+                "/usr/lib/*.a",
+                "/usr/lib/cmake",
+                "/usr/lib/lib*.so",
+                "/usr/lib/pkgconfig",
+                "/usr/share/aclocal",
+                "/usr/share/cmake",
+                "/usr/share/man/man2",
+                "/usr/share/man/man3",
+                "/usr/share/man/man9",
+                "/usr/share/pkgconfig",
+                "/usr/share/gir-1.0/*.gir",
+                "/usr/share/vala/vapi/*.deps",
+                "/usr/share/vala/vapi/*.vapi",
+                "/usr/lib/*.prl",
+                "/usr/lib/metatypes",
+                "/usr/lib/qt*/metatypes/qt*.json",
+                "/usr/lib/qt*/mkspecs",
+                "/usr/lib/qt*/modules/*.json",
+                "/usr/lib/qt*/sbom",
+                "/usr/lib/qt*/plugins/designer/*.so",
+                "/usr/share/doc/qt5/*.qch",
+                "/usr/share/doc/qt5/*.tags",
+                "/usr/share/doc/qt6/*.qch",
+                "/usr/share/doc/qt6/*.tags",
+            ]
+        );
+    }
+}
