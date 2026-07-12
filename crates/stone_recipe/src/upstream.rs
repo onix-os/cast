@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{borrow::Borrow, collections::BTreeMap, fmt::Display, path::PathBuf, str::FromStr};
+use std::{borrow::Borrow, fmt::Display, path::PathBuf, str::FromStr};
 
-use crate::serde_util::{default_true, stringy_bool};
-use serde::Deserialize;
 use url::Url;
 
 /// Prefix applied to URLs to report they point to a Git repository.
@@ -14,39 +12,6 @@ pub static GIT_PREFIX: &str = "git|";
 pub struct Upstream {
     pub url: Url,
     pub props: Props,
-}
-
-impl<'de> Deserialize<'de> for Upstream {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Debug, Deserialize)]
-        #[serde(untagged)]
-        enum Fields {
-            String(String),
-            Props(Props),
-        }
-
-        let (uri, fields) = BTreeMap::<SourceUri, Fields>::deserialize(deserializer)?
-            .into_iter()
-            .next()
-            .ok_or(serde::de::Error::custom("no upstream"))?;
-        let props = match fields {
-            Fields::String(hash) => match &uri.kind {
-                Kind::Archive => Props::default_plain(hash),
-                Kind::Git => Props::default_git(hash),
-            },
-            Fields::Props(props) => match (&props, &uri.kind) {
-                (Props::Git { .. }, Kind::Archive) | (Props::Plain { .. }, Kind::Git) => {
-                    return Err(serde::de::Error::custom("mismatched URL type and upstream properties"));
-                }
-                _ => props,
-            },
-        };
-
-        Ok(Self { url: uri.into(), props })
-    }
 }
 
 /// Supported kinds of upstream in a recipe.
@@ -69,8 +34,7 @@ pub enum Kind {
 ///
 /// For a git repository, the URI is parsed and unparsed
 /// with the format `git|<regular_url>`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialOrd, Ord, PartialEq)]
-#[serde(try_from = "&str")]
+#[derive(Clone, Debug, Eq, PartialOrd, Ord, PartialEq)]
 pub struct SourceUri {
     /// The kind of source the URL refers to.
     pub kind: Kind,
@@ -127,44 +91,19 @@ impl Borrow<Url> for SourceUri {
     }
 }
 
-#[derive(Clone, Deserialize, Debug)]
-#[serde(untagged)]
+#[derive(Clone, Debug)]
 pub enum Props {
     Plain {
         hash: String,
         rename: Option<String>,
-        #[serde(rename = "stripdirs")]
         strip_dirs: Option<u8>,
-        #[serde(default = "default_true", deserialize_with = "stringy_bool")]
         unpack: bool,
-        #[serde(rename = "unpackdir")]
         unpack_dir: Option<PathBuf>,
     },
     Git {
-        #[serde(rename = "ref")]
         git_ref: String,
-        #[serde(rename = "clonedir")]
         clone_dir: Option<PathBuf>,
     },
-}
-
-impl Props {
-    fn default_plain(hash: String) -> Self {
-        Self::Plain {
-            hash,
-            rename: None,
-            strip_dirs: None,
-            unpack: true,
-            unpack_dir: None,
-        }
-    }
-
-    fn default_git(git_ref: String) -> Self {
-        Self::Git {
-            git_ref,
-            clone_dir: None,
-        }
-    }
 }
 
 #[cfg(test)]

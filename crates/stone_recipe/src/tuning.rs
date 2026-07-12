@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::Deserialize;
 use snafu::{OptionExt, Snafu};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{KeyValue, Macros, sequence_of_key_value, single_as_sequence};
+use crate::{KeyValue, Macros};
 
 #[derive(Debug, Clone)]
 pub enum Tuning {
@@ -14,57 +13,10 @@ pub enum Tuning {
     Config(String),
 }
 
-impl<'de> Deserialize<'de> for KeyValue<Tuning> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Debug, Deserialize)]
-        #[serde(untagged)]
-        enum Inner {
-            Bool(bool),
-            Config(String),
-        }
-
-        #[derive(Debug, Deserialize)]
-        #[serde(untagged)]
-        enum Outer {
-            Key(String),
-            KeyValue(BTreeMap<String, Inner>),
-        }
-
-        match Outer::deserialize(deserializer)? {
-            Outer::Key(key) => Ok(KeyValue {
-                key,
-                value: Tuning::Enable,
-            }),
-            Outer::KeyValue(map) => match map.into_iter().next() {
-                Some((key, Inner::Bool(true))) => Ok(KeyValue {
-                    key,
-                    value: Tuning::Enable,
-                }),
-                Some((key, Inner::Bool(false))) => Ok(KeyValue {
-                    key,
-                    value: Tuning::Disable,
-                }),
-                Some((key, Inner::Config(config))) => Ok(KeyValue {
-                    key,
-                    value: Tuning::Config(config),
-                }),
-                // unreachable?
-                None => Err(serde::de::Error::custom("missing tuning entry")),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TuningFlag {
-    #[serde(flatten)]
     root: CompilerFlags,
-    #[serde(default)]
     gnu: CompilerFlags,
-    #[serde(default)]
     llvm: CompilerFlags,
 }
 
@@ -90,7 +42,7 @@ pub enum CompilerFlag {
     Ld,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CompilerFlags {
     c: Option<String>,
     cxx: Option<String>,
@@ -138,19 +90,16 @@ impl CompilerFlags {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Toolchain {
     #[default]
     Llvm,
     Gnu,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TuningOption {
-    #[serde(default, deserialize_with = "single_as_sequence")]
     pub enabled: Vec<String>,
-    #[serde(default, deserialize_with = "single_as_sequence")]
     pub disabled: Vec<String>,
 }
 
@@ -161,12 +110,10 @@ pub struct TuningOptionSpec {
     pub disabled: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TuningGroup {
-    #[serde(flatten, default)]
     pub root: TuningOption,
     pub default: Option<String>,
-    #[serde(default, rename = "options", deserialize_with = "sequence_of_key_value")]
     pub choices: Vec<KeyValue<TuningOption>>,
 }
 

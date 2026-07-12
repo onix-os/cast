@@ -5,7 +5,7 @@
 //!
 //! These types deliberately contain only primitive values, options, vectors,
 //! key-value arrays, and explicit variants. Parsers and embedded languages can
-//! target this boundary without taking a dependency on YAML shapes or domain
+//! target this boundary without taking a dependency on serialization shapes or domain
 //! parser types such as [`url::Url`] and [`std::path::PathBuf`].
 
 use std::path::PathBuf;
@@ -36,7 +36,7 @@ pub struct RecipeSpec {
 }
 
 impl RecipeSpec {
-    /// Construct a minimal recipe with the same defaults as the legacy loader.
+    /// Construct a minimal recipe with the canonical declarative defaults.
     pub fn new(source: SourceSpec) -> Self {
         Self {
             source,
@@ -614,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn minimal_recipe_uses_legacy_defaults() {
+    fn minimal_recipe_uses_canonical_defaults() {
         let recipe = Recipe::try_from(RecipeSpec::new(source())).unwrap();
 
         assert!(recipe.build.setup.is_none());

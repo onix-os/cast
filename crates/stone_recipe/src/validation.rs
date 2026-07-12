@@ -50,23 +50,23 @@ pub fn validate(recipe: &Recipe) -> Result<(), ValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{RecipeSpec, SourceSpec};
 
     #[test]
-    fn legacy_yaml_recipe_uses_shared_validation() {
-        let recipe = crate::from_str(
-            r#"
-name: example
-version: v1.0.0
-release: 1
-homepage: https://example.com
-license: MPL-2.0
-"#,
-        )
-        .unwrap();
-
-        let error = recipe.validate().unwrap_err();
+    fn recipe_spec_uses_shared_validation() {
+        let error = Recipe::try_from(RecipeSpec::new(SourceSpec {
+            name: "example".to_owned(),
+            version: "v1.0.0".to_owned(),
+            release: 1,
+            homepage: "https://example.com".to_owned(),
+            license: vec!["MPL-2.0".to_owned()],
+        }))
+        .unwrap_err();
 
         assert_eq!(error.field(), "source.version");
-        assert!(matches!(error, ValidationError::VersionMustStartWithDigit { .. }));
+        assert!(matches!(
+            error,
+            crate::RecipeConversionError::Validation(ValidationError::VersionMustStartWithDigit { .. })
+        ));
     }
 }
