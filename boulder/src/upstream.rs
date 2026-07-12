@@ -9,7 +9,6 @@ use crate::{
         self, ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, WriteOutcome,
     },
 };
-use fs_err as fs;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use moss::runtime;
 use stone_recipe::upstream;
@@ -211,23 +210,13 @@ pub fn sync(
     mp.clear()?;
     println!();
 
-    if recipe.is_yaml_compatibility() {
-        if let Some(updated_yaml) = update_git_upstream_refs(&recipe.source, &stored) {
-            fs::write(&recipe.path, updated_yaml)?;
-            println!(
-                "{} | Git references resolved to commit hashes and saved to stone.yaml. This ensures reproducible builds since tags and branches can move over time.",
-                "Warning".yellow()
-            );
-        }
-    } else {
-        require_current_source_lock(recipe, &stored)?;
-    }
+    require_current_source_lock(recipe, &stored)?;
 
     Ok(stored)
 }
 
 fn require_current_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<(), Error> {
-    if write_resolved_source_lock(recipe, stored)? == Some(WriteOutcome::Written) {
+    if write_resolved_source_lock(recipe, stored)? == WriteOutcome::Written {
         return Err(Error::SourceLockChanged {
             path: recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME),
         });
@@ -235,11 +224,7 @@ fn require_current_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<Option<WriteOutcome>, Error> {
-    if recipe.is_yaml_compatibility() {
-        return Ok(None);
-    }
-
+pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<WriteOutcome, Error> {
     let sources = recipe
         .parsed
         .upstreams
@@ -278,7 +263,7 @@ pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> 
     let path = recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME);
     let outcome =
         source_lock::write_source_lock(&path, &lock).map_err(|source| Error::WriteSourceLock { path, source })?;
-    Ok(Some(outcome))
+    Ok(outcome)
 }
 
 /// Helper that removes a list of [Upstream]s from the storage directory.
@@ -317,65 +302,6 @@ pub enum Error {
     Io(#[from] io::Error),
 }
 
-/// Process git upstreams after cloning and return updated YAML if refs differ from resolved hashes.
-pub(crate) fn update_git_upstream_refs(recipe_source: &str, stored_upstreams: &[Stored]) -> Option<String> {
-    let mut yaml_updater = yaml::Updater::new();
-    let mut refs_updated = false;
-
-    for stored in stored_upstreams.iter() {
-        if let Stored::Git(git) = stored
-            && git.resolved_hash != git.original_ref
-        {
-            update_git_upstream_ref_in_yaml(
-                &mut yaml_updater,
-                git.original_index,
-                git.url.as_str(),
-                &git.resolved_hash,
-                &git.original_ref,
-            );
-            println!(
-                "{} | Updated ref '{}' to commit {} for {}",
-                "Warning".yellow(),
-                &git.resolved_hash[..8],
-                git.original_ref,
-                git.url.as_str()
-            );
-            refs_updated = true;
-        }
-    }
-
-    if refs_updated {
-        Some(yaml_updater.apply(recipe_source))
-    } else {
-        None
-    }
-}
-
-/// Replaces the non-hash refs for git upstreams with the hash for the given ref
-/// and includes a comment showing the original ref.
-fn update_git_upstream_ref_in_yaml(
-    updater: &mut yaml::Updater,
-    upstream_index: usize,
-    url: &str,
-    new_ref: &str,
-    original_ref: &str,
-) {
-    let git_key = format!("git|{url}");
-    let new_value_with_comment = format!("{new_ref} # {original_ref}");
-
-    // git|url: <ref>
-    updater.update_value(&new_value_with_comment, |p| {
-        p / "upstreams" / upstream_index / git_key.as_str()
-    });
-
-    // git|url:
-    // - ref: <ref>
-    // ...
-    updater.update_value(&new_value_with_comment, |p| {
-        p / "upstreams" / upstream_index / git_key.as_str() / "ref"
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use crate::upstream::StoredGit;
@@ -383,8 +309,7 @@ mod tests {
 
     use super::*;
 
-    use url::Url;
-
+    use fs_err as fs;
     const ARCHIVE_URL: &str = "https://example.com/source.tar.xz";
     const ARCHIVE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const GIT_URL: &str = "https://example.com/source.git";
@@ -421,8 +346,6 @@ let base = boulder.recipe (boulder.source {{
                 name: "source.git".to_owned(),
                 repo: gitwrap::null_repository(),
                 was_cached: false,
-                url: Url::parse(GIT_URL).unwrap(),
-                original_ref: "main".to_owned(),
                 resolved_hash: FULL_COMMIT.to_owned(),
                 original_index: 1,
             }),
@@ -474,141 +397,5 @@ let base = boulder.recipe (boulder.source {{
             use std::os::unix::fs::MetadataExt;
             assert_eq!(before.ino(), after.ino());
         }
-    }
-
-    #[test]
-    fn yaml_compatibility_never_writes_a_source_lock() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(
-            directory.path().join("stone.yaml"),
-            r#"
-name: example
-version: "1.2.3"
-release: 1
-homepage: https://example.com
-license: MPL-2.0
-"#,
-        )
-        .unwrap();
-        let recipe = Recipe::load(directory.path()).unwrap();
-
-        assert_eq!(write_resolved_source_lock(&recipe, &[]).unwrap(), None);
-        assert!(!directory.path().join(SOURCE_LOCK_FILE_NAME).exists());
-    }
-
-    #[test]
-    fn test_update_git_upstream_refs() {
-        let recipe_source = r#"
-upstreams:
-  - git|https://github.com/example/repo1.git: main
-  - git|https://github.com/example/repo2.git:
-      ref: main
-  - git|https://github.com/example/repo3.git: abcd1234567890abcdef1234567890abcdef1234
-  - git|https://github.com/example/repo4.git: abc123d
-  - https://example.com/file.tar.gz: some-hash
-"#;
-
-        let stored = vec![
-            Stored::Git(StoredGit {
-                name: "repo1.git".to_owned(),
-                repo: gitwrap::null_repository(),
-                was_cached: false,
-                url: Url::parse("https://github.com/example/repo1.git").unwrap(),
-                original_ref: "main".to_owned(),
-                resolved_hash: "1111222233334444555566667777888899990000".to_owned(),
-                original_index: 0,
-            }),
-            Stored::Git(StoredGit {
-                name: "repo2.git".to_owned(),
-                repo: gitwrap::null_repository(),
-                was_cached: false,
-                url: Url::parse("https://github.com/example/repo2.git").unwrap(),
-                original_ref: "main".to_owned(),
-                resolved_hash: "aaaa1111bbbb2222cccc3333dddd4444eeee5555".to_owned(),
-                original_index: 1,
-            }),
-            Stored::Git(StoredGit {
-                name: "repo3.git".to_owned(),
-                repo: gitwrap::null_repository(),
-                was_cached: false,
-                url: Url::parse("https://github.com/example/repo3.git").unwrap(),
-                original_ref: "abcd1234567890abcdef1234567890abcdef1234".to_owned(),
-                resolved_hash: "abcd1234567890abcdef1234567890abcdef1234".to_owned(),
-                original_index: 2,
-            }),
-            Stored::Git(StoredGit {
-                name: "repo4.git".to_owned(),
-                repo: gitwrap::null_repository(),
-                was_cached: false,
-                url: Url::parse("https://github.com/example/repo4.git").unwrap(),
-                original_ref: "abc123d".to_owned(),
-                resolved_hash: "abc123d567890abcdef1234567890abcdef12345".to_owned(),
-                original_index: 3,
-            }),
-            Stored::Git(StoredGit {
-                name: "file.tar.gz".to_owned(),
-                repo: gitwrap::null_repository(),
-                was_cached: false,
-                // We don't care about the values below.
-                url: "http://example.com".try_into().unwrap(),
-                original_ref: String::new(),
-                resolved_hash: String::new(),
-                original_index: 0,
-            }),
-        ];
-
-        let result = update_git_upstream_refs(recipe_source, &stored);
-
-        assert!(result.is_some());
-        let updated_yaml = result.unwrap();
-
-        // Should update short form ref to hash with comment
-        assert!(updated_yaml.contains("1111222233334444555566667777888899990000 # main"));
-
-        // Should update long form ref to hash with comment
-        assert!(updated_yaml.contains("aaaa1111bbbb2222cccc3333dddd4444eeee5555 # main"));
-
-        // Should not change hash that's already a hash
-        assert!(updated_yaml.contains("abcd1234567890abcdef1234567890abcdef1234"));
-        assert!(
-            !updated_yaml
-                .contains("abcd1234567890abcdef1234567890abcdef1234 # abcd1234567890abcdef1234567890abcdef1234")
-        );
-
-        // Should update short hash to long hash
-        assert!(updated_yaml.contains("abc123d567890abcdef1234567890abcdef12345 # abc123d"));
-
-        // Should preserve non-git upstreams unchanged
-        assert!(updated_yaml.contains("https://example.com/file.tar.gz: some-hash"));
-    }
-
-    #[test]
-    fn test_update_git_upstream_refs_no_updates() {
-        let recipe_source = r#"
-upstreams:
-  - git|https://github.com/example/repo3.git: abcd1234567890abcdef1234567890abcdef1234
-  - https://example.com/file.tar.gz: some-hash
-"#;
-
-        let stored = vec![
-            Stored::Git(StoredGit {
-                name: "repo3.git".to_owned(),
-                repo: gitwrap::null_repository(),
-                was_cached: false,
-                url: Url::parse("https://github.com/example/repo3.git").unwrap(),
-                original_ref: "abcd1234567890abcdef1234567890abcdef1234".to_owned(),
-                resolved_hash: "abcd1234567890abcdef1234567890abcdef1234".to_owned(),
-                original_index: 0,
-            }),
-            Stored::Plain(StoredPlain {
-                name: "file.tar.gz".to_owned(),
-                path: "/tmp/file.tar.gz".into(),
-                was_cached: false,
-            }),
-        ];
-
-        let result = update_git_upstream_refs(recipe_source, &stored);
-
-        assert!(result.is_none());
     }
 }

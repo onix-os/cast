@@ -12,7 +12,6 @@ use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
 use stone_recipe::evaluate_gluon_with_inputs;
 use thiserror::Error;
-use tui::Styled;
 
 use crate::{
     architecture::{self, BuildTarget},
@@ -21,55 +20,21 @@ use crate::{
 
 pub type Parsed = stone_recipe::Recipe;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Format {
-    Gluon,
-    YamlCompatibility,
-}
-
-impl Format {
-    fn from_path(path: &Path) -> Self {
-        if path.extension().and_then(|extension| extension.to_str()) == Some("glu") {
-            Self::Gluon
-        } else {
-            Self::YamlCompatibility
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
     pub parsed: Parsed,
     pub source_lock: Option<SourceLock>,
-    pub fingerprint: Option<EvaluationFingerprint>,
+    pub fingerprint: EvaluationFingerprint,
     pub build_time: DateTime<Utc>,
-    format: Format,
 }
 
 impl Recipe {
     /// Desired recipe value invariants are checked here
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let format = Format::from_path(&path);
-
-        let (source, parsed, source_lock, fingerprint) = match format {
-            Format::Gluon => {
-                let (source, parsed, source_lock, fingerprint) = load_gluon(&path)?;
-                (source, parsed, source_lock, Some(fingerprint))
-            }
-            Format::YamlCompatibility => {
-                eprintln!(
-                    "{} | YAML recipe compatibility is deprecated and read-only; migrate {} to stone.glu",
-                    "Warning".yellow(),
-                    path.display()
-                );
-                let source = fs::read_to_string(&path).map_err(Error::LoadRecipe)?;
-                let parsed = stone_recipe::from_str(&source)?;
-                (source, parsed, None, None)
-            }
-        };
+        let (source, parsed, source_lock, fingerprint) = load_gluon(&path)?;
 
         let build_time = resolve_build_time(&path);
 
@@ -82,14 +47,7 @@ impl Recipe {
             source_lock,
             fingerprint,
             build_time,
-            format,
         })
-    }
-
-    /// Whether this recipe came through the temporary, read-only YAML loader.
-    #[must_use]
-    pub fn is_yaml_compatibility(&self) -> bool {
-        self.format == Format::YamlCompatibility
     }
 
     pub fn build_targets(&self) -> Vec<BuildTarget> {
@@ -194,18 +152,8 @@ fn load_gluon(path: &Path) -> Result<(String, Parsed, Option<SourceLock>, Evalua
 pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     let path = path.as_ref();
 
-    // Resolve a recipe directory without silently shadowing either format
-    // during the short YAML compatibility window.
     let path = if path.is_dir() {
-        let gluon = path.join("stone.glu");
-        let yaml = path.join("stone.yaml");
-
-        match (gluon.exists(), yaml.exists()) {
-            (true, false) => gluon,
-            (false, true) => yaml,
-            (true, true) => return Err(Error::AmbiguousRecipe { gluon, yaml }),
-            (false, false) => gluon,
-        }
+        path.join("stone.glu")
     } else {
         path.to_path_buf()
     };
@@ -244,10 +192,6 @@ fn resolve_build_time(path: &Path) -> DateTime<Utc> {
 pub enum Error {
     #[error("recipe file does not exist: {0:?}")]
     MissingRecipe(PathBuf),
-    #[error("recipe directory contains both {gluon:?} and {yaml:?}")]
-    AmbiguousRecipe { gluon: PathBuf, yaml: PathBuf },
-    #[error("load recipe")]
-    LoadRecipe(#[source] io::Error),
     #[error("load Gluon recipe source")]
     LoadGluonSource(#[source] gluon_config::Diagnostic),
     #[error("load Gluon source lock {path:?}")]
@@ -270,8 +214,6 @@ pub enum Error {
     },
     #[error("evaluate Gluon recipe")]
     EvaluateGluon(#[from] stone_recipe::RecipeEvaluationError),
-    #[error("decode recipe")]
-    Decode(#[from] stone_recipe::Error),
     #[error("invalid recipe")]
     Validation(#[from] stone_recipe::ValidationError),
 }
@@ -287,14 +229,6 @@ mod tests {
     homepage = "https://example.com",
     license = ["MPL-2.0"],
 }"#;
-
-    const YAML_RECIPE: &str = r#"
-name: example
-version: "1.2.3"
-release: 1
-homepage: https://example.com
-license: MPL-2.0
-"#;
 
     const ARCHIVE_URL: &str = "https://example.com/source.tar.xz";
     const ARCHIVE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -337,31 +271,15 @@ let base = boulder.recipe (boulder.source {SOURCE_SPEC})
     }
 
     #[test]
-    fn recipe_directory_resolves_each_format_without_shadowing() {
+    fn recipe_directory_resolves_only_stone_glu() {
         let root = tempfile::tempdir().unwrap();
 
         let missing = resolve_path(root.path()).unwrap_err();
         assert!(matches!(missing, Error::MissingRecipe(path) if path.ends_with("stone.glu")));
 
-        let yaml = root.path().join("stone.yaml");
-        fs::write(&yaml, "name: compatibility").unwrap();
-        assert_eq!(resolve_path(root.path()).unwrap(), yaml.canonicalize().unwrap());
-
-        fs::remove_file(&yaml).unwrap();
         let gluon = root.path().join("stone.glu");
         fs::write(&gluon, "{}").unwrap();
         assert_eq!(resolve_path(root.path()).unwrap(), gluon.canonicalize().unwrap());
-    }
-
-    #[test]
-    fn recipe_directory_rejects_ambiguous_formats() {
-        let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.glu"), "{}").unwrap();
-        fs::write(root.path().join("stone.yaml"), "name: compatibility").unwrap();
-
-        let error = resolve_path(root.path()).unwrap_err();
-
-        assert!(matches!(error, Error::AmbiguousRecipe { .. }));
     }
 
     #[test]
@@ -374,9 +292,8 @@ let base = boulder.recipe (boulder.source {SOURCE_SPEC})
 
         assert_eq!(recipe.path, path.canonicalize().unwrap());
         assert_eq!(recipe.parsed.source.name, "example");
-        assert!(!recipe.is_yaml_compatibility());
         assert!(recipe.source_lock.is_none());
-        let fingerprint = recipe.fingerprint.unwrap();
+        let fingerprint = recipe.fingerprint;
         assert_eq!(fingerprint.root_source_sha256.len(), 64);
         assert!(
             fingerprint
@@ -401,7 +318,7 @@ boulder.recipe (boulder.source source)
         .unwrap();
 
         let recipe = Recipe::load(root.path()).unwrap();
-        let fingerprint = recipe.fingerprint.unwrap();
+        let fingerprint = recipe.fingerprint;
 
         assert_eq!(recipe.path, root.path().join("stone.glu").canonicalize().unwrap());
         assert_eq!(recipe.parsed.source.version, "1.2.3");
@@ -413,19 +330,6 @@ boulder.recipe (boulder.source source)
                 .collect::<Vec<_>>(),
             ["boulder.recipe.v1", "source.glu"]
         );
-    }
-
-    #[test]
-    fn yaml_directory_remains_legacy_read_only_compatibility() {
-        let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("stone.yaml"), YAML_RECIPE).unwrap();
-
-        let recipe = Recipe::load(root.path()).unwrap();
-
-        assert!(recipe.is_yaml_compatibility());
-        assert!(recipe.source_lock.is_none());
-        assert!(recipe.fingerprint.is_none());
-        assert!(recipe.parsed.build.setup.is_none());
     }
 
     #[test]
@@ -574,8 +478,8 @@ boulder.recipe (boulder.source {
         )
         .unwrap();
         let changed = Recipe::load(root.path()).unwrap();
-        let first_fingerprint = first.fingerprint.as_ref().unwrap();
-        let changed_fingerprint = changed.fingerprint.as_ref().unwrap();
+        let first_fingerprint = &first.fingerprint;
+        let changed_fingerprint = &changed.fingerprint;
 
         assert_ne!(first_fingerprint.sha256, changed_fingerprint.sha256);
         assert_ne!(

@@ -149,16 +149,12 @@ pub fn handle(command: Command, env: Env, _yes: bool, _verbose: bool) -> Result<
 
 fn check(path: PathBuf) -> Result<(), Error> {
     let recipe = recipe::Recipe::load(path).map_err(Error::CheckRecipe)?;
-    if let Some(fingerprint) = recipe.fingerprint.as_ref() {
-        println!(
-            "{} | {} is valid ({})",
-            "Recipe".green(),
-            recipe.path.display(),
-            fingerprint.sha256
-        );
-    } else {
-        println!("{} | {} is valid", "Recipe".green(), recipe.path.display());
-    }
+    println!(
+        "{} | {} is valid ({})",
+        "Recipe".green(),
+        recipe.path.display(),
+        recipe.fingerprint.sha256
+    );
     Ok(())
 }
 
@@ -326,9 +322,6 @@ fn load_authored_gluon(path: &Path) -> Result<recipe::Recipe, Error> {
         }
         Err(error) => return Err(Error::LoadRecipe(error)),
     };
-    if recipe.is_yaml_compatibility() {
-        return Err(Error::AuthoredGluonRequired(recipe.path));
-    }
     Ok(recipe)
 }
 
@@ -499,8 +492,6 @@ pub enum Error {
         #[source]
         source: Box<crate::source_lock::ValidationError>,
     },
-    #[error("{0} is a deprecated YAML compatibility recipe; bump/update require authored stone.glu")]
-    AuthoredGluonRequired(PathBuf),
     #[error(
         "manual authored edit required for {0}; Boulder validated the recipe and intentionally left it byte-for-byte unchanged"
     )]

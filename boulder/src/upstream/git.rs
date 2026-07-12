@@ -58,8 +58,6 @@ impl Git {
             name: self.name().to_owned(),
             was_cached: cached,
             repo,
-            url: self.url.clone(),
-            original_ref: self.requested_ref.to_owned(),
             resolved_hash,
             original_index: self.original_index,
         })
@@ -92,8 +90,6 @@ impl Git {
                 name: self.name().to_owned(),
                 was_cached: has_ref,
                 repo,
-                url: self.url.clone(),
-                original_ref: self.requested_ref.to_owned(),
                 resolved_hash,
                 original_index: self.original_index,
             },
@@ -133,8 +129,6 @@ pub struct StoredGit {
     /// synchronized with [Git],
     /// that is, it existed and contained [Git::commit].
     pub was_cached: bool,
-    pub url: Url,
-    pub original_ref: String,
     pub resolved_hash: String,
     pub original_index: usize,
     pub repo: gitwrap::Repository,
