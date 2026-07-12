@@ -44,7 +44,6 @@ gluon_codegen.workspace = true
 gluon_config = { path = "../crates/gluon_config" }
 hex.workspace = true
 indexmap.workspace = true
-kdl.workspace = true
 libsqlite3-sys.workspace = true
 log.workspace = true
 nix.workspace = true
@@ -53,7 +52,6 @@ rayon.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 similar.workspace = true
 sha2.workspace = true
 snafu.workspace = true
