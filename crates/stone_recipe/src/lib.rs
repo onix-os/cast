@@ -246,17 +246,33 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use gluon_config::Source as GluonSource;
 
     #[test]
-    fn deserialize() {
+    fn evaluate_repository_gluon_fixtures() {
         let inputs = [
-            &include_bytes!("../../../test/llvm-stone.yml")[..],
-            &include_bytes!("../../../test/boulder-stone.yml")[..],
+            ("test/llvm-stone.glu", include_str!("../../../test/llvm-stone.glu")),
+            (
+                "test/boulder-stone.glu",
+                include_str!("../../../test/boulder-stone.glu"),
+            ),
+            (
+                "test/conflicts/italian-pizza.glu",
+                include_str!("../../../test/conflicts/italian-pizza.glu"),
+            ),
+            (
+                "test/conflicts/pineapple.glu",
+                include_str!("../../../test/conflicts/pineapple.glu"),
+            ),
+            (
+                "boulder/boulder-concurrency-test.glu",
+                include_str!("../../../boulder/boulder-concurrency-test.glu"),
+            ),
         ];
 
-        for input in inputs {
-            let recipe = from_slice(input).unwrap();
-            dbg!(&recipe);
+        for (logical_name, input) in inputs {
+            let evaluated = evaluate_gluon(&GluonSource::new(logical_name, input)).unwrap();
+            evaluated.recipe.validate().unwrap();
         }
     }
 }

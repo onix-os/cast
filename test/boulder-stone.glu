@@ -1,0 +1,199 @@
+// SPDX-FileCopyrightText: 2023 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Canonical standalone Boulder recipe.
+
+type Optional a =
+    | Unset
+    | Set a
+
+type Boolean =
+    | False
+    | True
+
+type SourceSpec = {
+    name: String,
+    version: String,
+    release: Int,
+    homepage: String,
+    license: Array String,
+}
+
+type BuildSpec = {
+    setup: Optional String,
+    build: Optional String,
+    install: Optional String,
+    check: Optional String,
+    workload: Optional String,
+    environment: Optional String,
+    build_deps: Array String,
+    check_deps: Array String,
+}
+
+type PathSpec =
+    | Any { path: String }
+    | Exe { path: String }
+    | Symlink { path: String }
+    | Special { path: String }
+
+type PackageSpec = {
+    summary: Optional String,
+    description: Optional String,
+    provides_exclude: Array String,
+    run_deps: Array String,
+    run_deps_exclude: Array String,
+    paths: Array PathSpec,
+    conflicts: Array String,
+}
+
+type ToolchainSpec =
+    | Llvm
+    | Gnu
+
+type OptionsSpec = {
+    toolchain: ToolchainSpec,
+    cspgo: Boolean,
+    samplepgo: Boolean,
+    debug: Boolean,
+    strip: Boolean,
+    networking: Boolean,
+    compressman: Boolean,
+    lastrip: Boolean,
+}
+
+type UpstreamSpec =
+    | Archive {
+        url: String,
+        hash: String,
+        rename: Optional String,
+        strip_dirs: Optional Int,
+        unpack: Boolean,
+        unpack_dir: Optional String,
+    }
+    | Git {
+        url: String,
+        git_ref: String,
+        clone_dir: Optional String,
+    }
+
+type TuningSpec =
+    | Enable
+    | Disable
+    | Config { value: String }
+
+type KeyValueSpec a = {
+    key: String,
+    value: a,
+}
+
+type RecipeSpec = {
+    source: SourceSpec,
+    build: BuildSpec,
+    package: PackageSpec,
+    options: OptionsSpec,
+    profiles: Array (KeyValueSpec BuildSpec),
+    sub_packages: Array (KeyValueSpec PackageSpec),
+    upstreams: Array UpstreamSpec,
+    architectures: Array String,
+    tuning: Array (KeyValueSpec TuningSpec),
+    emul32: Boolean,
+    mold: Boolean,
+}
+
+{
+    source = {
+        name = "boulder",
+        version = "1.0.1",
+        release = 35,
+        homepage = "https://github.com/serpent-os/boulder",
+        license = [
+            "Zlib",
+        ],
+    },
+    build = {
+        setup = Set r#"# Fix libmoss
+cd ../libmoss
+%patch %(pkgdir)/0001-deps-analysis-elves-In-absence-of-soname.-make-one-u.patch
+cd ../boulder
+
+# TODO: Unset buildtype here when moss-format supports DFLAGS
+export DFLAGS="$DFLAGS -flto=thin -O3 -g"
+%meson --buildtype debugoptimized
+"#,
+        build = Set r"%meson_build
+",
+        install = Set r"%meson_install
+ln -sf boulder %(installroot)/usr/bin/mason
+
+%install_dir %(installroot)/usr/share/moss
+mv data/macros %(installroot)/usr/share/moss/
+",
+        check = Unset,
+        workload = Unset,
+        environment = Set r"cd %(buildroot)/boulder
+",
+        build_deps = [
+            "binary(cmake)",
+            "ldc",
+            "ldc-devel",
+            "lmdb-devel",
+            "pkgconfig(libcurl)",
+            "pkgconfig(libxxhash)",
+            "pkgconfig(libzstd)",
+        ],
+        check_deps = [
+        ],
+    },
+    package = {
+        summary = Set "Package creation tool for Serpent OS",
+        description = Set r"Extremely flexible and powerful, yet simple to use, package build
+tool for the Serpent OS project.
+",
+        provides_exclude = [
+        ],
+        run_deps = [
+            "binary(moss-container)",
+        ],
+        run_deps_exclude = [
+        ],
+        paths = [
+        ],
+        conflicts = [
+        ],
+    },
+    options = {
+        toolchain = Llvm,
+        cspgo = False,
+        samplepgo = False,
+        debug = True,
+        strip = True,
+        networking = False,
+        compressman = False,
+        lastrip = True,
+    },
+    profiles = [
+    ],
+    sub_packages = [
+    ],
+    upstreams = [
+        Git {
+            url = "https://github.com/serpent-os/boulder",
+            git_ref = "v1.0.1",
+            clone_dir = Unset,
+        },
+        Archive {
+            url = "https://github.com/serpent-os/libmoss/releases/download/v1.2.0/libmoss-1.2.0.tar.xz",
+            hash = "cbf684b5a37a3a433e0526beb04a7b3419b71e81b3709c3b0d7ed6a1987d3dcb",
+            rename = Unset,
+            strip_dirs = Set 1,
+            unpack = True,
+            unpack_dir = Set "libmoss",
+        },
+    ],
+    architectures = [
+    ],
+    tuning = [
+    ],
+    emul32 = False,
+    mold = False,
+}

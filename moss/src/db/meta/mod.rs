@@ -522,7 +522,7 @@ mod test {
     fn test_conflict_is_recognized() {
         let db = Database::new(":memory:").unwrap();
 
-        // See `test/conflicts/italian-pizza.yml` for the recipe file that produced this stone.
+        // See `test/conflicts/italian-pizza.glu` for the recipe file that produced this stone.
         // It should be obvious that this package conflicts with `name(pineapple)`.
         let italian_pizza = include_bytes!("../../../../test/conflicts/italian-pizza-1-1-1-x86_64.stone");
         let pineapple_provider = Provider {

@@ -1,0 +1,163 @@
+// SPDX-FileCopyrightText: 2024 AerynOS Developers
+// SPDX-License-Identifier: Zlib
+
+// Canonical standalone Boulder recipe.
+
+type Optional a =
+    | Unset
+    | Set a
+
+type Boolean =
+    | False
+    | True
+
+type SourceSpec = {
+    name: String,
+    version: String,
+    release: Int,
+    homepage: String,
+    license: Array String,
+}
+
+type BuildSpec = {
+    setup: Optional String,
+    build: Optional String,
+    install: Optional String,
+    check: Optional String,
+    workload: Optional String,
+    environment: Optional String,
+    build_deps: Array String,
+    check_deps: Array String,
+}
+
+type PathSpec =
+    | Any { path: String }
+    | Exe { path: String }
+    | Symlink { path: String }
+    | Special { path: String }
+
+type PackageSpec = {
+    summary: Optional String,
+    description: Optional String,
+    provides_exclude: Array String,
+    run_deps: Array String,
+    run_deps_exclude: Array String,
+    paths: Array PathSpec,
+    conflicts: Array String,
+}
+
+type ToolchainSpec =
+    | Llvm
+    | Gnu
+
+type OptionsSpec = {
+    toolchain: ToolchainSpec,
+    cspgo: Boolean,
+    samplepgo: Boolean,
+    debug: Boolean,
+    strip: Boolean,
+    networking: Boolean,
+    compressman: Boolean,
+    lastrip: Boolean,
+}
+
+type UpstreamSpec =
+    | Archive {
+        url: String,
+        hash: String,
+        rename: Optional String,
+        strip_dirs: Optional Int,
+        unpack: Boolean,
+        unpack_dir: Optional String,
+    }
+    | Git {
+        url: String,
+        git_ref: String,
+        clone_dir: Optional String,
+    }
+
+type TuningSpec =
+    | Enable
+    | Disable
+    | Config { value: String }
+
+type KeyValueSpec a = {
+    key: String,
+    value: a,
+}
+
+type RecipeSpec = {
+    source: SourceSpec,
+    build: BuildSpec,
+    package: PackageSpec,
+    options: OptionsSpec,
+    profiles: Array (KeyValueSpec BuildSpec),
+    sub_packages: Array (KeyValueSpec PackageSpec),
+    upstreams: Array UpstreamSpec,
+    architectures: Array String,
+    tuning: Array (KeyValueSpec TuningSpec),
+    emul32: Boolean,
+    mold: Boolean,
+}
+
+{
+    source = {
+        name = "pineapple",
+        version = "1",
+        release = 1,
+        homepage = "https://github.com/serpent-os",
+        license = [
+            "Zlib",
+        ],
+    },
+    build = {
+        setup = Unset,
+        build = Unset,
+        install = Set r"mkdir -p %(installroot)/%(vendordir)
+touch %(installroot)/%(vendordir)/pienapple
+",
+        check = Unset,
+        workload = Unset,
+        environment = Unset,
+        build_deps = [
+        ],
+        check_deps = [
+        ],
+    },
+    package = {
+        summary = Set "Delicious slices of pineapples",
+        description = Set "Can I be on your pizza?",
+        provides_exclude = [
+        ],
+        run_deps = [
+        ],
+        run_deps_exclude = [
+        ],
+        paths = [
+        ],
+        conflicts = [
+        ],
+    },
+    options = {
+        toolchain = Llvm,
+        cspgo = False,
+        samplepgo = False,
+        debug = True,
+        strip = True,
+        networking = False,
+        compressman = False,
+        lastrip = True,
+    },
+    profiles = [
+    ],
+    sub_packages = [
+    ],
+    upstreams = [
+    ],
+    architectures = [
+    ],
+    tuning = [
+    ],
+    emul32 = False,
+    mold = False,
+}
