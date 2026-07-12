@@ -3,11 +3,14 @@
 
 let boulder = import! boulder.recipe.v1
 
-\source -> {
-    package = {
-        summary = boulder.optional.set "Recipe composed with an imported policy",
-        run_deps = ["ca-certificates"],
-        .. boulder.defaults.package
-    },
-    .. boulder.recipe source
+let runtime_patch = boulder.package_patch {
+    run_deps = boulder.optional.set ["ca-certificates"],
+    .. boulder.defaults.package_patch
 }
+
+\recipe ->
+    let package = {
+        summary = boulder.optional.set "Recipe composed with an imported policy",
+        .. boulder.compose.package.append runtime_patch recipe.package
+    }
+    boulder.compose.recipe.package package recipe

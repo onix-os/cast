@@ -12,4 +12,4 @@ let source = boulder.source {
     license = ["MPL-2.0"],
 }
 
-package_policy source
+package_policy (boulder.recipe source)

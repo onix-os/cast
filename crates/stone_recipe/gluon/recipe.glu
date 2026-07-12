@@ -253,6 +253,14 @@ let apply_package: Modification -> PackagePatch -> PackageSpec -> PackageSpec = 
     .. current
 }
 
+let with_build: BuildSpec -> RecipeSpec -> RecipeSpec = \build recipe -> { build, .. recipe }
+let with_package: PackageSpec -> RecipeSpec -> RecipeSpec = \package recipe -> { package, .. recipe }
+let with_profiles: Array (KeyValueSpec BuildSpec) -> RecipeSpec -> RecipeSpec = \profiles recipe -> { profiles, .. recipe }
+let with_sub_packages: Array (KeyValueSpec PackageSpec) -> RecipeSpec -> RecipeSpec = \sub_packages recipe -> {
+    sub_packages,
+    .. recipe
+}
+
 let recipe: SourceSpec -> RecipeSpec = \source -> {
     source,
     build = empty_build,
@@ -328,6 +336,12 @@ let recipe: SourceSpec -> RecipeSpec = \source -> {
             append = arrays.append,
             prepend = \value current -> arrays.append value current,
             override = \value _ -> value,
+        },
+        recipe = {
+            build = with_build,
+            package = with_package,
+            profiles = with_profiles,
+            sub_packages = with_sub_packages,
         },
     },
 }

@@ -49,7 +49,9 @@ Runnable examples live in [`docs/examples/gluon`](examples/gluon):
 `crates/gluon_config` is the single VM construction and import-policy boundary.
 It starts an empty `RootedThread`, disables the implicit prelude, standard
 library, and Gluon I/O execution, clears import search paths, and installs only
-the modules required by the selected typed ABI.
+the modules required by the selected typed ABI. The recipe ABI explicitly opts
+into Gluon's pure array and string primitives for immutable composition; those
+imports are closed by default and are included in the fingerprint.
 
 Evaluated configuration cannot read or write the host filesystem, run a
 process, access the network or environment, observe a clock, use randomness,
@@ -114,8 +116,12 @@ let source = boulder.source {
     license = ["MPL-2.0"],
 }
 
-add_runtime source
+add_runtime (boulder.recipe source)
 ```
+
+`boulder.compose` provides typed append, prepend, and override operations for
+build phases, dependency arrays, packages, profiles, and subpackages. Patch
+records distinguish an omitted change from overriding an array with `[]`.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
@@ -145,12 +151,16 @@ Moss similarly keeps desired intent separate from normalized state. `moss sync
 --import path/to/system.glu` evaluates an alternate intent, while `moss state
 export` emits a standalone generated snapshot. Export, verification,
 activation, and archival operate on the normalized snapshot without rewriting
-the administrator's program.
+the administrator's program. Snapshots derived from authored intent retain its
+evaluation fingerprint in a generated header comment across later state
+updates.
 
 Generated files are stable literals with explicit schema versions and field
-ordering. Writers use a temporary file, sync it, and atomically replace the
-destination. Configuration fragment writers refuse to replace a file which
-does not carry the generated marker.
+ordering. Source-lock and configuration-fragment writers use a temporary file,
+sync it, and atomically replace the destination. State snapshots are written
+inside the transaction's staging root before activation. Configuration
+fragment writers refuse to replace or delete a file which does not carry the
+generated marker.
 
 ## Fingerprints and provenance
 
@@ -168,6 +178,10 @@ aggregate SHA-256 commits to:
 Stable logical names are used instead of host paths. Identical source and
 inputs therefore produce an identical fingerprint, while a changed import,
 lock, ABI, runtime version, or evaluator policy changes it.
+
+Boulder records the aggregate recipe fingerprint in package and binary-manifest
+`SourceRef` metadata and in the JSONC build manifest. Moss records the authored
+system-intent fingerprint with each normalized state snapshot.
 
 ## CLI workflow
 
