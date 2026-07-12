@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let boulder = import! boulder.recipe.v1
+
+let base = boulder.recipe (boulder.source {
+    name = "hello",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/hello",
+    license = ["MPL-2.0"],
+})
+
+{
+    package = {
+        summary = boulder.optional.set "Minimal Gluon recipe example",
+        .. boulder.defaults.package
+    },
+    .. base
+}

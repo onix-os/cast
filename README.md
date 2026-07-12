@@ -33,9 +33,10 @@ The `.stone` format is a structured binary package format designed for modern, r
 - Full USR merge compliance
 - Stateless system design with clear separation of OS and local system configuration
 - Quick system rollbacks through atomic operations
+- Restricted, deterministic [Gluon](https://gluon-lang.org/) evaluation for declarative configuration
 
 ### Boulder Features
-- YAML-based recipe format (`stone.yaml`, [`KDL`](https://kdl.dev) coming soon ❤️)
+- Typed, composable Gluon recipes (`stone.glu`)
 - Automatic subpackage splitting
 - Automatic provider emission (e.g. `soname()`) and dependency use
 - Uniform format for repos, manifests and packages
@@ -99,7 +100,9 @@ alias boulder="${HOME}/.local/bin/boulder --data-dir=${HOME}/.local/share/boulde
 
 ## 📚 Documentation
 
-See [aerynos.dev](https://aerynos.dev/).
+See the [Gluon configuration contract](docs/gluon-configuration.md) for recipe,
+repository, trigger and system-intent examples. General project documentation
+lives at [aerynos.dev](https://aerynos.dev/).
 
 ## 🧪 Experiment
 

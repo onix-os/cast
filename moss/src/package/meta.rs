@@ -36,7 +36,7 @@ pub struct Meta {
     pub name: Name,
     /// Human readable version identifier
     pub version_identifier: String,
-    /// Package release as set in stone.yml
+    /// Package release as set in stone.glu
     pub source_release: u64,
     /// Build machinery specific build release
     pub build_release: u64,

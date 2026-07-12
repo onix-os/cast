@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let moss = import! moss.trigger.v1
+let base = moss.trigger "refresh-example" "Refresh generated example data"
+
+{
+    paths = [
+        moss.path
+            "/usr/share/example/(name:*)"
+            ["refresh"]
+            moss.optional.unset,
+    ],
+    handlers = [
+        moss.handler.named "refresh" (moss.handler.run
+            "/usr/bin/example-refresh"
+            ["$(name)"]),
+    ],
+    .. base
+}

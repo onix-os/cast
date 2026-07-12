@@ -111,7 +111,7 @@ impl Dependency {
     ///
     /// # Arguments
     ///
-    /// * `name` - The formatted name, as seen in `stone.yml`
+    /// * `name` - The formatted name, as seen in `stone.glu`
     ///
     /// # Examples
     ///

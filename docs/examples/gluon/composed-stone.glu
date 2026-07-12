@@ -1,0 +1,15 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let boulder = import! boulder.recipe.v1
+let package_policy = import! "./package_policy.glu"
+
+let source = boulder.source {
+    name = "composed-hello",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/composed-hello",
+    license = ["MPL-2.0"],
+}
+
+package_policy source

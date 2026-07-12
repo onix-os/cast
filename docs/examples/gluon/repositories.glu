@@ -1,0 +1,12 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let moss = import! moss.repository.v1
+
+moss.repositories [
+    moss.repository.direct "local" "file:///var/cache/moss/local.index",
+    moss.repository.root_index
+        "volatile"
+        "https://packages.example.invalid"
+        "stream/volatile",
+]

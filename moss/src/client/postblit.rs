@@ -5,7 +5,7 @@
 //! Note that we support transaction scope and system scope triggers, invoked
 //! before `/usr` is activated and after, respectively.
 //!
-//! Trigger intent is loaded from `/usr/share/moss/triggers/{tx,sys.d}/*.glu`
+//! Trigger intent is loaded from `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu`
 //! and do not yet support local triggers
 use std::{
     path::{Path, PathBuf},

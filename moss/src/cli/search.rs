@@ -264,7 +264,7 @@ mod tests {
     }
 
     /// Build a test registry populated with real packages from the AerynOS recipes.
-    /// Package names, summaries, and provider metadata are sourced from stone.yaml
+    /// Package names, summaries, and provider metadata are sourced from stone.glu
     /// and manifest.x86_64.jsonc files in the recipes repository.
     fn test_registry() -> Registry {
         let mut registry = Registry::default();

@@ -1,0 +1,13 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let boulder = import! boulder.recipe.v1
+
+\source -> {
+    package = {
+        summary = boulder.optional.set "Recipe composed with an imported policy",
+        run_deps = ["ca-certificates"],
+        .. boulder.defaults.package
+    },
+    .. boulder.recipe source
+}
