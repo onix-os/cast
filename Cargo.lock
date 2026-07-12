@@ -687,11 +687,6 @@ dependencies = [
  "dirs",
  "fs-err",
  "gluon_config",
- "itertools 0.14.0",
- "kdl",
- "serde_core",
- "serde_yaml",
- "snafu",
  "tempfile",
 ]
 

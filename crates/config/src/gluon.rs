@@ -308,8 +308,8 @@ impl Manager {
         Ok(path)
     }
 
-    /// Delete only the generated Gluon fragment, leaving legacy formats
-    /// untouched during the migration window.
+    /// Delete only the named generated Gluon fragment, leaving unrelated
+    /// files untouched.
     pub fn delete_gluon<T: Config>(&self, name: impl fmt::Display) -> io::Result<()> {
         let path = self.scope.save_dir(&T::domain()).join(format!("{name}.glu"));
         match fs::remove_file(path) {
