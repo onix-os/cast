@@ -10,6 +10,7 @@ use std::time::Duration;
 use astr::AStr;
 use fs_err::{self as fs, File};
 use futures_util::{StreamExt, stream};
+use gluon_config::Evaluator;
 use stone::{StoneDecodedPayload, StonePayloadMetaTag, StoneReadError};
 use thiserror::Error;
 use url::Url;
@@ -108,7 +109,8 @@ impl Manager {
             // Load all configs, default if none exist
             {
                 config
-                    .load::<repository::Map>()
+                    .load_gluon(&Evaluator::default(), &repository::RepositoryCodec)
+                    .map_err(Error::LoadConfig)?
                     .into_iter()
                     .map(|loaded| (Some(loaded.path), loaded.value))
                     .collect()
@@ -159,7 +161,9 @@ impl Manager {
         // We save it as a map for easy merging across
         // multiple configuration files
         let map = repository::Map::with([(id.clone(), repository.clone())]);
-        let config_path = config.save(&id, &map).map_err(Error::SaveConfig)?;
+        let config_path = config
+            .save_gluon(&id, &map, &repository::RepositoryCodec)
+            .map_err(Error::SaveConfig)?;
 
         let db = open_meta_db(self.source.identifier(), &repository, &self.installation)?;
 
@@ -327,7 +331,7 @@ impl Manager {
 
         // Delete config, only succeeds for configs that live in their
         // own config file w/ matching repo name
-        if config.delete::<repository::Map>(&repo.id).is_err() {
+        if config.delete_gluon::<repository::Map>(&repo.id).is_err() {
             return Ok(Removal::ConfigDeleted(false));
         }
 
@@ -354,7 +358,9 @@ impl Manager {
             cached.repository.active = active;
 
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
-            config.save(id, &map).map_err(Error::SaveConfig)?;
+            config
+                .save_gluon(id, &map, &repository::RepositoryCodec)
+                .map_err(Error::SaveConfig)?;
         }
 
         Ok(())
@@ -547,7 +553,7 @@ async fn resolve_index_from_root(
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Can't modify repos when using explicit configs or system-model.kdl")]
+    #[error("Can't modify repos when using explicit configs or authored Gluon system intent")]
     ExplicitUnsupported,
     #[error("Missing metadata field: {0:?}")]
     MissingMetaField(StonePayloadMetaTag),
@@ -564,7 +570,9 @@ pub enum Error {
     #[error("meta db")]
     Database(#[from] meta::Error),
     #[error("save config")]
-    SaveConfig(#[source] config::SaveError),
+    SaveConfig(#[source] config::SaveGluonError),
+    #[error("load config")]
+    LoadConfig(#[source] config::LoadGluonError),
     #[error("unknown repo")]
     UnknownRepo(repository::Id),
     #[error("resolve history index uri from root index")]
