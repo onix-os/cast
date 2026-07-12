@@ -17,6 +17,11 @@ pub struct EvaluatedSystem {
     pub fingerprint: EvaluationFingerprint,
 }
 
+struct EvaluatedSpec {
+    spec: spec::SystemSpec,
+    fingerprint: EvaluationFingerprint,
+}
+
 #[derive(Debug, Error)]
 pub enum EvaluationError {
     #[error(transparent)]
@@ -134,14 +139,41 @@ pub fn evaluate(source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
 }
 
 pub fn evaluate_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
+    let evaluated = evaluate_spec_with(evaluator, source)?;
+    let parts = spec::into_domain(evaluated.spec)?;
+    let model = SystemModel::regenerate(parts)?;
+
+    Ok(EvaluatedSystem {
+        model,
+        fingerprint: evaluated.fingerprint,
+    })
+}
+
+/// Evaluate a canonical generated snapshot without rewriting it.
+pub fn evaluate_generated_snapshot(source: &Source) -> Result<SystemModel, EvaluationError> {
+    evaluate_generated_snapshot_with(&Evaluator::default(), source)
+}
+
+/// Evaluate a canonical generated snapshot with caller-selected limits/root.
+pub fn evaluate_generated_snapshot_with(
+    evaluator: &Evaluator,
+    source: &Source,
+) -> Result<SystemModel, EvaluationError> {
+    let source_text = source.text().to_owned();
+    let evaluated = evaluate_spec_with(evaluator, source)?;
+    let parts = spec::into_domain(evaluated.spec)?;
+
+    Ok(SystemModel::from_generated(parts, source_text, evaluated.fingerprint))
+}
+
+fn evaluate_spec_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedSpec, EvaluationError> {
     let mut policy = evaluator.import_policy().clone();
     policy.insert_embedded_module("moss.system.v1", GLUON_SYSTEM_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(policy);
     let evaluation = evaluator.evaluate::<GluonSystemSpec>(source)?;
-    let model = SystemModel::try_from(spec::SystemSpec::from(evaluation.value))?;
 
-    Ok(EvaluatedSystem {
-        model,
+    Ok(EvaluatedSpec {
+        spec: spec::SystemSpec::from(evaluation.value),
         fingerprint: evaluation.fingerprint,
     })
 }

@@ -1,34 +1,62 @@
 // SPDX-FileCopyrightText: 2025 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::path::{Path, PathBuf};
-use std::{collections::BTreeSet, io};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
-use fs_err as fs;
+use gluon_config::{EvaluationFingerprint, Evaluator, Source, SourceRoot};
 use thiserror::Error;
 
 use crate::{Package, dependency, repository};
 
-use self::decode::decode;
-use self::encode::encode;
-
-mod decode;
-mod encode;
 pub mod gluon;
 pub mod spec;
-mod update;
+
+pub(super) struct SystemParts {
+    pub disable_warning: bool,
+    pub repositories: repository::Map,
+    pub packages: BTreeSet<dependency::Provider>,
+}
 
 #[derive(Debug, Clone)]
 pub struct SystemModel {
     pub disable_warning: bool,
     pub repositories: repository::Map,
     pub packages: BTreeSet<dependency::Provider>,
-    encoded: String,
+    generated_snapshot: String,
+    fingerprint: EvaluationFingerprint,
 }
 
 impl SystemModel {
+    /// Canonical generated Gluon snapshot for state storage and export.
     pub fn encoded(&self) -> &str {
-        &self.encoded
+        &self.generated_snapshot
+    }
+
+    pub fn fingerprint(&self) -> &EvaluationFingerprint {
+        &self.fingerprint
+    }
+
+    pub(super) fn from_generated(
+        parts: SystemParts,
+        generated_snapshot: String,
+        fingerprint: EvaluationFingerprint,
+    ) -> Self {
+        Self {
+            disable_warning: parts.disable_warning,
+            repositories: parts.repositories,
+            packages: parts.packages,
+            generated_snapshot,
+            fingerprint,
+        }
+    }
+
+    pub(super) fn regenerate(parts: SystemParts) -> Result<Self, gluon::EvaluationError> {
+        let normalized = spec::from_domain(parts.disable_warning, &parts.repositories, &parts.packages)?;
+        let generated = spec::encode_generated_gluon(&normalized);
+        gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", generated))
     }
 }
 
@@ -37,13 +65,39 @@ pub struct LoadedSystemModel {
     pub disable_warning: bool,
     pub repositories: repository::Map,
     pub packages: BTreeSet<dependency::Provider>,
-    encoded: String,
+    provenance: Box<LoadedProvenance>,
     path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct LoadedProvenance {
+    authored_source: String,
+    authored_fingerprint: EvaluationFingerprint,
+    generated_snapshot: String,
+    generated_fingerprint: EvaluationFingerprint,
+}
+
 impl LoadedSystemModel {
+    /// Original authored source retained byte-for-byte for diagnostics and
+    /// source-change suggestions.
     pub fn encoded(&self) -> &str {
-        &self.encoded
+        &self.provenance.authored_source
+    }
+
+    pub fn authored_source(&self) -> &str {
+        &self.provenance.authored_source
+    }
+
+    pub fn fingerprint(&self) -> &EvaluationFingerprint {
+        &self.provenance.authored_fingerprint
+    }
+
+    pub fn generated_snapshot(&self) -> &str {
+        &self.provenance.generated_snapshot
+    }
+
+    pub fn generated_fingerprint(&self) -> &EvaluationFingerprint {
+        &self.provenance.generated_fingerprint
     }
 
     pub fn path(&self) -> &Path {
@@ -53,40 +107,62 @@ impl LoadedSystemModel {
 
 impl From<LoadedSystemModel> for SystemModel {
     fn from(system_model: LoadedSystemModel) -> Self {
+        let provenance = *system_model.provenance;
+
         SystemModel {
             disable_warning: system_model.disable_warning,
             repositories: system_model.repositories,
             packages: system_model.packages,
-            encoded: system_model.encoded,
+            generated_snapshot: provenance.generated_snapshot,
+            fingerprint: provenance.generated_fingerprint,
         }
     }
 }
 
-/// Loads a [`SystemModel`] from the provided path
+/// Load and evaluate authored intent or a generated Gluon snapshot.
 pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
     if !path.exists() {
         return Ok(None);
     }
 
-    let content = fs::read_to_string(path).map_err(LoadError::ReadFile)?;
-
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| LoadError::InvalidPath(path.to_owned()))?;
+    let source_root = SourceRoot::new(parent).map_err(gluon::EvaluationError::from)?;
+    let evaluator = Evaluator::default().with_source_root(source_root.clone());
+    let source = source_root
+        .load(Path::new(file_name), evaluator.limits().max_source_bytes)
+        .map_err(gluon::EvaluationError::from)?;
+    let authored_source = source.text().to_owned();
+    let evaluated = gluon::evaluate_with(&evaluator, &source)?;
+    let authored_fingerprint = evaluated.fingerprint;
     let SystemModel {
         disable_warning,
         repositories,
         packages,
-        encoded,
-    } = decode(&content)?;
+        generated_snapshot,
+        fingerprint: generated_fingerprint,
+    } = evaluated.model;
 
     Ok(Some(LoadedSystemModel {
         disable_warning,
         repositories,
         packages,
-        encoded,
+        provenance: Box::new(LoadedProvenance {
+            authored_source,
+            authored_fingerprint,
+            generated_snapshot,
+            generated_fingerprint,
+        }),
         path: path.to_owned(),
     }))
 }
 
-/// Creates a new [`SystemModel`] with the given items
+/// Create a canonical generated system model.
 pub fn create(repositories: repository::Map, packages: BTreeSet<dependency::Provider>) -> SystemModel {
     create_with_options(false, repositories, packages)
 }
@@ -96,79 +172,224 @@ pub(super) fn create_with_options(
     repositories: repository::Map,
     packages: BTreeSet<dependency::Provider>,
 ) -> SystemModel {
-    let encoded = encode(&repositories, &packages);
-    let encoded = if disable_warning {
-        format!("disable_warning #true\n{encoded}")
-    } else {
-        encoded
-    };
-
-    SystemModel {
+    SystemModel::regenerate(SystemParts {
         disable_warning,
         repositories,
         packages,
-        encoded,
-    }
+    })
+    .expect("Moss-generated system snapshots must evaluate")
 }
 
 impl SystemModel {
-    /// Sync the provided packages to the [`SystemModel`].
-    ///
-    /// This function will retain formatting from the original system model
-    /// and either delete existing packages where those do not exist in the
-    /// incoming set, or append packages to the very end if those aren't
-    /// already present in the system model
+    /// Sync package selections through domain values and regenerate a
+    /// canonical snapshot. No authored Gluon source is modified.
     pub fn sync_packages(self, packages: &[Package]) -> Result<SystemModel, UpdateError> {
-        // Packages not provided by the incoming set of packages
-        let packages_to_remove = self
-            .packages
+        let selected = self.packages;
+        let mut updated = selected
             .iter()
-            .filter(|provider| !packages.iter().any(|package| package.meta.providers.contains(provider)))
-            .collect();
+            .filter(|provider| packages.iter().any(|package| package.meta.providers.contains(provider)))
+            .cloned()
+            .collect::<BTreeSet<_>>();
 
-        // Packages which aren't already provided by the system-model
-        let packages_to_add = packages
-            .iter()
-            .filter(|package| {
-                !package
-                    .meta
-                    .providers
-                    .iter()
-                    .any(|provider| self.packages.contains(provider))
-            })
-            // We add these as their package name
-            .map(|package| package.meta.name.as_str());
+        for package in packages {
+            if !package
+                .meta
+                .providers
+                .iter()
+                .any(|provider| selected.contains(provider))
+            {
+                updated.insert(dependency::Provider::package_name(package.meta.name.as_str()));
+            }
+        }
 
-        // Apply diffs to encoded system model which allows us to retain existing formatting
-        let updated_content = update::sync_packages(&self.encoded, &packages_to_remove, packages_to_add)?;
-
-        // Convert back into decoded system model
-        Ok(decode(&updated_content)?)
+        Ok(Self::regenerate(SystemParts {
+            disable_warning: self.disable_warning,
+            repositories: self.repositories,
+            packages: updated,
+        })?)
     }
 
-    /// Update the provided repositories to the [`SystemModel`].
-    ///
-    /// This function will retain formatting from the original system model
-    /// and update existing repositories from the incoming set where
-    /// they match by [`repository::Id`]
-    pub fn update_repositories(self, repos: &repository::Map) -> Result<SystemModel, UpdateError> {
-        let updated_content = update::update_repositories(&self.encoded, repos.iter())?;
+    /// Replace matching repository domain values and regenerate a canonical
+    /// snapshot. Repositories absent from this model are not added.
+    pub fn update_repositories(mut self, repositories: &repository::Map) -> Result<SystemModel, UpdateError> {
+        for (id, repository) in repositories {
+            if self.repositories.contains_id(id) {
+                self.repositories.add(id.clone(), repository.clone());
+            }
+        }
 
-        // Convert back into decoded system model
-        Ok(decode(&updated_content)?)
+        Ok(Self::regenerate(SystemParts {
+            disable_warning: self.disable_warning,
+            repositories: self.repositories,
+            packages: self.packages,
+        })?)
     }
 }
 
 #[derive(Debug, Error)]
 pub enum LoadError {
-    #[error("read file")]
-    ReadFile(#[source] io::Error),
-    #[error("decode")]
-    Decode(#[from] decode::Error),
+    #[error("invalid system model path {0}")]
+    InvalidPath(PathBuf),
+    #[error("evaluate system model")]
+    Evaluation(#[from] gluon::EvaluationError),
 }
 
 #[derive(Debug, Error)]
 pub enum UpdateError {
-    #[error("decode")]
-    Decode(#[from] decode::Error),
+    #[error("regenerate system model")]
+    Evaluation(#[from] gluon::EvaluationError),
+}
+
+#[cfg(test)]
+mod tests {
+    use fs_err as fs;
+
+    use super::*;
+    use crate::{Provider, Repository, package};
+
+    fn authored_source() -> String {
+        r#"// Authored intent is retained exactly.
+let moss = import! moss.system.v1
+
+{
+    repositories = [
+        moss.repository.direct "local" "file:///var/cache/local.index",
+    ],
+    packages = ["alpha"],
+    .. moss.system
+}
+"#
+        .to_owned()
+    }
+
+    fn package(name: &str, providers: impl IntoIterator<Item = Provider>) -> Package {
+        Package {
+            id: package::Id::from(name.to_owned()),
+            meta: package::Meta {
+                name: name.to_owned().into(),
+                version_identifier: String::new(),
+                source_release: 0,
+                build_release: 0,
+                architecture: String::new(),
+                summary: String::new(),
+                description: String::new(),
+                source_id: String::new(),
+                homepage: String::new(),
+                licenses: Vec::new(),
+                dependencies: Default::default(),
+                providers: providers.into_iter().collect(),
+                conflicts: Default::default(),
+                uri: None,
+                hash: None,
+                download_size: None,
+            },
+            flags: package::Flags::default(),
+        }
+    }
+
+    fn repository(uri: &str, priority: u64) -> Repository {
+        Repository {
+            description: "repository".to_owned(),
+            source: repository::Source::DirectIndex(uri.parse().unwrap()),
+            priority: repository::Priority::new(priority),
+            active: true,
+        }
+    }
+
+    #[test]
+    fn load_retains_authored_source_and_records_both_fingerprints() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("system.glu");
+        let authored = authored_source();
+        fs::write(&path, &authored).unwrap();
+
+        let loaded = load(&path).unwrap().unwrap();
+
+        assert_eq!(loaded.authored_source(), authored);
+        assert_eq!(loaded.encoded(), authored);
+        assert!(loaded.generated_snapshot().starts_with(spec::GENERATED_GLUON_MARKER));
+        assert_eq!(
+            loaded
+                .fingerprint()
+                .imported_modules
+                .iter()
+                .map(|module| module.logical_name.as_str())
+                .collect::<Vec<_>>(),
+            ["moss.system.v1"]
+        );
+        assert!(loaded.generated_fingerprint().imported_modules.is_empty());
+        assert_ne!(loaded.fingerprint().sha256, loaded.generated_fingerprint().sha256);
+    }
+
+    #[test]
+    fn generated_snapshot_loads_and_round_trips_canonically() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("system-model.glu");
+        let model = create(
+            repository::Map::with([(
+                repository::Id::new("local"),
+                repository("file:///var/cache/local.index", 5),
+            )]),
+            BTreeSet::from([Provider::package_name("alpha")]),
+        );
+        fs::write(&path, model.encoded()).unwrap();
+
+        let loaded = load(&path).unwrap().unwrap();
+        let round_trip = SystemModel::from(loaded.clone());
+
+        assert_eq!(loaded.authored_source(), model.encoded());
+        assert_eq!(round_trip.encoded(), model.encoded());
+        assert_eq!(round_trip.fingerprint(), model.fingerprint());
+        assert!(round_trip.packages.contains(&Provider::package_name("alpha")));
+    }
+
+    #[test]
+    fn package_and_repository_updates_are_functional_and_regenerate() {
+        let original = create(
+            repository::Map::with([(
+                repository::Id::new("local"),
+                repository("https://old.example.test/index.stone", 1),
+            )]),
+            BTreeSet::from([
+                Provider::package_name("alpha"),
+                Provider::from_name("binary(beta)").unwrap(),
+            ]),
+        );
+        let original_snapshot = original.encoded().to_owned();
+        let updated = original
+            .sync_packages(&[
+                package("alpha", [Provider::package_name("alpha")]),
+                package("gamma", [Provider::package_name("gamma")]),
+            ])
+            .unwrap();
+
+        assert!(updated.packages.contains(&Provider::package_name("alpha")));
+        assert!(updated.packages.contains(&Provider::package_name("gamma")));
+        assert!(!updated.packages.contains(&Provider::from_name("binary(beta)").unwrap()));
+        assert_ne!(updated.encoded(), original_snapshot);
+
+        let repositories = repository::Map::with([
+            (
+                repository::Id::new("local"),
+                repository("https://new.example.test/index.stone", 9),
+            ),
+            (
+                repository::Id::new("not-added"),
+                repository("https://ignored.example.test/index.stone", 10),
+            ),
+        ]);
+        let updated = updated.update_repositories(&repositories).unwrap();
+        let local = updated.repositories.get(&repository::Id::new("local")).unwrap();
+
+        assert_eq!(u64::from(local.priority), 9);
+        assert_eq!(
+            local.source.direct_index().map(|url| url.as_str()),
+            Some("https://new.example.test/index.stone")
+        );
+        assert!(!updated.repositories.contains_id(&repository::Id::new("not-added")));
+        let evaluated =
+            gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", updated.encoded())).unwrap();
+        assert_eq!(evaluated.encoded(), updated.encoded());
+        assert_eq!(evaluated.fingerprint(), updated.fingerprint());
+    }
 }

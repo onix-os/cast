@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 use crate::{Repository, dependency, repository};
 
-use super::SystemModel;
+use super::{SystemModel, SystemParts};
 
 /// A declarative system configuration before domain conversion.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -134,45 +134,48 @@ impl TryFrom<&SystemModel> for SystemSpec {
     type Error = ConversionError;
 
     fn try_from(model: &SystemModel) -> Result<Self, Self::Error> {
-        let repositories = model
-            .repositories
-            .iter()
-            .enumerate()
-            .map(|(index, (id, repository))| {
-                let priority = i64::try_from(u64::from(repository.priority))
-                    .map_err(|error| ConversionError::new(format!("repositories[{index}].priority"), error))?;
-                let source = match &repository.source {
-                    repository::Source::DirectIndex(uri) => RepositorySourceSpec::DirectIndex { uri: uri.to_string() },
-                    repository::Source::RootIndex(source) => RepositorySourceSpec::RootIndex {
-                        base_uri: source.base_uri.to_string(),
-                        channel: Some(source.channel.to_string()),
-                        version: source.version.to_string(),
-                        arch: Some(source.arch.clone()),
-                    },
-                };
-
-                Ok(RepositorySpec {
-                    id: id.to_string(),
-                    description: Some(repository.description.clone()),
-                    source,
-                    priority: Some(priority),
-                    enabled: Some(repository.active),
-                })
-            })
-            .collect::<Result<Vec<_>, ConversionError>>()?;
-        let mut packages = model
-            .packages
-            .iter()
-            .map(dependency::Provider::to_name)
-            .collect::<Vec<_>>();
-        packages.sort();
-
-        Ok(Self {
-            disable_warning: model.disable_warning,
-            repositories,
-            packages,
-        })
+        from_domain(model.disable_warning, &model.repositories, &model.packages)
     }
+}
+
+pub(super) fn from_domain(
+    disable_warning: bool,
+    repositories: &repository::Map,
+    packages: &BTreeSet<dependency::Provider>,
+) -> Result<SystemSpec, ConversionError> {
+    let repositories = repositories
+        .iter()
+        .enumerate()
+        .map(|(index, (id, repository))| {
+            let priority = i64::try_from(u64::from(repository.priority))
+                .map_err(|error| ConversionError::new(format!("repositories[{index}].priority"), error))?;
+            let source = match &repository.source {
+                repository::Source::DirectIndex(uri) => RepositorySourceSpec::DirectIndex { uri: uri.to_string() },
+                repository::Source::RootIndex(source) => RepositorySourceSpec::RootIndex {
+                    base_uri: source.base_uri.to_string(),
+                    channel: Some(source.channel.to_string()),
+                    version: source.version.to_string(),
+                    arch: Some(source.arch.clone()),
+                },
+            };
+
+            Ok(RepositorySpec {
+                id: id.to_string(),
+                description: Some(repository.description.clone()),
+                source,
+                priority: Some(priority),
+                enabled: Some(repository.active),
+            })
+        })
+        .collect::<Result<Vec<_>, ConversionError>>()?;
+    let mut packages = packages.iter().map(dependency::Provider::to_name).collect::<Vec<_>>();
+    packages.sort();
+
+    Ok(SystemSpec {
+        disable_warning,
+        repositories,
+        packages,
+    })
 }
 
 impl TryFrom<SystemModel> for SystemSpec {
@@ -304,38 +307,51 @@ impl TryFrom<SystemSpec> for SystemModel {
     type Error = ConversionError;
 
     fn try_from(spec: SystemSpec) -> Result<Self, Self::Error> {
-        let mut repository_ids = BTreeSet::new();
-        let repositories = spec
-            .repositories
-            .into_iter()
-            .enumerate()
-            .map(|(index, repository)| {
-                let path = format!("repositories[{index}]");
-                let (id, repository) = convert_repository(repository).map_err(|error| error.at(&path))?;
-
-                if !repository_ids.insert(id.clone()) {
-                    return Err(ConversionError::new(
-                        format!("{path}.id"),
-                        format_args!("duplicate repository identifier `{id}`"),
-                    ));
-                }
-
-                Ok((id, repository))
-            })
-            .collect::<Result<repository::Map, _>>()?;
-
-        let packages = spec
-            .packages
-            .into_iter()
-            .enumerate()
-            .map(|(index, package)| {
-                dependency::Provider::from_name(&package)
-                    .map_err(|error| ConversionError::new(format!("packages[{index}]"), error))
-            })
-            .collect::<Result<BTreeSet<_>, _>>()?;
-
-        Ok(super::create_with_options(spec.disable_warning, repositories, packages))
+        let parts = into_domain(spec)?;
+        Ok(super::create_with_options(
+            parts.disable_warning,
+            parts.repositories,
+            parts.packages,
+        ))
     }
+}
+
+pub(super) fn into_domain(spec: SystemSpec) -> Result<SystemParts, ConversionError> {
+    let mut repository_ids = BTreeSet::new();
+    let repositories = spec
+        .repositories
+        .into_iter()
+        .enumerate()
+        .map(|(index, repository)| {
+            let path = format!("repositories[{index}]");
+            let (id, repository) = convert_repository(repository).map_err(|error| error.at(&path))?;
+
+            if !repository_ids.insert(id.clone()) {
+                return Err(ConversionError::new(
+                    format!("{path}.id"),
+                    format_args!("duplicate repository identifier `{id}`"),
+                ));
+            }
+
+            Ok((id, repository))
+        })
+        .collect::<Result<repository::Map, _>>()?;
+
+    let packages = spec
+        .packages
+        .into_iter()
+        .enumerate()
+        .map(|(index, package)| {
+            dependency::Provider::from_name(&package)
+                .map_err(|error| ConversionError::new(format!("packages[{index}]"), error))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+
+    Ok(SystemParts {
+        disable_warning: spec.disable_warning,
+        repositories,
+        packages,
+    })
 }
 
 impl TryFrom<RepositorySpec> for (repository::Id, Repository) {
@@ -600,7 +616,8 @@ mod tests {
         .expect("convert populated spec");
 
         assert!(model.disable_warning);
-        assert!(model.encoded().starts_with("disable_warning #true\n"));
+        assert!(model.encoded().starts_with(GENERATED_GLUON_MARKER));
+        assert!(model.encoded().contains("disable_warning = True,"));
 
         let root = model
             .repositories
