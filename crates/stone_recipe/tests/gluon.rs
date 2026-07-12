@@ -174,6 +174,94 @@ let base = boulder.recipe (boulder.source {SOURCE})
 }
 
 #[test]
+fn composition_helpers_replace_control_file_semantics() {
+    let source = authored(&format!(
+        r#"
+let base = boulder.recipe (boulder.source {SOURCE})
+
+let append_build_patch = boulder.build_patch {{
+    setup = boulder.optional.set "append setup",
+    build_deps = boulder.optional.set ["append-build"],
+    .. boulder.defaults.build_patch
+}}
+let base_build = {{
+    setup = boulder.optional.set "base setup",
+    build_deps = ["base-build"],
+    check_deps = ["base-check"],
+    .. boulder.defaults.build
+}}
+let build = boulder.compose.build.append append_build_patch base_build
+
+let override_build_patch = boulder.build_patch {{
+    check_deps = boulder.optional.set ["only-check"],
+    .. boulder.defaults.build_patch
+}}
+let build = boulder.compose.build.override override_build_patch build
+
+let prepend_package_patch = boulder.package_patch {{
+    conflicts = boulder.optional.set ["prepend-conflict"],
+    .. boulder.defaults.package_patch
+}}
+let base_package = {{
+    run_deps = ["base-run"],
+    conflicts = ["base-conflict"],
+    .. boulder.defaults.package
+}}
+let package = boulder.compose.package.prepend prepend_package_patch base_package
+
+let append_package_patch = boulder.package_patch {{
+    run_deps = boulder.optional.set ["append-run"],
+    .. boulder.defaults.package_patch
+}}
+let package = boulder.compose.package.append append_package_patch package
+
+let prepend_profile_patch = boulder.build_patch {{
+    environment = boulder.optional.set "profile prepend",
+    .. boulder.defaults.build_patch
+}}
+let base_profile = {{
+    environment = boulder.optional.set "profile base",
+    .. boulder.defaults.build
+}}
+let profile = boulder.compose.build.prepend prepend_profile_patch base_profile
+
+let override_subpackage_patch = boulder.package_patch {{
+    run_deps = boulder.optional.set ["only-subpackage-run"],
+    .. boulder.defaults.package_patch
+}}
+let base_subpackage = {{
+    run_deps = ["old-subpackage-run"],
+    .. boulder.defaults.package
+}}
+let sub_package = boulder.compose.package.override override_subpackage_patch base_subpackage
+
+{{
+    build,
+    package,
+    profiles = [boulder.named "emul32" profile],
+    sub_packages = [boulder.named "example-devel" sub_package],
+    .. base
+}}
+"#
+    ));
+
+    let recipe = evaluate_gluon(&source).unwrap().recipe;
+
+    assert_eq!(recipe.build.setup.as_deref(), Some("base setup\nappend setup"));
+    assert_eq!(recipe.build.build_deps, ["base-build", "append-build"]);
+    assert_eq!(recipe.build.check_deps, ["only-check"]);
+    assert_eq!(recipe.package.run_deps, ["base-run", "append-run"]);
+    assert_eq!(recipe.package.conflicts, ["prepend-conflict", "base-conflict"]);
+    assert_eq!(recipe.profiles[0].key, "emul32");
+    assert_eq!(
+        recipe.profiles[0].value.environment.as_deref(),
+        Some("profile prepend\nprofile base")
+    );
+    assert_eq!(recipe.sub_packages[0].key, "example-devel");
+    assert_eq!(recipe.sub_packages[0].value.run_deps, ["only-subpackage-run"]);
+}
+
+#[test]
 fn invalid_url_and_release_are_conversion_errors() {
     let invalid_url = authored(&format!(
         r#"
@@ -310,6 +398,6 @@ fn evaluation_fingerprint_is_deterministic_and_binds_explicit_inputs() {
             .iter()
             .map(|module| module.logical_name.as_str())
             .collect::<Vec<_>>(),
-        ["boulder.recipe.v1"]
+        ["boulder.recipe.v1", "std.array.prim", "std.string.prim", "std.types"]
     );
 }

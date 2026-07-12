@@ -17,6 +17,33 @@ fn evaluates_a_string_literal() {
 }
 
 #[test]
+fn pure_array_primitives_are_explicit_and_fingerprinted() {
+    let source = Source::new(
+        "array-policy.glu",
+        r#"let array = import! std.array.prim
+array.append ["one"] ["two"]"#,
+    );
+    let denied = Evaluator::default().evaluate::<Vec<String>>(&source).unwrap_err();
+    assert_eq!(denied.category, DiagnosticCategory::Import);
+
+    let mut policy = ImportPolicy::new();
+    policy.enable_array_primitives();
+    let evaluated = Evaluator::default()
+        .with_import_policy(policy)
+        .evaluate::<Vec<String>>(&source)
+        .unwrap();
+
+    assert_eq!(evaluated.value, ["one", "two"]);
+    assert!(
+        evaluated
+            .fingerprint
+            .imported_modules
+            .iter()
+            .any(|module| module.logical_name == "std.array.prim")
+    );
+}
+
+#[test]
 fn fingerprints_source_and_explicit_inputs() {
     let evaluator = Evaluator::default();
     let source = Source::new("literal.glu", "42");

@@ -13,7 +13,7 @@ use std::{
 
 use gluon::{
     RootedThread, ThreadExt,
-    import::Import,
+    import::{Import, add_extern_module},
     query::CompilationBase,
     vm::{
         api::{Getable, VmType},
@@ -163,6 +163,8 @@ impl Evaluator {
         let import = Import::new(RestrictedImporter::allowing(imports.allowed_modules()));
         import.set_paths(Vec::new());
         vm.get_macros().insert("import".to_owned(), import);
+        add_extern_module(&vm, "std.array.prim", gluon::vm::primitives::load_array);
+        add_extern_module(&vm, "std.string.prim", gluon::vm::primitives::load_string);
         {
             let mut database = vm.get_database_mut();
             database.set_implicit_prelude(false);

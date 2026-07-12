@@ -24,6 +24,26 @@ pub const RECIPE_ABI_VERSION: u32 = 1;
 /// from the authored root in every evaluation fingerprint.
 pub const GLUON_RECIPE_ABI: &str = include_str!("../gluon/recipe.glu");
 
+const GLUON_PURE_TYPES: &str = r#"type Bool =
+    | False
+    | True
+
+type Option a =
+    | None
+    | Some a
+
+type Result e t =
+    | Err e
+    | Ok t
+
+type Ordering =
+    | LT
+    | EQ
+    | GT
+
+{ Bool, Option, Result, Ordering }
+"#;
+
 // Standalone recipes cannot depend on an import root, so the canonical encoder
 // repeats only the ABI-owned wire types that are needed to type the final
 // literal. Keep this in lockstep with `gluon/recipe.glu` and the DTOs below.
@@ -450,6 +470,9 @@ pub fn evaluate_gluon_with_inputs(
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedRecipe, RecipeEvaluationError> {
     let mut import_policy = evaluator.import_policy().clone();
+    import_policy.enable_array_primitives();
+    import_policy.enable_string_primitives();
+    import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
     import_policy.insert_embedded_module("boulder.recipe.v1", GLUON_RECIPE_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonRecipeSpec>(source, explicit_inputs)?;

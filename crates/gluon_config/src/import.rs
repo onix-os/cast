@@ -45,6 +45,7 @@ const FORBIDDEN_MODULE_PREFIXES: &[&str] = &[
 #[derive(Debug, Clone, Default)]
 pub struct ImportPolicy {
     embedded_modules: BTreeMap<String, String>,
+    pure_builtin_modules: BTreeSet<String>,
 }
 
 impl ImportPolicy {
@@ -81,11 +82,25 @@ impl ImportPolicy {
         self.insert_embedded_module(logical_name, source)?;
         Ok(self)
     }
+
+    /// Allow Gluon's pure array primitives for an explicitly embedded ABI.
+    ///
+    /// These primitives only inspect and construct VM arrays. They do not
+    /// grant filesystem, process, network, environment, time, or random access.
+    pub fn enable_array_primitives(&mut self) {
+        self.pure_builtin_modules.insert("std.array.prim".to_owned());
+    }
+
+    /// Allow Gluon's pure string inspection and concatenation primitives.
+    pub fn enable_string_primitives(&mut self) {
+        self.pure_builtin_modules.insert("std.string.prim".to_owned());
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct PreparedImports {
     module_sources: BTreeMap<String, String>,
+    pure_builtin_modules: BTreeSet<String>,
     fingerprints: Vec<ModuleFingerprint>,
 }
 
@@ -93,12 +108,17 @@ impl PreparedImports {
     pub(crate) fn empty() -> Self {
         Self {
             module_sources: BTreeMap::new(),
+            pure_builtin_modules: BTreeSet::new(),
             fingerprints: Vec::new(),
         }
     }
 
     pub(crate) fn allowed_modules(&self) -> BTreeSet<String> {
-        self.module_sources.keys().cloned().collect()
+        self.module_sources
+            .keys()
+            .cloned()
+            .chain(self.pure_builtin_modules.iter().cloned())
+            .collect()
     }
 
     pub(crate) fn module_sources(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -148,6 +168,7 @@ pub(crate) fn prepare_imports(
         identities: BTreeSet::new(),
         aliases: BTreeMap::new(),
         fingerprints: BTreeMap::new(),
+        pure_builtin_modules: BTreeSet::new(),
         pending: VecDeque::from([PendingSource {
             identity: "root".to_owned(),
             class: SourceClass::Root,
@@ -177,6 +198,7 @@ pub(crate) fn prepare_imports(
             .into_iter()
             .map(|(alias, (_, source))| (alias, source))
             .collect(),
+        pure_builtin_modules: graph.pure_builtin_modules,
         fingerprints: graph.fingerprints.into_values().collect(),
     })
 }
@@ -189,6 +211,7 @@ struct ImportGraph<'a> {
     identities: BTreeSet<String>,
     aliases: BTreeMap<String, (String, String)>,
     fingerprints: BTreeMap<String, ModuleFingerprint>,
+    pure_builtin_modules: BTreeSet<String>,
     pending: VecDeque<PendingSource>,
 }
 
@@ -196,6 +219,9 @@ impl ImportGraph<'_> {
     fn add_embedded(&mut self, parent: &PendingSource, module: &str) -> Result<(), Diagnostic> {
         if RestrictedImporter::is_forbidden(module) {
             return Err(self.denied(parent, module, "forbidden host-capability module"));
+        }
+        if self.policy.pure_builtin_modules.contains(module) {
+            return self.register_pure_builtin(module);
         }
         let source = self
             .policy
@@ -227,6 +253,9 @@ impl ImportGraph<'_> {
         }
         if self.policy.embedded_modules.contains_key(&alias) {
             return Err(self.denied(parent, raw_path, "relative import aliases an embedded module name"));
+        }
+        if self.policy.pure_builtin_modules.contains(&alias) {
+            return Err(self.denied(parent, raw_path, "relative import aliases a pure builtin module name"));
         }
 
         let base = Path::new(parent.source.logical_name())
@@ -304,6 +333,26 @@ impl ImportGraph<'_> {
             class,
             source,
         });
+        Ok(())
+    }
+
+    fn register_pure_builtin(&mut self, module: &str) -> Result<(), Diagnostic> {
+        let identity = format!("pure-builtin:{module}");
+        if !self.identities.insert(identity.clone()) {
+            return Ok(());
+        }
+        if self.identities.len() > self.limits.max_imports {
+            return Err(Diagnostic::limit(
+                LimitKind::ImportCount,
+                Some(module.to_owned()),
+                format!("import graph exceeds the {}-module limit", self.limits.max_imports),
+            ));
+        }
+        self.pure_builtin_modules.insert(module.to_owned());
+        self.fingerprints.insert(
+            identity,
+            ModuleFingerprint::new(module, &format!("gluon-0.18.3:pure-builtin:{module}")),
+        );
         Ok(())
     }
 

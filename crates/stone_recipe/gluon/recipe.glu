@@ -3,6 +3,10 @@
 
 // Embedded, pure module imported by authored recipes as `boulder.recipe.v1`.
 
+let _ = import! std.types
+let arrays = import! std.array.prim
+let strings = import! std.string.prim
+
 type SourceSpec = {
     name: String,
     version: String,
@@ -102,6 +106,28 @@ type RecipeSpec = {
     mold: Boolean,
 }
 
+type BuildPatch = {
+    setup: Optional String,
+    build: Optional String,
+    install: Optional String,
+    check: Optional String,
+    workload: Optional String,
+    environment: Optional String,
+    build_deps: Optional (Array String),
+    check_deps: Optional (Array String),
+}
+
+type PackagePatch = {
+    run_deps: Optional (Array String),
+    run_deps_exclude: Optional (Array String),
+    conflicts: Optional (Array String),
+}
+
+type Modification =
+    | Prepend
+    | Append
+    | Override
+
 let empty_build: BuildSpec = {
     setup = Unset,
     build = Unset,
@@ -134,10 +160,29 @@ let default_options: OptionsSpec = {
     lastrip = True,
 }
 
+let empty_build_patch: BuildPatch = {
+    setup = Unset,
+    build = Unset,
+    install = Unset,
+    check = Unset,
+    workload = Unset,
+    environment = Unset,
+    build_deps = Unset,
+    check_deps = Unset,
+}
+
+let empty_package_patch: PackagePatch = {
+    run_deps = Unset,
+    run_deps_exclude = Unset,
+    conflicts = Unset,
+}
+
 let source: SourceSpec -> SourceSpec = \value -> value
 let build: BuildSpec -> BuildSpec = \value -> value
 let package: PackageSpec -> PackageSpec = \value -> value
 let options: OptionsSpec -> OptionsSpec = \value -> value
+let build_patch: BuildPatch -> BuildPatch = \value -> value
+let package_patch: PackagePatch -> PackagePatch = \value -> value
 
 let named = \key value -> { key, value }
 
@@ -162,6 +207,52 @@ let git = \url git_ref ->
 
 let git_with = \value -> Git value
 
+let update_text = \modification current update ->
+    match update with
+    | Unset -> current
+    | Set value ->
+        match modification with
+        | Override -> Set value
+        | Append ->
+            let current =
+                match current with
+                | Unset -> ""
+                | Set value -> value
+            Set (strings.append (strings.append current "\n") value)
+        | Prepend ->
+            let current =
+                match current with
+                | Unset -> ""
+                | Set value -> value
+            Set (strings.append (strings.append value "\n") current)
+
+let update_array = \modification current update ->
+    match update with
+    | Unset -> current
+    | Set value ->
+        match modification with
+        | Override -> value
+        | Append -> arrays.append current value
+        | Prepend -> arrays.append value current
+
+let apply_build: Modification -> BuildPatch -> BuildSpec -> BuildSpec = \modification patch current -> {
+    setup = update_text modification current.setup patch.setup,
+    build = update_text modification current.build patch.build,
+    install = update_text modification current.install patch.install,
+    check = update_text modification current.check patch.check,
+    workload = update_text modification current.workload patch.workload,
+    environment = update_text modification current.environment patch.environment,
+    build_deps = update_array modification current.build_deps patch.build_deps,
+    check_deps = update_array modification current.check_deps patch.check_deps,
+}
+
+let apply_package: Modification -> PackagePatch -> PackageSpec -> PackageSpec = \modification patch current -> {
+    run_deps = update_array modification current.run_deps patch.run_deps,
+    run_deps_exclude = update_array modification current.run_deps_exclude patch.run_deps_exclude,
+    conflicts = update_array modification current.conflicts patch.conflicts,
+    .. current
+}
+
 let recipe: SourceSpec -> RecipeSpec = \source -> {
     source,
     build = empty_build,
@@ -183,10 +274,14 @@ let recipe: SourceSpec -> RecipeSpec = \source -> {
     build,
     package,
     options,
+    build_patch,
+    package_patch,
     defaults = {
         build = empty_build,
         package = empty_package,
         options = default_options,
+        build_patch = empty_build_patch,
+        package_patch = empty_package_patch,
     },
     optional = {
         unset = Unset,
@@ -217,5 +312,22 @@ let recipe: SourceSpec -> RecipeSpec = \source -> {
     toolchain = {
         llvm = Llvm,
         gnu = Gnu,
+    },
+    compose = {
+        build = {
+            prepend = apply_build Prepend,
+            append = apply_build Append,
+            override = apply_build Override,
+        },
+        package = {
+            prepend = apply_package Prepend,
+            append = apply_package Append,
+            override = apply_package Override,
+        },
+        array = {
+            append = arrays.append,
+            prepend = \value current -> arrays.append value current,
+            override = \value _ -> value,
+        },
     },
 }
