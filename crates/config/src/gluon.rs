@@ -148,6 +148,13 @@ pub enum SaveGluonError {
     Encode {
         source: GluonCodecError,
     },
+    ReadExisting {
+        path: PathBuf,
+        source: io::Error,
+    },
+    AuthoredFragment {
+        path: PathBuf,
+    },
     CreateTemporary {
         path: PathBuf,
         source: io::Error,
@@ -172,6 +179,16 @@ impl fmt::Display for SaveGluonError {
         match self {
             Self::CreateDir { path, .. } => write!(formatter, "create Gluon config directory {}", path.display()),
             Self::Encode { .. } => formatter.write_str("encode generated Gluon fragment"),
+            Self::ReadExisting { path, .. } => {
+                write!(formatter, "read existing Gluon fragment {}", path.display())
+            }
+            Self::AuthoredFragment { path } => {
+                write!(
+                    formatter,
+                    "refuse to overwrite authored Gluon fragment {}",
+                    path.display()
+                )
+            }
             Self::CreateTemporary { path, .. } => {
                 write!(formatter, "create temporary Gluon fragment {}", path.display())
             }
@@ -192,11 +209,13 @@ impl Error for SaveGluonError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::CreateDir { source, .. }
+            | Self::ReadExisting { source, .. }
             | Self::CreateTemporary { source, .. }
             | Self::WriteTemporary { source, .. }
             | Self::SyncTemporary { source, .. }
             | Self::Rename { source, .. } => Some(source),
             Self::Encode { source } => Some(source),
+            Self::AuthoredFragment { .. } => None,
         }
     }
 }
@@ -267,6 +286,15 @@ impl Manager {
         })?;
 
         let path = dir.join(format!("{name}.glu"));
+        if path.exists() {
+            let existing = fs::read_to_string(&path).map_err(|source| SaveGluonError::ReadExisting {
+                path: path.clone(),
+                source,
+            })?;
+            if !existing.starts_with(GENERATED_GLUON_MARKER) {
+                return Err(SaveGluonError::AuthoredFragment { path });
+            }
+        }
         let literal = codec
             .encode(config)
             .map_err(|source| SaveGluonError::Encode { source })?;
@@ -611,5 +639,20 @@ mod tests {
         assert!(path.with_extension("yaml").exists());
         assert!(path.with_extension("kdl").exists());
         manager.delete_gluon::<String>("example").unwrap();
+    }
+
+    #[test]
+    fn save_never_overwrites_an_authored_fragment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let manager = Manager::custom(temporary.path());
+        let path = temporary.path().join("dummy.d/authored.glu");
+        write(&path, "\"user expression\"\n");
+
+        let error = manager
+            .save_gluon("authored", &"generated replacement".to_owned(), &StringCodec)
+            .unwrap_err();
+
+        assert!(matches!(error, SaveGluonError::AuthoredFragment { path: ref found } if found == &path));
+        assert_eq!(fs::read_to_string(path).unwrap(), "\"user expression\"\n");
     }
 }
