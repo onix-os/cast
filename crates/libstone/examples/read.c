@@ -37,15 +37,19 @@ void print_payload_header(StonePayloadHeader *header) {
   printf("}\n");
 }
 
-void format_digest(uint8_t digest[16], char (*formatted)[32]) {
+void format_digest(const uint8_t digest[16], char formatted[33]) {
+  static const char hex[] = "0123456789abcdef";
+
   for (size_t i = 0; i < 16; i++) {
-    sprintf((char *)formatted + i * 2, "%.02x", digest[i]);
+    formatted[i * 2] = hex[digest[i] >> 4];
+    formatted[i * 2 + 1] = hex[digest[i] & 0x0f];
   }
+  formatted[32] = '\0';
 }
 
 void print_payload_layout_record(StonePayloadLayoutRecord *record) {
   uint8_t file_type[100];
-  char digest[32];
+  char digest[33];
 
   stone_format_payload_layout_file_type(record->file_type, file_type);
 
@@ -58,7 +62,7 @@ void print_payload_layout_record(StonePayloadLayoutRecord *record) {
 
   switch (record->file_type) {
   case STONE_PAYLOAD_LAYOUT_FILE_TYPE_REGULAR: {
-    format_digest(record->file_payload.regular.hash, &digest);
+    format_digest(record->file_payload.regular.hash, digest);
     printf("  hash: %.32s\n", digest);
     printf("  name: %.*s\n", (int)record->file_payload.regular.name.size,
            record->file_payload.regular.name.buf);
@@ -150,9 +154,9 @@ void print_payload_meta_record(StonePayloadMetaRecord *record) {
 }
 
 void print_payload_index_record(StonePayloadIndexRecord *record) {
-  char digest[32];
+  char digest[33];
 
-  format_digest(record->digest, &digest);
+  format_digest(record->digest, digest);
 
   printf("StonePayloadIndexRecord {\n");
   printf("  start: %ld\n", record->start);
