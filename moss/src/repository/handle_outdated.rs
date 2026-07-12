@@ -4,11 +4,12 @@
 use std::collections::HashMap;
 
 use fs_err as fs;
+use gluon_config::Evaluator;
 use tui::Styled;
 use url::Url;
 
 use crate::{
-    Repository, SystemModel,
+    Repository,
     repository::{self, manager},
 };
 
@@ -27,60 +28,75 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
 
     match source {
         manager::Source::ConfigManager(config_manager) => {
-            println!("{count} {repo_plural} will be upgraded to the new repository format");
+            println!("{count} {repo_plural} {require_plural} an updated Gluon repository source");
 
-            let loaded_config = config_manager
-                .load::<repository::Map>()
+            let loaded_config = match config_manager.load_gluon(&Evaluator::default(), &repository::RepositoryCodec) {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("Failed to load Gluon repository configuration: {error:#}");
+                    return;
+                }
+            }
+            .into_iter()
+            .map(|item| {
+                let no_ext = item.path.with_extension("");
+                (no_ext, item)
+            })
+            .collect::<HashMap<_, _>>();
+
+            let updates = outdated_repos
                 .into_iter()
-                .map(|item| {
-                    let no_ext = item.path.with_extension("");
-                    (no_ext, item)
-                })
-                .collect::<HashMap<_, _>>();
+                .fold(HashMap::<_, Vec<_>>::new(), |mut acc, repo| {
+                    let Some(path) = repo.repository.config_path.as_ref() else {
+                        // Every repository loaded through the configuration manager has a source path.
+                        return acc;
+                    };
+                    acc.entry(path.with_extension("")).or_default().push(repo);
+                    acc
+                });
 
-            let updated_config =
-                outdated_repos
-                    .into_iter()
-                    .fold(HashMap::<_, repository::Map>::new(), |mut acc, repo| {
-                        let Some(path) = repo.repository.config_path else {
-                            // Unreachable, if config manager is present than
-                            // all repos were loaded from it & will have a config path
-                            return acc;
-                        };
-                        let no_ext = path.with_extension("");
-
-                        let id = repo.repository.id.clone();
-
-                        let old_repo = &repo.repository.repository;
-                        let new_repo = Repository {
-                            source: repository::Source::RootIndex(repo.compatible_root_index_source),
-                            ..old_repo.clone()
-                        };
-
-                        acc.entry(no_ext.clone()).or_default().add(id, new_repo);
-                        acc
-                    });
-
-            for (no_ext, updated_map) in updated_config {
+            for (no_ext, updates) in updates {
                 let Some(current_config) = loaded_config.get(&no_ext) else {
                     // Unreachable, everything returned originated from
                     // stuff loaded via config manager
                     continue;
                 };
 
-                let name = no_ext.file_name().unwrap_or_default().to_str().unwrap_or_default();
-                let kdl_path = no_ext.with_extension("kdl");
-
+                let mut updated_map = current_config.value.clone();
+                for update in &updates {
+                    let old_repo = &update.repository.repository;
+                    updated_map.add(
+                        update.repository.id.clone(),
+                        Repository {
+                            source: repository::Source::RootIndex(update.compatible_root_index_source.clone()),
+                            ..old_repo.clone()
+                        },
+                    );
+                }
                 let old_content = fs::read_to_string(&current_config.path).unwrap_or_default();
 
-                if let Err(e) = config_manager.save(name, &updated_map) {
-                    eprintln!("Failed to save updated config to {kdl_path:?}: {e:#}");
-                    continue;
-                }
+                let gluon_path = match config_manager.save_gluon(
+                    &current_config.logical_name,
+                    &updated_map,
+                    &repository::RepositoryCodec,
+                ) {
+                    Ok(path) => path,
+                    Err(config::SaveGluonError::AuthoredFragment { path }) => {
+                        println!("\nMoss left the authored source at {path:?} unchanged.");
+                        for update in &updates {
+                            print_repository_suggestion(update);
+                        }
+                        continue;
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to save updated Gluon repository configuration: {error:#}");
+                        continue;
+                    }
+                };
 
-                let new_content = fs::read_to_string(&kdl_path).unwrap_or_default();
+                let new_content = fs::read_to_string(&gluon_path).unwrap_or_default();
 
-                println!("\nUpdate applied to {kdl_path:?}");
+                println!("\nUpdate applied to {gluon_path:?}");
 
                 println!("\n```diff");
                 print_diff(
@@ -88,77 +104,43 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
                     &new_content,
                     Some((
                         current_config.path.as_os_str().to_str().unwrap_or_default(),
-                        kdl_path.as_os_str().to_str().unwrap_or_default(),
+                        gluon_path.as_os_str().to_str().unwrap_or_default(),
                     )),
                 );
                 println!("```");
             }
         }
         manager::Source::SystemModel { system_model, .. } => {
-            println!(
-                "{count} system-model {repo_plural} {require_plural} a configuration update to the new repository format"
-            );
+            println!("{count} system-intent {repo_plural} {require_plural} an authored Gluon source update");
 
             let path = system_model.path().to_owned();
 
-            let updated_repos = outdated_repos
-                .iter()
-                .map(|repo| {
-                    (
-                        repo.repository.id.clone(),
-                        Repository {
-                            source: repository::Source::RootIndex(repo.compatible_root_index_source.clone()),
-                            ..repo.repository.repository.clone()
-                        },
-                    )
-                })
-                .collect::<repository::Map>();
-
-            let updated_system_model = SystemModel::from(system_model.clone())
-                .update_repositories(&updated_repos)
-                .expect("roundtrip system model update");
-
-            let old_kdl = system_model.encoded();
-            let new_kdl = updated_system_model.encoded();
-
-            println!("\nApply the following update to {path:?}");
-
-            println!("\n```diff");
-            print_diff(
-                old_kdl,
-                new_kdl,
-                Some((
-                    path.as_os_str().to_str().unwrap_or_default(),
-                    path.as_os_str().to_str().unwrap_or_default(),
-                )),
-            );
-            println!("```");
+            println!("Moss left the authored source at {path:?} unchanged.");
+            for outdated in outdated_repos {
+                print_repository_suggestion(&outdated);
+            }
         }
         manager::Source::Explicit { .. } => {
             println!("{count} {repo_plural} {require_plural} a configuration update to the new repository format");
 
             for repo in outdated_repos {
-                let id = &repo.repository.id;
-
-                let old_repo = &repo.repository.repository;
-                let new_repo = Repository {
-                    source: repository::Source::RootIndex(repo.compatible_root_index_source),
-                    ..old_repo.clone()
-                };
-
-                let mut old_kdl = kdl::se::to_document(&old_repo).unwrap_or_default();
-                let mut new_kdl = kdl::se::to_document(&new_repo).unwrap_or_default();
-
-                old_kdl.autoformat();
-                new_kdl.autoformat();
-
-                println!("\nUpdate for repository {}", id.to_string().bold());
-                println!("\n```diff");
-                print_diff(&old_kdl.to_string(), &new_kdl.to_string(), None);
-                println!("```");
+                print_repository_suggestion(&repo);
             }
         }
     }
+}
+
+fn print_repository_suggestion(outdated: &OutdatedRepoIndexUri) {
+    let id = &outdated.repository.id;
+    let source = &outdated.compatible_root_index_source;
+
+    println!("\nSuggested repository source change for {}:", id.to_string().bold());
+    println!("  current.direct_index = {:?}", outdated.legacy_index_uri.as_str());
+    println!("  replacement.kind = root-index");
+    println!("  replacement.base_uri = {:?}", source.base_uri.as_str());
+    println!("  replacement.channel = {:?}", source.channel.as_ref());
+    println!("  replacement.version = {:?}", source.version.to_string());
+    println!("  replacement.arch = {:?}", source.arch);
 }
 
 fn print_diff(a: &str, b: &str, header: Option<(&str, &str)>) {
