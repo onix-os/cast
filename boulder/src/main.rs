@@ -24,6 +24,7 @@ mod package;
 mod paths;
 mod profile;
 mod recipe;
+pub mod source_lock;
 mod timing;
 mod upstream;
 
