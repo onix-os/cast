@@ -3,7 +3,12 @@
 
 use std::{io, path::Path, time::Duration};
 
-use crate::recipe::Recipe;
+use crate::{
+    recipe::Recipe,
+    source_lock::{
+        self, ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, WriteOutcome,
+    },
+};
 use fs_err as fs;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use moss::runtime;
@@ -34,18 +39,26 @@ pub enum Upstream {
 impl Upstream {
     /// Constructs an [Upstream] based on the information provided
     /// in the `upstream` section of a Stone recipe.
-    pub fn from_recipe_upstream(upstream: upstream::Upstream, original_index: usize) -> Result<Self, Error> {
+    pub fn from_recipe_upstream(
+        upstream: upstream::Upstream,
+        original_index: usize,
+        locked_commit: Option<&str>,
+    ) -> Result<Self, Error> {
         match upstream.props {
             upstream::Props::Plain { hash, rename, .. } => Ok(Self::Plain(Plain {
                 url: upstream.url,
                 hash: hash.parse().map_err(plain::Error::from)?,
                 rename,
             })),
-            upstream::Props::Git { git_ref, .. } => Ok(Self::Git(Git {
-                url: upstream.url,
-                commit: git_ref,
-                original_index,
-            })),
+            upstream::Props::Git { git_ref, .. } => {
+                let commit = locked_commit.unwrap_or(&git_ref).to_owned();
+                Ok(Self::Git(Git {
+                    url: upstream.url,
+                    commit,
+                    requested_ref: git_ref,
+                    original_index,
+                }))
+            }
         }
     }
 
@@ -121,7 +134,17 @@ pub fn parse_recipe(recipe: &Recipe) -> Result<Vec<Upstream>, Error> {
         .iter()
         .cloned()
         .enumerate()
-        .map(|(index, upstream)| Upstream::from_recipe_upstream(upstream, index))
+        .map(|(index, upstream)| {
+            let locked_commit = recipe
+                .source_lock
+                .as_ref()
+                .and_then(|lock| lock.source(index))
+                .and_then(|source| match source {
+                    SourceResolution::Git(source) => Some(source.commit.as_str()),
+                    SourceResolution::Archive(_) => None,
+                });
+            Upstream::from_recipe_upstream(upstream, index, locked_commit)
+        })
         .collect()
 }
 
@@ -185,20 +208,77 @@ pub fn sync(
             .try_collect::<Vec<_>>(),
     )?;
 
-    if recipe.is_yaml_compatibility()
-        && let Some(updated_yaml) = update_git_upstream_refs(&recipe.source, &stored)
-    {
-        fs::write(&recipe.path, updated_yaml)?;
-        println!(
-            "{} | Git references resolved to commit hashes and saved to stone.yaml. This ensures reproducible builds since tags and branches can move over time.",
-            "Warning".yellow()
-        );
-    }
-
     mp.clear()?;
     println!();
 
+    if recipe.is_yaml_compatibility() {
+        if let Some(updated_yaml) = update_git_upstream_refs(&recipe.source, &stored) {
+            fs::write(&recipe.path, updated_yaml)?;
+            println!(
+                "{} | Git references resolved to commit hashes and saved to stone.yaml. This ensures reproducible builds since tags and branches can move over time.",
+                "Warning".yellow()
+            );
+        }
+    } else {
+        require_current_source_lock(recipe, &stored)?;
+    }
+
     Ok(stored)
+}
+
+fn require_current_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<(), Error> {
+    if write_resolved_source_lock(recipe, stored)? == Some(WriteOutcome::Written) {
+        return Err(Error::SourceLockChanged {
+            path: recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<Option<WriteOutcome>, Error> {
+    if recipe.is_yaml_compatibility() {
+        return Ok(None);
+    }
+
+    let sources = recipe
+        .parsed
+        .upstreams
+        .iter()
+        .enumerate()
+        .map(|(index, upstream)| {
+            let order = u32::try_from(index).map_err(|_| Error::SourceOrderTooLarge(index))?;
+            Ok(match &upstream.props {
+                upstream::Props::Plain { hash, .. } => SourceResolution::Archive(ArchiveResolution {
+                    order,
+                    url: upstream.url.as_str().to_owned(),
+                    sha256: hash.clone(),
+                }),
+                upstream::Props::Git { git_ref, .. } => {
+                    let stored = stored
+                        .iter()
+                        .find_map(|stored| match stored {
+                            Stored::Git(stored) if stored.original_index == index => Some(stored),
+                            _ => None,
+                        })
+                        .ok_or(Error::MissingStoredSource(index))?;
+                    SourceResolution::Git(GitResolution {
+                        order,
+                        url: upstream.url.as_str().to_owned(),
+                        requested_ref: git_ref.clone(),
+                        commit: stored.resolved_hash.clone(),
+                    })
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let lock = SourceLock::new(sources);
+    lock.validate_against(&recipe.parsed)
+        .map_err(|error| Error::GeneratedSourceLock(Box::new(error)))?;
+
+    let path = recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME);
+    let outcome =
+        source_lock::write_source_lock(&path, &lock).map_err(|source| Error::WriteSourceLock { path, source })?;
+    Ok(Some(outcome))
 }
 
 /// Helper that removes a list of [Upstream]s from the storage directory.
@@ -218,6 +298,20 @@ pub enum Error {
     /// An error occurred while dealing with a Git-based [Upstream].
     #[error("git")]
     Git(#[from] git::Error),
+    #[error("source order {0} cannot be represented in a source lock")]
+    SourceOrderTooLarge(usize),
+    #[error("resolved Git source {0} is missing after synchronization")]
+    MissingStoredSource(usize),
+    #[error("validate generated source lock")]
+    GeneratedSourceLock(#[source] Box<source_lock::ValidationError>),
+    #[error("write Gluon source lock {path:?}")]
+    WriteSourceLock {
+        path: std::path::PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Gluon source lock {path:?} was created or updated; rerun the build to bind it into provenance")]
+    SourceLockChanged { path: std::path::PathBuf },
     #[error("io")]
     // A generic I/O error occurred.
     Io(#[from] io::Error),
@@ -290,6 +384,117 @@ mod tests {
     use super::*;
 
     use url::Url;
+
+    const ARCHIVE_URL: &str = "https://example.com/source.tar.xz";
+    const ARCHIVE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const GIT_URL: &str = "https://example.com/source.git";
+    const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn gluon_recipe() -> String {
+        format!(
+            r#"let boulder = import! boulder.recipe.v1
+let base = boulder.recipe (boulder.source {{
+    name = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+}})
+{{
+    upstreams = [
+        boulder.upstream.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
+        boulder.upstream.git "{GIT_URL}" "main",
+    ],
+    .. base
+}}"#
+        )
+    }
+
+    fn resolved_upstreams() -> Vec<Stored> {
+        vec![
+            Stored::Plain(StoredPlain {
+                name: "source.tar.xz".to_owned(),
+                path: "/tmp/source.tar.xz".into(),
+                was_cached: false,
+            }),
+            Stored::Git(StoredGit {
+                name: "source.git".to_owned(),
+                repo: gitwrap::null_repository(),
+                was_cached: false,
+                url: Url::parse(GIT_URL).unwrap(),
+                original_ref: "main".to_owned(),
+                resolved_hash: FULL_COMMIT.to_owned(),
+                original_index: 1,
+            }),
+        ]
+    }
+
+    #[test]
+    fn missing_lock_is_generated_without_mutating_source_and_then_consumed() {
+        let directory = tempfile::tempdir().unwrap();
+        let recipe_path = directory.path().join("stone.glu");
+        let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
+        let authored = gluon_recipe();
+        fs::write(&recipe_path, &authored).unwrap();
+
+        let recipe = Recipe::load(directory.path()).unwrap();
+        assert!(recipe.source_lock.is_none());
+        let stored = resolved_upstreams();
+
+        let error = require_current_source_lock(&recipe, &stored).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::SourceLockChanged { path } if path == lock_path
+        ));
+        assert_eq!(fs::read_to_string(&recipe_path).unwrap(), authored);
+
+        let lock_bytes = fs::read(&lock_path).unwrap();
+        let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes).unwrap();
+        assert_eq!(lock.sources.len(), 2);
+        assert!(matches!(
+            &lock.sources[1],
+            SourceResolution::Git(source)
+                if source.requested_ref == "main" && source.commit == FULL_COMMIT
+        ));
+
+        let loaded = Recipe::load(directory.path()).unwrap();
+        let parsed = parse_recipe(&loaded).unwrap();
+        assert!(matches!(
+            &parsed[1],
+            Upstream::Git(source)
+                if source.requested_ref == "main" && source.commit == FULL_COMMIT
+        ));
+
+        let before = fs::metadata(&lock_path).unwrap();
+        require_current_source_lock(&loaded, &stored).unwrap();
+        let after = fs::metadata(&lock_path).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(before.ino(), after.ino());
+        }
+    }
+
+    #[test]
+    fn yaml_compatibility_never_writes_a_source_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("stone.yaml"),
+            r#"
+name: example
+version: "1.2.3"
+release: 1
+homepage: https://example.com
+license: MPL-2.0
+"#,
+        )
+        .unwrap();
+        let recipe = Recipe::load(directory.path()).unwrap();
+
+        assert_eq!(write_resolved_source_lock(&recipe, &[]).unwrap(), None);
+        assert!(!directory.path().join(SOURCE_LOCK_FILE_NAME).exists());
+    }
 
     #[test]
     fn test_update_git_upstream_refs() {

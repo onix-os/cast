@@ -17,8 +17,10 @@ use url::Url;
 pub struct Git {
     /// URL of origin.
     pub url: Url,
-    /// Hash of the commit to be considered as source.
+    /// Revision to fetch, pinned to the full commit when a source lock exists.
     pub commit: String,
+    /// Reference authored in the recipe and retained in generated provenance.
+    pub requested_ref: String,
     pub original_index: usize,
 }
 
@@ -57,7 +59,7 @@ impl Git {
             was_cached: cached,
             repo,
             url: self.url.clone(),
-            original_ref: self.commit.to_owned(),
+            original_ref: self.requested_ref.to_owned(),
             resolved_hash,
             original_index: self.original_index,
         })
@@ -91,7 +93,7 @@ impl Git {
                 was_cached: has_ref,
                 repo,
                 url: self.url.clone(),
-                original_ref: self.commit.to_owned(),
+                original_ref: self.requested_ref.to_owned(),
                 resolved_hash,
                 original_index: self.original_index,
             },

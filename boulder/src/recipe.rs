@@ -16,7 +16,7 @@ use tui::Styled;
 
 use crate::{
     architecture::{self, BuildTarget},
-    source_lock::SOURCE_LOCK_FILE_NAME,
+    source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock},
 };
 
 pub type Parsed = stone_recipe::Recipe;
@@ -42,6 +42,7 @@ pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
     pub parsed: Parsed,
+    pub source_lock: Option<SourceLock>,
     pub fingerprint: Option<EvaluationFingerprint>,
     pub build_time: DateTime<Utc>,
     format: Format,
@@ -53,10 +54,10 @@ impl Recipe {
         let path = resolve_path(path)?;
         let format = Format::from_path(&path);
 
-        let (source, parsed, fingerprint) = match format {
+        let (source, parsed, source_lock, fingerprint) = match format {
             Format::Gluon => {
-                let (source, parsed, fingerprint) = load_gluon(&path)?;
-                (source, parsed, Some(fingerprint))
+                let (source, parsed, source_lock, fingerprint) = load_gluon(&path)?;
+                (source, parsed, source_lock, Some(fingerprint))
             }
             Format::YamlCompatibility => {
                 eprintln!(
@@ -67,7 +68,7 @@ impl Recipe {
                 let source = fs::read_to_string(&path).map_err(Error::LoadRecipe)?;
                 let mut parsed = stone_recipe::from_str(&source)?;
                 apply_legacy_control_file(&path, &mut parsed)?;
-                (source, parsed, None)
+                (source, parsed, None, None)
             }
         };
 
@@ -79,6 +80,7 @@ impl Recipe {
             path,
             source,
             parsed,
+            source_lock,
             fingerprint,
             build_time,
             format,
@@ -144,7 +146,7 @@ impl Recipe {
     }
 }
 
-fn load_gluon(path: &Path) -> Result<(String, Parsed, EvaluationFingerprint), Error> {
+fn load_gluon(path: &Path) -> Result<(String, Parsed, Option<SourceLock>, EvaluationFingerprint), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
@@ -155,9 +157,17 @@ fn load_gluon(path: &Path) -> Result<(String, Parsed, EvaluationFingerprint), Er
     let evaluator = evaluator.with_source_root(source_root);
 
     let lock_path = path.with_file_name(SOURCE_LOCK_FILE_NAME);
-    let explicit_inputs = match fs::read(&lock_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+    let (explicit_inputs, source_lock) = match fs::read(&lock_path) {
+        Ok(bytes) => {
+            let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &bytes).map_err(|source| {
+                Error::DecodeSourceLock {
+                    path: lock_path.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+            (bytes, Some(lock))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (Vec::new(), None),
         Err(source) => {
             return Err(Error::LoadSourceLock {
                 path: lock_path,
@@ -167,7 +177,19 @@ fn load_gluon(path: &Path) -> Result<(String, Parsed, EvaluationFingerprint), Er
     };
 
     let evaluated = evaluate_gluon_with_inputs(&evaluator, &source, &explicit_inputs)?;
-    Ok((source.text().to_owned(), evaluated.recipe, evaluated.fingerprint))
+    if let Some(lock) = source_lock.as_ref() {
+        lock.validate_against(&evaluated.recipe)
+            .map_err(|source| Error::StaleSourceLock {
+                path: lock_path,
+                source: Box::new(source),
+            })?;
+    }
+    Ok((
+        source.text().to_owned(),
+        evaluated.recipe,
+        source_lock,
+        evaluated.fingerprint,
+    ))
 }
 
 fn apply_legacy_control_file(path: &Path, parsed: &mut Parsed) -> Result<(), Error> {
@@ -256,6 +278,18 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("decode Gluon source lock {path:?}")]
+    DecodeSourceLock {
+        path: PathBuf,
+        #[source]
+        source: Box<source_lock::DecodeError>,
+    },
+    #[error("stale Gluon source lock {path:?}")]
+    StaleSourceLock {
+        path: PathBuf,
+        #[source]
+        source: Box<source_lock::ValidationError>,
+    },
     #[error("evaluate Gluon recipe")]
     EvaluateGluon(#[from] stone_recipe::RecipeEvaluationError),
     #[error("load control file")]
@@ -290,8 +324,44 @@ homepage: https://example.com
 license: MPL-2.0
 "#;
 
+    const ARCHIVE_URL: &str = "https://example.com/source.tar.xz";
+    const ARCHIVE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const GIT_URL: &str = "https://example.com/source.git";
+    const GIT_REF: &str = "main";
+    const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
     fn gluon_recipe(source: &str) -> String {
         format!("let boulder = import! boulder.recipe.v1\nboulder.recipe (boulder.source {source})")
+    }
+
+    fn gluon_recipe_with_upstreams() -> String {
+        format!(
+            r#"let boulder = import! boulder.recipe.v1
+let base = boulder.recipe (boulder.source {SOURCE_SPEC})
+{{
+    upstreams = [
+        boulder.upstream.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
+        boulder.upstream.git "{GIT_URL}" "{GIT_REF}",
+    ],
+    .. base
+}}"#
+        )
+    }
+
+    fn matching_source_lock() -> SourceLock {
+        SourceLock::new(vec![
+            source_lock::SourceResolution::Archive(source_lock::ArchiveResolution {
+                order: 0,
+                url: ARCHIVE_URL.to_owned(),
+                sha256: ARCHIVE_HASH.to_owned(),
+            }),
+            source_lock::SourceResolution::Git(source_lock::GitResolution {
+                order: 1,
+                url: GIT_URL.to_owned(),
+                requested_ref: GIT_REF.to_owned(),
+                commit: FULL_COMMIT.to_owned(),
+            }),
+        ])
     }
 
     #[test]
@@ -333,6 +403,7 @@ license: MPL-2.0
         assert_eq!(recipe.path, path.canonicalize().unwrap());
         assert_eq!(recipe.parsed.source.name, "example");
         assert!(!recipe.is_yaml_compatibility());
+        assert!(recipe.source_lock.is_none());
         let fingerprint = recipe.fingerprint.unwrap();
         assert_eq!(fingerprint.root_source_sha256.len(), 64);
         assert!(
@@ -389,6 +460,7 @@ override {
         let recipe = Recipe::load(root.path()).unwrap();
 
         assert!(recipe.is_yaml_compatibility());
+        assert!(recipe.source_lock.is_none());
         assert!(recipe.fingerprint.is_none());
         assert_eq!(recipe.parsed.build.setup.as_deref(), Some("controlled"));
     }
@@ -433,10 +505,109 @@ boulder.recipe (boulder.source {
     }
 
     #[test]
+    fn valid_source_lock_is_decoded_and_retained() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        fs::write(
+            root.path().join(SOURCE_LOCK_FILE_NAME),
+            source_lock::encode_source_lock(&matching_source_lock()),
+        )
+        .unwrap();
+
+        let recipe = Recipe::load(root.path()).unwrap();
+
+        assert_eq!(recipe.source_lock, Some(matching_source_lock()));
+    }
+
+    #[test]
+    fn malformed_schema_and_commit_lock_errors_include_the_lock_path() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
+
+        let mut wrong_schema = matching_source_lock();
+        wrong_schema.schema_version = 2;
+        let mut short_commit = matching_source_lock();
+        let source_lock::SourceResolution::Git(git) = &mut short_commit.sources[1] else {
+            unreachable!();
+        };
+        git.commit = "abc123d".to_owned();
+
+        let cases = [
+            ("{".to_owned(), "evaluate source lock"),
+            (source_lock::encode_source_lock(&wrong_schema), "unsupported schema"),
+            (source_lock::encode_source_lock(&short_commit), "complete 40-hex"),
+        ];
+
+        for (contents, expected) in cases {
+            fs::write(&lock_path, contents).unwrap();
+            let error = Recipe::load(root.path()).unwrap_err();
+            let Error::DecodeSourceLock { path, source } = error else {
+                panic!("unexpected error: {error}");
+            };
+            assert_eq!(path, lock_path);
+            assert!(source.to_string().contains(expected), "{source}");
+        }
+    }
+
+    #[test]
+    fn stale_source_lock_rejects_count_kind_url_hash_and_requested_ref() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
+
+        let mut count = matching_source_lock();
+        count.sources.pop();
+
+        let mut kind = matching_source_lock();
+        kind.sources[0] = source_lock::SourceResolution::Git(source_lock::GitResolution {
+            order: 0,
+            url: ARCHIVE_URL.to_owned(),
+            requested_ref: "archive".to_owned(),
+            commit: FULL_COMMIT.to_owned(),
+        });
+
+        let mut url = matching_source_lock();
+        let source_lock::SourceResolution::Archive(archive) = &mut url.sources[0] else {
+            unreachable!();
+        };
+        archive.url = "https://example.com/changed.tar.xz".to_owned();
+
+        let mut hash = matching_source_lock();
+        let source_lock::SourceResolution::Archive(archive) = &mut hash.sources[0] else {
+            unreachable!();
+        };
+        archive.sha256 = "changed-hash".to_owned();
+
+        let mut requested_ref = matching_source_lock();
+        let source_lock::SourceResolution::Git(git) = &mut requested_ref.sources[1] else {
+            unreachable!();
+        };
+        git.requested_ref = "v2".to_owned();
+
+        for (lock, expected) in [
+            (count, "stale source count"),
+            (kind, "stale source kind"),
+            (url, "sources[0].url"),
+            (hash, "sources[0].sha256"),
+            (requested_ref, "sources[1].requested_ref"),
+        ] {
+            fs::write(&lock_path, source_lock::encode_source_lock(&lock)).unwrap();
+            let error = Recipe::load(root.path()).unwrap_err();
+            let Error::StaleSourceLock { path, source } = error else {
+                panic!("unexpected error: {error}");
+            };
+            assert_eq!(path, lock_path);
+            assert!(source.to_string().contains(expected), "{source}");
+        }
+    }
+
+    #[test]
     fn recipe_and_lock_fingerprints_are_deterministic() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
-        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), "lock-v1").unwrap();
+        let lock = source_lock::encode_source_lock(&SourceLock::default());
+        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), &lock).unwrap();
 
         let first = Recipe::load(root.path()).unwrap();
         let repeated = Recipe::load(root.path()).unwrap();
@@ -445,7 +616,11 @@ boulder.recipe (boulder.source {
         assert_eq!(first.source, repeated.source);
         assert_eq!(first.fingerprint, repeated.fingerprint);
 
-        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), "lock-v2").unwrap();
+        fs::write(
+            root.path().join(SOURCE_LOCK_FILE_NAME),
+            format!("{lock}// semantically inert fingerprint change\n"),
+        )
+        .unwrap();
         let changed = Recipe::load(root.path()).unwrap();
         let first_fingerprint = first.fingerprint.as_ref().unwrap();
         let changed_fingerprint = changed.fingerprint.as_ref().unwrap();

@@ -3,19 +3,25 @@
 
 //! Canonical generated lock data for resolved recipe sources.
 //!
-//! This module deliberately emits a standalone Gluon value instead of
-//! rewriting authored recipe source. Loading and upstream integration are kept
-//! separate so the lock format can be reviewed and versioned first.
+//! This module deliberately decodes and emits a standalone Gluon value instead
+//! of rewriting authored recipe source. Both directions use one versioned,
+//! validated representation.
 
 use std::{
     cmp::Ordering,
+    collections::BTreeMap,
     fmt::Write as _,
     io::{self, Write as _},
     path::{Path, PathBuf},
+    str,
     sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
 };
 
 use fs_err as fs;
+use gluon_config::{Diagnostic, Evaluator, Source as GluonSource};
+use stone_recipe::upstream::Props;
+use thiserror::Error;
+use url::Url;
 
 /// Canonical file name for generated source resolution data.
 pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.glu";
@@ -61,6 +67,104 @@ impl SourceLock {
             sources,
         }
     }
+
+    /// Validate the standalone lock schema and canonical source ordering.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.schema_version != SOURCE_LOCK_SCHEMA_VERSION {
+            return Err(ValidationError::UnsupportedSchema {
+                found: self.schema_version,
+                expected: SOURCE_LOCK_SCHEMA_VERSION,
+            });
+        }
+
+        let mut orders = BTreeMap::new();
+        for (index, source) in self.sources.iter().enumerate() {
+            let order = source.order();
+            if let Some(first_index) = orders.insert(order, index) {
+                return Err(ValidationError::DuplicateOrder {
+                    order,
+                    first_index,
+                    duplicate_index: index,
+                });
+            }
+        }
+
+        for (index, source) in self.sources.iter().enumerate() {
+            let order = source.order();
+            if usize::try_from(order) != Ok(index) {
+                return Err(ValidationError::UnexpectedOrder { index, order });
+            }
+
+            let (url, commit) = match source {
+                SourceResolution::Archive(source) => (&source.url, None),
+                SourceResolution::Git(source) => (&source.url, Some(&source.commit)),
+            };
+            Url::parse(url).map_err(|source| ValidationError::InvalidUrl {
+                field: format!("sources[{index}].url"),
+                value: url.clone(),
+                source,
+            })?;
+
+            if let Some(commit) = commit
+                && !is_complete_git_commit(commit)
+            {
+                return Err(ValidationError::InvalidGitCommit {
+                    field: format!("sources[{index}].commit"),
+                    value: commit.clone(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Ensure this lock still describes the authored upstream list exactly.
+    pub fn validate_against(&self, recipe: &stone_recipe::Recipe) -> Result<(), ValidationError> {
+        self.validate()?;
+        if self.sources.len() != recipe.upstreams.len() {
+            return Err(ValidationError::SourceCount {
+                expected: recipe.upstreams.len(),
+                found: self.sources.len(),
+            });
+        }
+
+        for (index, (locked, authored)) in self.sources.iter().zip(&recipe.upstreams).enumerate() {
+            let authored_url = authored.url.as_str();
+            match (locked, &authored.props) {
+                (SourceResolution::Archive(locked), Props::Plain { hash, .. }) => {
+                    validate_equal(index, "url", authored_url, &locked.url)?;
+                    validate_equal(index, "sha256", hash, &locked.sha256)?;
+                }
+                (SourceResolution::Git(locked), Props::Git { git_ref, .. }) => {
+                    validate_equal(index, "url", authored_url, &locked.url)?;
+                    validate_equal(index, "requested_ref", git_ref, &locked.requested_ref)?;
+                }
+                (SourceResolution::Archive(_), Props::Git { .. }) => {
+                    return Err(ValidationError::SourceKind {
+                        order: index,
+                        expected: "git",
+                        found: "archive",
+                    });
+                }
+                (SourceResolution::Git(_), Props::Plain { .. }) => {
+                    return Err(ValidationError::SourceKind {
+                        order: index,
+                        expected: "archive",
+                        found: "git",
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return the source resolution at its validated authored order.
+    pub fn source(&self, order: usize) -> Option<&SourceResolution> {
+        self.sources
+            .get(order)
+            .filter(|source| usize::try_from(source.order()) == Ok(order))
+    }
 }
 
 impl Default for SourceLock {
@@ -77,7 +181,8 @@ pub enum SourceResolution {
 }
 
 impl SourceResolution {
-    fn order(&self) -> u32 {
+    /// Position of this source in the authored upstream list.
+    pub fn order(&self) -> u32 {
         match self {
             Self::Archive(source) => source.order,
             Self::Git(source) => source.order,
@@ -107,6 +212,162 @@ impl SourceResolution {
                 _ => Ordering::Equal,
             })
     }
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonSourceLock {
+    schema_version: i64,
+    sources: Vec<GluonSourceResolution>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonSourceResolution {
+    Archive {
+        order: i64,
+        url: String,
+        sha256: String,
+    },
+    Git {
+        order: i64,
+        url: String,
+        requested_ref: String,
+        commit: String,
+    },
+}
+
+/// Decode a standalone lock with the shared restricted Gluon evaluator.
+pub fn decode_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, DecodeError> {
+    let source = str::from_utf8(bytes)?;
+    let evaluated = Evaluator::default()
+        .evaluate::<GluonSourceLock>(&GluonSource::new(logical_name, source))
+        .map_err(|error| DecodeError::Evaluation(Box::new(error)))?;
+    let lock = SourceLock::try_from(evaluated.value)?;
+    lock.validate()?;
+    Ok(lock)
+}
+
+impl TryFrom<GluonSourceLock> for SourceLock {
+    type Error = ValidationError;
+
+    fn try_from(lock: GluonSourceLock) -> Result<Self, Self::Error> {
+        let schema_version = u32::try_from(lock.schema_version).map_err(|_| ValidationError::IntegerOutOfRange {
+            field: "schema_version".to_owned(),
+            value: lock.schema_version,
+            expected: "non-negative 32-bit integer",
+        })?;
+        let sources = lock
+            .sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, source)| source.try_into_domain(index))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            schema_version,
+            sources,
+        })
+    }
+}
+
+impl GluonSourceResolution {
+    fn try_into_domain(self, index: usize) -> Result<SourceResolution, ValidationError> {
+        let convert_order = |order| {
+            u32::try_from(order).map_err(|_| ValidationError::IntegerOutOfRange {
+                field: format!("sources[{index}].order"),
+                value: order,
+                expected: "non-negative 32-bit integer",
+            })
+        };
+
+        Ok(match self {
+            Self::Archive { order, url, sha256 } => SourceResolution::Archive(ArchiveResolution {
+                order: convert_order(order)?,
+                url,
+                sha256,
+            }),
+            Self::Git {
+                order,
+                url,
+                requested_ref,
+                commit,
+            } => SourceResolution::Git(GitResolution {
+                order: convert_order(order)?,
+                url,
+                requested_ref,
+                commit,
+            }),
+        })
+    }
+}
+
+fn is_complete_git_commit(commit: &str) -> bool {
+    commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_equal(order: usize, field: &'static str, expected: &str, found: &str) -> Result<(), ValidationError> {
+    if expected == found {
+        Ok(())
+    } else {
+        Err(ValidationError::StaleSource {
+            field: format!("sources[{order}].{field}"),
+            expected: expected.to_owned(),
+            found: found.to_owned(),
+        })
+    }
+}
+
+/// Failure to decode or validate a generated source lock.
+#[derive(Debug, Error)]
+pub enum DecodeError {
+    #[error("source lock is not UTF-8")]
+    Utf8(#[from] str::Utf8Error),
+    #[error("evaluate source lock")]
+    Evaluation(#[source] Box<Diagnostic>),
+    #[error(transparent)]
+    Validation(#[from] ValidationError),
+}
+
+/// Semantic failure in a source lock or its relationship to a recipe.
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error("{field}: `{value}` is outside the valid {expected} range")]
+    IntegerOutOfRange {
+        field: String,
+        value: i64,
+        expected: &'static str,
+    },
+    #[error("schema_version: unsupported schema {found}; expected {expected}")]
+    UnsupportedSchema { found: u32, expected: u32 },
+    #[error("sources[{duplicate_index}].order: duplicate order {order}, first used by sources[{first_index}]")]
+    DuplicateOrder {
+        order: u32,
+        first_index: usize,
+        duplicate_index: usize,
+    },
+    #[error("sources[{index}].order: expected canonical order {index}, found {order}")]
+    UnexpectedOrder { index: usize, order: u32 },
+    #[error("{field}: invalid URL `{value}`")]
+    InvalidUrl {
+        field: String,
+        value: String,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error("{field}: Git commit must be a complete 40-hex identifier, found `{value}`")]
+    InvalidGitCommit { field: String, value: String },
+    #[error("sources: stale source count; expected {expected}, found {found}")]
+    SourceCount { expected: usize, found: usize },
+    #[error("sources[{order}]: stale source kind; expected {expected}, found {found}")]
+    SourceKind {
+        order: usize,
+        expected: &'static str,
+        found: &'static str,
+    },
+    #[error("{field}: stale source; expected `{expected}`, found `{found}`")]
+    StaleSource {
+        field: String,
+        expected: String,
+        found: String,
+    },
 }
 
 /// Resolution data for an archive source.
@@ -290,6 +551,69 @@ mod tests {
         assert!(encoded.contains("requested_ref = \"refs/tags/v1.2.3\","));
         assert!(encoded.contains(&format!("commit = \"{FULL_COMMIT}\",")));
         assert!(!encoded.contains("import!"));
+    }
+
+    #[test]
+    fn restricted_decoder_round_trips_canonical_output() {
+        let encoded = encode_source_lock(&sample_lock());
+
+        let decoded = decode_source_lock(SOURCE_LOCK_FILE_NAME, encoded.as_bytes()).unwrap();
+
+        assert_eq!(decoded.schema_version, SOURCE_LOCK_SCHEMA_VERSION);
+        assert_eq!(
+            decoded.sources.iter().map(SourceResolution::order).collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(encode_source_lock(&decoded), encoded);
+    }
+
+    #[test]
+    fn decoder_rejects_schema_orders_and_incomplete_commits() {
+        let canonical = encode_source_lock(&sample_lock());
+        let cases = [
+            (
+                canonical.replacen("schema_version = 1", "schema_version = 2", 1),
+                "unsupported schema",
+            ),
+            (canonical.replacen("order = 0", "order = -1", 1), "sources[0].order"),
+            (canonical.replacen("order = 1", "order = 0", 1), "duplicate order"),
+            (
+                canonical.replacen("order = 1", "order = 2", 1),
+                "expected canonical order 1",
+            ),
+            (
+                canonical.replacen("https://example.invalid/archive.tar.zst", "not a URL", 1),
+                "invalid URL",
+            ),
+            (canonical.replace(FULL_COMMIT, "abc123d"), "complete 40-hex"),
+        ];
+
+        for (source, expected) in cases {
+            let error = decode_source_lock(SOURCE_LOCK_FILE_NAME, source.as_bytes()).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn decoder_preserves_malformed_source_diagnostics() {
+        let error = decode_source_lock(SOURCE_LOCK_FILE_NAME, b"{").unwrap_err();
+        let DecodeError::Evaluation(diagnostic) = error else {
+            panic!("unexpected error: {error}");
+        };
+
+        assert_eq!(diagnostic.source_name.as_deref(), Some(SOURCE_LOCK_FILE_NAME));
+        assert!(diagnostic.span.is_some());
+    }
+
+    #[test]
+    fn decoder_keeps_host_imports_closed() {
+        let source = format!("let _ = import! std.fs\n{}", encode_source_lock(&sample_lock()));
+        let error = decode_source_lock(SOURCE_LOCK_FILE_NAME, source.as_bytes()).unwrap_err();
+        let DecodeError::Evaluation(diagnostic) = error else {
+            panic!("unexpected error: {error}");
+        };
+
+        assert_eq!(diagnostic.category, gluon_config::DiagnosticCategory::Import);
     }
 
     #[test]
