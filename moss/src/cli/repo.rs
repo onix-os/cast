@@ -327,3 +327,47 @@ pub enum Error {
     )]
     SystemIntentDisallowed { command: String, path: PathBuf },
 }
+
+#[cfg(test)]
+mod tests {
+    use fs_err as fs;
+
+    use super::*;
+
+    #[test]
+    fn authored_system_intent_rejects_imperative_repository_changes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let intent_path = system_model::intent_path(temporary.path());
+        fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        let authored = r#"// Repository intent remains administrator-owned.
+let moss = import! moss.system.v1
+{
+    repositories = [
+        moss.repository.direct "local" "file:///var/cache/moss/local.index",
+    ],
+    .. moss.system
+}
+"#;
+        fs::write(&intent_path, authored).unwrap();
+
+        let cases = [
+            vec!["repo", "add", "extra", "file:///var/cache/moss/extra.index"],
+            vec!["repo", "remove", "local"],
+            vec!["repo", "enable", "local"],
+            vec!["repo", "disable", "local"],
+        ];
+
+        for args in cases {
+            let matches = command().try_get_matches_from(args).unwrap();
+            let installation = Installation::open(temporary.path(), None).unwrap();
+            let error = handle(&matches, installation).unwrap_err();
+            let Error::SystemIntentDisallowed { command, path } = error else {
+                panic!("expected system-intent rejection, got {error}");
+            };
+
+            assert!(matches!(command.as_str(), "add" | "remove" | "enable" | "disable"));
+            assert_eq!(path, intent_path);
+            assert_eq!(fs::read_to_string(&intent_path).unwrap(), authored);
+        }
+    }
+}
