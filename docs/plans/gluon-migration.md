@@ -341,7 +341,7 @@ verified Cargo, formatting and Clippy lanes.
 4. Produce a temporary size/build measurement for Boulder and Moss before and
    after linkage. Do not commit build artifacts; record results in the eventual
    architecture documentation.
-5. Confirm the dependency and license fit the repository's REUSE checks.
+5. Confirm the dependency and license fit the repository's licensing policy.
 
 **Verify**:
 

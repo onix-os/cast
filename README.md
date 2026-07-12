@@ -154,4 +154,4 @@ the people and communities who built it.
 
 ## ⚖️ License
 
-`moss` & `boulder` are available under the terms of the [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html)
+`moss` & `boulder` are available under the terms of the [MPL-2.0](LICENSE).
