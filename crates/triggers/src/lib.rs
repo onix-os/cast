@@ -9,6 +9,16 @@ use format::Trigger;
 use thiserror::Error;
 
 pub mod format;
+pub mod gluon;
+pub mod spec;
+
+pub use self::gluon::{
+    EvaluatedTrigger, GLUON_TRIGGER_ABI, TRIGGER_ABI_VERSION, TriggerEvaluationError, evaluate_gluon,
+    evaluate_gluon_with, evaluate_gluon_with_inputs,
+};
+pub use self::spec::{
+    HandlerSpec, InhibitorsSpec, KeyValueSpec, PathDefinitionSpec, PathKindSpec, TriggerConversionError, TriggerSpec,
+};
 
 /// Grouped management of a set of triggers
 pub struct Collection<'a> {

@@ -4238,6 +4238,9 @@ version = "0.26.6"
 dependencies = [
  "dag",
  "fnmatch",
+ "gluon",
+ "gluon_codegen",
+ "gluon_config",
  "serde",
  "serde_yaml",
  "thiserror 2.0.18",

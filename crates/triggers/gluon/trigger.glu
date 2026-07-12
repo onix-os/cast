@@ -1,0 +1,94 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Embedded pure module imported by authored triggers as `moss.trigger.v1`.
+
+type Optional a =
+    | Unset
+    | Set a
+
+type PathKindSpec =
+    | Directory
+    | Symlink
+
+type HandlerSpec =
+    | Run {
+        command: String,
+        args: Array String,
+    }
+    | Delete {
+        paths: Array String,
+    }
+
+type InhibitorsSpec = {
+    paths: Array String,
+    environment: Array String,
+}
+
+type PathDefinitionSpec = {
+    handlers: Array String,
+    kind: Optional PathKindSpec,
+}
+
+type KeyValueSpec a = {
+    key: String,
+    value: a,
+}
+
+type TriggerSpec = {
+    name: String,
+    description: String,
+    before: Optional String,
+    after: Optional String,
+    inhibitors: Optional InhibitorsSpec,
+    paths: Array (KeyValueSpec PathDefinitionSpec),
+    handlers: Array (KeyValueSpec HandlerSpec),
+}
+
+let empty_inhibitors: InhibitorsSpec = {
+    paths = [],
+    environment = [],
+}
+
+let empty_path: PathDefinitionSpec = {
+    handlers = [],
+    kind = Unset,
+}
+
+let trigger: String -> String -> TriggerSpec = \name description -> {
+    name,
+    description,
+    before = Unset,
+    after = Unset,
+    inhibitors = Unset,
+    paths = [],
+    handlers = [],
+}
+
+let named = \key value -> { key, value }
+let path = \key handlers kind -> { key, value = { handlers, kind } }
+let inhibitors = \paths environment -> { paths, environment }
+
+{
+    abi_version = 1,
+    trigger,
+    optional = {
+        unset = Unset,
+        set = \value -> Set value,
+    },
+    defaults = {
+        inhibitors = empty_inhibitors,
+        path = empty_path,
+    },
+    inhibitors,
+    path,
+    path_kind = {
+        directory = Directory,
+        symlink = Symlink,
+    },
+    handler = {
+        named,
+        run = \command args -> Run { command, args },
+        delete = \paths -> Delete { paths },
+    },
+}

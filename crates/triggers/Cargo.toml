@@ -10,6 +10,9 @@ rust-version.workspace = true
 [dependencies]
 dag = { path = "../dag" }
 fnmatch = { path = "../fnmatch" }
+gluon.workspace = true
+gluon_codegen.workspace = true
+gluon_config = { path = "../gluon_config" }
 
 serde.workspace = true
 thiserror.workspace = true
