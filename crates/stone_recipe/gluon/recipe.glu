@@ -1,0 +1,218 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// This is a source prelude, not a standalone configuration. `stone_recipe`
+// appends an authored expression after these versioned types and constructors.
+
+type SourceSpec = {
+    name: String,
+    version: String,
+    release: Int,
+    homepage: String,
+    license: Array String,
+}
+
+type Optional a =
+    | Unset
+    | Set a
+
+// The restricted evaluator does not load `std.types.Bool`, so the recipe ABI
+// owns the same explicit two-variant shape instead of depending on stdlib.
+type Boolean =
+    | False
+    | True
+
+type BuildSpec = {
+    setup: Optional String,
+    build: Optional String,
+    install: Optional String,
+    check: Optional String,
+    workload: Optional String,
+    environment: Optional String,
+    build_deps: Array String,
+    check_deps: Array String,
+}
+
+type PathSpec =
+    | Any { path: String }
+    | Exe { path: String }
+    | Symlink { path: String }
+    | Special { path: String }
+
+type PackageSpec = {
+    summary: Optional String,
+    description: Optional String,
+    provides_exclude: Array String,
+    run_deps: Array String,
+    run_deps_exclude: Array String,
+    paths: Array PathSpec,
+    conflicts: Array String,
+}
+
+type ToolchainSpec =
+    | Llvm
+    | Gnu
+
+type OptionsSpec = {
+    toolchain: ToolchainSpec,
+    cspgo: Boolean,
+    samplepgo: Boolean,
+    debug: Boolean,
+    strip: Boolean,
+    networking: Boolean,
+    compressman: Boolean,
+    lastrip: Boolean,
+}
+
+type UpstreamSpec =
+    | Archive {
+        url: String,
+        hash: String,
+        rename: Optional String,
+        strip_dirs: Optional Int,
+        unpack: Boolean,
+        unpack_dir: Optional String,
+    }
+    | Git {
+        url: String,
+        git_ref: String,
+        clone_dir: Optional String,
+    }
+
+type TuningSpec =
+    | Enable
+    | Disable
+    | Config { value: String }
+
+type KeyValueSpec a = {
+    key: String,
+    value: a,
+}
+
+type RecipeSpec = {
+    source: SourceSpec,
+    build: BuildSpec,
+    package: PackageSpec,
+    options: OptionsSpec,
+    profiles: Array (KeyValueSpec BuildSpec),
+    sub_packages: Array (KeyValueSpec PackageSpec),
+    upstreams: Array UpstreamSpec,
+    architectures: Array String,
+    tuning: Array (KeyValueSpec TuningSpec),
+    emul32: Boolean,
+    mold: Boolean,
+}
+
+let empty_build: BuildSpec = {
+    setup = Unset,
+    build = Unset,
+    install = Unset,
+    check = Unset,
+    workload = Unset,
+    environment = Unset,
+    build_deps = [],
+    check_deps = [],
+}
+
+let empty_package: PackageSpec = {
+    summary = Unset,
+    description = Unset,
+    provides_exclude = [],
+    run_deps = [],
+    run_deps_exclude = [],
+    paths = [],
+    conflicts = [],
+}
+
+let default_options: OptionsSpec = {
+    toolchain = Llvm,
+    cspgo = False,
+    samplepgo = False,
+    debug = True,
+    strip = True,
+    networking = False,
+    compressman = False,
+    lastrip = True,
+}
+
+let source: SourceSpec -> SourceSpec = \value -> value
+let build: BuildSpec -> BuildSpec = \value -> value
+let package: PackageSpec -> PackageSpec = \value -> value
+let options: OptionsSpec -> OptionsSpec = \value -> value
+
+let named = \key value -> { key, value }
+
+let archive = \url hash ->
+    Archive {
+        url,
+        hash,
+        rename = Unset,
+        strip_dirs = Unset,
+        unpack = True,
+        unpack_dir = Unset,
+    }
+
+let archive_with = \value -> Archive value
+
+let git = \url git_ref ->
+    Git {
+        url,
+        git_ref,
+        clone_dir = Unset,
+    }
+
+let git_with = \value -> Git value
+
+let recipe: SourceSpec -> RecipeSpec = \source -> {
+    source,
+    build = empty_build,
+    package = empty_package,
+    options = default_options,
+    profiles = [],
+    sub_packages = [],
+    upstreams = [],
+    architectures = [],
+    tuning = [],
+    emul32 = False,
+    mold = False,
+}
+
+let boulder = {
+    abi_version = 1,
+    recipe,
+    source,
+    build,
+    package,
+    options,
+    defaults = {
+        build = empty_build,
+        package = empty_package,
+        options = default_options,
+    },
+    optional = {
+        unset = Unset,
+        set = \value -> Set value,
+    },
+    named,
+    upstream = {
+        archive,
+        archive_with,
+        git,
+        git_with,
+    },
+    path = {
+        any = \path -> Any { path },
+        exe = \path -> Exe { path },
+        symlink = \path -> Symlink { path },
+        special = \path -> Special { path },
+    },
+    tuning = {
+        enable = Enable,
+        disable = Disable,
+        config = \value -> Config { value },
+    },
+    toolchain = {
+        llvm = Llvm,
+        gnu = Gnu,
+    },
+}

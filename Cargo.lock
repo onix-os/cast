@@ -3686,6 +3686,9 @@ dependencies = [
 name = "stone_recipe"
 version = "0.26.6"
 dependencies = [
+ "gluon",
+ "gluon_codegen",
+ "gluon_config",
  "kdl",
  "nom",
  "serde",

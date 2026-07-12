@@ -59,7 +59,9 @@ impl RecipeSpec {
 pub struct SourceSpec {
     pub name: String,
     pub version: String,
-    pub release: u64,
+    /// Signed at the input boundary so negative authored values can be
+    /// rejected before conversion to the domain model's unsigned field.
+    pub release: i64,
     pub homepage: String,
     pub license: Vec<String>,
 }
@@ -131,7 +133,8 @@ pub enum UpstreamSpec {
         url: String,
         hash: String,
         rename: Option<String>,
-        strip_dirs: Option<u8>,
+        /// Range-checked before conversion to the domain model's byte field.
+        strip_dirs: Option<i64>,
         unpack: bool,
         unpack_dir: Option<String>,
     },
@@ -178,6 +181,13 @@ pub enum RecipeConversionError {
         #[source]
         source: url::ParseError,
     },
+    /// A signed input integer did not fit the domain field.
+    #[error("{field}: `{value}` is outside the valid {expected} range")]
+    IntegerOutOfRange {
+        field: String,
+        value: i64,
+        expected: &'static str,
+    },
     /// The converted recipe violated a format-independent invariant.
     #[error(transparent)]
     Validation(#[from] ValidationError),
@@ -188,6 +198,7 @@ impl RecipeConversionError {
     pub fn field(&self) -> &str {
         match self {
             Self::InvalidUrl { field, .. } => field,
+            Self::IntegerOutOfRange { field, .. } => field,
             Self::Validation(error) => error.field(),
         }
     }
@@ -218,7 +229,7 @@ impl TryFrom<RecipeSpec> for Recipe {
             .collect::<Result<_, _>>()?;
 
         let recipe = Self {
-            source: source.into(),
+            source: source.try_into_domain()?,
             build: build.into(),
             package: package.into(),
             options: options.into(),
@@ -236,15 +247,21 @@ impl TryFrom<RecipeSpec> for Recipe {
     }
 }
 
-impl From<SourceSpec> for Source {
-    fn from(spec: SourceSpec) -> Self {
-        Self {
-            name: spec.name,
-            version: spec.version,
-            release: spec.release,
-            homepage: spec.homepage,
-            license: spec.license,
-        }
+impl SourceSpec {
+    fn try_into_domain(self) -> Result<Source, RecipeConversionError> {
+        let release = u64::try_from(self.release).map_err(|_| RecipeConversionError::IntegerOutOfRange {
+            field: "source.release".to_owned(),
+            value: self.release,
+            expected: "non-negative integer",
+        })?;
+
+        Ok(Source {
+            name: self.name,
+            version: self.version,
+            release,
+            homepage: self.homepage,
+            license: self.license,
+        })
     }
 }
 
@@ -322,16 +339,28 @@ impl UpstreamSpec {
                 strip_dirs,
                 unpack,
                 unpack_dir,
-            } => Ok(Upstream {
-                url: parse_url(url)?,
-                props: Props::Plain {
-                    hash,
-                    rename,
-                    strip_dirs,
-                    unpack,
-                    unpack_dir: unpack_dir.map(PathBuf::from),
-                },
-            }),
+            } => {
+                let strip_dirs = strip_dirs
+                    .map(|value| {
+                        u8::try_from(value).map_err(|_| RecipeConversionError::IntegerOutOfRange {
+                            field: format!("upstreams[{index}].strip_dirs"),
+                            value,
+                            expected: "0..=255 integer",
+                        })
+                    })
+                    .transpose()?;
+
+                Ok(Upstream {
+                    url: parse_url(url)?,
+                    props: Props::Plain {
+                        hash,
+                        rename,
+                        strip_dirs,
+                        unpack,
+                        unpack_dir: unpack_dir.map(PathBuf::from),
+                    },
+                })
+            }
             Self::Git {
                 url,
                 git_ref,

@@ -9,6 +9,10 @@ pub use serde_yaml::Error;
 use crate::serde_util::{default_true, stringy_bool};
 
 pub use self::control_file::ControlFile;
+pub use self::gluon::{
+    EvaluatedRecipe, GLUON_RECIPE_ABI, RECIPE_ABI_VERSION, RecipeEvaluationError, evaluate_gluon, evaluate_gluon_with,
+    evaluate_gluon_with_inputs,
+};
 pub use self::macros::Macros;
 pub use self::script::Script;
 pub use self::spec::{
@@ -20,6 +24,7 @@ pub use self::upstream::Upstream;
 pub use self::validation::ValidationError;
 
 pub mod control_file;
+pub mod gluon;
 pub mod macros;
 pub mod script;
 pub mod spec;

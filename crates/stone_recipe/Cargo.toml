@@ -10,6 +10,9 @@ rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+gluon.workspace = true
+gluon_codegen.workspace = true
+gluon_config.path = "../gluon_config"
 kdl.workspace = true
 nom.workspace = true
 serde.workspace = true
