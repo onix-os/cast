@@ -100,7 +100,7 @@ libstone example="read" *ARGS="./test/bash-completion-2.11-1-1-x86_64.stone":
   #!/bin/bash
   output=$(mktemp)
   cargo build -p libstone --release
-  clang libstone/examples/{{ example }}.c -o $output -I./libstone/src/ -lstone -L./target/release/ -Wl,-rpath,./target/release/
+  clang crates/libstone/examples/{{ example }}.c -o $output -I./crates/libstone/src/ -lstone -L./target/release/ -Wl,-rpath,./target/release/
   if [ "$USE_VALGRIND" == "1" ]; then
     time valgrind --track-origins=yes $output {{ ARGS }};
   else

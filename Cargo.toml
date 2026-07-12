@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MPL-2.0
 
 [workspace]
-members = ["bin/boulder", "bin/moss", "libstone", "crates/*"]
+members = ["bin/boulder", "bin/moss", "crates/*"]
 default-members = ["bin/moss"]
 resolver = "3"
 
