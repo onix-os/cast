@@ -11,7 +11,7 @@ path = [
     "Cargo.lock",
     "funding.json",
     "bin/moss/src/db/*/schema.rs",
-    "test/**/*.stone",
+    "tests/**/*.stone",
 ]
 SPDX-FileCopyrightText = "AerynOS Developers"
 SPDX-License-Identifier = "MPL-2.0"

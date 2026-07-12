@@ -10,15 +10,15 @@
 > `os-tools`-only migration. Never edit, generate files in, or otherwise modify
 > `../bedrock`; Bedrock will migrate separately after the Gluon foundation is
 > proven here. Do not use Python to edit files. Use patch/edit tools and the
-> repository's `just` tasks for final validation.
+> repository's `make` targets for final validation.
 >
 > **Drift check (run first)**:
 >
 > ```sh
 > git diff --stat 80d7ac5..HEAD -- \
->   Cargo.toml Cargo.lock justfile README.md \
+>   Cargo.toml Cargo.lock Makefile README.md \
 >   crates/config crates/stone_recipe crates/triggers crates/yaml \
->   boulder moss test
+>   bin/boulder bin/moss tests
 > ```
 >
 > If the relevant code has changed, compare it against the current-state notes
@@ -79,11 +79,10 @@ removed rather than retained as internal intermediate formats.
 ### Repository and validation conventions
 
 - The workspace is Rust 2024 and requires Rust 1.91 (`Cargo.toml`).
-- There is no root `Makefile`; repository-native build, lint and test tasks are
-  in `justfile`.
-- `just test` runs Clippy, formatting, typos and `cargo test --all`.
+- The root `Makefile` is the repository-native build, lint and test interface.
+- `make test` runs Clippy, formatting, typos and `cargo test --all`.
 - At the planned commit, `env RUSTUP_TOOLCHAIN=1.93.0 cargo test --all` passes.
-- In the planning environment, bare `just test` used Rust 1.88 and failed the
+- In the planning environment, the validation command used Rust 1.88 and failed the
   MSRV check; with Rust 1.93 it reached the typos step and failed because the
   external `typos` executable was absent. Treat these as environment
   prerequisites, not product failures.
@@ -286,7 +285,7 @@ unless another independently justified non-configuration use remains.
 | Workspace tests | `env RUSTUP_TOOLCHAIN=1.93.0 cargo test --all` | exit 0; all unit and doc tests pass |
 | Formatting | `env RUSTUP_TOOLCHAIN=1.93.0 cargo fmt --all -- --check` | exit 0, no diff |
 | Clippy | `env RUSTUP_TOOLCHAIN=1.93.0 cargo clippy --workspace -- --no-deps` | exit 0; no new warnings in changed code |
-| Repo-native final gate | `env RUSTUP_TOOLCHAIN=1.93.0 just test` | exit 0 when `typos` is installed |
+| Repo-native final gate | `env RUSTUP_TOOLCHAIN=1.93.0 make test` | exit 0 when `typos` is installed |
 
 Do not install tools or dependencies by editing the host environment silently.
 If `typos` is unavailable, report that prerequisite while still running the
@@ -297,7 +296,7 @@ verified Cargo, formatting and Clippy lanes.
 ### In scope
 
 - `Cargo.toml`, `Cargo.lock`
-- `justfile` only if new check/conversion targets are required
+- `Makefile` only if new check/conversion targets are required
 - `README.md` and in-repository user-facing format documentation
 - new `crates/gluon_config/**`
 - `crates/stone_recipe/**`
@@ -306,7 +305,7 @@ verified Cargo, formatting and Clippy lanes.
 - `crates/yaml/**` for eventual deletion
 - `bin/boulder/Cargo.toml`, `bin/boulder/src/**`, `bin/boulder/data/**`
 - `bin/moss/Cargo.toml`, `bin/moss/src/**`
-- `test/**` and new format fixtures
+- `tests/**` and new format fixtures
 - repository-owned examples required to prove the new language
 
 ### Explicitly out of scope
@@ -493,7 +492,7 @@ Required tests:
 
 ```sh
 env RUSTUP_TOOLCHAIN=1.93.0 cargo test -p boulder -p stone_recipe
-git diff --exit-code -- test/fixtures/gluon/authored-source.glu
+git diff --exit-code -- tests/fixtures/gluon/authored-source.glu
 ```
 
 Expected: tests exit 0 and source resolution never mutates authored Gluon.
@@ -510,7 +509,7 @@ Expected: tests exit 0 and source resolution never mutates authored Gluon.
 4. Provide clear helpers for append/prepend/override operations where useful,
    while retaining immutable functional behavior.
 5. Migrate repository-owned macro fixtures and Boulder data to `.glu` modules.
-6. Update `just get-started` data installation to ship Gluon modules rather
+6. Update `make get-started` data installation to ship Gluon modules rather
    than `*.yaml` macro files.
 7. After all repository-owned users migrate, remove the `%()` macro mini-language
    in a separate reviewable change if Gluon modules provide all equivalent
@@ -648,8 +647,8 @@ is unchanged across sync/update/export/verify operations.
 
 ```sh
 rg -n 'serde_yaml|kdl::|crates/yaml|control\.kdl|stone\.yaml|system-model\.kdl' \
-  Cargo.toml boulder moss crates test README.md justfile
-find boulder moss crates test -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.kdl' \) -print
+  Cargo.toml bin crates tests README.md Makefile
+find bin crates tests -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.kdl' \) -print
 env RUSTUP_TOOLCHAIN=1.93.0 cargo tree -i serde_yaml
 env RUSTUP_TOOLCHAIN=1.93.0 cargo tree -i kdl
 ```
@@ -679,7 +678,7 @@ YAML remains untouched.
 env RUSTUP_TOOLCHAIN=1.93.0 cargo fmt --all -- --check
 env RUSTUP_TOOLCHAIN=1.93.0 cargo clippy --workspace -- --no-deps
 env RUSTUP_TOOLCHAIN=1.93.0 cargo test --all
-env RUSTUP_TOOLCHAIN=1.93.0 just test
+env RUSTUP_TOOLCHAIN=1.93.0 make test
 git status --short
 ```
 
@@ -749,7 +748,7 @@ All items must hold before declaring the migration complete:
 - [x] `cargo fmt --all -- --check` passes.
 - [x] `cargo clippy --workspace -- --no-deps` passes without new warnings.
 - [x] `cargo test --all` passes.
-- [x] `just test` passes in an environment with Rust >=1.91 and `typos`.
+- [x] `make test` passes in an environment with Rust >=1.91 and `typos`.
 - [x] No file under `../bedrock` was modified.
 
 ## STOP conditions
