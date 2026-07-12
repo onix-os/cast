@@ -343,7 +343,13 @@ boulder.recipe (boulder.source source)
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
-            ["boulder.recipe.v1", "source.glu"]
+            [
+                "boulder.recipe.v1",
+                "source.glu",
+                "std.array.prim",
+                "std.string.prim",
+                "std.types",
+            ]
         );
     }
 
