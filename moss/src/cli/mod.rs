@@ -208,7 +208,7 @@ pub fn process() -> Result<(), Error> {
 
     match matches.subcommand() {
         Some(("boot", args)) => boot::handle(args, installation).map_err(Error::Boot),
-        Some(("cache", args)) => cache::handle(args, installation).map_err(Error::Cache),
+        Some(("cache", args)) => cache::handle(args, installation).map_err(|error| Error::Cache(Box::new(error))),
         Some(("extract", args)) => extract::handle(args).map_err(Error::Extract),
         Some(("fetch", args)) => fetch::handle(args, installation).map_err(Error::Fetch),
         Some(("index", args)) => index::handle(args).map_err(Error::Index),
@@ -300,7 +300,7 @@ pub enum Error {
     Boot(#[source] boot::Error),
 
     #[error("cache")]
-    Cache(#[source] cache::Error),
+    Cache(#[source] Box<cache::Error>),
 
     #[error("index")]
     Index(#[source] index::Error),
