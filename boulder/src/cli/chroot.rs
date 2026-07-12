@@ -15,7 +15,10 @@ use thiserror::Error;
 #[derive(Debug, Parser)]
 #[command(about = "Chroot into the build environment")]
 pub struct Command {
-    #[arg(default_value = "./stone.yaml", help = "Path to recipe file")]
+    #[arg(
+        default_value = "./stone.glu",
+        help = "Path to a stone.glu recipe file or recipe directory"
+    )]
     recipe: PathBuf,
 }
 
@@ -88,4 +91,16 @@ pub enum Error {
     Recipe(#[from] recipe::Error),
     #[error("io")]
     Io(#[from] io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_recipe_is_gluon() {
+        let command = Command::try_parse_from(["chroot"]).unwrap();
+
+        assert_eq!(command.recipe, PathBuf::from("./stone.glu"));
+    }
 }

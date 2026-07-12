@@ -47,6 +47,14 @@ pub struct Command {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
+    #[command(about = "Typecheck and validate a recipe without building it")]
+    Check {
+        #[arg(
+            default_value = "./stone.glu",
+            help = "Path to a stone.glu recipe file or recipe directory"
+        )]
+        recipe: PathBuf,
+    },
     #[command(about = "Bump a recipe's release")]
     Bump {
         #[arg(short, long, default_value = "./stone.yaml", help = "The recipe file to update")]
@@ -118,6 +126,7 @@ fn parse_updated_source(s: &str) -> Result<UpdatedSource, String> {
 
 pub fn handle(command: Command, env: Env, yes: bool, verbose: bool) -> Result<(), Error> {
     match command.subcommand {
+        Subcommand::Check { recipe } => check(recipe),
         Subcommand::Bump { recipe, release } => bump(recipe, release),
         Subcommand::New { output, upstreams } => new(env, output, upstreams),
         Subcommand::Update {
@@ -138,6 +147,21 @@ pub fn handle(command: Command, env: Env, yes: bool, verbose: bool) -> Result<()
         ),
         Subcommand::Macros { _macro } => macros(_macro, env),
     }
+}
+
+fn check(path: PathBuf) -> Result<(), Error> {
+    let recipe = recipe::Recipe::load(path).map_err(Error::CheckRecipe)?;
+    if let Some(fingerprint) = recipe.fingerprint.as_ref() {
+        println!(
+            "{} | {} is valid ({})",
+            "Recipe".green(),
+            recipe.path.display(),
+            fingerprint.sha256
+        );
+    } else {
+        println!("{} | {} is valid", "Recipe".green(), recipe.path.display());
+    }
+    Ok(())
 }
 
 fn detect_update(recipe_path: &Path, parsed_recipe: &recipe::Parsed, verbose: bool) -> Result<DetectedUpdate, Error> {
@@ -600,6 +624,8 @@ fn print_diff(a: &str, b: &str) {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("check recipe")]
+    CheckRecipe(#[source] recipe::Error),
     #[error(
         "Missing monitoring file, cannot autoupdate. Either add a monitoring file or supply an explicit --ver or --upstream."
     )]
@@ -647,6 +673,27 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_defaults_to_gluon_without_changing_yaml_mutator_defaults() {
+        let check = Command::try_parse_from(["recipe", "check"]).unwrap();
+        assert!(matches!(
+            check.subcommand,
+            Subcommand::Check { recipe } if recipe == Path::new("./stone.glu")
+        ));
+
+        let bump = Command::try_parse_from(["recipe", "bump"]).unwrap();
+        assert!(matches!(
+            bump.subcommand,
+            Subcommand::Bump { recipe, .. } if recipe == Path::new("./stone.yaml")
+        ));
+
+        let update = Command::try_parse_from(["recipe", "update"]).unwrap();
+        assert!(matches!(
+            update.subcommand,
+            Subcommand::Update { recipe, .. } if recipe == Path::new("./stone.yaml")
+        ));
+    }
 
     #[test]
     fn test_guess_new_url() {

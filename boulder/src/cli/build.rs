@@ -43,7 +43,10 @@ pub struct Command {
     normal_priority: bool,
     #[arg(short, long, default_value = ".", help = "Directory to store build results")]
     output: PathBuf,
-    #[arg(default_value = "./stone.yaml", help = "Path to recipe file")]
+    #[arg(
+        default_value = "./stone.glu",
+        help = "Path to a stone.glu recipe file or recipe directory"
+    )]
     recipe: PathBuf,
     #[arg(
         short,
@@ -235,4 +238,16 @@ pub enum Error {
     VerifyBinaryManifestRequired(PathBuf),
     #[error("version parse")]
     Upstreams(#[from] version_parse::VersionError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_recipe_is_gluon() {
+        let command = Command::try_parse_from(["build"]).unwrap();
+
+        assert_eq!(command.recipe, PathBuf::from("./stone.glu"));
+    }
 }
