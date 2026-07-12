@@ -4930,10 +4930,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
-name = "yaml"
-version = "0.1.0"
-
-[[package]]
 name = "yoke"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5165,8 +5161,3 @@ dependencies = [
  "syn 2.0.118",
  "winnow 0.7.15",
 ]
-
-[[patch.unused]]
-name = "kdl"
-version = "6.5.0"
-source = "git+https://github.com/kdl-org/kdl-rs?rev=e9df058c25cd4486df8fe568d2ff24ea2c4ed0e8#e9df058c25cd4486df8fe568d2ff24ea2c4ed0e8"
