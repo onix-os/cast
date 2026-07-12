@@ -13,6 +13,7 @@ rust-version.workspace = true
 config = { path = "../crates/config" }
 container = { path = "../crates/container" }
 gitwrap = { path = "../crates/gitwrap" }
+gluon_config = { path = "../crates/gluon_config" }
 moss = { path = "../moss" }
 tools_buildinfo = { path = "../crates/tools_buildinfo" }
 stone = { path = "../crates/stone" }

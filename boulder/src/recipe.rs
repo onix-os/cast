@@ -9,46 +9,67 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use fs_err as fs;
-use stone_recipe::control_file;
+use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
+use stone_recipe::{control_file, evaluate_gluon_with_inputs};
 use thiserror::Error;
 use tui::Styled;
 
-use crate::architecture::{self, BuildTarget};
+use crate::{
+    architecture::{self, BuildTarget},
+    source_lock::SOURCE_LOCK_FILE_NAME,
+};
 
 pub type Parsed = stone_recipe::Recipe;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Gluon,
+    YamlCompatibility,
+}
+
+impl Format {
+    fn from_path(path: &Path) -> Self {
+        if path.extension().and_then(|extension| extension.to_str()) == Some("glu") {
+            Self::Gluon
+        } else {
+            Self::YamlCompatibility
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
     pub parsed: Parsed,
+    pub fingerprint: Option<EvaluationFingerprint>,
     pub build_time: DateTime<Utc>,
+    format: Format,
 }
 
 impl Recipe {
     /// Desired recipe value invariants are checked here
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let control_file_path = path.with_file_name("control.kdl");
+        let format = Format::from_path(&path);
 
-        let source = fs::read_to_string(&path).map_err(Error::LoadRecipe)?;
-        let mut parsed = stone_recipe::from_str(&source)?;
-
-        // Apply control file if it exists
-        if control_file_path.exists() {
-            let content = fs::read_to_string(&control_file_path).map_err(Error::LoadControlFile)?;
-            let control_file = control_file::decode(&content)
-                .map_err(|err| Error::DecodeControlFile(err, control_file_path.clone()))?;
-
-            control_file
-                .apply_to_recipe(&mut parsed)
-                .map_err(|err| Error::ApplyControlFile(err, control_file_path.clone()))?;
-
-            println!(
-                "{} | Applied modifications from {control_file_path:?}",
-                "Control File".green()
-            );
-        }
+        let (source, parsed, fingerprint) = match format {
+            Format::Gluon => {
+                let (source, parsed, fingerprint) = load_gluon(&path)?;
+                (source, parsed, Some(fingerprint))
+            }
+            Format::YamlCompatibility => {
+                eprintln!(
+                    "{} | YAML recipe compatibility is deprecated and read-only; migrate {} to stone.glu",
+                    "Warning".yellow(),
+                    path.display()
+                );
+                let source = fs::read_to_string(&path).map_err(Error::LoadRecipe)?;
+                let mut parsed = stone_recipe::from_str(&source)?;
+                apply_legacy_control_file(&path, &mut parsed)?;
+                (source, parsed, None)
+            }
+        };
 
         let build_time = resolve_build_time(&path);
 
@@ -58,8 +79,16 @@ impl Recipe {
             path,
             source,
             parsed,
+            fingerprint,
             build_time,
+            format,
         })
+    }
+
+    /// Whether this recipe came through the temporary, read-only YAML loader.
+    #[must_use]
+    pub fn is_yaml_compatibility(&self) -> bool {
+        self.format == Format::YamlCompatibility
     }
 
     pub fn build_targets(&self) -> Vec<BuildTarget> {
@@ -113,6 +142,53 @@ impl Recipe {
             &self.parsed.build
         }
     }
+}
+
+fn load_gluon(path: &Path) -> Result<(String, Parsed, EvaluationFingerprint), Error> {
+    let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
+    let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
+    let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
+    let evaluator = Evaluator::default();
+    let source = source_root
+        .load(Path::new(file_name), evaluator.limits().max_source_bytes)
+        .map_err(Error::LoadGluonSource)?;
+    let evaluator = evaluator.with_source_root(source_root);
+
+    let lock_path = path.with_file_name(SOURCE_LOCK_FILE_NAME);
+    let explicit_inputs = match fs::read(&lock_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(source) => {
+            return Err(Error::LoadSourceLock {
+                path: lock_path,
+                source,
+            });
+        }
+    };
+
+    let evaluated = evaluate_gluon_with_inputs(&evaluator, &source, &explicit_inputs)?;
+    Ok((source.text().to_owned(), evaluated.recipe, evaluated.fingerprint))
+}
+
+fn apply_legacy_control_file(path: &Path, parsed: &mut Parsed) -> Result<(), Error> {
+    let control_file_path = path.with_file_name("control.kdl");
+    if !control_file_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&control_file_path).map_err(Error::LoadControlFile)?;
+    let control_file =
+        control_file::decode(&content).map_err(|error| Error::DecodeControlFile(error, control_file_path.clone()))?;
+
+    control_file
+        .apply_to_recipe(parsed)
+        .map_err(|error| Error::ApplyControlFile(error, control_file_path.clone()))?;
+
+    println!(
+        "{} | Applied modifications from {control_file_path:?}",
+        "Control File".green()
+    );
+    Ok(())
 }
 
 pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
@@ -172,6 +248,16 @@ pub enum Error {
     AmbiguousRecipe { gluon: PathBuf, yaml: PathBuf },
     #[error("load recipe")]
     LoadRecipe(#[source] io::Error),
+    #[error("load Gluon recipe source")]
+    LoadGluonSource(#[source] gluon_config::Diagnostic),
+    #[error("load Gluon source lock {path:?}")]
+    LoadSourceLock {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("evaluate Gluon recipe")]
+    EvaluateGluon(#[from] stone_recipe::RecipeEvaluationError),
     #[error("load control file")]
     LoadControlFile(#[source] io::Error),
     #[error("decode recipe")]
@@ -187,6 +273,26 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SOURCE_SPEC: &str = r#"{
+    name = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+}"#;
+
+    const YAML_RECIPE: &str = r#"
+name: example
+version: "1.2.3"
+release: 1
+homepage: https://example.com
+license: MPL-2.0
+"#;
+
+    fn gluon_recipe(source: &str) -> String {
+        format!("let boulder = import! boulder.recipe.v1\nboulder.recipe (boulder.source {source})")
+    }
 
     #[test]
     fn recipe_directory_resolves_each_format_without_shadowing() {
@@ -214,5 +320,140 @@ mod tests {
         let error = resolve_path(root.path()).unwrap_err();
 
         assert!(matches!(error, Error::AmbiguousRecipe { .. }));
+    }
+
+    #[test]
+    fn explicit_gluon_file_loads_and_records_provenance() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("custom.glu");
+        fs::write(&path, gluon_recipe(SOURCE_SPEC)).unwrap();
+
+        let recipe = Recipe::load(&path).unwrap();
+
+        assert_eq!(recipe.path, path.canonicalize().unwrap());
+        assert_eq!(recipe.parsed.source.name, "example");
+        assert!(!recipe.is_yaml_compatibility());
+        let fingerprint = recipe.fingerprint.unwrap();
+        assert_eq!(fingerprint.root_source_sha256.len(), 64);
+        assert!(
+            fingerprint
+                .imported_modules
+                .iter()
+                .any(|module| module.logical_name == "boulder.recipe.v1")
+        );
+    }
+
+    #[test]
+    fn directory_gluon_loads_contained_relative_imports() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("source.glu"), SOURCE_SPEC).unwrap();
+        fs::write(
+            root.path().join("stone.glu"),
+            r#"
+let boulder = import! boulder.recipe.v1
+let source = import! "source.glu"
+boulder.recipe (boulder.source source)
+"#,
+        )
+        .unwrap();
+
+        let recipe = Recipe::load(root.path()).unwrap();
+        let fingerprint = recipe.fingerprint.unwrap();
+
+        assert_eq!(recipe.path, root.path().join("stone.glu").canonicalize().unwrap());
+        assert_eq!(recipe.parsed.source.version, "1.2.3");
+        assert_eq!(
+            fingerprint
+                .imported_modules
+                .iter()
+                .map(|module| module.logical_name.as_str())
+                .collect::<Vec<_>>(),
+            ["boulder.recipe.v1", "source.glu"]
+        );
+    }
+
+    #[test]
+    fn yaml_directory_remains_legacy_read_only_compatibility() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.yaml"), YAML_RECIPE).unwrap();
+        fs::write(
+            root.path().join("control.kdl"),
+            r#"
+override {
+    setup "controlled"
+}
+"#,
+        )
+        .unwrap();
+
+        let recipe = Recipe::load(root.path()).unwrap();
+
+        assert!(recipe.is_yaml_compatibility());
+        assert!(recipe.fingerprint.is_none());
+        assert_eq!(recipe.parsed.build.setup.as_deref(), Some("controlled"));
+    }
+
+    #[test]
+    fn gluon_never_applies_legacy_control_file() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join("control.kdl"), "not valid kdl {").unwrap();
+
+        let recipe = Recipe::load(root.path()).unwrap();
+
+        assert!(recipe.parsed.build.setup.is_none());
+    }
+
+    #[test]
+    fn invalid_gluon_preserves_source_diagnostics() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("stone.glu"),
+            r#"
+let boulder = import! boulder.recipe.v1
+boulder.recipe (boulder.source {
+    name = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = 42,
+    license = ["MPL-2.0"],
+})
+"#,
+        )
+        .unwrap();
+
+        let error = Recipe::load(root.path()).unwrap_err();
+        let Error::EvaluateGluon(stone_recipe::RecipeEvaluationError::Evaluation(diagnostic)) = error else {
+            panic!("unexpected error: {error}");
+        };
+
+        assert_eq!(diagnostic.category, gluon_config::DiagnosticCategory::Type);
+        assert_eq!(diagnostic.source_name.as_deref(), Some("stone.glu"));
+        assert!(diagnostic.span.is_some());
+    }
+
+    #[test]
+    fn recipe_and_lock_fingerprints_are_deterministic() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), "lock-v1").unwrap();
+
+        let first = Recipe::load(root.path()).unwrap();
+        let repeated = Recipe::load(root.path()).unwrap();
+
+        assert_eq!(format!("{:?}", first.parsed), format!("{:?}", repeated.parsed));
+        assert_eq!(first.source, repeated.source);
+        assert_eq!(first.fingerprint, repeated.fingerprint);
+
+        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), "lock-v2").unwrap();
+        let changed = Recipe::load(root.path()).unwrap();
+        let first_fingerprint = first.fingerprint.as_ref().unwrap();
+        let changed_fingerprint = changed.fingerprint.as_ref().unwrap();
+
+        assert_ne!(first_fingerprint.sha256, changed_fingerprint.sha256);
+        assert_ne!(
+            first_fingerprint.explicit_inputs_sha256,
+            changed_fingerprint.explicit_inputs_sha256
+        );
     }
 }

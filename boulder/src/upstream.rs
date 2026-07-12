@@ -185,7 +185,9 @@ pub fn sync(
             .try_collect::<Vec<_>>(),
     )?;
 
-    if let Some(updated_yaml) = update_git_upstream_refs(&recipe.source, &stored) {
+    if recipe.is_yaml_compatibility()
+        && let Some(updated_yaml) = update_git_upstream_refs(&recipe.source, &stored)
+    {
         fs::write(&recipe.path, updated_yaml)?;
         println!(
             "{} | Git references resolved to commit hashes and saved to stone.yaml. This ensures reproducible builds since tags and branches can move over time.",

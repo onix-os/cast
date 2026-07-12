@@ -347,6 +347,7 @@ dependencies = [
  "futures-util",
  "gitwrap",
  "glob",
+ "gluon_config",
  "hex",
  "humansize",
  "inventory",
