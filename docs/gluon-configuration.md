@@ -144,8 +144,13 @@ requests to resolved data; Git entries contain a complete commit ID. If source
 resolution creates or changes the lock, Boulder stops and asks for a rerun so
 the new bytes become part of provenance. An unchanged lock is not rewritten,
 and a lock which no longer matches the authored upstream list is a visible
-error. `boulder recipe bump` and `boulder recipe update` print structured
-suggestions instead of trying to edit arbitrary Gluon expressions.
+error. Running `boulder recipe update ./stone.glu` without `--ver` or
+`--upstream` evaluates only the authored expression, fetches moving Git
+references, and atomically refreshes the generated lock. Resolution failure
+leaves the previous lock intact. Supplying update values prints structured
+authored-change suggestions instead; neither update mode rewrites arbitrary
+Gluon expressions. `boulder recipe bump` likewise prints an authored release
+suggestion.
 
 Moss similarly keeps desired intent separate from normalized state. `moss sync
 --import path/to/system.glu` evaluates an alternate intent, while `moss state
@@ -204,6 +209,15 @@ boulder recipe new --output ./package https://example.invalid/source-1.0.tar.xz
 The output is `./package/stone.glu`. Edit authored values directly or compose
 them through imported functions. Boulder deliberately has no general-purpose
 Gluon source rewriter.
+
+Refresh source resolution after editing upstream declarations:
+
+```sh
+boulder recipe update ./stone.glu
+```
+
+The command writes only `sources.lock.glu`; `stone.glu` and its imported
+modules remain byte-for-byte unchanged.
 
 ## Compatibility policy
 
