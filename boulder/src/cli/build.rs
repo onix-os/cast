@@ -162,7 +162,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     package::sync_artefacts(paths).map_err(Error::SyncArtefacts)?;
 
     if cleanup {
-        builder.cleanup().map_err(Error::Cleanup)?;
+        builder.cleanup().map_err(|error| Error::Cleanup(Box::new(error)))?;
     }
 
     verify_versions_match(&builder)?;
@@ -223,7 +223,7 @@ pub enum Error {
     #[error("output directory does not exist: {0:?}")]
     MissingOutput(PathBuf),
     #[error("build recipe")]
-    Build(#[from] build::Error),
+    Build(#[source] Box<build::Error>),
     #[error("package artifacts")]
     Package(#[from] package::Error),
     #[error("sync artefacts")]
@@ -233,11 +233,17 @@ pub enum Error {
     #[error("setting thread priority")]
     Priority(#[from] thread_priority::Error),
     #[error("cleanup")]
-    Cleanup(#[source] build::Error),
+    Cleanup(#[source] Box<build::Error>),
     #[error("Binary manifest required for verification, got {0:?}")]
     VerifyBinaryManifestRequired(PathBuf),
     #[error("version parse")]
     Upstreams(#[from] version_parse::VersionError),
+}
+
+impl From<build::Error> for Error {
+    fn from(error: build::Error) -> Self {
+        Self::Build(Box::new(error))
+    }
 }
 
 #[cfg(test)]
