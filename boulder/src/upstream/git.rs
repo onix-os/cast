@@ -45,7 +45,11 @@ impl Git {
             Err(Error::Git(_)) => {
                 cached = false;
                 self.remove(storage_dir)?;
-                repo = clone(&self.url, &self.stored_path(storage_dir), pb).await?;
+                let stored_path = self.stored_path(storage_dir);
+                if let Some(parent) = stored_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                repo = clone(&self.url, &stored_path, pb).await?;
             }
             Err(Error::Io(e)) => return Err(Error::from(e)),
         }
@@ -55,6 +59,38 @@ impl Git {
         Ok(StoredGit {
             name: self.name().to_owned(),
             was_cached: cached,
+            repo,
+            resolved_hash,
+            original_index: self.original_index,
+        })
+    }
+
+    /// Resolve an authored moving reference against the current remote state.
+    ///
+    /// Normal build storage may reuse a lock-pinned commit without contacting
+    /// the network. Explicit lock refreshes must instead fetch an existing
+    /// mirror so branches and tags can advance before they are pinned again.
+    pub async fn resolve(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<StoredGit, Error> {
+        let repo = match self.stored(storage_dir).await {
+            Ok((stored, _)) => {
+                fetch(&stored.repo, pb).await?;
+                stored.repo
+            }
+            Err(Error::Git(_)) => {
+                self.remove(storage_dir)?;
+                let stored_path = self.stored_path(storage_dir);
+                if let Some(parent) = stored_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                clone(&self.url, &stored_path, pb).await?
+            }
+            Err(Error::Io(error)) => return Err(Error::Io(error)),
+        };
+        let resolved_hash = repo.peel_commit(&self.commit).await?;
+
+        Ok(StoredGit {
+            name: self.name().to_owned(),
+            was_cached: false,
             repo,
             resolved_hash,
             original_index: self.original_index,

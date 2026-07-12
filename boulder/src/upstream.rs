@@ -81,6 +81,14 @@ impl Upstream {
         })
     }
 
+    /// Store an authored source while refreshing moving Git references.
+    async fn resolve(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<Stored, Error> {
+        Ok(match self {
+            Upstream::Plain(plain) => Stored::Plain(plain.store(storage_dir, pb).await?),
+            Upstream::Git(git) => Stored::Git(git.resolve(storage_dir, pb).await?),
+        })
+    }
+
     /// Unconditionally removes this Upstream's resources within the storage directory.
     /// If the resources do not exist, this function returns successfully
     /// (it is idempotent).
@@ -171,7 +179,7 @@ pub(crate) fn refresh_source_lock(recipe: &Recipe, storage_dir: &Path) -> Result
                             ),
                     );
                     bar.enable_steady_tick(Duration::from_millis(150));
-                    let stored = upstream.store(storage_dir, &bar).await;
+                    let stored = upstream.resolve(storage_dir, &bar).await;
                     bar.finish_and_clear();
                     progress.remove(&bar);
                     stored
@@ -342,6 +350,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::{path::Path, process::Command};
+
     use crate::upstream::StoredGit;
     use crate::upstream::plain::StoredPlain;
 
@@ -371,6 +381,45 @@ let base = boulder.recipe (boulder.source {{
     .. base
 }}"#
         )
+    }
+
+    fn gluon_git_recipe(url: &str) -> String {
+        format!(
+            r#"let boulder = import! boulder.recipe.v1
+let base = boulder.recipe (boulder.source {{
+    name = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+}})
+{{
+    upstreams = [boulder.upstream.git "{url}" "main"],
+    .. base
+}}"#
+        )
+    }
+
+    fn git(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn commit(repository: &Path, contents: &str, message: &str) -> String {
+        fs::write(repository.join("source.txt"), contents).unwrap();
+        git(repository, &["add", "source.txt"]);
+        git(repository, &["commit", "-m", message]);
+        git(repository, &["rev-parse", "HEAD"])
     }
 
     fn resolved_upstreams() -> Vec<Stored> {
@@ -435,5 +484,43 @@ let base = boulder.recipe (boulder.source {{
             use std::os::unix::fs::MetadataExt;
             assert_eq!(before.ino(), after.ino());
         }
+    }
+
+    #[test]
+    fn explicit_refresh_fetches_and_pins_the_latest_git_commit() {
+        let directory = tempfile::tempdir().unwrap();
+        let origin = directory.path().join("origin");
+        fs::create_dir(&origin).unwrap();
+        git(&origin, &["init", "--initial-branch=main"]);
+        git(&origin, &["config", "user.name", "Boulder Test"]);
+        git(&origin, &["config", "user.email", "boulder@example.invalid"]);
+        let first_commit = commit(&origin, "first\n", "first");
+        let url = url::Url::from_file_path(&origin).unwrap().to_string();
+        let authored = gluon_git_recipe(&url);
+        let recipe_path = directory.path().join("stone.glu");
+        let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
+        let storage = directory.path().join("cache/upstreams");
+        fs::write(&recipe_path, &authored).unwrap();
+
+        let recipe = Recipe::load_authored(&recipe_path).unwrap();
+        assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Written);
+        let first = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &fs::read(&lock_path).unwrap()).unwrap();
+        assert!(matches!(
+            &first.sources[0],
+            SourceResolution::Git(source)
+                if source.requested_ref == "main" && source.commit == first_commit
+        ));
+
+        let second_commit = commit(&origin, "second\n", "second");
+        let recipe = Recipe::load_authored(&recipe_path).unwrap();
+        assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Written);
+        let second = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &fs::read(&lock_path).unwrap()).unwrap();
+        assert!(matches!(
+            &second.sources[0],
+            SourceResolution::Git(source)
+                if source.requested_ref == "main" && source.commit == second_commit
+        ));
+        assert_ne!(first_commit, second_commit);
+        assert_eq!(fs::read_to_string(recipe_path).unwrap(), authored);
     }
 }
