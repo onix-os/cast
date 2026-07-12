@@ -52,25 +52,7 @@ impl Recipe {
 
         let build_time = resolve_build_time(&path);
 
-        // Invariant checks
-
-        // We want versions to start with an integer for ent comparison purposes
-        if !parsed.source.version.starts_with(|c: char| c.is_ascii_digit()) {
-            return Err(Error::Value(format!(
-                "version must start with an integer (found 'version: {}')",
-                parsed.source.version
-            )));
-        }
-
-        // Setting release to 0 is a common mistake
-        if parsed.source.release == 0 {
-            return Err(Error::Value(format!(
-                "release must be > 0 (found 'release: {}')",
-                parsed.source.release
-            )));
-        }
-
-        // Invariant checks done
+        parsed.validate()?;
 
         Ok(Self {
             path,
@@ -183,8 +165,8 @@ pub enum Error {
     LoadControlFile(#[source] io::Error),
     #[error("decode recipe")]
     Decode(#[from] stone_recipe::Error),
-    #[error("value: {0}")]
-    Value(String),
+    #[error("invalid recipe")]
+    Validation(#[from] stone_recipe::ValidationError),
     #[error("failed to decode control file {1:?}")]
     DecodeControlFile(#[source] control_file::decode::Error, PathBuf),
     #[error("failed to modify recipe with control file {1:?}")]
