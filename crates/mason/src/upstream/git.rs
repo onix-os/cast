@@ -4,8 +4,15 @@
 use std::{
     ffi::{CString, OsString},
     io,
-    os::{fd::AsRawFd as _, unix::ffi::OsStrExt},
+    os::{
+        fd::{AsRawFd as _, FromRawFd as _, OwnedFd},
+        unix::{
+            ffi::OsStrExt,
+            fs::{MetadataExt, PermissionsExt},
+        },
+    },
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -179,19 +186,6 @@ impl Git {
         })
     }
 
-    /// Unconditionally removes the directory, within the storage
-    /// directory, that would store the Git repository.
-    /// If the directory does not exist, this function returns
-    /// successfully (it is idempotent).
-    ///
-    /// Careful: this function does not validate the content
-    /// of the directory! Resources will be deleted even if they
-    /// do not belong to a Git repository.
-    pub fn remove(&self, storage_dir: &Path) -> Result<(), Error> {
-        let _cache_lock = self.try_acquire_cache_lock(storage_dir, CacheLockMode::Exclusive)?;
-        self.remove_locked(storage_dir)
-    }
-
     fn remove_locked(&self, storage_dir: &Path) -> Result<(), Error> {
         let dir = self.stored_path(storage_dir);
         let marker = self.mutation_marker_path(storage_dir);
@@ -211,6 +205,7 @@ impl Git {
     /// If successful, a tuple is returned containing the
     /// stored upstream and a boolean flag, indicating whether
     /// the stored Git repository contains [Self::commit].
+    #[cfg(test)]
     pub async fn stored(&self, storage_dir: &Path) -> Result<(StoredGit, bool), Error> {
         let _cache_lock = self.acquire_cache_lock(storage_dir, CacheLockMode::Shared).await?;
         self.stored_locked(storage_dir).await
@@ -272,11 +267,17 @@ impl Git {
     }
 
     async fn acquire_cache_lock(&self, storage_dir: &Path, mode: CacheLockMode) -> Result<CacheLock, Error> {
-        let file = self.open_cache_lock(storage_dir)?;
+        let lock = self.open_cache_lock(storage_dir)?;
         let deadline = Instant::now() + CACHE_LOCK_WAIT_TIMEOUT;
         loop {
-            match try_lock_cache_file(&file, mode)? {
-                true => return Ok(CacheLock { _file: file }),
+            match try_lock_cache_file(&lock.file, mode)? {
+                true => {
+                    lock.verify_name()?;
+                    return Ok(CacheLock {
+                        _file: lock.file,
+                        _parent: lock.parent,
+                    });
+                }
                 false if Instant::now() >= deadline => {
                     return Err(Error::CacheBusy {
                         cache: self.stored_path(storage_dir),
@@ -287,31 +288,37 @@ impl Git {
         }
     }
 
-    fn try_acquire_cache_lock(&self, storage_dir: &Path, mode: CacheLockMode) -> Result<CacheLock, Error> {
-        let file = self.open_cache_lock(storage_dir)?;
-        if try_lock_cache_file(&file, mode)? {
-            Ok(CacheLock { _file: file })
-        } else {
-            Err(Error::CacheBusy {
-                cache: self.stored_path(storage_dir),
-            })
-        }
-    }
-
-    fn open_cache_lock(&self, storage_dir: &Path) -> Result<fs::File, Error> {
+    fn open_cache_lock(&self, storage_dir: &Path) -> Result<OpenedCacheLock, Error> {
         let path = self.cache_lock_path(storage_dir);
         let parent = path
             .parent()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Git cache lock has no parent directory"))?;
         fs::create_dir_all(parent)?;
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
-            .open(&path)?;
-        Ok(file)
+        let parent = open_directory(parent)?;
+        parent.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+        let name = path_file_name(&path, "Git cache lock")?;
+        let file = openat_lock_file(&parent, &name)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Git cache lock is not a private regular file",
+            )
+            .into());
+        }
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.sync_all()?;
+        parent.sync_all()?;
+        let identity = FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
+        Ok(OpenedCacheLock {
+            file,
+            parent,
+            name,
+            identity,
+        })
     }
 
     fn begin_cache_mutation(&self, storage_dir: &Path) -> Result<CacheMutationMarker, Error> {
@@ -389,12 +396,14 @@ impl Git {
 
 #[derive(Clone, Copy)]
 enum CacheLockMode {
+    #[cfg(test)]
     Shared,
     Exclusive,
 }
 
 fn try_lock_cache_file(file: &fs::File, mode: CacheLockMode) -> io::Result<bool> {
     let operation = match mode {
+        #[cfg(test)]
         CacheLockMode::Shared => nix::libc::LOCK_SH | nix::libc::LOCK_NB,
         CacheLockMode::Exclusive => nix::libc::LOCK_EX | nix::libc::LOCK_NB,
     };
@@ -414,6 +423,36 @@ fn try_lock_cache_file(file: &fs::File, mode: CacheLockMode) -> io::Result<bool>
 
 struct CacheLock {
     _file: fs::File,
+    _parent: fs::File,
+}
+
+struct OpenedCacheLock {
+    file: fs::File,
+    parent: fs::File,
+    name: CString,
+    identity: FileIdentity,
+}
+
+impl OpenedCacheLock {
+    fn verify_name(&self) -> io::Result<()> {
+        let metadata = self.file.metadata()?;
+        let held_identity = FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
+        if metadata.is_file()
+            && metadata.nlink() == 1
+            && metadata.mode() & 0o7777 == 0o600
+            && held_identity == self.identity
+            && regular_identity_at(&self.parent, &self.name)? == Some(self.identity)
+        {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "Git cache lock inode, link count, or private mode changed before acquisition",
+            ))
+        }
+    }
 }
 
 struct CacheMutationMarker {
@@ -588,13 +627,13 @@ impl StoredGit {
                 found: sealed.digest().to_owned(),
             });
         }
-        rename_noreplace(&checkout, dest_dir).map_err(|source| Error::Install {
+        let installed = PinnedInstall::install(&checkout, dest_dir).map_err(|source| Error::Install {
             source_path: checkout,
             destination: dest_dir.to_owned(),
             source,
         })?;
         if let Err(source) = sealed.verify_installed_descriptor_path(dest_dir) {
-            return match quarantine_rejected_install(dest_dir) {
+            return match installed.quarantine() {
                 Ok(quarantine) => Err(Error::RejectedInstalledMaterialization {
                     destination: dest_dir.to_owned(),
                     quarantine,
@@ -622,35 +661,301 @@ async fn reject_gitlinks(repo: &gitwrap::Repository, commit: &str) -> Result<(),
     }
 }
 
-fn quarantine_rejected_install(destination: &Path) -> io::Result<PathBuf> {
-    let parent = destination
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileIdentity {
+    device: nix::libc::dev_t,
+    inode: nix::libc::ino_t,
+}
+
+impl FileIdentity {
+    fn from_file(file: &fs::File) -> io::Result<Self> {
+        let metadata = file.metadata()?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "installed Git checkout is not a directory",
+            ));
+        }
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+}
+
+/// Pins both the destination parent and the exact staged directory inode
+/// across publication and post-install verification. Failure cleanup never
+/// resolves the destination through its caller-visible ancestors again.
+struct PinnedInstall {
+    parent: fs::File,
+    parent_path: PathBuf,
+    parent_identity: FileIdentity,
+    name: CString,
+    identity: FileIdentity,
+    _installed: fs::File,
+}
+
+impl PinnedInstall {
+    fn install(source: &Path, destination: &Path) -> io::Result<Self> {
+        let source_parent = open_parent_directory(source, "staged checkout")?;
+        let source_name = path_file_name(source, "staged checkout")?;
+        let installed = openat_directory(&source_parent, &source_name)?;
+        let identity = FileIdentity::from_file(&installed)?;
+
+        let parent_path = destination
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "final checkout has no parent"))?
+            .to_owned();
+        let parent = open_directory(&parent_path)?;
+        let parent_identity = FileIdentity::from_file(&parent)?;
+        let name = path_file_name(destination, "final checkout")?;
+        renameat_noreplace(&source_parent, &source_name, &parent, &name)?;
+        if identity_at(&parent, &name)? != Some(identity) {
+            return Err(io::Error::other(
+                "published Git checkout name does not identify the staged directory",
+            ));
+        }
+        parent.sync_all()?;
+        Ok(Self {
+            parent,
+            parent_path,
+            parent_identity,
+            name,
+            identity,
+            _installed: installed,
+        })
+    }
+
+    fn quarantine(self) -> io::Result<PathBuf> {
+        // A public-name replacement is not ours to move. This check is made
+        // against the pinned parent, not a re-resolved ancestor path.
+        if identity_at(&self.parent, &self.name)? != Some(self.identity) {
+            return Err(io::Error::other(
+                "refusing to quarantine a replacement Git checkout inode",
+            ));
+        }
+
+        let (quarantine_name, quarantine) = create_quarantine_directory(&self.parent)?;
+        let checkout = c"checkout";
+        if let Err(source) = renameat_noreplace(&self.parent, &self.name, &quarantine, checkout) {
+            drop(quarantine);
+            return Err(cleanup_quarantine_error(&self.parent, &quarantine_name, source));
+        }
+        if identity_at(&quarantine, checkout)? != Some(self.identity) {
+            return Err(io::Error::other(
+                "quarantined Git checkout does not identify the installed directory",
+            ));
+        }
+        quarantine.sync_all()?;
+        self.parent.sync_all()?;
+        let quarantine_name = std::ffi::OsStr::from_bytes(quarantine_name.as_bytes());
+        let public_parent_matches = open_directory(&self.parent_path)
+            .and_then(|parent| FileIdentity::from_file(&parent))
+            .is_ok_and(|identity| identity == self.parent_identity);
+        if public_parent_matches {
+            Ok(self.parent_path.join(quarantine_name).join("checkout"))
+        } else {
+            Ok(PathBuf::from(format!(
+                "<detached pinned Git quarantine from {}>",
+                self.parent_path.display()
+            ))
+            .join(quarantine_name)
+            .join("checkout"))
+        }
+    }
+}
+
+static QUARANTINE_NONCE: AtomicU64 = AtomicU64::new(0);
+
+fn create_quarantine_directory(parent: &fs::File) -> io::Result<(CString, fs::File)> {
+    for _ in 0..128 {
+        let nonce = QUARANTINE_NONCE.fetch_add(1, Ordering::Relaxed);
+        let name = CString::new(format!(".cast-git-rejected-{}-{nonce}", std::process::id()))
+            .expect("generated quarantine name contains no NUL");
+        let result = unsafe { nix::libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
+        if result == 0 {
+            let directory = match openat_directory(parent, &name) {
+                Ok(directory) => directory,
+                Err(source) => return Err(cleanup_quarantine_error(parent, &name, source)),
+            };
+            if let Err(source) = directory.set_permissions(std::fs::Permissions::from_mode(0o700)) {
+                drop(directory);
+                return Err(cleanup_quarantine_error(parent, &name, source));
+            }
+            if let Err(source) = directory.sync_all().and_then(|()| parent.sync_all()) {
+                drop(directory);
+                return Err(cleanup_quarantine_error(parent, &name, source));
+            }
+            return Ok((name, directory));
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::AlreadyExists {
+            return Err(source);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve a rejected Git checkout quarantine",
+    ))
+}
+
+fn cleanup_quarantine_error(parent: &fs::File, name: &std::ffi::CStr, source: io::Error) -> io::Error {
+    match remove_empty_quarantine(parent, name) {
+        Ok(()) => source,
+        Err(cleanup) => io::Error::new(
+            source.kind(),
+            format!("{source}; removing the incomplete Git quarantine also failed: {cleanup}"),
+        ),
+    }
+}
+
+fn remove_empty_quarantine(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<()> {
+    let result = unsafe { nix::libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), nix::libc::AT_REMOVEDIR) };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    parent.sync_all()
+}
+
+fn identity_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<Option<FileIdentity>> {
+    let mut stat = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+    let result = unsafe {
+        nix::libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            nix::libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == -1 {
+        let source = io::Error::last_os_error();
+        return if source.kind() == io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(source)
+        };
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFDIR {
+        return Ok(None);
+    }
+    Ok(Some(FileIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+    }))
+}
+
+fn regular_identity_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<Option<FileIdentity>> {
+    let mut stat = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+    let result = unsafe {
+        nix::libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            nix::libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == -1 {
+        let source = io::Error::last_os_error();
+        return if source.kind() == io::ErrorKind::NotFound {
+            Ok(None)
+        } else {
+            Err(source)
+        };
+    }
+    let stat = unsafe { stat.assume_init() };
+    if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFREG || stat.st_nlink != 1 {
+        return Ok(None);
+    }
+    Ok(Some(FileIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+    }))
+}
+
+fn path_file_name(path: &Path, description: &'static str) -> io::Result<CString> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{description} has no file name")))?;
+    CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, format!("{description} contains NUL")))
+}
+
+fn open_parent_directory(path: &Path, description: &'static str) -> io::Result<fs::File> {
+    let parent = path
         .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rejected Git install has no parent"))?;
-    let quarantine_root = tempfile::Builder::new()
-        .prefix(".cast-git-rejected-")
-        .tempdir_in(parent)?;
-    let quarantine = quarantine_root.path().join("checkout");
-    rename_noreplace(destination, &quarantine)?;
-    let retained_root = quarantine_root.keep();
-    Ok(retained_root.join("checkout"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{description} has no parent")))?;
+    open_directory(parent)
+}
+
+fn open_directory(path: &Path) -> io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW)
+        .open(path)
+}
+
+fn openat_directory(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<fs::File> {
+    let descriptor = unsafe {
+        nix::libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    Ok(fs::File::from_parts(
+        descriptor.into(),
+        Path::new("<descriptor-rooted Git checkout directory>"),
+    ))
+}
+
+fn openat_lock_file(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<fs::File> {
+    let descriptor = unsafe {
+        nix::libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            nix::libc::O_RDWR | nix::libc::O_CREAT | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    Ok(fs::File::from_parts(
+        descriptor.into(),
+        Path::new("<descriptor-rooted Git cache lock>"),
+    ))
 }
 
 /// Atomically install a verified checkout without ever replacing or following
 /// a destination that appeared after the source-root preflight.
+#[cfg(test)]
 fn rename_noreplace(source: &Path, target: &Path) -> io::Result<()> {
-    let source = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "staged checkout path contains NUL"))?;
-    let target = CString::new(target.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "final checkout path contains NUL"))?;
-    // nix exposes renameat2 only on some libc targets. Cast supports musl,
-    // so use the Linux syscall directly with RENAME_NOREPLACE.
+    let source_parent = open_parent_directory(source, "staged checkout")?;
+    let target_parent = open_parent_directory(target, "final checkout")?;
+    let source_name = path_file_name(source, "staged checkout")?;
+    let target_name = path_file_name(target, "final checkout")?;
+    renameat_noreplace(&source_parent, &source_name, &target_parent, &target_name)
+}
+
+fn renameat_noreplace(
+    source_parent: &fs::File,
+    source_name: &std::ffi::CStr,
+    target_parent: &fs::File,
+    target_name: &std::ffi::CStr,
+) -> io::Result<()> {
     let result = unsafe {
         nix::libc::syscall(
             nix::libc::SYS_renameat2,
-            nix::libc::AT_FDCWD,
-            source.as_ptr(),
-            nix::libc::AT_FDCWD,
-            target.as_ptr(),
+            source_parent.as_raw_fd(),
+            source_name.as_ptr(),
+            target_parent.as_raw_fd(),
+            target_name.as_ptr(),
             1_u32, // RENAME_NOREPLACE
         )
     };
@@ -944,6 +1249,36 @@ mod tests {
         assert_eq!(first.stored_path(&storage), second.stored_path(&storage));
     }
 
+    #[test]
+    fn cache_lock_rejects_parent_symlinks_and_detects_lock_inode_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let requested = source(Url::parse("https://example.invalid/source.git").unwrap());
+        let storage = temporary.path().join("storage");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&storage).unwrap();
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, storage.join("git")).unwrap();
+        assert!(requested.open_cache_lock(&storage).is_err());
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+
+        fs::remove_file(storage.join("git")).unwrap();
+        let opened = requested.open_cache_lock(&storage).unwrap();
+        let lock_path = requested.cache_lock_path(&storage);
+
+        fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let error = opened.verify_name().unwrap_err();
+        assert!(error.to_string().contains("private mode"));
+        fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        opened.verify_name().unwrap();
+
+        let displaced = lock_path.with_extension("displaced");
+        fs::rename(&lock_path, &displaced).unwrap();
+        fs::write(&lock_path, b"replacement").unwrap();
+        let error = opened.verify_name().unwrap_err();
+        assert!(error.to_string().contains("inode"));
+        assert_eq!(fs::read(&lock_path).unwrap(), b"replacement");
+    }
+
     #[tokio::test]
     async fn live_cache_owner_is_waited_for_and_interrupted_marker_is_repaired() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1007,6 +1342,101 @@ mod tests {
         assert!(source.join("source.txt").is_file());
         assert!(fs::symlink_metadata(&destination).unwrap().file_type().is_symlink());
         assert!(fs::read_dir(outside).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn rejected_install_quarantine_refuses_to_move_a_replacement_inode() {
+        let temporary = tempfile::tempdir().unwrap();
+        let staged = temporary.path().join("staged");
+        let destination = temporary.path().join("destination");
+        let displaced = temporary.path().join("displaced-verified");
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("source.txt"), b"verified").unwrap();
+        let installed = PinnedInstall::install(&staged, &destination).unwrap();
+
+        fs::rename(&destination, &displaced).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("attacker.txt"), b"replacement").unwrap();
+        let error = installed.quarantine().unwrap_err();
+
+        assert!(error.to_string().contains("replacement Git checkout inode"));
+        assert_eq!(fs::read(destination.join("attacker.txt")).unwrap(), b"replacement");
+        assert_eq!(fs::read(displaced.join("source.txt")).unwrap(), b"verified");
+        assert!(fs::read_dir(temporary.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .as_bytes()
+                .starts_with(b".cast-git-rejected-")
+        }));
+    }
+
+    #[test]
+    fn quarantine_cleanup_removes_empty_entries_and_reports_cleanup_failure() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = open_directory(temporary.path()).unwrap();
+
+        let (empty_name, empty) = create_quarantine_directory(&parent).unwrap();
+        drop(empty);
+        let source = io::Error::new(io::ErrorKind::Interrupted, "primary quarantine failure");
+        let error = cleanup_quarantine_error(&parent, &empty_name, source);
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(error.to_string(), "primary quarantine failure");
+        assert_eq!(identity_at(&parent, &empty_name).unwrap(), None);
+
+        let (nonempty_name, nonempty) = create_quarantine_directory(&parent).unwrap();
+        let public_name = std::ffi::OsStr::from_bytes(nonempty_name.as_bytes());
+        fs::write(temporary.path().join(public_name).join("retained"), b"data").unwrap();
+        drop(nonempty);
+        let source = io::Error::new(io::ErrorKind::Interrupted, "primary quarantine failure");
+        let error = cleanup_quarantine_error(&parent, &nonempty_name, source);
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert!(
+            error
+                .to_string()
+                .contains("removing the incomplete Git quarantine also failed")
+        );
+        assert!(temporary.path().join(public_name).join("retained").is_file());
+    }
+
+    #[test]
+    fn rejected_install_quarantine_stays_with_the_pinned_parent_after_path_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().join("parent");
+        let moved_parent = temporary.path().join("moved-parent");
+        let staged = temporary.path().join("staged");
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("source.txt"), b"verified").unwrap();
+        let destination = parent.join("destination");
+        let installed = PinnedInstall::install(&staged, &destination).unwrap();
+
+        fs::rename(&parent, &moved_parent).unwrap();
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir(parent.join("destination")).unwrap();
+        fs::write(parent.join("destination/attacker.txt"), b"replacement").unwrap();
+        let reported = installed.quarantine().unwrap();
+
+        assert_eq!(
+            fs::read(parent.join("destination/attacker.txt")).unwrap(),
+            b"replacement"
+        );
+        assert!(
+            reported.to_string_lossy().contains("detached pinned Git quarantine"),
+            "a replaced public parent must not produce a misleading live path: {reported:?}"
+        );
+        let quarantine = fs::read_dir(&moved_parent)
+            .unwrap()
+            .find_map(|entry| {
+                let entry = entry.unwrap();
+                entry
+                    .file_name()
+                    .as_bytes()
+                    .starts_with(b".cast-git-rejected-")
+                    .then(|| entry.path())
+            })
+            .expect("rejected checkout remains beneath the pinned original parent");
+        assert_eq!(fs::read(quarantine.join("checkout/source.txt")).unwrap(), b"verified");
     }
 
     #[tokio::test]

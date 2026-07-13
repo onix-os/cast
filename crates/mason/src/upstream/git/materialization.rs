@@ -144,12 +144,13 @@ impl SealedMaterialization {
 
     /// Verify that a normal final path names the exact normalized inode held
     /// by this proof and that its complete canonical digest is unchanged.
+    #[cfg(test)]
     pub(super) fn verify_installed(mut self, installed: &Path) -> Result<(), Error> {
         self.verify_installed_with_access(installed, false)
     }
 
-    /// As [`Self::verify_installed`], but permit an intentional held-fd magic
-    /// link in an ancestor component of `installed`.
+    /// Verify a final path while permitting an intentional held-fd magic link
+    /// in an ancestor component of `installed`.
     pub(super) fn verify_installed_descriptor_path(mut self, installed: &Path) -> Result<(), Error> {
         self.verify_installed_with_access(installed, true)
     }
