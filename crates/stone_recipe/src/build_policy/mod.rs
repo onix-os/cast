@@ -103,6 +103,116 @@ pub enum TextSpec {
     Concat(Vec<Self>),
 }
 
+impl Drop for TextSpec {
+    fn drop(&mut self) {
+        let Self::Concat(parts) = self else {
+            return;
+        };
+
+        // Rust's generated drop glue follows recursive enum fields recursively.
+        // Policy validation is iterative, so an over-depth value must also be
+        // safe to reject and destroy without consuming one call frame per node.
+        // Move each child vector onto an explicit stack and empty every
+        // `Concat` before that node's own `Drop` implementation runs.
+        let mut stack = Vec::new();
+        stack.push(std::mem::take(parts));
+        while let Some(children) = stack.last_mut() {
+            let Some(mut child) = children.pop() else {
+                stack.pop();
+                continue;
+            };
+            if let Self::Concat(grandchildren) = &mut child
+                && !grandchildren.is_empty()
+            {
+                stack.push(std::mem::take(grandchildren));
+            }
+        }
+    }
+}
+
+/// Finite resource ceilings applied while accepting repository build policy.
+///
+/// The defaults are intentionally generous for a repository policy, while
+/// still preventing a decoded value from driving unbounded allocation or
+/// recursive traversal. Callers which accept policy from a less trusted
+/// boundary can select tighter limits and pass the same value to Mason's
+/// resolver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildPolicyValidationLimits {
+    pub max_targets: usize,
+    pub max_retired_targets: usize,
+    pub max_environment_bindings: usize,
+    pub max_tuning_flags: usize,
+    pub max_tuning_groups: usize,
+    pub max_tuning_choices: usize,
+    pub max_tuning_default_groups: usize,
+    pub max_tuning_option_flags: usize,
+    pub max_build_root_tools: usize,
+    pub max_compiler_flags: usize,
+    pub max_builder_arguments: usize,
+    pub max_analyzers: usize,
+    pub max_pgo_arguments: usize,
+    pub max_pgo_inputs: usize,
+    pub max_string_bytes: usize,
+    pub max_total_collection_items: usize,
+    pub max_total_string_bytes: usize,
+    pub max_text_nodes: usize,
+    pub max_text_depth: usize,
+    pub max_text_literal_bytes: usize,
+    pub max_text_total_literal_bytes: usize,
+    pub max_total_text_nodes: usize,
+    pub max_total_text_literal_bytes: usize,
+    pub max_resolved_text_bytes: usize,
+    pub max_resolved_items: usize,
+    pub max_total_resolved_text_nodes: usize,
+    pub max_total_resolved_text_bytes: usize,
+    pub max_resolver_steps: usize,
+}
+
+impl Default for BuildPolicyValidationLimits {
+    fn default() -> Self {
+        Self {
+            max_targets: 64,
+            max_retired_targets: 256,
+            max_environment_bindings: 1_024,
+            max_tuning_flags: 1_024,
+            max_tuning_groups: 1_024,
+            max_tuning_choices: 1_024,
+            max_tuning_default_groups: 1_024,
+            max_tuning_option_flags: 4_096,
+            max_build_root_tools: 4_096,
+            max_compiler_flags: 8_192,
+            max_builder_arguments: 4_096,
+            max_analyzers: 64,
+            max_pgo_arguments: 4_096,
+            max_pgo_inputs: 4_096,
+            max_string_bytes: 256 * 1024,
+            max_total_collection_items: 131_072,
+            max_total_string_bytes: 64 * 1024 * 1024,
+            max_text_nodes: 65_536,
+            max_text_depth: 512,
+            max_text_literal_bytes: 256 * 1024,
+            max_text_total_literal_bytes: 8 * 1024 * 1024,
+            max_total_text_nodes: 1_000_000,
+            max_total_text_literal_bytes: 64 * 1024 * 1024,
+            max_resolved_text_bytes: 8 * 1024 * 1024,
+            max_resolved_items: 131_072,
+            max_total_resolved_text_nodes: 1_000_000,
+            max_total_resolved_text_bytes: 64 * 1024 * 1024,
+            max_resolver_steps: 2_000_000,
+        }
+    }
+}
+
+impl TextSpec {
+    /// Validate one standalone text tree without recursive Rust calls.
+    pub fn validate_with_limits(&self, limits: BuildPolicyValidationLimits) -> Result<(), BuildPolicyConversionError> {
+        let mut validator = ResourceValidator::new(limits);
+        validator.text("text", self)?;
+        require_text("text", self)
+    }
+}
+
 /// Filesystem installation policy. Derived paths remain structural text so a
 /// package-specific directory such as `libexecdir` can name the package.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -608,19 +718,53 @@ pub enum ArrayPatch<T> {
 }
 
 impl<T> ArrayPatch<T> {
-    /// Apply this operation without deduplicating, sorting, or otherwise
-    /// changing authored order and multiplicity.
-    pub fn apply(self, mut current: Vec<T>) -> Vec<T> {
+    /// Apply one ordered-array operation after checking its final length and
+    /// before reserving or combining either vector.
+    pub fn apply_validated_with_limits(
+        self,
+        mut current: Vec<T>,
+        field: &str,
+        max_items: usize,
+    ) -> Result<Vec<T>, BuildPolicyConversionError> {
+        let patch_len = match &self {
+            Self::Keep => 0,
+            Self::Replace(values) | Self::Prepend(values) | Self::Append(values) => values.len(),
+        };
+        let count = match &self {
+            Self::Keep => current.len(),
+            Self::Replace(_) => patch_len,
+            Self::Prepend(_) | Self::Append(_) => current.len().saturating_add(patch_len),
+        };
+        if count > max_items {
+            return Err(BuildPolicyConversionError::CollectionLimit {
+                field: field.to_owned(),
+                count,
+                limit: max_items,
+            });
+        }
+
         match self {
-            Self::Keep => current,
-            Self::Replace(values) => values,
+            Self::Keep => Ok(current),
+            Self::Replace(values) => Ok(values),
             Self::Prepend(mut values) => {
-                values.append(&mut current);
                 values
+                    .try_reserve_exact(current.len())
+                    .map_err(|_| BuildPolicyConversionError::Capacity {
+                        field: field.to_owned(),
+                        count,
+                    })?;
+                values.append(&mut current);
+                Ok(values)
             }
             Self::Append(values) => {
-                current.extend(values);
                 current
+                    .try_reserve_exact(values.len())
+                    .map_err(|_| BuildPolicyConversionError::Capacity {
+                        field: field.to_owned(),
+                        count,
+                    })?;
+                current.extend(values);
+                Ok(current)
             }
         }
     }
@@ -648,8 +792,21 @@ pub struct BuildPolicyPatchSpec {
 }
 
 impl BuildPolicyPatchSpec {
-    /// Apply every patch operation to a complete policy.
-    pub fn apply(self, policy: BuildPolicySpec) -> BuildPolicySpec {
+    /// Apply the patch and reject a resulting policy which violates the same
+    /// invariants as a directly evaluated policy root.
+    pub fn apply_validated(self, policy: BuildPolicySpec) -> Result<BuildPolicySpec, BuildPolicyConversionError> {
+        self.apply_validated_with_limits(policy, BuildPolicyValidationLimits::default())
+    }
+
+    /// Apply a patch with bounded array combination, then validate every field
+    /// of the resulting policy under the same ceilings.
+    pub fn apply_validated_with_limits(
+        self,
+        policy: BuildPolicySpec,
+        limits: BuildPolicyValidationLimits,
+    ) -> Result<BuildPolicySpec, BuildPolicyConversionError> {
+        policy.validate_with_limits(limits)?;
+
         let Self {
             build_subdir,
             layout,
@@ -681,28 +838,30 @@ impl BuildPolicyPatchSpec {
             pgo: current_pgo,
         } = policy;
 
-        BuildPolicySpec {
+        let policy = BuildPolicySpec {
             build_subdir: build_subdir.apply(current_build_subdir),
             layout: layout.apply(current_layout),
             toolchains: toolchains.apply(current_toolchains),
-            targets: targets.apply(current_targets),
-            retired_targets: retired_targets.apply(current_retired_targets),
+            targets: targets.apply_validated_with_limits(current_targets, "targets", limits.max_targets)?,
+            retired_targets: retired_targets.apply_validated_with_limits(
+                current_retired_targets,
+                "retired_targets",
+                limits.max_retired_targets,
+            )?,
             sandbox: sandbox.apply(current_sandbox),
             build_root: build_root.apply(current_build_root),
             sources: sources.apply(current_sources),
             tuning: tuning.apply(current_tuning),
-            environment: environment.apply(current_environment),
+            environment: environment.apply_validated_with_limits(
+                current_environment,
+                "environment",
+                limits.max_environment_bindings,
+            )?,
             builders: builders.apply(current_builders),
-            analyzers: analyzers.apply(current_analyzers),
+            analyzers: analyzers.apply_validated_with_limits(current_analyzers, "analyzers", limits.max_analyzers)?,
             pgo: pgo.apply(current_pgo),
-        }
-    }
-
-    /// Apply the patch and reject a resulting policy which violates the same
-    /// invariants as a directly evaluated policy root.
-    pub fn apply_validated(self, policy: BuildPolicySpec) -> Result<BuildPolicySpec, BuildPolicyConversionError> {
-        let policy = self.apply(policy);
-        policy.validate()?;
+        };
+        policy.validate_with_limits(limits)?;
         Ok(policy)
     }
 }
@@ -710,6 +869,28 @@ impl BuildPolicyPatchSpec {
 /// Semantic policy error with a stable field path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BuildPolicyConversionError {
+    #[error("{field}: collection has {count} items, limit is {limit}")]
+    CollectionLimit { field: String, count: usize, limit: usize },
+    #[error("{field}: string has {bytes} bytes, limit is {limit}")]
+    StringBytesLimit { field: String, bytes: usize, limit: usize },
+    #[error("policy collections contain {count} items in total, limit is {limit}")]
+    TotalCollectionItemsLimit { count: usize, limit: usize },
+    #[error("policy strings contain {bytes} bytes in total, limit is {limit}")]
+    TotalStringBytesLimit { bytes: usize, limit: usize },
+    #[error("{field}: text has at least {nodes} nodes, limit is {limit}")]
+    TextNodeLimit { field: String, nodes: usize, limit: usize },
+    #[error("{field}: text depth is {depth}, limit is {limit}")]
+    TextDepthLimit { field: String, depth: usize, limit: usize },
+    #[error("{field}: literal has {bytes} bytes, limit is {limit}")]
+    TextLiteralBytesLimit { field: String, bytes: usize, limit: usize },
+    #[error("{field}: text literals contain {bytes} bytes in total, limit is {limit}")]
+    TextTotalLiteralBytesLimit { field: String, bytes: usize, limit: usize },
+    #[error("policy text contains {nodes} nodes in total, limit is {limit}")]
+    TotalTextNodesLimit { nodes: usize, limit: usize },
+    #[error("policy text literals contain {bytes} bytes in total, limit is {limit}")]
+    TotalTextLiteralBytesLimit { bytes: usize, limit: usize },
+    #[error("{field}: unable to reserve bounded capacity for {count} items")]
+    Capacity { field: String, count: usize },
     #[error("{field}: value must not be empty")]
     Empty { field: String },
     #[error("{field}: duplicate value `{value}`")]
@@ -777,10 +958,542 @@ pub enum BuildPolicyConversionError {
     AmbiguousPackageProgram { field: String, value: String },
 }
 
+struct ResourceValidator {
+    limits: BuildPolicyValidationLimits,
+    total_collection_items: usize,
+    total_string_bytes: usize,
+    total_text_nodes: usize,
+    total_text_literal_bytes: usize,
+}
+
+impl ResourceValidator {
+    fn new(limits: BuildPolicyValidationLimits) -> Self {
+        Self {
+            limits,
+            total_collection_items: 0,
+            total_string_bytes: 0,
+            total_text_nodes: 0,
+            total_text_literal_bytes: 0,
+        }
+    }
+
+    fn policy(&mut self, policy: &BuildPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.string("build_subdir", &policy.build_subdir)?;
+        self.layout(&policy.layout)?;
+        self.compiler_tools("toolchains.llvm", &policy.toolchains.llvm)?;
+        self.compiler_tools("toolchains.gnu", &policy.toolchains.gnu)?;
+
+        self.collection("targets", policy.targets.len(), self.limits.max_targets)?;
+        for (index, target) in policy.targets.iter().enumerate() {
+            self.target(&format!("targets[{index}]"), target)?;
+        }
+        self.collection(
+            "retired_targets",
+            policy.retired_targets.len(),
+            self.limits.max_retired_targets,
+        )?;
+        for (index, target) in policy.retired_targets.iter().enumerate() {
+            self.string(&format!("retired_targets[{index}].name"), &target.name)?;
+            self.string(&format!("retired_targets[{index}].reason"), &target.reason)?;
+        }
+
+        self.sandbox(&policy.sandbox)?;
+        self.build_root(&policy.build_root)?;
+        self.sources(&policy.sources)?;
+        self.tuning(&policy.tuning)?;
+        self.bindings("environment", &policy.environment)?;
+        self.builder("builders.cmake", &policy.builders.cmake)?;
+        self.builder("builders.meson", &policy.builders.meson)?;
+        self.builder("builders.cargo", &policy.builders.cargo)?;
+        self.builder("builders.autotools", &policy.builders.autotools)?;
+        self.collection("analyzers", policy.analyzers.len(), self.limits.max_analyzers)?;
+        self.pgo(&policy.pgo)
+    }
+
+    fn collection(&mut self, field: &str, count: usize, limit: usize) -> Result<(), BuildPolicyConversionError> {
+        if count > limit {
+            return Err(BuildPolicyConversionError::CollectionLimit {
+                field: field.to_owned(),
+                count,
+                limit,
+            });
+        }
+        self.total_collection_items = self.total_collection_items.saturating_add(count);
+        if self.total_collection_items > self.limits.max_total_collection_items {
+            return Err(BuildPolicyConversionError::TotalCollectionItemsLimit {
+                count: self.total_collection_items,
+                limit: self.limits.max_total_collection_items,
+            });
+        }
+        Ok(())
+    }
+
+    fn string(&mut self, field: &str, value: &str) -> Result<(), BuildPolicyConversionError> {
+        let bytes = value.len();
+        if bytes > self.limits.max_string_bytes {
+            return Err(BuildPolicyConversionError::StringBytesLimit {
+                field: field.to_owned(),
+                bytes,
+                limit: self.limits.max_string_bytes,
+            });
+        }
+        self.total_string_bytes = self.total_string_bytes.saturating_add(bytes);
+        if self.total_string_bytes > self.limits.max_total_string_bytes {
+            return Err(BuildPolicyConversionError::TotalStringBytesLimit {
+                bytes: self.total_string_bytes,
+                limit: self.limits.max_total_string_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    fn text(&mut self, field: &str, value: &TextSpec) -> Result<(), BuildPolicyConversionError> {
+        let mut stack = vec![(value, 1usize)];
+        let mut nodes = 0usize;
+        let mut literal_bytes = 0usize;
+
+        while let Some((value, depth)) = stack.pop() {
+            nodes = nodes.saturating_add(1);
+            if nodes > self.limits.max_text_nodes {
+                return Err(BuildPolicyConversionError::TextNodeLimit {
+                    field: field.to_owned(),
+                    nodes,
+                    limit: self.limits.max_text_nodes,
+                });
+            }
+            self.total_text_nodes = self.total_text_nodes.saturating_add(1);
+            if self.total_text_nodes > self.limits.max_total_text_nodes {
+                return Err(BuildPolicyConversionError::TotalTextNodesLimit {
+                    nodes: self.total_text_nodes,
+                    limit: self.limits.max_total_text_nodes,
+                });
+            }
+            if depth > self.limits.max_text_depth {
+                return Err(BuildPolicyConversionError::TextDepthLimit {
+                    field: field.to_owned(),
+                    depth,
+                    limit: self.limits.max_text_depth,
+                });
+            }
+
+            match value {
+                TextSpec::Literal(value) => {
+                    let bytes = value.len();
+                    if bytes > self.limits.max_text_literal_bytes {
+                        return Err(BuildPolicyConversionError::TextLiteralBytesLimit {
+                            field: field.to_owned(),
+                            bytes,
+                            limit: self.limits.max_text_literal_bytes,
+                        });
+                    }
+                    literal_bytes = literal_bytes.saturating_add(bytes);
+                    if literal_bytes > self.limits.max_text_total_literal_bytes {
+                        return Err(BuildPolicyConversionError::TextTotalLiteralBytesLimit {
+                            field: field.to_owned(),
+                            bytes: literal_bytes,
+                            limit: self.limits.max_text_total_literal_bytes,
+                        });
+                    }
+                    self.total_text_literal_bytes = self.total_text_literal_bytes.saturating_add(bytes);
+                    if self.total_text_literal_bytes > self.limits.max_total_text_literal_bytes {
+                        return Err(BuildPolicyConversionError::TotalTextLiteralBytesLimit {
+                            bytes: self.total_text_literal_bytes,
+                            limit: self.limits.max_total_text_literal_bytes,
+                        });
+                    }
+                    self.string(field, value)?;
+                }
+                TextSpec::Context(_) => {}
+                TextSpec::Concat(parts) => {
+                    let minimum_nodes = nodes.saturating_add(stack.len()).saturating_add(parts.len());
+                    if minimum_nodes > self.limits.max_text_nodes {
+                        return Err(BuildPolicyConversionError::TextNodeLimit {
+                            field: field.to_owned(),
+                            nodes: minimum_nodes,
+                            limit: self.limits.max_text_nodes,
+                        });
+                    }
+                    let minimum_total = self
+                        .total_text_nodes
+                        .saturating_add(stack.len())
+                        .saturating_add(parts.len());
+                    if minimum_total > self.limits.max_total_text_nodes {
+                        return Err(BuildPolicyConversionError::TotalTextNodesLimit {
+                            nodes: minimum_total,
+                            limit: self.limits.max_total_text_nodes,
+                        });
+                    }
+                    stack
+                        .try_reserve(parts.len())
+                        .map_err(|_| BuildPolicyConversionError::Capacity {
+                            field: field.to_owned(),
+                            count: minimum_nodes,
+                        })?;
+                    let child_depth = depth.saturating_add(1);
+                    for part in parts.iter().rev() {
+                        stack.push((part, child_depth));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn texts(&mut self, field: &str, values: &[TextSpec], limit: usize) -> Result<(), BuildPolicyConversionError> {
+        self.collection(field, values.len(), limit)?;
+        for (index, value) in values.iter().enumerate() {
+            self.text(&format!("{field}[{index}]"), value)?;
+        }
+        Ok(())
+    }
+
+    fn layout(&mut self, layout: &InstallLayoutSpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, value) in [
+            ("prefix", &layout.prefix),
+            ("bindir", &layout.bindir),
+            ("sbindir", &layout.sbindir),
+            ("includedir", &layout.includedir),
+            ("libdir", &layout.libdir),
+            ("libexecdir", &layout.libexecdir),
+            ("datadir", &layout.datadir),
+            ("vendordir", &layout.vendordir),
+            ("docdir", &layout.docdir),
+            ("infodir", &layout.infodir),
+            ("localedir", &layout.localedir),
+            ("mandir", &layout.mandir),
+            ("sysconfdir", &layout.sysconfdir),
+            ("localstatedir", &layout.localstatedir),
+            ("sharedstatedir", &layout.sharedstatedir),
+            ("runstatedir", &layout.runstatedir),
+            ("sysusersdir", &layout.sysusersdir),
+            ("tmpfilesdir", &layout.tmpfilesdir),
+            ("udevrulesdir", &layout.udevrulesdir),
+            ("bash_completions_dir", &layout.bash_completions_dir),
+            ("fish_completions_dir", &layout.fish_completions_dir),
+            ("elvish_completions_dir", &layout.elvish_completions_dir),
+            ("zsh_completions_dir", &layout.zsh_completions_dir),
+        ] {
+            self.text(&format!("layout.{name}"), value)?;
+        }
+        Ok(())
+    }
+
+    fn compiler_tools(&mut self, field: &str, tools: &CompilerToolsSpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, value) in [
+            ("cc", &tools.cc),
+            ("cxx", &tools.cxx),
+            ("objc", &tools.objc),
+            ("objcxx", &tools.objcxx),
+            ("cpp", &tools.cpp),
+            ("objcpp", &tools.objcpp),
+            ("objcxxcpp", &tools.objcxxcpp),
+            ("d", &tools.d),
+            ("ar", &tools.ar),
+            ("ld", &tools.ld),
+            ("objcopy", &tools.objcopy),
+            ("nm", &tools.nm),
+            ("ranlib", &tools.ranlib),
+            ("strip", &tools.strip),
+        ] {
+            self.text(&format!("{field}.{name}"), value)?;
+        }
+        Ok(())
+    }
+
+    fn target(&mut self, field: &str, target: &TargetPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, value) in [
+            ("name", &target.name),
+            ("target_triple", &target.target_triple),
+            ("build_triple", &target.build_triple),
+            ("host_triple", &target.host_triple),
+            ("lib_suffix", &target.lib_suffix),
+            ("artifact_architecture", &target.artifact_architecture),
+        ] {
+            self.string(&format!("{field}.{name}"), value)?;
+        }
+        if let TargetEmulationSpec::Emul32 { host_architecture } = &target.emulation {
+            self.string(&format!("{field}.emulation.host_architecture"), host_architecture)?;
+        }
+        self.platform(&format!("{field}.build_platform"), &target.build_platform)?;
+        self.platform(&format!("{field}.host_platform"), &target.host_platform)?;
+        self.platform(&format!("{field}.target_platform"), &target.target_platform)?;
+        self.toolchain_flags(&format!("{field}.architecture_flags"), &target.architecture_flags)?;
+        self.bindings(&format!("{field}.environment"), &target.environment)
+    }
+
+    fn platform(&mut self, field: &str, platform: &PlatformPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, value) in [
+            ("architecture", &platform.architecture),
+            ("vendor", &platform.vendor),
+            ("operating_system", &platform.operating_system),
+            ("abi", &platform.abi),
+        ] {
+            self.string(&format!("{field}.{name}"), value)?;
+        }
+        Ok(())
+    }
+
+    fn sandbox(&mut self, sandbox: &SandboxPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, value) in [
+            ("hostname", &sandbox.hostname),
+            ("guest_root", &sandbox.guest_root),
+            ("artifacts_dir", &sandbox.artifacts_dir),
+            ("build_dir", &sandbox.build_dir),
+            ("source_dir", &sandbox.source_dir),
+            ("recipe_dir", &sandbox.recipe_dir),
+            ("package_dir", &sandbox.package_dir),
+            ("install_dir", &sandbox.install_dir),
+        ] {
+            self.string(&format!("sandbox.{name}"), value)?;
+        }
+        Ok(())
+    }
+
+    fn build_root(&mut self, root: &BuildRootPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.tools("build_root.base", &root.base)?;
+        self.toolchain_inputs("build_root.toolchains", &root.toolchains)?;
+        self.tools("build_root.emul32.base", &root.emul32.base)?;
+        self.toolchain_inputs("build_root.emul32.toolchains", &root.emul32.toolchains)?;
+        for (field, tool) in [
+            ("build_root.analyzer_tools.pkg_config", &root.analyzer_tools.pkg_config),
+            ("build_root.analyzer_tools.python", &root.analyzer_tools.python),
+            (
+                "build_root.analyzer_tools.llvm.objcopy",
+                &root.analyzer_tools.llvm.objcopy,
+            ),
+            ("build_root.analyzer_tools.llvm.strip", &root.analyzer_tools.llvm.strip),
+            (
+                "build_root.analyzer_tools.gnu.objcopy",
+                &root.analyzer_tools.gnu.objcopy,
+            ),
+            ("build_root.analyzer_tools.gnu.strip", &root.analyzer_tools.gnu.strip),
+        ] {
+            self.tool(field, tool)?;
+        }
+        let cache = &root.compiler_cache;
+        self.tools("build_root.compiler_cache.required_tools", &cache.required_tools)?;
+        for (name, value) in [
+            ("default_path", &cache.default_path),
+            ("compiler_path", &cache.compiler_path),
+            ("ccache_dir", &cache.ccache_dir),
+            ("sccache_dir", &cache.sccache_dir),
+            ("go_cache_dir", &cache.go_cache_dir),
+            ("go_mod_cache_dir", &cache.go_mod_cache_dir),
+            ("cargo_cache_dir", &cache.cargo_cache_dir),
+            ("zig_cache_dir", &cache.zig_cache_dir),
+            ("rustc_wrapper", &cache.rustc_wrapper),
+        ] {
+            self.string(&format!("build_root.compiler_cache.{name}"), value)?;
+        }
+        self.tools("build_root.mold.required_tools", &root.mold.required_tools)?;
+        self.text("build_root.mold.linker", &root.mold.linker)?;
+        self.compiler_flags("build_root.mold.flags", &root.mold.flags)
+    }
+
+    fn toolchain_inputs(
+        &mut self,
+        field: &str,
+        inputs: &ToolchainInputPolicySpec,
+    ) -> Result<(), BuildPolicyConversionError> {
+        self.tools(&format!("{field}.llvm"), &inputs.llvm)?;
+        self.tools(&format!("{field}.gnu"), &inputs.gnu)
+    }
+
+    fn tools(&mut self, field: &str, tools: &[BuildToolSpec]) -> Result<(), BuildPolicyConversionError> {
+        self.collection(field, tools.len(), self.limits.max_build_root_tools)?;
+        for (index, tool) in tools.iter().enumerate() {
+            self.tool(&format!("{field}[{index}]"), tool)?;
+        }
+        Ok(())
+    }
+
+    fn tool(&mut self, field: &str, tool: &BuildToolSpec) -> Result<(), BuildPolicyConversionError> {
+        let value = match tool {
+            BuildToolSpec::Package(value) | BuildToolSpec::Binary(value) | BuildToolSpec::SystemBinary(value) => value,
+        };
+        self.string(field, value)
+    }
+
+    fn sources(&mut self, sources: &SourcePreparationPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.command("sources.archive.create_directory", &sources.archive.create_directory)?;
+        self.command("sources.archive.unpack", &sources.archive.unpack)?;
+        self.command("sources.git.create_directory", &sources.git.create_directory)?;
+        self.command("sources.git.copy", &sources.git.copy)
+    }
+
+    fn tuning(&mut self, tuning: &TuningPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.collection("tuning.flags", tuning.flags.len(), self.limits.max_tuning_flags)?;
+        for (index, flag) in tuning.flags.iter().enumerate() {
+            let field = format!("tuning.flags[{index}]");
+            self.string(&format!("{field}.name"), &flag.name)?;
+            self.toolchain_flags(&format!("{field}.value"), &flag.value)?;
+        }
+        self.collection("tuning.groups", tuning.groups.len(), self.limits.max_tuning_groups)?;
+        for (index, group) in tuning.groups.iter().enumerate() {
+            let field = format!("tuning.groups[{index}]");
+            self.string(&format!("{field}.name"), &group.name)?;
+            self.tuning_option(&format!("{field}.value.base"), &group.value.base)?;
+            if let Some(default) = &group.value.default {
+                self.string(&format!("{field}.value.default"), default)?;
+            }
+            self.collection(
+                &format!("{field}.value.choices"),
+                group.value.choices.len(),
+                self.limits.max_tuning_choices,
+            )?;
+            for (choice_index, choice) in group.value.choices.iter().enumerate() {
+                let choice_field = format!("{field}.value.choices[{choice_index}]");
+                self.string(&format!("{choice_field}.name"), &choice.name)?;
+                self.tuning_option(&format!("{choice_field}.value"), &choice.value)?;
+            }
+        }
+        self.collection(
+            "tuning.default_groups",
+            tuning.default_groups.len(),
+            self.limits.max_tuning_default_groups,
+        )?;
+        for (index, group) in tuning.default_groups.iter().enumerate() {
+            self.string(&format!("tuning.default_groups[{index}]"), group)?;
+        }
+        Ok(())
+    }
+
+    fn tuning_option(&mut self, field: &str, option: &TuningOptionSpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, values) in [("enabled", &option.enabled), ("disabled", &option.disabled)] {
+            let values_field = format!("{field}.{name}");
+            self.collection(&values_field, values.len(), self.limits.max_tuning_option_flags)?;
+            for (index, value) in values.iter().enumerate() {
+                self.string(&format!("{values_field}[{index}]"), value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn bindings(&mut self, field: &str, bindings: &[EnvironmentBindingSpec]) -> Result<(), BuildPolicyConversionError> {
+        self.collection(field, bindings.len(), self.limits.max_environment_bindings)?;
+        for (index, binding) in bindings.iter().enumerate() {
+            self.string(&format!("{field}[{index}].name"), &binding.name)?;
+            self.text(&format!("{field}[{index}].value"), &binding.value)?;
+        }
+        Ok(())
+    }
+
+    fn builder(&mut self, field: &str, builder: &StandardBuilderPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.bindings(&format!("{field}.environment"), &builder.environment)?;
+        self.command(&format!("{field}.setup"), &builder.setup)?;
+        self.command(&format!("{field}.build"), &builder.build)?;
+        self.command(&format!("{field}.install"), &builder.install)?;
+        self.command(&format!("{field}.check"), &builder.check)
+    }
+
+    fn command(&mut self, field: &str, command: &BuilderCommandSpec) -> Result<(), BuildPolicyConversionError> {
+        self.program(&format!("{field}.program"), &command.program)?;
+        self.text(&format!("{field}.working_dir"), &command.working_dir)?;
+        self.texts(
+            &format!("{field}.args"),
+            &command.args,
+            self.limits.max_builder_arguments,
+        )?;
+        self.bindings(&format!("{field}.environment"), &command.environment)
+    }
+
+    fn program(&mut self, field: &str, program: &BuildProgramSpec) -> Result<(), BuildPolicyConversionError> {
+        self.string(&format!("{field}.path"), &program.path)?;
+        self.tool(&format!("{field}.requirement"), &program.requirement)
+    }
+
+    fn toolchain_flags(&mut self, field: &str, flags: &ToolchainFlagsSpec) -> Result<(), BuildPolicyConversionError> {
+        self.compiler_flags(&format!("{field}.common"), &flags.common)?;
+        self.compiler_flags(&format!("{field}.gnu"), &flags.gnu)?;
+        self.compiler_flags(&format!("{field}.llvm"), &flags.llvm)
+    }
+
+    fn compiler_flags(&mut self, field: &str, flags: &CompilerFlagsSpec) -> Result<(), BuildPolicyConversionError> {
+        for (name, values) in [
+            ("c", &flags.c),
+            ("cxx", &flags.cxx),
+            ("f", &flags.f),
+            ("d", &flags.d),
+            ("rust", &flags.rust),
+            ("vala", &flags.vala),
+            ("go", &flags.go),
+            ("ld", &flags.ld),
+        ] {
+            self.texts(&format!("{field}.{name}"), values, self.limits.max_compiler_flags)?;
+        }
+        Ok(())
+    }
+
+    fn pgo(&mut self, pgo: &PgoPolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.program("pgo.shell_interpreter", &pgo.shell_interpreter)?;
+        self.program("pgo.merge_program", &pgo.merge_program)?;
+        self.texts("pgo.merge_args", &pgo.merge_args, self.limits.max_pgo_arguments)?;
+        self.program("pgo.copy_program", &pgo.copy_program)?;
+        self.program("pgo.remove_program", &pgo.remove_program)?;
+        self.toolchain_flags("pgo.sample", &pgo.sample)?;
+        self.pgo_stage("pgo.stage_one", &pgo.stage_one)?;
+        self.pgo_stage("pgo.stage_two", &pgo.stage_two)?;
+        self.pgo_stage("pgo.use_profile", &pgo.use_profile)
+    }
+
+    fn pgo_stage(&mut self, field: &str, stage: &PgoStagePolicySpec) -> Result<(), BuildPolicyConversionError> {
+        self.toolchain_flags(&format!("{field}.flags"), &stage.flags)?;
+        let Some(finish) = &stage.finish else {
+            return Ok(());
+        };
+        self.text(&format!("{field}.finish.output"), &finish.output)?;
+        self.texts(
+            &format!("{field}.finish.inputs"),
+            &finish.inputs,
+            self.limits.max_pgo_inputs,
+        )?;
+        if let Some(copy_to) = &finish.copy_to {
+            self.text(&format!("{field}.finish.copy_to"), copy_to)?;
+        }
+        Ok(())
+    }
+}
+
+impl BuilderCommandSpec {
+    /// Validate a command supplied independently from a complete policy.
+    ///
+    /// Mason uses this at fragment-taking boundaries so callers cannot bypass
+    /// the collection, string, text, or semantic checks applied to commands
+    /// embedded in [`BuildPolicySpec`].
+    pub fn validate_with_limits(&self, limits: BuildPolicyValidationLimits) -> Result<(), BuildPolicyConversionError> {
+        let mut validator = ResourceValidator::new(limits);
+        validator.command("command", self)?;
+        validate_command("command", self)
+    }
+}
+
+/// Validate an environment fragment supplied independently from a complete
+/// policy under the same resource and semantic rules as policy-owned bindings.
+pub fn validate_environment_bindings_with_limits(
+    bindings: &[EnvironmentBindingSpec],
+    limits: BuildPolicyValidationLimits,
+) -> Result<(), BuildPolicyConversionError> {
+    let mut validator = ResourceValidator::new(limits);
+    validator.bindings("environment", bindings)?;
+    validate_bindings("environment", bindings)
+}
+
 impl BuildPolicySpec {
     /// Validate invariants needed before the policy can participate in a
     /// derivation fingerprint.
     pub fn validate(&self) -> Result<(), BuildPolicyConversionError> {
+        self.validate_with_limits(BuildPolicyValidationLimits::default())
+    }
+
+    /// Validate semantic invariants and all configured finite resource
+    /// ceilings before the policy participates in a derivation fingerprint.
+    pub fn validate_with_limits(&self, limits: BuildPolicyValidationLimits) -> Result<(), BuildPolicyConversionError> {
+        let mut validator = ResourceValidator::new(limits);
+        validator.policy(self)?;
+        self.validate_semantics()
+    }
+
+    fn validate_semantics(&self) -> Result<(), BuildPolicyConversionError> {
         require_string("build_subdir", &self.build_subdir)?;
         validate_layout(&self.layout)?;
         validate_tools_record("toolchains.llvm", &self.toolchains.llvm)?;
@@ -1543,12 +2256,7 @@ fn require_string(field: &str, value: &str) -> Result<(), BuildPolicyConversionE
 }
 
 fn require_text(field: &str, value: &TextSpec) -> Result<(), BuildPolicyConversionError> {
-    let empty = match value {
-        TextSpec::Literal(value) => value.is_empty(),
-        TextSpec::Context(_) => false,
-        TextSpec::Concat(parts) => parts.is_empty() || parts.iter().all(text_is_statically_empty),
-    };
-    if empty {
+    if text_is_statically_empty(value) {
         Err(BuildPolicyConversionError::Empty {
             field: field.to_owned(),
         })
@@ -1558,9 +2266,294 @@ fn require_text(field: &str, value: &TextSpec) -> Result<(), BuildPolicyConversi
 }
 
 fn text_is_statically_empty(value: &TextSpec) -> bool {
-    match value {
-        TextSpec::Literal(value) => value.is_empty(),
-        TextSpec::Context(_) => false,
-        TextSpec::Concat(parts) => parts.iter().all(text_is_statically_empty),
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        match value {
+            TextSpec::Literal(value) if !value.is_empty() => return false,
+            TextSpec::Context(_) => return false,
+            TextSpec::Concat(parts) => stack.extend(parts),
+            TextSpec::Literal(_) => {}
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use gluon_config::Source;
+
+    use super::*;
+
+    fn repository_policy() -> BuildPolicySpec {
+        evaluate_gluon(&Source::new(
+            "crates/mason/data/policy/default.glu",
+            include_str!("../../../mason/data/policy/default.glu"),
+        ))
+        .unwrap()
+        .policy
+    }
+
+    #[test]
+    fn text_node_limit_accepts_n_and_rejects_n_plus_one() {
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_text_nodes = 4;
+
+        let at_limit = TextSpec::Concat(vec![
+            TextSpec::Literal("a".to_owned()),
+            TextSpec::Literal("b".to_owned()),
+            TextSpec::Literal("c".to_owned()),
+        ]);
+        assert_eq!(at_limit.validate_with_limits(limits), Ok(()));
+
+        let over_limit = TextSpec::Concat(vec![
+            TextSpec::Literal("a".to_owned()),
+            TextSpec::Literal("b".to_owned()),
+            TextSpec::Literal("c".to_owned()),
+            TextSpec::Literal("d".to_owned()),
+        ]);
+        assert_eq!(
+            over_limit.validate_with_limits(limits),
+            Err(BuildPolicyConversionError::TextNodeLimit {
+                field: "text".to_owned(),
+                nodes: 5,
+                limit: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn text_literal_limits_accept_n_and_reject_n_plus_one() {
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_text_literal_bytes = 3;
+        limits.max_text_total_literal_bytes = 3;
+        assert_eq!(TextSpec::Literal("abc".to_owned()).validate_with_limits(limits), Ok(()));
+        assert_eq!(
+            TextSpec::Literal("abcd".to_owned()).validate_with_limits(limits),
+            Err(BuildPolicyConversionError::TextLiteralBytesLimit {
+                field: "text".to_owned(),
+                bytes: 4,
+                limit: 3,
+            })
+        );
+
+        limits.max_text_literal_bytes = 3;
+        let over_total = TextSpec::Concat(vec![
+            TextSpec::Literal("ab".to_owned()),
+            TextSpec::Literal("cd".to_owned()),
+        ]);
+        assert_eq!(
+            over_total.validate_with_limits(limits),
+            Err(BuildPolicyConversionError::TextTotalLiteralBytesLimit {
+                field: "text".to_owned(),
+                bytes: 4,
+                limit: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn deeply_nested_text_is_rejected_iteratively() {
+        let mut value = TextSpec::Literal("x".to_owned());
+        for _ in 0..20_000 {
+            value = TextSpec::Concat(vec![value]);
+        }
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_text_nodes = 25_000;
+        limits.max_text_depth = 64;
+        assert_eq!(
+            value.validate_with_limits(limits),
+            Err(BuildPolicyConversionError::TextDepthLimit {
+                field: "text".to_owned(),
+                depth: 65,
+                limit: 64,
+            })
+        );
+    }
+
+    #[test]
+    fn representative_policy_collection_accepts_n_and_rejects_n_plus_one() {
+        let policy = repository_policy();
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_targets = policy.targets.len();
+        assert_eq!(policy.validate_with_limits(limits), Ok(()));
+
+        let mut oversized = policy;
+        oversized.targets.push(oversized.targets[0].clone());
+        assert_eq!(
+            oversized.validate_with_limits(limits),
+            Err(BuildPolicyConversionError::CollectionLimit {
+                field: "targets".to_owned(),
+                count: limits.max_targets + 1,
+                limit: limits.max_targets,
+            })
+        );
+    }
+
+    #[test]
+    fn aggregate_budgets_accept_n_and_reject_n_plus_one() {
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_total_collection_items = 3;
+        let mut at_limit = ResourceValidator::new(limits);
+        at_limit.collection("first", 1, 3).unwrap();
+        at_limit.collection("second", 2, 3).unwrap();
+        assert_eq!(
+            at_limit.collection("third", 1, 3),
+            Err(BuildPolicyConversionError::TotalCollectionItemsLimit { count: 4, limit: 3 })
+        );
+
+        limits.max_total_string_bytes = 3;
+        let mut strings = ResourceValidator::new(limits);
+        strings.string("first", "a").unwrap();
+        strings.string("second", "bc").unwrap();
+        assert_eq!(
+            strings.string("third", "d"),
+            Err(BuildPolicyConversionError::TotalStringBytesLimit { bytes: 4, limit: 3 })
+        );
+
+        limits.max_total_text_literal_bytes = 3;
+        let mut text = ResourceValidator::new(limits);
+        text.text("first", &TextSpec::Literal("a".to_owned())).unwrap();
+        text.text("second", &TextSpec::Literal("bc".to_owned())).unwrap();
+        assert_eq!(
+            text.text("third", &TextSpec::Literal("d".to_owned())),
+            Err(BuildPolicyConversionError::TotalTextLiteralBytesLimit { bytes: 4, limit: 3 })
+        );
+
+        limits.max_total_text_nodes = 3;
+        let mut nodes = ResourceValidator::new(limits);
+        nodes.text("first", &TextSpec::Literal("a".to_owned())).unwrap();
+        nodes
+            .text("second", &TextSpec::Concat(vec![TextSpec::Literal("b".to_owned())]))
+            .unwrap();
+        assert_eq!(
+            nodes.text("third", &TextSpec::Context(ContextValue::Jobs)),
+            Err(BuildPolicyConversionError::TotalTextNodesLimit { nodes: 4, limit: 3 })
+        );
+    }
+
+    #[test]
+    fn actual_policy_total_text_nodes_accepts_n_and_rejects_n_plus_one() {
+        let policy = repository_policy();
+        let mut measured = ResourceValidator::new(BuildPolicyValidationLimits::default());
+        measured.policy(&policy).unwrap();
+        let total_text_nodes = measured.total_text_nodes;
+
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_total_text_nodes = total_text_nodes;
+        assert_eq!(policy.validate_with_limits(limits), Ok(()));
+
+        let mut oversized = policy;
+        oversized
+            .sources
+            .archive
+            .unpack
+            .args
+            .push(TextSpec::Context(ContextValue::Jobs));
+        assert_eq!(
+            oversized.validate_with_limits(limits),
+            Err(BuildPolicyConversionError::TotalTextNodesLimit {
+                nodes: total_text_nodes + 1,
+                limit: total_text_nodes,
+            })
+        );
+    }
+
+    #[test]
+    fn every_dynamic_policy_branch_contributes_to_the_collection_aggregate() {
+        let policy = repository_policy();
+        let mut measured = ResourceValidator::new(BuildPolicyValidationLimits::default());
+        measured.policy(&policy).unwrap();
+        let total_collection_items = measured.total_collection_items;
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_total_collection_items = total_collection_items;
+
+        macro_rules! assert_counted {
+            ($mutate:expr) => {{
+                let mut oversized = policy.clone();
+                $mutate(&mut oversized);
+                assert!(matches!(
+                    oversized.validate_with_limits(limits),
+                    Err(BuildPolicyConversionError::TotalCollectionItemsLimit { limit, .. })
+                        if limit == total_collection_items
+                ));
+            }};
+        }
+
+        assert_counted!(|value: &mut BuildPolicySpec| value.targets[0].environment.push(value.environment[0].clone()));
+        assert_counted!(|value: &mut BuildPolicySpec| value.targets[0]
+            .architecture_flags
+            .common
+            .c
+            .push(TextSpec::Literal("-fbranch-test".to_owned())));
+        assert_counted!(|value: &mut BuildPolicySpec| value.retired_targets.push(value.retired_targets[0].clone()));
+        assert_counted!(|value: &mut BuildPolicySpec| value.build_root.base.push(value.build_root.base[0].clone()));
+        assert_counted!(|value: &mut BuildPolicySpec| value
+            .sources
+            .archive
+            .unpack
+            .args
+            .push(TextSpec::Literal("branch-test".to_owned())));
+        assert_counted!(|value: &mut BuildPolicySpec| value
+            .tuning
+            .default_groups
+            .push(value.tuning.default_groups[0].clone()));
+        assert_counted!(|value: &mut BuildPolicySpec| value.environment.push(value.environment[0].clone()));
+        assert_counted!(|value: &mut BuildPolicySpec| value
+            .builders
+            .cmake
+            .environment
+            .push(value.environment[0].clone()));
+        assert_counted!(|value: &mut BuildPolicySpec| value.analyzers.push(value.analyzers[0]));
+        assert_counted!(|value: &mut BuildPolicySpec| value.pgo.merge_args.push(value.pgo.merge_args[0].clone()));
+    }
+
+    #[test]
+    fn array_patch_preflights_lengths_and_preserves_order() {
+        assert_eq!(
+            ArrayPatch::Append(vec![3]).apply_validated_with_limits(vec![1, 2], "values", 3),
+            Ok(vec![1, 2, 3])
+        );
+        assert_eq!(
+            ArrayPatch::Prepend(vec![1, 2]).apply_validated_with_limits(vec![3], "values", 3),
+            Ok(vec![1, 2, 3])
+        );
+        assert_eq!(
+            ArrayPatch::Replace(vec![1, 2, 3, 4]).apply_validated_with_limits(Vec::new(), "values", 3),
+            Err(BuildPolicyConversionError::CollectionLimit {
+                field: "values".to_owned(),
+                count: 4,
+                limit: 3,
+            })
+        );
+        assert_eq!(
+            ArrayPatch::Append(vec![3, 4]).apply_validated_with_limits(vec![1, 2], "values", 3),
+            Err(BuildPolicyConversionError::CollectionLimit {
+                field: "values".to_owned(),
+                count: 4,
+                limit: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn validated_patch_revalidates_scalar_replacements_with_same_limits() {
+        let policy = repository_policy();
+        let mut layout = policy.layout.clone();
+        layout.prefix = TextSpec::Literal("x".repeat(129));
+        let patch = BuildPolicyPatchSpec {
+            layout: ValuePatch::Set(layout),
+            ..BuildPolicyPatchSpec::default()
+        };
+        let mut limits = BuildPolicyValidationLimits::default();
+        limits.max_text_literal_bytes = 128;
+
+        assert_eq!(
+            patch.apply_validated_with_limits(policy, limits),
+            Err(BuildPolicyConversionError::TextLiteralBytesLimit {
+                field: "layout.prefix".to_owned(),
+                bytes: 129,
+                limit: 128,
+            })
+        );
     }
 }

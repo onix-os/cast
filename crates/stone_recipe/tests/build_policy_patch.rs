@@ -34,16 +34,33 @@ fn value_and_array_operations_are_total_and_order_preserving() {
         "replacement"
     );
 
-    assert_eq!(ArrayPatch::<i32>::Keep.apply(vec![1, 2]), [1, 2]);
-    assert!(ArrayPatch::Replace(Vec::<i32>::new()).apply(vec![1, 2]).is_empty());
-    assert_eq!(ArrayPatch::Prepend(vec![0, 1]).apply(vec![1, 2]), [0, 1, 1, 2]);
-    assert_eq!(ArrayPatch::Append(vec![2, 3]).apply(vec![1, 2]), [1, 2, 2, 3]);
+    assert_eq!(
+        ArrayPatch::<i32>::Keep.apply_validated_with_limits(vec![1, 2], "values", 4),
+        Ok(vec![1, 2])
+    );
+    assert!(
+        ArrayPatch::Replace(Vec::<i32>::new())
+            .apply_validated_with_limits(vec![1, 2], "values", 4)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ArrayPatch::Prepend(vec![0, 1]).apply_validated_with_limits(vec![1, 2], "values", 4),
+        Ok(vec![0, 1, 1, 2])
+    );
+    assert_eq!(
+        ArrayPatch::Append(vec![2, 3]).apply_validated_with_limits(vec![1, 2], "values", 4),
+        Ok(vec![1, 2, 2, 3])
+    );
 }
 
 #[test]
 fn default_patch_keeps_the_complete_policy() {
     let policy = repository_policy();
-    assert_eq!(BuildPolicyPatchSpec::default().apply(policy.clone()), policy);
+    assert_eq!(
+        BuildPolicyPatchSpec::default().apply_validated(policy.clone()),
+        Ok(policy)
+    );
 }
 
 #[test]
@@ -135,11 +152,6 @@ b.policy_patch {
             if values == &[AnalyzerKind::Binary, AnalyzerKind::IncludeAny]
     ));
 
-    let policy = evaluated.patch.clone().apply(repository_policy());
-    assert!(policy.targets.is_empty());
-    assert_eq!(policy.retired_targets[0].name, "removed-test");
-    assert_eq!(policy.environment.last().unwrap().name, "PATCHED");
-    assert_eq!(policy.analyzers, [AnalyzerKind::Binary, AnalyzerKind::IncludeAny]);
     assert!(matches!(
         evaluated.patch.apply_validated(repository_policy()),
         Err(BuildPolicyConversionError::Empty { field }) if field == "targets"
