@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::collections::BTreeSet;
-use std::{io, iter, path::PathBuf};
+use std::{io, path::PathBuf};
 
 use fs_err as fs;
 use moss::{Installation, package, repository, util};
-use stone_recipe::upstream;
 use stone_recipe::{
+    ToolchainSpec, UpstreamSpec,
     derivation::{BuildLock, DerivationPlan, LockedPackage, RepositorySnapshot},
-    tuning::Toolchain,
 };
 use thiserror::Error;
 
@@ -161,88 +160,75 @@ fn locked_metadata_matches(locked: &LockedPackage, package: &moss::Package) -> b
         && package.meta.architecture == locked.architecture
 }
 
-pub(crate) fn packages(builder: &Builder) -> Vec<&str> {
-    let mut packages = BASE_PACKAGES.to_vec();
+pub(crate) fn packages(builder: &Builder) -> Result<Vec<String>, Error> {
+    let mut packages = BASE_PACKAGES
+        .iter()
+        .map(|package| (*package).to_owned())
+        .collect::<Vec<_>>();
 
-    match builder.recipe.parsed.options.toolchain {
-        Toolchain::Llvm => packages.extend(LLVM_PACKAGES),
-        Toolchain::Gnu => packages.extend(GNU_PACKAGES),
+    match builder.recipe.declaration.options.toolchain {
+        ToolchainSpec::Llvm => packages.extend(LLVM_PACKAGES.iter().map(|package| (*package).to_owned())),
+        ToolchainSpec::Gnu => packages.extend(GNU_PACKAGES.iter().map(|package| (*package).to_owned())),
     }
 
-    if builder.recipe.parsed.emul32 {
-        packages.extend(BASE32_PACKAGES);
+    if builder.target.build_target.emul32() {
+        packages.extend(BASE32_PACKAGES.iter().map(|package| (*package).to_owned()));
 
-        match builder.recipe.parsed.options.toolchain {
-            Toolchain::Llvm => packages.extend(LLVM32_PACKAGES),
-            Toolchain::Gnu => packages.extend(GNU32_PACKAGES),
+        match builder.recipe.declaration.options.toolchain {
+            ToolchainSpec::Llvm => packages.extend(LLVM32_PACKAGES.iter().map(|package| (*package).to_owned())),
+            ToolchainSpec::Gnu => packages.extend(GNU32_PACKAGES.iter().map(|package| (*package).to_owned())),
         }
     }
 
-    if builder.recipe.parsed.mold {
-        packages.extend(MOLD_PACKAGES);
+    if builder.recipe.declaration.mold {
+        packages.extend(MOLD_PACKAGES.iter().map(|package| (*package).to_owned()));
     }
 
     if builder.ccache {
-        packages.extend(CCACHE_PACKAGES);
+        packages.extend(CCACHE_PACKAGES.iter().map(|package| (*package).to_owned()));
     }
 
-    packages.extend(
-        builder.recipe.parsed.build.build_deps.iter().map(String::as_str).chain(
-            builder
-                .recipe
-                .parsed
-                .profiles
-                .iter()
-                .flat_map(|kv| kv.value.build_deps.iter().map(String::as_str)),
-        ),
-    );
-    packages.extend(
-        builder.recipe.parsed.build.check_deps.iter().map(String::as_str).chain(
-            builder
-                .recipe
-                .parsed
-                .profiles
-                .iter()
-                .flat_map(|kv| kv.value.check_deps.iter().map(String::as_str)),
-        ),
-    );
+    packages.extend(declared_inputs(&builder.recipe, builder.target.build_target)?);
 
-    for upstream in &builder.recipe.parsed.upstreams {
-        if let upstream::Props::Plain { rename, .. } = &upstream.props {
-            let path = upstream.url.path();
+    for source in &builder.recipe.declaration.sources {
+        if let UpstreamSpec::Archive { url, rename, .. } = source {
+            let path = url::Url::parse(url)
+                .expect("validated package source URL")
+                .path()
+                .to_owned();
 
-            for path in iter::once(path).chain(rename.as_deref()) {
+            for path in std::iter::once(path.as_str()).chain(rename.as_deref()) {
                 if let Some((_, ext)) = path.rsplit_once('.') {
                     match ext {
                         "xz" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "zst" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "bz2" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "gz" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "lz" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "tgz" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "7z" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "zip" => {
-                            packages.push("binary(bsdtar-static)");
+                            packages.push("binary(bsdtar-static)".to_owned());
                         }
                         "rpm" => {
-                            packages.extend(["binary(rpm2cpio)", "cpio"]);
+                            packages.extend(["binary(rpm2cpio)".to_owned(), "cpio".to_owned()]);
                         }
                         "deb" => {
-                            packages.push("binary(ar)");
+                            packages.push("binary(ar)".to_owned());
                         }
                         _ => {}
                     }
@@ -252,14 +238,41 @@ pub(crate) fn packages(builder: &Builder) -> Vec<&str> {
     }
 
     // Dependencies from all scripts in the builder
-    let extra_deps = builder.extra_deps();
+    packages.extend(builder.extra_deps().map(str::to_owned));
 
-    packages
+    Ok(packages
         .into_iter()
-        .chain(extra_deps)
         // Remove dupes
         .collect::<BTreeSet<_>>()
         .into_iter()
+        .collect())
+}
+
+pub(crate) fn declared_inputs(
+    recipe: &crate::Recipe,
+    target: crate::architecture::BuildTarget,
+) -> Result<Vec<String>, Error> {
+    declared_inputs_for(&recipe.declaration, recipe.build_target_profile_key(target))
+}
+
+fn declared_inputs_for(
+    package: &stone_recipe::package::PackageSpec,
+    profile: Option<&str>,
+) -> Result<Vec<String>, Error> {
+    package
+        .builder_for_profile(profile)
+        .required_tools()
+        .iter()
+        .chain(package.native_build_inputs_for_profile(profile))
+        .chain(package.build_inputs_for_profile(profile))
+        .chain(package.check_inputs_for_profile(profile))
+        .enumerate()
+        .map(|(index, dependency)| {
+            dependency
+                .dependency()
+                .map(|dependency| dependency.to_name())
+                .map_err(|source| Error::InvalidDeclaredInput { index, source })
+        })
         .collect()
 }
 
@@ -322,12 +335,19 @@ pub enum Error {
     FrozenBuildLayoutMismatch,
     #[error("frozen job cleanup path escapes the runtime build directory")]
     UnsafeFrozenJobPath,
+    #[error("selected package input {index} is invalid")]
+    InvalidDeclaredInput {
+        index: usize,
+        #[source]
+        source: stone::relation::ParseError,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
+    use gluon_config::Source;
     use moss::package::{Flags, Meta, Name};
     use stone_recipe::derivation::{LockedOutput, LockedOutputRef};
 
@@ -373,6 +393,43 @@ mod tests {
         }
     }
 
+    fn selected_inputs_package() -> stone_recipe::package::PackageSpec {
+        let source = Source::new(
+            "stone.glu",
+            r#"let b = import! boulder.package.v2
+let base = b.mk_package (b.meta {
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.invalid", license = ["MPL-2.0"],
+})
+let scripts = b.defaults.scripts
+let selected = b.profile_with {
+    name = "x86_64",
+    builder = b.builder.shell scripts [b.dep.binary "profile-builder"],
+    hooks = b.defaults.hooks,
+    native_build_inputs = [b.dep.package "profile-native"],
+    build_inputs = [b.dep.package "profile-build"],
+    check_inputs = [b.dep.package "profile-check"],
+}
+let unrelated = b.profile_with {
+    name = "aarch64",
+    builder = b.builder.shell scripts [b.dep.binary "unrelated-builder"],
+    hooks = b.defaults.hooks,
+    native_build_inputs = [b.dep.package "unrelated-native"],
+    build_inputs = [], check_inputs = [],
+}
+{
+    builder = b.builder.shell scripts [b.dep.binary "base-builder"],
+    native_build_inputs = [b.dep.package "base-native"],
+    build_inputs = [b.dep.package "base-build"],
+    check_inputs = [b.dep.package "base-check"],
+    profiles = [selected, unrelated],
+    .. base
+}
+"#,
+        );
+        stone_recipe::package::evaluate_gluon(&source).unwrap().package
+    }
+
     #[test]
     fn exact_root_rejects_locked_metadata_drift() {
         let locked = locked();
@@ -387,5 +444,33 @@ mod tests {
         package = self::package();
         package.meta.architecture = "aarch64".to_owned();
         assert!(!locked_metadata_matches(&locked, &package));
+    }
+
+    #[test]
+    fn direct_inputs_use_root_only_without_a_profile() {
+        let package = selected_inputs_package();
+
+        assert_eq!(
+            declared_inputs_for(&package, None).unwrap(),
+            ["binary(base-builder)", "base-native", "base-build", "base-check"]
+        );
+    }
+
+    #[test]
+    fn direct_inputs_use_only_the_selected_profile() {
+        let package = selected_inputs_package();
+        let selected = declared_inputs_for(&package, Some("x86_64")).unwrap();
+
+        assert_eq!(
+            selected,
+            [
+                "binary(profile-builder)",
+                "profile-native",
+                "profile-build",
+                "profile-check"
+            ]
+        );
+        assert!(selected.iter().all(|input| !input.contains("unrelated")));
+        assert!(selected.iter().all(|input| !input.contains("base-")));
     }
 }

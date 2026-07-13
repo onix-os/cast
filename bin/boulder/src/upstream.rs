@@ -11,7 +11,7 @@ use crate::{
 };
 use futures_util::{StreamExt, TryStreamExt, stream};
 use moss::runtime;
-use stone_recipe::{derivation::LockedSource, upstream};
+use stone_recipe::{UpstreamSpec, derivation::LockedSource};
 use thiserror::Error;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 
@@ -36,24 +36,30 @@ pub enum Upstream {
 }
 
 impl Upstream {
-    /// Constructs an [Upstream] based on the information provided
-    /// in the `upstream` section of a Stone recipe.
-    pub fn from_recipe_upstream(
-        upstream: upstream::Upstream,
+    /// Constructs an upstream from one concrete package-v2 source request.
+    pub fn from_package_source(
+        source: &UpstreamSpec,
         original_index: usize,
         locked_commit: Option<&str>,
     ) -> Result<Self, Error> {
-        match upstream.props {
-            upstream::Props::Plain { hash, rename, .. } => Ok(Self::Plain(Plain {
-                url: upstream.url,
+        match source {
+            UpstreamSpec::Archive { url, hash, rename, .. } => Ok(Self::Plain(Plain {
+                url: url.parse().map_err(|source| Error::AuthoredSourceUrl {
+                    index: original_index,
+                    source,
+                })?,
                 hash: hash.parse().map_err(plain::Error::from)?,
-                rename,
+                rename: rename.clone(),
             })),
-            upstream::Props::Git { git_ref, .. } => {
-                let commit = locked_commit.unwrap_or(&git_ref).to_owned();
-                let name = moss::util::uri_file_name(&upstream.url).to_owned();
+            UpstreamSpec::Git { url, git_ref, .. } => {
+                let commit = locked_commit.unwrap_or(git_ref).to_owned();
+                let url = url.parse().map_err(|source| Error::AuthoredSourceUrl {
+                    index: original_index,
+                    source,
+                })?;
+                let name = moss::util::uri_file_name(&url).to_owned();
                 Ok(Self::Git(Git {
-                    url: upstream.url,
+                    url,
                     commit,
                     name,
                     original_index,
@@ -137,12 +143,11 @@ impl Stored {
 /// Returns a list of upstream from a Stone recipe.
 pub fn parse_recipe(recipe: &Recipe) -> Result<Vec<Upstream>, Error> {
     recipe
-        .parsed
-        .upstreams
+        .declaration
+        .sources
         .iter()
-        .cloned()
         .enumerate()
-        .map(|(index, upstream)| {
+        .map(|(index, source)| {
             let locked_commit = recipe
                 .source_lock
                 .as_ref()
@@ -151,7 +156,7 @@ pub fn parse_recipe(recipe: &Recipe) -> Result<Vec<Upstream>, Error> {
                     SourceResolution::Git(source) => Some(source.commit.as_str()),
                     SourceResolution::Archive(_) => None,
                 });
-            Upstream::from_recipe_upstream(upstream, index, locked_commit)
+            Upstream::from_package_source(source, index, locked_commit)
         })
         .collect()
 }
@@ -291,19 +296,19 @@ fn sync_upstreams(upstreams: &[Upstream], storage_dir: &Path, share_dir: &Path) 
 
 pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<WriteOutcome, Error> {
     let sources = recipe
-        .parsed
-        .upstreams
+        .declaration
+        .sources
         .iter()
         .enumerate()
-        .map(|(index, upstream)| {
+        .map(|(index, source)| {
             let order = u32::try_from(index).map_err(|_| Error::SourceOrderTooLarge(index))?;
-            Ok(match &upstream.props {
-                upstream::Props::Plain { hash, .. } => SourceResolution::Archive(ArchiveResolution {
+            Ok(match source {
+                UpstreamSpec::Archive { url, hash, .. } => SourceResolution::Archive(ArchiveResolution {
                     order,
-                    url: upstream.url.as_str().to_owned(),
+                    url: url.clone(),
                     sha256: hash.clone(),
                 }),
-                upstream::Props::Git { git_ref, .. } => {
+                UpstreamSpec::Git { url, git_ref, .. } => {
                     let stored = stored
                         .iter()
                         .find_map(|stored| match stored {
@@ -313,7 +318,7 @@ pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> 
                         .ok_or(Error::MissingStoredSource(index))?;
                     SourceResolution::Git(GitResolution {
                         order,
-                        url: upstream.url.as_str().to_owned(),
+                        url: url.clone(),
                         requested_ref: git_ref.clone(),
                         commit: stored.resolved_hash.clone(),
                     })
@@ -322,7 +327,7 @@ pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> 
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let lock = SourceLock::new(sources);
-    lock.validate_against(&recipe.parsed)
+    lock.validate_against(&recipe.declaration.sources)
         .map_err(|error| Error::GeneratedSourceLock(Box::new(error)))?;
 
     let path = recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME);
@@ -366,6 +371,12 @@ pub enum Error {
     },
     #[error("locked source {index} has an invalid URL")]
     LockedSourceUrl {
+        index: usize,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error("authored source {index} has an invalid URL")]
+    AuthoredSourceUrl {
         index: usize,
         #[source]
         source: url::ParseError,

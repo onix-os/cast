@@ -19,7 +19,7 @@ use std::{
 
 use fs_err as fs;
 use gluon_config::{Diagnostic, Evaluator, Source as GluonSource};
-use stone_recipe::upstream::Props;
+use stone_recipe::UpstreamSpec;
 use thiserror::Error;
 use url::Url;
 
@@ -119,34 +119,33 @@ impl SourceLock {
     }
 
     /// Ensure this lock still describes the authored upstream list exactly.
-    pub fn validate_against(&self, recipe: &stone_recipe::Recipe) -> Result<(), ValidationError> {
+    pub fn validate_against(&self, sources: &[UpstreamSpec]) -> Result<(), ValidationError> {
         self.validate()?;
-        if self.sources.len() != recipe.upstreams.len() {
+        if self.sources.len() != sources.len() {
             return Err(ValidationError::SourceCount {
-                expected: recipe.upstreams.len(),
+                expected: sources.len(),
                 found: self.sources.len(),
             });
         }
 
-        for (index, (locked, authored)) in self.sources.iter().zip(&recipe.upstreams).enumerate() {
-            let authored_url = authored.url.as_str();
-            match (locked, &authored.props) {
-                (SourceResolution::Archive(locked), Props::Plain { hash, .. }) => {
-                    validate_equal(index, "url", authored_url, &locked.url)?;
+        for (index, (locked, authored)) in self.sources.iter().zip(sources).enumerate() {
+            match (locked, authored) {
+                (SourceResolution::Archive(locked), UpstreamSpec::Archive { url, hash, .. }) => {
+                    validate_equal(index, "url", url, &locked.url)?;
                     validate_equal(index, "sha256", hash, &locked.sha256)?;
                 }
-                (SourceResolution::Git(locked), Props::Git { git_ref, .. }) => {
-                    validate_equal(index, "url", authored_url, &locked.url)?;
+                (SourceResolution::Git(locked), UpstreamSpec::Git { url, git_ref, .. }) => {
+                    validate_equal(index, "url", url, &locked.url)?;
                     validate_equal(index, "requested_ref", git_ref, &locked.requested_ref)?;
                 }
-                (SourceResolution::Archive(_), Props::Git { .. }) => {
+                (SourceResolution::Archive(_), UpstreamSpec::Git { .. }) => {
                     return Err(ValidationError::SourceKind {
                         order: index,
                         expected: "git",
                         found: "archive",
                     });
                 }
-                (SourceResolution::Git(_), Props::Plain { .. }) => {
+                (SourceResolution::Git(_), UpstreamSpec::Archive { .. }) => {
                     return Err(ValidationError::SourceKind {
                         order: index,
                         expected: "archive",

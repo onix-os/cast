@@ -2,15 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use itertools::Itertools;
-use std::{collections::BTreeSet, num::NonZeroUsize, path::Path};
-use stone_recipe::upstream;
-
 use moss::util;
+use std::{collections::BTreeSet, num::NonZeroUsize, path::Path};
 use stone_recipe::{
-    Script,
+    Script, ToolchainSpec, UpstreamSpec,
     package::{PhaseSpec, StepSpec},
-    script,
-    tuning::{self, Toolchain},
+    script, tuning,
 };
 use tui::Styled;
 
@@ -78,8 +75,6 @@ impl Phase {
         ccache: bool,
         num_jobs: NonZeroUsize,
     ) -> Result<Option<Script>, Error> {
-        let root_build = &recipe.parsed.build;
-        let target_build = recipe.build_target_definition(target);
         let typed_phases = recipe.build_target_phases(target);
         let mut typed_phase = match self {
             Phase::Prepare => PhaseSpec::default(),
@@ -92,7 +87,7 @@ impl Phase {
 
         if !typed_phase.is_empty()
             && matches!(self, Phase::Workload)
-            && matches!(recipe.parsed.options.toolchain, Toolchain::Llvm)
+            && matches!(recipe.declaration.options.toolchain, ToolchainSpec::Llvm)
         {
             if matches!(pgo_stage, Some(pgo::Stage::One)) {
                 typed_phase.steps.push(StepSpec::Shell {
@@ -105,28 +100,7 @@ impl Phase {
             }
         }
 
-        let legacy_content = match self {
-            Phase::Prepare => Some(prepare_script(&recipe.parsed.upstreams)),
-            Phase::Setup => target_build.setup.clone().or_else(|| root_build.setup.clone()),
-            Phase::Build => target_build.build.clone().or_else(|| root_build.build.clone()),
-            Phase::Check => target_build.check.clone().or_else(|| root_build.check.clone()),
-            Phase::Install => target_build.install.clone().or_else(|| root_build.install.clone()),
-            Phase::Workload => match target_build.workload.clone().or_else(|| root_build.workload.clone()) {
-                Some(mut content) => {
-                    if matches!(recipe.parsed.options.toolchain, Toolchain::Llvm) {
-                        if matches!(pgo_stage, Some(pgo::Stage::One)) {
-                            content.push_str("%llvm_merge_s1");
-                        } else if matches!(pgo_stage, Some(pgo::Stage::Two)) {
-                            content.push_str("%llvm_merge_s2");
-                        }
-                    }
-
-                    Some(content)
-                }
-                None => None,
-            },
-        };
-        let content = if !typed_phase.is_empty() { None } else { legacy_content };
+        let content = matches!(self, Phase::Prepare).then(|| prepare_script(&recipe.declaration.sources));
         if typed_phase.is_empty() && content.is_none() {
             return Ok(None);
         }
@@ -135,16 +109,6 @@ impl Phase {
             return Ok(None);
         }
 
-        let legacy_env = if typed_phases.environment.is_empty() {
-            target_build
-                .environment
-                .as_deref()
-                .or(root_build.environment.as_deref())
-                .filter(|env| *env != "(null)" && !env.is_empty() && !matches!(self, Phase::Prepare))
-                .unwrap_or_default()
-        } else {
-            ""
-        };
         let typed_env = if matches!(self, Phase::Prepare) {
             String::new()
         } else {
@@ -156,7 +120,7 @@ impl Phase {
                 .collect::<Result<Vec<_>, _>>()?
                 .join("\n")
         };
-        let env = format!("%scriptBase\n{legacy_env}\n{typed_env}\n");
+        let env = format!("%scriptBase\n{typed_env}\n");
 
         let mut parser = script::Parser::new().env(env);
 
@@ -165,7 +129,7 @@ impl Phase {
         let work_dir = if matches!(self, Phase::Prepare) {
             build_dir.clone()
         } else {
-            work_dir(&build_dir, &recipe.parsed.upstreams)
+            work_dir(&build_dir, &recipe.declaration.sources)
         };
         for arch in ["base", &build_target] {
             let macros = macros
@@ -181,9 +145,9 @@ impl Phase {
             parser.add_macros(macros.clone());
         }
 
-        parser.add_definition("name", &recipe.parsed.source.name);
-        parser.add_definition("version", &recipe.parsed.source.version);
-        parser.add_definition("release", recipe.parsed.source.release);
+        parser.add_definition("name", &recipe.declaration.meta.pname);
+        parser.add_definition("version", &recipe.declaration.meta.version);
+        parser.add_definition("release", recipe.declaration.meta.release);
         parser.add_definition("jobs", num_jobs);
         parser.add_definition("pkgdir", paths.recipe().guest.join("pkg").display());
         parser.add_definition("sourcedir", paths.upstreams().guest.display());
@@ -217,7 +181,7 @@ impl Phase {
         }
 
         /* Set the relevant compilers */
-        if matches!(recipe.parsed.options.toolchain, Toolchain::Llvm) {
+        if matches!(recipe.declaration.options.toolchain, ToolchainSpec::Llvm) {
             parser.add_definition("compiler_c", "clang");
             parser.add_definition("compiler_cxx", "clang++");
             parser.add_definition("compiler_objc", "clang");
@@ -248,9 +212,9 @@ impl Phase {
         }
         parser.add_definition("compiler_path", path);
 
-        if recipe.parsed.mold {
+        if recipe.declaration.mold {
             parser.add_definition("compiler_ld", "ld.mold");
-        } else if matches!(recipe.parsed.options.toolchain, Toolchain::Llvm) {
+        } else if matches!(recipe.declaration.options.toolchain, ToolchainSpec::Llvm) {
             parser.add_definition("compiler_ld", "ld.lld");
         } else {
             parser.add_definition("compiler_ld", "ld.bfd");
@@ -282,7 +246,7 @@ impl Phase {
                     build_dir: Path::new(&builder_dir),
                     install_root: &paths.install().guest,
                     jobs: num_jobs,
-                    package_name: &recipe.parsed.source.name,
+                    package_name: &recipe.declaration.meta.pname,
                 },
             )?))
         }
@@ -430,29 +394,31 @@ echo "Explicitly using dash to execute ./configure"
     })
 }
 
-fn prepare_script(upstreams: &[upstream::Upstream]) -> String {
+fn prepare_script(sources: &[UpstreamSpec]) -> String {
     use std::fmt::Write;
 
     let mut content = String::default();
 
-    for upstream in upstreams {
-        match &upstream.props {
-            upstream::Props::Plain {
+    for source in sources {
+        match source {
+            UpstreamSpec::Archive {
+                url,
                 rename,
                 strip_dirs,
                 unpack,
                 unpack_dir,
                 ..
             } => {
-                if !unpack {
+                if !*unpack {
                     continue;
                 }
-                let file_name = util::uri_file_name(&upstream.url);
-                let rename = rename.as_deref().unwrap_or(file_name);
-                let unpack_dir = unpack_dir
-                    .as_ref()
-                    .map(|dir| dir.display().to_string())
-                    .unwrap_or_else(|| rename.to_owned());
+                let file_name = url
+                    .parse()
+                    .ok()
+                    .map(|url| util::uri_file_name(&url).to_owned())
+                    .unwrap_or_default();
+                let rename = rename.as_deref().unwrap_or(file_name.as_str());
+                let unpack_dir = unpack_dir.as_ref().cloned().unwrap_or_else(|| rename.to_owned());
                 let strip_dirs = strip_dirs.unwrap_or(1);
 
                 let _ = writeln!(&mut content, "mkdir -p {unpack_dir}");
@@ -461,12 +427,13 @@ fn prepare_script(upstreams: &[upstream::Upstream]) -> String {
                     r#"bsdtar-static xf "%(sourcedir)/{rename}" -C "{unpack_dir}" --strip-components={strip_dirs} --no-same-owner || (echo "Failed to extract archive"; exit 1);"#,
                 );
             }
-            upstream::Props::Git { clone_dir, .. } => {
-                let source = util::uri_file_name(&upstream.url);
-                let target = clone_dir
-                    .as_ref()
-                    .map(|dir| dir.display().to_string())
-                    .unwrap_or_else(|| source.to_owned());
+            UpstreamSpec::Git { url, clone_dir, .. } => {
+                let source = url
+                    .parse()
+                    .ok()
+                    .map(|url| util::uri_file_name(&url).to_owned())
+                    .unwrap_or_default();
+                let target = clone_dir.as_ref().cloned().unwrap_or_else(|| source.to_owned());
 
                 let _ = writeln!(&mut content, "mkdir -p {target}");
                 let _ = writeln!(
@@ -507,17 +474,17 @@ fn add_tuning(
 
     tuning.enable("architecture", None)?;
 
-    for kv in &recipe.parsed.tuning {
+    for kv in &recipe.declaration.tuning {
         match &kv.value {
-            stone_recipe::Tuning::Enable => tuning.enable(&kv.key, None)?,
-            stone_recipe::Tuning::Disable => tuning.disable(&kv.key)?,
-            stone_recipe::Tuning::Config(config) => tuning.enable(&kv.key, Some(config.clone()))?,
+            stone_recipe::TuningSpec::Enable => tuning.enable(&kv.key, None)?,
+            stone_recipe::TuningSpec::Disable => tuning.disable(&kv.key)?,
+            stone_recipe::TuningSpec::Config { value } => tuning.enable(&kv.key, Some(value.clone()))?,
         }
     }
 
     // Add defaults that aren't already in recipe
     for group in default_tuning_groups(target, macros) {
-        if !recipe.parsed.tuning.iter().any(|kv| &kv.key == group) {
+        if !recipe.declaration.tuning.iter().any(|kv| &kv.key == group) {
             tuning.enable(group, None)?;
         }
     }
@@ -528,7 +495,7 @@ fn add_tuning(
             pgo::Stage::Two => tuning.enable("pgostage2", None)?,
             pgo::Stage::Use => {
                 tuning.enable("pgouse", None)?;
-                if recipe.parsed.options.samplepgo {
+                if recipe.declaration.options.samplepgo {
                     tuning.enable("pgosample", None)?;
                 }
             }
@@ -544,7 +511,7 @@ fn add_tuning(
             .join(" ")
     }
 
-    let toolchain = recipe.parsed.options.toolchain;
+    let toolchain = recipe.declaration.options.toolchain.into();
     let flags = tuning.build()?;
 
     let mut cflags = fmt_flags(
@@ -588,7 +555,7 @@ fn add_tuning(
             .filter_map(|flag| flag.get(tuning::CompilerFlag::Go, toolchain)),
     );
 
-    if recipe.parsed.mold {
+    if recipe.declaration.mold {
         cflags.push_str(" -fuse-ld=mold");
         cxxflags.push_str(" -fuse-ld=mold");
         rustflags.push_str(" -Clink-arg=-fuse-ld=mold");

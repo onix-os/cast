@@ -22,7 +22,7 @@ pub mod pgo;
 pub(crate) mod root;
 
 pub struct Builder {
-    pub targets: Vec<Target>,
+    pub target: Target,
     pub recipe: Recipe,
     pub paths: Paths,
     pub macros: Macros,
@@ -56,6 +56,7 @@ impl Builder {
         output_dir: impl Into<PathBuf>,
         jobs: NonZeroUsize,
         source_date_epoch: Option<i64>,
+        requested_target: &str,
     ) -> Result<Self, Error> {
         let recipe = match source_date_epoch {
             Some(epoch) => {
@@ -76,32 +77,33 @@ impl Builder {
             return Err(Error::NoBuildTargets);
         }
 
-        let targets = build_targets
+        let build_target = build_targets
+            .iter()
+            .copied()
+            .find(|target| target.to_string() == requested_target)
+            .ok_or_else(|| Error::UnknownTarget {
+                requested: requested_target.to_owned(),
+                available: build_targets.into_iter().map(|target| target.to_string()).collect(),
+            })?;
+        let stages = pgo::stages(&recipe, build_target)
+            .map(|stages| stages.into_iter().map(Some).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![None]);
+        let target_jobs = stages
             .into_iter()
-            .map(|build_target| {
-                let stages = pgo::stages(&recipe, build_target)
-                    .map(|stages| stages.into_iter().map(Some).collect::<Vec<_>>())
-                    .unwrap_or_else(|| vec![None]);
-
-                let jobs = stages
-                    .into_iter()
-                    .map(|stage| Job::new(build_target, stage, &recipe, &paths, &macros, ccache, jobs))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(Target {
-                    build_target,
-                    policy: macros.selection(build_target),
-                    jobs,
-                })
-            })
-            .collect::<Result<Vec<_>, job::Error>>()?;
+            .map(|stage| Job::new(build_target, stage, &recipe, &paths, &macros, ccache, jobs))
+            .collect::<Result<Vec<_>, _>>()?;
+        let target = Target {
+            build_target,
+            policy: macros.selection(build_target),
+            jobs: target_jobs,
+        };
 
         let profiles = profile::Manager::new(&env)?;
         let repos = profiles.repositories(&profile)?.clone();
         let profile_fingerprints = profiles.fingerprints.clone();
 
         Ok(Self {
-            targets,
+            target,
             recipe,
             paths,
             macros,
@@ -114,12 +116,10 @@ impl Builder {
     }
 
     pub fn extra_deps(&self) -> impl Iterator<Item = &str> {
-        self.targets.iter().flat_map(|target| {
-            target.jobs.iter().flat_map(|job| {
-                job.phases
-                    .values()
-                    .flat_map(|script| script.dependencies.iter().map(String::as_str))
-            })
+        self.target.jobs.iter().flat_map(|job| {
+            job.phases
+                .values()
+                .flat_map(|script| script.dependencies.iter().map(String::as_str))
         })
     }
 
@@ -230,6 +230,8 @@ pub fn format_profile(script: &Script) -> String {
 pub enum Error {
     #[error("no supported build targets for recipe")]
     NoBuildTargets,
+    #[error("unknown build target `{requested}`; available targets: {}", available.join(", "))]
+    UnknownTarget { requested: String, available: Vec<String> },
     #[error("invalid SOURCE_DATE_EPOCH {0}")]
     InvalidSourceDateEpoch(i64),
     #[error("macros")]

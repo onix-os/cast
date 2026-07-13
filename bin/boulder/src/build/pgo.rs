@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use stone_recipe::tuning::Toolchain;
+use stone_recipe::ToolchainSpec;
 
 use crate::architecture::BuildTarget;
 use crate::recipe::Recipe;
 
 pub fn stages(recipe: &Recipe, target: BuildTarget) -> Option<Vec<Stage>> {
-    let build = recipe.build_target_definition(target);
+    let phases = recipe.build_target_phases(target);
 
-    build.workload.is_some().then(|| {
+    (!phases.workload.is_empty()).then(|| {
         let mut stages = vec![Stage::One];
 
-        if matches!(recipe.parsed.options.toolchain, Toolchain::Llvm) && recipe.parsed.options.cspgo {
+        if matches!(recipe.declaration.options.toolchain, ToolchainSpec::Llvm) && recipe.declaration.options.cspgo {
             stages.push(Stage::Two);
         }
 
@@ -30,4 +30,52 @@ pub enum Stage {
     Two,
     #[strum(serialize = "use")]
     Use,
+}
+
+#[cfg(test)]
+mod tests {
+    use fs_err as fs;
+
+    use super::*;
+
+    #[test]
+    fn selected_profile_workload_preserves_llvm_pgo_stages() {
+        let target = BuildTarget::Native(crate::architecture::host());
+        let target_name = target.to_string();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("stone.glu"),
+            format!(
+                r#"let b = import! boulder.package.v2
+let base = b.mk_package (b.meta {{
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.invalid", license = ["MPL-2.0"],
+}})
+let scripts = b.scripts {{
+    workload = b.phase [b.step.shell "run-workload"],
+    .. b.defaults.scripts
+}}
+let profile = b.profile_with {{
+    name = {target_name:?},
+    builder = b.builder.shell scripts [],
+    hooks = b.defaults.hooks,
+    native_build_inputs = [], build_inputs = [], check_inputs = [],
+}}
+{{
+    options = b.options {{
+        cspgo = b.boolean.true,
+        .. b.defaults.options
+    }},
+    profiles = [profile],
+    .. base
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let recipe = Recipe::load(root.path()).unwrap();
+
+        assert_eq!(recipe.build_target_profile_key(target), Some(target_name.as_str()));
+        assert_eq!(stages(&recipe, target), Some(vec![Stage::One, Stage::Two, Stage::Use]));
+    }
 }

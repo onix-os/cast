@@ -17,7 +17,7 @@ use clap::{Args, Parser};
 use fs_err::{self as fs};
 use itertools::Itertools;
 use moss::{request, runtime, util};
-use stone_recipe::upstream;
+use stone_recipe::{UpstreamSpec, upstream};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tui::{
@@ -332,7 +332,7 @@ fn eval(path: PathBuf) -> Result<(), Error> {
 
 fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
     let recipe = load_authored_gluon(&recipe)?;
-    let previous = recipe.parsed.source.release;
+    let previous = u64::try_from(recipe.declaration.meta.release).expect("validated package release");
     let proposed = match release {
         Some(release) => release,
         None => previous.checked_add(1).ok_or(Error::ReleaseOverflow)?,
@@ -380,10 +380,10 @@ fn update(
     }
     let recipe = load_authored_gluon(recipe_path)?;
 
-    if sources.len() > recipe.parsed.upstreams.len() {
+    if sources.len() > recipe.declaration.sources.len() {
         return Err(Error::TooManyUpstreamUpdates {
             supplied: sources.len(),
-            available: recipe.parsed.upstreams.len(),
+            available: recipe.declaration.sources.len(),
         });
     }
 
@@ -402,42 +402,34 @@ fn update(
     };
 
     let mut changes = Vec::new();
-    if proposed_version != recipe.parsed.source.version {
+    if proposed_version != recipe.declaration.meta.version {
         changes.push(SuggestedChange::new(
             "meta.version",
-            &recipe.parsed.source.version,
+            &recipe.declaration.meta.version,
             proposed_version,
         ));
     }
     if !no_bump {
-        let proposed_release = recipe
-            .parsed
-            .source
-            .release
-            .checked_add(1)
-            .ok_or(Error::ReleaseOverflow)?;
-        changes.push(SuggestedChange::new(
-            "meta.release",
-            recipe.parsed.source.release,
-            proposed_release,
-        ));
+        let release = u64::try_from(recipe.declaration.meta.release).expect("validated package release");
+        let proposed_release = release.checked_add(1).ok_or(Error::ReleaseOverflow)?;
+        changes.push(SuggestedChange::new("meta.release", release, proposed_release));
     }
 
     let mpb = MultiProgress::new();
-    for (index, (original, update)) in recipe.parsed.upstreams.iter().zip(sources).enumerate() {
-        match (&original.props, update) {
-            (upstream::Props::Plain { .. }, UpdatedSource::Git(_)) => {
+    for (index, (original, update)) in recipe.declaration.sources.iter().zip(sources).enumerate() {
+        match (original, update) {
+            (UpstreamSpec::Archive { .. }, UpdatedSource::Git(_)) => {
                 return Err(Error::UpstreamMismatch(index, "Plain", "Git"));
             }
-            (upstream::Props::Git { .. }, UpdatedSource::Plain(_)) => {
+            (UpstreamSpec::Git { .. }, UpdatedSource::Plain(_)) => {
                 return Err(Error::UpstreamMismatch(index, "Git", "Plain"));
             }
-            (upstream::Props::Plain { hash, .. }, UpdatedSource::Plain(new_uri)) => {
+            (UpstreamSpec::Archive { url, hash, .. }, UpdatedSource::Plain(new_uri)) => {
                 let new_hash = runtime::block_on(fetch_and_cache_upstream(&env, new_uri.clone(), &mpb))?;
-                if original.url != new_uri {
+                if url != new_uri.as_str() {
                     changes.push(SuggestedChange::new(
                         format!("sources[{index}].url"),
-                        original.url.as_str(),
+                        url,
                         new_uri.as_str(),
                     ));
                 }
@@ -445,7 +437,7 @@ fn update(
                     changes.push(SuggestedChange::new(format!("sources[{index}].hash"), hash, new_hash));
                 }
             }
-            (upstream::Props::Git { git_ref, .. }, UpdatedSource::Git(new_ref)) => {
+            (UpstreamSpec::Git { git_ref, .. }, UpdatedSource::Git(new_ref)) => {
                 if *git_ref != new_ref {
                     changes.push(SuggestedChange::new(
                         format!("sources[{index}].git_ref"),

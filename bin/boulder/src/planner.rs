@@ -21,7 +21,6 @@ use stone_recipe::{
         PackageIdentity, PathRuleKind, PathRulePlan, PhasePlan, Platform, RepositorySnapshot, StepPlan,
     },
     script,
-    tuning::Toolchain,
 };
 use thiserror::Error;
 
@@ -82,19 +81,9 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         NonZeroUsize::new(usize::try_from(request.jobs.get()).expect("u32 fits supported usize"))
             .expect("jobs is non-zero"),
         Some(request.source_date_epoch),
+        &request.target,
     )?;
-    let target = builder
-        .targets
-        .iter()
-        .find(|target| target.build_target.to_string() == request.target)
-        .ok_or_else(|| Error::UnknownTarget {
-            requested: request.target.clone(),
-            available: builder
-                .targets
-                .iter()
-                .map(|target| target.build_target.to_string())
-                .collect(),
-        })?;
+    let target = &builder.target;
 
     let packager = Packager::new(
         &builder.paths,
@@ -103,10 +92,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         std::slice::from_ref(target),
     )?;
     let package_names = packager.resolved_packages().keys().cloned().collect::<Vec<_>>();
-    let mut requested_packages = build::root::packages(&builder)
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
+    let mut requested_packages = build::root::packages(&builder)?;
     for package in packager.resolved_packages().values() {
         requested_packages.extend(
             package
@@ -121,7 +107,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
 
     let source_lock_bytes = match fs::read(builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME)) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && builder.recipe.parsed.upstreams.is_empty() => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && builder.recipe.declaration.sources.is_empty() => {
             Vec::new()
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(Error::MissingSourceLock),
@@ -129,9 +115,9 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
     let source_lock_digest = sha256(&source_lock_bytes);
     let profile_fingerprint = combined_profile_fingerprint(&builder.profile_fingerprints);
-    let toolchain_name = match builder.recipe.parsed.options.toolchain {
-        Toolchain::Llvm => "llvm",
-        Toolchain::Gnu => "gnu",
+    let toolchain_name = match builder.recipe.declaration.options.toolchain {
+        stone_recipe::ToolchainSpec::Llvm => "llvm",
+        stone_recipe::ToolchainSpec::Gnu => "gnu",
     };
     let boulder_version = tools_buildinfo::get_simple_version();
     let jobs = request.jobs.to_string();
@@ -181,18 +167,18 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         return Err(Error::UnsupportedPackageDirectoryInput { package_dir });
     }
     let outputs = freeze_outputs(
-        &builder.recipe.parsed.source.name,
+        &builder.recipe.declaration.meta.pname,
         packager.resolved_packages(),
         &build_lock,
     )?;
     let mut plan = DerivationPlan::new(
         PackageIdentity {
-            name: builder.recipe.parsed.source.name.clone(),
-            version: builder.recipe.parsed.source.version.clone(),
-            source_release: builder.recipe.parsed.source.release,
+            name: builder.recipe.declaration.meta.pname.clone(),
+            version: builder.recipe.declaration.meta.version.clone(),
+            source_release: u64::try_from(builder.recipe.declaration.meta.release).expect("validated package release"),
             build_release: request.build_release.get(),
-            homepage: builder.recipe.parsed.source.homepage.clone(),
-            licenses: builder.recipe.parsed.source.license.clone(),
+            homepage: builder.recipe.declaration.meta.homepage.clone(),
+            licenses: builder.recipe.declaration.meta.license.clone(),
             architecture: artifact_architecture(target.build_target)?.to_string(),
         },
         build_lock,
@@ -213,7 +199,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         package_dir,
     };
     plan.execution = ExecutionPolicy {
-        network: if builder.recipe.parsed.options.networking {
+        network: if builder.recipe.declaration.options.networking {
             NetworkMode::Enabled
         } else {
             NetworkMode::Disabled
@@ -223,7 +209,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
     plan.tuning = builder
         .recipe
-        .parsed
+        .declaration
         .tuning
         .iter()
         .map(|entry| format!("{}={:?}", entry.key, entry.value))
@@ -233,28 +219,20 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         fingerprint: tools_buildinfo::get_simple_version(),
     }];
     plan.analysis = AnalysisPlan {
-        toolchain: match builder.recipe.parsed.options.toolchain {
-            Toolchain::Llvm => AnalysisToolchain::Llvm,
-            Toolchain::Gnu => AnalysisToolchain::Gnu,
+        toolchain: match builder.recipe.declaration.options.toolchain {
+            stone_recipe::ToolchainSpec::Llvm => AnalysisToolchain::Llvm,
+            stone_recipe::ToolchainSpec::Gnu => AnalysisToolchain::Gnu,
         },
-        debug: builder.recipe.parsed.options.debug,
-        strip: builder.recipe.parsed.options.strip,
-        compress_man: builder.recipe.parsed.options.compressman,
-        remove_libtool: builder.recipe.parsed.options.lastrip,
+        debug: builder.recipe.declaration.options.debug,
+        strip: builder.recipe.declaration.options.strip,
+        compress_man: builder.recipe.declaration.options.compressman,
+        remove_libtool: builder.recipe.declaration.options.lastrip,
     };
-    plan.manifest_build_inputs = builder
-        .recipe
-        .parsed
-        .build
-        .build_deps
-        .iter()
-        .chain(&builder.recipe.parsed.build.check_deps)
-        .cloned()
-        .collect();
+    plan.manifest_build_inputs = build::root::declared_inputs(&builder.recipe, target.build_target)?;
     plan.collection_rules = packager
         .collection_rules()
         .map(|(package, kind, pattern)| CollectionRulePlan {
-            output: output_name(&builder.recipe.parsed.source.name, package),
+            output: output_name(&builder.recipe.declaration.meta.pname, package),
             kind: path_rule_kind(kind),
             pattern: pattern.to_owned(),
         })
@@ -547,12 +525,12 @@ fn freeze_sources(recipe: &crate::Recipe) -> Vec<LockedSource> {
                         url: source.url.clone(),
                         sha256: source.sha256.clone(),
                         filename: recipe
-                            .parsed
-                            .upstreams
+                            .declaration
+                            .sources
                             .get(source.order as usize)
-                            .and_then(|upstream| match &upstream.props {
-                                stone_recipe::upstream::Props::Plain { rename, .. } => rename.clone(),
-                                stone_recipe::upstream::Props::Git { .. } => None,
+                            .and_then(|upstream| match upstream {
+                                stone_recipe::UpstreamSpec::Archive { rename, .. } => rename.clone(),
+                                stone_recipe::UpstreamSpec::Git { .. } => None,
                             })
                             .unwrap_or_else(|| {
                                 url::Url::parse(&source.url)
@@ -623,6 +601,8 @@ pub enum Error {
     #[error(transparent)]
     Package(#[from] crate::package::Error),
     #[error(transparent)]
+    Root(#[from] build::root::Error),
+    #[error(transparent)]
     BuildLock(#[from] build_lock::Error),
     #[error(transparent)]
     BuildLockValidation(#[from] stone_recipe::derivation::BuildLockValidationError),
@@ -634,8 +614,6 @@ pub enum Error {
     MossResolve(#[from] moss::client::ResolveError),
     #[error(transparent)]
     MossInstallation(#[from] moss::installation::Error),
-    #[error("unknown build target `{requested}`; available targets: {}", available.join(", "))]
-    UnknownTarget { requested: String, available: Vec<String> },
     #[error("`--refresh-repositories` requires `--update-lock`")]
     RefreshRequiresUpdate,
     #[error("sources.lock.glu is required when a recipe declares sources")]

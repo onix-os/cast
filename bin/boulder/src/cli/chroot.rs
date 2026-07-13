@@ -59,7 +59,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
 
     let home = &paths.build().guest;
 
-    container::exec(&paths, recipe.parsed.options.networking, || {
+    container::exec(&paths, recipe.declaration.options.networking, || {
         fs::write(home.join(".profile"), profile)?;
 
         let mut child = process::Command::new("/bin/bash")

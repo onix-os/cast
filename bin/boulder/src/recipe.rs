@@ -9,7 +9,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
-use stone_recipe::package::{PackageSpec, PhasesSpec, evaluate_gluon_with_inputs};
+use stone_recipe::package::{PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
 
 use crate::{
@@ -17,13 +17,13 @@ use crate::{
     source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock},
 };
 
-pub type Parsed = stone_recipe::Recipe;
-
 #[derive(Debug)]
 pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
-    pub parsed: Parsed,
+    /// Transitional adapter used only by the legacy package-template resolver.
+    /// All build planning reads [`Self::declaration`] directly.
+    pub(crate) parsed: stone_recipe::Recipe,
     /// Concrete package-v2 declaration produced by the authored factory.
     pub declaration: PackageSpec,
     pub source_lock: Option<SourceLock>,
@@ -73,7 +73,7 @@ impl Recipe {
         path: PathBuf,
         source: String,
         declaration: PackageSpec,
-        parsed: Parsed,
+        parsed: stone_recipe::Recipe,
         source_lock: Option<SourceLock>,
         fingerprint: EvaluationFingerprint,
         explicit_build_time: Option<DateTime<Utc>>,
@@ -99,8 +99,8 @@ impl Recipe {
         let host_string = host.to_string();
 
         let mut targets = vec![];
-        if self.parsed.architectures.is_empty() {
-            if self.parsed.emul32 {
+        if self.declaration.architectures.is_empty() {
+            if self.declaration.emul32 {
                 targets.push(BuildTarget::Emul32(host));
             }
 
@@ -109,13 +109,14 @@ impl Recipe {
             let emul32 = BuildTarget::Emul32(host);
             let emul32_string = emul32.to_string();
 
-            if self.parsed.architectures.contains(&emul32_string)
-                || self.parsed.architectures.contains(&"emul32".into())
+            if self.declaration.architectures.contains(&emul32_string)
+                || self.declaration.architectures.contains(&"emul32".into())
             {
                 targets.push(emul32);
             }
 
-            if self.parsed.architectures.contains(&host_string) || self.parsed.architectures.contains(&"native".into())
+            if self.declaration.architectures.contains(&host_string)
+                || self.declaration.architectures.contains(&"native".into())
             {
                 targets.push(BuildTarget::Native(host));
             }
@@ -124,41 +125,36 @@ impl Recipe {
         targets
     }
 
-    pub fn build_target_profile_key(&self, target: BuildTarget) -> Option<String> {
+    pub fn build_target_profile_key(&self, target: BuildTarget) -> Option<&str> {
         let target_string = target.to_string();
 
-        if self.parsed.profiles.iter().any(|kv| kv.key == target_string) {
-            Some(target_string)
-        } else if target.emul32() && self.parsed.profiles.iter().any(|kv| &kv.key == "emul32") {
-            Some("emul32".to_owned())
+        if let Some(profile) = self
+            .declaration
+            .profiles
+            .iter()
+            .find(|profile| profile.name == target_string)
+        {
+            Some(&profile.name)
+        } else if target.emul32() {
+            self.declaration
+                .profiles
+                .iter()
+                .find(|profile| profile.name == "emul32")
+                .map(|profile| profile.name.as_str())
         } else {
             None
         }
     }
 
-    pub fn build_target_definition(&self, target: BuildTarget) -> &stone_recipe::Build {
-        let key = self.build_target_profile_key(target);
-
-        if let Some(profile) = self.parsed.profiles.iter().find(|kv| Some(&kv.key) == key.as_ref()) {
-            &profile.value
-        } else {
-            &self.parsed.build
-        }
+    pub fn build_target_profile(&self, target: BuildTarget) -> Option<&ProfileSpec> {
+        let key = self.build_target_profile_key(target)?;
+        self.declaration.profiles.iter().find(|profile| profile.name == key)
     }
 
     /// Select the structural package-v2 phases for one target.
     pub fn build_target_phases(&self, target: BuildTarget) -> PhasesSpec {
-        let key = self.build_target_profile_key(target);
-        if let Some(profile) = self
-            .declaration
-            .profiles
-            .iter()
-            .find(|profile| Some(&profile.name) == key.as_ref())
-        {
-            profile.phases()
-        } else {
-            self.declaration.phases()
-        }
+        self.declaration
+            .phases_for_profile(self.build_target_profile_key(target))
     }
 }
 
@@ -171,7 +167,16 @@ enum SourceLockPolicy {
 fn load_gluon(
     path: &Path,
     source_lock_policy: SourceLockPolicy,
-) -> Result<(String, PackageSpec, Parsed, Option<SourceLock>, EvaluationFingerprint), Error> {
+) -> Result<
+    (
+        String,
+        PackageSpec,
+        stone_recipe::Recipe,
+        Option<SourceLock>,
+        EvaluationFingerprint,
+    ),
+    Error,
+> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
@@ -206,7 +211,7 @@ fn load_gluon(
 
     let evaluated = evaluate_gluon_with_inputs(&evaluator, &source, &explicit_inputs)?;
     if let Some(lock) = source_lock.as_ref() {
-        lock.validate_against(&evaluated.recipe)
+        lock.validate_against(&evaluated.package.sources)
             .map_err(|source| Error::StaleSourceLock {
                 path: lock_path,
                 source: Box::new(source),
@@ -305,12 +310,12 @@ let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
 
         let minimal = Recipe::load(examples.join("stone.glu")).unwrap();
-        assert_eq!(minimal.parsed.source.name, "hello");
+        assert_eq!(minimal.declaration.meta.pname, "hello");
 
         let composed = Recipe::load(examples.join("composed-stone.glu")).unwrap();
-        assert_eq!(composed.parsed.source.name, "composed-hello");
+        assert_eq!(composed.declaration.meta.pname, "composed-hello");
         assert_eq!(
-            composed.parsed.package.summary.as_deref(),
+            composed.declaration.outputs[0].summary.as_deref(),
             Some("Recipe composed with an imported policy")
         );
     }
@@ -352,7 +357,7 @@ let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
         let recipe = Recipe::load(&path).unwrap();
 
         assert_eq!(recipe.path, path.canonicalize().unwrap());
-        assert_eq!(recipe.parsed.source.name, "example");
+        assert_eq!(recipe.declaration.meta.pname, "example");
         assert!(recipe.source_lock.is_none());
         let fingerprint = recipe.fingerprint;
         assert_eq!(fingerprint.root_source_sha256.len(), 64);
@@ -382,7 +387,7 @@ boulder.mk_package (boulder.meta source)
         let fingerprint = recipe.fingerprint;
 
         assert_eq!(recipe.path, root.path().join("stone.glu").canonicalize().unwrap());
-        assert_eq!(recipe.parsed.source.version, "1.2.3");
+        assert_eq!(recipe.declaration.meta.version, "1.2.3");
         assert_eq!(
             fingerprint
                 .imported_modules
@@ -493,7 +498,7 @@ boulder.mk_package (boulder.meta {
 
         let recipe = Recipe::load_authored(root.path()).unwrap();
 
-        assert_eq!(recipe.parsed.source.name, "example");
+        assert_eq!(recipe.declaration.meta.pname, "example");
         assert!(recipe.source_lock.is_none());
         assert_eq!(fs::read_to_string(lock_path).unwrap(), "not valid Gluon");
     }
@@ -560,7 +565,7 @@ boulder.mk_package (boulder.meta {
         let first = Recipe::load(root.path()).unwrap();
         let repeated = Recipe::load(root.path()).unwrap();
 
-        assert_eq!(format!("{:?}", first.parsed), format!("{:?}", repeated.parsed));
+        assert_eq!(first.declaration, repeated.declaration);
         assert_eq!(first.source, repeated.source);
         assert_eq!(first.fingerprint, repeated.fingerprint);
 

@@ -16,7 +16,7 @@ impl Id {
     pub fn new(recipe: &Recipe) -> Self {
         Self(format!(
             "{}-{}-{}",
-            recipe.parsed.source.name, recipe.parsed.source.version, recipe.parsed.source.release
+            recipe.declaration.meta.pname, recipe.declaration.meta.version, recipe.declaration.meta.release
         ))
     }
 }

@@ -9,10 +9,7 @@ use std::{
 };
 
 use moss::util;
-use stone_recipe::{
-    Script, script, tuning,
-    upstream::{self, Upstream},
-};
+use stone_recipe::{Script, UpstreamSpec, script, tuning};
 use thiserror::Error;
 
 pub use self::phase::Phase;
@@ -40,7 +37,7 @@ impl Job {
         jobs: NonZeroUsize,
     ) -> Result<Self, Error> {
         let build_dir = paths.build().guest.join(target.to_string());
-        let work_dir = work_dir(&build_dir, &recipe.parsed.upstreams);
+        let work_dir = work_dir(&build_dir, &recipe.declaration.sources);
 
         let phases = phase::list(pgo_stage)
             .into_iter()
@@ -61,31 +58,38 @@ impl Job {
     }
 }
 
-fn work_dir(build_dir: &Path, upstreams: &[Upstream]) -> PathBuf {
+fn work_dir(build_dir: &Path, sources: &[UpstreamSpec]) -> PathBuf {
     let mut work_dir = build_dir.to_path_buf();
 
     // Work dir is the first upstream that should be unpacked
-    if let Some(upstream) = upstreams.iter().find(|upstream| match upstream.props {
-        upstream::Props::Plain { unpack, .. } => unpack,
-        upstream::Props::Git { .. } => true,
+    if let Some(source) = sources.iter().find(|source| match source {
+        UpstreamSpec::Archive { unpack, .. } => *unpack,
+        UpstreamSpec::Git { .. } => true,
     }) {
-        match &upstream.props {
-            upstream::Props::Plain { rename, unpack_dir, .. } => {
-                let file_name = util::uri_file_name(&upstream.url);
-                let rename = rename.as_deref().unwrap_or(file_name);
-                let unpack_dir = unpack_dir
-                    .as_ref()
-                    .map(|dir| dir.display().to_string())
-                    .unwrap_or_else(|| rename.to_owned());
+        match source {
+            UpstreamSpec::Archive {
+                url,
+                rename,
+                unpack_dir,
+                ..
+            } => {
+                let file_name = url
+                    .parse()
+                    .ok()
+                    .map(|url| util::uri_file_name(&url).to_owned())
+                    .unwrap_or_default();
+                let rename = rename.as_deref().unwrap_or(file_name.as_str());
+                let unpack_dir = unpack_dir.as_ref().cloned().unwrap_or_else(|| rename.to_owned());
 
                 work_dir = build_dir.join(unpack_dir);
             }
-            upstream::Props::Git { clone_dir, .. } => {
-                let source = util::uri_file_name(&upstream.url);
-                let target = clone_dir
-                    .as_ref()
-                    .map(|dir| dir.display().to_string())
-                    .unwrap_or_else(|| source.to_owned());
+            UpstreamSpec::Git { url, clone_dir, .. } => {
+                let source = url
+                    .parse()
+                    .ok()
+                    .map(|url| util::uri_file_name(&url).to_owned())
+                    .unwrap_or_default();
+                let target = clone_dir.as_ref().cloned().unwrap_or_else(|| source.to_owned());
 
                 work_dir = build_dir.join(target);
             }
