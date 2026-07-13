@@ -245,6 +245,7 @@ where
     let workspace = workspace_root.as_os_str().as_bytes();
 
     validate_cross_tool_selection(&environment, host, target, kind, &target_underscored)?;
+    validate_aws_lc_bindgen_selection(&environment, target)?;
 
     let mut watched = watched_environment(kind, target, &target_underscored);
     let mut inputs = BTreeMap::<String, Vec<u8>>::new();
@@ -310,7 +311,7 @@ where
         );
     }
 
-    if let Some(selector) = select_cmake_generator_tool(&environment, target, &target_underscored) {
+    if let Some(selector) = select_cmake_generator_tool(&environment, kind, target) {
         let command = direct_command("cmake-generator", selector)?;
         inputs.insert(
             "native.tool.cmake-generator.command".to_owned(),
@@ -420,6 +421,46 @@ fn validate_cross_tool_selection(
     )))
 }
 
+fn validate_aws_lc_bindgen_selection(environment: &BTreeMap<String, OsString>, target: &str) -> io::Result<()> {
+    // The locked aws-lc-sys 0.40 dependency is selected through aws-lc-rs
+    // with default features disabled.  Its only enabled feature is
+    // `prebuilt-nasm`, so it has universal pregenerated bindings but no
+    // in-process bindgen implementation.  These controls bypass those
+    // bindings and make its build script fall back to a PATH-selected
+    // `bindgen` CLI (which in turn selects rustfmt and libclang).  That open
+    // toolchain cannot be represented by the identities collected here, so
+    // reject it before any build is assigned an incomplete fingerprint.
+    let target_underscored = target.replace('-', "_");
+    for control in ["EXTERNAL_BINDGEN", "NO_PREFIX", "PREGENERATING_BINDINGS"] {
+        if aws_lc_bool(environment, control, &target_underscored) == Some(true) {
+            return Err(invalid_data(format!(
+                "aws-lc-sys external binding generation is unsupported for {target}: effective AWS_LC_SYS_{control} enables an unidentifiable external bindgen toolchain"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn aws_lc_bool(environment: &BTreeMap<String, OsString>, control: &str, target_underscored: &str) -> Option<bool> {
+    let value = environment
+        .get(&format!("AWS_LC_SYS_{control}_{target_underscored}"))
+        .or_else(|| environment.get(&format!("AWS_LC_SYS_{control}")))?;
+    let value = value.to_str()?.to_lowercase();
+
+    if value.starts_with('0') || value.starts_with('n') || value.starts_with("off") || value.starts_with('f') {
+        Some(false)
+    } else if value.starts_with(|character: char| character.is_ascii_digit())
+        || value.starts_with('y')
+        || value.starts_with("on")
+        || value.starts_with('t')
+    {
+        Some(true)
+    } else {
+        None
+    }
+}
+
 fn watched_environment(kind: &str, target: &str, target_underscored: &str) -> BTreeSet<String> {
     let mut watched = BTreeSet::from(["HOST".to_owned(), "TARGET".to_owned()]);
     watched.extend(EXACT_VALUES.iter().map(|key| (*key).to_owned()));
@@ -438,7 +479,7 @@ fn watched_environment(kind: &str, target: &str, target_underscored: &str) -> BT
         watched.extend(tool_keys(*spec, kind, target, target_underscored));
     }
     watched.extend(GENERATOR_TOOL_VARIABLES.iter().map(|key| (*key).to_owned()));
-    watched.insert(format!("CMAKE_GENERATOR_{target_underscored}"));
+    watched.extend(cmake_generator_keys(kind, target));
 
     // libsqlite3-sys supports a target-prefix form in addition to the cc-rs
     // suffix form.  AWS-LC accepts crate-specific target suffixes.
@@ -512,19 +553,10 @@ fn tool_keys(spec: ToolSpec, kind: &str, target: &str, target_underscored: &str)
     }
 }
 
-fn select_cmake_generator_tool(
-    environment: &BTreeMap<String, OsString>,
-    target: &str,
-    target_underscored: &str,
-) -> Option<OsString> {
-    let generator = [
-        format!("AWS_LC_SYS_CMAKE_GENERATOR_{target_underscored}"),
-        "AWS_LC_SYS_CMAKE_GENERATOR".to_owned(),
-        format!("CMAKE_GENERATOR_{target_underscored}"),
-        "CMAKE_GENERATOR".to_owned(),
-    ]
-    .into_iter()
-    .find_map(|key| environment.get(&key));
+fn select_cmake_generator_tool(environment: &BTreeMap<String, OsString>, kind: &str, target: &str) -> Option<OsString> {
+    let generator = cmake_generator_keys(kind, target)
+        .into_iter()
+        .find_map(|key| environment.get(&key));
     let generator = generator.and_then(|value| value.to_str()).map(str::to_ascii_lowercase);
 
     let (override_variable, default_program) = match generator.as_deref() {
@@ -543,6 +575,23 @@ fn select_cmake_generator_tool(
             .cloned()
             .unwrap_or_else(|| OsString::from(default_program)),
     )
+}
+
+fn cmake_generator_keys(kind: &str, target: &str) -> Vec<String> {
+    let target_underscored = target.replace('-', "_");
+
+    // aws-lc-sys copies its crate-specific generator override into the plain
+    // CMAKE_GENERATOR variable.  cmake-rs 0.1.58 subsequently applies its own
+    // target lookup, so the target and HOST_/TARGET_ forms remain above that
+    // copied plain value.  Keep the combined precedence exact.
+    vec![
+        format!("CMAKE_GENERATOR_{target}"),
+        format!("CMAKE_GENERATOR_{target_underscored}"),
+        format!("{kind}_CMAKE_GENERATOR"),
+        format!("AWS_LC_SYS_CMAKE_GENERATOR_{target_underscored}"),
+        "AWS_LC_SYS_CMAKE_GENERATOR".to_owned(),
+        "CMAKE_GENERATOR".to_owned(),
+    ]
 }
 
 /// Return the compiler delegated to by a wrapper syntax understood by cc-rs.

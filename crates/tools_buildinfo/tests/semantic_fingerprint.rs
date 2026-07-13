@@ -592,6 +592,111 @@ fn only_the_selected_cmake_generator_tool_is_semantic() {
 }
 
 #[test]
+fn cmake_generator_kind_and_target_precedence_match_cmake_rs() {
+    let workspace = Path::new("/workspace/os-tools");
+    let collect = |environment: Vec<(OsString, OsString)>| {
+        let mut selected_generator_tool = None;
+        let context = native_build_context::collect(environment, workspace, |role, command| {
+            if role == "cmake-generator" {
+                selected_generator_tool = command.first().cloned();
+            }
+            Ok(Some(fake_command_identity(command, "1")))
+        })
+        .unwrap();
+        (selected_generator_tool, context.watched_environment().to_vec())
+    };
+
+    let (host_selected, host_watched) = collect(native_environment(&[
+        ("HOST_CMAKE_GENERATOR", "Ninja"),
+        ("AWS_LC_SYS_CMAKE_GENERATOR", "Unix Makefiles"),
+        ("CMAKE_GENERATOR", "Unix Makefiles"),
+        ("NINJA", "host-ninja"),
+        ("MAKE", "shadowed-host-make"),
+    ]));
+    assert_eq!(host_selected, Some(OsString::from("host-ninja")));
+    assert!(host_watched.contains(&"HOST_CMAKE_GENERATOR".to_owned()));
+    assert!(!host_watched.contains(&"TARGET_CMAKE_GENERATOR".to_owned()));
+
+    let (target_specific_selected, _) = collect(native_environment(&[
+        ("CMAKE_GENERATOR_x86_64-unknown-linux-gnu", "Unix Makefiles"),
+        ("HOST_CMAKE_GENERATOR", "Ninja"),
+        ("CMAKE_GENERATOR", "Ninja"),
+        ("NINJA", "shadowed-target-ninja"),
+        ("MAKE", "target-make"),
+    ]));
+    assert_eq!(target_specific_selected, Some(OsString::from("target-make")));
+
+    let (cross_selected, cross_watched) = collect(native_environment_for(
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        &[
+            ("CC", "aarch64-cc"),
+            ("CXX", "aarch64-cxx"),
+            ("AR", "aarch64-ar"),
+            ("RANLIB", "aarch64-ranlib"),
+            ("TARGET_CMAKE_GENERATOR", "Ninja"),
+            ("HOST_CMAKE_GENERATOR", "Unix Makefiles"),
+            ("CMAKE_GENERATOR", "Unix Makefiles"),
+            ("NINJA", "target-ninja"),
+            ("MAKE", "shadowed-cross-make"),
+        ],
+    ));
+    assert_eq!(cross_selected, Some(OsString::from("target-ninja")));
+    assert!(cross_watched.contains(&"TARGET_CMAKE_GENERATOR".to_owned()));
+    assert!(!cross_watched.contains(&"HOST_CMAKE_GENERATOR".to_owned()));
+}
+
+#[test]
+fn aws_lc_external_bindgen_lanes_fail_closed() {
+    let workspace = Path::new("/workspace/os-tools");
+    for (control, value) in [
+        ("AWS_LC_SYS_EXTERNAL_BINDGEN", "1"),
+        ("AWS_LC_SYS_NO_PREFIX", "yes"),
+        ("AWS_LC_SYS_PREGENERATING_BINDINGS", "ON"),
+    ] {
+        let error = native_build_context::collect(native_environment(&[(control, value)]), workspace, |_, command| {
+            Ok(Some(fake_command_identity(command, "1")))
+        })
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains(control));
+        assert!(error.to_string().contains("external bindgen toolchain"));
+    }
+}
+
+#[test]
+fn aws_lc_bindgen_controls_use_crate_target_precedence() {
+    let workspace = Path::new("/workspace/os-tools");
+    let target_control = "AWS_LC_SYS_EXTERNAL_BINDGEN_x86_64_unknown_linux_gnu";
+
+    native_build_context::collect(
+        native_environment(&[(target_control, "0"), ("AWS_LC_SYS_EXTERNAL_BINDGEN", "1")]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap();
+
+    let error = native_build_context::collect(
+        native_environment(&[(target_control, "true"), ("AWS_LC_SYS_EXTERNAL_BINDGEN", "0")]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("AWS_LC_SYS_EXTERNAL_BINDGEN"));
+
+    // This similarly named control only disables pregenerated C sources and
+    // selects the CMake builder.  It does not disable pregenerated bindings in
+    // the locked aws-lc-sys implementation.
+    native_build_context::collect(
+        native_environment(&[("AWS_LC_SYS_NO_PREGENERATED_SRC", "1")]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap();
+}
+
+#[test]
 fn aws_lc_cmake_fallback_and_explicit_precedence_match_the_build_script() {
     let workspace = Path::new("/workspace/os-tools");
     let probe = |cmake3_available: bool| {
