@@ -7,8 +7,8 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    DependencySpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef, PackageSpec, ProfileSpec,
-    ScriptsSpec,
+    BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef,
+    PackageSpec, ProfileSpec, ScriptsSpec,
 };
 use crate::{KeyValueSpec, OptionsSpec, PathSpec, Recipe, ToolchainSpec, TuningSpec, UpstreamSpec};
 
@@ -17,6 +17,11 @@ pub const PACKAGE_ABI_VERSION: u32 = 2;
 
 /// Pure Gluon definitions exposed as `boulder.package.v2`.
 pub const GLUON_PACKAGE_ABI: &str = include_str!("../../gluon/package.glu");
+
+pub const GLUON_CMAKE_BUILDER_ABI: &str = include_str!("../../gluon/builders/cmake.glu");
+pub const GLUON_MESON_BUILDER_ABI: &str = include_str!("../../gluon/builders/meson.glu");
+pub const GLUON_CARGO_BUILDER_ABI: &str = include_str!("../../gluon/builders/cargo.glu");
+pub const GLUON_AUTOTOOLS_BUILDER_ABI: &str = include_str!("../../gluon/builders/autotools.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
     | False
@@ -70,7 +75,8 @@ enum GluonBool {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonPackageSpec {
     meta: GluonMetaSpec,
-    scripts: GluonScriptsSpec,
+    builder: GluonBuilderSpec,
+    hooks: GluonHooksSpec,
     native_build_inputs: Vec<GluonDependencySpec>,
     build_inputs: Vec<GluonDependencySpec>,
     check_inputs: Vec<GluonDependencySpec>,
@@ -104,6 +110,21 @@ struct GluonScriptsSpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonHooksSpec {
+    pre_setup: Vec<String>,
+    post_setup: Vec<String>,
+    pre_build: Vec<String>,
+    post_build: Vec<String>,
+    pre_check: Vec<String>,
+    post_check: Vec<String>,
+    pre_install: Vec<String>,
+    post_install: Vec<String>,
+    pre_workload: Vec<String>,
+    post_workload: Vec<String>,
+    environment: Vec<String>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonPackageRef {
     name: String,
 }
@@ -126,6 +147,31 @@ enum GluonDependencySpec {
     CMake { target: String },
     Python { target: String },
     Interpreter { target: String },
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonBuilderSpec {
+    CMakeSystem {
+        flags: Vec<String>,
+        run_tests: GluonBool,
+    },
+    MesonSystem {
+        flags: Vec<String>,
+        run_tests: GluonBool,
+    },
+    CargoProject {
+        features: Vec<String>,
+        binaries: Vec<String>,
+        run_tests: GluonBool,
+    },
+    AutotoolsProject {
+        flags: Vec<String>,
+        run_tests: GluonBool,
+    },
+    Custom {
+        scripts: GluonScriptsSpec,
+        required_tools: Vec<GluonDependencySpec>,
+    },
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -169,7 +215,8 @@ struct GluonOptionsSpec {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonProfileSpec {
     name: String,
-    scripts: GluonScriptsSpec,
+    builder: GluonBuilderSpec,
+    hooks: GluonHooksSpec,
     native_build_inputs: Vec<GluonDependencySpec>,
     build_inputs: Vec<GluonDependencySpec>,
     check_inputs: Vec<GluonDependencySpec>,
@@ -224,7 +271,8 @@ impl From<GluonPackageSpec> for PackageSpec {
     fn from(spec: GluonPackageSpec) -> Self {
         Self {
             meta: spec.meta.into(),
-            scripts: spec.scripts.into(),
+            builder: spec.builder.into(),
+            hooks: spec.hooks.into(),
             native_build_inputs: spec.native_build_inputs.into_iter().map(Into::into).collect(),
             build_inputs: spec.build_inputs.into_iter().map(Into::into).collect(),
             check_inputs: spec.check_inputs.into_iter().map(Into::into).collect(),
@@ -265,6 +313,24 @@ impl From<GluonScriptsSpec> for ScriptsSpec {
     }
 }
 
+impl From<GluonHooksSpec> for HooksSpec {
+    fn from(spec: GluonHooksSpec) -> Self {
+        Self {
+            pre_setup: spec.pre_setup,
+            post_setup: spec.post_setup,
+            pre_build: spec.pre_build,
+            post_build: spec.post_build,
+            pre_check: spec.pre_check,
+            post_check: spec.post_check,
+            pre_install: spec.pre_install,
+            post_install: spec.post_install,
+            pre_workload: spec.pre_workload,
+            post_workload: spec.post_workload,
+            environment: spec.environment,
+        }
+    }
+}
+
 impl From<GluonPackageRef> for PackageRef {
     fn from(spec: GluonPackageRef) -> Self {
         Self { name: spec.name }
@@ -293,6 +359,41 @@ impl From<GluonDependencySpec> for DependencySpec {
             GluonDependencySpec::CMake { target } => Self::CMake(target),
             GluonDependencySpec::Python { target } => Self::Python(target),
             GluonDependencySpec::Interpreter { target } => Self::Interpreter(target),
+        }
+    }
+}
+
+impl From<GluonBuilderSpec> for BuilderSpec {
+    fn from(spec: GluonBuilderSpec) -> Self {
+        match spec {
+            GluonBuilderSpec::CMakeSystem { flags, run_tests } => Self::CMake {
+                flags,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderSpec::MesonSystem { flags, run_tests } => Self::Meson {
+                flags,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderSpec::CargoProject {
+                features,
+                binaries,
+                run_tests,
+            } => Self::Cargo {
+                features,
+                binaries,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderSpec::AutotoolsProject { flags, run_tests } => Self::Autotools {
+                flags,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderSpec::Custom {
+                scripts,
+                required_tools,
+            } => Self::Custom {
+                scripts: scripts.into(),
+                required_tools: required_tools.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
@@ -351,7 +452,8 @@ impl From<GluonProfileSpec> for ProfileSpec {
     fn from(spec: GluonProfileSpec) -> Self {
         Self {
             name: spec.name,
-            scripts: spec.scripts.into(),
+            builder: spec.builder.into(),
+            hooks: spec.hooks.into(),
             native_build_inputs: spec.native_build_inputs.into_iter().map(Into::into).collect(),
             build_inputs: spec.build_inputs.into_iter().map(Into::into).collect(),
             check_inputs: spec.check_inputs.into_iter().map(Into::into).collect(),
@@ -432,6 +534,10 @@ pub fn evaluate_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
     import_policy.insert_embedded_module("boulder.package.v2", GLUON_PACKAGE_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.cmake.v1", GLUON_CMAKE_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.meson.v1", GLUON_MESON_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.cargo.v1", GLUON_CARGO_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.autotools.v1", GLUON_AUTOTOOLS_BUILDER_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
     let package = PackageSpec::from(evaluation.value);

@@ -31,6 +31,20 @@ type ScriptsSpec = {
     environment: Optional String,
 }
 
+type HooksSpec = {
+    pre_setup: Array String,
+    post_setup: Array String,
+    pre_build: Array String,
+    post_build: Array String,
+    pre_check: Array String,
+    post_check: Array String,
+    pre_install: Array String,
+    post_install: Array String,
+    pre_workload: Array String,
+    post_workload: Array String,
+    environment: Array String,
+}
+
 type PackageRef = { name: String }
 
 type OutputRef = {
@@ -49,6 +63,29 @@ type DependencySpec =
     | CMake { target: String }
     | Python { target: String }
     | Interpreter { target: String }
+
+type BuilderSpec =
+    | CMakeSystem {
+        flags: Array String,
+        run_tests: Boolean,
+    }
+    | MesonSystem {
+        flags: Array String,
+        run_tests: Boolean,
+    }
+    | CargoProject {
+        features: Array String,
+        binaries: Array String,
+        run_tests: Boolean,
+    }
+    | AutotoolsProject {
+        flags: Array String,
+        run_tests: Boolean,
+    }
+    | Custom {
+        scripts: ScriptsSpec,
+        required_tools: Array DependencySpec,
+    }
 
 type PathSpec =
     | Any { path: String }
@@ -84,7 +121,8 @@ type OptionsSpec = {
 
 type ProfileSpec = {
     name: String,
-    scripts: ScriptsSpec,
+    builder: BuilderSpec,
+    hooks: HooksSpec,
     native_build_inputs: Array DependencySpec,
     build_inputs: Array DependencySpec,
     check_inputs: Array DependencySpec,
@@ -117,7 +155,8 @@ type KeyValueSpec a = {
 
 type PackageSpec = {
     meta: MetaSpec,
-    scripts: ScriptsSpec,
+    builder: BuilderSpec,
+    hooks: HooksSpec,
     native_build_inputs: Array DependencySpec,
     build_inputs: Array DependencySpec,
     check_inputs: Array DependencySpec,
@@ -145,7 +184,8 @@ type ArrayPatch a =
 
 type PackagePatch = {
     meta: ValuePatch MetaSpec,
-    scripts: ValuePatch ScriptsSpec,
+    builder: ValuePatch BuilderSpec,
+    hooks: ValuePatch HooksSpec,
     native_build_inputs: ArrayPatch DependencySpec,
     build_inputs: ArrayPatch DependencySpec,
     check_inputs: ArrayPatch DependencySpec,
@@ -166,6 +206,25 @@ let empty_scripts: ScriptsSpec = {
     check = Unset,
     workload = Unset,
     environment = Unset,
+}
+
+let empty_hooks: HooksSpec = {
+    pre_setup = [],
+    post_setup = [],
+    pre_build = [],
+    post_build = [],
+    pre_check = [],
+    post_check = [],
+    pre_install = [],
+    post_install = [],
+    pre_workload = [],
+    post_workload = [],
+    environment = [],
+}
+
+let empty_custom_builder: BuilderSpec = Custom {
+    scripts = empty_scripts,
+    required_tools = [],
 }
 
 let default_options: OptionsSpec = {
@@ -192,7 +251,8 @@ let output = \name -> {
 
 let profile = \name -> {
     name,
-    scripts = empty_scripts,
+    builder = empty_custom_builder,
+    hooks = empty_hooks,
     native_build_inputs = [],
     build_inputs = [],
     check_inputs = [],
@@ -200,7 +260,8 @@ let profile = \name -> {
 
 let mk_package: MetaSpec -> PackageSpec = \meta -> {
     meta,
-    scripts = empty_scripts,
+    builder = empty_custom_builder,
+    hooks = empty_hooks,
     native_build_inputs = [],
     build_inputs = [],
     check_inputs = [],
@@ -228,7 +289,8 @@ let apply_array = \patch current ->
 
 let apply_package_patch: PackagePatch -> PackageSpec -> PackageSpec = \patch current -> {
     meta = apply_value patch.meta current.meta,
-    scripts = apply_value patch.scripts current.scripts,
+    builder = apply_value patch.builder current.builder,
+    hooks = apply_value patch.hooks current.hooks,
     native_build_inputs = apply_array patch.native_build_inputs current.native_build_inputs,
     build_inputs = apply_array patch.build_inputs current.build_inputs,
     check_inputs = apply_array patch.check_inputs current.check_inputs,
@@ -244,7 +306,8 @@ let apply_package_patch: PackagePatch -> PackageSpec -> PackageSpec = \patch cur
 
 let empty_package_patch: PackagePatch = {
     meta = KeepValue,
-    scripts = KeepValue,
+    builder = KeepValue,
+    hooks = KeepValue,
     native_build_inputs = KeepArray,
     build_inputs = KeepArray,
     check_inputs = KeepArray,
@@ -282,6 +345,7 @@ let git = \url git_ref -> GitSource {
     mk_package,
     meta = \value -> value,
     scripts = \value -> value,
+    hooks = \value -> value,
     output,
     output_with = \value -> value,
     profile,
@@ -291,6 +355,8 @@ let git = \url git_ref -> GitSource {
     override_attrs = apply_package_patch,
     defaults = {
         scripts = empty_scripts,
+        hooks = empty_hooks,
+        builder = empty_custom_builder,
         options = default_options,
         package_patch = empty_package_patch,
     },
@@ -325,6 +391,14 @@ let git = \url git_ref -> GitSource {
         cmake = \target -> CMake { target },
         python = \target -> Python { target },
         interpreter = \target -> Interpreter { target },
+    },
+    builder = {
+        cmake = \value -> CMakeSystem value,
+        meson = \value -> MesonSystem value,
+        cargo = \value -> CargoProject value,
+        autotools = \value -> AutotoolsProject value,
+        custom = \scripts required_tools -> Custom { scripts, required_tools },
+        shell = \scripts required_tools -> Custom { scripts, required_tools },
     },
     source = {
         archive,

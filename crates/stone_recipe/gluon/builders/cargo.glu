@@ -1,0 +1,17 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! boulder.package.v2
+
+let defaults = {
+    features = [],
+    binaries = [],
+    run_tests = b.boolean.true,
+}
+
+{
+    abi_version = 1,
+    defaults,
+    builder = \config -> b.builder.cargo config,
+    default = b.builder.cargo defaults,
+}

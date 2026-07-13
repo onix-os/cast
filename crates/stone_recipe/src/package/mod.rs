@@ -19,7 +19,8 @@ use crate::{
 };
 
 pub use self::gluon::{
-    EvaluatedPackage, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION, PackageEvaluationError, evaluate_gluon,
+    EvaluatedPackage, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
+    GLUON_MESON_BUILDER_ABI, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION, PackageEvaluationError, evaluate_gluon,
     evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
@@ -29,7 +30,8 @@ mod gluon;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSpec {
     pub meta: MetaSpec,
-    pub scripts: ScriptsSpec,
+    pub builder: BuilderSpec,
+    pub hooks: HooksSpec,
     pub native_build_inputs: Vec<DependencySpec>,
     pub build_inputs: Vec<DependencySpec>,
     pub check_inputs: Vec<DependencySpec>,
@@ -68,11 +70,67 @@ pub struct ScriptsSpec {
     pub environment: Option<String>,
 }
 
+/// Commands inserted around builder-owned phase bodies.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HooksSpec {
+    pub pre_setup: Vec<String>,
+    pub post_setup: Vec<String>,
+    pub pre_build: Vec<String>,
+    pub post_build: Vec<String>,
+    pub pre_check: Vec<String>,
+    pub post_check: Vec<String>,
+    pub pre_install: Vec<String>,
+    pub post_install: Vec<String>,
+    pub pre_workload: Vec<String>,
+    pub post_workload: Vec<String>,
+    pub environment: Vec<String>,
+}
+
+/// A structural build-system selection.
+///
+/// Standard builders declare every tool needed to lower and execute their
+/// phases. [`Self::Custom`] is the explicit shell escape hatch; it cannot hide
+/// its tool dependencies in an untyped macro side channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuilderSpec {
+    CMake {
+        flags: Vec<String>,
+        run_tests: bool,
+    },
+    Meson {
+        flags: Vec<String>,
+        run_tests: bool,
+    },
+    Cargo {
+        features: Vec<String>,
+        binaries: Vec<String>,
+        run_tests: bool,
+    },
+    Autotools {
+        flags: Vec<String>,
+        run_tests: bool,
+    },
+    Custom {
+        scripts: ScriptsSpec,
+        required_tools: Vec<DependencySpec>,
+    },
+}
+
+impl Default for BuilderSpec {
+    fn default() -> Self {
+        Self::Custom {
+            scripts: ScriptsSpec::default(),
+            required_tools: Vec::new(),
+        }
+    }
+}
+
 /// A target-specific package build profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSpec {
     pub name: String,
-    pub scripts: ScriptsSpec,
+    pub builder: BuilderSpec,
+    pub hooks: HooksSpec,
     pub native_build_inputs: Vec<DependencySpec>,
     pub build_inputs: Vec<DependencySpec>,
     pub check_inputs: Vec<DependencySpec>,
@@ -213,7 +271,8 @@ impl TryFrom<PackageSpec> for Recipe {
 
         let PackageSpec {
             meta,
-            scripts,
+            builder,
+            hooks,
             native_build_inputs,
             build_inputs,
             check_inputs,
@@ -233,8 +292,11 @@ impl TryFrom<PackageSpec> for Recipe {
             .ok_or(PackageConversionError::MissingRootOutput)?;
         let root = outputs[root_index].clone();
 
-        let build_deps = native_build_inputs
+        let lowered = builder.lower(hooks);
+        let build_deps = lowered
+            .required_tools
             .into_iter()
+            .chain(native_build_inputs)
             .chain(build_inputs)
             .map(|dependency| dependency.provider())
             .collect();
@@ -272,7 +334,7 @@ impl TryFrom<PackageSpec> for Recipe {
                 homepage: meta.homepage,
                 license: meta.license,
             },
-            build: scripts.into_build_spec(build_deps, check_deps),
+            build: lowered.scripts.into_build_spec(build_deps, check_deps),
             package: root.into_legacy(),
             options,
             profiles,
@@ -312,9 +374,15 @@ impl PackageSpec {
         self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs)?;
         self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs)?;
         self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs)?;
+        self.validate_dependency_list(&self.builder.required_tools(), "builder.required_tools", &outputs)?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
             let parent = format!("profiles[{index}]");
+            self.validate_dependency_list(
+                &profile.builder.required_tools(),
+                &format!("{parent}.builder.required_tools"),
+                &outputs,
+            )?;
             self.validate_dependency_list(
                 &profile.native_build_inputs,
                 &format!("{parent}.native_build_inputs"),
@@ -431,6 +499,108 @@ fn valid_output_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_'))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoweredBuilder {
+    scripts: ScriptsSpec,
+    required_tools: Vec<DependencySpec>,
+}
+
+impl BuilderSpec {
+    fn required_tools(&self) -> Vec<DependencySpec> {
+        let binary = |name: &str| DependencySpec::Binary(name.to_owned());
+        match self {
+            Self::CMake { run_tests, .. } => {
+                let mut tools = vec![binary("cmake"), binary("ninja")];
+                if *run_tests {
+                    tools.push(binary("ctest"));
+                }
+                tools
+            }
+            Self::Meson { .. } => vec![binary("cmake"), binary("meson"), binary("ninja"), binary("pkgconf")],
+            Self::Cargo { .. } => vec![binary("cargo")],
+            Self::Autotools { .. } => vec![binary("autoconf"), binary("automake"), binary("make")],
+            Self::Custom { required_tools, .. } => required_tools.clone(),
+        }
+    }
+
+    fn lower(self, hooks: HooksSpec) -> LoweredBuilder {
+        let required_tools = self.required_tools();
+        let scripts = match self {
+            Self::CMake { flags, run_tests } => ScriptsSpec {
+                setup: Some(action_with_args("%cmake", &flags)),
+                build: Some("%cmake_build".to_owned()),
+                install: Some("%cmake_install".to_owned()),
+                check: run_tests.then(|| "%cmake_test".to_owned()),
+                ..ScriptsSpec::default()
+            },
+            Self::Meson { flags, run_tests } => ScriptsSpec {
+                setup: Some(action_with_args("%meson", &flags)),
+                build: Some("%meson_build".to_owned()),
+                install: Some("%meson_install".to_owned()),
+                check: run_tests.then(|| "%meson_test".to_owned()),
+                ..ScriptsSpec::default()
+            },
+            Self::Cargo {
+                features,
+                binaries,
+                run_tests,
+            } => {
+                let feature_args = if features.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!("--features {}", features.join(","))]
+                };
+                ScriptsSpec {
+                    build: Some(action_with_args("%cargo_build", &feature_args)),
+                    install: Some(action_with_args("%cargo_install", &binaries)),
+                    check: run_tests.then(|| action_with_args("%cargo_test", &feature_args)),
+                    environment: Some("%cargo_set_environment".to_owned()),
+                    ..ScriptsSpec::default()
+                }
+            }
+            Self::Autotools { flags, run_tests } => ScriptsSpec {
+                setup: Some(action_with_args("%configure", &flags)),
+                build: Some("%make".to_owned()),
+                install: Some("%make_install".to_owned()),
+                check: run_tests.then(|| "%make check".to_owned()),
+                ..ScriptsSpec::default()
+            },
+            Self::Custom { scripts, .. } => scripts,
+        };
+
+        LoweredBuilder {
+            scripts: hooks.apply(scripts),
+            required_tools,
+        }
+    }
+}
+
+impl HooksSpec {
+    fn apply(self, scripts: ScriptsSpec) -> ScriptsSpec {
+        ScriptsSpec {
+            setup: phase_with_hooks(self.pre_setup, scripts.setup, self.post_setup),
+            build: phase_with_hooks(self.pre_build, scripts.build, self.post_build),
+            check: phase_with_hooks(self.pre_check, scripts.check, self.post_check),
+            install: phase_with_hooks(self.pre_install, scripts.install, self.post_install),
+            workload: phase_with_hooks(self.pre_workload, scripts.workload, self.post_workload),
+            environment: phase_with_hooks(Vec::new(), scripts.environment, self.environment),
+        }
+    }
+}
+
+fn action_with_args(action: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        action.to_owned()
+    } else {
+        format!("{action} {}", args.join(" "))
+    }
+}
+
+fn phase_with_hooks(pre: Vec<String>, body: Option<String>, post: Vec<String>) -> Option<String> {
+    let values = pre.into_iter().chain(body).chain(post).collect::<Vec<_>>();
+    (!values.is_empty()).then(|| values.join("\n"))
+}
+
 impl ScriptsSpec {
     fn into_build_spec(self, build_deps: Vec<String>, check_deps: Vec<String>) -> BuildSpec {
         BuildSpec {
@@ -448,9 +618,11 @@ impl ScriptsSpec {
 
 impl ProfileSpec {
     fn into_build_spec(self) -> BuildSpec {
-        let build_deps = self
-            .native_build_inputs
+        let lowered = self.builder.lower(self.hooks);
+        let build_deps = lowered
+            .required_tools
             .into_iter()
+            .chain(self.native_build_inputs)
             .chain(self.build_inputs)
             .map(|dependency| dependency.provider())
             .collect();
@@ -459,7 +631,7 @@ impl ProfileSpec {
             .into_iter()
             .map(|dependency| dependency.provider())
             .collect();
-        self.scripts.into_build_spec(build_deps, check_deps)
+        lowered.scripts.into_build_spec(build_deps, check_deps)
     }
 }
 
@@ -502,7 +674,8 @@ mod tests {
                 homepage: "https://example.com".to_owned(),
                 license: vec!["MPL-2.0".to_owned()],
             },
-            scripts: ScriptsSpec::default(),
+            builder: BuilderSpec::default(),
+            hooks: HooksSpec::default(),
             native_build_inputs: vec![DependencySpec::Binary("cmake".to_owned())],
             build_inputs: vec![dependency("zlib")],
             check_inputs: Vec::new(),

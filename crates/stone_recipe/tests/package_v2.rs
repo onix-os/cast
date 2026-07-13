@@ -31,7 +31,20 @@ fn imported_factory_arguments_and_typed_patch_lower_to_recipe() {
         evaluated.package.build_inputs[0],
         DependencySpec::Package(ref package) if package.name == "zlib"
     ));
-    assert_eq!(evaluated.recipe.build.build_deps, ["binary(cmake)", "zlib"]);
+    assert_eq!(
+        evaluated.recipe.build.build_deps,
+        ["binary(cmake)", "binary(ninja)", "binary(ctest)", "zlib"]
+    );
+    assert_eq!(
+        evaluated.recipe.build.setup.as_deref(),
+        Some("%cmake -DBUILD_DOCUMENTATION=OFF")
+    );
+    assert_eq!(evaluated.recipe.build.build.as_deref(), Some("%cmake_build"));
+    assert_eq!(evaluated.recipe.build.check.as_deref(), Some("%cmake_test"));
+    assert_eq!(
+        evaluated.recipe.build.install.as_deref(),
+        Some("%cmake_install\nln -s factory-hello %(installroot)/usr/bin/hello")
+    );
     assert_eq!(evaluated.recipe.package.run_deps, ["pkgconfig(libressl)"]);
     assert_eq!(evaluated.recipe.sub_packages[0].key, "factory-hello-dev");
     assert_eq!(evaluated.recipe.sub_packages[0].value.run_deps, ["factory-hello"]);

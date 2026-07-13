@@ -4,7 +4,6 @@
 let b = import! boulder.package.v2
 
 {
-    cmake = b.dep.binary "cmake",
     zlib = b.dep.package "zlib",
     tls = b.dep.pkgconfig "openssl",
 }
