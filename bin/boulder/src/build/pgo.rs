@@ -26,7 +26,7 @@ pub fn stages(recipe: &Recipe, target: BuildTarget) -> Option<Vec<Stage>> {
 pub enum Stage {
     #[strum(serialize = "stage1")]
     One,
-    #[strum(serialize = "stage1")]
+    #[strum(serialize = "stage2")]
     Two,
     #[strum(serialize = "use")]
     Use,
@@ -77,5 +77,12 @@ let profile = b.profile_with {{
 
         assert_eq!(recipe.build_target_profile_key(target), Some(target_name.as_str()));
         assert_eq!(stages(&recipe, target), Some(vec![Stage::One, Stage::Two, Stage::Use]));
+    }
+
+    #[test]
+    fn stage_names_are_distinct_and_stable() {
+        assert_eq!(Stage::One.to_string(), "stage1");
+        assert_eq!(Stage::Two.to_string(), "stage2");
+        assert_eq!(Stage::Use.to_string(), "use");
     }
 }
