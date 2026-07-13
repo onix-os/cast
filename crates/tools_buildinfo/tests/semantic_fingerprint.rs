@@ -1,8 +1,18 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{ffi::OsString, fs, os::unix::ffi::OsStrExt as _, path::Path};
+use std::{
+    ffi::OsString,
+    fs,
+    os::unix::{
+        ffi::{OsStrExt as _, OsStringExt as _},
+        fs::PermissionsExt as _,
+    },
+    path::{Path, PathBuf},
+    process::Command,
+};
 
+use sha2::{Digest as _, Sha256};
 use tempfile::TempDir;
 
 #[path = "../src/semantic_fingerprint.rs"]
@@ -10,6 +20,9 @@ mod semantic_fingerprint;
 
 #[path = "../src/native_build_context.rs"]
 mod native_build_context;
+
+#[path = "../src/tool_identity.rs"]
+mod tool_identity;
 
 use semantic_fingerprint::{ExplicitInput, calculate};
 
@@ -35,6 +48,32 @@ fn write(root: &Path, relative: &str, contents: &str) {
     let path = root.join(relative);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, contents).unwrap();
+}
+
+fn write_executable(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+fn identify_test_executable(path: &Path, with_version: bool) -> tool_identity::ExecutableIdentity {
+    tool_identity::identify(path.as_os_str(), None, path.parent().unwrap(), |resolved| {
+        if !with_version {
+            return Ok(None);
+        }
+        let output = Command::new(resolved).arg("--version").output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "test executable {} failed with {}",
+                resolved.display(),
+                output.status
+            )));
+        }
+        Ok(Some(output.stdout))
+    })
+    .unwrap()
+    .unwrap()
 }
 
 fn fixture(files: impl IntoIterator<Item = (&'static str, &'static str)>) -> TempDir {
@@ -73,22 +112,40 @@ fn native_environment(values: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
     .collect()
 }
 
+fn fake_command_identity(command: &[OsString], tool_revision: &str) -> tool_identity::CommandIdentity {
+    let program = command
+        .first()
+        .map(|value| value.as_os_str().as_bytes())
+        .unwrap_or_default();
+    let basename = program.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(basename);
+    hasher.update(tool_revision.as_bytes());
+    let content_sha256 = hasher.finalize().into();
+    let resolved_path = if program.contains(&b'/') {
+        PathBuf::from(OsString::from_vec(program.to_vec()))
+    } else {
+        Path::new("/resolved/toolchain/bin").join(OsString::from_vec(program.to_vec()))
+    };
+    let mut version = basename.to_vec();
+    version.extend_from_slice(b" version ");
+    version.extend_from_slice(tool_revision.as_bytes());
+    tool_identity::CommandIdentity::new(tool_identity::ExecutableIdentity::from_parts(
+        resolved_path,
+        content_sha256,
+        Some(version),
+    ))
+}
+
 fn native_context(values: &[(&str, &str)], tool_revision: &str, workspace: &Path) -> Vec<ExplicitInput> {
-    native_context_with_probe(values, workspace, |command| {
-        let program = command
-            .first()
-            .map(|value| value.as_os_str().as_bytes())
-            .unwrap_or_default();
-        let mut identity = program.to_vec();
-        identity.extend_from_slice(b" version ");
-        identity.extend_from_slice(tool_revision.as_bytes());
-        Ok(Some(identity))
+    native_context_with_probe(values, workspace, |_, command| {
+        Ok(Some(fake_command_identity(command, tool_revision)))
     })
 }
 
 fn native_context_with_probe<F>(values: &[(&str, &str)], workspace: &Path, probe: F) -> Vec<ExplicitInput>
 where
-    F: FnMut(&[OsString]) -> std::io::Result<Option<Vec<u8>>>,
+    F: FnMut(&str, &[OsString]) -> std::io::Result<Option<tool_identity::CommandIdentity>>,
 {
     native_build_context::collect(native_environment(values), workspace, probe)
         .unwrap()
@@ -344,7 +401,10 @@ fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state
         "present-empty dependency controls are distinct from absence"
     );
 
-    let collected = native_build_context::collect(native_environment(&values), workspace, |_| Ok(None)).unwrap();
+    let collected = native_build_context::collect(native_environment(&values), workspace, |_, command| {
+        Ok(Some(fake_command_identity(command, "1")))
+    })
+    .unwrap();
     assert!(collected.watched_environment().contains(&"CFLAGS".to_owned()));
     assert!(
         collected
@@ -352,6 +412,123 @@ fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state
             .contains(&"CC_x86_64_unknown_linux_gnu".to_owned())
     );
     assert!(!collected.watched_environment().contains(&"EDITOR".to_owned()));
+}
+
+#[test]
+fn selected_native_tool_without_an_identity_is_rejected() {
+    let error = native_build_context::collect(
+        native_environment(&[("CC", "unidentifiable-compiler")]),
+        Path::new("/workspace/os-tools"),
+        |_, command| {
+            if command[0] == OsString::from("unidentifiable-compiler") {
+                Ok(None)
+            } else {
+                Ok(Some(fake_command_identity(command, "1")))
+            }
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("selected native tool cc"));
+    assert!(error.to_string().contains("unidentifiable-compiler"));
+}
+
+#[test]
+fn identical_version_output_does_not_hide_changed_executable_bytes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let executable = temporary.path().join("compiler");
+    write_executable(
+        &executable,
+        "#!/bin/sh\n# compiler implementation one\nprintf 'compiler 1.0\\n'\n",
+    );
+    let first = identify_test_executable(&executable, true);
+
+    write_executable(
+        &executable,
+        "#!/bin/sh\n# compiler implementation two\nprintf 'compiler 1.0\\n'\n",
+    );
+    let second = identify_test_executable(&executable, true);
+
+    assert_ne!(
+        first.encode(temporary.path()),
+        second.encode(temporary.path()),
+        "executable content SHA-256 must distinguish tools with the same path and version"
+    );
+}
+
+#[test]
+fn replacing_a_rustc_wrapper_at_the_same_selector_changes_identity() {
+    let temporary = tempfile::tempdir().unwrap();
+    let wrapper = temporary.path().join("rustc-wrapper");
+    write_executable(&wrapper, "#!/bin/sh\n# wrapper one\nexec \"$@\"\n");
+    let first = identify_test_executable(&wrapper, false);
+
+    write_executable(&wrapper, "#!/bin/sh\n# wrapper two\nexec \"$@\"\n");
+    let second = identify_test_executable(&wrapper, false);
+
+    assert_ne!(
+        first.encode(temporary.path()),
+        second.encode(temporary.path()),
+        "Cargo wrappers have no version protocol, so their exact bytes must be bound"
+    );
+}
+
+#[test]
+fn native_wrapper_identity_binds_the_delegated_compiler_bytes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let wrapper = temporary.path().join("sccache");
+    let compiler = temporary.path().join("clang");
+    write_executable(&wrapper, "#!/bin/sh\nexec \"$@\"\n");
+    write_executable(&compiler, "#!/bin/sh\n# compiler one\nprintf 'clang 1.0\\n'\n");
+
+    let command = vec![wrapper.clone().into_os_string(), compiler.clone().into_os_string()];
+    assert_eq!(
+        native_build_context::delegated_compiler("cc", &command, None),
+        Some(compiler.as_os_str())
+    );
+    assert_eq!(
+        native_build_context::delegated_compiler("archiver", &command, None),
+        None
+    );
+
+    let mut first = tool_identity::CommandIdentity::new(identify_test_executable(&wrapper, false));
+    first.push_delegated(identify_test_executable(&compiler, false));
+
+    write_executable(&compiler, "#!/bin/sh\n# compiler two\nprintf 'clang 1.0\\n'\n");
+    let mut second = tool_identity::CommandIdentity::new(identify_test_executable(&wrapper, false));
+    second.push_delegated(identify_test_executable(&compiler, false));
+
+    assert_ne!(
+        first.encode(temporary.path()),
+        second.encode(temporary.path()),
+        "the wrapper and delegated compiler must both be byte-bound"
+    );
+}
+
+#[test]
+fn equivalent_workspace_executable_paths_have_one_identity() {
+    let first_workspace = tempfile::tempdir().unwrap();
+    let second_workspace = tempfile::tempdir().unwrap();
+    let relative = Path::new("toolchain/bin/compiler");
+    let first_path = first_workspace.path().join(relative);
+    let second_path = second_workspace.path().join(relative);
+    fs::create_dir_all(first_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(second_path.parent().unwrap()).unwrap();
+    let contents = "#!/bin/sh\nprintf 'compiler 1.0\\n'\n";
+    write_executable(&first_path, contents);
+    write_executable(&second_path, contents);
+
+    let first = identify_test_executable(&first_path, true);
+    let second = identify_test_executable(&second_path, true);
+    assert_eq!(first.resolved_path(), first_path.canonicalize().unwrap());
+    assert_eq!(second.resolved_path(), second_path.canonicalize().unwrap());
+
+    assert_eq!(
+        first.encode(first_workspace.path()),
+        second.encode(second_workspace.path()),
+        "canonical paths beneath equivalent workspaces must use the workspace token"
+    );
 }
 
 #[test]
@@ -417,14 +594,12 @@ fn only_the_selected_cmake_generator_tool_is_semantic() {
 fn aws_lc_cmake_fallback_and_explicit_precedence_match_the_build_script() {
     let workspace = Path::new("/workspace/os-tools");
     let probe = |cmake3_available: bool| {
-        move |command: &[OsString]| {
+        move |_: &str, command: &[OsString]| {
             let program = command[0].as_os_str().as_bytes();
             if program == b"cmake3" && !cmake3_available {
                 return Ok(None);
             }
-            let mut identity = program.to_vec();
-            identity.extend_from_slice(b" version 1");
-            Ok(Some(identity))
+            Ok(Some(fake_command_identity(command, "1")))
         }
     };
 

@@ -16,6 +16,8 @@ use std::{
     path::Path,
 };
 
+use crate::tool_identity::{CommandIdentity, normalize_workspace};
+
 pub(crate) type ExplicitInput = (String, Vec<u8>);
 
 const TARGET_SCOPED_VALUES: &[&str] = &[
@@ -205,14 +207,16 @@ impl NativeBuildContext {
 
 /// Collect the effective native build context from an explicit environment.
 ///
-/// `probe` receives the selected command and returns its stable `--version`
-/// output when the tool is available.  A missing optional tool is represented
-/// by its normalized selector only; it is not a reason for this build script
-/// to fail before the dependency which needs it runs.
+/// `probe` receives the tool role and selected command and returns its content-strong
+/// executable identity, including stable `--version` output.  `None` is used
+/// only while reproducing AWS-LC's implicit
+/// `cmake3`-then-`cmake` discovery.  Every command that is ultimately selected
+/// must have an identity; otherwise two different implementations could share
+/// one Boulder semantic fingerprint.
 pub(crate) fn collect<I, F>(environment: I, workspace_root: &Path, mut probe: F) -> io::Result<NativeBuildContext>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
-    F: FnMut(&[OsString]) -> io::Result<Option<Vec<u8>>>,
+    F: FnMut(&str, &[OsString]) -> io::Result<Option<CommandIdentity>>,
 {
     let environment = normalize_environment(environment)?;
     let host = required_utf8(&environment, "HOST")?;
@@ -244,28 +248,26 @@ where
         let selector = select_tool(&environment, *spec, kind, target, &target_underscored);
         let (command, identity) = if spec.selection == ToolSelection::AwsTargeted && selector.is_none() {
             let cmake3 = vec![OsString::from("cmake3")];
-            match probe(&cmake3)? {
-                Some(identity) => (cmake3, Some(identity)),
+            match probe(spec.role, &cmake3)? {
+                Some(identity) => (cmake3, identity),
                 None => {
                     let cmake = vec![OsString::from("cmake")];
-                    let identity = probe(&cmake)?;
+                    let identity = require_tool_identity(spec.role, &cmake, probe(spec.role, &cmake)?)?;
                     (cmake, identity)
                 }
             }
         } else {
             let selector = selector.unwrap_or_else(|| OsString::from(spec.default_program));
             let command = parse_command(selector.as_os_str()).unwrap_or_else(|| vec![selector.clone()]);
-            let identity = probe(&command)?;
+            let identity = require_tool_identity(spec.role, &command, probe(spec.role, &command)?)?;
             (command, identity)
         };
         let encoded_command = encode_command(&command, workspace);
         inputs.insert(format!("native.tool.{}.command", spec.role), encoded_command);
-        if let Some(identity) = identity {
-            inputs.insert(
-                format!("native.tool.{}.version", spec.role),
-                normalize_workspace(&identity, workspace),
-            );
-        }
+        inputs.insert(
+            format!("native.tool.{}.identity", spec.role),
+            identity.encode(workspace_root),
+        );
     }
 
     if let Some(selector) = select_cmake_generator_tool(&environment, target, &target_underscored) {
@@ -274,12 +276,11 @@ where
             "native.tool.cmake-generator.command".to_owned(),
             encode_command(&command, workspace),
         );
-        if let Some(identity) = probe(&command)? {
-            inputs.insert(
-                "native.tool.cmake-generator.version".to_owned(),
-                normalize_workspace(&identity, workspace),
-            );
-        }
+        let identity = require_tool_identity("cmake-generator", &command, probe("cmake-generator", &command)?)?;
+        inputs.insert(
+            "native.tool.cmake-generator.identity".to_owned(),
+            identity.encode(workspace_root),
+        );
     }
 
     // Cargo normally resolves a target linker into RUSTC_LINKER.  Retain the
@@ -290,23 +291,34 @@ where
     if !environment.contains_key("RUSTC_LINKER")
         && let Some(selector) = environment.get(&cargo_linker)
     {
-        inputs.remove("native.tool.rust-linker.version");
+        inputs.remove("native.tool.rust-linker.identity");
         let command = parse_command(selector.as_os_str()).unwrap_or_else(|| vec![selector.clone()]);
         inputs.insert(
             "native.tool.rust-linker.command".to_owned(),
             encode_command(&command, workspace),
         );
-        if let Some(identity) = probe(&command)? {
-            inputs.insert(
-                "native.tool.rust-linker.version".to_owned(),
-                normalize_workspace(&identity, workspace),
-            );
-        }
+        let identity = require_tool_identity("rust-linker", &command, probe("rust-linker", &command)?)?;
+        inputs.insert(
+            "native.tool.rust-linker.identity".to_owned(),
+            identity.encode(workspace_root),
+        );
     }
 
     Ok(NativeBuildContext {
         inputs: inputs.into_iter().collect(),
         watched_environment: watched.into_iter().collect(),
+    })
+}
+
+fn require_tool_identity(
+    role: &str,
+    command: &[OsString],
+    identity: Option<CommandIdentity>,
+) -> io::Result<CommandIdentity> {
+    identity.ok_or_else(|| {
+        invalid_data(format!(
+            "cannot identify selected native tool {role} with command {command:?}"
+        ))
     })
 }
 
@@ -444,6 +456,29 @@ fn select_cmake_generator_tool(
     )
 }
 
+/// Return the compiler delegated to by a wrapper syntax understood by cc-rs.
+///
+/// cc-rs treats these wrappers specially for the `CC` and `CXX` selectors and
+/// executes both the wrapper and the following compiler.  Keep that delegated
+/// executable visible to the build identity rather than relying on its version
+/// output through the wrapper.
+pub(crate) fn delegated_compiler<'a>(
+    role: &str,
+    command: &'a [OsString],
+    custom_wrapper: Option<&OsStr>,
+) -> Option<&'a OsStr> {
+    if !matches!(role, "cc" | "cxx") {
+        return None;
+    }
+    let wrapper = Path::new(command.first()?).file_stem()?.to_str()?;
+    let known = ["ccache", "distcc", "sccache", "icecc", "cachepot", "buildcache"];
+    if known.contains(&wrapper) || custom_wrapper.and_then(OsStr::to_str) == Some(wrapper) {
+        command.get(1).map(OsString::as_os_str)
+    } else {
+        None
+    }
+}
+
 fn parse_command(value: &OsStr) -> Option<Vec<OsString>> {
     #[derive(Clone, Copy)]
     enum Quote {
@@ -517,27 +552,6 @@ fn encode_command(command: &[OsString], workspace: &[u8]) -> Vec<u8> {
         write_field(&mut encoded, &value);
     }
     encoded
-}
-
-fn normalize_workspace(value: &[u8], workspace: &[u8]) -> Vec<u8> {
-    const TOKEN: &[u8] = b"${WORKSPACE}";
-    if workspace.is_empty() || value.len() < workspace.len() {
-        return value.to_vec();
-    }
-
-    let mut normalized = Vec::with_capacity(value.len());
-    let mut offset = 0;
-    while offset < value.len() {
-        let end = offset.saturating_add(workspace.len());
-        if end <= value.len() && &value[offset..end] == workspace && (end == value.len() || value[end] == b'/') {
-            normalized.extend_from_slice(TOKEN);
-            offset = end;
-        } else {
-            normalized.push(value[offset]);
-            offset += 1;
-        }
-    }
-    normalized
 }
 
 fn write_count(output: &mut Vec<u8>, count: usize) {

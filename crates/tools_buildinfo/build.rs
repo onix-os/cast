@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // build.rs
-use std::{collections::BTreeMap, ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
+use std::{
+    collections::BTreeMap,
+    ffi::{OsStr, OsString},
+    os::unix::ffi::{OsStrExt as _, OsStringExt as _},
+    path::Path,
+};
 
 use chrono::{DateTime, Utc};
 
@@ -11,6 +16,9 @@ mod semantic_fingerprint;
 
 #[path = "src/native_build_context.rs"]
 mod native_build_context;
+
+#[path = "src/tool_identity.rs"]
+mod tool_identity;
 
 /// Returns value of given environment variable or error if missing.
 ///
@@ -49,22 +57,6 @@ fn command(prog: &str, args: &[&str], cwd: Option<std::path::PathBuf>) -> Result
     }
 }
 
-/// Return a stable description of the compiler Cargo selected for this build.
-fn rustc_identity() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let rustc = env("RUSTC")?;
-    let mut cmd = std::process::Command::new(&rustc);
-    cmd.arg("-vV");
-    let out = cmd.output()?;
-    if !out.status.success() {
-        return Err(Box::from(format!(
-            "{} -vV terminated with {}",
-            rustc.to_string_lossy(),
-            out.status
-        )));
-    }
-    Ok(trim_trailing_newline(out.stdout))
-}
-
 fn trim_trailing_newline(mut value: Vec<u8>) -> Vec<u8> {
     if value.last() == Some(&b'\n') {
         value.pop();
@@ -75,39 +67,131 @@ fn trim_trailing_newline(mut value: Vec<u8>) -> Vec<u8> {
     value
 }
 
-/// Probe an optional native build tool without making it a new build
-/// requirement.  The selected command itself remains in the fingerprint when
-/// a tool is unavailable; successful probes additionally identify the exact
-/// implementation which would compile or link native dependencies.
-fn native_tool_identity(command: &[OsString]) -> Result<Option<Vec<u8>>, std::io::Error> {
+fn watch_executable(identity: &tool_identity::ExecutableIdentity) -> Result<(), Box<dyn std::error::Error>> {
+    let path = identity.resolved_path();
+    let path = path.to_str().ok_or_else(|| {
+        Box::<dyn std::error::Error>::from(format!(
+            "selected executable path is not UTF-8 and cannot be watched by Cargo: {}",
+            path.display()
+        ))
+    })?;
+    if path.contains(['\r', '\n']) {
+        return Err(Box::from(format!(
+            "selected executable path cannot be represented by a Cargo directive: {path:?}"
+        )));
+    }
+    println!("cargo:rerun-if-changed={path}");
+    Ok(())
+}
+
+fn identify_executable<F>(
+    program: &OsStr,
+    probe: F,
+) -> Result<Option<tool_identity::ExecutableIdentity>, Box<dyn std::error::Error>>
+where
+    F: FnOnce(&Path) -> Result<Option<Vec<u8>>, std::io::Error>,
+{
+    println!("cargo:rerun-if-env-changed=PATH");
+    let search_path = std::env::var_os("PATH");
+    let working_directory = std::env::current_dir()?;
+    let identity = tool_identity::identify(program, search_path.as_deref(), &working_directory, probe)?;
+    if let Some(identity) = &identity {
+        watch_executable(identity)?;
+    }
+    Ok(identity)
+}
+
+/// Return a content-strong identity of the compiler Cargo selected.
+fn rustc_identity(rustc: &OsStr) -> Result<tool_identity::ExecutableIdentity, Box<dyn std::error::Error>> {
+    identify_executable(rustc, |resolved| {
+        let output = std::process::Command::new(resolved)
+            .arg("-vV")
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "{} -vV terminated with {}",
+                resolved.display(),
+                output.status
+            )));
+        }
+        Ok(Some(trim_trailing_newline(output.stdout)))
+    })?
+    .ok_or_else(|| Box::from(format!("cannot resolve selected Rust compiler {rustc:?}")))
+}
+
+fn rustc_wrapper_identity(
+    role: &str,
+    selector: &OsStr,
+) -> Result<tool_identity::ExecutableIdentity, Box<dyn std::error::Error>> {
+    identify_executable(selector, |_| Ok(None))?
+        .ok_or_else(|| Box::from(format!("cannot resolve selected {role} executable {selector:?}")))
+}
+
+/// Probe a native build tool selected by Cargo or one of its native
+/// dependencies.  `NotFound` remains distinguishable only so the AWS-LC
+/// `cmake3`-then-`cmake` discovery rule can be reproduced; once a command is
+/// selected, [`native_build_context::collect`] rejects a missing identity.
+fn native_tool_identity(
+    role: &str,
+    command: &[OsString],
+) -> Result<Option<tool_identity::CommandIdentity>, std::io::Error> {
     let Some((program, arguments)) = command.split_first() else {
-        return Ok(None);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native tool command is empty",
+        ));
     };
     if program.is_empty() {
-        return Ok(None);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "native tool program is empty",
+        ));
     }
 
-    let output = match std::process::Command::new(program)
-        .args(arguments)
-        .arg("--version")
-        .env("LC_ALL", "C")
-        .env("LANG", "C")
-        .output()
-    {
-        Ok(output) => output,
-        Err(_) => return Ok(None),
+    let primary = identify_executable(program, |resolved| {
+        let output = std::process::Command::new(resolved)
+            .args(arguments)
+            .arg("--version")
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other(format!(
+                "native tool {command:?} --version terminated with {}",
+                output.status
+            )));
+        }
+
+        let stdout = trim_trailing_newline(output.stdout);
+        let stderr = trim_trailing_newline(output.stderr);
+        let mut version = Vec::with_capacity(stdout.len() + stderr.len() + 16);
+        for value in [&stdout, &stderr] {
+            let length = u64::try_from(value.len()).expect("native tool version output fits in u64");
+            version.extend_from_slice(&length.to_be_bytes());
+            version.extend_from_slice(value);
+        }
+        Ok(Some(version))
+    })
+    .map_err(|source| std::io::Error::other(source.to_string()))?;
+    let Some(primary) = primary else {
+        return Ok(None);
     };
-    if !output.status.success() {
-        return Ok(None);
-    }
 
-    let stdout = trim_trailing_newline(output.stdout);
-    let stderr = trim_trailing_newline(output.stderr);
-    let mut identity = Vec::with_capacity(stdout.len() + stderr.len() + 16);
-    for value in [&stdout, &stderr] {
-        let length = u64::try_from(value.len()).expect("native tool version output fits in u64");
-        identity.extend_from_slice(&length.to_be_bytes());
-        identity.extend_from_slice(value);
+    let mut identity = tool_identity::CommandIdentity::new(primary);
+    let custom_wrapper = std::env::var_os("CC_KNOWN_WRAPPER_CUSTOM");
+    if let Some(delegated_program) = native_build_context::delegated_compiler(role, command, custom_wrapper.as_deref())
+    {
+        let delegated = identify_executable(delegated_program, |_| Ok(None))
+            .map_err(|source| std::io::Error::other(source.to_string()))?
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("cannot resolve delegated native compiler {delegated_program:?}"),
+                )
+            })?;
+        identity.push_delegated(delegated);
     }
     Ok(Some(identity))
 }
@@ -129,12 +213,37 @@ fn semantic_build_context(
         "CARGO_ENCODED_RUSTFLAGS",
         "RUSTFLAGS",
         "RUSTC_BOOTSTRAP",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
     ];
 
     let mut inputs = BTreeMap::<String, Vec<u8>>::new();
-    inputs.insert("toolchain.rustc-vV".to_owned(), rustc_identity()?);
+    let workspace = top_level.as_os_str().as_bytes();
+    let rustc = env("RUSTC")?;
+    let rustc_identity = rustc_identity(&rustc)?;
+    inputs.insert(
+        "toolchain.rustc.selector".to_owned(),
+        tool_identity::normalize_workspace(rustc.as_os_str().as_bytes(), workspace),
+    );
+    inputs.insert("toolchain.rustc.identity".to_owned(), rustc_identity.encode(top_level));
+
+    for (key, role, input_role) in [
+        ("RUSTC_WRAPPER", "RUSTC_WRAPPER", "rustc-wrapper"),
+        (
+            "RUSTC_WORKSPACE_WRAPPER",
+            "RUSTC_WORKSPACE_WRAPPER",
+            "rustc-workspace-wrapper",
+        ),
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+        let Some(selector) = std::env::var_os(key).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        let identity = rustc_wrapper_identity(role, &selector)?;
+        inputs.insert(
+            format!("toolchain.{input_role}.selector"),
+            tool_identity::normalize_workspace(selector.as_os_str().as_bytes(), workspace),
+        );
+        inputs.insert(format!("toolchain.{input_role}.identity"), identity.encode(top_level));
+    }
 
     for key in OPTIONAL_KEYS {
         println!("cargo:rerun-if-env-changed={key}");
