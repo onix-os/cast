@@ -145,6 +145,25 @@ let root = {
 }
 
 #[test]
+fn evaluator_validates_the_concrete_package_before_recipe_lowering() {
+    let source = authored(
+        r#"
+b.mk_package (b.meta {
+    pname = "example", version = "v1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+})
+"#,
+    );
+
+    let error = evaluate_gluon(&source).unwrap_err();
+    assert!(matches!(
+        error,
+        PackageEvaluationError::Conversion(ref error)
+            if error.field() == "meta.version"
+    ));
+}
+
+#[test]
 fn package_fingerprint_is_deterministic_and_binds_explicit_inputs() {
     let source = authored(
         r#"

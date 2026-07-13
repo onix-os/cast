@@ -9,10 +9,14 @@
 //! lowers into the existing [`crate::Recipe`] domain model while Boulder is
 //! migrated to consume package declarations directly.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::LazyLock,
+};
 
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
+use url::Url;
 
 use crate::{
     BuildSpec, KeyValueSpec, OptionsSpec, PackageSpec as LegacyPackageSpec, PathSpec, Recipe, RecipeConversionError,
@@ -292,6 +296,23 @@ impl DependencySpec {
 /// Failure to lower a v2 package declaration into the current recipe domain.
 #[derive(Debug, Error)]
 pub enum PackageConversionError {
+    #[error("meta.version: version must start with an integer (found `{version}`)")]
+    VersionMustStartWithDigit { version: String },
+    #[error("meta.release: release must be greater than zero (found `{release}`)")]
+    ReleaseMustBePositive { release: i64 },
+    #[error("{field}: invalid URL `{value}`")]
+    InvalidUrl {
+        field: String,
+        value: String,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error("{field}: `{value}` is outside the valid {expected} range")]
+    IntegerOutOfRange {
+        field: String,
+        value: i64,
+        expected: &'static str,
+    },
     #[error("{field}: invalid dependency: {source}")]
     InvalidDependency {
         field: String,
@@ -325,7 +346,11 @@ pub enum PackageConversionError {
 impl PackageConversionError {
     pub fn field(&self) -> &str {
         match self {
-            Self::InvalidDependency { field, .. }
+            Self::VersionMustStartWithDigit { .. } => "meta.version",
+            Self::ReleaseMustBePositive { .. } => "meta.release",
+            Self::InvalidUrl { field, .. }
+            | Self::IntegerOutOfRange { field, .. }
+            | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
             | Self::MissingOutputReference { field, .. }
             | Self::OutputDependencyCycle { field, .. } => field,
@@ -340,7 +365,7 @@ impl TryFrom<PackageSpec> for Recipe {
     type Error = PackageConversionError;
 
     fn try_from(package: PackageSpec) -> Result<Self, Self::Error> {
-        package.validate_relations()?;
+        package.validate()?;
 
         let PackageSpec {
             meta,
@@ -434,8 +459,97 @@ impl TryFrom<PackageSpec> for Recipe {
 }
 
 impl PackageSpec {
+    /// Validate the concrete package declaration without lowering it through
+    /// the transitional recipe model.
+    pub fn validate(&self) -> Result<(), PackageConversionError> {
+        if !self
+            .meta
+            .version
+            .starts_with(|character: char| character.is_ascii_digit())
+        {
+            return Err(PackageConversionError::VersionMustStartWithDigit {
+                version: self.meta.version.clone(),
+            });
+        }
+        if self.meta.release <= 0 {
+            return Err(PackageConversionError::ReleaseMustBePositive {
+                release: self.meta.release,
+            });
+        }
+
+        for (index, source) in self.sources.iter().enumerate() {
+            let (url, strip_dirs) = match source {
+                UpstreamSpec::Archive { url, strip_dirs, .. } => (url, *strip_dirs),
+                UpstreamSpec::Git { url, .. } => (url, None),
+            };
+            Url::parse(url).map_err(|source| PackageConversionError::InvalidUrl {
+                field: format!("sources[{index}].url"),
+                value: url.clone(),
+                source,
+            })?;
+            if let Some(value) = strip_dirs {
+                u8::try_from(value).map_err(|_| PackageConversionError::IntegerOutOfRange {
+                    field: format!("sources[{index}].strip_dirs"),
+                    value,
+                    expected: "0..=255 integer",
+                })?;
+            }
+        }
+
+        self.validate_relations()
+    }
+
     pub fn phases(&self) -> PhasesSpec {
-        self.builder.phases(&self.hooks)
+        self.phases_for_profile(None)
+    }
+
+    /// Find a target-specific profile by its declarative name.
+    pub fn profile(&self, name: &str) -> Option<&ProfileSpec> {
+        self.profiles.iter().find(|profile| profile.name == name)
+    }
+
+    /// Select a builder for a known profile, falling back to the package's
+    /// base builder when no matching profile was requested.
+    pub fn builder_for_profile(&self, profile: Option<&str>) -> &BuilderSpec {
+        self.selected_profile(profile)
+            .map_or(&self.builder, |profile| &profile.builder)
+    }
+
+    /// Select hooks for a known profile, falling back to the package's base
+    /// hooks when no matching profile was requested.
+    pub fn hooks_for_profile(&self, profile: Option<&str>) -> &HooksSpec {
+        self.selected_profile(profile)
+            .map_or(&self.hooks, |profile| &profile.hooks)
+    }
+
+    /// Select structural phases for one optional target profile.
+    pub fn phases_for_profile(&self, profile: Option<&str>) -> PhasesSpec {
+        self.builder_for_profile(profile)
+            .phases(self.hooks_for_profile(profile))
+    }
+
+    /// Select target-native build inputs for one optional profile.
+    /// Builder-required tools remain available separately through
+    /// [`BuilderSpec::required_tools`].
+    pub fn native_build_inputs_for_profile(&self, profile: Option<&str>) -> &[DependencySpec] {
+        self.selected_profile(profile)
+            .map_or(&self.native_build_inputs, |profile| &profile.native_build_inputs)
+    }
+
+    /// Select target build inputs for one optional profile.
+    pub fn build_inputs_for_profile(&self, profile: Option<&str>) -> &[DependencySpec] {
+        self.selected_profile(profile)
+            .map_or(&self.build_inputs, |profile| &profile.build_inputs)
+    }
+
+    /// Select target check inputs for one optional profile.
+    pub fn check_inputs_for_profile(&self, profile: Option<&str>) -> &[DependencySpec] {
+        self.selected_profile(profile)
+            .map_or(&self.check_inputs, |profile| &profile.check_inputs)
+    }
+
+    fn selected_profile(&self, profile: Option<&str>) -> Option<&ProfileSpec> {
+        profile.and_then(|name| self.profile(name))
     }
 
     fn validate_relations(&self) -> Result<(), PackageConversionError> {
@@ -461,17 +575,12 @@ impl PackageSpec {
         self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, false)?;
-        self.validate_dependency_list(
-            &self.builder.required_tools(),
-            "builder.required_tools",
-            &outputs,
-            false,
-        )?;
+        self.validate_dependency_list(self.builder.required_tools(), "builder.required_tools", &outputs, false)?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
             let parent = format!("profiles[{index}]");
             self.validate_dependency_list(
-                &profile.builder.required_tools(),
+                profile.builder.required_tools(),
                 &format!("{parent}.builder.required_tools"),
                 &outputs,
                 false,
@@ -631,21 +740,30 @@ struct LoweredBuilder {
     required_tools: Vec<DependencySpec>,
 }
 
+fn binary(name: &str) -> DependencySpec {
+    DependencySpec::Binary(name.to_owned())
+}
+
+static CMAKE_TOOLS: LazyLock<Vec<DependencySpec>> = LazyLock::new(|| vec![binary("cmake"), binary("ninja")]);
+static CMAKE_TOOLS_WITH_TESTS: LazyLock<Vec<DependencySpec>> =
+    LazyLock::new(|| vec![binary("cmake"), binary("ninja"), binary("ctest")]);
+static MESON_TOOLS: LazyLock<Vec<DependencySpec>> =
+    LazyLock::new(|| vec![binary("cmake"), binary("meson"), binary("ninja"), binary("pkgconf")]);
+static CARGO_TOOLS: LazyLock<Vec<DependencySpec>> = LazyLock::new(|| vec![binary("cargo")]);
+static AUTOTOOLS_TOOLS: LazyLock<Vec<DependencySpec>> =
+    LazyLock::new(|| vec![binary("autoconf"), binary("automake"), binary("make")]);
+
 impl BuilderSpec {
-    fn required_tools(&self) -> Vec<DependencySpec> {
-        let binary = |name: &str| DependencySpec::Binary(name.to_owned());
+    /// Canonical tools required by this builder. These are separate from the
+    /// package's declared native, build, and check inputs.
+    pub fn required_tools(&self) -> &[DependencySpec] {
         match self {
-            Self::CMake { run_tests, .. } => {
-                let mut tools = vec![binary("cmake"), binary("ninja")];
-                if *run_tests {
-                    tools.push(binary("ctest"));
-                }
-                tools
-            }
-            Self::Meson { .. } => vec![binary("cmake"), binary("meson"), binary("ninja"), binary("pkgconf")],
-            Self::Cargo { .. } => vec![binary("cargo")],
-            Self::Autotools { .. } => vec![binary("autoconf"), binary("automake"), binary("make")],
-            Self::Custom { required_tools, .. } => required_tools.clone(),
+            Self::CMake { run_tests: true, .. } => CMAKE_TOOLS_WITH_TESTS.as_slice(),
+            Self::CMake { run_tests: false, .. } => CMAKE_TOOLS.as_slice(),
+            Self::Meson { .. } => MESON_TOOLS.as_slice(),
+            Self::Cargo { .. } => CARGO_TOOLS.as_slice(),
+            Self::Autotools { .. } => AUTOTOOLS_TOOLS.as_slice(),
+            Self::Custom { required_tools, .. } => required_tools,
         }
     }
 
@@ -654,7 +772,7 @@ impl BuilderSpec {
     }
 
     fn lower(self, hooks: HooksSpec) -> LoweredBuilder {
-        let required_tools = self.required_tools();
+        let required_tools = self.required_tools().to_vec();
         let phases = match self {
             Self::CMake { flags, run_tests } => PhasesSpec {
                 setup: PhaseSpec::new([StepSpec::CMakeConfigure { flags }]),
@@ -903,6 +1021,153 @@ mod tests {
         let error = Recipe::try_from(output).unwrap_err();
         assert!(matches!(error, PackageConversionError::InvalidDependency { .. }));
         assert_eq!(error.field(), "build_inputs[0]");
+    }
+
+    #[test]
+    fn base_and_selected_profile_semantics_stay_structural() {
+        let mut package = package();
+        package.builder = BuilderSpec::CMake {
+            flags: vec!["-DBASE=ON".to_owned()],
+            run_tests: false,
+        };
+        package.native_build_inputs = vec![dependency("base-native")];
+        package.build_inputs = vec![dependency("base-build")];
+        package.check_inputs = vec![dependency("base-check")];
+        package.profiles.push(ProfileSpec {
+            name: "emul32/x86_64".to_owned(),
+            builder: BuilderSpec::Cargo {
+                features: vec!["profile".to_owned()],
+                binaries: vec!["example".to_owned()],
+                run_tests: true,
+            },
+            hooks: HooksSpec {
+                pre_build: vec![StepSpec::Shell {
+                    script: "prepare-profile".to_owned(),
+                }],
+                ..HooksSpec::default()
+            },
+            native_build_inputs: vec![dependency("profile-native")],
+            build_inputs: vec![dependency("profile-build")],
+            check_inputs: vec![dependency("profile-check")],
+        });
+
+        assert!(matches!(package.builder_for_profile(None), BuilderSpec::CMake { .. }));
+        assert_eq!(
+            package.builder_for_profile(None).required_tools(),
+            [
+                DependencySpec::Binary("cmake".to_owned()),
+                DependencySpec::Binary("ninja".to_owned())
+            ]
+        );
+        assert!(matches!(
+            package.builder_for_profile(Some("emul32/x86_64")),
+            BuilderSpec::Cargo { .. }
+        ));
+        assert_eq!(
+            package.builder_for_profile(Some("emul32/x86_64")).required_tools(),
+            [DependencySpec::Binary("cargo".to_owned())]
+        );
+        assert_eq!(
+            package.phases_for_profile(Some("emul32/x86_64")).build.steps,
+            [
+                StepSpec::Shell {
+                    script: "prepare-profile".to_owned()
+                },
+                StepSpec::CargoBuild {
+                    features: vec!["profile".to_owned()]
+                }
+            ]
+        );
+        assert_eq!(
+            package.native_build_inputs_for_profile(None),
+            [dependency("base-native")]
+        );
+        assert_eq!(
+            package.build_inputs_for_profile(Some("emul32/x86_64")),
+            [dependency("profile-build")]
+        );
+        assert_eq!(
+            package.check_inputs_for_profile(Some("emul32/x86_64")),
+            [dependency("profile-check")]
+        );
+        assert!(matches!(
+            package.builder_for_profile(Some("missing")),
+            BuilderSpec::CMake { .. }
+        ));
+    }
+
+    #[test]
+    fn direct_metadata_and_source_validation_keep_package_field_paths() {
+        let mut invalid = package();
+        invalid.meta.version = "v1.0".to_owned();
+        let error = invalid.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::VersionMustStartWithDigit { .. }
+        ));
+        assert_eq!(error.field(), "meta.version");
+
+        let mut invalid = package();
+        invalid.meta.release = 0;
+        let error = invalid.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::ReleaseMustBePositive { release: 0 }
+        ));
+        assert_eq!(error.field(), "meta.release");
+
+        let mut invalid = package();
+        invalid.sources.push(UpstreamSpec::Git {
+            url: "not a URL".to_owned(),
+            git_ref: "main".to_owned(),
+            clone_dir: None,
+        });
+        let error = invalid.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidUrl { .. }));
+        assert_eq!(error.field(), "sources[0].url");
+
+        let mut invalid = package();
+        invalid.sources.push(UpstreamSpec::Archive {
+            url: "https://example.com/source.tar.xz".to_owned(),
+            hash: "hash".to_owned(),
+            rename: None,
+            strip_dirs: Some(256),
+            unpack: true,
+            unpack_dir: None,
+        });
+        let error = invalid.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::IntegerOutOfRange { .. }));
+        assert_eq!(error.field(), "sources[0].strip_dirs");
+    }
+
+    #[test]
+    fn every_direct_relation_group_reports_its_package_field() {
+        let invalid = DependencySpec::Binary(String::new());
+
+        let mut spec = package();
+        spec.check_inputs = vec![invalid.clone()];
+        assert_eq!(spec.validate().unwrap_err().field(), "check_inputs[0]");
+
+        let mut spec = package();
+        spec.outputs[0].runtime_inputs = vec![invalid.clone()];
+        assert_eq!(spec.validate().unwrap_err().field(), "outputs[0].runtime_inputs[0]");
+
+        let mut spec = package();
+        spec.profiles.push(ProfileSpec {
+            name: "native".to_owned(),
+            builder: BuilderSpec::Custom {
+                scripts: ScriptsSpec::default(),
+                required_tools: vec![invalid.clone()],
+            },
+            hooks: HooksSpec::default(),
+            native_build_inputs: Vec::new(),
+            build_inputs: Vec::new(),
+            check_inputs: Vec::new(),
+        });
+        assert_eq!(
+            spec.validate().unwrap_err().field(),
+            "profiles[0].builder.required_tools[0]"
+        );
     }
 
     #[test]

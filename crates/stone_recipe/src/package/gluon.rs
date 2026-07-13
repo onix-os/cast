@@ -569,6 +569,7 @@ pub fn evaluate_gluon_with_inputs(
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
     let package = PackageSpec::from(evaluation.value);
+    package.validate()?;
     let recipe = Recipe::try_from(package.clone())?;
 
     Ok(EvaluatedPackage {
