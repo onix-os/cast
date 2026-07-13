@@ -23,17 +23,16 @@ pub fn populate_frozen(
     moss_dir: &std::path::Path,
     repositories: repository::Map,
     build_lock: &BuildLock,
+    source_date_epoch: i64,
     timing: &mut Timing,
     initialize_timer: timing::Timer,
 ) -> Result<(), Error> {
     let rootfs = paths.rootfs().host;
 
     // Create the moss client
-    let installation = Installation::open(moss_dir, None)?;
-    let mut moss_client = moss::Client::builder("boulder", installation)
-        .repositories(repositories)
-        .ephemeral(rootfs)
-        .build()?;
+    let repositories = locked_repositories(&repositories, &build_lock.repositories)?;
+    let installation = Installation::open_frozen(moss_dir, None)?;
+    let mut moss_client = moss::Client::frozen("boulder", installation, repositories, rootfs)?;
     require_locked_repositories(&moss_client, build_lock)?;
     let package_ids = exact_package_ids(&moss_client, build_lock)?;
 
@@ -42,7 +41,7 @@ pub fn populate_frozen(
     // The planner already selected the complete package closure. Installing
     // provider strings here would silently cross the freeze boundary and allow
     // a newer candidate to replace a locked package.
-    let install_timing = moss_client.install_exact(&package_ids, true, false)?;
+    let install_timing = moss_client.materialize_frozen_root(&package_ids, source_date_epoch)?;
 
     timing.record(timing::Populate::Resolve, install_timing.resolve);
     timing.record(timing::Populate::Fetch, install_timing.fetch);
@@ -118,15 +117,9 @@ fn safe_child(root: &std::path::Path, path: &std::path::Path) -> bool {
 }
 
 fn require_locked_repositories(client: &moss::Client, build_lock: &BuildLock) -> Result<(), Error> {
-    let locked_ids = build_lock
-        .repositories
-        .iter()
-        .map(|repository| repository.id.clone())
-        .collect::<BTreeSet<_>>();
     let mut current = client
         .repository_index_snapshots()?
         .into_iter()
-        .filter(|snapshot| locked_ids.contains(&snapshot.id.to_string()))
         .map(|snapshot| RepositorySnapshot {
             id: snapshot.id.to_string(),
             index_uri: snapshot.index_uri.to_string(),
@@ -142,6 +135,26 @@ fn require_locked_repositories(client: &moss::Client, build_lock: &BuildLock) ->
         });
     }
     Ok(())
+}
+
+fn locked_repositories(
+    configured: &repository::Map,
+    locked_repositories: &[RepositorySnapshot],
+) -> Result<repository::Map, Error> {
+    locked_repositories
+        .iter()
+        .map(|locked| {
+            let id = repository::Id::new(&locked.id);
+            if id.to_string() != locked.id {
+                return Err(Error::InvalidLockedRepositoryId(locked.id.clone()));
+            }
+            let repository = configured
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| Error::MissingLockedRepository(locked.id.clone()))?;
+            Ok((id, repository))
+        })
+        .collect::<Result<repository::Map, Error>>()
 }
 
 fn exact_package_ids(client: &moss::Client, build_lock: &BuildLock) -> Result<Vec<package::Id>, Error> {
@@ -326,6 +339,10 @@ pub enum Error {
         locked: Vec<RepositorySnapshot>,
         current: Vec<RepositorySnapshot>,
     },
+    #[error("locked repository is not configured: {0}")]
+    MissingLockedRepository(String),
+    #[error("locked repository ID is not canonical: {0}")]
+    InvalidLockedRepositoryId(String),
     #[error("locked metadata no longer matches package {package_id}")]
     LockedPackageMetadataMismatch { package_id: String },
     #[error("frozen plan sandbox layout does not match runtime paths")]
@@ -575,6 +592,42 @@ let base = b.mk_package (b.meta {
         package = self::package();
         package.meta.architecture = "aarch64".to_owned();
         assert!(!locked_metadata_matches(&locked, &package));
+    }
+
+    #[test]
+    fn frozen_root_excludes_unlocked_higher_priority_repositories_before_resolution() {
+        let configured = repository::Map::with([
+            (
+                repository::Id::new("locked"),
+                repository::Repository {
+                    description: "locked".to_owned(),
+                    source: repository::Source::DirectIndex("https://locked.invalid/stone.index".parse().unwrap()),
+                    priority: repository::Priority::new(1),
+                    active: true,
+                },
+            ),
+            (
+                repository::Id::new("ambient"),
+                repository::Repository {
+                    description: "unlocked higher-priority source".to_owned(),
+                    source: repository::Source::DirectIndex("https://ambient.invalid/stone.index".parse().unwrap()),
+                    priority: repository::Priority::new(u64::MAX),
+                    active: true,
+                },
+            ),
+        ]);
+        let locked = [RepositorySnapshot {
+            id: "locked".to_owned(),
+            index_uri: "https://locked.invalid/stone.index".to_owned(),
+            snapshot: "snapshot".to_owned(),
+        }];
+
+        let selected = locked_repositories(&configured, &locked).unwrap();
+        assert_eq!(
+            selected.iter().map(|(id, _)| id.to_string()).collect::<Vec<_>>(),
+            ["locked"]
+        );
+        assert!(!selected.contains_id(&repository::Id::new("ambient")));
     }
 
     #[test]

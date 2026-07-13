@@ -171,6 +171,7 @@ impl Runtime {
             &self.moss_dir,
             self.repositories.clone(),
             &plan.build_lock,
+            plan.source_date_epoch,
             timing,
             initialize_timer,
         )?;
