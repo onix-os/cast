@@ -46,7 +46,7 @@ get-started: cast licenses
 		*) echo "$(BIN_DIR) is not in PATH yet; add it before running the tools." ;; \
 	esac; \
 	echo; \
-	echo "The AerynOS documentation lives at https://aerynos.dev"
+	echo "Cast documentation lives at https://github.com/onix-os/os-tools"
 
 licenses:
 	@"$(TOP_DIR)/misc/scripts/fetch-licenses.sh" "$(LICENSE_DIR)"
