@@ -192,7 +192,6 @@ struct GluonCompilerToolsSpec {
     d: GluonTextSpec,
     ar: GluonTextSpec,
     ld: GluonTextSpec,
-    mold_ld: GluonTextSpec,
     objcopy: GluonTextSpec,
     nm: GluonTextSpec,
     ranlib: GluonTextSpec,
@@ -325,7 +324,6 @@ struct GluonSandboxPolicySpec {
     recipe_dir: String,
     package_dir: String,
     install_dir: String,
-    verify_dir: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -466,7 +464,6 @@ struct GluonPgoPolicySpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBuildPolicySpec {
-    vendor_id: String,
     build_subdir: String,
     layout: GluonInstallLayoutSpec,
     toolchains: GluonToolchainsSpec,
@@ -498,7 +495,6 @@ enum GluonArrayPatch<T> {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBuildPolicyPatchSpec {
-    vendor_id: GluonValuePatch<String>,
     build_subdir: GluonValuePatch<String>,
     layout: GluonValuePatch<GluonInstallLayoutSpec>,
     toolchains: GluonValuePatch<GluonToolchainsSpec>,
@@ -638,7 +634,7 @@ convert_record!(GluonInstallLayoutSpec => InstallLayoutSpec {
     bash_completions_dir, fish_completions_dir, elvish_completions_dir, zsh_completions_dir,
 });
 convert_record!(GluonCompilerToolsSpec => CompilerToolsSpec {
-    cc, cxx, objc, objcxx, cpp, objcpp, objcxxcpp, d, ar, ld, mold_ld, objcopy, nm, ranlib, strip,
+    cc, cxx, objc, objcxx, cpp, objcpp, objcxxcpp, d, ar, ld, objcopy, nm, ranlib, strip,
 });
 convert_record!(GluonToolchainsSpec => ToolchainsSpec { llvm, gnu });
 convert_record!(GluonPlatformPolicySpec => PlatformPolicySpec {
@@ -665,7 +661,7 @@ impl From<GluonTargetPolicySpec> for TargetPolicySpec {
 convert_record!(GluonRetiredTargetPolicySpec => RetiredTargetPolicySpec { name, reason });
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
 convert_record!(GluonSandboxPolicySpec => SandboxPolicySpec {
-    guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir, verify_dir,
+    guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
 });
 convert_record!(GluonSourcePreparationPolicySpec => SourcePreparationPolicySpec { archive, git });
 convert_record!(GluonBuildersPolicySpec => BuildersPolicySpec { cmake, meson, cargo, autotools });
@@ -848,7 +844,6 @@ impl From<GluonPgoPolicySpec> for PgoPolicySpec {
 impl From<GluonBuildPolicySpec> for BuildPolicySpec {
     fn from(value: GluonBuildPolicySpec) -> Self {
         Self {
-            vendor_id: value.vendor_id,
             build_subdir: value.build_subdir,
             layout: value.layout.into(),
             toolchains: value.toolchains.into(),
@@ -895,7 +890,6 @@ where
 impl From<GluonBuildPolicyPatchSpec> for BuildPolicyPatchSpec {
     fn from(value: GluonBuildPolicyPatchSpec) -> Self {
         Self {
-            vendor_id: value.vendor_id.into(),
             build_subdir: value.build_subdir.into(),
             layout: value.layout.into(),
             toolchains: value.toolchains.into(),

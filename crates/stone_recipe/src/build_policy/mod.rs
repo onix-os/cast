@@ -144,7 +144,6 @@ pub struct CompilerToolsSpec {
     pub d: TextSpec,
     pub ar: TextSpec,
     pub ld: TextSpec,
-    pub mold_ld: TextSpec,
     pub objcopy: TextSpec,
     pub nm: TextSpec,
     pub ranlib: TextSpec,
@@ -345,7 +344,6 @@ pub struct SandboxPolicySpec {
     pub recipe_dir: String,
     pub package_dir: String,
     pub install_dir: String,
-    pub verify_dir: String,
 }
 
 /// An argv-preserving command template. Package-specific flags and binary
@@ -443,7 +441,6 @@ pub struct PgoPolicySpec {
 /// Concrete repository build policy returned from restricted Gluon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicySpec {
-    pub vendor_id: String,
     pub build_subdir: String,
     pub layout: InstallLayoutSpec,
     pub toolchains: ToolchainsSpec,
@@ -514,7 +511,6 @@ impl<T> ArrayPatch<T> {
 /// deliberate patch-semantics decision at compile time.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuildPolicyPatchSpec {
-    pub vendor_id: ValuePatch<String>,
     pub build_subdir: ValuePatch<String>,
     pub layout: ValuePatch<InstallLayoutSpec>,
     pub toolchains: ValuePatch<ToolchainsSpec>,
@@ -533,7 +529,6 @@ impl BuildPolicyPatchSpec {
     /// Apply every patch operation to a complete policy.
     pub fn apply(self, policy: BuildPolicySpec) -> BuildPolicySpec {
         let Self {
-            vendor_id,
             build_subdir,
             layout,
             toolchains,
@@ -548,7 +543,6 @@ impl BuildPolicyPatchSpec {
             pgo,
         } = self;
         let BuildPolicySpec {
-            vendor_id: current_vendor_id,
             build_subdir: current_build_subdir,
             layout: current_layout,
             toolchains: current_toolchains,
@@ -564,7 +558,6 @@ impl BuildPolicyPatchSpec {
         } = policy;
 
         BuildPolicySpec {
-            vendor_id: vendor_id.apply(current_vendor_id),
             build_subdir: build_subdir.apply(current_build_subdir),
             layout: layout.apply(current_layout),
             toolchains: toolchains.apply(current_toolchains),
@@ -634,7 +627,6 @@ impl BuildPolicySpec {
     /// Validate invariants needed before the policy can participate in a
     /// derivation fingerprint.
     pub fn validate(&self) -> Result<(), BuildPolicyConversionError> {
-        require_string("vendor_id", &self.vendor_id)?;
         require_string("build_subdir", &self.build_subdir)?;
         validate_layout(&self.layout)?;
         validate_tools_record("toolchains.llvm", &self.toolchains.llvm)?;
@@ -808,7 +800,6 @@ fn validate_sandbox(sandbox: &SandboxPolicySpec) -> Result<(), BuildPolicyConver
         ("recipe_dir", &sandbox.recipe_dir),
         ("package_dir", &sandbox.package_dir),
         ("install_dir", &sandbox.install_dir),
-        ("verify_dir", &sandbox.verify_dir),
     ] {
         let field = format!("sandbox.{name}");
         validate_guest_child(&field, value, &sandbox.guest_root)?;
@@ -1091,7 +1082,6 @@ fn validate_tools_record(field: &str, tools: &CompilerToolsSpec) -> Result<(), B
         ("d", &tools.d),
         ("ar", &tools.ar),
         ("ld", &tools.ld),
-        ("mold_ld", &tools.mold_ld),
         ("objcopy", &tools.objcopy),
         ("nm", &tools.nm),
         ("ranlib", &tools.ranlib),

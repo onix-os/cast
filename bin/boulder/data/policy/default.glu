@@ -84,7 +84,6 @@ let llvm_tools = {
     d = lit "ldc2",
     ar = lit "llvm-ar",
     ld = lit "ld.lld",
-    mold_ld = lit "ld.mold",
     objcopy = lit "llvm-objcopy",
     nm = lit "llvm-nm",
     ranlib = lit "llvm-ranlib",
@@ -102,7 +101,6 @@ let gnu_tools = {
     d = lit "ldc2",
     ar = lit "gcc-ar",
     ld = lit "ld.bfd",
-    mold_ld = lit "ld.mold",
     objcopy = lit "objcopy",
     nm = lit "gcc-nm",
     ranlib = lit "gcc-ranlib",
@@ -219,7 +217,6 @@ let sandbox = {
     recipe_dir = "/mason/recipe",
     package_dir = "/mason/recipe/pkg",
     install_dir = "/mason/install",
-    verify_dir = "/mason/verify",
 }
 
 let base_inputs = [
@@ -2274,7 +2271,6 @@ let default_tuning_groups = [
 ]
 
 p.policy {
-    vendor_id = "aerynos-linux",
     build_subdir = "aerynos-builddir",
     layout,
     toolchains = {

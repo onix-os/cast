@@ -470,7 +470,7 @@ mod tests {
 
         assert_eq!(policy.name, "aerynos");
         assert_eq!(policy.origin, "policy.glu");
-        assert_eq!(policy.spec.vendor_id, "aerynos-linux");
+        assert_eq!(policy.spec.build_subdir, "aerynos-builddir");
         assert_eq!(
             policy.target("x86_64").unwrap().target_triple,
             "x86_64-unknown-linux-gnu"
@@ -550,7 +550,7 @@ l.policy "test-policy" [
             r#"
 let b = import! boulder.build_policy.v1
 b.policy_patch {
-    vendor_id = b.patch.set "modified-linux",
+    build_subdir = b.patch.set "modified-builddir",
     .. b.defaults.policy_patch
 }
 "#,
@@ -558,13 +558,13 @@ b.policy_patch {
         .unwrap();
         fs::write(
             root.path().join("replacement.glu"),
-            REPOSITORY_DEFAULT.replace("aerynos-linux", "final-linux"),
+            REPOSITORY_DEFAULT.replace("aerynos-builddir", "final-builddir"),
         )
         .unwrap();
 
         let policy = BuildPolicy::load_from(root.path()).unwrap();
 
-        assert_eq!(policy.spec.vendor_id, "final-linux");
+        assert_eq!(policy.spec.build_subdir, "final-builddir");
         assert_eq!(
             policy
                 .changes()
@@ -632,7 +632,7 @@ l.policy "validated-policy" [l.layer "site" [
             r#"
 let b = import! boulder.build_policy.v1
 b.policy_patch {
-    vendor_id = b.patch.set "",
+    build_subdir = b.patch.set "",
     .. b.defaults.policy_patch
 }
 "#,

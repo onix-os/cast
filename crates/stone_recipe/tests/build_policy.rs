@@ -27,7 +27,6 @@ fn evaluates_repository_build_policy_as_typed_data() {
     let evaluated = evaluate_gluon(&repository_policy()).unwrap();
     let policy = evaluated.policy;
 
-    assert_eq!(policy.vendor_id, "aerynos-linux");
     assert_eq!(policy.build_subdir, "aerynos-builddir");
     assert_eq!(policy.targets.len(), 6);
     assert_eq!(policy.targets[0].target_triple, "x86_64-unknown-linux-gnu");
@@ -548,7 +547,6 @@ fn repository_sandbox_and_cache_paths_are_explicit_guest_abi() {
     assert_eq!(policy.sandbox.recipe_dir, "/mason/recipe");
     assert_eq!(policy.sandbox.package_dir, "/mason/recipe/pkg");
     assert_eq!(policy.sandbox.install_dir, "/mason/install");
-    assert_eq!(policy.sandbox.verify_dir, "/mason/verify");
 
     let cache = policy.build_root.compiler_cache;
     assert_eq!(cache.default_path, "/usr/bin:/bin");

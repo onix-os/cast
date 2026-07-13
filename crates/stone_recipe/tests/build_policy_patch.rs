@@ -50,13 +50,11 @@ fn default_patch_keeps_the_complete_policy() {
 fn exhaustive_patch_covers_every_build_policy_field() {
     let policy = repository_policy();
     let mut expected = policy.clone();
-    expected.vendor_id = "layered-linux".to_owned();
     expected.build_subdir = "layered-builddir".to_owned();
     expected.retired_targets.clear();
     expected.environment.clear();
 
     let patch = BuildPolicyPatchSpec {
-        vendor_id: ValuePatch::Set(expected.vendor_id.clone()),
         build_subdir: ValuePatch::Set(expected.build_subdir.clone()),
         layout: ValuePatch::Set(expected.layout.clone()),
         toolchains: ValuePatch::Set(expected.toolchains.clone()),
@@ -77,13 +75,13 @@ fn exhaustive_patch_covers_every_build_policy_field() {
 #[test]
 fn validation_runs_after_the_patch_is_applied() {
     let patch = BuildPolicyPatchSpec {
-        vendor_id: ValuePatch::Set(String::new()),
+        build_subdir: ValuePatch::Set(String::new()),
         ..BuildPolicyPatchSpec::default()
     };
 
     assert!(matches!(
         patch.apply_validated(repository_policy()),
-        Err(BuildPolicyConversionError::Empty { field }) if field == "vendor_id"
+        Err(BuildPolicyConversionError::Empty { field }) if field == "build_subdir"
     ));
 }
 
@@ -92,7 +90,7 @@ fn restricted_gluon_bridge_preserves_all_patch_operations() {
     let source = authored_patch(
         r#"
 b.policy_patch {
-    vendor_id = b.patch.set "layered-linux",
+    build_subdir = b.patch.set "layered-builddir",
     targets = b.patch.array.replace [],
     retired_targets = b.patch.array.prepend [b.retired_target {
         name = "removed-test",
@@ -107,7 +105,7 @@ b.policy_patch {
     );
     let evaluated = evaluate_patch_gluon(&source).unwrap();
 
-    assert!(matches!(evaluated.patch.vendor_id, ValuePatch::Set(ref value) if value == "layered-linux"));
+    assert!(matches!(evaluated.patch.build_subdir, ValuePatch::Set(ref value) if value == "layered-builddir"));
     assert!(matches!(evaluated.patch.targets, ArrayPatch::Replace(ref values) if values.is_empty()));
     assert!(matches!(
         evaluated.patch.retired_targets,
