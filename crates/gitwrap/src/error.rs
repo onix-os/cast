@@ -46,6 +46,12 @@ impl Error {
         )
     }
 
+    /// Returns whether a cache-owned mirror's direct origin differed from the
+    /// exact origin supplied by its owner.
+    pub fn mirror_origin_mismatch(&self) -> bool {
+        matches!(self.0, InnerError::MirrorOriginMismatch)
+    }
+
     /// Returns the kind of violated [Constraint] if such error happened.
     /// Otherwise, it returns [None].
     pub fn constraint(&self) -> Option<&Constraint> {
@@ -115,6 +121,30 @@ pub(crate) enum InnerError {
     /// A limit set cannot provide a finite live quota/termination boundary.
     #[error("Git quota polling and termination intervals must be non-zero and representable")]
     InvalidLimits,
+
+    /// Only built-in transports with an explicit policy are accepted. Unknown
+    /// schemes could dispatch arbitrary `git-remote-*` programs from PATH.
+    #[error("Git transport scheme {scheme:?} is not allowed")]
+    UnsupportedTransportScheme { scheme: String },
+
+    /// A repository remote did not contain a syntactically valid absolute URL.
+    #[error("Git remote URL is not a valid absolute URL")]
+    InvalidRemoteUrl,
+
+    /// A cache-owned mirror did not have the exact, finite configuration
+    /// required at the network boundary.
+    #[error("Git mirror configuration is not canonical or does not match the expected origin")]
+    InvalidMirrorConfiguration,
+
+    /// The direct local mirror origin did not equal the caller-owned URL.
+    /// Neither URL is included because either may contain credentials.
+    #[error("Git mirror origin does not match the expected origin")]
+    MirrorOriginMismatch,
+
+    /// A public string argument could be parsed as an option or exceeded the
+    /// finite argument boundary.
+    #[error("Git {argument} argument is empty, option-like, or too long")]
+    InvalidArgument { argument: &'static str },
 
     /// The private process group could not be proven empty after termination.
     #[error("Git subprocess boundary did not terminate within {timeout:?}")]

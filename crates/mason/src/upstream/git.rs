@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    ffi::{CString, OsStr, OsString},
+    ffi::{CString, OsString},
     io,
     os::{fd::AsRawFd as _, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
@@ -14,7 +14,10 @@ use fs_err as fs;
 use fs_err::os::unix::fs::OpenOptionsExt as _;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::time::{Instant, sleep};
+use tokio::{
+    sync::mpsc,
+    time::{Instant, sleep},
+};
 use tui::{ProgressBar, ProgressStyle};
 use url::Url;
 
@@ -67,13 +70,14 @@ impl Git {
     pub async fn store(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<StoredGit, Error> {
         let _cache_lock = self.acquire_cache_lock(storage_dir, CacheLockMode::Exclusive).await?;
         let repo: gitwrap::Repository;
+        let mut mutation = None;
         let mut cached = true;
         match self.stored_locked(storage_dir).await {
             Ok((stored, has_commit)) => {
                 repo = stored.repo;
                 if !has_commit {
                     cached = false;
-                    self.fetch_cached(storage_dir, &repo, pb).await?;
+                    mutation = Some(self.fetch_cached(storage_dir, &repo, pb).await?);
                 }
             }
             Err(Error::Git(_) | Error::OriginMismatch { .. } | Error::IncompleteCache { .. }) => {
@@ -88,8 +92,27 @@ impl Git {
             Err(error) => return Err(error),
         }
 
-        let resolved_hash = repo.peel_commit(&self.commit).await?;
-        reject_gitlinks(&repo, &resolved_hash).await?;
+        let resolved_hash = match repo.peel_commit(&self.commit).await {
+            Ok(resolved_hash) => resolved_hash,
+            Err(source) => {
+                if mutation.is_some() {
+                    self.remove_locked(storage_dir)?;
+                }
+                return Err(source.into());
+            }
+        };
+        if let Err(source) = reject_gitlinks(&repo, &resolved_hash).await {
+            if mutation.is_some() {
+                self.remove_locked(storage_dir)?;
+            }
+            return Err(source);
+        }
+        if let Some(marker) = mutation
+            && let Err(source) = marker.commit()
+        {
+            self.remove_locked(storage_dir)?;
+            return Err(source.into());
+        }
 
         Ok(StoredGit {
             name: self.name().to_owned(),
@@ -108,9 +131,10 @@ impl Git {
     /// mirror so branches and tags can advance before they are pinned again.
     pub async fn resolve(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<StoredGit, Error> {
         let _cache_lock = self.acquire_cache_lock(storage_dir, CacheLockMode::Exclusive).await?;
+        let mut mutation = None;
         let repo = match self.stored_locked(storage_dir).await {
             Ok((stored, _)) => {
-                self.fetch_cached(storage_dir, &stored.repo, pb).await?;
+                mutation = Some(self.fetch_cached(storage_dir, &stored.repo, pb).await?);
                 stored.repo
             }
             Err(Error::Git(_) | Error::OriginMismatch { .. } | Error::IncompleteCache { .. }) => {
@@ -123,8 +147,27 @@ impl Git {
             }
             Err(error) => return Err(error),
         };
-        let resolved_hash = repo.peel_commit(&self.commit).await?;
-        reject_gitlinks(&repo, &resolved_hash).await?;
+        let resolved_hash = match repo.peel_commit(&self.commit).await {
+            Ok(resolved_hash) => resolved_hash,
+            Err(source) => {
+                if mutation.is_some() {
+                    self.remove_locked(storage_dir)?;
+                }
+                return Err(source.into());
+            }
+        };
+        if let Err(source) = reject_gitlinks(&repo, &resolved_hash).await {
+            if mutation.is_some() {
+                self.remove_locked(storage_dir)?;
+            }
+            return Err(source);
+        }
+        if let Some(marker) = mutation
+            && let Err(source) = marker.commit()
+        {
+            self.remove_locked(storage_dir)?;
+            return Err(source.into());
+        }
 
         Ok(StoredGit {
             name: self.name().to_owned(),
@@ -181,11 +224,16 @@ impl Git {
             Err(source) if source.kind() == io::ErrorKind::NotFound => {}
             Err(source) => return Err(source.into()),
         }
-        let repo = gitwrap::Repository::open_bare_with_limits(&stored_path, MASON_GIT_LIMITS).await?;
-        let origin = repo.get_remote_url("origin").await?;
-        if origin != self.url.as_str() {
-            return Err(Error::OriginMismatch { cache: stored_path });
-        }
+        let repo = match gitwrap::Repository::open_private_mirror_with_limits(&stored_path, &self.url, MASON_GIT_LIMITS)
+            .await
+        {
+            Ok(repo) => repo,
+            Err(source) if source.mirror_origin_mismatch() => {
+                return Err(Error::OriginMismatch { cache: stored_path });
+            }
+            Err(source) => return Err(source.into()),
+        };
+        repo.secure_private_mirror()?;
         let has_ref = repo.has_commit(&self.commit).await?;
         let resolved_hash = repo.peel_commit(&self.commit).await?;
         Ok((
@@ -268,23 +316,15 @@ impl Git {
 
     fn begin_cache_mutation(&self, storage_dir: &Path) -> Result<CacheMutationMarker, Error> {
         let path = self.mutation_marker_path(storage_dir);
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|source| {
-                if source.kind() == io::ErrorKind::AlreadyExists {
-                    Error::IncompleteCache {
-                        cache: self.stored_path(storage_dir),
-                    }
-                } else {
-                    source.into()
+        write_cache_mutation_marker(&path, true).map_err(|source| {
+            if source.kind() == io::ErrorKind::AlreadyExists {
+                Error::IncompleteCache {
+                    cache: self.stored_path(storage_dir),
                 }
-            })?;
-        use std::io::Write as _;
-        file.write_all(b"incomplete Git cache mutation\n")?;
-        file.sync_all()?;
-        sync_parent_directory(&path)?;
+            } else {
+                source.into()
+            }
+        })?;
         Ok(CacheMutationMarker { path })
     }
 
@@ -293,7 +333,7 @@ impl Git {
         storage_dir: &Path,
         repo: &gitwrap::Repository,
         pb: &ProgressBar,
-    ) -> Result<(), Error> {
+    ) -> Result<CacheMutationMarker, Error> {
         let marker = self.begin_cache_mutation(storage_dir)?;
         if let Err(source) = fetch(repo, pb).await {
             // Fetch mutates the cache in place. If its deadline, output, or
@@ -303,11 +343,7 @@ impl Git {
             self.remove_locked(storage_dir)?;
             return Err(source.into());
         }
-        if let Err(source) = marker.commit() {
-            self.remove_locked(storage_dir)?;
-            return Err(source.into());
-        }
-        Ok(())
+        Ok(marker)
     }
 
     /// Returns the name of the directory that should contain
@@ -387,8 +423,31 @@ struct CacheMutationMarker {
 impl CacheMutationMarker {
     fn commit(self) -> io::Result<()> {
         fs::remove_file(&self.path)?;
-        sync_parent_directory(&self.path)
+        if let Err(source) = sync_parent_directory(&self.path) {
+            // Once unlink succeeds, a failed directory sync must not leave the
+            // current process with an apparently reusable cache. Restore and
+            // sync the poison marker before reporting the original failure.
+            write_cache_mutation_marker(&self.path, false)?;
+            return Err(source);
+        }
+        Ok(())
     }
+}
+
+fn write_cache_mutation_marker(path: &Path, create_new: bool) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .write(true)
+        .create(!create_new)
+        .create_new(create_new)
+        .truncate(!create_new)
+        .mode(0o600)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    let mut file = options.open(path)?;
+    use std::io::Write as _;
+    file.write_all(b"incomplete Git cache mutation\n")?;
+    file.sync_all()?;
+    sync_parent_directory(path)
 }
 
 fn sync_parent_directory(path: &Path) -> io::Result<()> {
@@ -446,13 +505,54 @@ impl StoredGit {
 
         // Git administration data contains checkout-time and host-specific
         // state and is not part of the locked commit tree.
-        remove_git_administration(dest_dir)?;
+        let removal = if descriptor_rooted {
+            materialization::remove_git_administration_descriptor_path_bounded(dest_dir)
+        } else {
+            materialization::remove_git_administration_bounded(dest_dir)
+        };
+        removal.map_err(|source| Error::Materialization {
+            root: dest_dir.to_owned(),
+            source,
+        })?;
         let digest = if descriptor_rooted {
             materialization::normalize_and_hash_descriptor_path(dest_dir, source_date_epoch)
         } else {
             materialization::normalize_and_hash(dest_dir, source_date_epoch)
         };
         digest.map_err(|source| Error::Materialization {
+            root: dest_dir.to_owned(),
+            source,
+        })
+    }
+
+    async fn export_normalized_sealed(
+        &self,
+        dest_dir: &Path,
+        source_date_epoch: i64,
+    ) -> Result<materialization::SealedMaterialization, Error> {
+        reject_gitlinks(&self.repo, &self.resolved_hash).await?;
+        match fs::symlink_metadata(dest_dir) {
+            Ok(_) => return Err(Error::DestinationExists(dest_dir.to_owned())),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source.into()),
+        }
+
+        let cloned = self.repo.clone_to(dest_dir).await?;
+        let source_origin = self.repo.get_remote_url("origin").await?;
+        cloned.set_remote_url("origin", &source_origin).await?;
+        cloned.checkout(&self.resolved_hash).await?;
+        materialization::remove_git_administration_descriptor_path_bounded(dest_dir).map_err(|source| {
+            Error::Materialization {
+                root: dest_dir.to_owned(),
+                source,
+            }
+        })?;
+        materialization::normalize_and_seal_descriptor_path_with_limits(
+            dest_dir,
+            source_date_epoch,
+            materialization::MaterializationLimits::default(),
+        )
+        .map_err(|source| Error::Materialization {
             root: dest_dir.to_owned(),
             source,
         })
@@ -479,15 +579,13 @@ impl StoredGit {
                 source,
             })?;
         let checkout = staging.path().join("checkout");
-        let found = self
-            .export_normalized_with_root_access(&checkout, source_date_epoch, true)
-            .await?;
-        if found != expected {
+        let sealed = self.export_normalized_sealed(&checkout, source_date_epoch).await?;
+        if sealed.digest() != expected {
             return Err(Error::MaterializationDigestMismatch {
                 index: self.original_index,
                 commit: self.resolved_hash.clone(),
                 expected: expected.to_owned(),
-                found,
+                found: sealed.digest().to_owned(),
             });
         }
         rename_noreplace(&checkout, dest_dir).map_err(|source| Error::Install {
@@ -495,6 +593,20 @@ impl StoredGit {
             destination: dest_dir.to_owned(),
             source,
         })?;
+        if let Err(source) = sealed.verify_installed_descriptor_path(dest_dir) {
+            return match quarantine_rejected_install(dest_dir) {
+                Ok(quarantine) => Err(Error::RejectedInstalledMaterialization {
+                    destination: dest_dir.to_owned(),
+                    quarantine,
+                    source,
+                }),
+                Err(cleanup) => Err(Error::RejectedInstallCleanup {
+                    destination: dest_dir.to_owned(),
+                    verification: Box::new(source),
+                    cleanup,
+                }),
+            };
+        }
 
         Ok(())
     }
@@ -510,34 +622,17 @@ async fn reject_gitlinks(repo: &gitwrap::Repository, commit: &str) -> Result<(),
     }
 }
 
-fn remove_git_administration(root: &Path) -> Result<(), Error> {
-    let entries = walkdir::WalkDir::new(root)
-        // The export directory itself may legitimately be named `.git` by an
-        // authored clone_dir. Only administration entries *inside* the export
-        // are removable.
-        .min_depth(1)
-        .contents_first(true)
-        .follow_links(false)
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(walk_error)?;
-    for entry in entries {
-        if entry.file_name() != OsStr::new(".git") {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(entry.path())?;
-        if metadata.is_dir() {
-            fs::remove_dir_all(entry.path())?;
-        } else {
-            fs::remove_file(entry.path())?;
-        }
-    }
-    Ok(())
-}
-
-fn walk_error(error: walkdir::Error) -> io::Error {
-    let message = error.to_string();
-    error.into_io_error().unwrap_or_else(|| io::Error::other(message))
+fn quarantine_rejected_install(destination: &Path) -> io::Result<PathBuf> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rejected Git install has no parent"))?;
+    let quarantine_root = tempfile::Builder::new()
+        .prefix(".cast-git-rejected-")
+        .tempdir_in(parent)?;
+    let quarantine = quarantine_root.path().join("checkout");
+    rename_noreplace(destination, &quarantine)?;
+    let retained_root = quarantine_root.keep();
+    Ok(retained_root.join("checkout"))
 }
 
 /// Atomically install a verified checkout without ever replacing or following
@@ -623,41 +718,65 @@ pub enum Error {
         #[source]
         source: materialization::Error,
     },
+    /// Post-publication verification failed and the rejected inode was moved
+    /// out of the build-visible destination without following it.
+    #[error("rejected installed Git materialization at {destination:?}; quarantined at {quarantine:?}")]
+    RejectedInstalledMaterialization {
+        destination: PathBuf,
+        quarantine: PathBuf,
+        #[source]
+        source: materialization::Error,
+    },
+    /// Verification failed and moving the rejected public name into a private
+    /// no-replace quarantine also failed.
+    #[error("failed to quarantine rejected Git materialization at {destination:?}: {cleanup}")]
+    RejectedInstallCleanup {
+        destination: PathBuf,
+        #[source]
+        verification: Box<materialization::Error>,
+        cleanup: io::Error,
+    },
     /// A generic I/O error occurred.
     #[error("{0}")]
     Io(#[from] io::Error),
 }
 
 async fn clone(url: &Url, path: &Path, pb: &ProgressBar) -> Result<gitwrap::Repository, gitwrap::Error> {
-    let cb = set_progress_bar_style(pb);
+    let (progress, reporter) = progress_reporter(pb);
 
-    let result = gitwrap::Repository::clone_mirror_progress_with_limits(path, url, MASON_GIT_LIMITS, cb).await;
+    let result = gitwrap::Repository::clone_mirror_progress_with_limits(path, url, MASON_GIT_LIMITS, progress).await;
+    let _ = reporter.await;
     pb.finish_and_clear();
 
     result
 }
 
 async fn fetch(repo: &gitwrap::Repository, pb: &ProgressBar) -> Result<(), gitwrap::Error> {
-    let cb = set_progress_bar_style(pb);
+    let (progress, reporter) = progress_reporter(pb);
 
-    let result = repo.fetch_progress(cb).await;
+    let result = repo.fetch_progress(progress).await;
+    let _ = reporter.await;
     pb.finish_and_clear();
 
     result
 }
 
-fn set_progress_bar_style(pb: &ProgressBar) -> impl Fn(gitwrap::FetchProgress) {
+fn progress_reporter(pb: &ProgressBar) -> (mpsc::Sender<gitwrap::FetchProgress>, tokio::task::JoinHandle<()>) {
     pb.set_length(100);
     pb.set_style(
         ProgressStyle::with_template(" {spinner} |{percent:>3}%| {wide_msg} {prefix:>.dim} ")
             .unwrap()
             .tick_chars("--=≡■≡=--"),
     );
-
-    |prog| {
-        pb.set_position(prog.percent as u64);
-        pb.set_prefix(prog.speed);
-    }
+    let (sender, mut receiver) = mpsc::channel::<gitwrap::FetchProgress>(64);
+    let pb = pb.clone();
+    let reporter = tokio::spawn(async move {
+        while let Some(progress) = receiver.recv().await {
+            pb.set_position(u64::from(progress.percent));
+            pb.set_prefix(progress.speed);
+        }
+    });
+    (sender, reporter)
 }
 
 #[cfg(test)]
@@ -929,7 +1048,7 @@ mod tests {
         symlink("regular", root.join("link")).unwrap();
         fs::write(root.join(".git-marker"), b"ordinary committed name").unwrap();
 
-        remove_git_administration(&root).unwrap();
+        materialization::remove_git_administration_bounded(&root).unwrap();
 
         assert!(root.is_dir());
         assert!(!root.join(".git").exists());

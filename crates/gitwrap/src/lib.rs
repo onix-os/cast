@@ -17,11 +17,16 @@ use std::{
     ffi::{CString, OsStr},
     io as std_io,
     os::{
-        fd::AsRawFd as _,
-        unix::{ffi::OsStrExt, fs::MetadataExt, process::CommandExt},
+        fd::{AsRawFd as _, FromRawFd as _, OwnedFd},
+        unix::{
+            ffi::OsStrExt,
+            fs::{MetadataExt, PermissionsExt},
+            process::CommandExt,
+        },
     },
     path::{self, Path, PathBuf},
     process::Stdio,
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -30,6 +35,7 @@ use fs_err::os::unix::fs::OpenOptionsExt as _;
 use tokio::{
     io::{self, AsyncReadExt},
     process,
+    sync::mpsc,
     time::{sleep, sleep_until, timeout, Instant},
 };
 use url::Url;
@@ -49,9 +55,8 @@ use error::{Constraint, InnerError};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Limits {
     /// Total wall-clock time for a single Git subprocess, including pipe
-    /// draining and progress parsing while caller code yields control. Public
-    /// progress callbacks run synchronously and must return promptly; no Rust
-    /// API can preempt arbitrary blocking code inside a callback.
+    /// draining and non-blocking progress parsing. Public progress delivery is
+    /// lossy under channel backpressure and never awaits receiver code.
     pub wall_timeout: Duration,
     /// Time allowed to kill the private process group, reap Git, and observe
     /// all transport descendants disappear.
@@ -129,6 +134,7 @@ pub fn null_repository() -> Repository {
         path: PathBuf::new(),
         limits: Limits::DEFAULT,
         identity: None,
+        mirror: None,
     }
 }
 
@@ -136,6 +142,18 @@ pub fn null_repository() -> Repository {
 struct RepositoryIdentity {
     device: u64,
     inode: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ObjectFormat {
+    Sha1,
+    Sha256,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MirrorIdentity {
+    origin: Url,
+    object_format: ObjectFormat,
 }
 
 impl RepositoryIdentity {
@@ -164,6 +182,10 @@ pub struct Repository {
     /// Rejects replacement between operations without retaining one descriptor
     /// per cached repository for the lifetime of this object.
     identity: Option<RepositoryIdentity>,
+    /// Cache-owned mirrors retain the origin and object format admitted before
+    /// their local configuration was reduced to the canonical safe subset.
+    /// Fetches can therefore repair hostile local config without trusting it.
+    mirror: Option<MirrorIdentity>,
 }
 
 impl Repository {
@@ -199,6 +221,39 @@ impl Repository {
             path,
             limits,
             identity: Some(identity),
+            mirror: None,
+        })
+    }
+
+    /// Opens a cache-owned mirror for one exact origin. Unlike [`Self::open_bare`],
+    /// this boundary may restrict permissions and replace local Git config.
+    /// The direct `remote.origin.url`, bare flag, and object format are read
+    /// with includes disabled before the config is rewritten, so a cache for a
+    /// different origin is never silently repointed and accepted.
+    pub async fn open_private_mirror_with_limits(path: &Path, origin: &Url, limits: Limits) -> Result<Self, Error> {
+        let limits = limits.validate()?;
+        validate_transport_url(origin)?;
+        let path = path::absolute(path).map_err(InnerError::from)?;
+        let root = open_repository_directory(&path)?;
+        verify_repository_path_identity(&path, &root)?;
+        verify_repository_usage_directory(&root, limits)?;
+        secure_mirror_permissions(&root)?;
+        let object_format = inspect_private_mirror_config(&root, origin, limits).await?;
+        write_canonical_mirror_config(&root, origin, object_format)?;
+        verify_bare_repository(&root, limits).await?;
+        verify_repository_path_identity(&path, &root)?;
+        verify_repository_usage_directory(&root, limits)?;
+        secure_mirror_permissions(&root)?;
+        verify_canonical_mirror_config(&root, origin, object_format)?;
+        let identity = RepositoryIdentity::from_directory(&root)?;
+        Ok(Self {
+            path,
+            limits,
+            identity: Some(identity),
+            mirror: Some(MirrorIdentity {
+                origin: origin.clone(),
+                object_format,
+            }),
         })
     }
 
@@ -215,37 +270,40 @@ impl Repository {
 
     /// Clones a local or remote Git repository as bare into `path`.
     /// The clone is performed with Git's `--mirror` flag.
-    /// A callback is fired repeatedly to track the cloning
-    /// process in real time. The callback runs synchronously in the supervisor
-    /// task and must not block, perform I/O, or re-enter this repository.
-    pub async fn clone_mirror_progress<F>(path: &Path, url: &Url, callback: F) -> Result<Self, Error>
-    where
-        F: Fn(FetchProgress),
-    {
-        Self::clone_mirror_progress_with_limits(path, url, Limits::DEFAULT, callback).await
+    /// Progress records are offered to a bounded Tokio channel without
+    /// waiting. A full or closed channel drops records rather than delaying
+    /// stderr draining, quota enforcement, or the subprocess wall deadline.
+    pub async fn clone_mirror_progress(
+        path: &Path,
+        url: &Url,
+        progress: mpsc::Sender<FetchProgress>,
+    ) -> Result<Self, Error> {
+        Self::clone_mirror_progress_with_limits(path, url, Limits::DEFAULT, progress).await
     }
 
     /// Clones a progress-reporting mirror under an explicit resource policy.
-    /// The callback runs synchronously and must return promptly; its code is
-    /// outside the boundary that a subprocess deadline can forcibly preempt.
-    pub async fn clone_mirror_progress_with_limits<F>(
+    /// Delivery is non-blocking and deliberately lossy under backpressure.
+    pub async fn clone_mirror_progress_with_limits(
         path: &Path,
         url: &Url,
         limits: Limits,
-        callback: F,
-    ) -> Result<Self, Error>
-    where
-        F: Fn(FetchProgress),
-    {
-        clone_mirror_impl(path, url, limits, Some(callback)).await
+        progress: mpsc::Sender<FetchProgress>,
+    ) -> Result<Self, Error> {
+        clone_mirror_impl(path, url, limits, Some(progress_callback(progress))).await
     }
 
     /// Whether this repository has a commit identified by its hash.
     pub async fn has_commit(&self, commit: &str) -> Result<bool, Error> {
+        validate_revision_argument(commit)?;
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
         let output = run_git_in_directory(
-            &[OsStr::new("cat-file"), OsStr::new("-t"), OsStr::new(commit)],
+            &[
+                OsStr::new("cat-file"),
+                OsStr::new("-t"),
+                OsStr::new("--"),
+                OsStr::new(commit),
+            ],
             self.limits,
             &root,
             None,
@@ -260,6 +318,7 @@ impl Repository {
     /// the output is equal to `commit`. If a Git reference is passed, the
     /// reference is peeled through annotated tags into the commit object.
     pub async fn peel_commit(&self, commit: &str) -> Result<String, Error> {
+        validate_revision_argument(commit)?;
         let commit = format!("{commit}^{{commit}}");
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
@@ -277,7 +336,7 @@ impl Repository {
         )
         .await?;
         let object_id = str::from_utf8(output.stdout.trim_ascii_end()).unwrap_or("");
-        if object_id.len() != 40
+        if !matches!(object_id.len(), 40 | 64)
             || !object_id
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
@@ -290,10 +349,16 @@ impl Repository {
 
     /// Returns the remote URL for the provided `remote`
     pub async fn get_remote_url(&self, remote: &str) -> Result<String, Error> {
+        validate_remote_argument(remote)?;
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
         let output = run_git_in_directory(
-            &[OsStr::new("remote"), OsStr::new("get-url"), OsStr::new(remote)],
+            &[
+                OsStr::new("remote"),
+                OsStr::new("get-url"),
+                OsStr::new("--"),
+                OsStr::new(remote),
+            ],
             self.limits,
             &root,
             None,
@@ -306,12 +371,15 @@ impl Repository {
 
     /// Sets the remote URL for the provided `remote` to `url`
     pub async fn set_remote_url(&self, remote: &str, url: &str) -> Result<(), Error> {
+        validate_remote_argument(remote)?;
+        validate_value_argument(url, "remote URL")?;
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
         run_git_in_directory(
             &[
                 OsStr::new("remote"),
                 OsStr::new("set-url"),
+                OsStr::new("--"),
                 OsStr::new(remote),
                 OsStr::new(url),
             ],
@@ -332,6 +400,7 @@ impl Repository {
     /// discard it before retrying; Mason does so through its private checkout
     /// staging directory.
     pub async fn checkout(&self, rev: &str) -> Result<(), Error> {
+        validate_revision_argument(rev)?;
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
         run_git_in_directory(
@@ -353,19 +422,25 @@ impl Repository {
     }
 
     /// Equivalent to `git fetch`.
-    /// A callback is fired repeatedly to track the fetching
-    /// process in real time. The callback runs synchronously in the supervisor
-    /// task and must not block, perform I/O, or re-enter this repository.
+    /// Progress records are offered to a bounded channel without waiting.
+    /// Records may be dropped when the receiver cannot keep up.
     ///
     /// Fetch mutates the repository. On failure, cache-owning callers must
     /// discard the repository before reuse. Gitwrap never implicitly deletes
     /// an arbitrary path supplied through [`Self::open_bare`].
-    pub async fn fetch_progress<F>(&self, callback: F) -> Result<(), Error>
-    where
-        F: Fn(FetchProgress),
-    {
+    pub async fn fetch_progress(&self, progress: mpsc::Sender<FetchProgress>) -> Result<(), Error> {
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
+        if let Some(mirror) = &self.mirror {
+            validate_transport_url(&mirror.origin)?;
+            write_canonical_mirror_config(&root, &mirror.origin, mirror.object_format)?;
+            secure_mirror_permissions(&root)?;
+            verify_canonical_mirror_config(&root, &mirror.origin, mirror.object_format)?;
+        } else {
+            let origin = self.get_remote_url("origin").await?;
+            let origin = Url::parse(&origin).map_err(|_| InnerError::InvalidRemoteUrl)?;
+            validate_transport_url(&origin)?;
+        }
         run_git_in_directory(
             &[
                 OsStr::new("fetch"),
@@ -375,7 +450,7 @@ impl Repository {
             self.limits,
             &root,
             Some(MonitoredRepository::directory(&root)?),
-            Some(callback),
+            Some(progress_callback(progress)),
         )
         .await?;
         self.verify_usage(&root)?;
@@ -401,21 +476,21 @@ impl Repository {
             }
             return Err(error);
         }
-        if let Err(error) = verify_repository_path_identity(&path, &root) {
-            return Err(error);
-        }
+        verify_repository_path_identity(&path, &root)?;
         let identity = RepositoryIdentity::from_directory(&root)?;
 
         Ok(Self {
             path,
             limits: self.limits,
             identity: Some(identity),
+            mirror: None,
         })
     }
 
     /// Whether `rev` contains Gitlink entries whose contents would require
     /// an additional, independently fetched submodule source graph.
     pub async fn contains_gitlinks(&self, rev: &str) -> Result<bool, Error> {
+        validate_revision_argument(rev)?;
         let root = self.transaction_root()?;
         self.verify_usage(&root)?;
         let output = run_git_in_directory(
@@ -424,6 +499,7 @@ impl Repository {
                 OsStr::new("-r"),
                 OsStr::new("--full-tree"),
                 OsStr::new("--format=%(objectmode)"),
+                OsStr::new("--"),
                 OsStr::new(rev),
             ],
             self.limits,
@@ -446,6 +522,15 @@ impl Repository {
         self.limits
     }
 
+    /// Restrict a cache-owned mirror and its credential-bearing configuration
+    /// to the current user. This is intentionally explicit: [`Self::open_bare`]
+    /// also serves caller-owned repositories and must not silently chmod them.
+    pub fn secure_private_mirror(&self) -> Result<(), Error> {
+        let root = self.transaction_root()?;
+        secure_mirror_permissions(&root)?;
+        self.verify_identity(&root)
+    }
+
     fn verify_usage(&self, root: &fs::File) -> Result<(), Error> {
         self.verify_identity(root)?;
         verify_repository_usage_directory(root, self.limits).map(|_| ())
@@ -463,8 +548,8 @@ impl Repository {
     }
 }
 
-/// The argument of callbacks when they are invoked
-/// for reporting a Git operation's progress.
+/// One advisory record sent while Git reports network progress.
+#[derive(Debug)]
 pub struct FetchProgress {
     /// Completion percentage.
     pub percent: u8,
@@ -472,11 +557,61 @@ pub struct FetchProgress {
     pub speed: String,
 }
 
+fn progress_callback(progress: mpsc::Sender<FetchProgress>) -> impl Fn(FetchProgress) {
+    move |record| {
+        // Progress is advisory. Never let user-controlled receiver scheduling
+        // become part of the process supervisor's completion boundary.
+        let _ = progress.try_send(record);
+    }
+}
+
+const MAX_GIT_IDENTIFIER_BYTES: usize = 4096;
+const MAX_GIT_VALUE_BYTES: usize = 64 * 1024;
+
+fn validate_revision_argument(value: &str) -> Result<(), Error> {
+    validate_non_option_argument(value, "revision")
+}
+
+fn validate_remote_argument(value: &str) -> Result<(), Error> {
+    validate_non_option_argument(value, "remote name")
+}
+
+fn validate_non_option_argument(value: &str, argument: &'static str) -> Result<(), Error> {
+    if value.is_empty() || value.starts_with('-') || value.len() > MAX_GIT_IDENTIFIER_BYTES {
+        Err(InnerError::InvalidArgument { argument }.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_value_argument(value: &str, argument: &'static str) -> Result<(), Error> {
+    if value.is_empty() || value.len() > MAX_GIT_VALUE_BYTES {
+        Err(InnerError::InvalidArgument { argument }.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Reject unknown schemes before Git can dispatch a `git-remote-*` helper from
+/// PATH. Every accepted scheme is handled by Git itself or its explicitly
+/// constrained SSH transport.
+fn validate_transport_url(url: &Url) -> Result<(), Error> {
+    validate_value_argument(url.as_str(), "transport URL")?;
+    match url.scheme() {
+        "file" | "https" | "ssh" => Ok(()),
+        scheme => Err(InnerError::UnsupportedTransportScheme {
+            scheme: scheme.to_owned(),
+        }
+        .into()),
+    }
+}
+
 async fn clone_mirror_impl<F>(path: &Path, url: &Url, limits: Limits, callback: Option<F>) -> Result<Repository, Error>
 where
     F: Fn(FetchProgress),
 {
     let limits = limits.validate()?;
+    validate_transport_url(url)?;
     let path = path::absolute(path).map_err(InnerError::from)?;
     ensure_destination_absent(&path)?;
     let parent = path.parent().ok_or_else(|| {
@@ -524,6 +659,16 @@ where
         Ok(root) => root,
         Err(error) => return close_staging_after_error(staging, error),
     };
+    if let Err(error) = secure_mirror_permissions(&root) {
+        return close_staging_after_error(staging, error);
+    }
+    let object_format = match inspect_private_mirror_config(&root, url, limits).await {
+        Ok(object_format) => object_format,
+        Err(error) => return close_staging_after_error(staging, error),
+    };
+    if let Err(error) = write_canonical_mirror_config(&root, url, object_format) {
+        return close_staging_after_error(staging, error);
+    }
     let identity = match RepositoryIdentity::from_directory(&root) {
         Ok(identity) => identity,
         Err(error) => return close_staging_after_error(staging, error),
@@ -532,6 +677,11 @@ where
         return close_staging_after_error(staging, error);
     }
     if let Err(error) = verify_repository_path_identity(&path, &root) {
+        return close_staging_and_remove_install(staging, &path, &root, error);
+    }
+    if let Err(error) =
+        secure_mirror_permissions(&root).and_then(|()| verify_canonical_mirror_config(&root, url, object_format))
+    {
         return close_staging_and_remove_install(staging, &path, &root, error);
     }
     if let Err(source) = staging.close() {
@@ -543,6 +693,10 @@ where
         path,
         limits,
         identity: Some(identity),
+        mirror: Some(MirrorIdentity {
+            origin: url.clone(),
+            object_format,
+        }),
     })
 }
 
@@ -1067,6 +1221,264 @@ fn open_repository_directory(path: &Path) -> Result<fs::File, Error> {
     }
 }
 
+async fn verify_bare_repository(root: &fs::File, limits: Limits) -> Result<(), Error> {
+    let output = run_git_in_directory(
+        &[OsStr::new("repo"), OsStr::new("info"), OsStr::new("layout.bare")],
+        limits,
+        root,
+        None,
+        None::<fn(FetchProgress)>,
+    )
+    .await?;
+    if output.stdout.starts_with(b"layout.bare=true") {
+        Ok(())
+    } else {
+        Err(InnerError::Constraint(Constraint::NotBare).into())
+    }
+}
+
+/// Admit only the direct local values needed to preserve a mirror. Includes
+/// are disabled explicitly and every multi-valued field must have exactly one
+/// normalized result. No URL rewriting is consulted when comparing origins.
+async fn inspect_private_mirror_config(
+    root: &fs::File,
+    expected_origin: &Url,
+    limits: Limits,
+) -> Result<ObjectFormat, Error> {
+    let bare = run_git_in_directory(
+        &[
+            OsStr::new("config"),
+            OsStr::new("--local"),
+            OsStr::new("--no-includes"),
+            OsStr::new("--type=bool"),
+            OsStr::new("--get-all"),
+            OsStr::new("--"),
+            OsStr::new("core.bare"),
+        ],
+        limits,
+        root,
+        None,
+        None::<fn(FetchProgress)>,
+    )
+    .await?;
+    if bare.stdout != b"true\n" {
+        return Err(InnerError::InvalidMirrorConfiguration.into());
+    }
+
+    let origin = run_git_in_directory(
+        &[
+            OsStr::new("config"),
+            OsStr::new("--local"),
+            OsStr::new("--no-includes"),
+            OsStr::new("--get-all"),
+            OsStr::new("--"),
+            OsStr::new("remote.origin.url"),
+        ],
+        limits,
+        root,
+        None,
+        None::<fn(FetchProgress)>,
+    )
+    .await?;
+    let expected_origin_line = format!("{}\n", expected_origin.as_str());
+    if origin.stdout != expected_origin_line.as_bytes() {
+        return Err(InnerError::MirrorOriginMismatch.into());
+    }
+
+    let object_format = run_git_in_directory(
+        &[
+            OsStr::new("config"),
+            OsStr::new("--local"),
+            OsStr::new("--no-includes"),
+            OsStr::new("--default"),
+            OsStr::new("sha1"),
+            OsStr::new("--get"),
+            OsStr::new("--"),
+            OsStr::new("extensions.objectformat"),
+        ],
+        limits,
+        root,
+        None,
+        None::<fn(FetchProgress)>,
+    )
+    .await?;
+    match object_format.stdout.as_slice() {
+        b"sha1\n" => Ok(ObjectFormat::Sha1),
+        b"sha256\n" => Ok(ObjectFormat::Sha256),
+        _ => Err(InnerError::InvalidMirrorConfiguration.into()),
+    }
+}
+
+fn canonical_mirror_config(origin: &Url, object_format: ObjectFormat) -> Result<Vec<u8>, Error> {
+    validate_transport_url(origin)?;
+    let repository_format = match object_format {
+        ObjectFormat::Sha1 => 0,
+        ObjectFormat::Sha256 => 1,
+    };
+    let mut config =
+        format!("[core]\n\trepositoryformatversion = {repository_format}\n\tfilemode = true\n\tbare = true\n")
+            .into_bytes();
+    if object_format == ObjectFormat::Sha256 {
+        config.extend_from_slice(b"[extensions]\n\tobjectformat = sha256\n");
+    }
+    config.extend_from_slice(b"[remote \"origin\"]\n\turl = \"");
+    for byte in origin.as_str().bytes() {
+        match byte {
+            b'\\' => config.extend_from_slice(b"\\\\"),
+            b'\"' => config.extend_from_slice(b"\\\""),
+            b'\n' => config.extend_from_slice(b"\\n"),
+            b'\t' => config.extend_from_slice(b"\\t"),
+            0..=31 | 127 => return Err(InnerError::InvalidRemoteUrl.into()),
+            _ => config.push(byte),
+        }
+    }
+    config.extend_from_slice(b"\"\n\tfetch = +refs/*:refs/*\n\tmirror = true\n");
+    Ok(config)
+}
+
+static MIRROR_CONFIG_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Replace local config through the pinned repository descriptor. The old
+/// config remains in place until the complete owner-only replacement has been
+/// written and synced, and the root directory is synced after rename.
+fn write_canonical_mirror_config(root: &fs::File, origin: &Url, object_format: ObjectFormat) -> Result<(), Error> {
+    let expected = canonical_mirror_config(origin, object_format)?;
+    let mut temporary = None;
+    for _ in 0..128 {
+        let nonce = MIRROR_CONFIG_NONCE.fetch_add(1, Ordering::Relaxed);
+        let name = CString::new(format!(".gitwrap-config-{}-{nonce}", std::process::id()))
+            .expect("generated Git config name contains no NUL");
+        match createat_private_file(root, &name) {
+            Ok(file) => {
+                temporary = Some((name, file));
+                break;
+            }
+            Err(source) if source.kind() == std_io::ErrorKind::AlreadyExists => {}
+            Err(source) => return Err(InnerError::Io(source).into()),
+        }
+    }
+    let (temporary_name, mut temporary_file) = temporary.ok_or_else(|| {
+        InnerError::Io(std_io::Error::new(
+            std_io::ErrorKind::AlreadyExists,
+            "could not reserve a private Git config replacement",
+        ))
+    })?;
+
+    let result = (|| -> Result<(), Error> {
+        use std::io::Write as _;
+
+        temporary_file.write_all(&expected).map_err(InnerError::from)?;
+        temporary_file
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(InnerError::from)?;
+        temporary_file.sync_all().map_err(InnerError::from)?;
+        let current = openat_root_file(root, c"config", nix::libc::O_RDONLY)?;
+        if !current.metadata().map_err(InnerError::from)?.is_file() {
+            return Err(InnerError::InvalidMirrorConfiguration.into());
+        }
+        let renamed = unsafe {
+            nix::libc::renameat(
+                root.as_raw_fd(),
+                temporary_name.as_ptr(),
+                root.as_raw_fd(),
+                c"config".as_ptr(),
+            )
+        };
+        if renamed == -1 {
+            return Err(InnerError::Io(std_io::Error::last_os_error()).into());
+        }
+        root.sync_all().map_err(InnerError::from)?;
+        verify_canonical_mirror_config(root, origin, object_format)
+    })();
+
+    if result.is_err() {
+        unsafe {
+            nix::libc::unlinkat(root.as_raw_fd(), temporary_name.as_ptr(), 0);
+        }
+    }
+    result
+}
+
+fn verify_canonical_mirror_config(root: &fs::File, origin: &Url, object_format: ObjectFormat) -> Result<(), Error> {
+    use std::io::Read as _;
+
+    let expected = canonical_mirror_config(origin, object_format)?;
+    let root_mode = root.metadata().map_err(InnerError::from)?.mode() & 0o777;
+    let mut config = openat_root_file(root, c"config", nix::libc::O_RDONLY)?;
+    let metadata = config.metadata().map_err(InnerError::from)?;
+    if root_mode != 0o700 || !metadata.is_file() || metadata.mode() & 0o777 != 0o600 {
+        return Err(InnerError::InvalidMirrorConfiguration.into());
+    }
+    let mut found = Vec::with_capacity(expected.len());
+    config
+        .by_ref()
+        .take(u64::try_from(expected.len()).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut found)
+        .map_err(InnerError::from)?;
+    if found == expected {
+        Ok(())
+    } else {
+        Err(InnerError::InvalidMirrorConfiguration.into())
+    }
+}
+
+fn secure_mirror_permissions(root: &fs::File) -> Result<(), Error> {
+    root.set_permissions(std::fs::Permissions::from_mode(0o700))
+        .map_err(InnerError::from)?;
+    let config = openat_root_file(root, c"config", nix::libc::O_RDONLY)?;
+    let config_metadata = config.metadata().map_err(InnerError::from)?;
+    if !config_metadata.is_file() {
+        return Err(InnerError::InvalidRepositoryRoot.into());
+    }
+    config
+        .set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(InnerError::from)?;
+    config.sync_all().map_err(InnerError::from)?;
+    root.sync_all().map_err(InnerError::from)?;
+    let root_mode = root.metadata().map_err(InnerError::from)?.mode() & 0o777;
+    let config_mode = config.metadata().map_err(InnerError::from)?.mode() & 0o777;
+    if root_mode != 0o700 || config_mode != 0o600 {
+        return Err(InnerError::InvalidRepositoryRoot.into());
+    }
+    Ok(())
+}
+
+fn openat_root_file(root: &fs::File, name: &std::ffi::CStr, access: i32) -> Result<fs::File, Error> {
+    let descriptor = unsafe {
+        nix::libc::openat(
+            root.as_raw_fd(),
+            name.as_ptr(),
+            access | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor == -1 {
+        return Err(InnerError::Io(std_io::Error::last_os_error()).into());
+    }
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let file: std::fs::File = descriptor.into();
+    Ok(fs::File::from_parts(file, Path::new("<descriptor-rooted Git file>")))
+}
+
+fn createat_private_file(root: &fs::File, name: &std::ffi::CStr) -> std_io::Result<fs::File> {
+    let descriptor = unsafe {
+        nix::libc::openat(
+            root.as_raw_fd(),
+            name.as_ptr(),
+            nix::libc::O_WRONLY | nix::libc::O_CREAT | nix::libc::O_EXCL | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0o600,
+        )
+    };
+    if descriptor == -1 {
+        return Err(std_io::Error::last_os_error());
+    }
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let file: std::fs::File = descriptor.into();
+    Ok(fs::File::from_parts(
+        file,
+        Path::new("<descriptor-rooted private Git file>"),
+    ))
+}
+
 fn verify_repository_path_identity(path: &Path, directory: &fs::File) -> Result<(), Error> {
     let path_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -1364,13 +1776,55 @@ fn git_command(limits: Limits) -> process::Command {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
+        // Ignore SSH configuration capable of launching ProxyCommand or local
+        // commands. `ssh` itself is resolved from the same trusted PATH as Git;
+        // unknown Git remote-helper transports are rejected before spawn.
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -F /dev/null -oBatchMode=yes -oPermitLocalCommand=no -oProxyCommand=none",
+        )
+        .env("GIT_SSH_VARIANT", "ssh")
         .args([
             "-c",
             "core.autocrlf=false",
             "-c",
+            "core.fsmonitor=false",
+            "-c",
             "core.hooksPath=/dev/null",
             "-c",
             "core.symlinks=true",
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.useHttpPath=true",
+            "-c",
+            "fetch.recurseSubmodules=false",
+            "-c",
+            "http.cookieFile=",
+            "-c",
+            "http.extraHeader=",
+            "-c",
+            "http.proxy=",
+            "-c",
+            "http.sslVerify=true",
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
+            "protocol.http.allow=never",
+            "-c",
+            "protocol.https.allow=always",
+            "-c",
+            "protocol.ssh.allow=always",
+            "-c",
+            "protocol.ext.allow=never",
+            "-c",
+            "remote.origin.proxy=",
+            "-c",
+            "remote.origin.uploadpack=git-upload-pack",
+            "-c",
+            "submodule.recurse=false",
         ]);
     constrain_process(&mut command, limits);
     command
@@ -1639,6 +2093,35 @@ mod tests {
         assert!(error.to_string().contains("progress record"));
     }
 
+    #[tokio::test]
+    async fn public_progress_backpressure_never_blocks_stderr_supervision() {
+        let (progress, mut receiver) = mpsc::channel(1);
+        progress
+            .try_send(FetchProgress {
+                percent: 0,
+                speed: "queued".to_owned(),
+            })
+            .unwrap();
+        let (mut writer, reader) = io::duplex(256);
+        writer
+            .write_all(
+                b"Receiving objects:  25% (1/4), 1.00 MiB | 1.00 MiB/s\rReceiving objects:  50% (2/4), 2.00 MiB | 2.00 MiB/s\r",
+            )
+            .await
+            .unwrap();
+        drop(writer);
+
+        timeout(
+            Duration::from_millis(100),
+            ProgressParser::new(reader, 1024, 256).parse(progress_callback(progress)),
+        )
+        .await
+        .expect("a full progress channel must never stall parsing")
+        .unwrap();
+        assert_eq!(receiver.recv().await.unwrap().speed, "queued");
+        assert!(receiver.try_recv().is_err(), "backpressured updates are dropped");
+    }
+
     #[test]
     fn repository_limits_accept_exact_n_and_reject_n_plus_one() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1791,6 +2274,7 @@ mod tests {
             path: root.clone(),
             limits,
             identity: Some(RepositoryIdentity::from_directory(&open_repository_directory(&root).unwrap()).unwrap()),
+            mirror: None,
         };
         let large_url = format!("https://example.invalid/{}", "x".repeat(8192));
 
@@ -1812,9 +2296,11 @@ mod tests {
             path: root.clone(),
             limits: test_limits(),
             identity: Some(RepositoryIdentity::from_directory(&open_repository_directory(&root).unwrap()).unwrap()),
+            mirror: None,
         };
 
-        let error = repository.fetch_progress(|_| {}).await.unwrap_err();
+        let (progress, _receiver) = mpsc::channel(1);
+        let error = repository.fetch_progress(progress).await.unwrap_err();
         assert!(error.run_failed());
         assert!(root.join(".git").is_dir());
     }
@@ -1983,6 +2469,179 @@ mod tests {
             .starts_with(".gitwrap-mirror-")));
     }
 
+    #[tokio::test]
+    async fn published_mirror_and_credential_config_are_owner_private() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fixture_git(&source, &["init", "--initial-branch=main"]);
+        fixture_git(&source, &["config", "user.name", "Gitwrap Test"]);
+        fixture_git(&source, &["config", "user.email", "gitwrap@example.invalid"]);
+        fs::write(source.join("source.txt"), b"source\n").unwrap();
+        fixture_git(&source, &["add", "source.txt"]);
+        fixture_git(&source, &["commit", "-m", "source"]);
+
+        let destination = temporary.path().join("mirror.git");
+        Repository::clone_mirror_with_limits(&destination, &Url::from_directory_path(&source).unwrap(), test_limits())
+            .await
+            .unwrap();
+
+        assert_eq!(fs::metadata(&destination).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(destination.join("config")).unwrap().mode() & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn private_mirror_strips_hostile_local_config_before_open_and_fetch() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fixture_git(&source, &["init", "--initial-branch=main"]);
+        fixture_git(&source, &["config", "user.name", "Gitwrap Test"]);
+        fixture_git(&source, &["config", "user.email", "gitwrap@example.invalid"]);
+        fs::write(source.join("source.txt"), b"source\n").unwrap();
+        fixture_git(&source, &["add", "source.txt"]);
+        fixture_git(&source, &["commit", "-m", "source"]);
+
+        let origin = Url::from_directory_path(&source).unwrap();
+        let destination = temporary.path().join("mirror.git");
+        Repository::clone_mirror_with_limits(&destination, &origin, test_limits())
+            .await
+            .unwrap();
+        let canonical = canonical_mirror_config(&origin, ObjectFormat::Sha1).unwrap();
+        let included = temporary.path().join("included-config");
+        let sentinel = temporary.path().join("credential-helper-ran");
+        fs::write(
+            &included,
+            format!(
+                "[credential]\n\thelper = !touch {}\n[url \"custom-helper://attacker/\"]\n\tinsteadOf = {}\n",
+                sentinel.display(),
+                origin.as_str()
+            ),
+        )
+        .unwrap();
+        let mut hostile = canonical.clone();
+        hostile.extend_from_slice(
+            format!(
+                "[include]\n\tpath = {}\n[credential]\n\thelper = !touch {}\n[core]\n\tsshCommand = touch {}\n",
+                included.display(),
+                sentinel.display(),
+                sentinel.display()
+            )
+            .as_bytes(),
+        );
+        fs::write(destination.join("config"), &hostile).unwrap();
+        fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(destination.join("config"), std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let repository = Repository::open_private_mirror_with_limits(&destination, &origin, test_limits())
+            .await
+            .unwrap();
+        assert_eq!(fs::read(destination.join("config")).unwrap(), canonical);
+        assert_eq!(fs::metadata(&destination).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(destination.join("config")).unwrap().mode() & 0o777, 0o600);
+        assert!(!sentinel.exists());
+
+        fs::write(destination.join("config"), &hostile).unwrap();
+        let (progress, _receiver) = mpsc::channel(1);
+        repository.fetch_progress(progress).await.unwrap();
+        assert_eq!(fs::read(destination.join("config")).unwrap(), canonical);
+        assert!(!sentinel.exists());
+    }
+
+    #[tokio::test]
+    async fn private_mirror_origin_is_checked_before_config_is_rewritten() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let wrong_source = temporary.path().join("wrong-source");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&wrong_source).unwrap();
+        fixture_git(&source, &["init", "--bare"]);
+        fixture_git(&wrong_source, &["init", "--bare"]);
+        let origin = Url::from_directory_path(&source).unwrap();
+        let wrong_origin = Url::from_directory_path(&wrong_source).unwrap();
+        let destination = temporary.path().join("mirror.git");
+        Repository::clone_mirror_with_limits(&destination, &origin, test_limits())
+            .await
+            .unwrap();
+        fixture_git(&destination, &["remote", "set-url", "origin", wrong_origin.as_str()]);
+
+        let error = Repository::open_private_mirror_with_limits(&destination, &origin, test_limits())
+            .await
+            .unwrap_err();
+        assert!(error.mirror_origin_mismatch());
+        assert_eq!(
+            fixture_git(&destination, &["remote", "get-url", "origin"]),
+            wrong_origin.as_str()
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_remote_helper_schemes_and_option_like_arguments_are_rejected_before_spawn() {
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("mirror.git");
+        let error = Repository::clone_mirror_with_limits(
+            &destination,
+            &Url::parse("custom-helper://example.invalid/repository").unwrap(),
+            test_limits(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("not allowed"));
+        assert!(!destination.exists());
+
+        let error = Repository::clone_mirror_with_limits(
+            &destination,
+            &Url::parse("http://example.invalid/repository").unwrap(),
+            test_limits(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("not allowed"));
+        assert!(!destination.exists());
+
+        let error = Repository::clone_mirror_with_limits(
+            &destination,
+            &Url::parse("git://example.invalid/repository").unwrap(),
+            test_limits(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("not allowed"));
+        assert!(!destination.exists());
+
+        let repository = null_repository();
+        assert!(repository.has_commit("--batch").await.is_err());
+        assert!(repository.get_remote_url("--all").await.is_err());
+        assert!(repository.set_remote_url("--add", "value").await.is_err());
+        assert!(repository.checkout("--orphan").await.is_err());
+        assert!(repository.contains_gitlinks("--long").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sha256_object_format_commit_ids_are_accepted() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fixture_git(&source, &["init", "--object-format=sha256", "--initial-branch=main"]);
+        fixture_git(&source, &["config", "user.name", "Gitwrap Test"]);
+        fixture_git(&source, &["config", "user.email", "gitwrap@example.invalid"]);
+        fs::write(source.join("source.txt"), b"source\n").unwrap();
+        fixture_git(&source, &["add", "source.txt"]);
+        fixture_git(&source, &["commit", "-m", "source"]);
+
+        let destination = temporary.path().join("mirror.git");
+        let repository = Repository::clone_mirror_with_limits(
+            &destination,
+            &Url::from_directory_path(&source).unwrap(),
+            test_limits(),
+        )
+        .await
+        .unwrap();
+        let commit = repository.peel_commit("HEAD").await.unwrap();
+        assert_eq!(commit.len(), 64);
+        assert!(commit.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
+    }
+
     fn fixture_git(repository: &Path, arguments: &[&str]) -> String {
         let output = Command::new("git")
             .arg("-C")
@@ -2072,6 +2731,7 @@ mod tests {
             identity: Some(
                 RepositoryIdentity::from_directory(&open_repository_directory(&repository_path).unwrap()).unwrap(),
             ),
+            mirror: None,
         };
         let clone_path = temporary.path().join("locked-clone");
         let cloned = repository.clone_to(&clone_path).await.unwrap();
@@ -2104,6 +2764,7 @@ mod tests {
             identity: Some(
                 RepositoryIdentity::from_directory(&open_repository_directory(&repository_path).unwrap()).unwrap(),
             ),
+            mirror: None,
         };
         let source_commit = fixture_git(&repository_path, &["rev-parse", "HEAD"]);
         assert!(!repository.contains_gitlinks(&source_commit).await.unwrap());
@@ -2142,6 +2803,7 @@ mod tests {
             identity: Some(
                 RepositoryIdentity::from_directory(&open_repository_directory(&repository_path).unwrap()).unwrap(),
             ),
+            mirror: None,
         };
         let peeled = repository.peel_commit("v1").await.unwrap();
 
