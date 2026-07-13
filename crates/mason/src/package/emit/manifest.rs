@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{collections::BTreeSet, io, path::PathBuf};
+use std::{collections::BTreeSet, io, io::Write};
 
-use fs_err as fs;
 use snafu::{ResultExt, Snafu};
 use stone::relation::Dependency;
 use stone_recipe::derivation::{DerivationId, PackageIdentity};
-
-use crate::{Architecture, Paths};
 
 use super::Package;
 
@@ -19,8 +16,6 @@ mod json;
 pub struct Manifest<'a> {
     identity: &'a PackageIdentity,
     recipe_fingerprint: &'a str,
-    arch: Architecture,
-    output_dir: PathBuf,
     build_deps: BTreeSet<Dependency>,
     packages: Vec<&'a Package<'a>>,
     derivation_id: DerivationId,
@@ -28,20 +23,14 @@ pub struct Manifest<'a> {
 
 impl<'a> Manifest<'a> {
     pub fn new(
-        paths: &Paths,
         identity: &'a PackageIdentity,
         recipe_fingerprint: &'a str,
         build_deps: impl IntoIterator<Item = Dependency>,
-        arch: Architecture,
         derivation_id: &DerivationId,
     ) -> Self {
-        let output_dir = paths.artefacts().guest;
-
         Self {
             identity,
             recipe_fingerprint,
-            output_dir,
-            arch,
             build_deps: build_deps.into_iter().collect(),
             packages: Vec::new(),
             derivation_id: derivation_id.clone(),
@@ -54,12 +43,9 @@ impl<'a> Manifest<'a> {
         self.packages.sort_by_key(|package| package.name);
     }
 
-    pub fn write_binary(&self) -> Result<(), Error> {
-        let mut output = fs::File::create(self.output_dir.join(super::super::binary_manifest_filename(self.arch)))
-            .context(IoSnafu)?;
-
+    pub fn write_binary<W: Write>(&self, output: &mut W) -> Result<(), Error> {
         binary::write(
-            &mut output,
+            output,
             &self.packages,
             &self.build_deps,
             self.recipe_fingerprint,
@@ -68,9 +54,9 @@ impl<'a> Manifest<'a> {
         .context(BinarySnafu)
     }
 
-    pub fn write_json(&self) -> Result<(), Error> {
+    pub fn write_json<W: Write>(&self, output: &mut W) -> Result<(), Error> {
         json::write(
-            &self.output_dir.join(super::super::jsonc_manifest_filename(self.arch)),
+            output,
             self.identity,
             self.recipe_fingerprint,
             &self.packages,

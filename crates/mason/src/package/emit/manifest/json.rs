@@ -4,10 +4,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
-    path::Path,
 };
 
-use fs_err::File;
 use itertools::Itertools;
 use serde::Serialize;
 use snafu::ResultExt;
@@ -17,8 +15,8 @@ use stone_recipe::derivation::{DerivationId, PackageIdentity};
 use super::{Error, IoSnafu, JsonSnafu};
 use crate::package::emit;
 
-pub fn write(
-    path: &Path,
+pub fn write<W: Write>(
+    output: &mut W,
     identity: &PackageIdentity,
     recipe_fingerprint: &str,
     packages: &[&emit::Package<'_>],
@@ -71,15 +69,13 @@ pub fn write(
         source_version: identity.version.clone(),
     };
 
-    let mut file = File::create(path).context(IoSnafu)?;
-
-    writeln!(&mut file, "/** Human readable report. This is not consumed by Cast */").context(IoSnafu)?;
+    writeln!(output, "/** Human readable report. This is not consumed by Cast */").context(IoSnafu)?;
 
     let mut serializer =
-        serde_json::Serializer::with_formatter(&mut file, serde_json::ser::PrettyFormatter::with_indent(b"\t"));
+        serde_json::Serializer::with_formatter(&mut *output, serde_json::ser::PrettyFormatter::with_indent(b"\t"));
     content.serialize(&mut serializer).context(JsonSnafu)?;
 
-    writeln!(&mut file).context(IoSnafu)?;
+    writeln!(output).context(IoSnafu)?;
 
     Ok(())
 }
@@ -142,9 +138,9 @@ cast.mk_package (cast.meta {
         let first_plan = plan_with_recipe(&first_recipe);
         let first_derivation_id = first_plan.derivation_id();
         let first_identity = identity(&first_recipe);
-        let first_path = root.path().join("first.jsonc");
+        let mut first_output = Vec::new();
         write(
-            &first_path,
+            &mut first_output,
             &first_identity,
             &first_plan.provenance.recipe.sha256,
             &[],
@@ -152,16 +148,16 @@ cast.mk_package (cast.meta {
             &first_derivation_id,
         )
         .unwrap();
-        let first_manifest = read_jsonc(&first_path);
+        let first_manifest = read_jsonc(&first_output);
 
         fs::write(&lock_path, format!("{lock}// semantically inert provenance change\n")).unwrap();
         let changed_recipe = Recipe::load(root.path()).unwrap();
         let changed_plan = plan_with_recipe(&changed_recipe);
         let changed_derivation_id = changed_plan.derivation_id();
         let changed_identity = identity(&changed_recipe);
-        let changed_path = root.path().join("changed.jsonc");
+        let mut changed_output = Vec::new();
         write(
-            &changed_path,
+            &mut changed_output,
             &changed_identity,
             &changed_plan.provenance.recipe.sha256,
             &[],
@@ -169,7 +165,7 @@ cast.mk_package (cast.meta {
             &changed_derivation_id,
         )
         .unwrap();
-        let changed_manifest = read_jsonc(&changed_path);
+        let changed_manifest = read_jsonc(&changed_output);
 
         assert_eq!(
             first_manifest["recipe-fingerprint"],
@@ -208,8 +204,8 @@ cast.mk_package (cast.meta {
         }
     }
 
-    fn read_jsonc(path: &Path) -> serde_json::Value {
-        let content = fs::read_to_string(path).unwrap();
+    fn read_jsonc(content: &[u8]) -> serde_json::Value {
+        let content = std::str::from_utf8(content).unwrap();
         let (_, json) = content.split_once('\n').unwrap();
         serde_json::from_str(json).unwrap()
     }
