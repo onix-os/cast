@@ -51,7 +51,7 @@ pub struct Planned {
     pub lock_outcome: Option<build_lock::WriteOutcome>,
     pub request_fingerprint: String,
     pub requested_packages: Vec<String>,
-    pub policy_provenance: Vec<crate::macros::PolicyChange>,
+    pub policy_provenance: Vec<crate::policy::PolicySource>,
     pub profile_fingerprints: Vec<String>,
 }
 
@@ -80,6 +80,8 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         &request.target,
     )?;
     let target = &builder.target;
+    let target_name = target.build_target.to_string();
+    let target_policy = target.build_policy.target(&target_name)?;
 
     let packager = Packager::new(&builder.paths, &builder.recipe)?;
     let package_names = packager.resolved_packages().keys().cloned().collect::<Vec<_>>();
@@ -112,19 +114,14 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
     let boulder_version = tools_buildinfo::get_simple_version();
     let jobs = request.jobs.to_string();
-    let builder_fingerprint = hash_fields([
-        "boulder-executor-v1",
-        boulder_version.as_str(),
-        target.policy.fingerprint.sha256.as_str(),
-    ]);
-    let target_name = target.build_target.to_string();
+    let builder_fingerprint = builder_fingerprint(&boulder_version, &target.build_policy.fingerprint.sha256);
     let request_fingerprint = hash_fields(
         [
             "boulder-build-lock-request-v2",
             builder.recipe.fingerprint.sha256.as_str(),
             source_lock_digest.as_str(),
             target_name.as_str(),
-            target.policy.fingerprint.sha256.as_str(),
+            target.build_policy.fingerprint.sha256.as_str(),
             profile_fingerprint.as_str(),
             toolchain_name,
             builder_fingerprint.as_str(),
@@ -170,7 +167,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
             build_release: request.build_release.get(),
             homepage: builder.recipe.declaration.meta.homepage.clone(),
             licenses: builder.recipe.declaration.meta.license.clone(),
-            architecture: artifact_architecture(target.build_target)?.to_string(),
+            architecture: target_policy.artifact_architecture.clone(),
         },
         build_lock,
     );
@@ -231,7 +228,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.outputs = outputs;
     plan.source_date_epoch = request.source_date_epoch;
     plan.validate()?;
-    let policy_provenance = target.policy.changes.clone();
+    let policy_provenance = target.build_policy.sources();
     let profile_fingerprints = builder
         .profile_fingerprints
         .iter()
@@ -318,9 +315,11 @@ fn resolve_build_lock(
             output: "out".to_owned(),
         })
         .collect::<Vec<_>>();
-    let target_platform = platform(target.build_target.to_string());
-    let build_platform = platform(crate::architecture::host().to_string());
-    let host_platform = platform(target.build_target.to_string());
+    let target_name = target.build_target.to_string();
+    let target_policy = target.build_policy.target(&target_name)?;
+    let target_platform = platform(&target_policy.target_platform);
+    let build_platform = platform(&target_policy.build_platform);
+    let host_platform = platform(&target_policy.host_platform);
     let mut lock = BuildLock {
         schema_version: BUILD_LOCK_SCHEMA_VERSION,
         request_fingerprint: request_fingerprint.to_owned(),
@@ -332,8 +331,8 @@ fn resolve_build_lock(
         host_platform,
         target_platform,
         policy: LockedIdentity {
-            name: target.policy.target.clone(),
-            fingerprint: target.policy.fingerprint.sha256.clone(),
+            name: target_policy.name.clone(),
+            fingerprint: target.build_policy.fingerprint.sha256.clone(),
         },
         profile: LockedIdentity {
             name: builder.profile.to_string(),
@@ -341,7 +340,7 @@ fn resolve_build_lock(
         },
         toolchain: LockedIdentity {
             name: toolchain_name.to_owned(),
-            fingerprint: hash_fields([toolchain_name, target.policy.fingerprint.sha256.as_str()]),
+            fingerprint: toolchain_fingerprint(toolchain_name, &target.build_policy.fingerprint.sha256),
         },
         builder: LockedIdentity {
             name: EXECUTOR_ABI.to_owned(),
@@ -508,24 +507,20 @@ fn combined_profile_fingerprint(fingerprints: &[gluon_config::EvaluationFingerpr
     )
 }
 
-fn platform(architecture: impl Into<String>) -> Platform {
-    Platform {
-        architecture: architecture.into(),
-        vendor: "unknown".to_owned(),
-        operating_system: "linux".to_owned(),
-        abi: "gnu".to_owned(),
-    }
+fn builder_fingerprint(boulder_version: &str, policy_fingerprint: &str) -> String {
+    hash_fields([EXECUTOR_ABI, boulder_version, policy_fingerprint])
 }
 
-fn artifact_architecture(target: crate::architecture::BuildTarget) -> Result<crate::Architecture, Error> {
-    match target {
-        crate::architecture::BuildTarget::Native(architecture) => Ok(architecture),
-        crate::architecture::BuildTarget::Emul32(crate::Architecture::X86_64 | crate::Architecture::X86) => {
-            Ok(crate::Architecture::X86)
-        }
-        crate::architecture::BuildTarget::Emul32(architecture) => {
-            Err(Error::UnsupportedEmul32ArtifactArchitecture(architecture.to_string()))
-        }
+fn toolchain_fingerprint(toolchain: &str, policy_fingerprint: &str) -> String {
+    hash_fields([toolchain, policy_fingerprint])
+}
+
+fn platform(policy: &stone_recipe::build_policy::PlatformPolicySpec) -> Platform {
+    Platform {
+        architecture: policy.architecture.clone(),
+        vendor: policy.vendor.clone(),
+        operating_system: policy.operating_system.clone(),
+        abi: policy.abi.clone(),
     }
 }
 
@@ -551,6 +546,8 @@ pub enum Error {
     #[error(transparent)]
     Root(#[from] build::root::Error),
     #[error(transparent)]
+    Policy(#[from] crate::policy::Error),
+    #[error(transparent)]
     BuildLock(#[from] build_lock::Error),
     #[error(transparent)]
     BuildLockValidation(#[from] stone_recipe::derivation::BuildLockValidationError),
@@ -570,8 +567,6 @@ pub enum Error {
     ReadSourceLock(#[source] std::io::Error),
     #[error("output package `{package}` has runtime dependency `{dependency}` absent from the locked closure")]
     UnlockedRuntimeDependency { package: String, dependency: String },
-    #[error("no emitted Stone architecture mapping for emul32/{0}")]
-    UnsupportedEmul32ArtifactArchitecture(String),
     #[error("frozen execution does not support mutable package-directory input {package_dir}")]
     UnsupportedPackageDirectoryInput { package_dir: String },
 }
@@ -585,20 +580,18 @@ impl From<build::Error> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::architecture::BuildTarget;
     use stone_recipe::derivation::PhasePlan;
 
     #[test]
-    fn emitted_architecture_mapping_is_explicit_for_emul32() {
-        assert_eq!(
-            artifact_architecture(BuildTarget::Native(crate::Architecture::X86_64)).unwrap(),
-            crate::Architecture::X86_64
+    fn typed_policy_changes_builder_and_toolchain_identities() {
+        assert_ne!(
+            builder_fingerprint("1", "policy-a"),
+            builder_fingerprint("1", "policy-b")
         );
-        assert_eq!(
-            artifact_architecture(BuildTarget::Emul32(crate::Architecture::X86_64)).unwrap(),
-            crate::Architecture::X86
+        assert_ne!(
+            toolchain_fingerprint("llvm", "policy-a"),
+            toolchain_fingerprint("llvm", "policy-b")
         );
-        assert!(artifact_architecture(BuildTarget::Emul32(crate::Architecture::Aarch64)).is_err());
     }
 
     #[test]

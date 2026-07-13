@@ -164,11 +164,7 @@ mod tests {
         assert_eq!(sources[0].fingerprint, policy.fingerprint.root_source_sha256);
         assert!(sources[0].root);
         assert!(sources[1..].iter().all(|source| !source.root));
-        assert!(
-            sources
-                .iter()
-                .any(|source| source.origin == "boulder.build_policy.v1")
-        );
+        assert!(sources.iter().any(|source| source.origin == "boulder.build_policy.v1"));
     }
 
     #[test]

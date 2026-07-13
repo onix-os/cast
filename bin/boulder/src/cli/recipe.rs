@@ -265,25 +265,10 @@ fn explain(env: Env, command: ExplainCommand) -> Result<(), Error> {
     println!("  build_lock = {:?}", planned.plan.build_lock.digest());
     println!("  request = {:?}", planned.request_fingerprint);
     println!("  policy = {:?}", planned.plan.build_lock.policy.fingerprint);
-    let mut previous_layer = None;
-    for change in planned.policy_provenance {
-        let layer = (change.layer_order, change.layer_name.clone());
-        if previous_layer.as_ref() != Some(&layer) {
-            println!(
-                "  policy_layer = {{ order = {}, name = {:?} }}",
-                change.layer_order, change.layer_name
-            );
-            previous_layer = Some(layer);
-        }
+    for source in planned.policy_provenance {
         println!(
-            "  policy_module = {{ layer_order = {}, entry_order = {}, operation = {:?}, kind = {:?}, key = {:?}, origin = {:?}, fingerprint = {:?} }}",
-            change.layer_order,
-            change.entry_order,
-            change.operation,
-            change.kind,
-            change.key,
-            change.origin,
-            change.fingerprint.sha256
+            "  policy_source = {{ root = {}, origin = {:?}, fingerprint = {:?} }}",
+            source.root, source.origin, source.fingerprint
         );
     }
     for fingerprint in planned.profile_fingerprints {
