@@ -59,13 +59,16 @@ Implemented:
   and the legacy macro/parser/tuning stack is absent;
 - `build.lock.glu` freezes the exact Moss-resolved closure, repository
   snapshots, platforms, and selected policy identities with explicit
-  missing/stale/update behavior;
+  missing/stale/update behavior. Schema v4 also binds every canonical request
+  to all typed package, output-runtime, policy, job-executable, and analyzer
+  origins collected before request deduplication;
 - `boulder recipe plan` freezes and validates canonical target-specific jobs,
   phases, environment, layout, execution policy, analysis, collection rules,
   manifest inputs, outputs, and timestamp;
-- `recipe explain` exposes lock provenance plus each policy source and ordered
-  policy operation, and canonical mutation tests prove that semantic changes
-  alter the derivation ID;
+- `recipe explain` exposes each request, its exact package/output resolution,
+  every input origin, each policy source, and ordered policy operation;
+  canonical mutation tests prove that semantic and origin-only changes alter
+  the derivation ID;
 - normal `boulder build` uses that same plan to verify repository snapshots,
   exact-install locked packages, materialize locked sources, enter a frozen
   container, execute plan steps, package plan-owned outputs, verify manifests
@@ -159,7 +162,7 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, safe package/version/artifact filename components, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency, disabled networking, the schema-v11 plan and executor identity, explicit
+  concurrency, disabled networking, the schema-v12 plan and executor identity, explicit
   credentials, locked-closure root materialization, exact analyzer
   program/provider bindings, and the finite sandbox-filesystem contract. The locked
   closure path copies only exact package IDs from `build.lock.glu`, creates the

@@ -385,15 +385,19 @@ step.
 
 ## Build closure and derivation planning
 
-`build.lock.glu` is also generated beside `stone.glu`. Schema v3 records the
+`build.lock.glu` is also generated beside `stone.glu`. Schema v4 records the
 exact reachable package/output closure, its used repository index snapshots,
 platform roles, and separate policy-root, target, profile, toolchain, and
-selected structural-builder identities. The builder fingerprint commits to
+selected structural-builder identities. Each resolved provider records all
+typed origins collected before request deduplication: selected
+builder/native/build/check positions, output runtime edges, policy
+source/field/index positions, exact job executable coordinates, and analyzer
+roles. The builder fingerprint commits to
 the complete target-selected builder, hooks, and package-profile key; the
 executor ABI is a separate derivation execution-policy identity. The lock is
 not an authored overlay. Reuse validates every
-selected identity, platform component, and requested provider root rather than
-trusting only the generated request-fingerprint field.
+selected identity, platform component, and complete request-to-origin map
+rather than trusting only the generated request-fingerprint field.
 
 Create or refresh it while freezing a target-specific plan:
 
@@ -421,7 +425,8 @@ boulder recipe plan ./stone.glu \
 `recipe plan` prints the derivation ID, request fingerprint, plan counts, and
 canonical plan bytes. `recipe explain` uses the current lock and prints the
 recipe, source-lock, build-lock, request, policy, profile, and package-closure
-provenance:
+provenance. For every provider it prints the request, exact locked
+package/output, and every origin:
 
 ```sh
 boulder recipe explain ./stone.glu \
@@ -435,7 +440,9 @@ The source timestamp and job count are explicit because build scripts can
 observe them. The derivation ID is SHA-256 over the canonical
 `DerivationPlan`, including locked sources and dependencies, selected policy,
 jobs and phases, environment, execution policy, pseudo-filesystems, outputs,
-and timestamp.
+and timestamp. Derivation schema v12 includes the canonical build-lock origin
+mapping, so changing only why an unchanged provider was requested changes the
+derivation ID.
 
 ## Frozen execution
 

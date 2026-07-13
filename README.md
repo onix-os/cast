@@ -94,11 +94,13 @@ generated files freeze I/O-backed resolution:
 - `sources.lock.glu` schema v2 records archive hashes and binds each Git
   request to both a full commit and the SHA-256 of its canonical normalized
   checkout;
-- `build.lock.glu` schema v3 records the exact reachable package/output
+- `build.lock.glu` schema v4 records the exact reachable package/output
   closure, used repository snapshots, platforms, and independent
   policy/target/profile/toolchain identities plus the selected structural
-  builder identity. The executor ABI is frozen separately in the derivation
-  execution policy.
+  builder identity. Each resolved request also carries every typed reason it
+  entered the closure: package input role and position, output runtime edge,
+  policy field, job executable coordinate, or analyzer role. The executor ABI
+  is frozen separately in the derivation execution policy.
 
 After refreshing source resolution, create the build lock and plan with
 explicit target, timestamp, and concurrency inputs:
@@ -115,7 +117,8 @@ boulder recipe plan ./stone.glu \
 
 Run the same command without `--update-lock` to require the current lock. Use
 `boulder recipe explain` with the same arguments to inspect recipe, lock,
-policy, profile, and package-closure provenance.
+policy, profile, and package-closure provenance, including each provider
+request, its exact package/output resolution, and all of its origins.
 
 Normal builds use the same planner and lock contract:
 

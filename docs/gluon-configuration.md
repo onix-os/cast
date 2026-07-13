@@ -268,12 +268,15 @@ outer destination name is separately part of derivation identity.
 `build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
 planning, including `boulder build --update-lock`. Its request fingerprint
 binds the evaluated recipe and source lock, selected target and policy,
-profile, toolchain, builder, job count, and requested providers. Schema v3
-contains the exact Moss-resolved package/output closure, only the repository
+profile, toolchain, builder, job count, and the typed provenance of every
+requested provider. Schema v4 contains the exact Moss-resolved package/output closure, only the repository
 snapshots used by that closure, build/host/target platforms, and independent
-policy-root, target, profile, toolchain, and builder identities. It rejects
-disconnected packages, unused snapshots, and any reusable lock whose selected
-context or request roots differ even when its header fingerprint was retained.
+policy-root, target, profile, toolchain, and builder identities. Every request
+stores a canonical sorted set of origins: builder/native/build/check position,
+output runtime position, policy source/field/index, job executable coordinate,
+or analyzer role. It rejects disconnected packages, unused snapshots, requests
+without origins, and any reusable lock whose selected context or complete
+request-to-origin map differs even when its header fingerprint was retained.
 Planning without `--update-lock` requires a current lock; missing and stale
 locks are errors with an explicit refresh command. `--refresh-repositories` is
 valid only while updating the lock.
@@ -285,6 +288,8 @@ schema freezes the executor ABI and implementation fingerprint separately inside
 `ExecutionPolicy`, so changing execution compatibility cannot be
 mistaken for changing authored builder structure. It also freezes the selected
 credential contract and every reachable analyzer program and provider request.
+The current derivation schema is v12; build-lock origins participate in both
+the lock digest and the canonical derivation identity.
 
 The Boulder implementation fingerprint is produced at compile time from the
 production source tree and effective build context. In addition to the Rust
