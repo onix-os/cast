@@ -92,18 +92,41 @@ impl Phase {
             compiler_cache,
             jobs,
         } = *request;
-        let typed_phases = recipe.build_target_phases(target);
-        let typed_phase = match self {
-            Phase::Prepare => PhaseSpec::default(),
-            Phase::Setup => typed_phases.setup.clone(),
-            Phase::Build => typed_phases.build.clone(),
-            Phase::Install => typed_phases.install.clone(),
-            Phase::Check => typed_phases.check.clone(),
-            Phase::Workload => typed_phases.workload.clone(),
+        let typed_phases = &recipe.build_target_builder(target).phases;
+        let hooks = recipe.build_target_hooks(target);
+        let empty_phase = PhaseSpec::default();
+        let no_hooks: &[StepSpec] = &[];
+        let (typed_phase, pre_hooks, post_hooks) = match self {
+            Phase::Prepare => (&empty_phase, no_hooks, no_hooks),
+            Phase::Setup => (
+                &typed_phases.setup,
+                hooks.pre_setup.as_slice(),
+                hooks.post_setup.as_slice(),
+            ),
+            Phase::Build => (
+                &typed_phases.build,
+                hooks.pre_build.as_slice(),
+                hooks.post_build.as_slice(),
+            ),
+            Phase::Install => (
+                &typed_phases.install,
+                hooks.pre_install.as_slice(),
+                hooks.post_install.as_slice(),
+            ),
+            Phase::Check => (
+                &typed_phases.check,
+                hooks.pre_check.as_slice(),
+                hooks.post_check.as_slice(),
+            ),
+            Phase::Workload => (
+                &typed_phases.workload,
+                hooks.pre_workload.as_slice(),
+                hooks.post_workload.as_slice(),
+            ),
         };
 
         let prepare = matches!(self, Phase::Prepare);
-        if typed_phase.is_empty() && !prepare {
+        if typed_phase.is_empty() && pre_hooks.is_empty() && post_hooks.is_empty() && !prepare {
             return Ok(None);
         }
 
@@ -150,10 +173,11 @@ impl Phase {
         } else {
             work_dir.display().to_string()
         };
+        let pre = compile_steps(pre_hooks, &context, &working_dir)?;
         let mut steps = if prepare {
             prepare_steps(&recipe.declaration.sources, paths, &context, policy)?
         } else {
-            compile_steps(&typed_phase, &context, &working_dir)?
+            compile_steps(&typed_phase.steps, &context, &working_dir)?
         };
         if matches!(self, Phase::Workload)
             && matches!(recipe.declaration.options.toolchain, ToolchainSpec::Llvm)
@@ -161,21 +185,22 @@ impl Phase {
         {
             steps.push(step);
         }
-        if steps.is_empty() {
+        let post = compile_steps(post_hooks, &context, &working_dir)?;
+        if pre.is_empty() && steps.is_empty() && post.is_empty() {
             return Ok(None);
         }
         Ok(Some(PhasePlan {
             name: self.to_string(),
-            pre: Vec::new(),
+            pre,
             steps,
-            post: Vec::new(),
+            post,
         }))
     }
 }
 
-fn compile_steps(phase: &PhaseSpec, context: &BuildContext, working_dir: &str) -> Result<Vec<StepPlan>, Error> {
-    let mut steps = Vec::with_capacity(phase.steps.len());
-    for step in &phase.steps {
+fn compile_steps(typed_steps: &[StepSpec], context: &BuildContext, working_dir: &str) -> Result<Vec<StepPlan>, Error> {
+    let mut steps = Vec::with_capacity(typed_steps.len());
+    for step in typed_steps {
         match step {
             StepSpec::Shell { script } => {
                 steps.push(literal_shell(script.clone(), &context.environment, working_dir));
@@ -414,7 +439,10 @@ mod direct_tests {
     use stone_recipe::{
         build_policy::{EnvironmentBindingSpec, EnvironmentCondition},
         derivation::StepPlan,
-        package::{BuilderEnvironmentSpec, BuilderSpec, PhaseSpec, PhasesSpec, StepSpec, SupportedHooksSpec},
+        package::{
+            BuilderEnvironmentSpec, BuilderSpec, HooksSpec, PhaseSpec, PhasesSpec, ProfileSpec, StepSpec,
+            SupportedHooksSpec,
+        },
     };
 
     use super::*;
@@ -465,6 +493,17 @@ mod direct_tests {
         Paths::new(recipe, layout, root, root).unwrap()
     }
 
+    fn shell_script(step: &StepPlan) -> &str {
+        match step {
+            StepPlan::Shell { script, .. } => script,
+            StepPlan::Run { .. } => panic!("expected an authored shell step"),
+        }
+    }
+
+    fn shell_scripts(steps: &[StepPlan]) -> Vec<&str> {
+        steps.iter().map(shell_script).collect()
+    }
+
     #[test]
     fn standard_steps_freeze_as_run_with_exact_context() {
         let (mut recipe, policy, root) = fixture();
@@ -508,6 +547,116 @@ mod direct_tests {
         assert_eq!(environment["BOULDER_JOBS"], "3");
         assert_eq!(environment["SOURCE_DATE_EPOCH"], "1700000000");
         assert_eq!(environment["CC"], "clang");
+    }
+
+    #[test]
+    fn selected_profile_hooks_preserve_exact_phase_groups_and_order() {
+        let (mut recipe, policy, root) = fixture();
+        let shell = |script: &str| StepSpec::Shell {
+            script: script.to_owned(),
+        };
+        recipe.declaration.profiles = vec![ProfileSpec {
+            name: "x86_64".to_owned(),
+            builder: BuilderSpec {
+                required_tools: Vec::new(),
+                environment: Vec::new(),
+                phases: PhasesSpec {
+                    build: PhaseSpec::new([shell("body-one"), shell("body-two")]),
+                    ..PhasesSpec::default()
+                },
+                supported_hooks: SupportedHooksSpec::all(),
+            },
+            hooks: HooksSpec {
+                pre_build: vec![shell("pre-one"), shell("pre-two")],
+                post_build: vec![shell("post-one"), shell("post-two")],
+                ..HooksSpec::default()
+            },
+            native_build_inputs: Vec::new(),
+            build_inputs: Vec::new(),
+            check_inputs: Vec::new(),
+        }];
+
+        let paths = test_paths(&recipe, &policy, root.path());
+        let target = policy.target("x86_64").unwrap();
+        let plan = Phase::Build
+            .plan(&PlanContext {
+                target,
+                pgo_stage: None,
+                recipe: &recipe,
+                paths: &paths,
+                policy: &policy,
+                compiler_cache: false,
+                jobs: NonZeroUsize::new(2).unwrap(),
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(shell_scripts(&plan.pre), ["pre-one", "pre-two"]);
+        assert_eq!(shell_scripts(&plan.steps), ["body-one", "body-two"]);
+        assert_eq!(shell_scripts(&plan.post), ["post-one", "post-two"]);
+        let execution_order = plan
+            .pre
+            .iter()
+            .chain(&plan.steps)
+            .chain(&plan.post)
+            .map(shell_script)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            execution_order,
+            ["pre-one", "pre-two", "body-one", "body-two", "post-one", "post-two"]
+        );
+    }
+
+    #[test]
+    fn pgo_finish_stays_in_workload_body_before_post_hook() {
+        let (mut recipe, policy, root) = fixture();
+        recipe.declaration.builder = BuilderSpec {
+            required_tools: Vec::new(),
+            environment: Vec::new(),
+            phases: PhasesSpec {
+                workload: PhaseSpec::new([StepSpec::Shell {
+                    script: "workload-body".to_owned(),
+                }]),
+                ..PhasesSpec::default()
+            },
+            supported_hooks: SupportedHooksSpec::all(),
+        };
+        recipe.declaration.hooks = HooksSpec {
+            pre_workload: vec![StepSpec::Shell {
+                script: "pre-workload".to_owned(),
+            }],
+            post_workload: vec![StepSpec::Shell {
+                script: "post-workload".to_owned(),
+            }],
+            ..HooksSpec::default()
+        };
+
+        let paths = test_paths(&recipe, &policy, root.path());
+        let target = policy.target("x86_64").unwrap();
+        let plan = Phase::Workload
+            .plan(&PlanContext {
+                target,
+                pgo_stage: Some(pgo::Stage::One),
+                recipe: &recipe,
+                paths: &paths,
+                policy: &policy,
+                compiler_cache: false,
+                jobs: NonZeroUsize::new(2).unwrap(),
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(shell_scripts(&plan.pre), ["pre-workload"]);
+        assert_eq!(plan.steps.len(), 2);
+        let StepPlan::Shell { script, .. } = &plan.steps[0] else {
+            panic!("authored workload must remain a shell step")
+        };
+        assert_eq!(script, "workload-body");
+        let StepPlan::Shell { script, .. } = &plan.steps[1] else {
+            panic!("PGO completion must be frozen into the workload body")
+        };
+        assert!(script.starts_with("set -euo pipefail\n"));
+        assert_eq!(shell_scripts(&plan.post), ["post-workload"]);
     }
 
     #[test]
