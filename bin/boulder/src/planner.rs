@@ -6,7 +6,7 @@
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use fs_err as fs;
@@ -51,6 +51,7 @@ pub struct Request {
 
 pub struct Planned {
     pub plan: DerivationPlan,
+    pub runtime: build::Runtime,
     pub lock_path: PathBuf,
     pub lock_outcome: Option<build_lock::WriteOutcome>,
     pub request_fingerprint: String,
@@ -60,6 +61,14 @@ pub struct Planned {
 }
 
 pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
+    plan_with_runtime(env, request, Path::new("."))
+}
+
+pub fn plan_for_build(env: Env, request: Request, output_dir: &Path) -> Result<Planned, Error> {
+    plan_with_runtime(env, request, output_dir)
+}
+
+fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Planned, Error> {
     if request.refresh_repositories && !request.update_lock {
         return Err(Error::RefreshRequiresUpdate);
     }
@@ -69,7 +78,7 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
         env,
         request.profile.clone(),
         request.compiler_cache,
-        ".",
+        output_dir,
         NonZeroUsize::new(usize::try_from(request.jobs.get()).expect("u32 fits supported usize"))
             .expect("jobs is non-zero"),
         Some(request.source_date_epoch),
@@ -168,6 +177,10 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
     };
 
     let jobs = freeze_jobs(target)?;
+    let package_dir = builder.paths.recipe().guest.join("pkg").display().to_string();
+    if jobs_use_package_directory(&jobs, &package_dir) {
+        return Err(Error::UnsupportedPackageDirectoryInput { package_dir });
+    }
     let outputs = freeze_outputs(
         &builder.recipe.parsed.source.name,
         packager.resolved_packages(),
@@ -198,7 +211,7 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
         build_dir: builder.paths.build().guest.display().to_string(),
         source_dir: builder.paths.upstreams().guest.display().to_string(),
         install_dir: builder.paths.install().guest.display().to_string(),
-        package_dir: builder.paths.recipe().guest.join("pkg").display().to_string(),
+        package_dir,
     };
     plan.execution = ExecutionPolicy {
         network: if builder.recipe.parsed.options.networking {
@@ -261,9 +274,11 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
         .iter()
         .map(|fingerprint| fingerprint.sha256.clone())
         .collect();
+    let runtime = builder.into_runtime();
 
     Ok(Planned {
         plan,
+        runtime,
         lock_path,
         lock_outcome,
         request_fingerprint,
@@ -410,12 +425,41 @@ fn freeze_jobs(target: &build::Target) -> Result<Vec<JobPlan>, Error> {
         }
         jobs.push(JobPlan {
             pgo_stage: job.pgo_stage.map(|stage| format!("{stage:?}").to_lowercase()),
+            pgo_dir: job.pgo_stage.map(|_| format!("{}-pgo", job.build_dir.display())),
             build_dir: job.build_dir.display().to_string(),
             work_dir: job.work_dir.display().to_string(),
             phases,
         });
     }
     Ok(jobs)
+}
+
+fn jobs_use_package_directory(jobs: &[JobPlan], package_dir: &str) -> bool {
+    jobs.iter()
+        .flat_map(|job| &job.phases)
+        .flat_map(|phase| phase.pre.iter().chain(&phase.steps).chain(&phase.post))
+        .any(|step| match step {
+            StepPlan::Run {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => std::iter::once(program)
+                .chain(args)
+                .chain(environment.values())
+                .chain(std::iter::once(working_dir))
+                .any(|value| value.contains(package_dir)),
+            StepPlan::Shell {
+                interpreter,
+                script,
+                environment,
+                working_dir,
+            } => std::iter::once(interpreter)
+                .chain(std::iter::once(script))
+                .chain(environment.values())
+                .chain(std::iter::once(working_dir))
+                .any(|value| value.contains(package_dir)),
+        })
 }
 
 fn freeze_outputs(
@@ -610,6 +654,8 @@ pub enum Error {
     UnlockedRuntimeDependency { package: String, dependency: String },
     #[error("no emitted Stone architecture mapping for emul32/{0}")]
     UnsupportedEmul32ArtifactArchitecture(String),
+    #[error("frozen execution does not support mutable package-directory input {package_dir}")]
+    UnsupportedPackageDirectoryInput { package_dir: String },
 }
 
 impl From<build::Error> for Error {
@@ -634,5 +680,29 @@ mod tests {
             crate::Architecture::X86
         );
         assert!(artifact_architecture(BuildTarget::Emul32(crate::Architecture::Aarch64)).is_err());
+    }
+
+    #[test]
+    fn mutable_package_directory_references_are_rejected_before_freeze() {
+        let package_dir = "/mason/recipe/pkg";
+        let job = JobPlan {
+            pgo_stage: None,
+            pgo_dir: None,
+            build_dir: "/mason/build/x86_64".to_owned(),
+            work_dir: "/mason/build/x86_64/source".to_owned(),
+            phases: vec![PhasePlan {
+                name: "build".to_owned(),
+                pre: Vec::new(),
+                steps: vec![StepPlan::Shell {
+                    interpreter: "/usr/bin/bash".to_owned(),
+                    script: "install /mason/recipe/pkg/helper /usr/bin/helper".to_owned(),
+                    environment: BTreeMap::new(),
+                    working_dir: "/mason/build/x86_64/source".to_owned(),
+                }],
+                post: Vec::new(),
+            }],
+        };
+
+        assert!(jobs_use_package_directory(&[job], package_dir));
     }
 }

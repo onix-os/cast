@@ -2,20 +2,18 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::io;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::PathBuf;
 
-use crate::build::{self, Builder};
-use crate::package::Packager;
-use crate::{Env, Timing, container, package, profile, timing};
+use crate::build;
+use crate::executor::Executor;
+use crate::package::FrozenPackager;
+use crate::{Env, Timing, container, package, planner, profile, timing};
 use chrono::Local;
 use clap::Parser;
 use moss::signal::inhibit;
-use stone_recipe::derivation::DerivationId;
 use thiserror::Error;
 use thread_priority::{NormalThreadSchedulePolicy, ThreadPriority, ThreadSchedulePolicy, thread_native_id};
-use tui::Styled;
-use version_parse::VersionExtractor;
 
 #[derive(Debug, Parser)]
 #[command(about = "Build stone package(s) from a stone recipe file")]
@@ -30,12 +28,24 @@ pub struct Command {
     )]
     ccache: bool,
     #[arg(
-        short,
         long,
         default_value_t = false,
-        help = "Update profile repositories before building"
+        help = "Resolve and atomically update build.lock.glu before building"
     )]
-    update: bool,
+    update_lock: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        requires = "update_lock",
+        help = "Refresh repositories before updating build.lock.glu"
+    )]
+    refresh_repositories: bool,
+    #[arg(long, help = "Exact build target")]
+    target: String,
+    #[arg(long, help = "Explicit reproducible source timestamp")]
+    source_date_epoch: i64,
+    #[arg(long, default_value = "1", help = "Explicit parallel job count")]
+    jobs: NonZeroU32,
     #[arg(
         long = "normal-priority",
         help = "Run the build without lowering the process priority",
@@ -62,9 +72,10 @@ pub struct Command {
         default_value_t = false
     )]
     cleanup: bool,
-    /// Verify the built manifest against the provided [MANIFEST] file and fail the build if they don't match
+    /// Compare the emitted binary manifest byte-for-byte with [MANIFEST].
     ///
-    /// If supplied & the manifests do match, the existing manifests are preserved instead of being overwritten
+    /// The comparison file is read on the host after the isolated build and is
+    /// never exposed to build steps.
     #[arg(long = "verify", value_name = "MANIFEST")]
     verify_against: Option<PathBuf>,
 }
@@ -75,11 +86,15 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         profile,
         recipe: recipe_path,
         ccache,
-        update,
+        update_lock,
+        refresh_repositories,
         normal_priority,
         build_release,
         cleanup,
         verify_against,
+        target,
+        source_date_epoch,
+        jobs,
         ..
     } = command;
 
@@ -100,19 +115,42 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     {
         return Err(Error::VerifyBinaryManifestRequired(path.to_owned()));
     }
+    if let Some(path) = verify_against.as_ref()
+        && !path.is_file()
+    {
+        return Err(Error::MissingVerifyManifest(path.to_owned()));
+    }
 
-    let builder = Builder::new(&recipe_path, verify_against.clone(), env, profile, ccache, output)?;
-    let derivation_id = frozen_derivation_id(&builder)?;
+    let planned = planner::plan_for_build(
+        env,
+        planner::Request {
+            recipe: recipe_path,
+            profile,
+            target,
+            source_date_epoch,
+            build_release,
+            jobs,
+            compiler_cache: ccache,
+            update_lock,
+            refresh_repositories,
+        },
+        &output,
+    )?;
+    let plan = planned.plan;
+    let runtime = planned.runtime;
+    let executor = Executor::new(&plan)?;
+    let packager = FrozenPackager::from_plan(&runtime.paths, &plan)?;
+    let derivation_id = plan.derivation_id();
     let pkg_name = format!(
         "{}-{}-{}",
-        builder.recipe.parsed.source.name, builder.recipe.parsed.source.version, builder.recipe.parsed.source.release
+        plan.package.name, plan.package.version, plan.package.source_release
     );
     println!("boulder {}", tools_buildinfo::get_simple_version());
-    println!("└─ building {pkg_name}-{build_release}\n");
-    builder.setup(&mut timing, timer, update)?;
+    println!("└─ building {pkg_name}-{}\n", plan.package.build_release);
+    println!("└─ derivation {derivation_id}\n");
+    runtime.setup(&plan, &mut timing, timer)?;
 
-    let paths = &builder.paths;
-    let networking = builder.recipe.parsed.options.networking;
+    let paths = &runtime.paths;
 
     // Set the current thread priority to SCHED_BATCH so that it's inherited by all child processes
     if !normal_priority {
@@ -143,31 +181,27 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     );
 
     // Build & package from within container
-    container::exec::<Error>(paths, networking, || {
-        builder.build(&mut timing)?;
-
-        let packager = Packager::new(
-            &builder.paths,
-            &builder.recipe,
-            &builder.macros,
-            &builder.targets,
-            build_release,
-        )?;
-        packager.package(&mut timing, derivation_id)?;
+    container::exec_frozen::<Error>(paths, &plan, || {
+        executor.run(&mut timing)?;
+        packager.package(&mut timing)?;
 
         timing.print_table();
 
         Ok(())
     })?;
 
+    if let Some(expected) = verify_against.as_ref() {
+        verify_frozen_manifest(paths, &plan, expected)?;
+    }
+
     // Copy artefacts to host recipe dir
     package::sync_artefacts(paths).map_err(Error::SyncArtefacts)?;
 
     if cleanup {
-        builder.cleanup().map_err(|error| Error::Cleanup(Box::new(error)))?;
+        runtime
+            .cleanup(&plan)
+            .map_err(|error| Error::Cleanup(Box::new(error)))?;
     }
-
-    verify_versions_match(&builder)?;
 
     println!(
         "Build finished successfully at {}",
@@ -177,53 +211,21 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     Ok(())
 }
 
-/// Package emission is forbidden until this legacy build path is replaced by
-/// frozen-plan execution. The plan executor will supply its validated identity
-/// here instead of synthesizing one from partial build state.
-fn frozen_derivation_id(_builder: &Builder) -> Result<&DerivationId, Error> {
-    Err(Error::FrozenPlanRequired)
-}
-
-fn verify_versions_match(builder: &Builder) -> Result<(), Error> {
-    // Only check the first upstream, as that'll be the actual version
-    // in the majority of cases.
-    let first_upstream = if let Some(get) = builder.recipe.parsed.upstreams.first() {
-        get
-    } else {
-        // We may not have any upstreams for meta packages
-        return Ok(());
-    };
-
-    // We won't attempt to parse git upstreams for now
-    match &first_upstream.props {
-        stone_recipe::upstream::Props::Git { git_ref, .. } => {
-            // If we have a git ref, we have a git upstream and version parsing
-            // will not work.
-            if !git_ref.is_empty() {
-                return Ok(());
-            }
-        }
-        stone_recipe::upstream::Props::Plain { .. } => {}
+fn verify_frozen_manifest(
+    paths: &crate::Paths,
+    plan: &stone_recipe::derivation::DerivationPlan,
+    expected: &std::path::Path,
+) -> Result<(), Error> {
+    let generated = paths
+        .artefacts()
+        .host
+        .join(format!("manifest.{}.bin", plan.package.architecture));
+    if fs_err::read(&generated)? != fs_err::read(expected)? {
+        return Err(Error::VerificationMismatch {
+            generated,
+            expected: expected.to_owned(),
+        });
     }
-
-    let ver_ext = VersionExtractor::new();
-    let parsed_upstream = ver_ext.extract(first_upstream.url.as_str());
-    match parsed_upstream {
-        Ok(ext) => {
-            if ext.version != builder.recipe.parsed.source.version {
-                println!(
-                    "{} | 'version' and first parsed upstream version do not match. Expected: {}, got: {}",
-                    "Warning".yellow(),
-                    ext.version,
-                    builder.recipe.parsed.source.version
-                );
-                println!();
-            }
-        }
-        // Swallow error if the url couldn't be parsed
-        Err(_) => return Ok(()),
-    }
-
     Ok(())
 }
 
@@ -245,17 +247,27 @@ pub enum Error {
     Cleanup(#[source] Box<build::Error>),
     #[error("Binary manifest required for verification, got {0:?}")]
     VerifyBinaryManifestRequired(PathBuf),
-    #[error("version parse")]
-    Upstreams(#[from] version_parse::VersionError),
-    #[error(
-        "package emission requires a frozen derivation plan; run `boulder recipe plan` before executor integration"
-    )]
-    FrozenPlanRequired,
+    #[error("verification manifest does not exist or is not a file: {0:?}")]
+    MissingVerifyManifest(PathBuf),
+    #[error("plan build")]
+    Planner(#[source] Box<planner::Error>),
+    #[error("execute frozen plan")]
+    Executor(#[from] crate::executor::Error),
+    #[error("verify frozen manifest IO")]
+    VerifyIo(#[from] io::Error),
+    #[error("generated manifest {generated:?} does not match {expected:?}")]
+    VerificationMismatch { generated: PathBuf, expected: PathBuf },
 }
 
 impl From<build::Error> for Error {
     fn from(error: build::Error) -> Self {
         Self::Build(Box::new(error))
+    }
+}
+
+impl From<planner::Error> for Error {
+    fn from(error: planner::Error) -> Self {
+        Self::Planner(Box::new(error))
     }
 }
 
@@ -265,8 +277,15 @@ mod tests {
 
     #[test]
     fn default_recipe_is_gluon() {
-        let command = Command::try_parse_from(["build"]).unwrap();
+        let command =
+            Command::try_parse_from(["build", "--target", "x86_64", "--source-date-epoch", "1700000000"]).unwrap();
 
         assert_eq!(command.recipe, PathBuf::from("./stone.glu"));
+        assert_eq!(command.jobs, NonZeroU32::new(1).unwrap());
+    }
+
+    #[test]
+    fn frozen_build_requires_target_and_timestamp() {
+        assert!(Command::try_parse_from(["build"]).is_err());
     }
 }

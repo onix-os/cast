@@ -430,6 +430,7 @@ impl PhasePlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobPlan {
     pub pgo_stage: Option<String>,
+    pub pgo_dir: Option<String>,
     pub build_dir: String,
     pub work_dir: String,
     pub phases: Vec<PhasePlan>,
@@ -439,6 +440,9 @@ impl JobPlan {
     fn validate(&self, job_index: usize) -> Result<(), DerivationValidationError> {
         require_nonempty(&format!("jobs[{job_index}].build_dir"), &self.build_dir)?;
         require_nonempty(&format!("jobs[{job_index}].work_dir"), &self.work_dir)?;
+        if let Some(pgo_dir) = &self.pgo_dir {
+            require_nonempty(&format!("jobs[{job_index}].pgo_dir"), pgo_dir)?;
+        }
         let mut phase_names = BTreeSet::new();
         for (phase_index, phase) in self.phases.iter().enumerate() {
             require_nonempty(&format!("jobs[{job_index}].phases[{phase_index}].name"), &phase.name)?;
@@ -461,6 +465,7 @@ impl JobPlan {
             }
             None => encoder.variant(0),
         }
+        encode_optional_string(encoder, self.pgo_dir.as_deref());
         encoder.string(&self.build_dir);
         encoder.string(&self.work_dir);
         encoder.sequence(&self.phases, |encoder, phase| phase.encode(encoder));
@@ -1041,6 +1046,7 @@ mod tests {
         }];
         plan.jobs = vec![JobPlan {
             pgo_stage: None,
+            pgo_dir: None,
             build_dir: "/mason/build".to_owned(),
             work_dir: "/mason/build/hello".to_owned(),
             phases: vec![PhasePlan {
@@ -1234,6 +1240,7 @@ mod tests {
         let mut first = sample_plan();
         first.jobs.push(JobPlan {
             pgo_stage: Some("use".to_owned()),
+            pgo_dir: Some("/mason/build-pgo".to_owned()),
             build_dir: "/mason/build".to_owned(),
             work_dir: "/mason/build/hello".to_owned(),
             phases: Vec::new(),

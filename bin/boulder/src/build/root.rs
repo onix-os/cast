@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::collections::BTreeSet;
-use std::{io, iter};
+use std::{io, iter, path::PathBuf};
 
 use fs_err as fs;
 use moss::{Installation, package, repository, runtime, util};
 use stone_recipe::upstream;
 use stone_recipe::{
-    derivation::{BuildLock, LockedPackage, RepositorySnapshot},
+    derivation::{BuildLock, DerivationPlan, LockedPackage, RepositorySnapshot},
     tuning::Toolchain,
 };
 use thiserror::Error;
@@ -22,12 +22,30 @@ pub fn populate_locked(
     timing: &mut Timing,
     initialize_timer: timing::Timer,
 ) -> Result<(), Error> {
-    let rootfs = builder.paths.rootfs().host;
+    populate_frozen(
+        &builder.paths,
+        &builder.env.moss_dir,
+        builder.repositories().clone(),
+        build_lock,
+        timing,
+        initialize_timer,
+    )
+}
+
+pub fn populate_frozen(
+    paths: &crate::Paths,
+    moss_dir: &std::path::Path,
+    repositories: repository::Map,
+    build_lock: &BuildLock,
+    timing: &mut Timing,
+    initialize_timer: timing::Timer,
+) -> Result<(), Error> {
+    let rootfs = paths.rootfs().host;
 
     // Create the moss client
-    let installation = Installation::open(&builder.env.moss_dir, None)?;
+    let installation = Installation::open(moss_dir, None)?;
     let mut moss_client = moss::Client::builder("boulder", installation)
-        .repositories(builder.repositories().clone())
+        .repositories(repositories)
         .ephemeral(rootfs)
         .build()?;
     require_locked_repositories(&moss_client, build_lock)?;
@@ -45,6 +63,65 @@ pub fn populate_locked(
     timing.record(timing::Populate::Blit, install_timing.blit);
 
     Ok(())
+}
+
+pub fn recreate_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
+    if paths.rootfs().host.exists() {
+        remove_frozen(paths, plan)?;
+    }
+    util::recreate_dir(&paths.rootfs().host)?;
+    Ok(())
+}
+
+pub fn remove_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
+    if !paths.rootfs().host.exists() {
+        return Ok(());
+    }
+    let build_root = paths.build().guest;
+    if plan.layout.build_dir != build_root.display().to_string() {
+        return Err(Error::FrozenBuildLayoutMismatch);
+    }
+    let unsafe_job_path = plan
+        .jobs
+        .iter()
+        .flat_map(|job| [&job.work_dir, &job.build_dir].into_iter().chain(job.pgo_dir.iter()))
+        .map(PathBuf::from)
+        .any(|path| !safe_child(&build_root, &path));
+    if unsafe_job_path {
+        return Err(Error::UnsafeFrozenJobPath);
+    }
+
+    container::exec_frozen(paths, plan, || {
+        let install_dir = &paths.install().guest;
+        if install_dir.exists() {
+            fs::remove_dir_all(install_dir)?;
+        }
+        if build_root.exists() {
+            for entry in fs::read_dir(&build_root)? {
+                let entry = entry?;
+                let path = entry.path();
+                if entry.file_type()?.is_dir() {
+                    fs::remove_dir_all(path)?;
+                } else {
+                    fs::remove_file(path)?;
+                }
+            }
+        }
+        Ok(()) as io::Result<()>
+    })?;
+    fs::remove_dir_all(&paths.rootfs().host)?;
+    Ok(())
+}
+
+fn safe_child(root: &std::path::Path, path: &std::path::Path) -> bool {
+    path.is_absolute()
+        && path.starts_with(root)
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
 }
 
 pub fn populate(
@@ -336,6 +413,10 @@ pub enum Error {
     },
     #[error("locked metadata no longer matches package {package_id}")]
     LockedPackageMetadataMismatch { package_id: String },
+    #[error("frozen plan build layout does not match runtime paths")]
+    FrozenBuildLayoutMismatch,
+    #[error("frozen job cleanup path escapes the runtime build directory")]
+    UnsafeFrozenJobPath,
 }
 
 #[cfg(test)]

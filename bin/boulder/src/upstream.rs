@@ -360,6 +360,10 @@ pub fn remove(storage_dir: &Path, upstreams: &[Upstream]) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn remove_locked(storage_dir: &Path, sources: &[LockedSource]) -> Result<(), Error> {
+    remove(storage_dir, &locked_upstreams(sources)?)
+}
+
 /// Possible errors returned by functions in this module.
 #[derive(Debug, Error)]
 pub enum Error {

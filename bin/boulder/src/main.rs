@@ -20,6 +20,7 @@ mod cli;
 mod container;
 mod draft;
 mod env;
+mod executor;
 mod macros;
 mod package;
 mod paths;

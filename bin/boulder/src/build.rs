@@ -55,6 +55,13 @@ pub struct Target {
     pub jobs: Vec<Job>,
 }
 
+/// Host runtime resources retained after semantic planning is complete.
+pub struct Runtime {
+    pub paths: Paths,
+    moss_dir: PathBuf,
+    repositories: repository::Map,
+}
+
 impl Builder {
     pub fn new(
         recipe_path: &Path,
@@ -157,6 +164,14 @@ impl Builder {
 
     pub(crate) fn repositories(&self) -> &repository::Map {
         &self.repos
+    }
+
+    pub fn into_runtime(self) -> Runtime {
+        Runtime {
+            paths: self.paths,
+            moss_dir: self.env.moss_dir,
+            repositories: self.repos,
+        }
     }
 
     pub fn setup(
@@ -361,6 +376,49 @@ impl Builder {
 
         println!();
 
+        Ok(())
+    }
+}
+
+impl Runtime {
+    pub fn setup(
+        &self,
+        plan: &DerivationPlan,
+        timing: &mut Timing,
+        initialize_timer: timing::Timer,
+    ) -> Result<Vec<upstream::Stored>, Error> {
+        util::recreate_dir(&self.paths.artefacts().host).map_err(Error::RecreateArtefactsDir)?;
+        root::recreate_frozen(&self.paths, plan)?;
+        root::populate_frozen(
+            &self.paths,
+            &self.moss_dir,
+            self.repositories.clone(),
+            &plan.build_lock,
+            timing,
+            initialize_timer,
+        )?;
+        let timer = timing.begin(timing::Kind::Fetch);
+        let stored = upstream::sync_locked(
+            &plan.sources,
+            &self.paths.upstreams().host,
+            &self.paths.guest_host_path(&self.paths.upstreams()),
+        )?;
+        timing.finish(timer);
+        Ok(stored)
+    }
+
+    pub fn cleanup(&self, plan: &DerivationPlan) -> Result<(), Error> {
+        root::remove_frozen(&self.paths, plan)?;
+        for path in [self.paths.artefacts().host, self.paths.build().host] {
+            if path.exists() {
+                fs::remove_dir_all(path)?;
+            }
+        }
+        upstream::remove_locked(&self.paths.upstreams().host, &plan.sources)?;
+        moss::Client::builder("boulder", moss::Installation::open(&self.moss_dir, None)?)
+            .repositories(self.repositories.clone())
+            .build()?
+            .prune_cache()?;
         Ok(())
     }
 }
