@@ -3,6 +3,7 @@
 
 use std::{
     io,
+    num::NonZeroUsize,
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process, thread,
@@ -32,7 +33,7 @@ use crate::{
 
 pub mod job;
 pub mod pgo;
-mod root;
+pub(crate) mod root;
 
 pub struct Builder {
     pub targets: Vec<Target>,
@@ -62,7 +63,36 @@ impl Builder {
         ccache: bool,
         output_dir: impl Into<PathBuf>,
     ) -> Result<Self, Error> {
-        let recipe = Recipe::load(recipe_path)?;
+        Self::new_with_jobs(
+            recipe_path,
+            verify_against_manifest,
+            env,
+            profile,
+            ccache,
+            output_dir,
+            util::num_cpus(),
+            None,
+        )
+    }
+
+    pub(crate) fn new_with_jobs(
+        recipe_path: &Path,
+        verify_against_manifest: Option<PathBuf>,
+        env: Env,
+        profile: profile::Id,
+        ccache: bool,
+        output_dir: impl Into<PathBuf>,
+        jobs: NonZeroUsize,
+        source_date_epoch: Option<i64>,
+    ) -> Result<Self, Error> {
+        let recipe = match source_date_epoch {
+            Some(epoch) => {
+                let build_time =
+                    chrono::DateTime::from_timestamp(epoch, 0).ok_or(Error::InvalidSourceDateEpoch(epoch))?;
+                Recipe::load_at(recipe_path, build_time)?
+            }
+            None => Recipe::load(recipe_path)?,
+        };
 
         let macros = Macros::load(&env)?;
 
@@ -83,7 +113,7 @@ impl Builder {
 
                 let jobs = stages
                     .into_iter()
-                    .map(|stage| Job::new(build_target, stage, &recipe, &paths, &macros, ccache))
+                    .map(|stage| Job::new(build_target, stage, &recipe, &paths, &macros, ccache, jobs))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Target {
@@ -122,6 +152,10 @@ impl Builder {
                     .flat_map(|script| script.dependencies.iter().map(String::as_str))
             })
         })
+    }
+
+    pub(crate) fn repositories(&self) -> &repository::Map {
+        &self.repos
     }
 
     pub fn setup(
@@ -416,6 +450,8 @@ fn breakpoint_script_line(breakpoint: &Breakpoint) -> usize {
 pub enum Error {
     #[error("no supported build targets for recipe")]
     NoBuildTargets,
+    #[error("invalid SOURCE_DATE_EPOCH {0}")]
+    InvalidSourceDateEpoch(i64),
     #[error("macros")]
     Macros(#[from] macros::Error),
     #[error("job")]

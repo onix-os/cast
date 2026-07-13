@@ -139,7 +139,7 @@ fn encode_package_v2(
             ("environment", build_system.environment()),
         ] {
             if let Some(value) = value {
-                writeln!(output, "        {name} = b.optional.set {},", quoted(value)).unwrap();
+                writeln!(output, "        {name} = b.phase [b.step.shell {}],", quoted(value)).unwrap();
             }
         }
         output.push_str("        .. b.defaults.scripts\n    }) [],\n");
@@ -147,7 +147,7 @@ fn encode_package_v2(
 
     if matches!(build_system, build::System::Cargo) {
         output.push_str("    hooks = {\n");
-        output.push_str("        pre_setup = [\"%cargo_fetch\"],\n");
+        output.push_str("        pre_setup = [b.step.cargo_fetch],\n");
         output.push_str("        .. b.defaults.hooks\n    },\n");
     }
     let dependencies = dependencies.into_iter().sorted().collect::<Vec<_>>();

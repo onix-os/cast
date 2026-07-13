@@ -22,27 +22,35 @@ type MetaSpec = {
     license: Array String,
 }
 
+type StepSpec =
+    | Shell { script: String }
+    | CargoFetch
+
+type PhaseSpec = {
+    steps: Array StepSpec,
+}
+
 type ScriptsSpec = {
-    setup: Optional String,
-    build: Optional String,
-    install: Optional String,
-    check: Optional String,
-    workload: Optional String,
-    environment: Optional String,
+    setup: PhaseSpec,
+    build: PhaseSpec,
+    install: PhaseSpec,
+    check: PhaseSpec,
+    workload: PhaseSpec,
+    environment: PhaseSpec,
 }
 
 type HooksSpec = {
-    pre_setup: Array String,
-    post_setup: Array String,
-    pre_build: Array String,
-    post_build: Array String,
-    pre_check: Array String,
-    post_check: Array String,
-    pre_install: Array String,
-    post_install: Array String,
-    pre_workload: Array String,
-    post_workload: Array String,
-    environment: Array String,
+    pre_setup: Array StepSpec,
+    post_setup: Array StepSpec,
+    pre_build: Array StepSpec,
+    post_build: Array StepSpec,
+    pre_check: Array StepSpec,
+    post_check: Array StepSpec,
+    pre_install: Array StepSpec,
+    post_install: Array StepSpec,
+    pre_workload: Array StepSpec,
+    post_workload: Array StepSpec,
+    environment: Array StepSpec,
 }
 
 type PackageRef = { name: String }
@@ -199,13 +207,15 @@ type PackagePatch = {
     mold: ValuePatch Boolean,
 }
 
+let empty_phase: PhaseSpec = { steps = [] }
+
 let empty_scripts: ScriptsSpec = {
-    setup = Unset,
-    build = Unset,
-    install = Unset,
-    check = Unset,
-    workload = Unset,
-    environment = Unset,
+    setup = empty_phase,
+    build = empty_phase,
+    install = empty_phase,
+    check = empty_phase,
+    workload = empty_phase,
+    environment = empty_phase,
 }
 
 let empty_hooks: HooksSpec = {
@@ -346,6 +356,11 @@ let git = \url git_ref -> GitSource {
     mk_package,
     meta = \value -> value,
     scripts = \value -> value,
+    phase = \steps -> { steps },
+    step = {
+        shell = \script -> Shell { script },
+        cargo_fetch = CargoFetch,
+    },
     hooks = \value -> value,
     output,
     output_with,

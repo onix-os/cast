@@ -26,7 +26,7 @@ let cmake = import! boulder.builders.cmake.v1
             .. cmake.defaults
         },
         hooks = {
-            post_install = [r"ln -s factory-hello %(installroot)/usr/bin/hello"],
+            post_install = [b.step.shell r"ln -s factory-hello %(installroot)/usr/bin/hello"],
             .. b.defaults.hooks
         },
         build_inputs = [deps.zlib],

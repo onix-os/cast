@@ -5,7 +5,7 @@ use std::path::Path;
 
 use gluon_config::{DiagnosticCategory, Evaluator, Source, SourceRoot};
 use stone_recipe::package::{
-    DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError, PackageEvaluationError, evaluate_gluon,
+    DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError, PackageEvaluationError, StepSpec, evaluate_gluon,
     evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
@@ -35,15 +35,27 @@ fn imported_factory_arguments_and_typed_patch_lower_to_recipe() {
         evaluated.recipe.build.build_deps,
         ["binary(cmake)", "binary(ninja)", "binary(ctest)", "zlib"]
     );
+    assert!(evaluated.recipe.build.setup.is_none());
+    assert!(evaluated.recipe.build.build.is_none());
+    assert!(evaluated.recipe.build.check.is_none());
+    assert!(evaluated.recipe.build.install.is_none());
+    let phases = evaluated.package.phases();
     assert_eq!(
-        evaluated.recipe.build.setup.as_deref(),
-        Some("%cmake -DBUILD_DOCUMENTATION=OFF")
+        phases.setup.steps,
+        [StepSpec::CMakeConfigure {
+            flags: vec!["-DBUILD_DOCUMENTATION=OFF".to_owned()]
+        }]
     );
-    assert_eq!(evaluated.recipe.build.build.as_deref(), Some("%cmake_build"));
-    assert_eq!(evaluated.recipe.build.check.as_deref(), Some("%cmake_test"));
+    assert_eq!(phases.build.steps, [StepSpec::CMakeBuild]);
+    assert_eq!(phases.check.steps, [StepSpec::CMakeTest]);
     assert_eq!(
-        evaluated.recipe.build.install.as_deref(),
-        Some("%cmake_install\nln -s factory-hello %(installroot)/usr/bin/hello")
+        phases.install.steps,
+        [
+            StepSpec::CMakeInstall,
+            StepSpec::Shell {
+                script: "ln -s factory-hello %(installroot)/usr/bin/hello".to_owned()
+            }
+        ]
     );
     assert_eq!(evaluated.recipe.package.run_deps, ["pkgconfig(libressl)"]);
     assert_eq!(evaluated.recipe.sub_packages[0].key, "factory-hello-dev");

@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use itertools::Itertools;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, num::NonZeroUsize, path::Path};
 use stone_recipe::upstream;
 
 use moss::util;
 use stone_recipe::{
-    Script, script,
+    Script,
+    package::{PhaseSpec, StepSpec},
+    script,
     tuning::{self, Toolchain},
 };
 use tui::Styled;
@@ -74,11 +76,36 @@ impl Phase {
         paths: &Paths,
         macros: &Macros,
         ccache: bool,
+        num_jobs: NonZeroUsize,
     ) -> Result<Option<Script>, Error> {
         let root_build = &recipe.parsed.build;
         let target_build = recipe.build_target_definition(target);
+        let typed_phases = recipe.build_target_phases(target);
+        let mut typed_phase = match self {
+            Phase::Prepare => PhaseSpec::default(),
+            Phase::Setup => typed_phases.setup.clone(),
+            Phase::Build => typed_phases.build.clone(),
+            Phase::Install => typed_phases.install.clone(),
+            Phase::Check => typed_phases.check.clone(),
+            Phase::Workload => typed_phases.workload.clone(),
+        };
 
-        let Some(content) = (match self {
+        if !typed_phase.is_empty()
+            && matches!(self, Phase::Workload)
+            && matches!(recipe.parsed.options.toolchain, Toolchain::Llvm)
+        {
+            if matches!(pgo_stage, Some(pgo::Stage::One)) {
+                typed_phase.steps.push(StepSpec::Shell {
+                    script: "%llvm_merge_s1".to_owned(),
+                });
+            } else if matches!(pgo_stage, Some(pgo::Stage::Two)) {
+                typed_phase.steps.push(StepSpec::Shell {
+                    script: "%llvm_merge_s2".to_owned(),
+                });
+            }
+        }
+
+        let legacy_content = match self {
             Phase::Prepare => Some(prepare_script(&recipe.parsed.upstreams)),
             Phase::Setup => target_build.setup.clone().or_else(|| root_build.setup.clone()),
             Phase::Build => target_build.build.clone().or_else(|| root_build.build.clone()),
@@ -98,22 +125,38 @@ impl Phase {
                 }
                 None => None,
             },
-        }) else {
-            return Ok(None);
         };
-
-        if content.is_empty() {
+        let content = if !typed_phase.is_empty() { None } else { legacy_content };
+        if typed_phase.is_empty() && content.is_none() {
             return Ok(None);
         }
 
-        let mut env = target_build
-            .environment
-            .as_deref()
-            .or(root_build.environment.as_deref())
-            .filter(|env| *env != "(null)" && !env.is_empty() && !matches!(self, Phase::Prepare))
-            .unwrap_or_default()
-            .to_owned();
-        env = format!("%scriptBase\n{env}\n");
+        if typed_phase.is_empty() && content.as_deref().is_some_and(str::is_empty) {
+            return Ok(None);
+        }
+
+        let legacy_env = if typed_phases.environment.is_empty() {
+            target_build
+                .environment
+                .as_deref()
+                .or(root_build.environment.as_deref())
+                .filter(|env| *env != "(null)" && !env.is_empty() && !matches!(self, Phase::Prepare))
+                .unwrap_or_default()
+        } else {
+            ""
+        };
+        let typed_env = if matches!(self, Phase::Prepare) {
+            String::new()
+        } else {
+            typed_phases
+                .environment
+                .steps
+                .iter()
+                .map(environment_step)
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n")
+        };
+        let env = format!("%scriptBase\n{legacy_env}\n{typed_env}\n");
 
         let mut parser = script::Parser::new().env(env);
 
@@ -124,8 +167,6 @@ impl Phase {
         } else {
             work_dir(&build_dir, &recipe.parsed.upstreams)
         };
-        let num_jobs = util::num_cpus();
-
         for arch in ["base", &build_target] {
             let macros = macros
                 .arch
@@ -230,8 +271,163 @@ impl Phase {
 
         add_tuning(target, pgo_stage, recipe, macros, &mut parser)?;
 
-        Ok(Some(parser.parse(&content)?))
+        if typed_phase.is_empty() {
+            Ok(Some(parser.parse(content.as_deref().unwrap_or_default())?))
+        } else {
+            let builder_dir = parser.parse_content("%(builddir)")?;
+            Ok(Some(compile_steps(
+                &typed_phase,
+                &parser,
+                StepContext {
+                    build_dir: Path::new(&builder_dir),
+                    install_root: &paths.install().guest,
+                    jobs: num_jobs,
+                    package_name: &recipe.parsed.source.name,
+                },
+            )?))
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StepContext<'a> {
+    build_dir: &'a Path,
+    install_root: &'a Path,
+    jobs: NonZeroUsize,
+    package_name: &'a str,
+}
+
+fn environment_step(step: &StepSpec) -> Result<String, Error> {
+    match step {
+        StepSpec::Shell { script } => Ok(script.clone()),
+        StepSpec::CargoEnvironment => Ok(
+            r#"CARGO_BUILD_DEP_INFO_BASEDIR="%(workdir)"; export CARGO_BUILD_DEP_INFO_BASEDIR;
+CARGO_NET_RETRY=5; export CARGO_NET_RETRY;
+CARGO_PROFILE_RELEASE_DEBUG="full"; export CARGO_PROFILE_RELEASE_DEBUG;
+CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO="off"; export CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO;
+CARGO_PROFILE_RELEASE_LTO="off"; export CARGO_PROFILE_RELEASE_LTO;
+CARGO_PROFILE_RELEASE_STRIP="none"; export CARGO_PROFILE_RELEASE_STRIP;"#
+                .to_owned(),
+        ),
+        _ => Err(Error::UnsupportedEnvironmentStep),
+    }
+}
+
+/// Compile a structural phase into the existing executable script envelope.
+///
+/// Structural commands are escaped before the transitional parser sees them,
+/// so only an explicit [`StepSpec::Shell`] may invoke a legacy `%action`.
+fn compile_steps(phase: &PhaseSpec, parser: &script::Parser, context: StepContext<'_>) -> Result<Script, Error> {
+    let content = phase
+        .steps
+        .iter()
+        .map(|step| match step {
+            StepSpec::Shell { script } => Ok(script.clone()),
+            _ => render_step(step, parser, &context).map(|command| command.replace('%', "%%")),
+        })
+        .collect::<Result<Vec<_>, Error>>()?
+        .join("\n");
+
+    parser.parse(&content).map_err(Into::into)
+}
+
+fn render_step(step: &StepSpec, parser: &script::Parser, context: &StepContext<'_>) -> Result<String, Error> {
+    let build_dir = context.build_dir.display();
+    let install_root = context.install_root.display();
+    let flags = |values: &[String]| {
+        if values.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", values.join(" "))
+        }
+    };
+    let features = |values: &[String]| {
+        if values.is_empty() {
+            String::new()
+        } else {
+            format!(" --features {}", values.join(","))
+        }
+    };
+
+    Ok(match step {
+        StepSpec::Shell { .. } | StepSpec::CargoEnvironment => return Err(Error::UnsupportedExecutableStep),
+        StepSpec::CMakeConfigure { flags: values } => {
+            let options = parser.parse_content("%(options_cmake_ninja)")?;
+            format!("cmake {}{}", options.trim_end(), flags(values))
+        }
+        StepSpec::CMakeBuild => {
+            format!(
+                r#"cmake --build "${{BUILDDIR:-{build_dir}}}" --verbose --parallel "{}""#,
+                context.jobs
+            )
+        }
+        StepSpec::CMakeInstall => {
+            format!(r#"DESTDIR="{install_root}" cmake --install "${{BUILDDIR:-{build_dir}}}" --verbose"#)
+        }
+        StepSpec::CMakeTest => format!(
+            r#"ctest --test-dir "${{BUILDDIR:-{build_dir}}}" --verbose --parallel "{}" --output-on-failure --force-new-ctest-process"#,
+            context.jobs
+        ),
+        StepSpec::MesonSetup { flags: values } => {
+            let options = parser.parse_content("%(options_meson)")?;
+            format!(
+                r#"test -e ./meson.build || ( echo "%meson: The ./meson.build script could not be found" ; exit 1 )
+meson setup {}{} "{build_dir}""#,
+                options.trim_end(),
+                flags(values),
+            )
+        }
+        StepSpec::MesonBuild => {
+            format!(r#"meson compile --verbose -j "{}" -C "{build_dir}""#, context.jobs)
+        }
+        StepSpec::MesonInstall => {
+            format!(r#"DESTDIR="{install_root}" meson install --no-rebuild -C "{build_dir}""#)
+        }
+        StepSpec::MesonTest => format!(
+            r#"meson test --no-rebuild --print-errorlogs --verbose -j "{}" -C "{build_dir}""#,
+            context.jobs
+        ),
+        StepSpec::CargoFetch => "cargo fetch -v --locked".to_owned(),
+        StepSpec::CargoBuild { features: values } => {
+            let options = parser.parse_content("%(options_cargo_release)")?;
+            format!("cargo build {}{}", options.trim_end(), features(values))
+        }
+        StepSpec::CargoInstall { binaries } => {
+            let target_dir = parser.parse_content("%(cargo_target_dir)")?;
+            let bindir = parser.parse_content("%(bindir)")?;
+            let binaries = if binaries.is_empty() {
+                vec![context.package_name]
+            } else {
+                binaries.iter().map(String::as_str).collect()
+            };
+            let sources = binaries
+                .iter()
+                .map(|binary| format!(r#""{target_dir}/{binary}""#))
+                .join(" ");
+            format!(r#"install -Dm00755 -t "{install_root}{bindir}" {sources}"#)
+        }
+        StepSpec::CargoTest { features: values } => {
+            let options = parser.parse_content("%(options_cargo_release)")?;
+            format!("cargo test {}{} --workspace", options.trim_end(), features(values))
+        }
+        StepSpec::AutotoolsConfigure { flags: values } => {
+            let options = parser.parse_content("%(options_configure)")?;
+            format!(
+                r#"test -x ./configure || ( echo "%configure: The ./configure script could not be found" ; exit 1 )
+# Rewrite any '#!*/bin/sh' shebang to '#!/usr/bin/dash' instead
+# '-E' means "Use Extended Regular Expressions" (easier to write and read)
+CONFIG_SHELL=/usr/bin/dash; export CONFIG_SHELL
+SHELL=/usr/bin/dash; export SHELL
+echo "Explicitly using dash to execute ./configure"
+/usr/bin/dash ./configure {}{}"#,
+                options.trim_end(),
+                flags(values),
+            )
+        }
+        StepSpec::AutotoolsBuild => format!(r#"make VERBOSE=1 -j "{}""#, context.jobs),
+        StepSpec::AutotoolsInstall => format!(r#"make install DESTDIR="{install_root}""#),
+        StepSpec::AutotoolsTest => "make check".to_owned(),
+    })
 }
 
 fn prepare_script(upstreams: &[upstream::Upstream]) -> String {
@@ -430,10 +626,80 @@ fn default_tuning_groups(target: BuildTarget, macros: &Macros) -> &[String] {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use chrono::DateTime;
+    use stone_recipe::script::Command;
     use stone_recipe::tuning::{Builder, CompilerFlag, Toolchain};
 
     use super::*;
     use crate::Architecture;
+
+    fn structural_parser() -> script::Parser {
+        let macros = Macros::repository_for_tests();
+        let mut parser = script::Parser::new();
+        parser.add_macros(macros.arch["base"].clone());
+        parser.add_macros(macros.arch["x86_64"].clone());
+        for actions in macros.actions {
+            parser.add_macros(actions);
+        }
+        parser.add_definition("name", "example");
+        parser.add_definition("jobs", 8);
+        parser.add_definition("installroot", "/mason/install");
+        parser.add_definition("workdir", "/mason/build/x86_64/example");
+        for (name, value) in [
+            ("version", "1.0.0"),
+            ("release", "1"),
+            ("pkgdir", "/mason/recipe/pkg"),
+            ("sourcedir", "/mason/sources"),
+            ("buildroot", "/mason/build/x86_64"),
+            ("compiler_cache", "/mason/ccache"),
+            ("scompiler_cache", "/mason/sccache"),
+            ("sourcedateepoch", "0"),
+            ("compiler_go_cache", ""),
+            ("compiler_go_mod_cache", ""),
+            ("compiler_cargo_cache", ""),
+            ("compiler_zig_cache", ""),
+            ("rustc_wrapper", ""),
+            ("compiler_c", "clang"),
+            ("compiler_cxx", "clang++"),
+            ("compiler_objc", "clang"),
+            ("compiler_objcxx", "clang++"),
+            ("compiler_cpp", "clang-cpp"),
+            ("compiler_objcpp", "clang -E -"),
+            ("compiler_objcxxcpp", "clang++ -E"),
+            ("compiler_d", "ldc2"),
+            ("compiler_ar", "llvm-ar"),
+            ("compiler_objcopy", "llvm-objcopy"),
+            ("compiler_nm", "llvm-nm"),
+            ("compiler_ranlib", "llvm-ranlib"),
+            ("compiler_strip", "llvm-strip"),
+            ("compiler_path", "/usr/bin:/bin"),
+            ("compiler_ld", "ld.lld"),
+            ("pgo_stage", "NONE"),
+            ("pgo_dir", "/mason/build/x86_64-pgo"),
+            ("cflags", ""),
+            ("cxxflags", ""),
+            ("fflags", ""),
+            ("ldflags", ""),
+            ("dflags", ""),
+            ("rustflags", ""),
+            ("valaflags", ""),
+            ("goflags", ""),
+        ] {
+            parser.add_definition(name, value);
+        }
+        parser
+    }
+
+    fn step_context() -> StepContext<'static> {
+        StepContext {
+            build_dir: Path::new("aerynos-builddir"),
+            install_root: Path::new("/mason/install"),
+            jobs: NonZeroUsize::new(8).unwrap(),
+            package_name: "example",
+        }
+    }
 
     #[test]
     fn repository_architecture_tuning_overrides_base_and_selects_base_defaults() {
@@ -486,5 +752,104 @@ mod tests {
                 "version-allow-undefined",
             ]
         );
+    }
+
+    #[test]
+    fn explicit_source_timestamp_is_rendered_into_phase_scripts() {
+        let recipe_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu");
+        let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut recipe = Recipe::load_at(recipe_path, timestamp).unwrap();
+        recipe.declaration.builder = stone_recipe::package::BuilderSpec::Custom {
+            scripts: stone_recipe::package::ScriptsSpec {
+                build: PhaseSpec::new([StepSpec::Shell {
+                    script: "echo %(sourcedateepoch) %(jobs)".to_owned(),
+                }]),
+                ..Default::default()
+            },
+            required_tools: Vec::new(),
+        };
+        let macros = Macros::repository_for_tests();
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let script = Phase::Build
+            .script(
+                BuildTarget::Native(Architecture::X86_64),
+                None,
+                &recipe,
+                &paths,
+                &macros,
+                false,
+                NonZeroUsize::new(3).unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        let content = script
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                Command::Content(content) => Some(content.as_str()),
+                Command::Break(_) => None,
+            })
+            .join("\n");
+
+        assert!(content.contains("1700000000"));
+        assert!(content.contains("3"));
+    }
+
+    #[test]
+    fn structural_steps_preserve_covered_legacy_action_expansions() {
+        let parser = structural_parser();
+        let context = step_context();
+        let cases = [
+            (StepSpec::CMakeConfigure { flags: vec![] }, "%cmake"),
+            (StepSpec::CMakeBuild, "%cmake_build"),
+            (StepSpec::CMakeInstall, "%cmake_install"),
+            (StepSpec::CMakeTest, "%cmake_test"),
+            (StepSpec::MesonSetup { flags: vec![] }, "%meson"),
+            (StepSpec::MesonBuild, "%meson_build"),
+            (StepSpec::MesonInstall, "%meson_install"),
+            (StepSpec::MesonTest, "%meson_test"),
+            (StepSpec::CargoFetch, "%cargo_fetch"),
+            (StepSpec::CargoBuild { features: vec![] }, "%cargo_build"),
+            (StepSpec::CargoTest { features: vec![] }, "%cargo_test"),
+            (StepSpec::AutotoolsConfigure { flags: vec![] }, "%configure"),
+            (StepSpec::AutotoolsBuild, "%make"),
+        ];
+
+        for (step, legacy) in cases {
+            assert_eq!(
+                render_step(&step, &parser, &context).unwrap().trim(),
+                parser.parse_content(legacy).unwrap().trim(),
+                "structural rendering diverged for {step:?}"
+            );
+        }
+        assert_eq!(
+            parser
+                .parse_content(&environment_step(&StepSpec::CargoEnvironment).unwrap())
+                .unwrap()
+                .trim(),
+            parser.parse_content("%cargo_set_environment").unwrap().trim()
+        );
+    }
+
+    #[test]
+    fn structural_steps_do_not_reenter_legacy_action_parser() {
+        let parser = structural_parser();
+        let phase = PhaseSpec::new([
+            StepSpec::MesonSetup { flags: vec![] },
+            StepSpec::Shell {
+                script: "%cargo_fetch".to_owned(),
+            },
+        ]);
+
+        let script = compile_steps(&phase, &parser, step_context()).unwrap();
+        let Command::Content(content) = &script.commands[0] else {
+            panic!("typed phase should compile to one shell command");
+        };
+
+        assert!(content.contains(r#"echo "%meson: The ./meson.build script could not be found""#));
+        assert_eq!(content.matches("meson setup").count(), 1);
+        assert!(content.contains("cargo fetch -v --locked"));
+        assert_eq!(script.dependencies, ["binary(cargo)"]);
     }
 }

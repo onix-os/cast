@@ -3,7 +3,7 @@
 
 let b = import! boulder.package.v2
 let scripts = b.scripts {
-    install = b.optional.set "mkdir -p %(installroot)/%(vendordir) && touch %(installroot)/%(vendordir)/italian-pizza",
+    install = b.phase [b.step.shell "mkdir -p %(installroot)/%(vendordir) && touch %(installroot)/%(vendordir)/italian-pizza"],
     .. b.defaults.scripts
 }
 let root = {

@@ -4,6 +4,7 @@
 use std::{
     collections::BTreeMap,
     io,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 
@@ -37,6 +38,7 @@ impl Job {
         paths: &Paths,
         macros: &Macros,
         ccache: bool,
+        jobs: NonZeroUsize,
     ) -> Result<Self, Error> {
         let build_dir = paths.build().guest.join(target.to_string());
         let work_dir = work_dir(&build_dir, &recipe.parsed.upstreams);
@@ -45,7 +47,7 @@ impl Job {
             .into_iter()
             .filter_map(|phase| {
                 let result = phase
-                    .script(target, pgo_stage, recipe, paths, macros, ccache)
+                    .script(target, pgo_stage, recipe, paths, macros, ccache, jobs)
                     .transpose()?;
                 Some(result.map(|script| (phase, script)))
             })
@@ -103,6 +105,10 @@ pub enum Error {
     Script(#[from] script::Error),
     #[error("tuning")]
     Tuning(#[from] tuning::Error),
+    #[error("an environment phase may only contain Shell or CargoEnvironment steps")]
+    UnsupportedEnvironmentStep,
+    #[error("Shell and CargoEnvironment steps cannot be rendered as structural executable commands")]
+    UnsupportedExecutableStep,
     #[error("io")]
     Io(#[from] io::Error),
 }

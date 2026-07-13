@@ -56,35 +56,86 @@ pub struct MetaSpec {
     pub license: Vec<String>,
 }
 
-/// Transitional shell phases.
+/// One executable, structural build step.
 ///
-/// Structured builders will replace these fields. Keeping them in v2 for now
-/// permits deterministic lowering without changing Boulder's executor in the
-/// same slice.
+/// Standard builders use dedicated variants. [`Self::Shell`] is the only
+/// escape hatch for commands which cannot be expressed structurally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepSpec {
+    Shell { script: String },
+    CMakeConfigure { flags: Vec<String> },
+    CMakeBuild,
+    CMakeInstall,
+    CMakeTest,
+    MesonSetup { flags: Vec<String> },
+    MesonBuild,
+    MesonInstall,
+    MesonTest,
+    CargoEnvironment,
+    CargoFetch,
+    CargoBuild { features: Vec<String> },
+    CargoInstall { binaries: Vec<String> },
+    CargoTest { features: Vec<String> },
+    AutotoolsConfigure { flags: Vec<String> },
+    AutotoolsBuild,
+    AutotoolsInstall,
+    AutotoolsTest,
+}
+
+/// Ordered steps executed in one build phase.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhaseSpec {
+    pub steps: Vec<StepSpec>,
+}
+
+impl PhaseSpec {
+    pub fn new(steps: impl IntoIterator<Item = StepSpec>) -> Self {
+        Self {
+            steps: steps.into_iter().collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+}
+
+/// Complete structural phase set selected for one target.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PhasesSpec {
+    pub setup: PhaseSpec,
+    pub build: PhaseSpec,
+    pub install: PhaseSpec,
+    pub check: PhaseSpec,
+    pub workload: PhaseSpec,
+    pub environment: PhaseSpec,
+}
+
+/// Explicit custom phase definitions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScriptsSpec {
-    pub setup: Option<String>,
-    pub build: Option<String>,
-    pub install: Option<String>,
-    pub check: Option<String>,
-    pub workload: Option<String>,
-    pub environment: Option<String>,
+    pub setup: PhaseSpec,
+    pub build: PhaseSpec,
+    pub install: PhaseSpec,
+    pub check: PhaseSpec,
+    pub workload: PhaseSpec,
+    pub environment: PhaseSpec,
 }
 
 /// Commands inserted around builder-owned phase bodies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HooksSpec {
-    pub pre_setup: Vec<String>,
-    pub post_setup: Vec<String>,
-    pub pre_build: Vec<String>,
-    pub post_build: Vec<String>,
-    pub pre_check: Vec<String>,
-    pub post_check: Vec<String>,
-    pub pre_install: Vec<String>,
-    pub post_install: Vec<String>,
-    pub pre_workload: Vec<String>,
-    pub post_workload: Vec<String>,
-    pub environment: Vec<String>,
+    pub pre_setup: Vec<StepSpec>,
+    pub post_setup: Vec<StepSpec>,
+    pub pre_build: Vec<StepSpec>,
+    pub post_build: Vec<StepSpec>,
+    pub pre_check: Vec<StepSpec>,
+    pub post_check: Vec<StepSpec>,
+    pub pre_install: Vec<StepSpec>,
+    pub post_install: Vec<StepSpec>,
+    pub pre_workload: Vec<StepSpec>,
+    pub post_workload: Vec<StepSpec>,
+    pub environment: Vec<StepSpec>,
 }
 
 /// A structural build-system selection.
@@ -366,7 +417,7 @@ impl TryFrom<PackageSpec> for Recipe {
                 homepage: meta.homepage,
                 license: meta.license,
             },
-            build: lowered.scripts.into_build_spec(build_deps, check_deps),
+            build: lowered.phases.into_legacy_build_spec(build_deps, check_deps),
             package: root.into_legacy(),
             options,
             profiles,
@@ -383,6 +434,10 @@ impl TryFrom<PackageSpec> for Recipe {
 }
 
 impl PackageSpec {
+    pub fn phases(&self) -> PhasesSpec {
+        self.builder.phases(&self.hooks)
+    }
+
     fn validate_relations(&self) -> Result<(), PackageConversionError> {
         let mut outputs = BTreeMap::new();
         for (index, output) in self.outputs.iter().enumerate() {
@@ -572,7 +627,7 @@ fn valid_output_name(name: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LoweredBuilder {
-    scripts: ScriptsSpec,
+    phases: PhasesSpec,
     required_tools: Vec<DependencySpec>,
 }
 
@@ -594,100 +649,121 @@ impl BuilderSpec {
         }
     }
 
+    pub fn phases(&self, hooks: &HooksSpec) -> PhasesSpec {
+        self.clone().lower(hooks.clone()).phases
+    }
+
     fn lower(self, hooks: HooksSpec) -> LoweredBuilder {
         let required_tools = self.required_tools();
-        let scripts = match self {
-            Self::CMake { flags, run_tests } => ScriptsSpec {
-                setup: Some(action_with_args("%cmake", &flags)),
-                build: Some("%cmake_build".to_owned()),
-                install: Some("%cmake_install".to_owned()),
-                check: run_tests.then(|| "%cmake_test".to_owned()),
-                ..ScriptsSpec::default()
+        let phases = match self {
+            Self::CMake { flags, run_tests } => PhasesSpec {
+                setup: PhaseSpec::new([StepSpec::CMakeConfigure { flags }]),
+                build: PhaseSpec::new([StepSpec::CMakeBuild]),
+                install: PhaseSpec::new([StepSpec::CMakeInstall]),
+                check: PhaseSpec::new(run_tests.then_some(StepSpec::CMakeTest)),
+                ..PhasesSpec::default()
             },
-            Self::Meson { flags, run_tests } => ScriptsSpec {
-                setup: Some(action_with_args("%meson", &flags)),
-                build: Some("%meson_build".to_owned()),
-                install: Some("%meson_install".to_owned()),
-                check: run_tests.then(|| "%meson_test".to_owned()),
-                ..ScriptsSpec::default()
+            Self::Meson { flags, run_tests } => PhasesSpec {
+                setup: PhaseSpec::new([StepSpec::MesonSetup { flags }]),
+                build: PhaseSpec::new([StepSpec::MesonBuild]),
+                install: PhaseSpec::new([StepSpec::MesonInstall]),
+                check: PhaseSpec::new(run_tests.then_some(StepSpec::MesonTest)),
+                ..PhasesSpec::default()
             },
             Self::Cargo {
                 features,
                 binaries,
                 run_tests,
-            } => {
-                let feature_args = if features.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![format!("--features {}", features.join(","))]
-                };
-                ScriptsSpec {
-                    build: Some(action_with_args("%cargo_build", &feature_args)),
-                    install: Some(action_with_args("%cargo_install", &binaries)),
-                    check: run_tests.then(|| action_with_args("%cargo_test", &feature_args)),
-                    environment: Some("%cargo_set_environment".to_owned()),
-                    ..ScriptsSpec::default()
-                }
-            }
-            Self::Autotools { flags, run_tests } => ScriptsSpec {
-                setup: Some(action_with_args("%configure", &flags)),
-                build: Some("%make".to_owned()),
-                install: Some("%make_install".to_owned()),
-                check: run_tests.then(|| "%make check".to_owned()),
-                ..ScriptsSpec::default()
+            } => PhasesSpec {
+                build: PhaseSpec::new([StepSpec::CargoBuild {
+                    features: features.clone(),
+                }]),
+                install: PhaseSpec::new([StepSpec::CargoInstall { binaries }]),
+                check: PhaseSpec::new(run_tests.then_some(StepSpec::CargoTest { features })),
+                environment: PhaseSpec::new([StepSpec::CargoEnvironment]),
+                ..PhasesSpec::default()
             },
-            Self::Custom { scripts, .. } => scripts,
+            Self::Autotools { flags, run_tests } => PhasesSpec {
+                setup: PhaseSpec::new([StepSpec::AutotoolsConfigure { flags }]),
+                build: PhaseSpec::new([StepSpec::AutotoolsBuild]),
+                install: PhaseSpec::new([StepSpec::AutotoolsInstall]),
+                check: PhaseSpec::new(run_tests.then_some(StepSpec::AutotoolsTest)),
+                ..PhasesSpec::default()
+            },
+            Self::Custom { scripts, .. } => scripts.into(),
         };
 
         LoweredBuilder {
-            scripts: hooks.apply(scripts),
+            phases: hooks.apply(phases),
             required_tools,
         }
     }
 }
 
 impl HooksSpec {
-    fn apply(self, scripts: ScriptsSpec) -> ScriptsSpec {
-        ScriptsSpec {
-            setup: phase_with_hooks(self.pre_setup, scripts.setup, self.post_setup),
-            build: phase_with_hooks(self.pre_build, scripts.build, self.post_build),
-            check: phase_with_hooks(self.pre_check, scripts.check, self.post_check),
-            install: phase_with_hooks(self.pre_install, scripts.install, self.post_install),
-            workload: phase_with_hooks(self.pre_workload, scripts.workload, self.post_workload),
-            environment: phase_with_hooks(Vec::new(), scripts.environment, self.environment),
+    fn apply(self, phases: PhasesSpec) -> PhasesSpec {
+        PhasesSpec {
+            setup: phase_with_hooks(self.pre_setup, phases.setup, self.post_setup),
+            build: phase_with_hooks(self.pre_build, phases.build, self.post_build),
+            check: phase_with_hooks(self.pre_check, phases.check, self.post_check),
+            install: phase_with_hooks(self.pre_install, phases.install, self.post_install),
+            workload: phase_with_hooks(self.pre_workload, phases.workload, self.post_workload),
+            environment: phase_with_hooks(Vec::new(), phases.environment, self.environment),
         }
     }
 }
 
-fn action_with_args(action: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        action.to_owned()
-    } else {
-        format!("{action} {}", args.join(" "))
+fn phase_with_hooks(pre: Vec<StepSpec>, body: PhaseSpec, post: Vec<StepSpec>) -> PhaseSpec {
+    PhaseSpec::new(pre.into_iter().chain(body.steps).chain(post))
+}
+
+impl From<ScriptsSpec> for PhasesSpec {
+    fn from(scripts: ScriptsSpec) -> Self {
+        Self {
+            setup: scripts.setup,
+            build: scripts.build,
+            install: scripts.install,
+            check: scripts.check,
+            workload: scripts.workload,
+            environment: scripts.environment,
+        }
     }
 }
 
-fn phase_with_hooks(pre: Vec<String>, body: Option<String>, post: Vec<String>) -> Option<String> {
-    let values = pre.into_iter().chain(body).chain(post).collect::<Vec<_>>();
-    (!values.is_empty()).then(|| values.join("\n"))
-}
-
-impl ScriptsSpec {
-    fn into_build_spec(self, build_deps: Vec<String>, check_deps: Vec<String>) -> BuildSpec {
+impl PhasesSpec {
+    fn into_legacy_build_spec(self, build_deps: Vec<String>, check_deps: Vec<String>) -> BuildSpec {
         BuildSpec {
-            setup: self.setup,
-            build: self.build,
-            install: self.install,
-            check: self.check,
-            workload: self.workload,
-            environment: self.environment,
+            setup: self.setup.shell_script(),
+            build: self.build.shell_script(),
+            install: self.install.shell_script(),
+            check: self.check.shell_script(),
+            workload: self.workload.shell_script(),
+            environment: self.environment.shell_script(),
             build_deps,
             check_deps,
         }
     }
 }
 
+impl PhaseSpec {
+    fn shell_script(self) -> Option<String> {
+        let scripts = self
+            .steps
+            .into_iter()
+            .map(|step| match step {
+                StepSpec::Shell { script } => Some(script),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!scripts.is_empty()).then(|| scripts.join("\n"))
+    }
+}
+
 impl ProfileSpec {
+    pub fn phases(&self) -> PhasesSpec {
+        self.builder.phases(&self.hooks)
+    }
+
     fn into_build_spec(self) -> BuildSpec {
         let lowered = self.builder.lower(self.hooks);
         let build_deps = lowered
@@ -712,7 +788,7 @@ impl ProfileSpec {
                     .to_name()
             })
             .collect();
-        lowered.scripts.into_build_spec(build_deps, check_deps)
+        lowered.phases.into_legacy_build_spec(build_deps, check_deps)
     }
 }
 

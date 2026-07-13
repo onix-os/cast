@@ -51,6 +51,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
             &paths,
             &macros,
             false,
+            moss::util::num_cpus(),
         )
         .map_err(Error::BuildScript)?
         .expect("script always available for prepare phase");

@@ -25,8 +25,8 @@ let base = b.mk_package (b.meta {
         run_tests = b.boolean.false,
     },
     hooks = {
-        post_install = ["ln -sf boulder %(installroot)/usr/bin/mason"],
-        environment = ["cd %(buildroot)/boulder"],
+        post_install = [b.step.shell "ln -sf boulder %(installroot)/usr/bin/mason"],
+        environment = [b.step.shell "cd %(buildroot)/boulder"],
         .. b.defaults.hooks
     },
     build_inputs = [

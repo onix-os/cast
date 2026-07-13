@@ -4,10 +4,10 @@
 let b = import! boulder.package.v2
 
 let scripts = b.scripts {
-    setup = b.optional.set "%cmake -S llvm -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_ENABLE_PROJECTS=clang;lld",
-    build = b.optional.set "%cmake_build",
-    install = b.optional.set "%cmake_install",
-    environment = b.optional.set "export LD_LIBRARY_PATH=%(workdir)/%(builddir)/lib",
+    setup = b.phase [b.step.shell "%cmake -S llvm -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_ENABLE_PROJECTS=clang;lld"],
+    build = b.phase [b.step.shell "%cmake_build"],
+    install = b.phase [b.step.shell "%cmake_install"],
+    environment = b.phase [b.step.shell "export LD_LIBRARY_PATH=%(workdir)/%(builddir)/lib"],
     .. b.defaults.scripts
 }
 

@@ -2,15 +2,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    env, io,
+    io,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use chrono::{DateTime, Utc};
 use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
-use stone_recipe::package::{PackageSpec, evaluate_gluon_with_inputs};
+use stone_recipe::package::{PackageSpec, PhasesSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
 
 use crate::{
@@ -39,7 +38,24 @@ impl Recipe {
         let (source, declaration, parsed, source_lock, fingerprint) =
             load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
 
-        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint)
+        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint, None)
+    }
+
+    /// Load using an explicit reproducible build timestamp. No process
+    /// environment, Git metadata, or clock fallback participates.
+    pub(crate) fn load_at(path: impl AsRef<Path>, build_time: DateTime<Utc>) -> Result<Self, Error> {
+        let path = resolve_path(path)?;
+        let (source, declaration, parsed, source_lock, fingerprint) =
+            load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
+        Self::from_loaded(
+            path,
+            source,
+            declaration,
+            parsed,
+            source_lock,
+            fingerprint,
+            Some(build_time),
+        )
     }
 
     /// Load only the authored expression, ignoring any generated source lock.
@@ -50,7 +66,7 @@ impl Recipe {
         let path = resolve_path(path)?;
         let (source, declaration, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
 
-        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint)
+        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint, None)
     }
 
     fn from_loaded(
@@ -60,8 +76,10 @@ impl Recipe {
         parsed: Parsed,
         source_lock: Option<SourceLock>,
         fingerprint: EvaluationFingerprint,
+        explicit_build_time: Option<DateTime<Utc>>,
     ) -> Result<Self, Error> {
-        let build_time = resolve_build_time(&path);
+        let build_time = explicit_build_time
+            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).expect("the Unix epoch is a valid UTC timestamp"));
 
         parsed.validate()?;
 
@@ -125,6 +143,21 @@ impl Recipe {
             &profile.value
         } else {
             &self.parsed.build
+        }
+    }
+
+    /// Select the structural package-v2 phases for one target.
+    pub fn build_target_phases(&self, target: BuildTarget) -> PhasesSpec {
+        let key = self.build_target_profile_key(target);
+        if let Some(profile) = self
+            .declaration
+            .profiles
+            .iter()
+            .find(|profile| Some(&profile.name) == key.as_ref())
+        {
+            profile.phases()
+        } else {
+            self.declaration.phases()
         }
     }
 }
@@ -199,32 +232,6 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
 
     // Ensure it's absolute & exists
     fs::canonicalize(&path).map_err(|_| Error::MissingRecipe(path))
-}
-
-fn resolve_build_time(path: &Path) -> DateTime<Utc> {
-    // Propagate SOURCE_DATE_EPOCH if set
-    if let Ok(epoch_env) = env::var("SOURCE_DATE_EPOCH")
-        && let Ok(parsed) = epoch_env.parse::<i64>()
-        && let Some(timestamp) = DateTime::from_timestamp(parsed, 0)
-    {
-        return timestamp;
-    }
-
-    // If we are building from a git repo and have the git binary available to us then use the last commit timestamp
-    if let Some(recipe_dir) = path.parent()
-        && let Ok(git_log) = Command::new("git")
-            .args(["log", "-1", "--format=\"%at\""])
-            .current_dir(recipe_dir)
-            .output()
-        && let Ok(stdout) = String::from_utf8(git_log.stdout)
-        && let Ok(parsed) = stdout.replace(['\n', '"'], "").parse::<i64>()
-        && let Some(timestamp) = DateTime::from_timestamp(parsed, 0)
-    {
-        return timestamp;
-    }
-
-    // As a final fallback use the current time
-    Utc::now()
 }
 
 #[derive(Debug, Error)]
@@ -571,5 +578,20 @@ boulder.mk_package (boulder.meta {
             first_fingerprint.explicit_inputs_sha256,
             changed_fingerprint.explicit_inputs_sha256
         );
+    }
+
+    #[test]
+    fn explicit_build_timestamp_is_deterministic_and_ambient_free() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        let timestamp = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+
+        let first = Recipe::load_at(root.path(), timestamp).unwrap();
+        let repeated = Recipe::load_at(root.path(), timestamp).unwrap();
+        let defaulted = Recipe::load(root.path()).unwrap();
+
+        assert_eq!(first.build_time, repeated.build_time);
+        assert_eq!(first.build_time.timestamp(), 1_700_000_000);
+        assert_eq!(defaulted.build_time.timestamp(), 0);
     }
 }

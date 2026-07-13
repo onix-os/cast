@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use super::{
     BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef,
-    PackageSpec, ProfileSpec, ScriptsSpec,
+    PackageSpec, PhaseSpec, ProfileSpec, ScriptsSpec, StepSpec,
 };
 use crate::{KeyValueSpec, OptionsSpec, PathSpec, Recipe, ToolchainSpec, TuningSpec, UpstreamSpec};
 
@@ -101,27 +101,38 @@ struct GluonMetaSpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonScriptsSpec {
-    setup: GluonOptional<String>,
-    build: GluonOptional<String>,
-    install: GluonOptional<String>,
-    check: GluonOptional<String>,
-    workload: GluonOptional<String>,
-    environment: GluonOptional<String>,
+    setup: GluonPhaseSpec,
+    build: GluonPhaseSpec,
+    install: GluonPhaseSpec,
+    check: GluonPhaseSpec,
+    workload: GluonPhaseSpec,
+    environment: GluonPhaseSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonPhaseSpec {
+    steps: Vec<GluonStepSpec>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonStepSpec {
+    Shell { script: String },
+    CargoFetch,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonHooksSpec {
-    pre_setup: Vec<String>,
-    post_setup: Vec<String>,
-    pre_build: Vec<String>,
-    post_build: Vec<String>,
-    pre_check: Vec<String>,
-    post_check: Vec<String>,
-    pre_install: Vec<String>,
-    post_install: Vec<String>,
-    pre_workload: Vec<String>,
-    post_workload: Vec<String>,
-    environment: Vec<String>,
+    pre_setup: Vec<GluonStepSpec>,
+    post_setup: Vec<GluonStepSpec>,
+    pre_build: Vec<GluonStepSpec>,
+    post_build: Vec<GluonStepSpec>,
+    pre_check: Vec<GluonStepSpec>,
+    post_check: Vec<GluonStepSpec>,
+    pre_install: Vec<GluonStepSpec>,
+    post_install: Vec<GluonStepSpec>,
+    pre_workload: Vec<GluonStepSpec>,
+    post_workload: Vec<GluonStepSpec>,
+    environment: Vec<GluonStepSpec>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -313,20 +324,37 @@ impl From<GluonScriptsSpec> for ScriptsSpec {
     }
 }
 
+impl From<GluonPhaseSpec> for PhaseSpec {
+    fn from(spec: GluonPhaseSpec) -> Self {
+        Self {
+            steps: spec.steps.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<GluonStepSpec> for StepSpec {
+    fn from(spec: GluonStepSpec) -> Self {
+        match spec {
+            GluonStepSpec::Shell { script } => Self::Shell { script },
+            GluonStepSpec::CargoFetch => Self::CargoFetch,
+        }
+    }
+}
+
 impl From<GluonHooksSpec> for HooksSpec {
     fn from(spec: GluonHooksSpec) -> Self {
         Self {
-            pre_setup: spec.pre_setup,
-            post_setup: spec.post_setup,
-            pre_build: spec.pre_build,
-            post_build: spec.post_build,
-            pre_check: spec.pre_check,
-            post_check: spec.post_check,
-            pre_install: spec.pre_install,
-            post_install: spec.post_install,
-            pre_workload: spec.pre_workload,
-            post_workload: spec.post_workload,
-            environment: spec.environment,
+            pre_setup: spec.pre_setup.into_iter().map(Into::into).collect(),
+            post_setup: spec.post_setup.into_iter().map(Into::into).collect(),
+            pre_build: spec.pre_build.into_iter().map(Into::into).collect(),
+            post_build: spec.post_build.into_iter().map(Into::into).collect(),
+            pre_check: spec.pre_check.into_iter().map(Into::into).collect(),
+            post_check: spec.post_check.into_iter().map(Into::into).collect(),
+            pre_install: spec.pre_install.into_iter().map(Into::into).collect(),
+            post_install: spec.post_install.into_iter().map(Into::into).collect(),
+            pre_workload: spec.pre_workload.into_iter().map(Into::into).collect(),
+            post_workload: spec.post_workload.into_iter().map(Into::into).collect(),
+            environment: spec.environment.into_iter().map(Into::into).collect(),
         }
     }
 }
