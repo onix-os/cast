@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use std::{
     io,
+    num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -9,10 +10,10 @@ use std::{
 use crate::{
     Env, Macros, architecture,
     draft::{self, Drafter, upstream::fetched_upstream_cache_path},
-    macros, recipe,
+    macros, planner, profile, recipe,
     source_lock::{SOURCE_LOCK_FILE_NAME, WriteOutcome},
 };
-use clap::Parser;
+use clap::{Args, Parser};
 use fs_err::{self as fs};
 use itertools::Itertools;
 use moss::{request, runtime, util};
@@ -55,6 +56,10 @@ pub enum Subcommand {
         )]
         recipe: PathBuf,
     },
+    #[command(about = "Freeze and print a canonical target-specific derivation plan")]
+    Plan(PlanCommand),
+    #[command(about = "Explain derivation identity and input provenance")]
+    Explain(ExplainCommand),
     #[command(about = "Evaluate and print the concrete normalized package-v2 declaration")]
     Eval {
         #[arg(
@@ -124,6 +129,62 @@ pub enum Subcommand {
     },
 }
 
+#[derive(Debug, Args)]
+pub struct PlanCommand {
+    #[arg(default_value = "./stone.glu", help = "Authored Gluon package factory")]
+    recipe: PathBuf,
+    #[arg(long, default_value = "default-x86_64", help = "Explicit Boulder repository profile")]
+    profile: profile::Id,
+    #[arg(long, help = "Exact build target, for example x86_64 or emul32/x86_64")]
+    target: String,
+    #[arg(long, help = "Explicit reproducible source timestamp")]
+    source_date_epoch: i64,
+    #[arg(long, default_value = "1", help = "Build release recorded in the derivation")]
+    build_release: NonZeroU64,
+    #[arg(
+        long,
+        default_value = "1",
+        help = "Explicit parallel job count exposed to build steps"
+    )]
+    jobs: NonZeroU32,
+    #[arg(long = "compiler-cache", default_value_t = false)]
+    compiler_cache: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Resolve and atomically refresh build.lock.glu"
+    )]
+    update_lock: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Refresh repositories before updating build.lock.glu"
+    )]
+    refresh_repositories: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ExplainCommand {
+    #[arg(default_value = "./stone.glu", help = "Authored Gluon package factory")]
+    recipe: PathBuf,
+    #[arg(long, default_value = "default-x86_64", help = "Explicit Boulder repository profile")]
+    profile: profile::Id,
+    #[arg(long, help = "Exact build target, for example x86_64 or emul32/x86_64")]
+    target: String,
+    #[arg(long, help = "Explicit reproducible source timestamp")]
+    source_date_epoch: i64,
+    #[arg(long, default_value = "1", help = "Build release recorded in the derivation")]
+    build_release: NonZeroU64,
+    #[arg(
+        long,
+        default_value = "1",
+        help = "Explicit parallel job count exposed to build steps"
+    )]
+    jobs: NonZeroU32,
+    #[arg(long = "compiler-cache", default_value_t = false)]
+    compiler_cache: bool,
+}
+
 /// A new source for an existing recipe.
 #[derive(Clone, Debug)]
 pub enum UpdatedSource {
@@ -145,6 +206,8 @@ fn parse_updated_source(s: &str) -> Result<UpdatedSource, String> {
 pub fn handle(command: Command, env: Env, _yes: bool, _verbose: bool) -> Result<(), Error> {
     match command.subcommand {
         Subcommand::Check { recipe } => check(recipe),
+        Subcommand::Plan(command) => plan(env, command),
+        Subcommand::Explain(command) => explain(env, command),
         Subcommand::Eval { recipe } => eval(recipe),
         Subcommand::Bump { recipe, release } => bump(recipe, release),
         Subcommand::New { output, upstreams } => new(env, output, upstreams),
@@ -156,6 +219,76 @@ pub fn handle(command: Command, env: Env, _yes: bool, _verbose: bool) -> Result<
         } => update(env, &recipe, version, upstreams, no_bump),
         Subcommand::Macros { _macro } => macros(_macro, env),
     }
+}
+
+fn plan(env: Env, command: PlanCommand) -> Result<(), Error> {
+    let planned = planner::plan(
+        env,
+        planner::Request {
+            recipe: command.recipe,
+            profile: command.profile,
+            target: command.target,
+            source_date_epoch: command.source_date_epoch,
+            build_release: command.build_release,
+            jobs: command.jobs,
+            compiler_cache: command.compiler_cache,
+            update_lock: command.update_lock,
+            refresh_repositories: command.refresh_repositories,
+        },
+    )?;
+    if let Some(outcome) = planned.lock_outcome {
+        println!("build_lock = {outcome:?} ({})", planned.lock_path.display());
+    }
+    println!("derivation_id = {:?}", planned.plan.derivation_id().as_str());
+    println!("request_fingerprint = {:?}", planned.request_fingerprint);
+    println!("target = {:?}", planned.plan.build_lock.target_platform.architecture);
+    println!("source_date_epoch = {}", planned.plan.source_date_epoch);
+    println!("packages = {}", planned.plan.build_lock.packages.len());
+    println!("jobs = {}", planned.plan.jobs.len());
+    println!(
+        "phases = {}",
+        planned.plan.jobs.iter().map(|job| job.phases.len()).sum::<usize>()
+    );
+    println!("outputs = {}", planned.plan.outputs.len());
+    println!("canonical_plan = {:?}", hex::encode(planned.plan.canonical_bytes()));
+    Ok(())
+}
+
+fn explain(env: Env, command: ExplainCommand) -> Result<(), Error> {
+    let planned = planner::plan(
+        env,
+        planner::Request {
+            recipe: command.recipe,
+            profile: command.profile,
+            target: command.target,
+            source_date_epoch: command.source_date_epoch,
+            build_release: command.build_release,
+            jobs: command.jobs,
+            compiler_cache: command.compiler_cache,
+            update_lock: false,
+            refresh_repositories: false,
+        },
+    )?;
+    println!("derivation {:?} {{", planned.plan.derivation_id().as_str());
+    println!("  recipe = {:?}", planned.plan.recipe_fingerprint);
+    println!("  source_lock = {:?}", planned.plan.source_lock_digest);
+    println!("  build_lock = {:?}", planned.plan.build_lock.digest());
+    println!("  request = {:?}", planned.request_fingerprint);
+    println!("  policy = {:?}", planned.plan.build_lock.policy.fingerprint);
+    for origin in planned.policy_origins {
+        println!("  policy_module = {origin:?}");
+    }
+    for fingerprint in planned.profile_fingerprints {
+        println!("  profile_fragment = {fingerprint:?}");
+    }
+    for package in planned.requested_packages {
+        println!("  requested_package = {package:?}");
+    }
+    for package in &planned.plan.build_lock.packages {
+        println!("  locked_package = {:?}", package.package_id);
+    }
+    println!("}}");
+    Ok(())
 }
 
 fn check(path: PathBuf) -> Result<(), Error> {
@@ -517,6 +650,8 @@ impl ColumnDisplay for PrintMacro<'_> {
 pub enum Error {
     #[error("check recipe")]
     CheckRecipe(#[source] recipe::Error),
+    #[error("plan derivation")]
+    Planner(#[source] Box<planner::Error>),
     #[error("load and validate authored recipe")]
     LoadRecipe(#[source] recipe::Error),
     #[error(
@@ -565,6 +700,12 @@ pub enum Error {
     GitUpstreamMustProvideVersion,
     #[error("io")]
     Io(#[from] io::Error),
+}
+
+impl From<planner::Error> for Error {
+    fn from(error: planner::Error) -> Self {
+        Self::Planner(Box::new(error))
+    }
 }
 
 #[cfg(test)]
@@ -630,6 +771,21 @@ let base = boulder.mk_package (boulder.meta {
         assert!(matches!(
             update.subcommand,
             Subcommand::Update { recipe, .. } if recipe == Path::new("./stone.glu")
+        ));
+
+        let plan = Command::try_parse_from([
+            "recipe",
+            "plan",
+            "--target",
+            "x86_64",
+            "--source-date-epoch",
+            "1700000000",
+        ])
+        .unwrap();
+        assert!(matches!(
+            plan.subcommand,
+            Subcommand::Plan(PlanCommand { recipe, jobs, .. })
+                if recipe == Path::new("./stone.glu") && jobs.get() == 1
         ));
     }
 

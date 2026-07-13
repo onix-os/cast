@@ -109,6 +109,10 @@ impl<'a> Packager<'a> {
 
         Ok(())
     }
+
+    pub(crate) fn resolved_packages(&self) -> &BTreeMap<String, Package> {
+        &self.packages
+    }
 }
 
 /// Resolve all package templates from the arch macros and

@@ -105,7 +105,7 @@ fn clean(builder: &Builder) -> Result<(), Error> {
     Ok(())
 }
 
-fn packages(builder: &Builder) -> Vec<&str> {
+pub(crate) fn packages(builder: &Builder) -> Vec<&str> {
     let mut packages = BASE_PACKAGES.to_vec();
 
     match builder.recipe.parsed.options.toolchain {

@@ -35,11 +35,10 @@ pub struct DerivationPlan {
     pub source_lock_digest: String,
     pub sources: Vec<LockedSource>,
     pub build_lock: BuildLock,
-    pub phases: Vec<PhasePlan>,
+    pub jobs: Vec<JobPlan>,
     pub environment: BTreeMap<String, String>,
     pub layout: BuilderLayout,
     pub execution: ExecutionPolicy,
-    pub pgo_stages: Vec<String>,
     pub tuning: Vec<String>,
     pub analyzers: Vec<LockedIdentity>,
     pub outputs: Vec<OutputPlan>,
@@ -57,11 +56,10 @@ impl DerivationPlan {
             source_lock_digest: String::new(),
             sources: Vec::new(),
             build_lock,
-            phases: Vec::new(),
+            jobs: Vec::new(),
             environment: BTreeMap::new(),
             layout: BuilderLayout::default(),
             execution: ExecutionPolicy::default(),
-            pgo_stages: Vec::new(),
             tuning: Vec::new(),
             analyzers: Vec::new(),
             outputs: Vec::new(),
@@ -101,19 +99,8 @@ impl DerivationPlan {
             source.validate(index)?;
         }
 
-        let mut phase_names = BTreeSet::new();
-        for (index, phase) in self.phases.iter().enumerate() {
-            require_nonempty(&format!("phases[{index}].name"), &phase.name)?;
-            if !phase_names.insert(phase.name.as_str()) {
-                return Err(DerivationValidationError::DuplicatePhase {
-                    name: phase.name.clone(),
-                });
-            }
-            phase.validate(index)?;
-        }
-
-        for (index, stage) in self.pgo_stages.iter().enumerate() {
-            require_nonempty(&format!("pgo_stages[{index}]"), stage)?;
+        for (index, job) in self.jobs.iter().enumerate() {
+            job.validate(index)?;
         }
         for (index, flag) in self.tuning.iter().enumerate() {
             require_nonempty(&format!("tuning[{index}]"), flag)?;
@@ -136,18 +123,24 @@ impl DerivationPlan {
                     name: output.name.clone(),
                 });
             }
-            for (relation, dependencies) in [
-                ("runtime_inputs", &output.runtime_inputs),
-                ("conflicts", &output.conflicts),
-            ] {
-                for (dependency_index, dependency) in dependencies.iter().enumerate() {
-                    if !self.build_lock.contains_output(dependency) {
+        }
+        for (index, output) in self.outputs.iter().enumerate() {
+            for (dependency_index, dependency) in output.runtime_inputs.iter().enumerate() {
+                match dependency {
+                    OutputRelation::Locked(dependency) if !self.build_lock.contains_output(dependency) => {
                         return Err(DerivationValidationError::UnknownOutputReference {
-                            field: format!("outputs[{index}].{relation}[{dependency_index}]"),
+                            field: format!("outputs[{index}].runtime_inputs[{dependency_index}]"),
                             package: dependency.package_id.clone(),
                             output: dependency.output.clone(),
                         });
                     }
+                    OutputRelation::Planned { output } if !output_names.contains(output.as_str()) => {
+                        return Err(DerivationValidationError::UnknownPlannedOutput {
+                            field: format!("outputs[{index}].runtime_inputs[{dependency_index}]"),
+                            output: output.clone(),
+                        });
+                    }
+                    _ => {}
                 }
             }
         }
@@ -174,11 +167,10 @@ impl DerivationPlan {
         encoder.sequence(&sources, |encoder, source| source.encode(encoder));
 
         self.build_lock.encode_canonical(&mut encoder);
-        encoder.sequence(&self.phases, |encoder, phase| phase.encode(encoder));
+        encoder.sequence(&self.jobs, |encoder, job| job.encode(encoder));
         encoder.map(&self.environment);
         self.layout.encode(&mut encoder);
         self.execution.encode(&mut encoder);
-        encoder.strings(&self.pgo_stages);
         encoder.strings(&self.tuning);
 
         let mut analyzers = self.analyzers.iter().collect::<Vec<_>>();
@@ -332,10 +324,10 @@ pub struct PhasePlan {
 }
 
 impl PhasePlan {
-    fn validate(&self, phase_index: usize) -> Result<(), DerivationValidationError> {
+    fn validate(&self, parent: &str) -> Result<(), DerivationValidationError> {
         for (group, steps) in [("pre", &self.pre), ("steps", &self.steps), ("post", &self.post)] {
             for (step_index, step) in steps.iter().enumerate() {
-                step.validate(&format!("phases[{phase_index}].{group}[{step_index}]"))?;
+                step.validate(&format!("{parent}.{group}[{step_index}]"))?;
             }
         }
         Ok(())
@@ -346,6 +338,48 @@ impl PhasePlan {
         encoder.sequence(&self.pre, |encoder, step| step.encode(encoder));
         encoder.sequence(&self.steps, |encoder, step| step.encode(encoder));
         encoder.sequence(&self.post, |encoder, step| step.encode(encoder));
+    }
+}
+
+/// One executor invocation. PGO stages are distinct jobs because each has its
+/// own ordered phase set and build/work directories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobPlan {
+    pub pgo_stage: Option<String>,
+    pub build_dir: String,
+    pub work_dir: String,
+    pub phases: Vec<PhasePlan>,
+}
+
+impl JobPlan {
+    fn validate(&self, job_index: usize) -> Result<(), DerivationValidationError> {
+        require_nonempty(&format!("jobs[{job_index}].build_dir"), &self.build_dir)?;
+        require_nonempty(&format!("jobs[{job_index}].work_dir"), &self.work_dir)?;
+        let mut phase_names = BTreeSet::new();
+        for (phase_index, phase) in self.phases.iter().enumerate() {
+            require_nonempty(&format!("jobs[{job_index}].phases[{phase_index}].name"), &phase.name)?;
+            if !phase_names.insert(phase.name.as_str()) {
+                return Err(DerivationValidationError::DuplicatePhase {
+                    job: job_index,
+                    name: phase.name.clone(),
+                });
+            }
+            phase.validate(&format!("jobs[{job_index}].phases[{phase_index}]"))?;
+        }
+        Ok(())
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        match &self.pgo_stage {
+            Some(stage) => {
+                encoder.variant(1);
+                encoder.string(stage);
+            }
+            None => encoder.variant(0),
+        }
+        encoder.string(&self.build_dir);
+        encoder.string(&self.work_dir);
+        encoder.sequence(&self.phases, |encoder, phase| phase.encode(encoder));
     }
 }
 
@@ -494,8 +528,8 @@ pub enum NetworkMode {
 pub struct OutputPlan {
     pub name: String,
     pub paths: Vec<PathRulePlan>,
-    pub runtime_inputs: Vec<LockedOutputRef>,
-    pub conflicts: Vec<LockedOutputRef>,
+    pub runtime_inputs: Vec<OutputRelation>,
+    pub conflicts: Vec<String>,
 }
 
 impl OutputPlan {
@@ -514,9 +548,30 @@ impl OutputPlan {
         let mut runtime_inputs = self.runtime_inputs.iter().collect::<Vec<_>>();
         runtime_inputs.sort();
         encoder.sequence(&runtime_inputs, |encoder, dependency| dependency.encode(encoder));
-        let mut conflicts = self.conflicts.iter().collect::<Vec<_>>();
+        let mut conflicts = self.conflicts.clone();
         conflicts.sort();
-        encoder.sequence(&conflicts, |encoder, conflict| conflict.encode(encoder));
+        encoder.strings(&conflicts);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OutputRelation {
+    Locked(LockedOutputRef),
+    Planned { output: String },
+}
+
+impl OutputRelation {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        match self {
+            Self::Locked(reference) => {
+                encoder.variant(0);
+                reference.encode(encoder);
+            }
+            Self::Planned { output } => {
+                encoder.variant(1);
+                encoder.string(output);
+            }
+        }
     }
 }
 
@@ -562,8 +617,8 @@ pub enum DerivationValidationError {
     DuplicateSourceOrder { order: u32 },
     #[error("sources[{index}].order: expected canonical order {index}, found {order}")]
     UnexpectedSourceOrder { index: usize, order: u32 },
-    #[error("phases: duplicate phase name `{name}`")]
-    DuplicatePhase { name: String },
+    #[error("jobs[{job}].phases: duplicate phase name `{name}`")]
+    DuplicatePhase { job: usize, name: String },
     #[error("outputs: duplicate output name `{name}`")]
     DuplicateOutput { name: String },
     #[error("analyzers: duplicate analyzer name `{name}`")]
@@ -574,6 +629,8 @@ pub enum DerivationValidationError {
         package: String,
         output: String,
     },
+    #[error("{field}: unknown planned output `{output}`")]
+    UnknownPlannedOutput { field: String, output: String },
     #[error("{field}: guest path must be absolute, found `{value}`")]
     NonAbsoluteGuestPath { field: String, value: String },
     #[error("sources[{index}].url: invalid URL `{value}`")]
@@ -688,16 +745,21 @@ mod tests {
             url: "https://example.invalid/hello.tar.zst".to_owned(),
             sha256: "archive-sha256".to_owned(),
         }];
-        plan.phases = vec![PhasePlan {
-            name: "build".to_owned(),
-            pre: Vec::new(),
-            steps: vec![StepPlan::Run {
-                program: "/usr/bin/cmake".to_owned(),
-                args: vec!["--build".to_owned(), ".".to_owned()],
-                environment: BTreeMap::from([("CFLAGS".to_owned(), "-O2".to_owned())]),
-                working_dir: "/mason/build".to_owned(),
+        plan.jobs = vec![JobPlan {
+            pgo_stage: None,
+            build_dir: "/mason/build".to_owned(),
+            work_dir: "/mason/build/hello".to_owned(),
+            phases: vec![PhasePlan {
+                name: "build".to_owned(),
+                pre: Vec::new(),
+                steps: vec![StepPlan::Run {
+                    program: "/usr/bin/cmake".to_owned(),
+                    args: vec!["--build".to_owned(), ".".to_owned()],
+                    environment: BTreeMap::from([("CFLAGS".to_owned(), "-O2".to_owned())]),
+                    working_dir: "/mason/build".to_owned(),
+                }],
+                post: Vec::new(),
             }],
-            post: Vec::new(),
         }];
         plan.environment = BTreeMap::from([
             ("HOME".to_owned(), "/mason/build".to_owned()),
@@ -714,7 +776,6 @@ mod tests {
             compiler_cache: false,
             jobs: 4,
         };
-        plan.pgo_stages = vec!["stage1".to_owned(), "use".to_owned()];
         plan.tuning = vec!["-O2".to_owned(), "-pipe".to_owned()];
         plan.analyzers = vec![LockedIdentity {
             name: "elf".to_owned(),
@@ -803,7 +864,7 @@ mod tests {
             ),
             (
                 "phase",
-                Box::new(|plan| match &mut plan.phases[0].steps[0] {
+                Box::new(|plan| match &mut plan.jobs[0].phases[0].steps[0] {
                     StepPlan::Run { args, .. } => args.push("--verbose".to_owned()),
                     StepPlan::Shell { .. } => unreachable!(),
                 }),
@@ -831,14 +892,14 @@ mod tests {
     #[test]
     fn phase_order_remains_semantic() {
         let mut first = sample_plan();
-        first.phases.push(PhasePlan {
-            name: "install".to_owned(),
-            pre: Vec::new(),
-            steps: Vec::new(),
-            post: Vec::new(),
+        first.jobs.push(JobPlan {
+            pgo_stage: Some("use".to_owned()),
+            build_dir: "/mason/build".to_owned(),
+            work_dir: "/mason/build/hello".to_owned(),
+            phases: Vec::new(),
         });
         let mut reordered = first.clone();
-        reordered.phases.reverse();
+        reordered.jobs.reverse();
 
         assert_ne!(first.derivation_id(), reordered.derivation_id());
     }
@@ -846,10 +907,12 @@ mod tests {
     #[test]
     fn validation_rejects_output_relations_outside_the_locked_closure() {
         let mut plan = sample_plan();
-        plan.outputs[0].runtime_inputs.push(LockedOutputRef {
-            package_id: "missing".to_owned(),
-            output: "out".to_owned(),
-        });
+        plan.outputs[0]
+            .runtime_inputs
+            .push(OutputRelation::Locked(LockedOutputRef {
+                package_id: "missing".to_owned(),
+                output: "out".to_owned(),
+            }));
 
         assert!(matches!(
             plan.validate(),

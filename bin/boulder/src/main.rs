@@ -23,6 +23,7 @@ mod env;
 mod macros;
 mod package;
 mod paths;
+mod planner;
 mod profile;
 mod recipe;
 pub mod source_lock;
