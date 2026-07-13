@@ -7,6 +7,7 @@ use astr::AStr;
 use diesel::prelude::*;
 use diesel::{Connection as _, SqliteConnection};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+use url::Url;
 
 use crate::db::Connection;
 use crate::package::{self, Meta};
@@ -17,6 +18,13 @@ use super::MAX_VARIABLE_NUMBER;
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/meta/migrations");
 const PACKAGE_INSERT_CHUNK_SIZE: usize = 128;
+// The repository manager consumes these in the next integration checkpoint.
+#[allow(dead_code)]
+const ACTIVE_SNAPSHOT_SINGLETON: i32 = 1;
+#[allow(dead_code)]
+const MAX_SNAPSHOT_INDEX_URI_BYTES: usize = 8 * 1024;
+#[allow(dead_code)]
+const MAX_SNAPSHOT_BYTE_SIZE: u64 = 16 * 1024 * 1024;
 
 mod schema;
 
@@ -33,6 +41,43 @@ pub struct Database {
     conn: Connection,
 }
 
+/// The exact repository index whose package rows are active in this database.
+///
+/// Fields are private so every value crosses the same URI, digest, and size
+/// validation boundary before it can participate in a replacement transaction.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Snapshot {
+    index_uri: Url,
+    sha256: String,
+    byte_size: u64,
+}
+
+#[allow(dead_code)]
+impl Snapshot {
+    pub(crate) fn new(index_uri: Url, sha256: String, byte_size: u64) -> Result<Self, Error> {
+        let snapshot = Self {
+            index_uri,
+            sha256,
+            byte_size,
+        };
+        validate_snapshot(&snapshot)?;
+        Ok(snapshot)
+    }
+
+    pub(crate) fn index_uri(&self) -> &Url {
+        &self.index_uri
+    }
+
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    pub(crate) fn byte_size(&self) -> u64 {
+        self.byte_size
+    }
+}
+
 impl Database {
     pub fn new(url: &str) -> Result<Self, Error> {
         let mut conn = SqliteConnection::establish(url)?;
@@ -46,9 +91,8 @@ impl Database {
 
     pub fn wipe(&self) -> Result<(), Error> {
         self.conn.exclusive_tx(|tx| {
-            // Cascading wipes other tables
-            diesel::delete(model::meta::table).execute(tx)?;
-            Ok(())
+            clear_active_snapshot_impl(tx)?;
+            clear_packages_impl(tx)
         })
     }
 
@@ -259,6 +303,7 @@ impl Database {
         validate_package_batch(&packages)?;
         self.conn.exclusive_tx(|tx| {
             let ids = packages.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+            clear_active_snapshot_impl(tx)?;
             batch_remove_impl(&ids, tx)?;
             insert_packages_impl(&packages, tx)
         })
@@ -272,14 +317,42 @@ impl Database {
     pub fn replace_all(&self, packages: Vec<(package::Id, Meta)>) -> Result<(), Error> {
         validate_package_batch(&packages)?;
         self.conn.exclusive_tx(|tx| {
-            // Be explicit rather than depending on a connection-local foreign
-            // key pragma for cascading deletes.
-            diesel::delete(model::meta_conflicts::table).execute(tx)?;
-            diesel::delete(model::meta_providers::table).execute(tx)?;
-            diesel::delete(model::meta_dependencies::table).execute(tx)?;
-            diesel::delete(model::meta_licenses::table).execute(tx)?;
-            diesel::delete(model::meta::table).execute(tx)?;
+            clear_active_snapshot_impl(tx)?;
+            clear_packages_impl(tx)?;
             insert_packages_impl(&packages, tx)
+        })
+    }
+
+    /// Atomically replace the complete package set and its accepted index
+    /// identity. No snapshot row is visible unless every package chunk and
+    /// relation insert committed successfully in the same transaction.
+    #[allow(dead_code)]
+    pub(crate) fn replace_all_with_snapshot(
+        &self,
+        packages: Vec<(package::Id, Meta)>,
+        snapshot: Snapshot,
+    ) -> Result<(), Error> {
+        validate_package_batch(&packages)?;
+        let snapshot_byte_size = validate_snapshot(&snapshot)?;
+
+        self.conn.exclusive_tx(|tx| {
+            clear_active_snapshot_impl(tx)?;
+            clear_packages_impl(tx)?;
+            insert_packages_impl(&packages, tx)?;
+            insert_active_snapshot_impl(&snapshot, snapshot_byte_size, tx)
+        })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn active_snapshot(&self) -> Result<Option<Snapshot>, Error> {
+        self.conn.exec(|conn| {
+            model::active_repository_snapshot::table
+                .select(model::ActiveRepositorySnapshot::as_select())
+                .find(ACTIVE_SNAPSHOT_SINGLETON)
+                .first::<model::ActiveRepositorySnapshot>(conn)
+                .optional()?
+                .map(decode_active_snapshot)
+                .transpose()
         })
     }
 
@@ -290,10 +363,110 @@ impl Database {
     pub fn batch_remove<'a>(&self, packages: impl IntoIterator<Item = &'a package::Id>) -> Result<(), Error> {
         self.conn.exclusive_tx(|tx| {
             let packages = packages.into_iter().map(package::Id::as_str).collect::<Vec<_>>();
+            clear_active_snapshot_impl(tx)?;
             batch_remove_impl(&packages, tx)?;
             Ok(())
         })
     }
+}
+
+#[allow(dead_code)]
+fn validate_snapshot(snapshot: &Snapshot) -> Result<i64, Error> {
+    let uri_bytes = snapshot.index_uri().as_str().len();
+    if uri_bytes > MAX_SNAPSHOT_INDEX_URI_BYTES {
+        return Err(Error::SnapshotIndexUriTooLong {
+            limit: MAX_SNAPSHOT_INDEX_URI_BYTES,
+            actual: uri_bytes,
+        });
+    }
+    if !snapshot.index_uri().username().is_empty() || snapshot.index_uri().password().is_some() {
+        return Err(Error::SnapshotIndexUriPolicy {
+            reason: "embedded credentials are not allowed",
+        });
+    }
+    if snapshot.index_uri().fragment().is_some() {
+        return Err(Error::SnapshotIndexUriPolicy {
+            reason: "fragments are not allowed",
+        });
+    }
+    match snapshot.index_uri().scheme() {
+        "http" | "https" if snapshot.index_uri().host_str().is_some() => {}
+        "file" if snapshot.index_uri().query().is_none() && snapshot.index_uri().to_file_path().is_ok() => {}
+        "file" => {
+            return Err(Error::SnapshotIndexUriPolicy {
+                reason: "file URI must be an absolute local path without a query",
+            });
+        }
+        _ => {
+            return Err(Error::SnapshotIndexUriPolicy {
+                reason: "only absolute HTTP(S) and local file URIs are supported",
+            });
+        }
+    }
+
+    if snapshot.sha256().len() != 64
+        || !snapshot
+            .sha256()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(Error::InvalidSnapshotSha256);
+    }
+
+    checked_snapshot_byte_size(snapshot)
+}
+
+#[allow(dead_code)]
+fn checked_snapshot_byte_size(snapshot: &Snapshot) -> Result<i64, Error> {
+    if snapshot.byte_size() > MAX_SNAPSHOT_BYTE_SIZE {
+        return Err(Error::SnapshotByteSizeOutOfRange {
+            limit: MAX_SNAPSHOT_BYTE_SIZE,
+            actual: snapshot.byte_size(),
+        });
+    }
+    i64::try_from(snapshot.byte_size()).map_err(|_| Error::SnapshotByteSizeOutOfRange {
+        limit: MAX_SNAPSHOT_BYTE_SIZE,
+        actual: snapshot.byte_size(),
+    })
+}
+
+#[allow(dead_code)]
+fn decode_active_snapshot(stored: model::ActiveRepositorySnapshot) -> Result<Snapshot, Error> {
+    if stored.singleton != ACTIVE_SNAPSHOT_SINGLETON {
+        return Err(Error::InvalidSnapshotSingleton(stored.singleton));
+    }
+    let index_uri = stored.index_uri.parse().map_err(Error::ParseSnapshotIndexUri)?;
+    let byte_size = u64::try_from(stored.byte_size).map_err(|_| Error::NegativeSnapshotByteSize(stored.byte_size))?;
+    Snapshot::new(index_uri, stored.sha256, byte_size)
+}
+
+fn clear_active_snapshot_impl(tx: &mut SqliteConnection) -> Result<(), Error> {
+    diesel::delete(model::active_repository_snapshot::table).execute(tx)?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn insert_active_snapshot_impl(snapshot: &Snapshot, byte_size: i64, tx: &mut SqliteConnection) -> Result<(), Error> {
+    diesel::insert_into(model::active_repository_snapshot::table)
+        .values(model::NewActiveRepositorySnapshot {
+            singleton: ACTIVE_SNAPSHOT_SINGLETON,
+            index_uri: snapshot.index_uri().as_str(),
+            sha256: snapshot.sha256(),
+            byte_size,
+        })
+        .execute(tx)?;
+    Ok(())
+}
+
+fn clear_packages_impl(tx: &mut SqliteConnection) -> Result<(), Error> {
+    // Be explicit rather than depending on a connection-local foreign-key
+    // pragma for cascading deletes.
+    diesel::delete(model::meta_conflicts::table).execute(tx)?;
+    diesel::delete(model::meta_providers::table).execute(tx)?;
+    diesel::delete(model::meta_dependencies::table).execute(tx)?;
+    diesel::delete(model::meta_licenses::table).execute(tx)?;
+    diesel::delete(model::meta::table).execute(tx)?;
+    Ok(())
 }
 
 fn validate_package_batch(packages: &[(package::Id, Meta)]) -> Result<(), Error> {
@@ -444,8 +617,29 @@ mod model {
         prelude::Insertable,
     };
 
-    pub use crate::db::meta::schema::{meta, meta_conflicts, meta_dependencies, meta_licenses, meta_providers};
+    pub use crate::db::meta::schema::{
+        active_repository_snapshot, meta, meta_conflicts, meta_dependencies, meta_licenses, meta_providers,
+    };
     use crate::package;
+
+    #[derive(Queryable, Selectable, Identifiable)]
+    #[diesel(table_name = active_repository_snapshot)]
+    #[diesel(primary_key(singleton))]
+    pub struct ActiveRepositorySnapshot {
+        pub singleton: i32,
+        pub index_uri: String,
+        pub sha256: String,
+        pub byte_size: i64,
+    }
+
+    #[derive(Insertable)]
+    #[diesel(table_name = active_repository_snapshot)]
+    pub struct NewActiveRepositorySnapshot<'a> {
+        pub singleton: i32,
+        pub index_uri: &'a str,
+        pub sha256: &'a str,
+        pub byte_size: i64,
+    }
 
     #[derive(Queryable, Selectable, Identifiable)]
     #[diesel(table_name = meta)]
@@ -553,6 +747,25 @@ mod test {
         Meta::from_stone_payload(&payload.body).unwrap()
     }
 
+    fn fixture_snapshot(hash: char) -> Snapshot {
+        Snapshot::new(
+            format!("https://cdn.example.test/main/history/{hash}/x86_64/stone.index")
+                .parse()
+                .unwrap(),
+            hash.to_string().repeat(64),
+            2_432_187,
+        )
+        .unwrap()
+    }
+
+    fn snapshot_uri_with_length(length: usize) -> Url {
+        const PREFIX: &str = "https://example.test/";
+        assert!(length >= PREFIX.len());
+        let uri = format!("{PREFIX}{}", "a".repeat(length - PREFIX.len()));
+        assert_eq!(uri.len(), length);
+        uri.parse().unwrap()
+    }
+
     #[test]
     fn create_insert_select() {
         let db = Database::new(":memory:").unwrap();
@@ -652,6 +865,125 @@ mod test {
     }
 
     #[test]
+    fn active_snapshot_validates_uri_digest_and_exact_size_boundaries() {
+        let exact = Snapshot::new(
+            snapshot_uri_with_length(MAX_SNAPSHOT_INDEX_URI_BYTES),
+            "a".repeat(64),
+            MAX_SNAPSHOT_BYTE_SIZE,
+        )
+        .unwrap();
+        assert_eq!(exact.index_uri().as_str().len(), MAX_SNAPSHOT_INDEX_URI_BYTES);
+        assert_eq!(exact.byte_size(), MAX_SNAPSHOT_BYTE_SIZE);
+
+        assert!(matches!(
+            Snapshot::new(
+                snapshot_uri_with_length(MAX_SNAPSHOT_INDEX_URI_BYTES + 1),
+                "a".repeat(64),
+                0,
+            ),
+            Err(Error::SnapshotIndexUriTooLong {
+                limit: MAX_SNAPSHOT_INDEX_URI_BYTES,
+                actual,
+            }) if actual == MAX_SNAPSHOT_INDEX_URI_BYTES + 1
+        ));
+        assert!(matches!(
+            Snapshot::new("ftp://example.test/stone.index".parse().unwrap(), "a".repeat(64), 0,),
+            Err(Error::SnapshotIndexUriPolicy { .. })
+        ));
+        assert!(matches!(
+            Snapshot::new("https://example.test/stone.index".parse().unwrap(), "A".repeat(64), 0,),
+            Err(Error::InvalidSnapshotSha256)
+        ));
+        assert!(matches!(
+            Snapshot::new("https://example.test/stone.index".parse().unwrap(), "a".repeat(63), 0,),
+            Err(Error::InvalidSnapshotSha256)
+        ));
+        assert!(matches!(
+            Snapshot::new(
+                "https://example.test/stone.index".parse().unwrap(),
+                "a".repeat(64),
+                MAX_SNAPSHOT_BYTE_SIZE + 1,
+            ),
+            Err(Error::SnapshotByteSizeOutOfRange {
+                limit: MAX_SNAPSHOT_BYTE_SIZE,
+                actual,
+            }) if actual == MAX_SNAPSHOT_BYTE_SIZE + 1
+        ));
+    }
+
+    #[test]
+    fn active_snapshot_migration_enforces_singleton_hash_uri_and_size_bounds() {
+        use diesel::sql_types::{BigInt, Integer, Text};
+
+        let db = Database::new(":memory:").unwrap();
+        let insert = |singleton: i32, index_uri: &str, sha256: &str, byte_size: i64| {
+            db.conn.exec(|conn| {
+                diesel::sql_query(
+                    "INSERT INTO active_repository_snapshot \
+                     (singleton, index_uri, sha256, byte_size) VALUES (?, ?, ?, ?)",
+                )
+                .bind::<Integer, _>(singleton)
+                .bind::<Text, _>(index_uri)
+                .bind::<Text, _>(sha256)
+                .bind::<BigInt, _>(byte_size)
+                .execute(conn)
+            })
+        };
+
+        assert!(insert(2, "https://example.test/stone.index", &"a".repeat(64), 0).is_err());
+        assert!(insert(1, "https://example.test/stone.index", &"A".repeat(64), 0).is_err());
+        assert!(
+            insert(
+                1,
+                snapshot_uri_with_length(MAX_SNAPSHOT_INDEX_URI_BYTES + 1).as_str(),
+                &"a".repeat(64),
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            insert(
+                1,
+                "https://example.test/stone.index",
+                &"a".repeat(64),
+                i64::try_from(MAX_SNAPSHOT_BYTE_SIZE + 1).unwrap(),
+            )
+            .is_err()
+        );
+        assert!(insert(1, "https://example.test/stone.index", &"a".repeat(64), -1).is_err());
+        assert_eq!(db.active_snapshot().unwrap(), None);
+    }
+
+    #[test]
+    fn replace_all_with_snapshot_round_trips_complete_active_state() {
+        let db = Database::new(":memory:").unwrap();
+        let first = package::Id::from("first");
+        let second = package::Id::from("second");
+        let snapshot = fixture_snapshot('a');
+
+        db.replace_all_with_snapshot(
+            vec![(first.clone(), fixture_meta()), (second.clone(), fixture_meta())],
+            snapshot.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(db.package_ids().unwrap(), BTreeSet::from([first, second]));
+        assert_eq!(db.active_snapshot().unwrap(), Some(snapshot));
+    }
+
+    #[test]
+    fn legacy_package_mutation_invalidates_the_active_snapshot() {
+        let db = Database::new(":memory:").unwrap();
+        db.replace_all_with_snapshot(vec![(package::Id::from("old"), fixture_meta())], fixture_snapshot('a'))
+            .unwrap();
+
+        db.replace_all(vec![(package::Id::from("new"), fixture_meta())])
+            .unwrap();
+
+        assert_eq!(db.active_snapshot().unwrap(), None);
+    }
+
+    #[test]
     fn replace_all_validates_complete_batch_before_deleting_existing_metadata() {
         let db = Database::new(":memory:").unwrap();
         let sentinel = package::Id::from("sentinel");
@@ -713,5 +1045,46 @@ mod test {
 
         assert_eq!(db.get(&sentinel).unwrap(), sentinel_meta);
         assert_eq!(db.package_ids().unwrap(), BTreeSet::from([sentinel]));
+    }
+
+    #[test]
+    fn snapshot_replacement_failure_in_package_chunk_129_preserves_complete_old_state() {
+        let db = Database::new(":memory:").unwrap();
+        let sentinel = package::Id::from("sentinel");
+        let sentinel_meta = fixture_meta();
+        let old_snapshot = fixture_snapshot('a');
+        db.replace_all_with_snapshot(vec![(sentinel.clone(), sentinel_meta.clone())], old_snapshot.clone())
+            .unwrap();
+
+        db.conn.exec(|conn| {
+            diesel::sql_query(
+                "CREATE TRIGGER reject_broken_snapshot_package \
+                 BEFORE INSERT ON meta \
+                 WHEN NEW.package = 'broken' \
+                 BEGIN SELECT RAISE(ABORT, 'injected snapshot replacement failure'); END",
+            )
+            .execute(conn)
+            .unwrap();
+        });
+
+        let replacement_meta = fixture_meta();
+        let mut candidates = (0..PACKAGE_INSERT_CHUNK_SIZE)
+            .map(|index| {
+                (
+                    package::Id::from(format!("candidate-{index:03}")),
+                    replacement_meta.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.push((package::Id::from("broken"), replacement_meta));
+
+        let error = db
+            .replace_all_with_snapshot(candidates, fixture_snapshot('b'))
+            .unwrap_err();
+        assert!(matches!(error, Error::Diesel(_)));
+
+        assert_eq!(db.get(&sentinel).unwrap(), sentinel_meta);
+        assert_eq!(db.package_ids().unwrap(), BTreeSet::from([sentinel]));
+        assert_eq!(db.active_snapshot().unwrap(), Some(old_snapshot));
     }
 }

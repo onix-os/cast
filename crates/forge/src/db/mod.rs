@@ -74,6 +74,20 @@ pub enum Error {
     ReservePackageIds(#[source] TryReserveError),
     #[error("metadata field `{field}` value {value} is outside the SQLite storage range")]
     MetaIntegerOutOfRange { field: &'static str, value: u64 },
+    #[error("active repository snapshot index URI exceeds {limit} bytes (got {actual})")]
+    SnapshotIndexUriTooLong { limit: usize, actual: usize },
+    #[error("active repository snapshot index URI is invalid: {reason}")]
+    SnapshotIndexUriPolicy { reason: &'static str },
+    #[error("parse active repository snapshot index URI")]
+    ParseSnapshotIndexUri(#[source] url::ParseError),
+    #[error("active repository snapshot SHA-256 must be exactly 64 lowercase ASCII hexadecimal characters")]
+    InvalidSnapshotSha256,
+    #[error("active repository snapshot byte size exceeds {limit} bytes (got {actual})")]
+    SnapshotByteSizeOutOfRange { limit: u64, actual: u64 },
+    #[error("stored active repository snapshot byte size is negative: {0}")]
+    NegativeSnapshotByteSize(i64),
+    #[error("stored active repository snapshot has invalid singleton key {0}")]
+    InvalidSnapshotSingleton(i32),
     #[error("diesel")]
     Diesel(#[from] diesel::result::Error),
     #[error("diesel connection")]

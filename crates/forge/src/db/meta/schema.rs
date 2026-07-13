@@ -1,6 +1,15 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    active_repository_snapshot (singleton) {
+        singleton -> Integer,
+        index_uri -> Text,
+        sha256 -> Text,
+        byte_size -> BigInt,
+    }
+}
+
+diesel::table! {
     meta (package) {
         package -> Text,
         name -> Text,
@@ -51,4 +60,11 @@ diesel::joinable!(meta_dependencies -> meta (package));
 diesel::joinable!(meta_licenses -> meta (package));
 diesel::joinable!(meta_providers -> meta (package));
 
-diesel::allow_tables_to_appear_in_same_query!(meta, meta_conflicts, meta_dependencies, meta_licenses, meta_providers);
+diesel::allow_tables_to_appear_in_same_query!(
+    active_repository_snapshot,
+    meta,
+    meta_conflicts,
+    meta_dependencies,
+    meta_licenses,
+    meta_providers,
+);
