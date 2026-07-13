@@ -3548,6 +3548,7 @@ dependencies = [
  "gluon_codegen",
  "gluon_config",
  "nom",
+ "sha2",
  "snafu",
  "strum",
  "thiserror 2.0.18",

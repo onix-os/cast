@@ -20,6 +20,7 @@ pub use self::tuning::{CompilerFlagsSpec, Tuning, TuningFlagSpec, TuningGroupSpe
 pub use self::upstream::Upstream;
 pub use self::validation::ValidationError;
 
+pub mod derivation;
 pub mod gluon;
 pub mod macros;
 pub mod package;
