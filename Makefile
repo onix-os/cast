@@ -17,7 +17,7 @@ STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 .DEFAULT_GOAL := moss
 
 .PHONY: build boulder moss get-started licenses fix lint test check fmt clean \
-	config-formats migrate migrate-redo libstone help
+	config-formats config-formats-test migrate migrate-redo libstone help
 
 build:
 	@$(CARGO) build --workspace
@@ -74,7 +74,10 @@ lint: config-formats
 config-formats:
 	@"$(TOP_DIR)/misc/scripts/check-config-formats.sh"
 
-test: lint
+config-formats-test:
+	@"$(TOP_DIR)/misc/scripts/test-check-config-formats.sh"
+
+test: lint config-formats-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all
 
@@ -135,6 +138,7 @@ help:
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"
 	@echo "  config-formats  Reject YAML/KDL outside external-service interfaces"
+	@echo "  config-formats-test  Test the configuration-format gate"
 	@echo "  migrate       Apply all Moss database migrations"
 	@echo "  migrate-redo  Reapply all Moss database migrations"
 	@echo "  libstone      Build and run the C libstone example"
