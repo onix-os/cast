@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use moss::util;
 use std::{
     num::NonZeroUsize,
     path::{Component, Path},
@@ -134,7 +133,7 @@ impl Phase {
         let work_dir = if matches!(self, Phase::Prepare) {
             build_dir.clone()
         } else {
-            work_dir(&build_dir, &recipe.declaration.sources)
+            work_dir(&build_dir, &recipe.declaration.sources)?
         };
         let flags = select_flags(target, pgo_stage, recipe, policy)?;
         let mut context = BuildContext::resolve(
@@ -371,11 +370,12 @@ fn prepare_steps(
     policy: &BuildPolicy,
 ) -> Result<Vec<StepPlan>, Error> {
     let mut steps = Vec::new();
-    for source in sources {
+    for (index, source) in sources.iter().enumerate() {
+        let materialization_name = source
+            .materialization_name()
+            .map_err(|source| Error::InvalidSource { index, source })?;
         match source {
             UpstreamSpec::Archive {
-                url,
-                rename,
                 strip_dirs,
                 unpack,
                 unpack_dir,
@@ -384,16 +384,20 @@ fn prepare_steps(
                 if !*unpack {
                     continue;
                 }
-                let file_name = url
-                    .parse()
-                    .ok()
-                    .map(|url| util::uri_file_name(&url).to_owned())
-                    .unwrap_or_default();
-                let rename = rename.as_deref().unwrap_or(file_name.as_str());
-                let unpack_dir = unpack_dir.as_ref().cloned().unwrap_or_else(|| rename.to_owned());
+                let unpack_dir = unpack_dir
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| materialization_name.clone());
                 let strip_dirs = strip_dirs.unwrap_or(1);
                 let overlay = TextContextOverlay {
-                    source_path: Some(paths.upstreams().guest.join(rename).display().to_string()),
+                    source_path: Some(
+                        paths
+                            .upstreams()
+                            .guest
+                            .join(&materialization_name)
+                            .display()
+                            .to_string(),
+                    ),
                     source_destination: Some(unpack_dir),
                     source_strip_components: Some(
                         u32::try_from(strip_dirs).expect("validated source strip_dirs fits u32"),
@@ -403,16 +407,17 @@ fn prepare_steps(
                 steps.push(context.resolve_command(&policy.spec.sources.archive.create_directory, &overlay)?);
                 steps.push(context.resolve_command(&policy.spec.sources.archive.unpack, &overlay)?);
             }
-            UpstreamSpec::Git { url, clone_dir, .. } => {
-                let source = url
-                    .parse()
-                    .ok()
-                    .map(|url| util::uri_file_name(&url).to_owned())
-                    .unwrap_or_default();
-                let target = clone_dir.as_ref().cloned().unwrap_or_else(|| source.to_owned());
+            UpstreamSpec::Git { .. } => {
                 let overlay = TextContextOverlay {
-                    source_path: Some(paths.upstreams().guest.join(source).display().to_string()),
-                    source_destination: Some(target),
+                    source_path: Some(
+                        paths
+                            .upstreams()
+                            .guest
+                            .join(&materialization_name)
+                            .display()
+                            .to_string(),
+                    ),
+                    source_destination: Some(materialization_name),
                     source_strip_components: None,
                 };
 
@@ -811,7 +816,7 @@ mod direct_tests {
             panic!("git preparation must be structural")
         };
         assert_eq!(program.path, "/usr/bin/cp");
-        assert_eq!(args[2], "/mason/sourcedir/project.git/.");
+        assert_eq!(args[2], "/mason/sourcedir/git tree/.");
         assert_eq!(args[3], "git tree");
     }
 

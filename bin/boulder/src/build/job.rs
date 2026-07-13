@@ -8,8 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use moss::util;
-use stone_recipe::{UpstreamSpec, build_policy::TargetPolicySpec, derivation::PhasePlan};
+use stone_recipe::{
+    UpstreamSpec, build_policy::TargetPolicySpec, derivation::PhasePlan, spec::UpstreamValidationError,
+};
 use thiserror::Error;
 
 pub use self::phase::Phase;
@@ -37,7 +38,7 @@ impl Job {
         jobs: NonZeroUsize,
     ) -> Result<Self, Error> {
         let build_dir = paths.build().guest.join(&target.name);
-        let work_dir = work_dir(&build_dir, &recipe.declaration.sources);
+        let work_dir = work_dir(&build_dir, &recipe.declaration.sources)?;
 
         let plan_context = phase::PlanContext {
             target,
@@ -66,45 +67,28 @@ impl Job {
     }
 }
 
-fn work_dir(build_dir: &Path, sources: &[UpstreamSpec]) -> PathBuf {
+fn work_dir(build_dir: &Path, sources: &[UpstreamSpec]) -> Result<PathBuf, Error> {
     let mut work_dir = build_dir.to_path_buf();
 
     // Work dir is the first upstream that should be unpacked
-    if let Some(source) = sources.iter().find(|source| match source {
+    if let Some((index, source)) = sources.iter().enumerate().find(|(_, source)| match source {
         UpstreamSpec::Archive { unpack, .. } => *unpack,
         UpstreamSpec::Git { .. } => true,
     }) {
+        let materialization_name = source
+            .materialization_name()
+            .map_err(|source| Error::InvalidSource { index, source })?;
         match source {
-            UpstreamSpec::Archive {
-                url,
-                rename,
-                unpack_dir,
-                ..
-            } => {
-                let file_name = url
-                    .parse()
-                    .ok()
-                    .map(|url| util::uri_file_name(&url).to_owned())
-                    .unwrap_or_default();
-                let rename = rename.as_deref().unwrap_or(file_name.as_str());
-                let unpack_dir = unpack_dir.as_ref().cloned().unwrap_or_else(|| rename.to_owned());
-
-                work_dir = build_dir.join(unpack_dir);
+            UpstreamSpec::Archive { unpack_dir, .. } => {
+                work_dir = build_dir.join(unpack_dir.as_deref().unwrap_or(&materialization_name));
             }
-            UpstreamSpec::Git { url, clone_dir, .. } => {
-                let source = url
-                    .parse()
-                    .ok()
-                    .map(|url| util::uri_file_name(&url).to_owned())
-                    .unwrap_or_default();
-                let target = clone_dir.as_ref().cloned().unwrap_or_else(|| source.to_owned());
-
-                work_dir = build_dir.join(target);
+            UpstreamSpec::Git { .. } => {
+                work_dir = build_dir.join(materialization_name);
             }
         }
     }
 
-    work_dir
+    Ok(work_dir)
 }
 
 #[derive(Debug, Error)]
@@ -119,6 +103,12 @@ pub enum Error {
     InvalidProgramRequirement {
         #[source]
         source: stone::relation::ParseError,
+    },
+    #[error("source {index} is invalid: {source}")]
+    InvalidSource {
+        index: usize,
+        #[source]
+        source: UpstreamValidationError,
     },
     #[error("PGO path {path:?} must be normalized and remain beneath {pgo_dir:?}")]
     UnsafePgoPath { path: String, pgo_dir: String },
