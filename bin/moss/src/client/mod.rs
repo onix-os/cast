@@ -25,7 +25,7 @@ use nix::{
     fcntl::{self, OFlag},
     libc::{AT_FDCWD, RENAME_EXCHANGE, SYS_renameat2, syscall},
     sys::stat::{Mode, fchmodat, mkdirat},
-    unistd::{close, linkat, mkdir, symlinkat},
+    unistd::{UnlinkatFlags, close, linkat, mkdir, read, symlinkat, unlinkat, write},
 };
 use postblit::TriggerScope;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -855,9 +855,11 @@ impl Client {
     ///
     /// The new `/usr` filesystem is written in optimal order to a staging tree by making
     /// use of the "at" family of functions (`mkdirat`, `linkat`, etc) with relative directory
-    /// file descriptors, linking files from the assets store to provide deduplication.
+    /// file descriptors. Stateful roots hardlink files from the assets store to provide
+    /// deduplication, while ephemeral roots receive independent copies so build-time writes
+    /// cannot mutate the persistent asset store.
     ///
-    /// This provides a very quick means to generate a hardlinked "snapshot" on-demand,
+    /// This provides a very quick means to generate a filesystem snapshot on-demand,
     /// which can then be activated via [`Self::promote_staging`]
     pub fn blit_root<'a>(
         &self,
@@ -870,7 +872,11 @@ impl Client {
 
         let fstree = self.vfs(packages)?;
 
-        blit_root(&self.installation, &fstree, &blit_target)?;
+        let materialization = match &self.scope {
+            Scope::Stateful => AssetMaterialization::HardLink,
+            Scope::Ephemeral { .. } => AssetMaterialization::IndependentCopy,
+        };
+        blit_root_with_materialization(&self.installation, &fstree, &blit_target, materialization)?;
 
         Ok(fstree)
     }
@@ -1035,6 +1041,15 @@ pub fn vfs(layouts: Vec<(package::Id, StonePayloadLayoutRecord)>) -> Result<vfs:
 /// This provides a very quick means to generate a hardlinked "snapshot" on-demand,
 /// which can then be activated via [`Self::promote_staging`]
 pub fn blit_root(installation: &Installation, tree: &vfs::Tree<PendingFile>, blit_target: &Path) -> Result<(), Error> {
+    blit_root_with_materialization(installation, tree, blit_target, AssetMaterialization::HardLink)
+}
+
+fn blit_root_with_materialization(
+    installation: &Installation,
+    tree: &vfs::Tree<PendingFile>,
+    blit_target: &Path,
+    materialization: AssetMaterialization,
+) -> Result<(), Error> {
     // undirt.
     fs::remove_dir_all(blit_target)?;
 
@@ -1073,7 +1088,7 @@ pub fn blit_root(installation: &Installation, tree: &vfs::Tree<PendingFile>, bli
                         .into_par_iter()
                         .map(|child| {
                             let _guard = current_span.enter();
-                            blit_element(root_dir, cache_fd, child, &progress)
+                            blit_element(root_dir, cache_fd, child, &progress, materialization)
                         })
                         .try_reduce(BlitStats::default, |a, b| Ok(a.merge(b)))?,
                 );
@@ -1108,6 +1123,7 @@ fn blit_element(
     cache: RawFd,
     element: Element<'_, PendingFile>,
     progress: &ProgressBar,
+    materialization: AssetMaterialization,
 ) -> Result<BlitStats, Error> {
     let mut stats = BlitStats::default();
 
@@ -1130,7 +1146,7 @@ fn blit_element(
     match element {
         Element::Directory(name, item, children) => {
             // Construct within the parent
-            blit_element_item(parent, cache, name, item, &mut stats)?;
+            blit_element_item(parent, cache, name, item, &mut stats, materialization)?;
 
             // open the new dir
             let newdir = fcntl::openat(parent, name, OFlag::O_RDONLY | OFlag::O_DIRECTORY, Mode::empty())?;
@@ -1141,7 +1157,7 @@ fn blit_element(
                     .into_par_iter()
                     .map(|child| {
                         let _guard = current_span.enter();
-                        blit_element(newdir, cache, child, progress)
+                        blit_element(newdir, cache, child, progress, materialization)
                     })
                     .try_reduce(BlitStats::default, |a, b| Ok(a.merge(b)))?,
             );
@@ -1151,7 +1167,7 @@ fn blit_element(
             Ok(stats)
         }
         Element::Child(name, item) => {
-            blit_element_item(parent, cache, name, item, &mut stats)?;
+            blit_element_item(parent, cache, name, item, &mut stats, materialization)?;
 
             Ok(stats)
         }
@@ -1172,6 +1188,7 @@ fn blit_element_item(
     subpath: &str,
     item: &PendingFile,
     stats: &mut BlitStats,
+    materialization: AssetMaterialization,
 ) -> Result<(), Error> {
     match &item.layout.file {
         StonePayloadLayoutFile::Regular(id, _) => {
@@ -1199,13 +1216,20 @@ fn blit_element_item(
                 }
                 // Regular file
                 _ => {
-                    linkat(
-                        Some(cache),
-                        fp.to_str().unwrap(),
-                        Some(parent),
-                        subpath,
-                        nix::unistd::LinkatFlags::NoSymlinkFollow,
-                    )?;
+                    match materialization {
+                        AssetMaterialization::HardLink => {
+                            linkat(
+                                Some(cache),
+                                fp.to_str().unwrap(),
+                                Some(parent),
+                                subpath,
+                                nix::unistd::LinkatFlags::NoSymlinkFollow,
+                            )?;
+                        }
+                        AssetMaterialization::IndependentCopy => {
+                            copy_asset(cache, &fp, parent, subpath)?;
+                        }
+                    }
 
                     // Fix permissions
                     fchmodat(
@@ -1237,6 +1261,71 @@ fn blit_element_item(
     };
 
     Ok(())
+}
+
+/// Copy one cached asset into a fresh inode under `parent`.
+///
+/// Ephemeral package roots are writable by build steps, so hardlinking them to
+/// the persistent content store would let a write or chmod corrupt the cached
+/// asset. Keep the descriptor-relative traversal used by the blitter while
+/// giving the destination independent bytes and metadata.
+fn copy_asset(cache: RawFd, source: &Path, parent: RawFd, target: &str) -> Result<(), Errno> {
+    let source_fd = fcntl::openat(
+        cache,
+        source,
+        OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+        Mode::empty(),
+    )?;
+    let target_fd = match fcntl::openat(
+        parent,
+        target,
+        OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_WRONLY,
+        Mode::from_bits_truncate(0o600),
+    ) {
+        Ok(fd) => fd,
+        Err(error) => {
+            let _ = close(source_fd);
+            return Err(error);
+        }
+    };
+
+    let copy_result = copy_fd(source_fd, target_fd);
+    let source_close_result = close(source_fd);
+    let target_close_result = close(target_fd);
+
+    if let Err(error) = copy_result {
+        let _ = unlinkat(Some(parent), target, UnlinkatFlags::NoRemoveDir);
+        return Err(error);
+    }
+    source_close_result?;
+    target_close_result?;
+
+    Ok(())
+}
+
+fn copy_fd(source: RawFd, target: RawFd) -> Result<(), Errno> {
+    let mut buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let read_count = match read(source, &mut buffer) {
+            Ok(count) => count,
+            Err(Errno::EINTR) => continue,
+            Err(error) => return Err(error),
+        };
+        if read_count == 0 {
+            return Ok(());
+        }
+
+        let mut written = 0;
+        while written < read_count {
+            match write(target, &buffer[written..read_count]) {
+                Ok(0) => return Err(Errno::EIO),
+                Ok(count) => written += count,
+                Err(Errno::EINTR) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 fn record_state_id(root: &Path, state: state::Id) -> Result<(), Error> {
@@ -1334,6 +1423,12 @@ impl Scope {
     fn is_ephemeral(&self) -> bool {
         matches!(self, Self::Ephemeral { .. })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AssetMaterialization {
+    HardLink,
+    IndependentCopy,
 }
 
 /// A pending file for blitting
@@ -1530,7 +1625,11 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        fs::Permissions,
+        os::unix::fs::{MetadataExt, PermissionsExt},
+    };
 
     use gluon_config::Source;
 
@@ -1651,6 +1750,61 @@ let moss = import! moss.system.v1
         assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
         assert_eq!(round_trip.encoded(), snapshot);
         assert_eq!(fs::read_to_string(intent_path).unwrap(), authored);
+    }
+
+    #[test]
+    fn ephemeral_blit_isolates_cached_asset_bytes_and_mode() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("ephemeral-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+
+        let installation = Installation::open(&installation_root, None).unwrap();
+        let client = Client::builder("ephemeral-asset-isolation-test", installation)
+            .repositories(repository::Map::default())
+            .ephemeral(&blit_root)
+            .build()
+            .unwrap();
+
+        let asset_id = 0x1234_5678_90ab_cdef_1234_5678_90ab_cdef_u128;
+        let asset_path = cache::asset_path(&client.installation, &format!("{asset_id:02x}"));
+        fs::create_dir_all(asset_path.parent().unwrap()).unwrap();
+        fs::write(&asset_path, b"persistent cached bytes").unwrap();
+        fs::set_permissions(&asset_path, Permissions::from_mode(0o640)).unwrap();
+
+        let package = package::Id::from("ephemeral-asset-isolation-package");
+        client
+            .layout_db
+            .add(
+                &package,
+                &StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFREG | 0o755,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(asset_id, "bin/cached-tool".into()),
+                },
+            )
+            .unwrap();
+
+        client.blit_root([&package]).unwrap();
+
+        let materialized_path = blit_root.join("usr/bin/cached-tool");
+        let cached_metadata = fs::metadata(&asset_path).unwrap();
+        let materialized_metadata = fs::metadata(&materialized_path).unwrap();
+        assert_ne!(
+            (cached_metadata.dev(), cached_metadata.ino()),
+            (materialized_metadata.dev(), materialized_metadata.ino())
+        );
+        assert_eq!(cached_metadata.permissions().mode() & 0o7777, 0o640);
+        assert_eq!(materialized_metadata.permissions().mode() & 0o7777, 0o755);
+
+        fs::write(&materialized_path, b"build-mutated bytes").unwrap();
+        fs::set_permissions(&materialized_path, Permissions::from_mode(0o600)).unwrap();
+
+        assert_eq!(fs::read(&asset_path).unwrap(), b"persistent cached bytes");
+        assert_eq!(fs::metadata(&asset_path).unwrap().permissions().mode() & 0o7777, 0o640);
     }
 
     #[test]
