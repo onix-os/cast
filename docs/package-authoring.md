@@ -61,6 +61,14 @@ make {
 }
 ```
 
+`meta.pname` is also an artifact filename component. It must be non-empty and
+use only ASCII letters, digits, `+`, `-`, `.`, or `_`; `.` and `..` are not
+package names. `meta.version` must begin with a digit and be one normalized
+filename component: path separators, traversal components, and control
+characters are rejected. Boulder checks these rules during package evaluation,
+again when validating the frozen plan, and before creating recipe-keyed host
+paths.
+
 There is no `callPackage`-style argument-name reflection. A missing scope field
 is a Gluon type error. Scope values remain symbolic during evaluation; Moss
 provider resolution occurs later when Boulder creates `build.lock.glu`.

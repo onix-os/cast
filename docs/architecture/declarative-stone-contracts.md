@@ -153,7 +153,7 @@ Deliberately unsupported:
 - Defines `derivation_id = hash(canonical_encode(plan))`. No executor option
   that changes an output may remain outside this identity.
 - Is validated before execution. Current validation covers schema versions,
-  identities, locked closure references and cycles, source order and identity,
+  identities, safe package/version/artifact filename components, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
   concurrency, disabled networking, schema-v7 locked-closure root
   materialization, and the finite sandbox-filesystem contract. The locked

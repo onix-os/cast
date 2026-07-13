@@ -23,6 +23,7 @@ use crate::build_policy::{
     SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
     layers::BuildPolicyOperation,
 };
+use crate::package::{is_safe_artifact_component, valid_package_name};
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
@@ -580,8 +581,13 @@ pub struct PackageIdentity {
 
 impl PackageIdentity {
     fn validate(&self) -> Result<(), DerivationValidationError> {
-        require_nonempty("package.name", &self.name)?;
-        require_nonempty("package.version", &self.version)?;
+        validate_package_name("package.name", &self.name)?;
+        if !self.version.starts_with(|character: char| character.is_ascii_digit()) {
+            return Err(DerivationValidationError::InvalidPackageVersion {
+                value: self.version.clone(),
+            });
+        }
+        validate_artifact_component("package.version", &self.version)?;
         require_nonempty("package.architecture", &self.architecture)?;
         if self.source_release == 0 {
             return Err(DerivationValidationError::ZeroSourceRelease);
@@ -1420,8 +1426,8 @@ pub struct OutputPlan {
 
 impl OutputPlan {
     fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
-        require_nonempty(&format!("outputs[{index}].name"), &self.name)?;
-        require_nonempty(&format!("outputs[{index}].package_name"), &self.package_name)?;
+        validate_package_name(&format!("outputs[{index}].name"), &self.name)?;
+        validate_package_name(&format!("outputs[{index}].package_name"), &self.package_name)?;
         for (pattern_index, pattern) in self.provides_exclude.iter().enumerate() {
             validate_regex(&format!("outputs[{index}].provides_exclude[{pattern_index}]"), pattern)?;
         }
@@ -1525,6 +1531,12 @@ pub enum DerivationValidationError {
     UnsupportedSchema { found: u32, expected: u32 },
     #[error("{field}: value must not be empty")]
     Empty { field: String },
+    #[error("{field}: package name {value:?} must use only ASCII letters, digits, '+', '-', '.', or '_'")]
+    InvalidPackageName { field: String, value: String },
+    #[error("{field}: value {value:?} must be one normalized filename component")]
+    InvalidArtifactComponent { field: String, value: String },
+    #[error("package.version: version must start with an integer (found {value:?})")]
+    InvalidPackageVersion { value: String },
     #[error("{field}: invalid evaluation fingerprint: {source}")]
     InvalidEvaluationFingerprint {
         field: String,
@@ -1786,6 +1798,28 @@ fn require_nonblank(field: &str, value: &str) -> Result<(), DerivationValidation
         })
     } else {
         Ok(())
+    }
+}
+
+fn validate_package_name(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    if valid_package_name(value) {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::InvalidPackageName {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
+    }
+}
+
+fn validate_artifact_component(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    if is_safe_artifact_component(value) {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::InvalidArtifactComponent {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
     }
 }
 
@@ -2631,6 +2665,60 @@ mod tests {
                 Err(DerivationValidationError::Empty { field: actual }) if actual == field
             ));
         }
+    }
+
+    #[test]
+    fn validation_rejects_artifact_filename_escape_components() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "/tmp/escape",
+            "../../escape",
+            "name/child",
+            "name\\child",
+        ] {
+            let mut plan = sample_plan();
+            plan.package.name = name.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidPackageName { field, value })
+                    if field == "package.name" && value == name
+            ));
+        }
+
+        for version in ["1/../../escape", "1\\escape", "1\ninvalid"] {
+            let mut plan = sample_plan();
+            plan.package.version = version.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidArtifactComponent { field, value })
+                    if field == "package.version" && value == version
+            ));
+        }
+
+        let mut non_numeric_version = sample_plan();
+        non_numeric_version.package.version = "v1.0".to_owned();
+        assert!(matches!(
+            non_numeric_version.validate(),
+            Err(DerivationValidationError::InvalidPackageVersion { value }) if value == "v1.0"
+        ));
+
+        let mut output_name = sample_plan();
+        output_name.outputs[0].name = "../escape".to_owned();
+        assert!(matches!(
+            output_name.validate(),
+            Err(DerivationValidationError::InvalidPackageName { field, .. })
+                if field == "outputs[0].name"
+        ));
+
+        let mut package_name = sample_plan();
+        package_name.outputs[0].package_name = "../escape".to_owned();
+        assert!(matches!(
+            package_name.validate(),
+            Err(DerivationValidationError::InvalidPackageName { field, .. })
+                if field == "outputs[0].package_name"
+        ));
     }
 
     #[test]

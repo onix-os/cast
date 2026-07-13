@@ -235,6 +235,29 @@ b.mk_package (b.meta {
 }
 
 #[test]
+fn evaluator_rejects_package_metadata_that_can_escape_artifact_paths() {
+    for (pname, version, field) in [
+        ("../../escape", "1.0.0", "meta.pname"),
+        ("example", "1/../../escape", "meta.version"),
+    ] {
+        let source = authored(&format!(
+            r#"
+b.mk_package (b.meta {{
+    pname = {pname:?}, version = {version:?}, release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+}})
+"#
+        ));
+
+        let error = evaluate_gluon(&source).unwrap_err();
+        assert!(matches!(
+            error,
+            PackageEvaluationError::Conversion(ref error) if error.field() == field
+        ));
+    }
+}
+
+#[test]
 fn evaluator_rejects_networked_frozen_packages_with_locked_source_guidance() {
     let source = authored(
         r#"

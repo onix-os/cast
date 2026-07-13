@@ -55,6 +55,10 @@ impl Paths {
         host_root: impl Into<PathBuf>,
         output_dir: impl Into<PathBuf>,
     ) -> io::Result<Self> {
+        recipe
+            .declaration
+            .validate()
+            .map_err(|error| invalid_binding(format!("invalid package identity before path creation: {error}")))?;
         let id = Id::recipe(recipe);
 
         let recipe_dir = recipe.path.parent().unwrap_or(&PathBuf::default()).canonicalize()?;
@@ -353,6 +357,21 @@ mod tests {
 
         assert!(matches!(&paths.id, Id::Recipe(_)));
         assert!(paths.require_plan(&plan).is_err());
+    }
+
+    #[test]
+    fn invalid_recipe_identity_is_rejected_before_host_paths_are_created() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let mut recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        recipe.declaration.meta.pname = "/tmp/boulder-path-escape".to_owned();
+        let output = root.path().join("output");
+        util::ensure_dir_exists(&output).unwrap();
+
+        let error = Paths::new(&recipe, plan.layout, root.path(), output).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!root.path().join("root").exists());
     }
 
     #[test]

@@ -290,8 +290,12 @@ impl DependencySpec {
 /// Failure to validate a concrete package-v2 declaration.
 #[derive(Debug, Error)]
 pub enum PackageConversionError {
+    #[error("meta.pname: package name `{name}` must use only ASCII letters, digits, '+', '-', '.', or '_'")]
+    InvalidPackageName { name: String },
     #[error("meta.version: version must start with an integer (found `{version}`)")]
     VersionMustStartWithDigit { version: String },
+    #[error("meta.version: version `{version}` must be one normalized filename component")]
+    InvalidVersionComponent { version: String },
     #[error("meta.release: release must be greater than zero (found `{release}`)")]
     ReleaseMustBePositive { release: i64 },
     #[error(
@@ -349,7 +353,9 @@ pub enum PackageConversionError {
 impl PackageConversionError {
     pub fn field(&self) -> &str {
         match self {
+            Self::InvalidPackageName { .. } => "meta.pname",
             Self::VersionMustStartWithDigit { .. } => "meta.version",
+            Self::InvalidVersionComponent { .. } => "meta.version",
             Self::ReleaseMustBePositive { .. } => "meta.release",
             Self::FrozenBuildNetworkingUnsupported => "options.networking",
             Self::InvalidUrl { field, .. }
@@ -370,12 +376,22 @@ impl PackageSpec {
     /// Validate the concrete package declaration without lowering it through
     /// the transitional recipe model.
     pub fn validate(&self) -> Result<(), PackageConversionError> {
+        if !valid_package_name(&self.meta.pname) {
+            return Err(PackageConversionError::InvalidPackageName {
+                name: self.meta.pname.clone(),
+            });
+        }
         if !self
             .meta
             .version
             .starts_with(|character: char| character.is_ascii_digit())
         {
             return Err(PackageConversionError::VersionMustStartWithDigit {
+                version: self.meta.version.clone(),
+            });
+        }
+        if !is_safe_artifact_component(&self.meta.version) {
+            return Err(PackageConversionError::InvalidVersionComponent {
                 version: self.meta.version.clone(),
             });
         }
@@ -714,11 +730,25 @@ fn find_cycle<'a>(
     None
 }
 
-fn valid_output_name(name: &str) -> bool {
+pub(crate) fn valid_package_name(name: &str) -> bool {
     !name.is_empty()
+        && name != "."
+        && name != ".."
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_'))
+}
+
+pub(crate) fn is_safe_artifact_component(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains(['/', '\\'])
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_output_name(name: &str) -> bool {
+    valid_package_name(name)
 }
 
 impl BuilderSpec {
@@ -947,6 +977,22 @@ mod tests {
 
     #[test]
     fn direct_metadata_and_source_validation_keep_package_field_paths() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "/tmp/escape",
+            "../../escape",
+            "name/child",
+            "name\\child",
+        ] {
+            let mut invalid = package();
+            invalid.meta.pname = name.to_owned();
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(error, PackageConversionError::InvalidPackageName { .. }));
+            assert_eq!(error.field(), "meta.pname");
+        }
+
         let mut invalid = package();
         invalid.meta.version = "v1.0".to_owned();
         let error = invalid.validate().unwrap_err();
@@ -955,6 +1001,14 @@ mod tests {
             PackageConversionError::VersionMustStartWithDigit { .. }
         ));
         assert_eq!(error.field(), "meta.version");
+
+        for version in ["1/../../escape", "1\\escape", "1\ninvalid"] {
+            let mut invalid = package();
+            invalid.meta.version = version.to_owned();
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(error, PackageConversionError::InvalidVersionComponent { .. }));
+            assert_eq!(error.field(), "meta.version");
+        }
 
         let mut invalid = package();
         invalid.meta.release = 0;
