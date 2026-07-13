@@ -3,11 +3,21 @@
 # SPDX-License-Identifier: MPL-2.0
 -->
 
-# How AerynOS delivers software to OS installs
+# Software delivery architecture
+
+This is inherited Serpent OS/AerynOS architecture retained by the Onix hard
+fork. The quotations document the origins of the Stone/Moss design; current
+Onix-specific package authoring and derivation contracts are documented in
+[`../package-authoring.md`](../package-authoring.md) and
+[`declarative-stone-contracts.md`](declarative-stone-contracts.md).
 
 ## Software package metadata: manifest.*.bin
 
-The `manifest.${ARCH}.bin` files contain all the metadata needed by the AerynOS tooling. For context, the `manifest.${ARCH}.jsonc` files are only there for git diff purposes and human-readable insight. They are completely ignored by the tooling.
+The `manifest.${ARCH}.bin` files contain the metadata consumed by the tooling.
+The `manifest.${ARCH}.jsonc` files are for review and human-readable insight;
+the tooling ignores them. Current Boulder metadata includes the evaluated
+recipe fingerprint and the canonical derivation ID so package provenance can
+be related to its frozen plan.
 
     **Ikey Doherty**
     > our manifest.*.bin format is just a .stone in disguise
@@ -21,7 +31,10 @@ The `manifest.${ARCH}.bin` files contain all the metadata needed by the AerynOS 
 
 ## Software distribution via *.stone packages
 
-AerynOS distributes software via its custom `stone` format. This format was explicitly built to enable fast, deduplicated transmission and installation of software artefacts on target OS installs.
+Onix retains the custom `stone` format for fast, deduplicated transmission and
+installation. A Stone package ID or payload hash proves artifact identity and
+integrity. It is distinct from the derivation ID, which hashes the canonical
+inputs and requested build semantics before execution.
 
     > **Ikey Doherty**
     > Context: we dont mix layout + metadata (unlike in alpine, where tar records are used for metadata)

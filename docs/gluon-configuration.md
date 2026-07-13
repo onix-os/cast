@@ -44,6 +44,10 @@ Runnable examples live in [`docs/examples/gluon`](examples/gluon):
 - [`trigger.glu`](examples/gluon/trigger.glu) defines a packaged trigger;
 - [`system.glu`](examples/gluon/system.glu) defines desired system state.
 
+The [package-authoring guide](package-authoring.md) documents factories,
+explicit dependency scopes, standard and custom builders, typed phases,
+outputs, patches, and lock/plan workflows.
+
 ## Restricted evaluator
 
 `crates/gluon_config` is the single VM construction and import-policy boundary.
@@ -127,8 +131,16 @@ Package factories are ordinary functions from an explicit dependency record to
 a concrete package value. `boulder.override_attrs` applies a total typed patch;
 patch records distinguish keeping an array from replacing it with `[]`.
 Standard CMake, Meson, Cargo, and Autotools modules declare their required
-tools structurally and lower to the transitional shell executor only after
-evaluation.
+tools and phase bodies as structural `StepSpec` values. They do not author or
+lower through `%action` strings. `b.step.shell` is the explicit escape hatch;
+Shell content and the remaining `%(definition)` environment/layout syntax use
+the transitional script parser before plan freeze. The executor receives only
+the resulting frozen `StepPlan` and environment values.
+
+The former `boulder.recipe.v1` embedded module, evaluator, and standalone
+encoders have been removed. `boulder.package.v2` is the only recipe ABI. An
+internal Rust `Recipe`/`RecipeSpec` lowering remains temporarily while
+pre-freeze planning is moved directly to `PackageSpec` and typed policy.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
@@ -142,6 +154,7 @@ Authored programs and generated values have different roles:
 | `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Boulder |
 | Macro, profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
 | `sources.lock.glu` | Boulder | Canonical standalone source resolution data, written atomically |
+| `build.lock.glu` | Boulder planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
 | Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Boulder/Moss CLI | Canonical standalone literals marked `@generated`; authored files are protected |
 | `/etc/moss/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
 | `/usr/lib/system-model.glu` | Moss state transaction | Canonical standalone snapshot stored with the state |
@@ -158,6 +171,16 @@ leaves the previous lock intact. Supplying update values prints structured
 authored-change suggestions instead; neither update mode rewrites arbitrary
 Gluon expressions. `boulder recipe bump` likewise prints an authored release
 suggestion.
+
+`build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
+planning, including `boulder build --update-lock`. Its request fingerprint
+binds the evaluated recipe and source lock, selected target and policy, profile, toolchain,
+builder, job count, and requested providers. The lock contains the exact
+Moss-resolved package/output closure, repository index snapshots, base state,
+build/host/target platforms, and selected policy identities. Planning without
+`--update-lock` requires a current lock; missing and stale locks are errors
+with an explicit refresh command. `--refresh-repositories` is valid only while
+updating the lock.
 
 Moss similarly keeps desired intent separate from normalized state. `moss sync
 --import path/to/system.glu` evaluates an alternate intent, while `moss state
@@ -191,9 +214,16 @@ Stable logical names are used instead of host paths. Identical source and
 inputs therefore produce an identical fingerprint, while a changed import,
 lock, ABI, runtime version, or evaluator policy changes it.
 
-Boulder records the aggregate recipe fingerprint in package and binary-manifest
-`SourceRef` metadata and in the JSONC build manifest. Moss records the authored
-system-intent fingerprint with each normalized state snapshot.
+Boulder freezes a canonical target-specific `DerivationPlan` and hashes it as
+the derivation ID. The canonical data includes the recipe/source identities,
+build lock, ordered jobs/phases/steps, environment, builder layout, execution
+policy, tuning, analyzers, outputs, and explicit source timestamp. Mutation
+tests cover each semantic category. Package and binary-manifest `SourceRef`
+metadata carry both `recipe-sha256:` and `derivation-sha256:` values, and the
+JSONC build manifest has `recipe-fingerprint` and `derivation-id` fields. The
+frozen executor and packager carry that validated ID through artifact emission.
+Moss records the authored system-intent fingerprint with each normalized state
+snapshot.
 
 ## CLI workflow
 
@@ -215,6 +245,55 @@ boulder recipe eval ./stone.glu
 
 Boulder build, check, update, and evaluation all use `boulder.package.v2`.
 There is no automatic legacy-recipe fallback or dual-source precedence.
+
+Freeze a target-specific derivation and create or refresh its generated build
+lock:
+
+```sh
+boulder recipe plan ./stone.glu \
+    --profile default-x86_64 \
+    --target x86_64 \
+    --source-date-epoch 1700000000 \
+    --jobs 8 \
+    --update-lock
+```
+
+The target, timestamp, and job count are explicit semantic inputs. Repeat the
+command without `--update-lock` to require and consume the current lock. The
+command prints the derivation ID, request fingerprint, target, plan counts,
+and canonical plan bytes.
+
+Explain the same locked derivation and its provenance:
+
+```sh
+boulder recipe explain ./stone.glu \
+    --profile default-x86_64 \
+    --target x86_64 \
+    --source-date-epoch 1700000000 \
+    --jobs 8
+```
+
+Normal builds use the same frozen plan:
+
+```sh
+boulder build ./stone.glu \
+    --profile default-x86_64 \
+    --target x86_64 \
+    --source-date-epoch 1700000000 \
+    --jobs 8
+```
+
+The build requires a current `build.lock.glu`. `--update-lock` refreshes it;
+`--refresh-repositories` requires `--update-lock`. Runtime setup verifies the
+repository snapshots and exact-installs locked package IDs, materializes only
+locked sources, and enters the plan-defined container. The executor runs only
+frozen steps, `FrozenPackager` consumes plan-owned analysis and collection
+rules, binary-manifest verification stays on the host, and cleanup is limited
+to plan-owned paths.
+
+Mutable local recipe inputs referenced through `%(pkgdir)` are rejected before
+freeze. Supporting them requires a local-source ABI that hashes their bytes and
+destination into the derivation.
 
 Create a skeletal recipe from one or more source archives:
 
@@ -243,8 +322,13 @@ KDL system-model round trip were removed. A file using an old configuration
 extension is ignored where fragment discovery applies; it is never preferred
 over Gluon.
 
-YAML required by external services, notably files under `.github`, is outside
-this configuration contract and remains in the repository.
+The exact external-service YAML allowlist is `.github/dependabot.yml`,
+`.github/workflows/ci.yaml`, and `.github/workflows/release.yaml`. No KDL files
+are tracked. Negative no-fallback tests, package names containing “yaml”, and
+the completed historical migration plan are textual audit exceptions rather
+than configuration paths. The Makefile `config-formats` target compares tracked
+YAML/KDL paths with this exact allowlist, and `make test` runs the target before
+Clippy and the test suite.
 
 ## Linkage measurement
 

@@ -21,9 +21,9 @@
 >   bin/boulder bin/moss tests
 > ```
 >
-> If the relevant code has changed, compare it against the current-state notes
-> below. Stop and report if the format boundaries or system-model semantics have
-> materially changed; do not mechanically apply this plan to a different design.
+> This migration is complete. The notes below describe the baseline at
+> `80d7ac5`, not the current repository. They are retained as the historical
+> audit trail for the removed format boundaries.
 
 ## Status
 
@@ -74,7 +74,7 @@ Building those boundaries once in a small shared crate avoids independent,
 inconsistent Gluon VMs in Boulder and Moss. It also permits YAML and KDL to be
 removed rather than retained as internal intermediate formats.
 
-## Current state
+## Baseline state at `80d7ac5`
 
 ### Repository and validation conventions
 

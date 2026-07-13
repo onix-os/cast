@@ -6,11 +6,10 @@
 # Declarative Stone contracts
 
 This document freezes the ownership boundary and invariants for the three
-specification layers introduced by the declarative Stone plan. It also records
-every value that Boulder currently supplies or derives after a Gluon recipe has
-been evaluated. The inventory is the Phase 1 migration checklist: later work
-must move each semantic value to its assigned layer rather than silently
-recreating it in the executor.
+specification layers introduced by the declarative Stone plan. It also retains
+the Phase 1 baseline inventory of values Boulder supplied after evaluation.
+That inventory is historical; the implementation status below distinguishes
+what has moved from what remains in the pre-freeze transition.
 
 ## Ownership
 
@@ -21,10 +20,10 @@ the restricted Gluon evaluator and Boulder.
 | Contract | Target module | Owner and responsibility |
 | --- | --- | --- |
 | `PackageSpec` | `stone_recipe::package` | Authored intent returned by a pure Gluon package factory. Validation may inspect only this value and explicit function arguments. |
-| `PolicySpec` | `stone_recipe::policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. Policy composition is pure, ordered, and fingerprinted. |
+| `PolicySpec` | `stone_recipe::macros` during transition; final home `stone_recipe::policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. Policy composition is pure, ordered, and fingerprinted. |
 | `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
 
-`bin/boulder` owns orchestration only:
+The target contract gives `bin/boulder` orchestration only:
 
 1. evaluate a package factory and an explicitly selected policy root;
 2. resolve sources and package providers through I/O-backed services;
@@ -35,6 +34,48 @@ Boulder must not own a second private representation that can express more
 semantic information than `DerivationPlan`. Runtime structs may borrow or
 index plan data, but they must not add dependencies, phases, environment,
 policy, or outputs.
+
+## Implementation status
+
+Implemented:
+
+- `boulder.package.v2` is the only public recipe ABI; the v1 Gluon module,
+  evaluator, encoders, and fixtures are removed.
+- `stone::relation` is the shared typed relation representation used by Stone,
+  Boulder, Moss, and `stone_recipe` validation.
+- reusable dependency scopes are ordinary imported Gluon records passed to
+  factories; missing fields are type errors, local output cycles are rejected,
+  and Moss closure cycles report their concrete path;
+- policy loads from one explicit `policy.glu` root with ordered `add`,
+  `replace`, and `modify` operations plus module fingerprints and provenance;
+- CMake, Meson, Cargo, and Autotools produce structural `StepSpec` phases and
+  declare their tools without authored `%action` strings;
+- `build.lock.glu` freezes the exact Moss-resolved closure, repository
+  snapshots, platforms, and selected policy identities with explicit
+  missing/stale/update behavior;
+- `boulder recipe plan` freezes and validates canonical target-specific jobs,
+  phases, environment, layout, execution policy, analysis, collection rules,
+  manifest inputs, outputs, and timestamp;
+- `recipe explain` exposes lock and policy provenance, and canonical mutation
+  tests prove that semantic changes alter the derivation ID;
+- normal `boulder build` uses that same plan to verify repository snapshots,
+  exact-install locked packages, materialize locked sources, enter a frozen
+  container, execute plan steps, package plan-owned outputs, verify manifests
+  on the host, and clean plan-owned paths;
+- manifest and Stone metadata record the recipe and derivation provenance from
+  the executed plan.
+
+Still transitional:
+
+- `PackageSpec` lowers into internal Rust `Recipe`/`RecipeSpec` values during
+  planning;
+- explicit `Shell` steps and `%(definition)` layout/environment expansion use
+  `stone_recipe::script`; standard builder steps themselves are structural;
+- mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
+  hash their content and destination into the derivation;
+- configured policy layers beyond the explicit repository root remain
+  deferred until explain and derivation identity carry their order and
+  provenance.
 
 ## Layer invariants
 
@@ -85,9 +126,12 @@ policy, or outputs.
   identifiers have one normalized representation.
 - Defines `derivation_id = hash(canonical_encode(plan))`. No executor option
   that changes an output may remain outside this identity.
-- Is deeply validated before execution. In particular, referenced outputs
-  exist, output names are unique, the dependency graph is acyclic, phases use
-  declared tools, and all platform roles are supported.
+- Is validated before execution. Current validation covers schema versions,
+  identities, locked closure references and cycles, source order and identity,
+  unique phases/outputs/analyzers, output relations, guest paths, and explicit
+  concurrency. An arbitrary explicit `Shell` escape cannot be statically proven
+  to use only declared tools; custom builders therefore retain an explicit
+  `required_tools` contract.
 - Is immutable after freezing. Execution can report observations such as
   output file hashes and analyzer findings, but cannot change the requested
   build semantics.
@@ -108,25 +152,29 @@ Every post-evaluation value belongs to exactly one of these classes:
 The filesystem location used to load an explicit value is not itself semantic;
 the selected identity, content, fingerprint, and ordering are semantic.
 
-## Current post-evaluation input inventory
+## Phase 1 baseline post-evaluation input inventory
+
+The following tables describe the migration baseline, not the current state.
+They remain the audit trail for why each value belongs in a contract. The
+implementation status above is authoritative for completed work.
 
 ### Policy and package construction
 
-| Current value or behavior | Current location | Class | Required destination |
+| Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
-| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | `bin/boulder/src/macros.rs` | Repository policy | One explicitly imported `PolicySpec` root; retain its complete fingerprint and module provenance. |
+| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicitly imported `PolicySpec` root; retain its complete fingerprint and module provenance. Implemented by `policy.glu`. |
 | Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Selected builder and platform policy, resolved into plan phases, tools, and environment. |
 | Architecture package templates | `package.rs::resolve_packages` | Repository policy | Typed output templates in `PolicySpec`, with explicit composition operations. |
 | Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
 | Root package and subpackage precedence | `package.rs::resolve_packages` | Authored intent | Explicit named outputs in `PackageSpec`; no collision-based merge in the executor. |
 | Template collision merge and list sorting | `package.rs::resolve_packages` | Repository policy | Typed policy patch semantics; the fully merged outputs appear in the plan. |
 | `%name`, `%version`, and `%release` expansion in package fields | `package.rs::resolve_packages` | Authored intent | Structural fields or typed interpolation resolved before plan freeze. |
-| `%action` expansion and action-provided dependencies | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Structured builders declare steps and required tools; plan contains expanded steps and inputs. |
+| `%action` expansion and action-provided dependencies | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Structured builders declare steps and required tools. Implemented for standard builders; explicit `Shell` is the remaining escape hatch. |
 | `%(definition)` expansion | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Typed builder arguments, paths, and environment values in the plan. |
 
 ### Platforms, toolchains, and build environment
 
-| Current value or behavior | Current location | Class | Required destination |
+| Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Host architecture used to choose build targets | `recipe.rs::build_targets` and `architecture.rs` | Forbidden ambient state | Explicit build/host/target platform input, validated against `PolicySpec` and frozen in the plan. |
 | Host architecture written to package metadata | `package/emit.rs` | Forbidden ambient state | The plan's resolved target/output architecture. |
@@ -144,7 +192,7 @@ the selected identity, content, fingerprint, and ordering are semantic.
 
 ### Sources and time
 
-| Current value or behavior | Current location | Class | Required destination |
+| Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Authored upstream requests | evaluated recipe | Authored intent | Typed source requests in `PackageSpec`. |
 | `sources.lock.glu` content | `recipe.rs` and `source_lock.rs` | Resolved dependency | Locked source identities and lock digest in `DerivationPlan`. |
@@ -157,18 +205,18 @@ the selected identity, content, fingerprint, and ordering are semantic.
 
 ### Dependency and repository resolution
 
-| Current value or behavior | Current location | Class | Required destination |
+| Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Recipe build/check dependency strings | evaluated recipe and `build/root.rs` | Authored intent | Typed native/build/check inputs in `PackageSpec`. |
 | Dependencies inferred from expanded actions | `Builder::extra_deps` | Repository policy | Builder requirements in `PolicySpec`, resolved before plan freeze. |
 | Profile selection and repository list from user/system configuration | `build.rs` and `profile.rs` | Repository policy | Explicit selected profile identity and fingerprint in the plan; repository contents are resolution inputs. |
-| Current repository indexes and provider choices | Moss population | Resolved dependency | Exact repository snapshot plus selected package/output IDs in the plan and `build.lock.glu`. |
+| Current repository indexes and provider choices | Moss population | Resolved dependency | Exact repository snapshot plus selected package/output IDs in the plan and `build.lock.glu`. Implemented by planning and enforced by frozen runtime setup. |
 | `--update` repository refresh | `cli/build.rs` and `build/root.rs` | Executor-only operation | It may change resolution, but the flag is not identity; the resulting repository snapshot and closure are. |
 | Automatic repository initialization | `build/root.rs` | Executor-only operation | Must not change a frozen plan. Resolution occurs before freezing, never during root population. |
 
 ### Outputs and invocation controls
 
-| Current value or behavior | Current location | Class | Required destination |
+| Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Output names, path rules, runtime relations, and conflicts | recipe plus architecture templates | Authored intent plus repository policy | Explicit, fully merged plan outputs. |
 | Package analysis chain and automatic provides/dependencies | `package/analysis` | Repository policy | Analyzer set/version/configuration in the plan. Findings are output-derived observations, not permission to select new policy. |
@@ -180,6 +228,11 @@ the selected identity, content, fingerprint, and ordering are semantic.
 | Compression worker count | `package/emit.rs` | Executor-only only if proven byte-stable | If it can alter artifact bytes or metadata, make encoding policy explicit in the plan. |
 
 ## Freeze boundary
+
+This execution contract is enforced. Planning freezes and validates the
+derivation; runtime setup, container entry, phase execution, packaging,
+verification, and cleanup receive plan-owned values rather than re-resolving
+semantic inputs.
 
 The only permitted transitions are:
 
@@ -207,17 +260,19 @@ the plan must be resolved again.
 
 ## Breakpoint locations
 
-An evaluated phase string may be defined by a function, record update, or
-imported module. Consequently, scanning the root `stone.glu` text cannot
-recover an authoritative authored source line. Boulder reports the stable,
-one-based line within the evaluated phase script instead. Future structured
-steps may carry Gluon provenance directly, but the executor must never guess a
-source location from configuration syntax.
+Standard builders now use typed steps. An explicit `Shell` script may still be
+defined by a function, record update, or imported module, so scanning the root
+`stone.glu` text cannot recover an authoritative authored source line. Boulder
+reports the stable, one-based line within that evaluated shell script instead.
+Interactive breakpoints are rejected when freezing a derivation plan; future
+structured steps may carry Gluon provenance directly, but the executor must
+never guess a source location from configuration syntax.
 
 ## Phase 1 exit audit
 
-Phase 1 is complete only when tests also prove that repeated evaluation with
-identical explicit source, imports, ABI modules, and lock bytes produces equal
-values and fingerprints. This document assigns every currently identified
-post-evaluation input to a destination, but it does not itself prove that the
-future resolver or executor enforces the boundary.
+Phase 1 tests prove that repeated evaluation with identical explicit source,
+imports, ABI modules, and lock bytes produces equal values and fingerprints.
+The resolver and planner freeze and validate the canonical plan, and the normal
+build path enforces it through execution and emission. The remaining work is
+to remove the internal pre-freeze recipe/macro representations without
+weakening this boundary.

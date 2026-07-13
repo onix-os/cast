@@ -25,7 +25,9 @@ and KDL loaders, fallbacks, dual writes, and intermediate representations have
 been removed. Gluon programs cross a typed and versioned ABI, run inside a
 restricted evaluator, and produce fingerprints used for provenance. Authored
 programs remain separate from generated source locks and normalized state
-snapshots.
+snapshots. Boulder additionally freezes exact Moss-resolved closures and
+canonical derivation plans whose SHA-256 identity is carried by the package
+metadata path.
 
 Keeping the old configuration paths would leave two sources of truth and two
 different composition models. It would also make compatibility promises
@@ -42,8 +44,9 @@ came from the Serpent OS and AerynOS contributors. Please read
 
 - **Moss** manages packages and system states. It builds content-addressed
   states and activates them atomically.
-- **Boulder** builds `.stone` packages in an isolated build environment from
-  `stone.glu` recipes.
+- **Boulder** evaluates `stone.glu` package factories, resolves exact build
+  closures, and executes target-specific frozen plans in an isolated build
+  environment.
 - **stone** and **libstone** provide Rust and C interfaces for the `.stone`
   package format.
 - **gluon_config** is the common evaluator boundary. It controls imports,
@@ -70,12 +73,66 @@ points are:
 - `*.glu` modules for packaged transaction triggers;
 - `/etc/moss/system.glu` for desired system state.
 
-OS Tools does not fall back to YAML or KDL. YAML files under `.github/` belong
-to GitHub's own interfaces and are not OS Tools configuration.
+OS Tools does not fall back to YAML or KDL. The only YAML allowlist is
+`.github/dependabot.yml`, `.github/workflows/ci.yaml`, and
+`.github/workflows/release.yaml`; these belong to GitHub's interfaces, not OS
+Tools configuration. There are no tracked KDL files. `make test` runs the
+`config-formats` allowlist gate so new owned YAML/KDL paths fail validation.
 
 Read the [Gluon configuration contract](docs/gluon-configuration.md) for the
 typed ABI, evaluator restrictions, generated-state rules, and CLI workflow.
+Read the [package-authoring guide](docs/package-authoring.md) for factories,
+dependency scopes, standard builders, typed phases, outputs, locks, and
+derivation planning.
 Runnable source examples live in [docs/examples/gluon](docs/examples/gluon).
+
+### Package locks and plans
+
+Authored `stone.glu` modules are never rewritten by Boulder. Two adjacent,
+generated files freeze I/O-backed resolution:
+
+- `sources.lock.glu` records resolved archives and full Git commits;
+- `build.lock.glu` records the exact package/output closure, repository
+  snapshots, platforms, and policy/profile/toolchain/builder identities.
+
+After refreshing source resolution, create the build lock and plan with
+explicit target, timestamp, and concurrency inputs:
+
+```sh
+boulder recipe update ./stone.glu
+boulder recipe plan ./stone.glu \
+  --profile default-x86_64 \
+  --target x86_64 \
+  --source-date-epoch 1700000000 \
+  --jobs 8 \
+  --update-lock
+```
+
+Run the same command without `--update-lock` to require the current lock. Use
+`boulder recipe explain` with the same arguments to inspect recipe, lock,
+policy, profile, and package-closure provenance.
+
+Normal builds use the same planner and lock contract:
+
+```sh
+boulder build ./stone.glu \
+  --profile default-x86_64 \
+  --target x86_64 \
+  --source-date-epoch 1700000000 \
+  --jobs 8
+```
+
+Add `--update-lock` to resolve and atomically refresh `build.lock.glu` before
+building. `--refresh-repositories` is accepted only with `--update-lock`.
+Boulder exact-installs the locked closure, materializes locked sources, runs
+the frozen jobs in the isolated container, packages from plan-owned analysis
+and collection rules, optionally verifies a binary manifest on the host, and
+cleans only plan-owned paths.
+
+Mutable local files referenced through `%(pkgdir)` under the recipe `pkg/`
+directory are currently rejected before plan freeze. They require a future
+local-source ABI that hashes their content into the derivation instead of
+exposing an untracked host input.
 
 ## Development
 
