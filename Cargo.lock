@@ -3528,9 +3528,11 @@ dependencies = [
 name = "stone_recipe"
 version = "0.26.6"
 dependencies = [
+ "glob",
  "gluon",
  "gluon_codegen",
  "gluon_config",
+ "regex",
  "sha2",
  "stone",
  "thiserror 2.0.18",

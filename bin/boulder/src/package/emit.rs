@@ -38,6 +38,8 @@ pub struct Package<'a> {
     pub identity: &'a PackageIdentity,
     pub definition: &'a ResolvedOutput,
     pub analysis: analysis::Bucket,
+    provides_exclude: Vec<Regex>,
+    runtime_exclude: Vec<Regex>,
     jobs: u32,
 }
 
@@ -51,12 +53,16 @@ impl<'a> Package<'a> {
         architecture: Architecture,
         jobs: u32,
     ) -> Self {
+        let provides_exclude = compile_exclusions(&definition.provides_exclude);
+        let runtime_exclude = compile_exclusions(&definition.runtime_exclude);
         Self {
             name,
             architecture,
             identity,
             definition,
             analysis,
+            provides_exclude,
+            runtime_exclude,
             build_release,
             jobs,
         }
@@ -79,11 +85,9 @@ impl<'a> Package<'a> {
             .cloned()
             .chain(self.definition.runtime_inputs.iter().cloned())
             .filter(|dependency| {
-                self.definition.runtime_exclude.iter().all(|filter| {
-                    Regex::new(filter)
-                        .map(|regex| !regex.is_match(&dependency.to_string()))
-                        .unwrap_or(true)
-                })
+                self.runtime_exclude
+                    .iter()
+                    .all(|filter| !filter.is_match(&dependency.to_string()))
             })
             .collect()
     }
@@ -92,11 +96,9 @@ impl<'a> Package<'a> {
         self.analysis
             .providers()
             .filter(|provider| {
-                self.definition.provides_exclude.iter().all(|filter| {
-                    Regex::new(filter)
-                        .map(|regex| !regex.is_match(&provider.to_string()))
-                        .unwrap_or(true)
-                })
+                self.provides_exclude
+                    .iter()
+                    .all(|filter| !filter.is_match(&provider.to_string()))
             })
             .cloned()
             .collect()
@@ -147,6 +149,13 @@ impl<'a> Package<'a> {
         });
         payload
     }
+}
+
+fn compile_exclusions(patterns: &[String]) -> Vec<Regex> {
+    patterns
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("output exclusions were validated before package emission"))
+        .collect()
 }
 
 impl PartialEq for Package<'_> {

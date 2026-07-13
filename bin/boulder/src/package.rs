@@ -79,10 +79,10 @@ impl<'a> FrozenPackager<'a> {
                     .runtime_inputs
                     .iter()
                     .map(|relation| match relation {
-                        OutputRelation::Locked { request, .. } => Ok(request.clone()),
+                        OutputRelation::Locked { relation, .. } => Ok(relation.to_dependency()),
                         OutputRelation::Planned { output } => output_packages
                             .get(output.as_str())
-                            .map(|package| (*package).to_owned())
+                            .map(|package| Dependency::package_name(*package))
                             .ok_or_else(|| Error::MissingFrozenOutput(output.clone())),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -92,30 +92,10 @@ impl<'a> FrozenPackager<'a> {
                         summary: output.summary.clone(),
                         description: output.description.clone(),
                         provides_exclude: output.provides_exclude.clone(),
-                        runtime_inputs: run_deps
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, value)| {
-                                parse_dependency(format!("outputs[{}].runtime_inputs[{index}]", output.name), &value)
-                            })
-                            .collect::<Result<_, _>>()?,
+                        runtime_inputs: run_deps,
                         runtime_exclude: output.runtime_exclude.clone(),
-                        paths: output
-                            .paths
-                            .iter()
-                            .map(|path| ResolvedPath {
-                                pattern: path.pattern.clone(),
-                                kind: path.kind,
-                            })
-                            .collect(),
-                        conflicts: output
-                            .conflicts
-                            .iter()
-                            .enumerate()
-                            .map(|(index, value)| {
-                                parse_provider(format!("outputs[{}].conflicts[{index}]", output.name), value)
-                            })
-                            .collect::<Result<_, _>>()?,
+                        paths: Vec::new(),
+                        conflicts: output.conflicts.iter().map(|relation| relation.to_provider()).collect(),
                     },
                 ))
             })
@@ -136,9 +116,8 @@ impl<'a> FrozenPackager<'a> {
         let manifest_build_inputs = plan
             .manifest_build_inputs
             .iter()
-            .enumerate()
-            .map(|(index, value)| parse_dependency(format!("manifest_build_inputs[{index}]"), value))
-            .collect::<Result<_, _>>()?;
+            .map(|relation| relation.to_dependency())
+            .collect();
 
         Ok(Self {
             paths,
@@ -148,7 +127,7 @@ impl<'a> FrozenPackager<'a> {
             build_release: NonZeroU64::new(plan.package.build_release).expect("validated build release"),
             recipe_fingerprint: plan.recipe_fingerprint.clone(),
             analysis: plan.analysis.clone(),
-            architecture: parse_frozen_architecture(&plan.package.architecture)?,
+            architecture: frozen_architecture(&plan.package.architecture),
             manifest_build_inputs,
             jobs: plan.execution.jobs,
             derivation_id: plan.derivation_id(),
@@ -198,13 +177,13 @@ impl<'a> FrozenPackager<'a> {
     }
 }
 
-fn parse_frozen_architecture(value: &str) -> Result<crate::Architecture, Error> {
+fn frozen_architecture(value: &str) -> crate::Architecture {
     match value {
-        "x86_64" => Ok(crate::Architecture::X86_64),
-        "x86" => Ok(crate::Architecture::X86),
-        "aarch64" => Ok(crate::Architecture::Aarch64),
-        "riscv64" => Ok(crate::Architecture::Riscv64),
-        _ => Err(Error::UnsupportedFrozenArchitecture(value.to_owned())),
+        "x86_64" => crate::Architecture::X86_64,
+        "x86" => crate::Architecture::X86,
+        "aarch64" => crate::Architecture::Aarch64,
+        "riscv64" => crate::Architecture::Riscv64,
+        _ => unreachable!("artifact architecture was validated before freeze"),
     }
 }
 
@@ -317,22 +296,6 @@ fn resolved_path(path: &stone_recipe::PathSpec) -> ResolvedPath {
     }
 }
 
-fn parse_dependency(field: String, value: &str) -> Result<Dependency, Error> {
-    Dependency::from_name(value).map_err(|source| Error::InvalidDependency {
-        field,
-        value: value.to_owned(),
-        source,
-    })
-}
-
-fn parse_provider(field: String, value: &str) -> Result<Provider, Error> {
-    Provider::from_name(value).map_err(|source| Error::InvalidProvider {
-        field,
-        value: value.to_owned(),
-        source,
-    })
-}
-
 pub fn sync_artefacts(paths: &Paths) -> io::Result<()> {
     for path in util::enumerate_files(&paths.artefacts().host, |_| true)? {
         let filename = path.file_name().and_then(|p| p.to_str()).unwrap_or_default();
@@ -374,8 +337,6 @@ pub enum Error {
     InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
     #[error("frozen output {0} is missing")]
     MissingFrozenOutput(String),
-    #[error("unsupported frozen artifact architecture {0}")]
-    UnsupportedFrozenArchitecture(String),
 }
 
 #[cfg(test)]
@@ -383,7 +344,9 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use stone_recipe::derivation::{AnalysisToolchain, CollectionRulePlan, OutputPlan, PathRuleKind, PathRulePlan};
+    use stone_recipe::derivation::{
+        AnalysisToolchain, CollectionRulePlan, OutputPlan, PathRuleKind, RelationKind, RelationPlan,
+    };
 
     #[test]
     fn package_factory_defaults_resolve_directly() {
@@ -489,7 +452,10 @@ mod tests {
             compress_man: false,
             remove_libtool: false,
         };
-        plan.manifest_build_inputs = vec!["frozen-build-input".to_owned()];
+        plan.manifest_build_inputs = vec![RelationPlan {
+            kind: RelationKind::Binary,
+            name: "frozen-build-input".to_owned(),
+        }];
         plan.outputs = vec![OutputPlan {
             name: "out".to_owned(),
             package_name: "frozen".to_owned(),
@@ -497,12 +463,11 @@ mod tests {
             description: Some("Only plan data".to_owned()),
             provides_exclude: vec!["excluded-provider".to_owned()],
             runtime_exclude: vec!["excluded-runtime".to_owned()],
-            paths: vec![PathRulePlan {
-                kind: PathRuleKind::Any,
-                pattern: "*".to_owned(),
-            }],
             runtime_inputs: Vec::new(),
-            conflicts: vec!["conflict".to_owned()],
+            conflicts: vec![RelationPlan {
+                kind: RelationKind::PkgConfig,
+                name: "conflict".to_owned(),
+            }],
         }];
         plan.collection_rules = vec![
             CollectionRulePlan {
@@ -530,7 +495,7 @@ mod tests {
                 .iter()
                 .map(Dependency::to_name)
                 .collect::<Vec<_>>(),
-            ["frozen-build-input"]
+            ["binary(frozen-build-input)"]
         );
         assert_eq!(packager.derivation_id, expected_id);
         assert_eq!(
@@ -549,7 +514,7 @@ mod tests {
         assert_eq!(output.summary.as_deref(), Some("Frozen output"));
         assert_eq!(
             output.conflicts.iter().map(Provider::to_name).collect::<Vec<_>>(),
-            ["conflict"]
+            ["pkgconfig(conflict)"]
         );
     }
 }

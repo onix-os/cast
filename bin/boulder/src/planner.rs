@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
     DerivationPlan, DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef,
-    LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, PathRulePlan,
-    Platform, RepositorySnapshot, StepPlan,
+    LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform,
+    RelationPlan, RepositorySnapshot, StepPlan,
 };
 use thiserror::Error;
 
@@ -421,12 +421,12 @@ fn freeze_outputs(
                 .runtime_inputs
                 .iter()
                 .map(|dependency| {
-                    let dependency = dependency.to_name();
-                    if let Some(output) = names.get(&dependency) {
+                    let request_name = dependency.to_name();
+                    if let Some(output) = names.get(&request_name) {
                         Ok(OutputRelation::Planned { output: output.clone() })
-                    } else if let Some(request) = lock.requests.iter().find(|request| request.request == dependency) {
+                    } else if let Some(request) = lock.requests.iter().find(|request| request.request == request_name) {
                         Ok(OutputRelation::Locked {
-                            request: request.request.clone(),
+                            relation: RelationPlan::from(dependency),
                             reference: LockedOutputRef {
                                 package_id: request.package_id.clone(),
                                 output: request.output.clone(),
@@ -435,7 +435,7 @@ fn freeze_outputs(
                     } else {
                         Err(Error::UnlockedRuntimeDependency {
                             package: name.clone(),
-                            dependency,
+                            dependency: request_name,
                         })
                     }
                 })
@@ -447,16 +447,8 @@ fn freeze_outputs(
                 description: package.description.clone(),
                 provides_exclude: package.provides_exclude.clone(),
                 runtime_exclude: package.runtime_exclude.clone(),
-                paths: package
-                    .paths
-                    .iter()
-                    .map(|path| PathRulePlan {
-                        kind: path.kind,
-                        pattern: path.pattern.clone(),
-                    })
-                    .collect(),
                 runtime_inputs,
-                conflicts: package.conflicts.iter().map(|provider| provider.to_name()).collect(),
+                conflicts: package.conflicts.iter().map(RelationPlan::from).collect(),
             })
         })
         .collect()

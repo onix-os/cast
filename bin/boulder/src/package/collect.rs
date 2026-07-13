@@ -33,13 +33,13 @@ impl Rule {
         // meaning in glob patterns (e.g., `[` or `]`).
         let escaped_path = Pattern::escape(path);
         Pattern::new(&self.pattern)
-                .map(|pattern| pattern.matches(&escaped_path))
-                .unwrap_or_default()
+                .expect("collection glob was validated before frozen execution")
+                .matches(&escaped_path)
             // If the supplied pattern is for a directory we want to match anything that's inside said directory,
             // Do this by creating a recursive glob pattern by appending `**` if the pattern already ends in a `/` or `/**` if not
             || Pattern::new(format!("{}/**", self.pattern.strip_suffix("/").unwrap_or(&self.pattern)).as_str())
-                .map(|pattern| pattern.matches(&escaped_path))
-                .unwrap_or_default()
+                .expect("derived collection glob must remain valid")
+                .matches(&escaped_path)
     }
 }
 

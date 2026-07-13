@@ -34,7 +34,7 @@ pub struct Manifest<'a> {
     arch: Architecture,
     output_dir: PathBuf,
     build_deps: BTreeSet<Dependency>,
-    packages: BTreeSet<&'a Package<'a>>,
+    packages: Vec<&'a Package<'a>>,
     derivation_id: DerivationId,
 }
 
@@ -55,13 +55,15 @@ impl<'a> Manifest<'a> {
             output_dir,
             arch,
             build_deps: build_deps.into_iter().collect(),
-            packages: BTreeSet::new(),
+            packages: Vec::new(),
             derivation_id: derivation_id.clone(),
         }
     }
 
     pub fn add_package(&mut self, package: &'a Package<'_>) {
-        self.packages.insert(package);
+        debug_assert!(self.packages.iter().all(|existing| existing.name != package.name));
+        self.packages.push(package);
+        self.packages.sort_by_key(|package| package.name);
     }
 
     pub fn write_binary(&self) -> Result<(), Error> {

@@ -13,7 +13,7 @@ use stone_recipe::{
         BuildPolicySpec, BuildToolSpec, BuildersPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec,
         TargetPolicySpec,
     },
-    derivation::{BuildLock, DerivationPlan, LockedPackage, RepositorySnapshot},
+    derivation::{BuildLock, DerivationPlan, LockedPackage, RelationPlan, RepositorySnapshot},
     package::{BuilderSpec, DependencySpec, PackageSpec},
 };
 use thiserror::Error;
@@ -231,7 +231,11 @@ fn packages_for(
         extend_policy_tools(&mut packages, "pgo.required_tools", &policy.pgo.required_tools)?;
     }
 
-    packages.extend(declared_inputs_for(package, profile)?);
+    packages.extend(
+        declared_inputs_for(package, profile)?
+            .into_iter()
+            .map(|relation| relation.canonical_name()),
+    );
     extend_source_tools(&mut packages, policy, &package.sources)?;
 
     Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
@@ -297,11 +301,11 @@ fn build_tool_name(tool: &BuildToolSpec) -> Result<String, stone::relation::Pars
     Dependency::new(kind, target.clone()).map(|dependency| dependency.to_name())
 }
 
-pub(crate) fn declared_inputs(recipe: &crate::Recipe, target: &TargetPolicySpec) -> Result<Vec<String>, Error> {
+pub(crate) fn declared_inputs(recipe: &crate::Recipe, target: &TargetPolicySpec) -> Result<Vec<RelationPlan>, Error> {
     declared_inputs_for(&recipe.declaration, recipe.build_target_profile_key(target))
 }
 
-fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<Vec<String>, Error> {
+fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<Vec<RelationPlan>, Error> {
     let builder_tools: &[DependencySpec] = match package.builder_for_profile(profile) {
         BuilderSpec::Custom { required_tools, .. } => required_tools,
         BuilderSpec::CMake { .. }
@@ -319,7 +323,7 @@ fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<V
         .map(|(index, dependency)| {
             dependency
                 .dependency()
-                .map(|dependency| dependency.to_name())
+                .map(RelationPlan::from)
                 .map_err(|source| Error::InvalidDeclaredInput { index, source })
         })
         .collect()
@@ -581,9 +585,14 @@ let unrelated = b.profile_with {
     #[test]
     fn direct_inputs_use_root_only_without_a_profile() {
         let package = selected_inputs_package();
+        let inputs = declared_inputs_for(&package, None)
+            .unwrap()
+            .into_iter()
+            .map(|relation| relation.canonical_name())
+            .collect::<Vec<_>>();
 
         assert_eq!(
-            declared_inputs_for(&package, None).unwrap(),
+            inputs,
             ["binary(base-builder)", "base-native", "base-build", "base-check"]
         );
     }
@@ -591,7 +600,11 @@ let unrelated = b.profile_with {
     #[test]
     fn direct_inputs_use_only_the_selected_profile() {
         let package = selected_inputs_package();
-        let selected = declared_inputs_for(&package, Some("x86_64")).unwrap();
+        let selected = declared_inputs_for(&package, Some("x86_64"))
+            .unwrap()
+            .into_iter()
+            .map(|relation| relation.canonical_name())
+            .collect::<Vec<_>>();
 
         assert_eq!(
             selected,

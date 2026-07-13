@@ -21,7 +21,7 @@ pub fn write(
     path: &Path,
     identity: &PackageIdentity,
     recipe_fingerprint: &str,
-    packages: &BTreeSet<&emit::Package<'_>>,
+    packages: &[&emit::Package<'_>],
     build_deps: &BTreeSet<Dependency>,
     derivation_id: &DerivationId,
 ) -> Result<(), Error> {
@@ -150,7 +150,7 @@ boulder.mk_package (boulder.meta {
             &first_path,
             &first_identity,
             &first_recipe.fingerprint.sha256,
-            &BTreeSet::new(),
+            &[],
             &BTreeSet::new(),
             &derivation_id,
         )
@@ -165,7 +165,7 @@ boulder.mk_package (boulder.meta {
             &changed_path,
             &changed_identity,
             &changed_recipe.fingerprint.sha256,
-            &BTreeSet::new(),
+            &[],
             &BTreeSet::new(),
             &derivation_id,
         )

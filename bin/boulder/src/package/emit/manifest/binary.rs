@@ -19,7 +19,7 @@ pub enum Error {
 
 pub fn write<W: Write>(
     output: &mut W,
-    packages: &BTreeSet<&Package<'_>>,
+    packages: &[&Package<'_>],
     build_deps: &BTreeSet<Dependency>,
     recipe_fingerprint: &str,
     derivation_id: &DerivationId,
@@ -113,7 +113,7 @@ mod tests {
         let mut output = Cursor::new(Vec::new());
         write(
             &mut output,
-            &BTreeSet::from([&package]),
+            &[&package],
             &BTreeSet::from([Dependency::package_name("build-tool")]),
             FINGERPRINT,
             &derivation_id,

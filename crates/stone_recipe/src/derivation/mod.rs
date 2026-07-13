@@ -13,7 +13,10 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
+use stone::relation::{Dependency, Kind as StoneRelationKind, Provider};
 use thiserror::Error;
+
+use crate::build_policy::SUPPORTED_ARTIFACT_ARCHITECTURES;
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
@@ -45,7 +48,7 @@ pub struct DerivationPlan {
     pub tuning: Vec<String>,
     pub analyzers: Vec<LockedIdentity>,
     pub analysis: AnalysisPlan,
-    pub manifest_build_inputs: Vec<String>,
+    pub manifest_build_inputs: Vec<RelationPlan>,
     pub collection_rules: Vec<CollectionRulePlan>,
     pub outputs: Vec<OutputPlan>,
     pub source_date_epoch: i64,
@@ -88,6 +91,12 @@ impl DerivationPlan {
 
         require_nonempty("boulder_version", &self.boulder_version)?;
         self.package.validate()?;
+        if !SUPPORTED_ARTIFACT_ARCHITECTURES.contains(&self.package.architecture.as_str()) {
+            return Err(DerivationValidationError::UnsupportedArtifactArchitecture {
+                value: self.package.architecture.clone(),
+                supported: SUPPORTED_ARTIFACT_ARCHITECTURES.join(", "),
+            });
+        }
         require_nonempty("recipe_fingerprint", &self.recipe_fingerprint)?;
         require_nonempty("source_lock_digest", &self.source_lock_digest)?;
         self.build_lock.validate()?;
@@ -131,6 +140,9 @@ impl DerivationPlan {
         for (index, flag) in self.tuning.iter().enumerate() {
             require_nonempty(&format!("tuning[{index}]"), flag)?;
         }
+        for (index, input) in self.manifest_build_inputs.iter().enumerate() {
+            input.validate(&format!("manifest_build_inputs[{index}]"))?;
+        }
         let mut analyzer_names = BTreeSet::new();
         for (index, analyzer) in self.analyzers.iter().enumerate() {
             analyzer.validate(&format!("analyzers[{index}]"))?;
@@ -167,24 +179,28 @@ impl DerivationPlan {
         }
         for (index, output) in self.outputs.iter().enumerate() {
             for (dependency_index, dependency) in output.runtime_inputs.iter().enumerate() {
+                let field = format!("outputs[{index}].runtime_inputs[{dependency_index}]");
+                if let OutputRelation::Locked { relation, .. } = dependency {
+                    relation.validate(&field)?;
+                }
                 match dependency {
-                    OutputRelation::Locked { request, reference }
+                    OutputRelation::Locked { relation, reference }
                         if !self.build_lock.contains_output(reference)
                             || !self.build_lock.requests.iter().any(|locked| {
-                                locked.request == *request
+                                locked.request == relation.canonical_name()
                                     && locked.package_id == reference.package_id
                                     && locked.output == reference.output
                             }) =>
                     {
                         return Err(DerivationValidationError::UnknownOutputReference {
-                            field: format!("outputs[{index}].runtime_inputs[{dependency_index}]"),
+                            field,
                             package: reference.package_id.clone(),
                             output: reference.output.clone(),
                         });
                     }
                     OutputRelation::Planned { output } if !output_names.contains(output.as_str()) => {
                         return Err(DerivationValidationError::UnknownPlannedOutput {
-                            field: format!("outputs[{index}].runtime_inputs[{dependency_index}]"),
+                            field,
                             output: output.clone(),
                         });
                     }
@@ -232,7 +248,7 @@ impl DerivationPlan {
         self.analysis.encode(&mut encoder);
         let mut manifest_build_inputs = self.manifest_build_inputs.clone();
         manifest_build_inputs.sort();
-        encoder.strings(&manifest_build_inputs);
+        encoder.sequence(&manifest_build_inputs, |encoder, relation| relation.encode(encoder));
         encoder.sequence(&self.collection_rules, |encoder, rule| rule.encode(encoder));
 
         let mut outputs = self.outputs.iter().collect::<Vec<_>>();
@@ -691,6 +707,135 @@ pub enum AnalysisToolchain {
     Gnu,
 }
 
+/// A typed package relation carried across the derivation freeze boundary.
+///
+/// The kind and target are stored separately so execution never has to parse
+/// authored `kind(target)` syntax. The same canonical value can be lowered
+/// infallibly to either Stone relation role after [`DerivationPlan::validate`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RelationPlan {
+    pub kind: RelationKind,
+    pub name: String,
+}
+
+impl RelationPlan {
+    fn validate(&self, field: &str) -> Result<(), DerivationValidationError> {
+        Dependency::new(self.kind.into(), self.name.clone())
+            .map(|_| ())
+            .map_err(|source| DerivationValidationError::InvalidRelation {
+                field: field.to_owned(),
+                value: self.name.clone(),
+                source,
+            })
+    }
+
+    pub fn to_dependency(&self) -> Dependency {
+        Dependency {
+            kind: self.kind.into(),
+            name: self.name.clone(),
+        }
+    }
+
+    pub fn to_provider(&self) -> Provider {
+        Provider {
+            kind: self.kind.into(),
+            name: self.name.clone(),
+        }
+    }
+
+    pub fn canonical_name(&self) -> String {
+        self.to_dependency().to_name()
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.variant(self.kind as u8);
+        encoder.string(&self.name);
+    }
+}
+
+impl From<&Dependency> for RelationPlan {
+    fn from(relation: &Dependency) -> Self {
+        Self {
+            kind: relation.kind.into(),
+            name: relation.name.clone(),
+        }
+    }
+}
+
+impl From<Dependency> for RelationPlan {
+    fn from(relation: Dependency) -> Self {
+        Self {
+            kind: relation.kind.into(),
+            name: relation.name,
+        }
+    }
+}
+
+impl From<&Provider> for RelationPlan {
+    fn from(relation: &Provider) -> Self {
+        Self {
+            kind: relation.kind.into(),
+            name: relation.name.clone(),
+        }
+    }
+}
+
+impl From<Provider> for RelationPlan {
+    fn from(relation: Provider) -> Self {
+        Self {
+            kind: relation.kind.into(),
+            name: relation.name,
+        }
+    }
+}
+
+/// Capability namespace retained explicitly in a frozen relation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum RelationKind {
+    PackageName = 0,
+    SharedLibrary = 1,
+    PkgConfig = 2,
+    Interpreter = 3,
+    CMake = 4,
+    Python = 5,
+    Binary = 6,
+    SystemBinary = 7,
+    PkgConfig32 = 8,
+}
+
+impl From<StoneRelationKind> for RelationKind {
+    fn from(kind: StoneRelationKind) -> Self {
+        match kind {
+            StoneRelationKind::PackageName => Self::PackageName,
+            StoneRelationKind::SharedLibrary => Self::SharedLibrary,
+            StoneRelationKind::PkgConfig => Self::PkgConfig,
+            StoneRelationKind::Interpreter => Self::Interpreter,
+            StoneRelationKind::CMake => Self::CMake,
+            StoneRelationKind::Python => Self::Python,
+            StoneRelationKind::Binary => Self::Binary,
+            StoneRelationKind::SystemBinary => Self::SystemBinary,
+            StoneRelationKind::PkgConfig32 => Self::PkgConfig32,
+        }
+    }
+}
+
+impl From<RelationKind> for StoneRelationKind {
+    fn from(kind: RelationKind) -> Self {
+        match kind {
+            RelationKind::PackageName => Self::PackageName,
+            RelationKind::SharedLibrary => Self::SharedLibrary,
+            RelationKind::PkgConfig => Self::PkgConfig,
+            RelationKind::Interpreter => Self::Interpreter,
+            RelationKind::CMake => Self::CMake,
+            RelationKind::Python => Self::Python,
+            RelationKind::Binary => Self::Binary,
+            RelationKind::SystemBinary => Self::SystemBinary,
+            RelationKind::PkgConfig32 => Self::PkgConfig32,
+        }
+    }
+}
+
 /// One declared package output after template and package composition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputPlan {
@@ -700,17 +845,22 @@ pub struct OutputPlan {
     pub description: Option<String>,
     pub provides_exclude: Vec<String>,
     pub runtime_exclude: Vec<String>,
-    pub paths: Vec<PathRulePlan>,
     pub runtime_inputs: Vec<OutputRelation>,
-    pub conflicts: Vec<String>,
+    pub conflicts: Vec<RelationPlan>,
 }
 
 impl OutputPlan {
     fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
         require_nonempty(&format!("outputs[{index}].name"), &self.name)?;
         require_nonempty(&format!("outputs[{index}].package_name"), &self.package_name)?;
-        for (rule_index, rule) in self.paths.iter().enumerate() {
-            require_nonempty(&format!("outputs[{index}].paths[{rule_index}].pattern"), &rule.pattern)?;
+        for (pattern_index, pattern) in self.provides_exclude.iter().enumerate() {
+            validate_regex(&format!("outputs[{index}].provides_exclude[{pattern_index}]"), pattern)?;
+        }
+        for (pattern_index, pattern) in self.runtime_exclude.iter().enumerate() {
+            validate_regex(&format!("outputs[{index}].runtime_exclude[{pattern_index}]"), pattern)?;
+        }
+        for (conflict_index, conflict) in self.conflicts.iter().enumerate() {
+            conflict.validate(&format!("outputs[{index}].conflicts[{conflict_index}]"))?;
         }
         Ok(())
     }
@@ -726,21 +876,20 @@ impl OutputPlan {
         let mut runtime_exclude = self.runtime_exclude.clone();
         runtime_exclude.sort();
         encoder.strings(&runtime_exclude);
-        encoder.sequence(&self.paths, |encoder, path| path.encode(encoder));
 
         let mut runtime_inputs = self.runtime_inputs.iter().collect::<Vec<_>>();
         runtime_inputs.sort();
         encoder.sequence(&runtime_inputs, |encoder, dependency| dependency.encode(encoder));
         let mut conflicts = self.conflicts.clone();
         conflicts.sort();
-        encoder.strings(&conflicts);
+        encoder.sequence(&conflicts, |encoder, relation| relation.encode(encoder));
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OutputRelation {
     Locked {
-        request: String,
+        relation: RelationPlan,
         reference: LockedOutputRef,
     },
     Planned {
@@ -751,9 +900,9 @@ pub enum OutputRelation {
 impl OutputRelation {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         match self {
-            Self::Locked { request, reference } => {
+            Self::Locked { relation, reference } => {
                 encoder.variant(0);
-                encoder.string(request);
+                relation.encode(encoder);
                 reference.encode(encoder);
             }
             Self::Planned { output } => {
@@ -761,24 +910,6 @@ impl OutputRelation {
                 encoder.string(output);
             }
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathRulePlan {
-    pub kind: PathRuleKind,
-    pub pattern: String,
-}
-
-impl PathRulePlan {
-    fn encode(&self, encoder: &mut CanonicalEncoder) {
-        encoder.variant(match self.kind {
-            PathRuleKind::Any => 0,
-            PathRuleKind::Executable => 1,
-            PathRuleKind::Symlink => 2,
-            PathRuleKind::Special => 3,
-        });
-        encoder.string(&self.pattern);
     }
 }
 
@@ -801,7 +932,9 @@ pub struct CollectionRulePlan {
 impl CollectionRulePlan {
     fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
         require_nonempty(&format!("collection_rules[{index}].output"), &self.output)?;
-        require_nonempty(&format!("collection_rules[{index}].pattern"), &self.pattern)
+        let field = format!("collection_rules[{index}].pattern");
+        require_nonempty(&field, &self.pattern)?;
+        validate_glob(&field, &self.pattern)
     }
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
@@ -828,6 +961,8 @@ pub enum DerivationValidationError {
     ZeroSourceRelease,
     #[error("execution.jobs: value must be greater than zero")]
     ZeroJobs,
+    #[error("package.architecture: unsupported Stone artifact architecture {value:?}; expected one of {supported}")]
+    UnsupportedArtifactArchitecture { value: String, supported: String },
     #[error(
         "package.architecture: artifact architecture {artifact} does not match build_lock.target_platform.architecture {target}"
     )]
@@ -862,6 +997,27 @@ pub enum DerivationValidationError {
     },
     #[error("{field}: unknown planned output `{output}`")]
     UnknownPlannedOutput { field: String, output: String },
+    #[error("{field}: invalid typed package relation target {value:?}")]
+    InvalidRelation {
+        field: String,
+        value: String,
+        #[source]
+        source: stone::relation::ParseError,
+    },
+    #[error("{field}: invalid regular expression {value:?}")]
+    InvalidRegex {
+        field: String,
+        value: String,
+        #[source]
+        source: regex::Error,
+    },
+    #[error("{field}: invalid collection glob {value:?}")]
+    InvalidGlob {
+        field: String,
+        value: String,
+        #[source]
+        source: glob::PatternError,
+    },
     #[error("{field}: planned output dependency cycle: {}", cycle.join(" -> "))]
     PlannedOutputCycle { field: String, cycle: Vec<String> },
     #[error("{field}: path must be a normalized, non-root absolute path, found {value:?}")]
@@ -978,6 +1134,26 @@ fn require_nonempty(field: &str, value: &str) -> Result<(), DerivationValidation
     } else {
         Ok(())
     }
+}
+
+fn validate_regex(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    regex::Regex::new(value)
+        .map(|_| ())
+        .map_err(|source| DerivationValidationError::InvalidRegex {
+            field: field.to_owned(),
+            value: value.to_owned(),
+            source,
+        })
+}
+
+fn validate_glob(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    glob::Pattern::new(value)
+        .map(|_| ())
+        .map_err(|source| DerivationValidationError::InvalidGlob {
+            field: field.to_owned(),
+            value: value.to_owned(),
+            source,
+        })
 }
 
 fn validate_normalized_absolute_path<'a>(field: &str, value: &'a str) -> Result<&'a Path, DerivationValidationError> {
@@ -1196,6 +1372,10 @@ mod tests {
             name: "elf".to_owned(),
             fingerprint: "elf-analyzer-v1".to_owned(),
         }];
+        plan.manifest_build_inputs = vec![RelationPlan {
+            kind: RelationKind::Binary,
+            name: "cmake".to_owned(),
+        }];
         plan.collection_rules = vec![
             CollectionRulePlan {
                 output: "out".to_owned(),
@@ -1215,12 +1395,11 @@ mod tests {
             description: None,
             provides_exclude: Vec::new(),
             runtime_exclude: Vec::new(),
-            paths: vec![PathRulePlan {
-                kind: PathRuleKind::Any,
-                pattern: "*".to_owned(),
-            }],
             runtime_inputs: Vec::new(),
-            conflicts: Vec::new(),
+            conflicts: vec![RelationPlan {
+                kind: RelationKind::PackageName,
+                name: "busybox".to_owned(),
+            }],
         }];
         plan.source_date_epoch = 1_700_000_000;
         plan
@@ -1238,6 +1417,101 @@ mod tests {
     }
 
     #[test]
+    fn typed_relations_lower_to_both_stone_roles_without_reparsing() {
+        for kind in [
+            StoneRelationKind::PackageName,
+            StoneRelationKind::SharedLibrary,
+            StoneRelationKind::PkgConfig,
+            StoneRelationKind::Interpreter,
+            StoneRelationKind::CMake,
+            StoneRelationKind::Python,
+            StoneRelationKind::Binary,
+            StoneRelationKind::SystemBinary,
+            StoneRelationKind::PkgConfig32,
+        ] {
+            let dependency = Dependency::new(kind, "target(with-nesting)").unwrap();
+            let relation = RelationPlan::from(&dependency);
+            assert_eq!(relation.to_dependency(), dependency);
+            assert_eq!(relation.to_provider().kind, dependency.kind);
+            assert_eq!(relation.to_provider().name, dependency.name);
+        }
+    }
+
+    #[test]
+    fn validation_rejects_unsupported_artifact_architecture_at_freeze() {
+        let mut plan = sample_plan();
+        plan.package.architecture = "mips64".to_owned();
+        plan.build_lock.target_platform.architecture = "mips64".to_owned();
+
+        let error = plan.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            DerivationValidationError::UnsupportedArtifactArchitecture { ref value, .. }
+                if value == "mips64"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "package.architecture: unsupported Stone artifact architecture \"mips64\"; expected one of x86_64, x86, aarch64, riscv64"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_every_invalid_output_exclusion_before_freeze() {
+        for (field, mutate) in [
+            (
+                "outputs[0].provides_exclude[0]",
+                Box::new(|plan: &mut DerivationPlan| plan.outputs[0].provides_exclude.push("(".to_owned()))
+                    as Box<dyn Fn(&mut DerivationPlan)>,
+            ),
+            (
+                "outputs[0].runtime_exclude[0]",
+                Box::new(|plan: &mut DerivationPlan| plan.outputs[0].runtime_exclude.push("[".to_owned())),
+            ),
+        ] {
+            let mut plan = sample_plan();
+            mutate(&mut plan);
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidRegex { field: actual, .. })
+                    if actual == field
+            ));
+        }
+    }
+
+    #[test]
+    fn validation_rejects_invalid_collection_globs_before_freeze() {
+        let mut plan = sample_plan();
+        plan.collection_rules[1].pattern = "[".to_owned();
+
+        let error = plan.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            DerivationValidationError::InvalidGlob { ref field, .. }
+                if field == "collection_rules[1].pattern"
+        ));
+        assert!(error.to_string().contains("collection_rules[1].pattern"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_typed_relation_targets_with_exact_fields() {
+        let mut manifest = sample_plan();
+        manifest.manifest_build_inputs[0].name.clear();
+        assert!(matches!(
+            manifest.validate(),
+            Err(DerivationValidationError::InvalidRelation { field, .. })
+                if field == "manifest_build_inputs[0]"
+        ));
+
+        let mut conflict = sample_plan();
+        conflict.outputs[0].conflicts[0].name = "unbalanced)".to_owned();
+        assert!(matches!(
+            conflict.validate(),
+            Err(DerivationValidationError::InvalidRelation { field, .. })
+                if field == "outputs[0].conflicts[0]"
+        ));
+    }
+
+    #[test]
     fn unordered_analyzers_and_outputs_do_not_change_identity() {
         let mut first = sample_plan();
         first.analyzers.push(LockedIdentity {
@@ -1251,7 +1525,6 @@ mod tests {
             description: None,
             provides_exclude: Vec::new(),
             runtime_exclude: Vec::new(),
-            paths: Vec::new(),
             runtime_inputs: Vec::new(),
             conflicts: Vec::new(),
         });
@@ -1333,8 +1606,12 @@ mod tests {
             ),
             ("analysis", Box::new(|plan| plan.analysis.strip = !plan.analysis.strip)),
             (
-                "manifest-build-input",
-                Box::new(|plan| plan.manifest_build_inputs.push("cmake".to_owned())),
+                "manifest-build-input-name",
+                Box::new(|plan| plan.manifest_build_inputs[0].name.push_str("-changed")),
+            ),
+            (
+                "manifest-build-input-kind",
+                Box::new(|plan| plan.manifest_build_inputs[0].kind = RelationKind::SystemBinary),
             ),
             (
                 "collection-rule-order",
@@ -1342,7 +1619,7 @@ mod tests {
             ),
             (
                 "output",
-                Box::new(|plan| plan.outputs[0].paths[0].pattern = "/usr/bin/*".to_owned()),
+                Box::new(|plan| plan.outputs[0].conflicts[0].name.push_str("-changed")),
             ),
             ("timestamp", Box::new(|plan| plan.source_date_epoch += 1)),
         ];
@@ -1540,7 +1817,10 @@ mod tests {
     fn validation_rejects_output_relations_outside_the_locked_closure() {
         let mut plan = sample_plan();
         plan.outputs[0].runtime_inputs.push(OutputRelation::Locked {
-            request: "missing".to_owned(),
+            relation: RelationPlan {
+                kind: RelationKind::PackageName,
+                name: "missing".to_owned(),
+            },
             reference: LockedOutputRef {
                 package_id: "missing".to_owned(),
                 output: "out".to_owned(),
@@ -1669,7 +1949,6 @@ mod tests {
             description: None,
             provides_exclude: Vec::new(),
             runtime_exclude: Vec::new(),
-            paths: Vec::new(),
             runtime_inputs: vec![OutputRelation::Planned {
                 output: "out".to_owned(),
             }],
