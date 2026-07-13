@@ -16,7 +16,7 @@ STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -83,6 +83,10 @@ test: lint config-formats-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all
 
+examples:
+	@echo "Checking every Gluon package example through the public Cast CLI..."
+	@$(CARGO) test -p cast --test gluon_examples -- --nocapture
+
 check:
 	@$(CARGO) check --workspace --all-targets
 
@@ -135,6 +139,7 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
+	@echo "  examples      Check and deterministically evaluate every Gluon package example"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"
