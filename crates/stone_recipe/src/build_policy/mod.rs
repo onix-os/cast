@@ -157,6 +157,51 @@ pub struct CompilerFlagsSpec {
     pub ld: Vec<TextSpec>,
 }
 
+/// One named, toolchain-aware tuning flag from repository policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedTuningFlagSpec {
+    pub name: String,
+    pub value: ToolchainFlagsSpec,
+}
+
+/// Flag references activated or suppressed by a tuning group or choice.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TuningOptionSpec {
+    pub enabled: Vec<String>,
+    pub disabled: Vec<String>,
+}
+
+/// One named choice within a tuning group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedTuningChoiceSpec {
+    pub name: String,
+    pub value: TuningOptionSpec,
+}
+
+/// One tuning group and its optional default choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuningGroupSpec {
+    pub base: TuningOptionSpec,
+    pub default: Option<String>,
+    pub choices: Vec<NamedTuningChoiceSpec>,
+}
+
+/// One named tuning group in the repository catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedTuningGroupSpec {
+    pub name: String,
+    pub value: TuningGroupSpec,
+}
+
+/// Complete general tuning catalog selected independently of architecture and
+/// PGO policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuningPolicySpec {
+    pub flags: Vec<NamedTuningFlagSpec>,
+    pub groups: Vec<NamedTuningGroupSpec>,
+    pub default_groups: Vec<String>,
+}
+
 /// One concrete build/host/target platform policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetPolicySpec {
@@ -264,6 +309,7 @@ pub struct BuildPolicySpec {
     pub layout: InstallLayoutSpec,
     pub toolchains: ToolchainsSpec,
     pub targets: Vec<TargetPolicySpec>,
+    pub tuning: TuningPolicySpec,
     pub environment: Vec<EnvironmentBindingSpec>,
     pub builders: BuildersPolicySpec,
     pub pgo: PgoPolicySpec,
@@ -278,6 +324,12 @@ pub enum BuildPolicyConversionError {
     Duplicate { field: String, value: String },
     #[error("{field}: PGO finish must declare at least one input")]
     EmptyPgoInputs { field: String },
+    #[error("{field}: unknown reference `{value}`")]
+    UnknownReference { field: String, value: String },
+    #[error("{field}: default choice `{value}` does not exist")]
+    InvalidDefault { field: String, value: String },
+    #[error("{field}: flag `{value}` cannot be both enabled and disabled")]
+    ConflictingTuningFlag { field: String, value: String },
 }
 
 impl BuildPolicySpec {
@@ -305,6 +357,8 @@ impl BuildPolicySpec {
             }
         }
 
+        validate_tuning(&self.tuning)?;
+
         validate_bindings("environment", &self.environment)?;
         for (name, builder) in [
             ("cmake", &self.builders.cmake),
@@ -320,6 +374,151 @@ impl BuildPolicySpec {
         validate_pgo_stage("pgo.stage_two", &self.pgo.stage_two)?;
         validate_pgo_stage("pgo.use_profile", &self.pgo.use_profile)
     }
+}
+
+fn validate_tuning(tuning: &TuningPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    let mut flag_names = BTreeSet::new();
+    for (index, flag) in tuning.flags.iter().enumerate() {
+        require_string(&format!("tuning.flags[{index}].name"), &flag.name)?;
+        if !flag_names.insert(flag.name.as_str()) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: "tuning.flags".to_owned(),
+                value: flag.name.clone(),
+            });
+        }
+        validate_toolchain_flags(&format!("tuning.flags[{index}].value"), &flag.value)?;
+    }
+
+    let mut group_names = BTreeSet::new();
+    for (index, group) in tuning.groups.iter().enumerate() {
+        let field = format!("tuning.groups[{index}]");
+        require_string(&format!("{field}.name"), &group.name)?;
+        if !group_names.insert(group.name.as_str()) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: "tuning.groups".to_owned(),
+                value: group.name.clone(),
+            });
+        }
+        validate_tuning_option(&format!("{field}.value.base"), &group.value.base, &flag_names)?;
+
+        let mut choice_names = BTreeSet::new();
+        for (choice_index, choice) in group.value.choices.iter().enumerate() {
+            let choice_field = format!("{field}.value.choices[{choice_index}]");
+            require_string(&format!("{choice_field}.name"), &choice.name)?;
+            if !choice_names.insert(choice.name.as_str()) {
+                return Err(BuildPolicyConversionError::Duplicate {
+                    field: format!("{field}.value.choices"),
+                    value: choice.name.clone(),
+                });
+            }
+            validate_tuning_option(&format!("{choice_field}.value"), &choice.value, &flag_names)?;
+        }
+
+        if let Some(default) = &group.value.default {
+            require_string(&format!("{field}.value.default"), default)?;
+            if !choice_names.contains(default.as_str()) {
+                return Err(BuildPolicyConversionError::InvalidDefault {
+                    field: format!("{field}.value.default"),
+                    value: default.clone(),
+                });
+            }
+        }
+    }
+
+    let mut default_groups = BTreeSet::new();
+    for (index, group) in tuning.default_groups.iter().enumerate() {
+        let field = format!("tuning.default_groups[{index}]");
+        require_string(&field, group)?;
+        if !default_groups.insert(group.as_str()) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: "tuning.default_groups".to_owned(),
+                value: group.clone(),
+            });
+        }
+        if !group_names.contains(group.as_str()) {
+            return Err(BuildPolicyConversionError::UnknownReference {
+                field,
+                value: group.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_tuning_option(
+    field: &str,
+    option: &TuningOptionSpec,
+    flag_names: &BTreeSet<&str>,
+) -> Result<(), BuildPolicyConversionError> {
+    let mut enabled = BTreeSet::new();
+    for (index, flag) in option.enabled.iter().enumerate() {
+        validate_tuning_flag_reference(&format!("{field}.enabled[{index}]"), flag, flag_names)?;
+        if !enabled.insert(flag.as_str()) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: format!("{field}.enabled"),
+                value: flag.clone(),
+            });
+        }
+    }
+
+    let mut disabled = BTreeSet::new();
+    for (index, flag) in option.disabled.iter().enumerate() {
+        validate_tuning_flag_reference(&format!("{field}.disabled[{index}]"), flag, flag_names)?;
+        if !disabled.insert(flag.as_str()) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: format!("{field}.disabled"),
+                value: flag.clone(),
+            });
+        }
+        if enabled.contains(flag.as_str()) {
+            return Err(BuildPolicyConversionError::ConflictingTuningFlag {
+                field: field.to_owned(),
+                value: flag.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_tuning_flag_reference(
+    field: &str,
+    flag: &str,
+    flag_names: &BTreeSet<&str>,
+) -> Result<(), BuildPolicyConversionError> {
+    require_string(field, flag)?;
+    if flag_names.contains(flag) {
+        Ok(())
+    } else {
+        Err(BuildPolicyConversionError::UnknownReference {
+            field: field.to_owned(),
+            value: flag.to_owned(),
+        })
+    }
+}
+
+fn validate_toolchain_flags(field: &str, flags: &ToolchainFlagsSpec) -> Result<(), BuildPolicyConversionError> {
+    validate_compiler_flags(&format!("{field}.common"), &flags.common)?;
+    validate_compiler_flags(&format!("{field}.gnu"), &flags.gnu)?;
+    validate_compiler_flags(&format!("{field}.llvm"), &flags.llvm)
+}
+
+fn validate_compiler_flags(field: &str, flags: &CompilerFlagsSpec) -> Result<(), BuildPolicyConversionError> {
+    for (language, values) in [
+        ("c", &flags.c),
+        ("cxx", &flags.cxx),
+        ("f", &flags.f),
+        ("d", &flags.d),
+        ("rust", &flags.rust),
+        ("vala", &flags.vala),
+        ("go", &flags.go),
+        ("ld", &flags.ld),
+    ] {
+        for (index, value) in values.iter().enumerate() {
+            require_text(&format!("{field}.{language}[{index}]"), value)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_layout(layout: &InstallLayoutSpec) -> Result<(), BuildPolicyConversionError> {

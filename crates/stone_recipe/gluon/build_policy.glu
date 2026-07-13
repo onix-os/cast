@@ -189,6 +189,42 @@ type ToolchainFlagsSpec = {
     llvm : CompilerFlagsSpec,
 }
 
+type NamedTuningFlagSpec = {
+    name : String,
+    value : ToolchainFlagsSpec,
+}
+
+type TuningOptionSpec = {
+    enabled : Array String,
+    disabled : Array String,
+}
+
+type NamedTuningChoiceSpec = {
+    name : String,
+    value : TuningOptionSpec,
+}
+
+type OptionalChoiceName =
+    | NoChoice
+    | SomeChoice String
+
+type TuningGroupSpec = {
+    base : TuningOptionSpec,
+    default : OptionalChoiceName,
+    choices : Array NamedTuningChoiceSpec,
+}
+
+type NamedTuningGroupSpec = {
+    name : String,
+    value : TuningGroupSpec,
+}
+
+type TuningPolicySpec = {
+    flags : Array NamedTuningFlagSpec,
+    groups : Array NamedTuningGroupSpec,
+    default_groups : Array String,
+}
+
 type OptionalTextSpec =
     | NoText
     | SomeText TextSpec
@@ -223,6 +259,7 @@ type BuildPolicySpec = {
     layout : InstallLayoutSpec,
     toolchains : ToolchainsSpec,
     targets : Array TargetPolicySpec,
+    tuning : TuningPolicySpec,
     environment : Array EnvironmentBindingSpec,
     builders : BuildersPolicySpec,
     pgo : PgoPolicySpec,
@@ -248,6 +285,10 @@ let command: BuilderCommandSpec -> BuilderCommandSpec = \value -> value
 let builder: StandardBuilderPolicySpec -> StandardBuilderPolicySpec = \value -> value
 let pgo_finish: PgoFinishSpec -> PgoFinishSpec = \value -> value
 let pgo_stage: PgoStagePolicySpec -> PgoStagePolicySpec = \value -> value
+let tuning_flag: NamedTuningFlagSpec -> NamedTuningFlagSpec = \value -> value
+let tuning_option: TuningOptionSpec -> TuningOptionSpec = \value -> value
+let tuning_choice: NamedTuningChoiceSpec -> NamedTuningChoiceSpec = \value -> value
+let tuning_group: NamedTuningGroupSpec -> NamedTuningGroupSpec = \value -> value
 
 {
     abi_version = 1,
@@ -319,6 +360,14 @@ let pgo_stage: PgoStagePolicySpec -> PgoStagePolicySpec = \value -> value
         text = \value -> SomeText value,
         no_pgo_finish = NoPgoFinish,
         pgo_finish = \value -> SomePgoFinish value,
+    },
+    tuning = {
+        flag = tuning_flag,
+        option = tuning_option,
+        choice = tuning_choice,
+        group = tuning_group,
+        no_choice = NoChoice,
+        default_choice = \value -> SomeChoice value,
     },
     boolean = {
         false = False,

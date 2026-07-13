@@ -9,8 +9,9 @@ use thiserror::Error;
 use super::{
     BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec,
     CompilerFlagsSpec, CompilerToolsSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
-    InstallLayoutSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, StandardBuilderPolicySpec, TargetPolicySpec,
-    TextSpec, ToolchainFlagsSpec, ToolchainsSpec,
+    InstallLayoutSpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec,
+    PgoStagePolicySpec, StandardBuilderPolicySpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainsSpec,
+    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
 };
 
 /// Version of the typed repository build-policy ABI.
@@ -259,6 +260,50 @@ struct GluonToolchainFlagsSpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonNamedTuningFlagSpec {
+    name: String,
+    value: GluonToolchainFlagsSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonTuningOptionSpec {
+    enabled: Vec<String>,
+    disabled: Vec<String>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonNamedTuningChoiceSpec {
+    name: String,
+    value: GluonTuningOptionSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonOptionalChoiceName {
+    NoChoice,
+    SomeChoice(String),
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonTuningGroupSpec {
+    base: GluonTuningOptionSpec,
+    default: GluonOptionalChoiceName,
+    choices: Vec<GluonNamedTuningChoiceSpec>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonNamedTuningGroupSpec {
+    name: String,
+    value: GluonTuningGroupSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonTuningPolicySpec {
+    flags: Vec<GluonNamedTuningFlagSpec>,
+    groups: Vec<GluonNamedTuningGroupSpec>,
+    default_groups: Vec<String>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 enum GluonOptionalTextSpec {
     NoText,
     SomeText(GluonTextSpec),
@@ -300,6 +345,7 @@ struct GluonBuildPolicySpec {
     layout: GluonInstallLayoutSpec,
     toolchains: GluonToolchainsSpec,
     targets: Vec<GluonTargetPolicySpec>,
+    tuning: GluonTuningPolicySpec,
     environment: Vec<GluonEnvironmentBindingSpec>,
     builders: GluonBuildersPolicySpec,
     pgo: GluonPgoPolicySpec,
@@ -429,6 +475,33 @@ convert_record!(GluonTargetPolicySpec => TargetPolicySpec {
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
 convert_record!(GluonBuildersPolicySpec => BuildersPolicySpec { cmake, meson, cargo, autotools });
 convert_record!(GluonToolchainFlagsSpec => ToolchainFlagsSpec { common, gnu, llvm });
+convert_record!(GluonNamedTuningFlagSpec => NamedTuningFlagSpec { name, value });
+convert_record!(GluonTuningOptionSpec => TuningOptionSpec { enabled, disabled });
+convert_record!(GluonNamedTuningChoiceSpec => NamedTuningChoiceSpec { name, value });
+
+impl From<GluonTuningGroupSpec> for TuningGroupSpec {
+    fn from(value: GluonTuningGroupSpec) -> Self {
+        Self {
+            base: value.base.into(),
+            default: match value.default {
+                GluonOptionalChoiceName::NoChoice => None,
+                GluonOptionalChoiceName::SomeChoice(value) => Some(value),
+            },
+            choices: value.choices.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+convert_record!(GluonNamedTuningGroupSpec => NamedTuningGroupSpec { name, value });
+
+impl From<GluonTuningPolicySpec> for TuningPolicySpec {
+    fn from(value: GluonTuningPolicySpec) -> Self {
+        Self {
+            flags: value.flags.into_iter().map(Into::into).collect(),
+            groups: value.groups.into_iter().map(Into::into).collect(),
+            default_groups: value.default_groups,
+        }
+    }
+}
 
 impl From<GluonBuilderCommandSpec> for BuilderCommandSpec {
     fn from(value: GluonBuilderCommandSpec) -> Self {
@@ -500,6 +573,7 @@ impl From<GluonBuildPolicySpec> for BuildPolicySpec {
             layout: value.layout.into(),
             toolchains: value.toolchains.into(),
             targets: value.targets.into_iter().map(Into::into).collect(),
+            tuning: value.tuning.into(),
             environment: value.environment.into_iter().map(Into::into).collect(),
             builders: value.builders.into(),
             pgo: value.pgo.into(),

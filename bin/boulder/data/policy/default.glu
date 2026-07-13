@@ -398,6 +398,1701 @@ let pgo_use_flags = {
     },
 }
 
+let tuning_flags = [
+    p.tuning.flag {
+        name = "architecture",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "base",
+        value = {
+            common = {
+                c = [lit "-pipe", lit "-Wformat", lit "-Wformat-security", lit "-Wno-error", lit "-fPIC"],
+                cxx = [lit "-pipe", lit "-Wformat", lit "-Wformat-security", lit "-Wno-error", lit "-fPIC"],
+                d = [lit "-release", lit "-Hkeep-all-bodies", lit "-relocation-model=pic", lit "-wi"],
+                rust = [lit "-C", lit "strip=none"],
+                go = [lit "-trimpath"],
+                ld = [lit "-Wl,-O2,--gc-sections"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "omit-frame-pointer",
+        value = {
+            common = {
+                c = [lit "-fomit-frame-pointer", lit "-momit-leaf-frame-pointer"],
+                cxx = [lit "-fomit-frame-pointer", lit "-momit-leaf-frame-pointer"],
+                f = [lit "-fomit-frame-pointer"],
+                d = [lit "-frame-pointer=none"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "no-omit-frame-pointer",
+        value = {
+            common = {
+                c = [lit "-fno-omit-frame-pointer", lit "-mno-omit-leaf-frame-pointer"],
+                cxx = [lit "-fno-omit-frame-pointer", lit "-mno-omit-leaf-frame-pointer"],
+                f = [lit "-fno-omit-frame-pointer"],
+                d = [lit "-frame-pointer=all"],
+                rust = [lit "-C", lit "force-frame-pointers"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "bindnow",
+        value = {
+            common = {
+                ld = [lit "-Wl,-z,relro,-z,now"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "symbolic-all",
+        value = {
+            common = {
+                ld = [lit "-Wl,-Bsymbolic"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "symbolic-functions",
+        value = {
+            common = {
+                ld = [lit "-Wl,-Bsymbolic-functions"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "symbolic-nonweak",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                ld = [lit "-Wl,-Bsymbolic-non-weak-functions"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "fortify-lvl1",
+        value = {
+            common = {
+                c = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=1"],
+                cxx = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=1"],
+                f = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=1"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "fortify-lvl2",
+        value = {
+            common = {
+                c = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=2"],
+                cxx = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=2"],
+                f = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=2"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "fortify-lvl3",
+        value = {
+            common = {
+                c = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3"],
+                cxx = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3"],
+                f = [lit "-Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "harden-none",
+        value = {
+            common = {
+                c = [lit "-fno-stack-protector"],
+                cxx = [lit "-fno-stack-protector"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "harden-lvl1",
+        value = {
+            common = {
+                c = [lit "-fstack-protector", lit "--param", lit "ssp-buffer-size=32"],
+                cxx = [lit "-fstack-protector", lit "--param", lit "ssp-buffer-size=32"],
+                go = [lit "-buildmode=pie"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "harden-lvl2",
+        value = {
+            common = empty_flags,
+            gnu = {
+                c = [lit "-fstack-protector-strong", lit "-fstack-clash-protection", lit "-fPIE", lit "--param", lit "ssp-buffer-size=4"],
+                cxx = [lit "-fstack-protector-strong", lit "-fstack-clash-protection", lit "-fPIE", lit "--param", lit "ssp-buffer-size=4"],
+                go = [lit "-buildmode=pie"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-fstack-protector-strong", lit "-fstack-clash-protection", lit "-fPIE", lit "--param", lit "ssp-buffer-size=4"],
+                cxx = [lit "-fstack-protector-strong", lit "-fstack-clash-protection", lit "-fPIE", lit "--param", lit "ssp-buffer-size=4"],
+                go = [lit "-buildmode=pie"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "control-flow",
+        value = {
+            common = {
+                c = [lit "-fcf-protection"],
+                cxx = [lit "-fcf-protection"],
+                f = [lit "-fcf-protection"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "libstdc-assertions",
+        value = {
+            common = {
+                c = [lit "-Wp,-D_GLIBCXX_ASSERTIONS"],
+                cxx = [lit "-Wp,-D_GLIBCXX_ASSERTIONS"],
+                f = [lit "-Wp,-D_GLIBCXX_ASSERTIONS"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "thread-exceptions",
+        value = {
+            common = {
+                c = [lit "-fexceptions"],
+                cxx = [lit "-fexceptions"],
+                f = [lit "-fexceptions"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "sections",
+        value = {
+            common = {
+                c = [lit "-ffunction-sections", lit "-fdata-sections"],
+                cxx = [lit "-ffunction-sections", lit "-fdata-sections"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "optimize-fast",
+        value = {
+            common = {
+                c = [lit "-Ofast"],
+                cxx = [lit "-Ofast"],
+                f = [lit "-Ofast"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "optimize-generic",
+        value = {
+            common = {
+                c = [lit "-O2"],
+                cxx = [lit "-O2"],
+                f = [lit "-O2"],
+                d = [lit "-O2"],
+                rust = [lit "-C", lit "opt-level=3", lit "-C", lit "codegen-units=1"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "optimize-size",
+        value = {
+            common = {
+                c = [lit "-Os"],
+                cxx = [lit "-Os"],
+                d = [lit "-Os"],
+                rust = [lit "-C", lit "opt-level=s", lit "-C", lit "codegen-units=1"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-Os"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "optimize-speed",
+        value = {
+            common = {
+                c = [lit "-O3"],
+                cxx = [lit "-O3"],
+                f = [lit "-O3"],
+                d = [lit "-O3"],
+                rust = [lit "-C", lit "opt-level=3", lit "-C", lit "codegen-units=1"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "lto-full",
+        value = {
+            common = {
+                rust = [lit "-C", lit "lto=fat", lit "-C", lit "linker-plugin-lto", lit "-C", lit "embed-bitcode=yes"],
+                .. empty_flags
+            },
+            gnu = {
+                c = [cat [lit "-flto=", ctx c.jobs], lit "-flto-partition=one"],
+                cxx = [cat [lit "-flto=", ctx c.jobs], lit "-flto-partition=one"],
+                f = [cat [lit "-flto=", ctx c.jobs], lit "-flto-partition=one"],
+                ld = [cat [lit "-flto=", ctx c.jobs], lit "-flto-partition=one"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-flto=full"],
+                cxx = [lit "-flto=full"],
+                f = [lit "-flto=full"],
+                d = [lit "-flto=full"],
+                ld = [lit "-flto=full"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "lto-thin",
+        value = {
+            common = {
+                rust = [lit "-C", lit "lto=thin", lit "-C", lit "linker-plugin-lto", lit "-C", lit "embed-bitcode=yes"],
+                .. empty_flags
+            },
+            gnu = {
+                c = [cat [lit "-flto=", ctx c.jobs]],
+                cxx = [cat [lit "-flto=", ctx c.jobs]],
+                f = [cat [lit "-flto=", ctx c.jobs]],
+                ld = [cat [lit "-flto=", ctx c.jobs]],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-flto=thin"],
+                cxx = [lit "-flto=thin"],
+                f = [lit "-flto=thin"],
+                d = [lit "-flto=thin"],
+                ld = [lit "-flto=thin"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "ltoextra-full",
+        value = {
+            common = empty_flags,
+            gnu = {
+                c = [lit "-fdevirtualize-at-ltrans"],
+                cxx = [lit "-fdevirtualize-at-ltrans"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-fwhole-program-vtables", lit "-fvirtual-function-elimination"],
+                cxx = [lit "-fwhole-program-vtables", lit "-fvirtual-function-elimination"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "ltoextra-thin",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                c = [lit "-fwhole-program-vtables"],
+                cxx = [lit "-fwhole-program-vtables"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "fat-lto",
+        value = {
+            common = {
+                c = [lit "-ffat-lto-objects"],
+                cxx = [lit "-ffat-lto-objects"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-ffat-lto-objects"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "fat-lto-none",
+        value = {
+            common = {
+                c = [lit "-fno-fat-lto-objects"],
+                cxx = [lit "-fno-fat-lto-objects"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-fno-fat-lto-objects"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "lto-errors",
+        value = {
+            common = empty_flags,
+            gnu = {
+                c = [lit "-Werror=odr", lit "-Werror=lto-type-mismatch", lit "-Werror=strict-aliasing"],
+                cxx = [lit "-Werror=odr", lit "-Werror=lto-type-mismatch", lit "-Werror=strict-aliasing"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-Werror=odr", lit "-Werror=strict-aliasing"],
+                cxx = [lit "-Werror=odr", lit "-Werror=strict-aliasing"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "build-id",
+        value = {
+            common = {
+                rust = [lit "-C", lit "link-args=-Wl,--build-id=sha1"],
+                ld = [lit "-Wl,--build-id=sha1"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "compress-debug-zstd",
+        value = {
+            common = {
+                rust = [lit "-C", lit "link-args=-Wl,--compress-debug-sections=zstd"],
+                ld = [lit "-Wl,--compress-debug-sections=zstd"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "compress-debug-zlib",
+        value = {
+            common = {
+                rust = [lit "-C", lit "link-args=-Wl,--compress-debug-sections=zlib"],
+                ld = [lit "-Wl,--compress-debug-sections=zlib"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "compress-debug-none",
+        value = {
+            common = {
+                rust = [lit "-C", lit "link-args=-Wl,--compress-debug-sections=none"],
+                ld = [lit "-Wl,--compress-debug-sections=none"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "icf-all",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                ld = [lit "-Wl,--icf=all"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "icf-safe",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                ld = [lit "-Wl,--icf=safe"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "idae",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                ld = [lit "-Wl,--ignore-data-address-equality"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "polly",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                c = [lit "-fplugin=LLVMPolly.so", lit "-fpass-plugin=LLVMPolly.so", lit "-Xclang", lit "-mllvm", lit "-Xclang", lit "-polly", lit "-Xclang", lit "-mllvm", lit "-Xclang", lit "-polly-vectorizer=stripmine"],
+                cxx = [lit "-fplugin=LLVMPolly.so", lit "-fpass-plugin=LLVMPolly.so", lit "-Xclang", lit "-mllvm", lit "-Xclang", lit "-polly", lit "-Xclang", lit "-mllvm", lit "-Xclang", lit "-polly-vectorizer=stripmine"],
+                f = [lit "-fpass-plugin=LLVMPolly.so"],
+                d = [lit "-polly", lit "-polly-vectorizer=stripmine"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "bolt",
+        value = {
+            common = empty_flags,
+            gnu = {
+                c = [lit "-fno-reorder-blocks-and-partition"],
+                cxx = [lit "-fno-reorder-blocks-and-partition"],
+                ld = [lit "-Wl,-q"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-fno-split-machine-functions"],
+                cxx = [lit "-fno-split-machine-functions"],
+                ld = [lit "-Wl,-q"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "common",
+        value = {
+            common = {
+                c = [lit "-fcommon"],
+                cxx = [lit "-fcommon"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-fcommon"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "debug-lines",
+        value = {
+            common = {
+                rust = [lit "-C", lit "debuginfo=line-tables-only", lit "-C", lit "split-debuginfo=off"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = {
+                c = [lit "-gline-tables-only", lit "-fasynchronous-unwind-tables"],
+                cxx = [lit "-gline-tables-only", lit "-fasynchronous-unwind-tables"],
+                d = [lit "-gline-tables-only", lit "-gc"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "debug-std",
+        value = {
+            common = {
+                f = [lit "-g"],
+                d = [lit "-g", lit "-gc", lit "-d-debug"],
+                rust = [lit "-C", lit "debuginfo=2", lit "-C", lit "split-debuginfo=off"],
+                vala = [lit "-g"],
+                .. empty_flags
+            },
+            gnu = {
+                c = [lit "-g", lit "-feliminate-unused-debug-types", lit "-fasynchronous-unwind-tables"],
+                cxx = [lit "-g", lit "-feliminate-unused-debug-types", lit "-fasynchronous-unwind-tables"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-g", lit "-fasynchronous-unwind-tables"],
+                cxx = [lit "-g", lit "-fasynchronous-unwind-tables"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "math",
+        value = {
+            common = {
+                f = [lit "-ffast-math"],
+                d = [lit "-ffast-math", lit "-fp-contract=fast"],
+                .. empty_flags
+            },
+            gnu = {
+                c = [lit "-fno-math-errno", lit "-fno-trapping-math"],
+                cxx = [lit "-fno-math-errno", lit "-fno-trapping-math"],
+                .. empty_flags
+            },
+            llvm = {
+                c = [lit "-fno-math-errno", lit "-fno-trapping-math", lit "-ffp-contract=fast", lit "-ffp-model=fast"],
+                cxx = [lit "-fno-math-errno", lit "-fno-trapping-math", lit "-ffp-contract=fast", lit "-ffp-model=fast"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "noplt",
+        value = {
+            common = {
+                c = [lit "-fno-plt"],
+                cxx = [lit "-fno-plt"],
+                d = [lit "-fno-plt"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-fno-plt"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "nosemantic",
+        value = {
+            common = {
+                c = [lit "-fno-semantic-interposition"],
+                cxx = [lit "-fno-semantic-interposition"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "nodaed",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                c = [lit "-fno-direct-access-external-data"],
+                cxx = [lit "-fno-direct-access-external-data"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "avxwidth-128",
+        value = {
+            common = {
+                c = [lit "-mprefer-vector-width=128"],
+                cxx = [lit "-mprefer-vector-width=128"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-mprefer-vector-width=128"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "pch-instantiate",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                c = [lit "-fpch-instantiate-templates"],
+                cxx = [lit "-fpch-instantiate-templates"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "asneeded",
+        value = {
+            common = {
+                ld = [lit "-Wl,--as-needed"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "runpath",
+        value = {
+            common = {
+                ld = [lit "-Wl,--enable-new-dtags"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "sse2avx",
+        value = {
+            common = empty_flags,
+            gnu = {
+                c = [lit "-msse2avx"],
+                cxx = [lit "-msse2avx"],
+                f = [lit "-msse2avx"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "visibility-hidden",
+        value = {
+            common = {
+                c = [lit "-fvisibility=hidden"],
+                cxx = [lit "-fvisibility-inlines-hidden", lit "-fvisibility=hidden"],
+                d = [lit "-fvisibility=hidden"],
+                .. empty_flags
+            },
+            gnu = {
+                f = [lit "-fvisibility=hidden"],
+                .. empty_flags
+            },
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "visibility-inline",
+        value = {
+            common = {
+                cxx = [lit "-fvisibility-inlines-hidden"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "relative-vtables",
+        value = {
+            common = empty_flags,
+            gnu = empty_flags,
+            llvm = {
+                cxx = [lit "-fexperimental-library", lit "-fexperimental-relative-c++-abi-vtables"],
+                .. empty_flags
+            },
+        },
+    },
+    p.tuning.flag {
+        name = "relr",
+        value = {
+            common = {
+                ld = [lit "-Wl,-z,pack-relative-relocs"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "tls-gnu",
+        value = {
+            common = {
+                c = [lit "-mtls-dialect=gnu2"],
+                cxx = [lit "-mtls-dialect=gnu2"],
+                f = [lit "-mtls-dialect=gnu2"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "version-allow-undefined",
+        value = {
+            common = {
+                ld = [lit "-Wl,--undefined-version"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "version-no-undefined",
+        value = {
+            common = {
+                ld = [lit "-Wl,--no-undefined-version"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "golang-modflags",
+        value = {
+            common = {
+                go = [lit "-mod=readonly", lit "-modcacherw"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+    p.tuning.flag {
+        name = "golang-ldflags",
+        value = {
+            common = {
+                go = [lit "-ldflags=-linkmode=external"],
+                .. empty_flags
+            },
+            gnu = empty_flags,
+            llvm = empty_flags,
+        },
+    },
+]
+
+let tuning_groups = [
+        p.tuning.group {
+            name = "architecture",
+            value = {
+                base = {
+                    enabled = [
+                        "architecture",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "base",
+            value = {
+                base = {
+                    enabled = [
+                        "base",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "debug",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "std",
+                choices = [
+                    p.tuning.choice {
+                        name = "lines",
+                        value = {
+                            enabled = [
+                                "debug-lines",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "std",
+                        value = {
+                            enabled = [
+                                "debug-std",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "compress-debug",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "zstd",
+                choices = [
+                    p.tuning.choice {
+                        name = "none",
+                        value = {
+                            enabled = [
+                                "compress-debug-none",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "zlib",
+                        value = {
+                            enabled = [
+                                "compress-debug-zlib",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "zstd",
+                        value = {
+                            enabled = [
+                                "compress-debug-zstd",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "frame-pointer",
+            value = {
+                base = {
+                    enabled = [
+                        "no-omit-frame-pointer",
+                    ],
+                    disabled = [
+                        "omit-frame-pointer",
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "build-id",
+            value = {
+                base = {
+                    enabled = [
+                        "build-id",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "bindnow",
+            value = {
+                base = {
+                    enabled = [
+                        "bindnow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "symbolic",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "functions",
+                choices = [
+                    p.tuning.choice {
+                        name = "all",
+                        value = {
+                            enabled = [
+                                "symbolic-all",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "functions",
+                        value = {
+                            enabled = [
+                                "symbolic-functions",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "nonweak",
+                        value = {
+                            enabled = [
+                                "symbolic-nonweak",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "fortify",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "lvl3",
+                choices = [
+                    p.tuning.choice {
+                        name = "lvl1",
+                        value = {
+                            enabled = [
+                                "fortify-lvl1",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl2",
+                        value = {
+                            enabled = [
+                                "fortify-lvl2",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl3",
+                        value = {
+                            enabled = [
+                                "fortify-lvl3",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "harden",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                        "harden-none",
+                    ],
+                },
+                default = p.tuning.default_choice "lvl1",
+                choices = [
+                    p.tuning.choice {
+                        name = "none",
+                        value = {
+                            enabled = [
+                                "harden-none",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl1",
+                        value = {
+                            enabled = [
+                                "harden-lvl1",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl2",
+                        value = {
+                            enabled = [
+                                "harden-lvl2",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "control-flow",
+            value = {
+                base = {
+                    enabled = [
+                        "control-flow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "libstdc-assertions",
+            value = {
+                base = {
+                    enabled = [
+                        "libstdc-assertions",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "thread-exceptions",
+            value = {
+                base = {
+                    enabled = [
+                        "thread-exceptions",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "optimize",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "generic",
+                choices = [
+                    p.tuning.choice {
+                        name = "fast",
+                        value = {
+                            enabled = [
+                                "optimize-fast",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "generic",
+                        value = {
+                            enabled = [
+                                "optimize-generic",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "size",
+                        value = {
+                            enabled = [
+                                "optimize-size",
+                                "sections",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "speed",
+                        value = {
+                            enabled = [
+                                "optimize-speed",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "lto",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "thin",
+                choices = [
+                    p.tuning.choice {
+                        name = "full",
+                        value = {
+                            enabled = [
+                                "lto-full",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "thin",
+                        value = {
+                            enabled = [
+                                "lto-thin",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "ltoextra",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "thin",
+                choices = [
+                    p.tuning.choice {
+                        name = "full",
+                        value = {
+                            enabled = [
+                                "ltoextra-full",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "thin",
+                        value = {
+                            enabled = [
+                                "ltoextra-thin",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "lto-errors",
+            value = {
+                base = {
+                    enabled = [
+                        "lto-errors",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "fat-lto",
+            value = {
+                base = {
+                    enabled = [
+                        "fat-lto",
+                    ],
+                    disabled = [
+                        "fat-lto-none",
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "icf",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "safe",
+                choices = [
+                    p.tuning.choice {
+                        name = "safe",
+                        value = {
+                            enabled = [
+                                "icf-safe",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "all",
+                        value = {
+                            enabled = [
+                                "icf-all",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "idae",
+            value = {
+                base = {
+                    enabled = [
+                        "idae",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "polly",
+            value = {
+                base = {
+                    enabled = [
+                        "polly",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "sections",
+            value = {
+                base = {
+                    enabled = [
+                        "sections",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "common",
+            value = {
+                base = {
+                    enabled = [
+                        "common",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "math",
+            value = {
+                base = {
+                    enabled = [
+                        "math",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "noplt",
+            value = {
+                base = {
+                    enabled = [
+                        "noplt",
+                        "bindnow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "nosemantic",
+            value = {
+                base = {
+                    enabled = [
+                        "nosemantic",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "nodaed",
+            value = {
+                base = {
+                    enabled = [
+                        "nodaed",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "asneeded",
+            value = {
+                base = {
+                    enabled = [
+                        "asneeded",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "avxwidth",
+            value = {
+                base = {
+                    enabled = [
+                        "avxwidth-128",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "bolt",
+            value = {
+                base = {
+                    enabled = [
+                        "bolt",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "runpath",
+            value = {
+                base = {
+                    enabled = [
+                        "runpath",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "sse2avx",
+            value = {
+                base = {
+                    enabled = [
+                        "sse2avx",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "pch-instantiate",
+            value = {
+                base = {
+                    enabled = [
+                        "pch-instantiate",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "visibility",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "inline",
+                choices = [
+                    p.tuning.choice {
+                        name = "inline",
+                        value = {
+                            enabled = [
+                                "visibility-inline",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "hidden",
+                        value = {
+                            enabled = [
+                                "visibility-hidden",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "relative-vtables",
+            value = {
+                base = {
+                    enabled = [
+                        "relative-vtables",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "relr",
+            value = {
+                base = {
+                    enabled = [
+                        "relr",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "tls-gnu",
+            value = {
+                base = {
+                    enabled = [
+                        "tls-gnu",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "version-allow-undefined",
+            value = {
+                base = {
+                    enabled = [
+                        "version-allow-undefined",
+                    ],
+                    disabled = [
+                        "version-no-undefined",
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "golang-ldflags",
+            value = {
+                base = {
+                    enabled = [
+                        "golang-ldflags",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "golang-modflags",
+            value = {
+                base = {
+                    enabled = [
+                        "golang-modflags",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+]
+
+let default_tuning_groups = [
+        "asneeded",
+        "avxwidth",
+        "base",
+        "bindnow",
+        "build-id",
+        "compress-debug",
+        "control-flow",
+        "debug",
+        "fat-lto",
+        "fortify",
+        "frame-pointer",
+        "golang-ldflags",
+        "golang-modflags",
+        "harden",
+        "icf",
+        "libstdc-assertions",
+        "lto",
+        "lto-errors",
+        "optimize",
+        "relr",
+        "symbolic",
+        "thread-exceptions",
+        "tls-gnu",
+        "version-allow-undefined",
+]
+
 p.policy {
     vendor_id = "aerynos-linux",
     build_subdir = "aerynos-builddir",
@@ -414,6 +2109,11 @@ p.policy {
         target "aarch64" "aarch64-unknown-linux-gnu" "aarch64-aerynos-linux" "aarch64-aerynos-linux" "" aarch64_architecture_flags,
         target "riscv64" "riscv64gc-unknown-linux-gnu" "riscv64-aerynos-linux" "riscv64-aerynos-linux" "" riscv64_architecture_flags,
     ],
+    tuning = {
+        flags = tuning_flags,
+        groups = tuning_groups,
+        default_groups = default_tuning_groups,
+    },
     environment,
     builders = {
         cmake,

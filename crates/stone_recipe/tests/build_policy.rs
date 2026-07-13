@@ -13,6 +13,10 @@ fn repository_policy() -> Source {
     )
 }
 
+fn repository_policy_value() -> stone_recipe::build_policy::BuildPolicySpec {
+    evaluate_gluon(&repository_policy()).unwrap().policy
+}
+
 #[test]
 fn evaluates_repository_build_policy_as_typed_data() {
     let evaluated = evaluate_gluon(&repository_policy()).unwrap();
@@ -62,12 +66,292 @@ fn explicit_inputs_participate_in_policy_identity() {
 
 #[test]
 fn duplicate_targets_are_rejected_semantically() {
-    let mut policy = evaluate_gluon(&repository_policy()).unwrap().policy;
+    let mut policy = repository_policy_value();
     policy.targets.push(policy.targets[0].clone());
 
     assert!(matches!(
         policy.validate(),
         Err(BuildPolicyConversionError::Duplicate { field, value })
             if field == "targets" && value == "x86_64"
+    ));
+}
+
+#[test]
+fn general_tuning_catalog_preserves_all_names_choices_and_defaults() {
+    let policy = repository_policy_value();
+    let tuning = policy.tuning;
+
+    let flag_names = tuning.flags.iter().map(|flag| flag.name.as_str()).collect::<Vec<_>>();
+    assert_eq!(
+        flag_names,
+        [
+            "architecture",
+            "base",
+            "omit-frame-pointer",
+            "no-omit-frame-pointer",
+            "bindnow",
+            "symbolic-all",
+            "symbolic-functions",
+            "symbolic-nonweak",
+            "fortify-lvl1",
+            "fortify-lvl2",
+            "fortify-lvl3",
+            "harden-none",
+            "harden-lvl1",
+            "harden-lvl2",
+            "control-flow",
+            "libstdc-assertions",
+            "thread-exceptions",
+            "sections",
+            "optimize-fast",
+            "optimize-generic",
+            "optimize-size",
+            "optimize-speed",
+            "lto-full",
+            "lto-thin",
+            "ltoextra-full",
+            "ltoextra-thin",
+            "fat-lto",
+            "fat-lto-none",
+            "lto-errors",
+            "build-id",
+            "compress-debug-zstd",
+            "compress-debug-zlib",
+            "compress-debug-none",
+            "icf-all",
+            "icf-safe",
+            "idae",
+            "polly",
+            "bolt",
+            "common",
+            "debug-lines",
+            "debug-std",
+            "math",
+            "noplt",
+            "nosemantic",
+            "nodaed",
+            "avxwidth-128",
+            "pch-instantiate",
+            "asneeded",
+            "runpath",
+            "sse2avx",
+            "visibility-hidden",
+            "visibility-inline",
+            "relative-vtables",
+            "relr",
+            "tls-gnu",
+            "version-allow-undefined",
+            "version-no-undefined",
+            "golang-modflags",
+            "golang-ldflags",
+        ]
+    );
+
+    let group_names = tuning
+        .groups
+        .iter()
+        .map(|group| group.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        group_names,
+        [
+            "architecture",
+            "base",
+            "debug",
+            "compress-debug",
+            "frame-pointer",
+            "build-id",
+            "bindnow",
+            "symbolic",
+            "fortify",
+            "harden",
+            "control-flow",
+            "libstdc-assertions",
+            "thread-exceptions",
+            "optimize",
+            "lto",
+            "ltoextra",
+            "lto-errors",
+            "fat-lto",
+            "icf",
+            "idae",
+            "polly",
+            "sections",
+            "common",
+            "math",
+            "noplt",
+            "nosemantic",
+            "nodaed",
+            "asneeded",
+            "avxwidth",
+            "bolt",
+            "runpath",
+            "sse2avx",
+            "pch-instantiate",
+            "visibility",
+            "relative-vtables",
+            "relr",
+            "tls-gnu",
+            "version-allow-undefined",
+            "golang-ldflags",
+            "golang-modflags",
+        ]
+    );
+
+    let choices = tuning
+        .groups
+        .iter()
+        .filter(|group| !group.value.choices.is_empty())
+        .map(|group| {
+            (
+                group.name.as_str(),
+                group.value.default.as_deref(),
+                group
+                    .value
+                    .choices
+                    .iter()
+                    .map(|choice| choice.name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        choices,
+        [
+            ("debug", Some("std"), vec!["lines", "std"]),
+            ("compress-debug", Some("zstd"), vec!["none", "zlib", "zstd"]),
+            ("symbolic", Some("functions"), vec!["all", "functions", "nonweak"]),
+            ("fortify", Some("lvl3"), vec!["lvl1", "lvl2", "lvl3"]),
+            ("harden", Some("lvl1"), vec!["none", "lvl1", "lvl2"]),
+            ("optimize", Some("generic"), vec!["fast", "generic", "size", "speed"]),
+            ("lto", Some("thin"), vec!["full", "thin"]),
+            ("ltoextra", Some("thin"), vec!["full", "thin"]),
+            ("icf", Some("safe"), vec!["safe", "all"]),
+            ("visibility", Some("inline"), vec!["inline", "hidden"]),
+        ]
+    );
+    assert_eq!(
+        tuning.default_groups,
+        [
+            "asneeded",
+            "avxwidth",
+            "base",
+            "bindnow",
+            "build-id",
+            "compress-debug",
+            "control-flow",
+            "debug",
+            "fat-lto",
+            "fortify",
+            "frame-pointer",
+            "golang-ldflags",
+            "golang-modflags",
+            "harden",
+            "icf",
+            "libstdc-assertions",
+            "lto",
+            "lto-errors",
+            "optimize",
+            "relr",
+            "symbolic",
+            "thread-exceptions",
+            "tls-gnu",
+            "version-allow-undefined",
+        ]
+    );
+}
+
+#[test]
+fn lto_jobs_are_explicit_typed_context_values() {
+    let policy = repository_policy_value();
+    let lto_full = &policy
+        .tuning
+        .flags
+        .iter()
+        .find(|flag| flag.name == "lto-full")
+        .unwrap()
+        .value
+        .gnu;
+    let lto_thin = &policy
+        .tuning
+        .flags
+        .iter()
+        .find(|flag| flag.name == "lto-thin")
+        .unwrap()
+        .value
+        .gnu;
+    let jobs = TextSpec::Concat(vec![
+        TextSpec::Literal("-flto=".to_owned()),
+        TextSpec::Context(ContextValue::Jobs),
+    ]);
+
+    for values in [&lto_full.c, &lto_full.cxx, &lto_full.f, &lto_full.ld] {
+        assert_eq!(
+            values,
+            &[jobs.clone(), TextSpec::Literal("-flto-partition=one".to_owned())]
+        );
+    }
+    for values in [&lto_thin.c, &lto_thin.cxx, &lto_thin.f, &lto_thin.ld] {
+        assert_eq!(values, &[jobs.clone()]);
+    }
+}
+
+#[test]
+fn duplicate_tuning_entries_and_choices_are_rejected() {
+    let mut policy = repository_policy_value();
+    policy.tuning.flags.push(policy.tuning.flags[0].clone());
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "tuning.flags" && value == "architecture"
+    ));
+
+    let mut policy = repository_policy_value();
+    let debug = policy
+        .tuning
+        .groups
+        .iter_mut()
+        .find(|group| group.name == "debug")
+        .unwrap();
+    debug.value.choices.push(debug.value.choices[0].clone());
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "tuning.groups[2].value.choices" && value == "lines"
+    ));
+}
+
+#[test]
+fn unknown_tuning_references_are_rejected() {
+    let mut policy = repository_policy_value();
+    policy.tuning.groups[0]
+        .value
+        .base
+        .enabled
+        .push("missing-flag".to_owned());
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::UnknownReference { field, value })
+            if field == "tuning.groups[0].value.base.enabled[1]" && value == "missing-flag"
+    ));
+
+    let mut policy = repository_policy_value();
+    policy.tuning.default_groups.push("missing-group".to_owned());
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::UnknownReference { field, value })
+            if field == "tuning.default_groups[24]" && value == "missing-group"
+    ));
+}
+
+#[test]
+fn invalid_tuning_defaults_are_rejected() {
+    let mut policy = repository_policy_value();
+    policy.tuning.groups[2].value.default = Some("missing-choice".to_owned());
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::InvalidDefault { field, value })
+            if field == "tuning.groups[2].value.default" && value == "missing-choice"
     ));
 }
