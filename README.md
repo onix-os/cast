@@ -91,7 +91,9 @@ Runnable source examples live in [docs/examples/gluon](docs/examples/gluon).
 Authored `stone.glu` modules are never rewritten by Boulder. Two adjacent,
 generated files freeze I/O-backed resolution:
 
-- `sources.lock.glu` records resolved archives and full Git commits;
+- `sources.lock.glu` schema v2 records archive hashes and binds each Git
+  request to both a full commit and the SHA-256 of its canonical normalized
+  checkout;
 - `build.lock.glu` schema v3 records the exact reachable package/output
   closure, used repository snapshots, platforms, and independent
   policy/target/profile/toolchain identities plus the selected structural

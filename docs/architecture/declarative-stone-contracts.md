@@ -147,7 +147,8 @@ Deliberately unsupported:
   repository snapshot, build/host/target platforms, policy, profile,
   toolchain, builder, phases, hooks, environment, network mode, explicit
   pseudo-filesystems, PGO stages, tuning, outputs, source timestamp, and
-  implementation/schema versions.
+  implementation/schema versions. Git sources carry both their complete
+  commit and canonical normalized-tree SHA-256.
 - Records the fingerprint and provenance of every authored or policy module
   that contributed semantic data.
 - Has one stable canonical encoding. Maps are key ordered, sequences preserve
@@ -158,7 +159,7 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, safe package/version/artifact filename components, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency, disabled networking, schema-v9 executor identity, explicit
+  concurrency, disabled networking, the schema-v11 plan and executor identity, explicit
   credentials, locked-closure root materialization, exact analyzer
   program/provider bindings, and the finite sandbox-filesystem contract. The locked
   closure path copies only exact package IDs from `build.lock.glu`, creates the
@@ -231,8 +232,8 @@ implementation status above is authoritative for completed work.
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Authored upstream requests | evaluated recipe | Authored intent | Typed source requests in `PackageSpec`. |
-| `sources.lock.glu` content | `recipe.rs` and `source_lock.rs` | Resolved dependency | Locked source identities and lock digest in `DerivationPlan`. |
-| Fetched archive/git content | `upstream.rs` | Resolved dependency | Verify against the source lock; storage/cache paths are executor-only. |
+| `sources.lock.glu` content | `recipe.rs` and `source_lock.rs` | Resolved dependency | Schema v2 locks archive identities and each Git commit plus normalized-tree SHA-256; the lock and per-source identities enter `DerivationPlan`. |
+| Fetched archive/git content | `upstream.rs` | Resolved dependency | Verify archives and canonical Git materializations against the source lock before execution; storage/cache paths are executor-only. |
 | Generated unpack/copy prepare script and work directory | `build/job.rs` and `build/job/phase.rs` | Repository policy | Structured source-preparation steps from the builder policy, concretized in the plan. |
 | Archive-extension unpacker dependencies | `build/root.rs::packages` | Repository policy | Source-preparation policy declares the tools; exact providers are in the closure. |
 | `SOURCE_DATE_EPOCH` process environment | `recipe.rs::resolve_build_time` | Forbidden ambient state | An explicit timestamp input to plan creation. Evaluation never reads the process environment. |

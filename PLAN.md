@@ -90,6 +90,13 @@ manifest verification, artifact emission, and plan-owned cleanup. It records
 the plan's derivation ID rather than synthesizing an identity from runtime
 state.
 
+Git resolution is also byte-bound rather than commit-only. Source-lock schema
+v2 records the canonical normalized checkout SHA-256, derivation schema v11
+includes it directly in plan identity and explanation, and frozen setup
+recomputes it before execution. Authored `clone_dir` is validated and preserved
+as the exact plan destination. Old source-lock schemas and digest mismatches
+fail closed instead of synthesizing compatibility state.
+
 Planning and packaging now consume `PackageSpec` and `DerivationPlan`
 directly. The former internal `Recipe`/`RecipeSpec` domain, its conversions,
 and its duplicated build and output values have been deleted.
@@ -392,6 +399,10 @@ dependencies are structural.
 - [x] Keep authored package modules separate from `sources.lock.glu` and
   `build.lock.glu`; Gluon evaluation describes requests while Rust performs and
   freezes I/O-backed resolution.
+- [x] Bind every Git source to both its complete commit and a canonical
+  normalized-tree SHA-256 in source-lock schema v2 and derivation schema v11;
+  use one refresh/execution materializer, reject schema v1 and byte mismatches,
+  and preserve validated authored `clone_dir` destinations.
 - [x] Eliminate wall-clock and Git fallback; plan creation requires an
   explicitly selected timestamp and records it in the plan.
 - [x] Implement stable canonical encoding and derivation hashing.

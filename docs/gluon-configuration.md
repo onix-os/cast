@@ -235,15 +235,18 @@ Authored programs and generated values have different roles:
 | `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Boulder |
 | Boulder build-policy root | OS Tools/vendor | `policy.glu` explicitly orders named layers and operations; unlisted files are ignored and invalid manifests, modules, transitions, or intermediate values are visible errors |
 | Profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
-| `sources.lock.glu` | Boulder | Canonical standalone source resolution data, written atomically |
+| `sources.lock.glu` | Boulder | Canonical schema-v2 source resolution data, written atomically |
 | `build.lock.glu` | Boulder planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
 | Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Boulder/Moss CLI | Canonical standalone literals marked `@generated`; authored files are protected |
 | `/etc/moss/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
 | `/usr/lib/system-model.glu` | Moss state transaction | Canonical standalone snapshot stored with the state |
 
 `sources.lock.glu` is adjacent to `stone.glu`. It binds archive hashes and Git
-requests to resolved data; Git entries contain a complete commit ID. If source
-resolution creates or changes the lock, Boulder stops and asks for a rerun so
+requests to resolved data; schema-v2 Git entries contain a complete commit ID
+and required lowercase `materialization_sha256` of the normalized exported
+tree. Schema v1 is rejected without a compatibility decoder or runtime
+fallback. If source resolution creates or changes the lock, Boulder stops and
+asks for a rerun so
 the new bytes become part of provenance. An unchanged lock is not rewritten,
 and a lock which no longer matches the authored upstream list is a visible
 error. Running `boulder recipe update ./stone.glu` without `--ver` or
@@ -253,6 +256,14 @@ leaves the previous lock intact. Supplying update values prints structured
 authored-change suggestions instead; neither update mode rewrites arbitrary
 Gluon expressions. `boulder recipe bump` likewise prints an authored release
 suggestion.
+
+Git lock refresh and frozen setup use the same export-normalize-hash path.
+The digest commits to raw relative path bytes, entry kinds, canonical modes,
+regular-file contents, and raw symlink targets after Git administration data
+is removed. Hard links, special inodes, Gitlinks, and a frozen digest mismatch
+fail closed before execution. Authored `clone_dir` is a validated single
+component and is preserved as the frozen materialization destination; the
+outer destination name is separately part of derivation identity.
 
 `build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
 planning, including `boulder build --update-lock`. Its request fingerprint

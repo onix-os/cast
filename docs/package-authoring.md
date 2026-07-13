@@ -322,23 +322,42 @@ sources = [
 ```
 
 Use `archive_with` to set `rename`, `strip_dirs`, `unpack`, or `unpack_dir`, and
-`git_with` to set `clone_dir`. These are authored requests. Boulder writes the
-resolved, generated `sources.lock.glu` beside `stone.glu`; Git locks contain a
-full commit ID. Refresh it without rewriting authored Gluon:
+`git_with` to set `clone_dir`:
+
+```gluon
+b.source.git_with {
+    url = "https://example.invalid/hello.git",
+    git_ref = "v1.0.0",
+    clone_dir = b.optional.set "hello-source",
+}
+```
+
+`clone_dir` must be one safe filename component and becomes the exact source
+directory recorded in the frozen plan. These values are authored requests.
+Boulder writes generated `sources.lock.glu` schema v2 beside `stone.glu`; each
+Git entry contains a full commit ID and a required
+`materialization_sha256`. Refresh it without rewriting authored Gluon:
 
 ```sh
 boulder recipe update ./stone.glu
 ```
 
 A recipe which declares sources needs a current source lock before its
-derivation can be planned.
+derivation can be planned. Schema v1 Git locks are intentionally unsupported;
+run the explicit update command to regenerate them rather than relying on a
+fallback or runtime digest.
 
 Git submodules are not implicit sources. A locked Git commit containing a
 Gitlink is rejected; declare each required checkout as its own typed source so
-its URL, identity, and destination are visible in the plan. Accepted Git trees
-are exported without administration data, and source modes and timestamps are
-normalized to the plan's `source_date_epoch`. Archive copies likewise receive
-an independent cache inode, fixed mode, and the frozen timestamp.
+its URL, identity, and destination are visible in the plan. Lock refresh
+exports the exact commit without Git administration data, rejects hard links
+and special inodes, normalizes directories and executable/non-executable file
+modes, and hashes raw paths, entry kinds, file bytes, executable state, and
+symlink targets. Frozen setup performs the same export and rejects a digest
+mismatch before the build container or analyzers start. Timestamps are
+normalized to the plan's `source_date_epoch` but do not change the tree digest.
+Archive copies likewise receive an independent cache inode, fixed mode, and
+the frozen timestamp.
 
 ### Frozen builds are offline
 
