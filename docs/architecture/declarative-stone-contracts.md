@@ -7,15 +7,15 @@
 
 This document freezes the ownership boundary and invariants for the three
 specification layers introduced by the declarative Stone plan. It also retains
-the Phase 1 baseline inventory of values Boulder supplied after evaluation.
+the Phase 1 baseline inventory of values the build frontend supplied after evaluation.
 That inventory is historical; the implementation status below distinguishes
 what has moved from what remains in the pre-freeze transition.
 
 ## Ownership
 
 The declarative data contracts belong in `crates/stone_recipe`, not in the
-`boulder` binary. The crate is the format-neutral boundary already shared by
-the restricted Gluon evaluator and Boulder.
+Cast frontend. The crate is the format-neutral boundary shared by the
+restricted Gluon evaluator and Mason.
 
 | Contract | Target module | Owner and responsibility |
 | --- | --- | --- |
@@ -23,14 +23,14 @@ the restricted Gluon evaluator and Boulder.
 | `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, source preparation, and sandbox layout. An explicit manifest composes validated values and total patches through ordered, fingerprinted operations. |
 | `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
 
-The target contract gives `bin/boulder` orchestration only:
+The target contract gives Mason orchestration only:
 
 1. evaluate a package factory and an explicitly selected policy root;
 2. resolve sources and package providers through I/O-backed services;
 3. freeze and validate one `DerivationPlan`;
 4. execute that plan and emit its declared outputs.
 
-Boulder must not own a second private representation that can express more
+Mason must not own a second private representation that can express more
 semantic information than `DerivationPlan`. Runtime structs may borrow or
 index plan data, but they must not add dependencies, phases, environment,
 policy, or outputs.
@@ -39,13 +39,13 @@ policy, or outputs.
 
 Implemented:
 
-- `boulder.package.v3` is the only public recipe ABI; the older Gluon modules,
+- `cast.package.v3` is the only public recipe ABI; the retired Gluon modules,
   evaluator, encoders, and fixtures are removed.
 - `stone::relation` is the shared typed relation representation used by Stone,
-  Boulder, Moss, and `stone_recipe` validation.
+  Mason, Forge, and `stone_recipe` validation.
 - reusable dependency scopes are ordinary imported Gluon records passed to
   factories; missing fields are type errors, local output cycles are rejected,
-  and Moss closure cycles report their concrete path;
+  and Forge closure cycles report their concrete path;
 - typed build policy loads from the explicit `data/policy/policy.glu` manifest,
   which names ordered layers and strict `add`, `replace`, and `modify`
   operations; unlisted neighboring files do not participate;
@@ -57,19 +57,19 @@ Implemented:
 - phase planning resolves layout, tools, tuning, environment, commands, and
   sources through a finite typed context; explicit `Shell` content is literal,
   and the legacy macro/parser/tuning stack is absent;
-- `build.lock.glu` freezes the exact Moss-resolved closure, repository
+- `build.lock.glu` freezes the exact Forge-resolved closure, repository
   snapshots, platforms, and selected policy identities with explicit
-  missing/stale/update behavior. Schema v4 also binds every canonical request
+  missing/stale/update behavior. Schema v5 also binds every canonical request
   to all typed package, output-runtime, policy, job-executable, and analyzer
   origins collected before request deduplication;
-- `boulder recipe plan` freezes and validates canonical target-specific jobs,
+- `cast recipe plan` freezes and validates canonical target-specific jobs,
   phases, environment, layout, execution policy, analysis, collection rules,
   manifest inputs, outputs, and timestamp;
 - `recipe explain` exposes each request, its exact package/output resolution,
   every input origin, each policy source, and ordered policy operation;
   canonical mutation tests prove that semantic and origin-only changes alter
   the derivation ID;
-- normal `boulder build` uses that same plan to verify repository snapshots,
+- normal `cast build` uses that same plan to verify repository snapshots,
   exact-install locked packages, materialize locked sources, enter a frozen
   container, execute plan steps, package plan-owned outputs, verify manifests
   on the host, and clean plan-owned paths;
@@ -162,7 +162,7 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, safe package/version/artifact filename components, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency, disabled networking, the schema-v12 plan and executor identity, explicit
+  concurrency, disabled networking, the schema-v13 plan and executor identity, explicit
   credentials, locked-closure root materialization, exact analyzer
   program/provider bindings, and the finite sandbox-filesystem contract. The locked
   closure path copies only exact package IDs from `build.lock.glu`, creates the
@@ -201,7 +201,7 @@ implementation status above is authoritative for completed work.
 
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
-| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicit `data/policy/policy.glu` manifest with ordered typed operations and complete evaluation fingerprints. Its foundation `add` names `default.glu`; the macro tree is deleted. |
+| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former build-frontend macro-loader behavior | Repository policy | One explicit `data/policy/policy.glu` manifest with ordered typed operations and complete evaluation fingerprints. Its foundation `add` names `default.glu`; the macro tree is deleted. |
 | Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Typed command and environment templates selected by module-owned steps and environment markers; the module-owned phase graph and capabilities are frozen with the resolved values. |
 | Architecture package templates | former `package.rs::resolve_packages` behavior | Repository policy | Removed. `PackageSpec.outputs` is the sole typed output declaration and the selected target supplies only artifact architecture and build policy. |
 | Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
@@ -225,7 +225,7 @@ implementation status above is authoritative for completed work.
 | CPU-derived `%(jobs)` | `build/job/phase.rs` | Forbidden ambient state | `execution.jobs` is explicit plan data, visible to build scripts, and enforced as PID 1's exact inherited CPU affinity before any build step or analyzer descendant runs. |
 | Compiler-cache enablement and cache-related definitions | CLI, `build.rs`, and `build/job/phase.rs` | Authored invocation intent | Explicit plan option when visible to the build; cache storage locations remain executor-only. |
 | Container networking during frozen builds | `PackageSpec.options.networking` and `container.rs` | Forbidden ambient input | Package validation rejects enabled networking. Fetched content must be declared as typed sources and locked before execution; the field is retained only for a possible future fixed-output ABI. |
-| Interactive `boulder chroot` shell | `cli/chroot.rs` | Explicit impure development exception | Outside frozen planning and execution guarantees. It can inspect an existing build root but never invokes, validates, or syncs package emission; files created there are not frozen artifacts. |
+| Interactive `cast chroot` shell | `cli/chroot.rs` | Explicit impure development exception | Outside frozen planning and execution guarantees. It can inspect an existing build root but never invokes, validates, or syncs package emission; files created there are not frozen artifacts. |
 | Container hostname, mounts, PATH, HOME, and TERM | `container.rs` and `build.rs` | Repository policy | Semantic process environment and mounts are builder policy/plan data; frozen new-network namespaces retain the kernel-default loopback state and never invoke the optional host `ip` utility. Interactive breakpoint TERM is executor-only. |
 | PGO stage sequence and LLVM merge actions | `build/pgo.rs` and `build/job/phase.rs` | Repository policy | Builder-generated structured stages in the plan. |
 | Default tuning groups, stage tuning, flag deduplication, and Mold flags | `build/job/phase.rs::add_tuning` | Repository policy | Ordered tuning policy and concrete compiler/linker flags in the plan. |
@@ -250,7 +250,7 @@ implementation status above is authoritative for completed work.
 | Recipe build/check dependency strings | evaluated recipe and `build/root.rs` | Authored intent | Typed native/build/check inputs in `PackageSpec`. |
 | Dependencies inferred from expanded actions | `Builder::extra_deps` | Repository policy | Builder requirements in `PolicySpec`, resolved before plan freeze. |
 | Profile selection and repository list from user/system configuration | `build.rs` and `profile.rs` | Repository policy | Explicit selected profile identity and fingerprint in the plan; repository contents are resolution inputs. |
-| Current repository indexes and provider choices | Moss population | Resolved dependency | Exact repository snapshot plus selected package/output IDs in the plan and `build.lock.glu`. Implemented by planning and enforced by frozen runtime setup. |
+| Current repository indexes and provider choices | Forge population | Resolved dependency | Exact repository snapshot plus selected package/output IDs in the plan and `build.lock.glu`. Implemented by planning and enforced by frozen runtime setup. |
 | `--update` repository refresh | `cli/build.rs` and `build/root.rs` | Executor-only operation | It may change resolution, but the flag is not identity; the resulting repository snapshot and closure are. |
 | Automatic repository initialization | `build/root.rs` | Executor-only operation | Must not change a frozen plan. Resolution occurs before freezing, never during root population. |
 
@@ -261,10 +261,10 @@ implementation status above is authoritative for completed work.
 | Output names, path rules, runtime relations, and conflicts | evaluated recipe | Authored intent | Explicit validated `PackageSpec.outputs`, resolved into frozen plan outputs. |
 | Package analysis chain and automatic provides/dependencies | `package/analysis` | Repository policy | Analyzer order and executable capabilities are selected into the plan and exact lock requests. Findings are output-derived observations, not permission to select new policy or rediscover tools. |
 | Build release number | `cli/build.rs` and `package/emit.rs` | Authored invocation intent | Explicit plan field because it changes emitted package identity/metadata. |
-| Boulder implementation and recipe fingerprint | `tools_buildinfo`, `package.rs`, and emitted metadata | Resolved dependency | Schema/implementation version plus a source-tree fingerprint bound to the Rust compiler context and effective native compiler, linker, archiver, flags, dependency controls, and tool identities; all recipe, policy, lock, and builder fingerprints are frozen separately in the plan. |
+| Cast implementation and recipe fingerprint | `tools_buildinfo`, `package.rs`, and emitted metadata | Resolved dependency | Schema/implementation version plus a source-tree fingerprint bound to the Rust compiler context and effective native compiler, linker, archiver, flags, dependency controls, and tool identities; all recipe, policy, lock, and builder fingerprints are frozen separately in the plan. |
 | Output directory, cleanup, progress/timing, terminal handling, process priority, and completion timestamp | CLI and `build.rs` | Executor-only state | Remain outside the plan; none may be visible to build processes or emitted package semantics. |
 | Compiler/tool caches | `paths.rs`, `container.rs`, and `executor.rs` | Executor-only state | Enabled cache mounts are namespaced by derivation identity, but `Executor::run` clears all six frozen layout destinations before any build step. Cache contents can be reused only by phases within that execution. Disabled plans neither mount nor touch them, and host locations never enter the plan. |
-| Verified source and Moss storage | `env.rs`, `upstream.rs`, and Moss | Executor-only state | Persistent content is admitted only through verified source locks or repository identities; storage locations never enter the plan. |
+| Verified source and Forge storage | `env.rs`, `upstream.rs`, and Forge | Executor-only state | Persistent content is admitted only through verified source locks or repository identities; storage locations never enter the plan. |
 | Manifest verification path | CLI and `paths.rs` | Executor-only validation | Expected manifest identity/content is a verification request, not a derivation input. |
 | Compression worker count | `package/emit.rs` | Executor-only only if proven byte-stable | If it can alter artifact bytes or metadata, make encoding policy explicit in the plan. |
 
@@ -305,7 +305,7 @@ the plan must be resolved again.
 Standard builder modules now return their typed phase graph directly; Rust does
 not synthesize the sequence. An explicit `Shell` script may still be defined by
 a function, record update, or imported module, so scanning the root `stone.glu`
-text cannot recover an authoritative authored source line. Boulder reports the
+text cannot recover an authoritative authored source line. Cast reports the
 stable, one-based line within that evaluated shell script instead.
 Interactive breakpoints are rejected when freezing a derivation plan; future
 structured steps may carry Gluon provenance directly, but the executor must

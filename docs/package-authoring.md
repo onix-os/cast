@@ -5,13 +5,13 @@
 
 # Package authoring
 
-Boulder packages are pure Gluon programs evaluated through
-`boulder.package.v3`. A recipe may import local modules and call functions, but
+Cast packages are pure Gluon programs evaluated through
+`cast.package.v3`. A recipe may import local modules and call functions, but
 Rust receives one concrete, validated `PackageSpec`; it never retains a Gluon
-closure. The former `boulder.recipe.v1` ABI is not a compatibility path.
+closure. The retired recipe-v1 ABI is not a compatibility path.
 
 This guide describes the current authoring, planning, and execution contract.
-`recipe plan`, `recipe explain`, and normal `boulder build` all use the same
+`cast recipe plan`, `cast recipe explain`, and normal `cast build` all use the same
 target-specific frozen derivation model.
 
 ## A package factory and explicit scope
@@ -21,8 +21,8 @@ record containing symbolic dependencies selected by the caller:
 
 ```gluon
 // package.glu
-let b = import! boulder.package.v3
-let cmake = import! boulder.builders.cmake.v2
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
 
 \scope ->
     let base = b.mk_package (b.meta {
@@ -52,7 +52,7 @@ The root `stone.glu` supplies the scope and therefore produces the concrete
 package value:
 
 ```gluon
-let b = import! boulder.package.v3
+let b = import! cast.package.v3
 let make = import! "./package.glu"
 
 make {
@@ -65,16 +65,16 @@ make {
 use only ASCII letters, digits, `+`, `-`, `.`, or `_`; `.` and `..` are not
 package names. `meta.version` must begin with a digit and be one normalized
 filename component: path separators, traversal components, and control
-characters are rejected. Boulder checks these rules during package evaluation,
+characters are rejected. Cast checks these rules during package evaluation,
 again when validating the frozen plan, and before creating recipe-keyed host
 paths.
 
 There is no `callPackage`-style argument-name reflection. A missing scope field
-is a Gluon type error. Scope values remain symbolic during evaluation; Moss
-provider resolution occurs later when Boulder creates `build.lock.glu`.
+is a Gluon type error. Scope values remain symbolic during evaluation;
+provider resolution occurs later when Cast creates `build.lock.glu`.
 Scopes remain ordinary, nonrecursive imported Gluon records; there is no
 second Rust `PackageSet` ABI or hidden alias-provenance layer. Local output
-cycles are rejected during package validation, and cycles in the resolved Moss
+cycles are rejected during package validation, and cycles in the resolved
 package closure report the concrete dependency path.
 
 ## Dependency roles
@@ -102,7 +102,7 @@ Put them in the field matching their purpose:
 - `outputs[*].runtime_inputs`: runtime relations of one emitted output.
 
 The shared `stone::relation` model is the canonical parser and representation
-used by Boulder, Moss, and package conversion. Local output references are
+used by Cast and package conversion. Local output references are
 validated before planning, including missing outputs and cycles.
 
 ## Standard builders
@@ -112,16 +112,16 @@ overriding typed settings:
 
 | Module | Settings | Structural phases | Environment marker |
 |---|---|---|---|
-| `boulder.builders.cmake.v2` | `flags`, `run_tests` | configure, build, install, test | CMake |
-| `boulder.builders.meson.v2` | `flags`, `run_tests` | setup, build, install, test | Meson |
-| `boulder.builders.cargo.v2` | `features`, `binaries`, `run_tests` | build, install, test | Cargo |
-| `boulder.builders.autotools.v2` | `flags`, `run_tests` | configure, build, install, test | Autotools |
+| `cast.builders.cmake.v2` | `flags`, `run_tests` | configure, build, install, test | CMake |
+| `cast.builders.meson.v2` | `flags`, `run_tests` | setup, build, install, test | Meson |
+| `cast.builders.cargo.v2` | `features`, `binaries`, `run_tests` | build, install, test | Cargo |
+| `cast.builders.autotools.v2` | `flags`, `run_tests` | configure, build, install, test | Autotools |
 
 Booleans use `b.boolean.true` and `b.boolean.false`. For example:
 
 ```gluon
-let b = import! boulder.package.v3
-let cargo = import! boulder.builders.cargo.v2
+let b = import! cast.package.v3
+let cargo = import! cast.builders.cargo.v2
 
 cargo.builder {
     features = ["cli", "tls"],
@@ -151,7 +151,7 @@ hooks = b.hooks {
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "ln"],
-            script = r#"ln -s hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hi""#,
+            script = r#"ln -s hello "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hi""#,
         },
     ],
     .. b.defaults.hooks
@@ -181,7 +181,7 @@ to the dependency capability which provides it; a `Shell` binds its interpreter
 and every non-builtin program invoked by the script:
 
 ```gluon
-let b = import! boulder.package.v3
+let b = import! cast.package.v3
 
 let scripts = b.scripts {
     setup = b.phase [b.step.run (b.program.binary "zig") ["build", "--fetch"]],
@@ -191,7 +191,7 @@ let scripts = b.scripts {
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "zig"],
-            script = r#"zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#,
+            script = r#"zig build install --prefix "${CAST_INSTALL_ROOT}${CAST_PREFIX}""#,
         },
     ],
     .. b.defaults.scripts
@@ -220,13 +220,12 @@ during package validation.
 Every step receives a frozen build context. Shell steps access it through
 stable variables including:
 
-- `BOULDER_PACKAGE_NAME`, `BOULDER_PACKAGE_VERSION`, and
-  `BOULDER_PACKAGE_RELEASE`;
-- `BOULDER_SOURCE_DIR`, `BOULDER_BUILD_ROOT`, `BOULDER_WORK_DIR`,
-  `BOULDER_INSTALL_ROOT`, and `BOULDER_BUILDER_DIR`;
-- `BOULDER_PREFIX`, `BOULDER_BINDIR`, `BOULDER_LIBDIR`,
-  `BOULDER_LIBEXECDIR`, `BOULDER_DATADIR`, and `BOULDER_VENDORDIR`;
-- `BOULDER_JOBS` and `BOULDER_PGO_DIR`.
+- `CAST_PACKAGE_NAME`, `CAST_PACKAGE_VERSION`, and `CAST_PACKAGE_RELEASE`;
+- `CAST_SOURCE_DIR`, `CAST_BUILD_ROOT`, `CAST_WORK_DIR`,
+  `CAST_INSTALL_ROOT`, and `CAST_BUILDER_DIR`;
+- `CAST_PREFIX`, `CAST_BINDIR`, `CAST_LIBDIR`,
+  `CAST_LIBEXECDIR`, `CAST_DATADIR`, and `CAST_VENDORDIR`;
+- `CAST_JOBS` and `CAST_PGO_DIR`.
 
 These values are resolved before execution and are part of the canonical
 derivation plan. They are not read from the host process environment.
@@ -234,11 +233,11 @@ derivation plan. They are not read from the host process environment.
 ## Outputs
 
 Every package must contain exactly one output named `out`. Additional output
-names are local names; Boulder currently lowers `dev` to `<pname>-dev` at the
+names are local names; Cast currently lowers `dev` to `<pname>-dev` at the
 internal packaging boundary.
 
 `b.mk_package` starts with the deterministic output set exported by
-`boulder.package.v3` (root, documentation, development, debug, libraries,
+`cast.package.v3` (root, documentation, development, debug, libraries,
 32-bit, and demos). These are versioned package-ABI defaults: they are ordinary
 Gluon values present in the concrete evaluated `PackageSpec`, not a hidden Rust
 merge or a repository policy layer. A package can replace `outputs` explicitly
@@ -344,12 +343,12 @@ must be a normalized relative path without empty, `.` or `..` components;
 would otherwise be ignored. Effective materialization names must be unique and
 become the exact source destinations recorded in the frozen plan. These values
 are authored requests.
-Boulder writes generated `sources.lock.glu` schema v2 beside `stone.glu`; each
+Cast writes generated `sources.lock.glu` schema v2 beside `stone.glu`; each
 Git entry contains a full commit ID and a required
 `materialization_sha256`. Refresh it without rewriting authored Gluon:
 
 ```sh
-boulder recipe update ./stone.glu
+cast recipe update ./stone.glu
 ```
 
 A recipe which declares sources needs a current source lock before its
@@ -385,7 +384,7 @@ step.
 
 ## Build closure and derivation planning
 
-`build.lock.glu` is also generated beside `stone.glu`. Schema v4 records the
+`build.lock.glu` is also generated beside `stone.glu`. Schema v5 records the
 exact reachable package/output closure, its used repository index snapshots,
 platform roles, and separate policy-root, target, profile, toolchain, and
 selected structural-builder identities. Each resolved provider records all
@@ -402,7 +401,7 @@ rather than trusting only the generated request-fingerprint field.
 Create or refresh it while freezing a target-specific plan:
 
 ```sh
-boulder recipe plan ./stone.glu \
+cast recipe plan ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -415,7 +414,7 @@ is current, omit both flags to prove that the same request reproduces the same
 canonical plan and derivation ID:
 
 ```sh
-boulder recipe plan ./stone.glu \
+cast recipe plan ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -429,7 +428,7 @@ provenance. For every provider it prints the request, exact locked
 package/output, and every origin:
 
 ```sh
-boulder recipe explain ./stone.glu \
+cast recipe explain ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -440,7 +439,7 @@ The source timestamp and job count are explicit because build scripts can
 observe them. The derivation ID is SHA-256 over the canonical
 `DerivationPlan`, including locked sources and dependencies, selected policy,
 jobs and phases, environment, execution policy, pseudo-filesystems, outputs,
-and timestamp. Derivation schema v12 includes the canonical build-lock origin
+and timestamp. Derivation schema v13 includes the canonical build-lock origin
 mapping, so changing only why an unchanged provider was requested changes the
 derivation ID.
 
@@ -449,7 +448,7 @@ derivation ID.
 Build with the same explicit inputs used during planning:
 
 ```sh
-boulder build ./stone.glu \
+cast build ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -458,7 +457,7 @@ boulder build ./stone.glu \
 
 The build requires a current `build.lock.glu`; pass `--update-lock` to resolve
 and atomically refresh it, and add `--refresh-repositories` only when updating
-the lock. Boulder then exact-installs the locked package IDs, verifies the
+the lock. Cast then exact-installs the locked package IDs, verifies the
 locked repository snapshots, materializes the locked source identities, enters
 the plan-defined container, runs `Executor` over frozen jobs and steps, and
 packages through plan-owned analysis, collection, outputs, and derivation ID.
@@ -476,7 +475,7 @@ Mutable local files under the recipe `pkg/` directory are deliberately not
 exposed to build steps. A future local-source ABI must hash their bytes and
 destination into the derivation before those inputs can be supported safely.
 
-`boulder chroot ./stone.glu` is an explicitly impure interactive development
+`cast chroot ./stone.glu` is an explicitly impure interactive development
 exception. It opens an existing build root without frozen planning or
 execution and is outside the reproducibility guarantees above. It never
 invokes, validates, or syncs package emission; files manually created by the

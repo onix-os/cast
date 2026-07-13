@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let boulder = import! boulder.package.v3
+let cast = import! cast.package.v3
 
-let base = boulder.mk_package (boulder.meta {
+let base = cast.mk_package (cast.meta {
     pname = "hello",
     version = "1.0.0",
     release = 1,
@@ -12,9 +12,9 @@ let base = boulder.mk_package (boulder.meta {
 })
 
 {
-    outputs = boulder.outputs.with_root base.meta.pname {
-        summary = boulder.optional.set "Minimal Gluon recipe example",
-        .. boulder.output "out"
+    outputs = cast.outputs.with_root base.meta.pname {
+        summary = cast.optional.set "Minimal Gluon recipe example",
+        .. cast.output "out"
     },
     .. base
 }

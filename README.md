@@ -5,61 +5,59 @@
 
 # OS Tools
 
-OS Tools is the package-building and system-state toolkit used by Onix OS. The
-workspace contains Moss, Boulder, the `.stone` libraries, and the restricted
-Gluon evaluator shared by their declarative interfaces.
+OS Tools is the declarative package-building and system-state toolkit used by
+Onix OS. It ships one command: `cast`.
 
-This repository is an intentional hard fork of
-[AerynOS OS Tools](https://github.com/AerynOS/os-tools). It keeps the original
-Git history and a great deal of the original architecture, but it is no longer
-a drop-in configuration-compatible AerynOS client.
+Cast is backed by two internal Rust libraries:
+
+- `mason` evaluates package declarations, freezes build plans, builds, and
+  emits Stone packages;
+- `forge` manages repositories, package transactions, and system state.
+
+Mason and Forge are implementation boundaries, not commands or public
+configuration namespaces. See the [Cast architecture](docs/architecture/cast.md).
 
 ## Why this is a hard fork
 
-Onix is being built as a declarative Linux userspace. Package recipes, Boulder
-policy and profiles, Moss repositories, transaction triggers, and desired
-system state are all authored in one language: Gluon.
+This repository intentionally hard-forks
+[AerynOS OS Tools](https://github.com/AerynOS/os-tools). It retains the
+original Git history and much of the inherited package and state-management
+foundation, but it is not a drop-in configuration-compatible client.
 
-This is a breaking architecture decision, not a file-extension change. YAML
-and KDL loaders, fallbacks, dual writes, and intermediate representations have
-been removed. Gluon programs cross a typed and versioned ABI, run inside a
-restricted evaluator, and produce fingerprints used for provenance. Authored
-programs remain separate from generated source locks and normalized state
-snapshots. Boulder additionally freezes exact Moss-resolved closures and
-canonical derivation plans whose SHA-256 identity is carried by the package
-metadata path.
+Onix is building a declarative Linux userspace. Package recipes, build policy,
+profiles, repositories, transaction triggers, and desired system state are all
+authored in Gluon. YAML and KDL loaders, fallbacks, dual writes, and compatibility
+representations have been removed.
 
-Keeping the old configuration paths would leave two sources of truth and two
-different composition models. It would also make compatibility promises
-unclear for both projects. The hard fork makes ownership explicit: AerynOS can
-develop OS Tools for its own system and release cycle, while Onix can accept
-the breakage required by its Gluon-only model.
+This is an architectural break, not a file-extension change. Gluon programs
+cross typed, versioned, capability-restricted ABIs and produce evaluation
+fingerprints. Authored programs remain separate from generated locks and
+normalized state. Cast freezes exact dependency closures and canonical
+derivation plans before execution.
 
-This is not a claim that the inherited work has been replaced. Moss, Boulder,
-the `.stone` format, and most of the package and state-management foundation
-came from the Serpent OS and AerynOS contributors. Please read
-[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the full credit.
+Keeping the inherited configuration paths would preserve two sources of truth
+and two incompatible composition models. The hard fork makes that break
+explicit while retaining full credit for the work it builds on. See
+[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## Components
 
-- **Moss** manages packages and system states. It builds content-addressed
-  states and activates them atomically.
-- **Boulder** evaluates `stone.glu` package factories, resolves exact build
-  closures, and executes target-specific frozen plans in an isolated build
-  environment.
-- **stone** and **libstone** provide Rust and C interfaces for the `.stone`
-  package format.
-- **gluon_config** is the common evaluator boundary. It controls imports,
-  capabilities, resource limits, diagnostics, and evaluation fingerprints.
-
-The workspace is organized by role:
+- **cast** is the sole CLI and public product identity.
+- **mason** is the internal build library.
+- **forge** is the internal package and system-state library.
+- **stone** and **libstone** provide Rust and C interfaces for `.stone`
+  packages.
+- **gluon_config** provides restricted evaluation, import policy, resource
+  limits, diagnostics, and fingerprints.
 
 ```text
-bin/       Moss and Boulder
-crates/    shared Rust libraries
-docs/      contracts, examples, and design notes
-tests/     repository-wide fixtures
-misc/      boot integration, MIME data, scripts, and notices
+bin/cast/       external CLI
+crates/mason/   internal build library
+crates/forge/   internal package/system library
+crates/         shared libraries
+docs/           contracts, examples, and architecture
+tests/          repository-wide fixtures
+misc/           boot integration, MIME data, scripts, and notices
 ```
 
 ## Declarative configuration
@@ -67,84 +65,65 @@ misc/      boot integration, MIME data, scripts, and notices
 Gluon is the only OS Tools configuration language. The main authored entry
 points are:
 
-- `stone.glu` for Boulder recipes;
-- `profile.glu` and `profile.d/*.glu` for Boulder profiles;
-- `repo.glu` and `repo.d/*.glu` for Moss repositories;
-- `*.glu` modules for packaged transaction triggers;
-- `/etc/moss/system.glu` for desired system state.
+- `stone.glu` for packages;
+- `profile.glu` and `profile.d/*.glu` for build profiles;
+- `repo.glu` and `repo.d/*.glu` for repositories;
+- `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` for packaged triggers;
+- `/etc/cast/system.glu` for desired system state.
 
-OS Tools does not fall back to YAML or KDL. The only YAML allowlist is
-`.github/dependabot.yml`, `.github/workflows/ci.yaml`, and
-`.github/workflows/release.yaml`; these belong to GitHub's interfaces, not OS
-Tools configuration. There are no tracked KDL files. `make test` runs the
-`config-formats` allowlist gate so new owned YAML/KDL paths fail validation.
+Public modules use only the `cast.*` namespace, including
+`cast.package.v3`, `cast.builders.*.v2`, `cast.profile.v1`,
+`cast.repository.v1`, `cast.trigger.v1`, and `cast.system.v1`.
 
-Read the [Gluon configuration contract](docs/gluon-configuration.md) for the
-typed ABI, evaluator restrictions, generated-state rules, and CLI workflow.
-Read the [package-authoring guide](docs/package-authoring.md) for factories,
-dependency scopes, standard builders, typed phases, outputs, locks, and
-derivation planning.
-Runnable source examples live in [docs/examples/gluon](docs/examples/gluon).
+OS Tools does not fall back to YAML or KDL. The only YAML allowlist belongs to
+external GitHub interfaces under `.github/`. `make test` runs the
+`config-formats` gate so owned YAML or KDL paths fail validation.
+
+Read the [Gluon configuration contract](docs/gluon-configuration.md) and the
+[package-authoring guide](docs/package-authoring.md). Runnable examples live in
+[docs/examples/gluon](docs/examples/gluon).
 
 ### Package locks and plans
 
-Authored `stone.glu` modules are never rewritten by Boulder. Two adjacent,
-generated files freeze I/O-backed resolution:
+Cast never rewrites authored `stone.glu` modules. Adjacent generated files
+freeze I/O-backed resolution:
 
 - `sources.lock.glu` schema v2 records archive hashes and binds each Git
-  request to both a full commit and the SHA-256 of its canonical normalized
-  checkout;
-- `build.lock.glu` schema v4 records the exact reachable package/output
-  closure, used repository snapshots, platforms, and independent
-  policy/target/profile/toolchain identities plus the selected structural
-  builder identity. Each resolved request also carries every typed reason it
-  entered the closure: package input role and position, output runtime edge,
-  policy field, job executable coordinate, or analyzer role. The executor ABI
-  is frozen separately in the derivation execution policy.
+  request to a commit and canonical normalized-checkout digest;
+- `build.lock.glu` schema v5 records the exact reachable package/output
+  closure, repository snapshots, platforms, policy identities, and typed input
+  provenance.
 
-After refreshing source resolution, create the build lock and plan with
-explicit target, timestamp, and concurrency inputs:
+The derivation-plan schema is v13. It binds the Cast implementation identity,
+recipe and policy provenance, locks, resolved commands, environment, outputs,
+and reproducibility inputs into one SHA-256 derivation identity.
 
 ```sh
-boulder recipe update ./stone.glu
-boulder recipe plan ./stone.glu \
+cast recipe update ./stone.glu
+cast recipe plan ./stone.glu \
   --profile default-x86_64 \
   --target x86_64 \
   --source-date-epoch 1700000000 \
   --jobs 8 \
   --update-lock
-```
 
-Run the same command without `--update-lock` to require the current lock. Use
-`boulder recipe explain` with the same arguments to inspect recipe, lock,
-policy, profile, and package-closure provenance, including each provider
-request, its exact package/output resolution, and all of its origins.
+cast recipe explain ./stone.glu \
+  --profile default-x86_64 \
+  --target x86_64 \
+  --source-date-epoch 1700000000 \
+  --jobs 8
 
-Normal builds use the same planner and lock contract:
-
-```sh
-boulder build ./stone.glu \
+cast build ./stone.glu \
   --profile default-x86_64 \
   --target x86_64 \
   --source-date-epoch 1700000000 \
   --jobs 8
 ```
 
-Add `--update-lock` to resolve and atomically refresh `build.lock.glu` before
-building. `--refresh-repositories` is accepted only with `--update-lock`.
-Boulder exact-installs the locked closure, materializes locked sources, runs
-the frozen jobs in the isolated container, packages from plan-owned analysis
-and collection rules, optionally verifies a binary manifest on the host, and
-cleans only plan-owned paths.
-
-Mutable local files under the recipe `pkg/` directory are currently rejected
-before plan freeze. They require a future local-source ABI that hashes their
-content into the derivation instead of exposing an untracked host input.
+Run planning without `--update-lock` to require the current lock.
+`--refresh-repositories` is accepted only with `--update-lock`.
 
 ## Development
-
-The tracked Nix shell contains Rust, Clang, CMake, Diesel, Valgrind, and the
-tools used by the Makefile.
 
 ```sh
 git clone https://github.com/onix-os/os-tools.git
@@ -155,16 +134,8 @@ make check
 make test
 ```
 
-Without direnv:
-
-```sh
-nix develop
-make check
-make test
-```
-
-`make test` runs Clippy, the formatting check, typos, and all Cargo tests.
-Use `make help` to list the other supported targets.
+Without direnv, enter `nix develop` first. Use `make help` for the supported
+targets.
 
 ## Local installation
 
@@ -172,31 +143,25 @@ Use `make help` to list the other supported targets.
 make get-started
 ```
 
-This builds Moss and Boulder, fetches the SPDX license list used by Boulder,
-and installs the binaries and shared data below `$HOME/.local`. Override the
-prefix when needed:
+This installs the Cast executable and its shared data below `$HOME/.local`,
+with profiles under `$HOME/.config/cast`. Override `PREFIX` when needed:
 
 ```sh
 PREFIX=/opt/onix-tools make get-started
 ```
 
-Make sure the selected `bin` directory is in `PATH`.
-
 ## Safety
 
-Moss uses `/` when no alternate root is provided. Do not experiment against
-your host system. Create a disposable root and pass it explicitly:
+System commands use `/` when no alternate root is provided. Test package and
+state operations against a disposable root:
 
 ```sh
 mkdir -p aosroot
-moss -D "$PWD/aosroot" list installed
+cast -D "$PWD/aosroot" list installed
 ```
 
-Full Boulder builds depend on Linux user namespaces. Each payload starts as
-namespace root with an empty supplementary-group list. Unprivileged callers
-also need `/usr/bin/newgidmap` and at least one delegated entry in
-`/etc/subgid`; that setup-only ID is mapped to a fixed namespace slot so the
-chosen host range cannot change build-visible credentials.
+Full builds require Linux user namespaces. Unprivileged callers also need
+`/usr/bin/newgidmap` and a delegated `/etc/subgid` entry.
 
 ## License
 

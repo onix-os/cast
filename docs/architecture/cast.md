@@ -12,7 +12,7 @@ The implementation remains split into two internal library crates:
 - `mason` owns package authoring, planning, building, and Stone emission;
 - `forge` owns repositories, package transactions, and system state.
 
-The old `boulder` and `moss` executables are not aliases. They do not remain as
+The retired split executables are not aliases. They do not remain as
 compatibility binaries, Cargo targets, symlinks, or multicall entry points.
 `mason` and `forge` are implementation names, not public command namespaces.
 
@@ -35,13 +35,14 @@ ambiguous historical `up` shortcut is removed: use `cast recipe update` or
 ## Public naming boundary
 
 Anything authored, installed, invoked, or reported to a user uses the `cast`
-name. This includes the executable and package, Gluon module namespaces,
-configuration and data paths, generated-file markers, build-script variables,
+name. This includes the executable and package, `cast.*` Gluon modules,
+`/etc/cast` and `/usr/share/cast`, `CAST_*` build variables,
+generated-file markers,
 boot integration, manpages, completions, and release archives. Rust crate and
 module paths alone use `mason` and `forge`.
 
-This is a hard rename. New code must not add fallback lookup, dual writes,
-legacy executable aliases, or compatibility imports for the former names.
+This is a hard boundary. New code must not add fallback lookup, dual writes,
+retired executable aliases, or compatibility imports.
 
 ## Validation
 
@@ -52,5 +53,5 @@ The repository must prove that:
 3. Every Mason and Forge command is reachable through Cast.
 4. Help, version output, completions, manpages, services, and release artifacts
    use the Cast name.
-5. No production path can launch an old executable or load an old public
+5. No production path can launch a retired executable or load a retired public
    namespace.

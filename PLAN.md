@@ -20,7 +20,7 @@
 ## Goal
 
 Make a Stone recipe behave like a pure package declaration rather than a
-manifest that Boulder completes through hidden Rust policy.
+manifest that Mason completes through hidden Rust policy.
 
 The target pipeline is:
 
@@ -70,8 +70,8 @@ Nix-like build description and reproducibility boundary.
   `sources.lock.glu`.
 - [x] YAML and KDL configuration paths have been removed from OS Tools.
 
-The public recipe boundary is now `boulder.package.v3`; the former
-`boulder.recipe.v1` embedded module, encoder, evaluator, and fixtures have been
+The public recipe boundary is now `cast.package.v3`; the former recipe-v1
+embedded module, encoder, evaluator, and fixtures have been
 removed. Standard builders produce typed phase steps, and the planner can
 resolve an exact package closure into `build.lock.glu`, freeze a canonical
 `DerivationPlan`, and explain its derivation ID.
@@ -91,7 +91,7 @@ the plan's derivation ID rather than synthesizing an identity from runtime
 state.
 
 Git resolution is also byte-bound rather than commit-only. Source-lock schema
-v2 records the canonical normalized checkout SHA-256, derivation schema v12
+v2 records the canonical normalized checkout SHA-256, derivation schema v13
 includes it directly in plan identity and explanation, and frozen setup
 recomputes it before execution. Authored `clone_dir` is validated and preserved
 as the exact plan destination. Old source-lock schemas and digest mismatches
@@ -100,7 +100,7 @@ fail closed instead of synthesizing compatibility state.
 Planning and packaging now consume `PackageSpec` and `DerivationPlan`
 directly. The former `stone_recipe::RecipeSpec` semantic domain, its
 conversions, and its duplicated build and output values have been deleted.
-Boulder retains a `recipe::Recipe` loaded-input context around the concrete
+Mason retains a `recipe::Recipe` loaded-input context around the concrete
 `PackageSpec`, authored path/source, source lock, evaluation provenance, and
 timestamp needed before freezing. It is not a second package model, and the
 frozen executor and packager consume only `DerivationPlan`.
@@ -116,7 +116,7 @@ names ordered layers and strict `add`, `replace`, and `modify` entries; a
 `modify` entry evaluates a total typed patch and validates the resulting policy
 before the next entry. Manifest order, operation kind, module origin, and each
 module's complete evaluation fingerprint participate in policy identity and
-are reported by `boulder recipe explain`.
+are reported by `cast recipe explain`.
 
 ### Deliberate limitation
 
@@ -145,8 +145,8 @@ The current ABI expresses that contract directly:
 
 ```gluon
 // package.glu
-let b = import! boulder.package.v3
-let cmake = import! boulder.builders.cmake.v2
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
 
 \deps ->
     let base = b.mk_package (b.meta {
@@ -188,7 +188,7 @@ There is no automatic argument-name reflection in the first implementation.
 Explicit records preserve Gluon's type checking and make missing dependencies
 visible.
 
-The initial split-output set is a deterministic `boulder.package.v3` ABI
+The initial split-output set is a deterministic `cast.package.v3` ABI
 default. It is evaluated into the concrete `PackageSpec` and can be replaced
 by a package factory; it is neither hidden Rust policy nor a repository layer.
 Changing that default incompatibly requires a new package ABI version.
@@ -220,7 +220,7 @@ b.dep.output (b.package_ref "zlib") "dev"
 
 The first implementation may lower these variants into the current provider
 syntax. The final implementation must share one dependency representation
-between Boulder and Moss rather than maintaining separate parsers.
+between Mason and Forge rather than maintaining separate parsers.
 
 Inputs are separated by purpose:
 
@@ -237,14 +237,14 @@ without making cross compilation implicit.
 Build systems become pure Gluon modules such as:
 
 ```text
-boulder.builders.cmake.v2
-boulder.builders.meson.v2
-boulder.builders.cargo.v2
-boulder.builders.autotools.v2
+cast.builders.cmake.v2
+cast.builders.meson.v2
+cast.builders.cargo.v2
+cast.builders.autotools.v2
 ```
 
 A builder returns structural data containing its tools, environment, phases,
-and hooks. Boulder must not learn that CMake or Ninja is required by expanding
+and hooks. Mason must not learn that CMake or Ninja is required by expanding
 a `%cmake` string.
 
 Standard builders should expose typed configuration and pre/post hooks. A
@@ -286,13 +286,13 @@ cycle and diagnostic complexity.
 
 `DerivationPlan` must include every input that can change the build:
 
-- schema version plus Boulder implementation version and semantic fingerprint,
+- schema version plus Cast implementation version and semantic fingerprint,
   including the production source tree, Rust compiler context, and effective
   native compiler, linker, archiver, flags, dependency controls, and tool
   identities;
 - recipe and imported-module fingerprints;
 - locked sources and source-lock digest;
-- exact Moss-resolved package and output identities;
+- exact Forge-resolved package and output identities;
 - build, host, and target platform values;
 - selected policy, profile, toolchain, and builder fingerprints;
 - all resolved phases, hooks, arguments, and environment values;
@@ -315,7 +315,7 @@ output-integrity checks; they do not replace the derivation identity.
 
 - [x] Document `PackageSpec`, `PolicySpec`, and `DerivationPlan` ownership and
   invariants in the code that will own them.
-- [x] Inventory every value Boulder currently adds after recipe evaluation.
+- [x] Inventory every value Mason currently adds after recipe evaluation.
 - [x] Classify each value as authored intent, repository policy, resolved
   dependency, executor-only state, or forbidden ambient state.
 - [x] Add regression tests proving that the same explicit inputs evaluate to
@@ -367,7 +367,7 @@ receives concrete, validated package data.
 - [x] Introduce `DependencySpec`, `PackageRef`, and `OutputRef` variants.
 - [x] Separate native build, target build, check, and runtime relations.
 - [x] Move the canonical provider parser and representation into a shared
-  crate used by both Boulder and Moss.
+  crate used by both Mason and Forge.
 - [x] Make root and split outputs explicit in `PackageSpec`.
 - [x] Detect missing references, duplicate output names, and dependency cycles
   before execution.
@@ -398,19 +398,19 @@ dependencies are structural.
 - [x] Add generated `build.lock.glu` data for the exact package/output closure,
   base build state, repository snapshot, toolchain, target, and policy
   identities.
-- [x] Wire `build.lock.glu` into Boulder planning with explicit missing, stale, and
+- [x] Wire `build.lock.glu` into Mason planning with explicit missing, stale, and
   update behavior.
 - [x] Keep authored package modules separate from `sources.lock.glu` and
   `build.lock.glu`; Gluon evaluation describes requests while Rust performs and
   freezes I/O-backed resolution.
 - [x] Bind every Git source to both its complete commit and a canonical
-  normalized-tree SHA-256 in source-lock schema v2 and derivation schema v12;
+  normalized-tree SHA-256 in source-lock schema v2 and derivation schema v13;
   use one refresh/execution materializer, reject schema v1 and byte mismatches,
   and preserve validated authored `clone_dir` destinations.
 - [x] Eliminate wall-clock and Git fallback; plan creation requires an
   explicitly selected timestamp and records it in the plan.
 - [x] Implement stable canonical encoding and derivation hashing.
-- [x] Add `boulder recipe plan` and `boulder recipe explain` commands.
+- [x] Add `cast recipe plan` and `cast recipe explain` commands.
 - [x] Add derivation-ID fields to JSON manifests, binary manifest metadata, and
   Stone metadata, and supply the validated ID during frozen-plan emission.
 - [x] Change the build executor to consume only the frozen plan. Normal builds
@@ -421,17 +421,17 @@ dependencies are structural.
 - [x] Prove that changing any source, dependency, target, policy, builder,
   phase, environment, output, or timestamp changes the derivation ID.
 
-**Exit gate:** after plan creation, Boulder performs execution but no semantic
+**Exit gate:** after plan creation, Mason performs execution but no semantic
 composition.
 
 ### Phase 7: Package scopes and controlled policy layers
 
 Scopes are ordinary, nonrecursive imported Gluon records passed to factories:
 missing fields are Gluon type errors, local output cycles fail before planning,
-and Moss closure cycles report their exact dependency path. No hidden recursive
+and Forge closure cycles report their exact dependency path. No hidden recursive
 scope graph or Rust `PackageSet` ABI is implied.
 
-- [x] Add explicit reusable dependency scopes backed by Moss provider
+- [x] Add explicit reusable dependency scopes backed by Forge provider
   resolution.
 - [x] Support ordinary Gluon package-argument overrides.
 - [x] Support typed whole-package patches analogous to attribute overrides.
@@ -449,10 +449,10 @@ recursive package universe inside Gluon.
 - [x] Remove `%action` and `%(definition)` parsing after golden parity tests;
   explicit `Shell` steps remain literal.
 - [x] Remove filesystem-discovered macro composition.
-- [x] Remove the public `boulder.recipe.v1` ABI, its standalone encoders and
+- [x] Remove the retired recipe-v1 ABI, its standalone encoders and
   evaluator, and migrate all tracked recipes and fixtures to package v3.
 - [x] Remove legacy `stone_recipe::RecipeSpec` and its lowering/conversions;
-  retain only Boulder's loaded-input context needed before the executor and
+  retain only Mason's loaded-input context needed before the executor and
   packaging path consume `DerivationPlan`.
 - [x] Remove the obsolete macro defaults, domain conversions, generic
   `KeyValue`, and duplicated Rust/Gluon macro wire definitions.
@@ -504,7 +504,7 @@ The final architecture must demonstrate:
   rejects commands which depend on `pkg/`; a future ABI must hash file type,
   mode, symlink target, content, and destination before this can change.
 - Unrestricted global overlays or user-home policy discovery.
-- Removing Moss provider resolution in favor of a second dependency solver.
+- Removing Forge provider resolution in favor of a second dependency solver.
 - Eliminating all shell execution.
 - Changing workspace release/version metadata or the `.stone` archive format.
 - Modifying or migrating `../bedrock`.
@@ -514,5 +514,5 @@ The final architecture must demonstrate:
 This plan is complete when a Stone package is authored as a reusable pure
 Gluon function, all policy and package relationships are typed and explicit, a
 canonical target-specific `DerivationPlan` fully describes the build before it
-runs, Boulder executes only that plan, and no YAML, KDL, legacy recipe, or
+runs, Mason executes only that plan, and no YAML, KDL, legacy recipe, or
 macro compatibility path remains.

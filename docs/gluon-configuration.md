@@ -6,7 +6,7 @@
 # Gluon configuration
 
 OS Tools uses [Gluon](https://gluon-lang.org/) as its only declarative
-configuration language. Boulder recipes, typed build policy, profiles, Moss
+configuration language. Cast packages, typed build policy, profiles,
 repositories, triggers, and system intent all cross a typed Gluon-to-Rust
 boundary. YAML and KDL are not compatibility formats and are not used as
 intermediate representations.
@@ -21,15 +21,15 @@ constructed only during that conversion.
 
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
-| Boulder package | `stone.glu` | `boulder.package.v3` and `boulder.builders.*.v2` |
-| Boulder build policy | `bin/boulder/data/policy/policy.glu` | `boulder.build_policy.layers.v1` and `boulder.build_policy.v3` |
-| Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
-| Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
-| Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |
-| Moss system intent | `/etc/moss/system.glu` | `moss.system.v1` |
+| Cast package | `stone.glu` | `cast.package.v3` and `cast.builders.*.v2` |
+| Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v3` |
+| Cast profile | `profile.glu` or `profile.d/*.glu` | `cast.profile.v1` |
+| Cast repository | `repo.glu` or `repo.d/*.glu` | `cast.repository.v1` |
+| Packaged Cast trigger | `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` | `cast.trigger.v1` |
+| Cast system intent | `/etc/cast/system.glu` | `cast.system.v1` |
 
 System and user fragment loading is deterministic. Vendor files under
-`/usr/share/<program>` load before administrator files under `/etc/<program>`;
+`/usr/share/cast` load before administrator files under `/etc/cast`;
 the user layer loads last where it applies. Files within a fragment directory
 are ordered by logical name. Invalid files are errors rather than silently
 ignored.
@@ -39,7 +39,7 @@ Runnable examples live in [`docs/examples/gluon`](examples/gluon):
 - [`stone.glu`](examples/gluon/stone.glu) is a minimal recipe;
 - [`composed-stone.glu`](examples/gluon/composed-stone.glu) applies a function
   from [`package_policy.glu`](examples/gluon/package_policy.glu);
-- [`repositories.glu`](examples/gluon/repositories.glu) defines Moss
+- [`repositories.glu`](examples/gluon/repositories.glu) defines Cast
   repositories;
 - [`trigger.glu`](examples/gluon/trigger.glu) defines a packaged trigger;
 - [`system.glu`](examples/gluon/system.glu) defines desired system state.
@@ -68,7 +68,7 @@ effect, thread, channel, and reference modules are explicitly denied.
 There are two import classes:
 
 1. Versioned in-memory modules supplied by OS Tools, such as
-   `boulder.package.v3` and `moss.system.v1`.
+   `cast.package.v3` and `cast.system.v1`.
 2. Quoted relative modules beneath the explicit source root, for example
    `import! "./package-policy.glu"`.
 
@@ -100,7 +100,7 @@ or terminating the process.
 
 ## Typed and versioned ABIs
 
-The shared configuration boundary is version `1`. The canonical Boulder
+The shared configuration boundary is version `1`. The canonical Cast
 package ABI is version `3`; the standard-builder modules are version `2`; the
 build-policy manifest remains version `1` and the build-policy value is version
 `3`.
@@ -112,10 +112,10 @@ Record update syntax makes policy composition ordinary Gluon rather than a
 sidecar overlay format:
 
 ```gluon
-let boulder = import! boulder.package.v3
+let cast = import! cast.package.v3
 let add_runtime = import! "./package_policy.glu"
 
-let meta = boulder.meta {
+let meta = cast.meta {
     pname = "hello",
     version = "1.0.0",
     release = 1,
@@ -124,13 +124,13 @@ let meta = boulder.meta {
 }
 
 {
-    outputs = [add_runtime (boulder.output "out")],
-    .. boulder.mk_package meta
+    outputs = [add_runtime (cast.output "out")],
+    .. cast.mk_package meta
 }
 ```
 
 Package factories are ordinary functions from an explicit dependency record to
-a concrete package value. `boulder.override_attrs` applies a total typed patch;
+a concrete package value. `cast.override_attrs` applies a total typed patch;
 patch records distinguish keeping an array from replacing it with `[]`.
 Standard CMake, Meson, Cargo, and Autotools modules return complete structural
 builder records: symbolic required capabilities, an environment marker,
@@ -146,10 +146,10 @@ list. Shell text stays literal and cannot invoke `%action` or `%(definition)`
 syntax. The executor receives only the resulting frozen `StepPlan` and
 environment values.
 
-The former `boulder.recipe.v1`, `boulder.macros.v1`, and `boulder.policy.v1`
-embedded modules, evaluators, and standalone encoders have been removed.
-`boulder.package.v3` is the only recipe ABI, repository build policy evaluates
-directly as `BuildPolicySpec`, and Boulder plans and packages the concrete
+The retired recipe and macro-policy embedded modules, evaluators, and
+standalone encoders have been removed. `cast.package.v3` is the only recipe
+ABI, repository build policy evaluates directly as `BuildPolicySpec`, and Cast
+plans and packages the concrete
 values without a second recipe or macro domain.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
@@ -157,12 +157,12 @@ version change; Rust struct layout is not the public configuration contract.
 
 ### Ordered build-policy composition
 
-`bin/boulder/data/policy/policy.glu` is the single repository policy entry
-point. It imports `boulder.build_policy.layers.v1` and names every participating
+`crates/mason/data/policy/policy.glu` is the single repository policy entry
+point. It imports `cast.build_policy.layers.v1` and names every participating
 module in semantic order:
 
 ```gluon
-let layers = import! boulder.build_policy.layers.v1
+let layers = import! cast.build_policy.layers.v1
 
 layers.policy "aerynos" [
     layers.layer "foundation" [
@@ -174,7 +174,7 @@ layers.policy "aerynos" [
 ]
 ```
 
-Only modules named by this manifest participate; Boulder does not enumerate a
+Only modules named by this manifest participate; Cast does not enumerate a
 policy directory or apply neighboring files implicitly. Layer names are
 unique, module origins are normalized relative paths beneath the policy source
 root, and the array order is preserved exactly.
@@ -222,7 +222,7 @@ positions, global operation order, operation kind, module origin, and the
 module's complete evaluation fingerprint. The final policy fingerprint binds
 that ordered stream, including imports of every operation module. It feeds the
 build-lock request, selected policy identity, and canonical derivation plan.
-`boulder recipe explain` prints both `policy_source` provenance and the ordered
+`cast recipe explain` prints both `policy_source` provenance and the ordered
 `policy_operation` records; transition, evaluation, and patch failures retain
 the same policy/layer/operation/origin context.
 
@@ -232,29 +232,29 @@ Authored programs and generated values have different roles:
 
 | Artifact | Owner | Rule |
 |---|---|---|
-| `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Boulder |
-| Boulder build-policy root | OS Tools/vendor | `policy.glu` explicitly orders named layers and operations; unlisted files are ignored and invalid manifests, modules, transitions, or intermediate values are visible errors |
+| `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Cast |
+| Cast build-policy root | OS Tools/vendor | `policy.glu` explicitly orders named layers and operations; unlisted files are ignored and invalid manifests, modules, transitions, or intermediate values are visible errors |
 | Profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
-| `sources.lock.glu` | Boulder | Canonical schema-v2 source resolution data, written atomically |
-| `build.lock.glu` | Boulder planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
-| Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Boulder/Moss CLI | Canonical standalone literals marked `@generated`; authored files are protected |
-| `/etc/moss/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
-| `/usr/lib/system-model.glu` | Moss state transaction | Canonical standalone snapshot stored with the state |
+| `sources.lock.glu` | Cast | Canonical schema-v2 source resolution data, written atomically |
+| `build.lock.glu` | Cast planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
+| Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Cast CLI | Canonical standalone literals marked `@generated`; authored files are protected |
+| `/etc/cast/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
+| `/usr/lib/system-model.glu` | Cast state transaction | Canonical standalone snapshot stored with the state |
 
 `sources.lock.glu` is adjacent to `stone.glu`. It binds archive hashes and Git
 requests to resolved data; schema-v2 Git entries contain a complete commit ID
 and required lowercase `materialization_sha256` of the normalized exported
 tree. Schema v1 is rejected without a compatibility decoder or runtime
-fallback. If source resolution creates or changes the lock, Boulder stops and
+fallback. If source resolution creates or changes the lock, Cast stops and
 asks for a rerun so
 the new bytes become part of provenance. An unchanged lock is not rewritten,
 and a lock which no longer matches the authored upstream list is a visible
-error. Running `boulder recipe update ./stone.glu` without `--ver` or
+error. Running `cast recipe update ./stone.glu` without `--ver` or
 `--upstream` evaluates only the authored expression, fetches moving Git
 references, and atomically refreshes the generated lock. Resolution failure
 leaves the previous lock intact. Supplying update values prints structured
 authored-change suggestions instead; neither update mode rewrites arbitrary
-Gluon expressions. `boulder recipe bump` likewise prints an authored release
+Gluon expressions. `cast recipe bump` likewise prints an authored release
 suggestion.
 
 Git lock refresh and frozen setup use the same export-normalize-hash path.
@@ -266,10 +266,10 @@ component and is preserved as the frozen materialization destination; the
 outer destination name is separately part of derivation identity.
 
 `build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
-planning, including `boulder build --update-lock`. Its request fingerprint
+planning, including `cast build --update-lock`. Its request fingerprint
 binds the evaluated recipe and source lock, selected target and policy,
 profile, toolchain, builder, job count, and the typed provenance of every
-requested provider. Schema v4 contains the exact Moss-resolved package/output closure, only the repository
+requested provider. Schema v5 contains the exact resolved package/output closure, only the repository
 snapshots used by that closure, build/host/target platforms, and independent
 policy-root, target, profile, toolchain, and builder identities. Every request
 stores a canonical sorted set of origins: builder/native/build/check position,
@@ -283,32 +283,33 @@ valid only while updating the lock.
 
 The builder identity names the selected structural family for explanation and
 fingerprints the complete target-selected `BuilderSpec`, `HooksSpec`, and
-package-profile key. It is not the Boulder executable identity. The derivation
+package-profile key. It is not the Cast executable identity. The derivation
 schema freezes the executor ABI and implementation fingerprint separately inside
 `ExecutionPolicy`, so changing execution compatibility cannot be
 mistaken for changing authored builder structure. It also freezes the selected
 credential contract and every reachable analyzer program and provider request.
-The current derivation schema is v12; build-lock origins participate in both
+The current derivation schema is v13; build-lock origins participate in both
 the lock digest and the canonical derivation identity.
 
-The Boulder implementation fingerprint is produced at compile time from the
+The Cast implementation fingerprint is produced at compile time from the
 production source tree and effective build context. In addition to the Rust
-target, profile, features, compiler, and flags, it binds the selected native C
-and C++ compilers, linker, assembler, archiver, ranlib, symbol tool, CMake and
-generator tools, their stable version output, compiler/linker search paths,
-and the curated native-dependency build controls used by the workspace. Build
+target, profile, features, compiler, and flags, it binds selected native C and
+C++ compilers, linkers, assemblers, archivers, ranlib and symbol tools, their
+stable version output, compiler/linker search paths, and curated
+native-dependency controls. Native build lanes whose executable inputs cannot
+be represented are rejected. Build
 timestamps, Git metadata, checkout location, and shadowed tool aliases are not
 semantic inputs.
 
 The lock is an explicit resolution input, not an authenticated statement from
-a remote service. Boulder validates its graph and selected planner context,
+a remote service. Cast validates its graph and selected planner context,
 and frozen setup verifies the recorded repository snapshots and exact package
 metadata. Any other valid lock content changes the lock digest and derivation
 identity; cryptographic publisher trust remains the repository/index layer's
 responsibility.
 
-Moss similarly keeps desired intent separate from normalized state. `moss sync
---import path/to/system.glu` evaluates an alternate intent, while `moss state
+Cast similarly keeps desired intent separate from normalized state. `cast sync
+--import path/to/system.glu` evaluates an alternate intent, while `cast state
 export` emits a standalone generated snapshot. Export, verification,
 activation, and archival operate on the normalized snapshot without rewriting
 the administrator's program. Snapshots derived from authored intent retain its
@@ -347,7 +348,7 @@ origin, or changing an operation module or one of its imports therefore changes
 the final policy fingerprint even when the resulting `BuildPolicySpec` happens
 to compare equal. An undeclared neighboring file contributes nothing.
 
-Boulder freezes a canonical target-specific `DerivationPlan` and hashes it as
+Cast freezes a canonical target-specific `DerivationPlan` and hashes it as
 the derivation ID. The canonical data includes the recipe/source identities,
 build lock, ordered jobs/phases/steps, environment, builder layout, execution
 policy (including every pseudo-filesystem selection), tuning, analyzers,
@@ -356,7 +357,7 @@ tests cover each semantic category. Package and binary-manifest `SourceRef`
 metadata carry both `recipe-sha256:` and `derivation-sha256:` values, and the
 JSONC build manifest has `recipe-fingerprint` and `derivation-id` fields. The
 frozen executor and packager carry that validated ID through artifact emission.
-Moss records the authored system-intent fingerprint with each normalized state
+Cast records the authored system-intent fingerprint with each normalized state
 snapshot.
 
 ## CLI workflow
@@ -364,7 +365,7 @@ snapshot.
 Typecheck and semantically validate a recipe without starting a build:
 
 ```sh
-boulder recipe check ./stone.glu
+cast recipe check ./stone.glu
 ```
 
 The command prints the evaluation fingerprint on success. Parse and type errors
@@ -374,17 +375,17 @@ field path such as `meta.release` or `sources[0].url`.
 Print the concrete normalized package declaration produced by the factory:
 
 ```sh
-boulder recipe eval ./stone.glu
+cast recipe eval ./stone.glu
 ```
 
-Boulder build, check, update, and evaluation all use `boulder.package.v3`.
+Cast build, check, update, and evaluation all use `cast.package.v3`.
 There is no automatic legacy-recipe fallback or dual-source precedence.
 
 Freeze a target-specific derivation and create or refresh its generated build
 lock:
 
 ```sh
-boulder recipe plan ./stone.glu \
+cast recipe plan ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -400,7 +401,7 @@ and canonical plan bytes.
 Explain the same locked derivation and its provenance:
 
 ```sh
-boulder recipe explain ./stone.glu \
+cast recipe explain ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -415,7 +416,7 @@ the command does not rediscover policy state after the plan is frozen.
 Normal builds use the same frozen plan:
 
 ```sh
-boulder build ./stone.glu \
+cast build ./stone.glu \
     --profile default-x86_64 \
     --target x86_64 \
     --source-date-epoch 1700000000 \
@@ -437,17 +438,17 @@ the derivation.
 Create a skeletal recipe from one or more source archives:
 
 ```sh
-boulder recipe new --output ./package https://example.invalid/source-1.0.tar.xz
+cast recipe new --output ./package https://example.invalid/source-1.0.tar.xz
 ```
 
 The output is `./package/stone.glu`. Edit authored values directly or compose
-them through imported functions. Boulder deliberately has no general-purpose
+them through imported functions. Cast deliberately has no general-purpose
 Gluon source rewriter.
 
 Refresh source resolution after editing upstream declarations:
 
 ```sh
-boulder recipe update ./stone.glu
+cast recipe update ./stone.glu
 ```
 
 The command writes only `sources.lock.glu`; `stone.glu` and its imported
@@ -456,8 +457,8 @@ modules remain byte-for-byte unchanged.
 ## Compatibility policy
 
 OS Tools configuration has no YAML or KDL compatibility loader, fallback, or
-dual-write path. The old YAML updater crate, KDL control-file overlay, and Moss
-KDL system-model round trip were removed. A file using an old configuration
+dual-write path. The YAML updater, KDL control-file overlay, and KDL
+system-model round trip were removed. A file using a non-Gluon configuration
 extension is ignored where fragment discovery applies; it is never preferred
 over Gluon.
 
@@ -469,23 +470,6 @@ than configuration paths. The Makefile `config-formats` target compares tracked
 YAML/KDL paths with this exact allowlist, and `make test` runs the target before
 Clippy and the test suite.
 
-## Linkage measurement
-
-Measurements use fresh temporary Cargo target directories and debug binaries;
-temporary build output is not committed.
-
-| Measurement | Before Gluon linkage | After migration and dependency cleanup |
-|---|---:|---:|
-| Boulder binary | 122,949,288 bytes | 146,606,848 bytes |
-| Moss binary | 111,252,744 bytes | 136,772,392 bytes |
-| Combined build wall time | 22.28 s | 27.86 s |
-
-The final debug measurement increases Boulder by 23,657,560 bytes (19.2%),
-Moss by 25,519,648 bytes (22.9%), and the clean combined build by 5.58 seconds
-(25.0%). This is the cost of linking the restricted Gluon runtime into both
-tools; YAML/KDL and their compatibility dependencies are absent from the final
-graph.
-
 ## Toolchain compatibility
 
 The completed migration is checked with the workspace MSRV and the release
@@ -495,7 +479,7 @@ target, not only the developer toolchain:
 |---|---|
 | Rust 1.91.0, `x86_64-unknown-linux-gnu` | `cargo check --workspace` |
 | Rust 1.93.0, `x86_64-unknown-linux-gnu` | full formatting, Clippy, and workspace tests |
-| Rust 1.93.0, `x86_64-unknown-linux-musl` | linked Boulder and Moss debug binaries |
+| Rust 1.93.0, `x86_64-unknown-linux-musl` | linked Cast debug binary |
 
 Gluon is pinned to `0.18.3` for all three lanes. Its default feature set is
 disabled; OS Tools does not enable Gluon's async, regex, or random runtime

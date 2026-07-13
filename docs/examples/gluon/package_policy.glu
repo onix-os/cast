@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let boulder = import! boulder.package.v3
+let cast = import! cast.package.v3
 
 \output ->
-    let output = boulder.output_with output
+    let output = cast.output_with output
     {
-        summary = boulder.optional.set "Recipe composed with an imported policy",
-        runtime_inputs = [boulder.dep.package "ca-certificates"],
+        summary = cast.optional.set "Recipe composed with an imported policy",
+        runtime_inputs = [cast.dep.package "ca-certificates"],
         .. output
     }

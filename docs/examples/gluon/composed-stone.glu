@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let boulder = import! boulder.package.v3
+let cast = import! cast.package.v3
 let package_policy = import! "./package_policy.glu"
 
-let meta = boulder.meta {
+let meta = cast.meta {
     pname = "composed-hello",
     version = "1.0.0",
     release = 1,
@@ -13,6 +13,6 @@ let meta = boulder.meta {
 }
 
 {
-    outputs = boulder.outputs.with_root meta.pname (package_policy (boulder.output "out")),
-    .. boulder.mk_package meta
+    outputs = cast.outputs.with_root meta.pname (package_policy (cast.output "out")),
+    .. cast.mk_package meta
 }

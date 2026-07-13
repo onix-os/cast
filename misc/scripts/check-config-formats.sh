@@ -113,7 +113,7 @@ is_allowed_runtime_reference() {
                     ;;
             esac
             ;;
-        'bin/moss/src/cli/search.rs')
+        'crates/forge/src/cli/search.rs')
             [[ "${in_test_module}" == true ]] || return 1
             case "${line}" in
                 '"libyaml",' \
@@ -134,8 +134,8 @@ is_allowed_runtime_reference() {
                     ;;
             esac
             ;;
-        'bin/boulder/src/draft/build/ruby.rs')
-            # RubyGems publishes this upstream index name; Boulder does not
+        'crates/mason/src/draft/build/ruby.rs')
+            # RubyGems publishes this upstream index name; Cast does not
             # parse it as OS Tools configuration.
             if [[ "${line}" == '"checksums.yaml.gz" if file.depth() == 0 => state.increment_confidence(50),' ]]; then
                 return 0
@@ -226,11 +226,14 @@ is_allowed_documentation_reference() {
             case "${line}" in
                 'This is a breaking architecture decision, not a file-extension change. YAML' \
                     | 'and KDL loaders, fallbacks, dual writes, and intermediate representations have' \
+                    | 'authored in Gluon. YAML and KDL loaders, fallbacks, dual writes, and compatibility' \
                     | 'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is' \
+                    | 'OS Tools does not fall back to YAML or KDL. The only YAML allowlist belongs to' \
                     | '`.github/dependabot.yml`, `.github/workflows/ci.yaml`, and' \
                     | $'`.github/workflows/release.yaml`; these belong to GitHub\'s interfaces, not OS' \
                     | 'Tools configuration. There are no tracked KDL files. `make test` runs the' \
-                    | '`config-formats` allowlist gate so new owned YAML/KDL paths fail validation.')
+                    | '`config-formats` allowlist gate so new owned YAML/KDL paths fail validation.' \
+                    | '`config-formats` gate so owned YAML or KDL paths fail validation.')
                     return 0
                     ;;
             esac
@@ -246,7 +249,7 @@ is_allowed_documentation_reference() {
                     | 'paths, examples, and documentation. The only owned YAML files are the' \
                     | '`config-formats` gate rejects any tracked YAML/KDL path outside the exact' \
                     | '- no OS Tools YAML/KDL compatibility path remains;' \
-                    | 'runs, Boulder executes only that plan, and no YAML, KDL, legacy recipe, or')
+                    | 'runs, Mason executes only that plan, and no YAML, KDL, legacy recipe, or')
                     return 0
                     ;;
             esac
@@ -255,7 +258,7 @@ is_allowed_documentation_reference() {
             case "${line}" in
                 'boundary. YAML and KDL are not compatibility formats and are not used as' \
                     | 'OS Tools configuration has no YAML or KDL compatibility loader, fallback, or' \
-                    | 'dual-write path. The old YAML updater crate, KDL control-file overlay, and Moss' \
+                    | 'dual-write path. The YAML updater, KDL control-file overlay, and KDL' \
                     | 'KDL system-model round trip were removed. A file using an old configuration' \
                     | 'The exact external-service YAML allowlist is `.github/dependabot.yml`,' \
                     | '`.github/workflows/ci.yaml`, and `.github/workflows/release.yaml`. No KDL files' \
