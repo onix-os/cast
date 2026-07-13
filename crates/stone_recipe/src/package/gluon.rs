@@ -10,7 +10,7 @@ use super::{
     BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef,
     PackageSpec, PhaseSpec, ProfileSpec, ScriptsSpec, StepSpec,
 };
-use crate::{KeyValueSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
+use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
 /// Version of the package-function ABI.
 pub const PACKAGE_ABI_VERSION: u32 = 2;
@@ -84,7 +84,7 @@ struct GluonPackageSpec {
     profiles: Vec<GluonProfileSpec>,
     sources: Vec<GluonUpstreamSpec>,
     architectures: Vec<String>,
-    tuning: Vec<GluonKeyValueSpec<GluonTuningSpec>>,
+    tuning: Vec<GluonNamedTuningSpec>,
     emul32: GluonBool,
     mold: GluonBool,
 }
@@ -257,9 +257,9 @@ enum GluonTuningSpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonKeyValueSpec<T> {
+struct GluonNamedTuningSpec {
     key: String,
-    value: T,
+    value: GluonTuningSpec,
 }
 
 impl<T> From<GluonOptional<T>> for Option<T> {
@@ -529,11 +529,8 @@ impl From<GluonTuningSpec> for TuningSpec {
     }
 }
 
-impl<T, U> From<GluonKeyValueSpec<T>> for KeyValueSpec<U>
-where
-    U: From<T>,
-{
-    fn from(spec: GluonKeyValueSpec<T>) -> Self {
+impl From<GluonNamedTuningSpec> for NamedTuningSpec {
+    fn from(spec: GluonNamedTuningSpec) -> Self {
         Self {
             key: spec.key,
             value: spec.value.into(),

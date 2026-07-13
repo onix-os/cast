@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-pub use self::spec::{KeyValueSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
+pub use self::spec::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
 pub mod build_policy;
 pub mod derivation;

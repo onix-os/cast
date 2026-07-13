@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use stone_recipe::{
-    KeyValueSpec, ToolchainSpec, TuningSpec,
+    NamedTuningSpec, ToolchainSpec, TuningSpec,
     build_policy::{
         CompilerFlagsSpec, NamedTuningFlagSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, TuningPolicySpec,
     },
@@ -29,7 +29,7 @@ pub fn resolve(
     tuning: &TuningPolicySpec,
     target: &TargetPolicySpec,
     toolchain: ToolchainSpec,
-    authored: &[KeyValueSpec<TuningSpec>],
+    authored: &[NamedTuningSpec],
 ) -> Result<Selection, Error> {
     let groups = tuning
         .groups
@@ -192,7 +192,7 @@ mod tests {
     use super::*;
     use crate::BuildPolicy;
 
-    fn selected(authored: Vec<KeyValueSpec<TuningSpec>>, toolchain: ToolchainSpec) -> Selection {
+    fn selected(authored: Vec<NamedTuningSpec>, toolchain: ToolchainSpec) -> Selection {
         let policy = BuildPolicy::repository_for_tests();
         resolve(
             &policy.spec.tuning,
@@ -229,17 +229,17 @@ mod tests {
     fn authored_values_replace_defaults_and_disabled_groups_select_fallback_flags() {
         let selected = selected(
             vec![
-                KeyValueSpec {
+                NamedTuningSpec {
                     key: "optimize".to_owned(),
                     value: TuningSpec::Config {
                         value: "speed".to_owned(),
                     },
                 },
-                KeyValueSpec {
+                NamedTuningSpec {
                     key: "harden".to_owned(),
                     value: TuningSpec::Disable,
                 },
-                KeyValueSpec {
+                NamedTuningSpec {
                     key: "lto".to_owned(),
                     value: TuningSpec::Disable,
                 },
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn lto_concurrency_remains_a_finite_context_value() {
         let selected = selected(
-            vec![KeyValueSpec {
+            vec![NamedTuningSpec {
                 key: "lto".to_owned(),
                 value: TuningSpec::Config {
                     value: "full".to_owned(),
@@ -288,7 +288,7 @@ mod tests {
                 &policy.spec.tuning,
                 policy.target("x86_64").unwrap(),
                 ToolchainSpec::Llvm,
-                &[KeyValueSpec {
+                &[NamedTuningSpec {
                     key: "missing".to_owned(),
                     value: TuningSpec::Enable,
                 }],
@@ -302,7 +302,7 @@ mod tests {
                 &policy.spec.tuning,
                 policy.target("x86_64").unwrap(),
                 ToolchainSpec::Llvm,
-                &[KeyValueSpec {
+                &[NamedTuningSpec {
                     key: "optimize".to_owned(),
                     value: TuningSpec::Config {
                         value: "impossible".to_owned(),

@@ -31,11 +31,11 @@ impl Default for OptionsSpec {
     }
 }
 
-/// A dynamically named value represented without dynamic record fields.
+/// One explicitly named package tuning selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyValueSpec<T> {
+pub struct NamedTuningSpec {
     pub key: String,
-    pub value: T,
+    pub value: TuningSpec,
 }
 
 /// An authored source request with its kind encoded explicitly.

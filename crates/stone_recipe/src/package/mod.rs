@@ -13,7 +13,7 @@ use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
 use url::Url;
 
-use crate::{KeyValueSpec, OptionsSpec, PathSpec, TuningSpec, UpstreamSpec};
+use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 
 pub use self::gluon::{
     EvaluatedPackage, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
@@ -37,7 +37,7 @@ pub struct PackageSpec {
     pub profiles: Vec<ProfileSpec>,
     pub sources: Vec<UpstreamSpec>,
     pub architectures: Vec<String>,
-    pub tuning: Vec<KeyValueSpec<TuningSpec>>,
+    pub tuning: Vec<NamedTuningSpec>,
     pub emul32: bool,
     pub mold: bool,
 }

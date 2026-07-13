@@ -157,9 +157,9 @@ type TuningSpec =
     | Disable
     | Config { value: String }
 
-type KeyValueSpec a = {
+type NamedTuningSpec = {
     key: String,
-    value: a,
+    value: TuningSpec,
 }
 
 type PackageSpec = {
@@ -174,7 +174,7 @@ type PackageSpec = {
     profiles: Array ProfileSpec,
     sources: Array UpstreamSpec,
     architectures: Array String,
-    tuning: Array (KeyValueSpec TuningSpec),
+    tuning: Array NamedTuningSpec,
     emul32: Boolean,
     mold: Boolean,
 }
@@ -203,7 +203,7 @@ type PackagePatch = {
     profiles: ArrayPatch ProfileSpec,
     sources: ArrayPatch UpstreamSpec,
     architectures: ArrayPatch String,
-    tuning: ArrayPatch (KeyValueSpec TuningSpec),
+    tuning: ArrayPatch NamedTuningSpec,
     emul32: ValuePatch Boolean,
     mold: ValuePatch Boolean,
 }
@@ -268,9 +268,10 @@ let local_output = \pname output -> Output {
     },
 }
 
-// Repository-owned split policy is part of the pure package factory. Output
-// relations remain symbolic here and are validated before Boulder sees the
-// concrete PackageSpec.
+// Versioned boulder.package.v2 output defaults are part of the pure package
+// factory ABI, not a filesystem-discovered or layered repository policy.
+// Changing their semantics requires a new package ABI. Output relations remain
+// symbolic here and are validated before Boulder sees the concrete PackageSpec.
 let default_output_set = \pname -> {
     root = output_with {
         paths = [Any { path = "*" }],
