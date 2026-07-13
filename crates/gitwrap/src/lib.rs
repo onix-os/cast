@@ -199,14 +199,16 @@ impl Repository {
         Ok(())
     }
 
-    /// Clone the current [`Repository`] to the provided `path` and return
-    /// the cloned to [`Repository`].
+    /// Clone the current [`Repository`] to the provided `path` without
+    /// checking out its default branch, and return the cloned to
+    /// [`Repository`].
     pub async fn clone_to(&self, path: &Path) -> Result<Self, Error> {
         let path = path::absolute(path).map_err(InnerError::from)?;
 
         // Clone it to `path`
         run_git(&[
             OsStr::new("clone"),
+            OsStr::new("--no-checkout"),
             OsStr::new("--no-hardlinks"),
             OsStr::new("--no-recurse-submodules"),
             self.path.as_os_str(),
@@ -403,7 +405,11 @@ impl<R: io::AsyncRead + Unpin> ProgressParser<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, process::Command};
+    use std::{
+        io::Write,
+        path::Path,
+        process::{Command, Stdio},
+    };
 
     use super::*;
 
@@ -420,6 +426,88 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn fixture_git_with_input(repository: &Path, arguments: &[&str], input: &[u8]) -> String {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.as_mut().unwrap().write_all(input).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[tokio::test]
+    async fn clone_to_skips_an_uncheckoutable_default_head() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository_path = temporary.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        fixture_git(&repository_path, &["init", "--initial-branch=main"]);
+        fixture_git(&repository_path, &["config", "user.name", "Gitwrap Test"]);
+        fixture_git(&repository_path, &["config", "user.email", "gitwrap@example.invalid"]);
+
+        std::fs::write(repository_path.join("source.txt"), b"locked source\n").unwrap();
+        fixture_git(&repository_path, &["add", "source.txt"]);
+        fixture_git(&repository_path, &["commit", "-m", "locked source"]);
+        let locked_commit = fixture_git(&repository_path, &["rev-parse", "HEAD"]);
+
+        std::fs::write(repository_path.join("invalid-head"), b"invalid default head\n").unwrap();
+        let invalid_blob = fixture_git(&repository_path, &["hash-object", "-w", "invalid-head"]);
+        let invalid_tree_entry = format!("100644 blob {invalid_blob}\t.git\n");
+        let invalid_tree = fixture_git_with_input(&repository_path, &["mktree"], invalid_tree_entry.as_bytes());
+        let invalid_head = fixture_git(
+            &repository_path,
+            &[
+                "commit-tree",
+                &invalid_tree,
+                "-p",
+                &locked_commit,
+                "-m",
+                "uncheckoutable default head",
+            ],
+        );
+        fixture_git(&repository_path, &["update-ref", "refs/heads/main", &invalid_head]);
+
+        let ordinary_clone = temporary.path().join("ordinary-clone");
+        let ordinary_result = run_git([
+            OsStr::new("clone"),
+            OsStr::new("--no-hardlinks"),
+            OsStr::new("--no-recurse-submodules"),
+            repository_path.as_os_str(),
+            ordinary_clone.as_os_str(),
+        ])
+        .await;
+        assert!(
+            ordinary_result.is_err(),
+            "the fixture's default HEAD must be uncheckoutable"
+        );
+
+        let repository = Repository { path: repository_path };
+        let clone_path = temporary.path().join("locked-clone");
+        let cloned = repository.clone_to(&clone_path).await.unwrap();
+        assert_eq!(
+            fixture_git(cloned.path(), &["rev-parse", "HEAD"]),
+            invalid_head,
+            "the clone must retain the unrelated default HEAD"
+        );
+
+        cloned.checkout(&locked_commit).await.unwrap();
+        assert_eq!(
+            std::fs::read(clone_path.join("source.txt")).unwrap(),
+            b"locked source\n"
+        );
+        assert_eq!(fixture_git(cloned.path(), &["rev-parse", "HEAD"]), locked_commit);
     }
 
     #[tokio::test]
