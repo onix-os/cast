@@ -3,12 +3,21 @@
 
 use filetime::FileTime;
 use itertools::Itertools;
+use nix::{
+    errno::Errno,
+    sys::{
+        signal::{Signal, kill},
+        wait::{WaitStatus, waitpid},
+    },
+    unistd::{Pid, getpid},
+};
 use std::{
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
     os::unix::fs::symlink,
     os::unix::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
+    thread,
 };
 
 use fs_err::{self as fs, File};
@@ -32,6 +41,9 @@ pub(super) fn analyzer_command(program: &str) -> Command {
     command.env_clear().stdin(Stdio::null());
     unsafe {
         command.pre_exec(|| {
+            if nix::libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
             const CLOSE_RANGE_CLOEXEC: nix::libc::c_uint = 1 << 2;
             let result = nix::libc::syscall(
                 nix::libc::SYS_close_range,
@@ -54,7 +66,7 @@ pub(super) fn analyzer_command(program: &str) -> Command {
 /// relations depend on host/runtime failure state outside the frozen plan.
 pub(super) fn checked_output(mut command: Command) -> Result<Output, BoxError> {
     let invocation = format!("{command:?}");
-    let output = command.output()?;
+    let output = contained_output(&mut command, analyzer_containment())?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -63,6 +75,108 @@ pub(super) fn checked_output(mut command: Command) -> Result<Output, BoxError> {
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnalyzerContainment {
+    /// Frozen packaging runs as PID 1. Killing every other process in that
+    /// namespace catches process-group changes, `setsid`, and double forks.
+    PidNamespace,
+    /// Unit tests do not own their PID namespace and use the command's private
+    /// process group as a safe behavioral boundary.
+    #[cfg(test)]
+    ProcessGroup,
+}
+
+fn analyzer_containment() -> AnalyzerContainment {
+    #[cfg(test)]
+    if getpid().as_raw() != 1 {
+        return AnalyzerContainment::ProcessGroup;
+    }
+    AnalyzerContainment::PidNamespace
+}
+
+fn contained_output(command: &mut Command, containment: AnalyzerContainment) -> Result<Output, BoxError> {
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let child_pid = Pid::from_raw(child.id() as i32);
+    let stdout = read_analyzer_pipe(child.stdout.take().expect("piped analyzer stdout"));
+    let stderr = read_analyzer_pipe(child.stderr.take().expect("piped analyzer stderr"));
+
+    // Drain both pipes concurrently so a verbose direct child cannot block on
+    // a full pipe. Once that child exits, terminate every descendant before
+    // waiting for EOF: a background pipe holder must never hang packaging.
+    let status = child.wait();
+    let cleanup = terminate_analyzer_descendants(containment, child_pid);
+    if let Err(error) = cleanup {
+        return Err(Box::new(error));
+    }
+    let stdout = join_analyzer_pipe(stdout)?;
+    let stderr = join_analyzer_pipe(stderr)?;
+
+    Ok(Output {
+        status: status?,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_analyzer_pipe<R>(mut pipe: R) -> thread::JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn join_analyzer_pipe(handle: thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>, BoxError> {
+    handle
+        .join()
+        .map_err(|_| Box::<dyn std::error::Error + Send + Sync>::from("analyzer pipe reader panicked"))?
+        .map_err(Into::into)
+}
+
+fn terminate_analyzer_descendants(containment: AnalyzerContainment, child_pid: Pid) -> std::io::Result<()> {
+    let target = analyzer_descendant_signal_target(containment, child_pid);
+    if matches!(containment, AnalyzerContainment::PidNamespace) && getpid().as_raw() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "refusing namespace-wide analyzer cleanup outside PID 1",
+        ));
+    }
+    match kill(target, Signal::SIGKILL) {
+        Ok(()) | Err(Errno::ESRCH) => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    if matches!(containment, AnalyzerContainment::PidNamespace) {
+        loop {
+            match waitpid(Pid::from_raw(-1), None) {
+                Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => {}
+                Ok(
+                    WaitStatus::Stopped(..)
+                    | WaitStatus::PtraceEvent(..)
+                    | WaitStatus::PtraceSyscall(..)
+                    | WaitStatus::Continued(..)
+                    | WaitStatus::StillAlive,
+                ) => {}
+                Err(Errno::EINTR) => {}
+                Err(Errno::ECHILD) => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn analyzer_descendant_signal_target(containment: AnalyzerContainment, _child_pid: Pid) -> Pid {
+    match containment {
+        AnalyzerContainment::PidNamespace => Pid::from_raw(-1),
+        #[cfg(test)]
+        AnalyzerContainment::ProcessGroup => Pid::from_raw(-_child_pid.as_raw()),
     }
 }
 
@@ -299,6 +413,7 @@ pub fn compressman(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Re
 #[cfg(test)]
 mod tests {
     use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
 
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
@@ -328,6 +443,41 @@ mod tests {
 
         assert!(error.contains("exit status: 9"), "{error}");
         assert!(error.contains("analyzer-failed"), "{error}");
+    }
+
+    #[test]
+    fn background_analyzer_pipe_holder_cannot_hang_packaging() {
+        let mut command = analyzer_command("/bin/sh");
+        command.args(["-c", "printf direct-output; (sleep 30) &"]);
+
+        let started = Instant::now();
+        let output = checked_output(command).unwrap();
+
+        assert_eq!(output.stdout, b"direct-output");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn background_analyzer_cannot_mutate_after_direct_child_exit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let marker = temporary.path().join("delayed-write");
+        let mut command = analyzer_command("/bin/sh");
+        command
+            .env("MARKER", &marker)
+            .args(["-c", "(sleep 0.2; printf escaped > \"$MARKER\") &"]);
+
+        checked_output(command).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn production_analyzer_cleanup_targets_the_complete_pid_namespace() {
+        assert_eq!(
+            analyzer_descendant_signal_target(AnalyzerContainment::PidNamespace, Pid::from_raw(1234)),
+            Pid::from_raw(-1)
+        );
     }
 
     #[test]
