@@ -59,6 +59,73 @@ pub enum UpstreamSpec {
     },
 }
 
+/// Network transport policy for one declared source URL.
+///
+/// This distinction is intentionally smaller than the set of schemes the URL
+/// parser and source backends happen to understand. Archive downloads are
+/// HTTPS-only. Git repositories may use HTTPS or SSH, but never an implicit
+/// local-file transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceUrlKind {
+    Archive,
+    Git,
+}
+
+/// Parse and enforce the production transport policy for a source URL.
+///
+/// Every authored source, generated source lock, and frozen source must pass
+/// through this function. It deliberately validates only the declared URL.
+/// Redirect targets and resolved network addresses require separate checks in
+/// the fetching backend; this function is not an SSRF or redirect-isolation
+/// boundary.
+pub fn validate_source_url(kind: SourceUrlKind, value: &str) -> Result<Url, SourceUrlValidationError> {
+    let url = Url::parse(value).map_err(SourceUrlValidationError::InvalidSyntax)?;
+
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(SourceUrlValidationError::EmbeddedCredentials);
+    }
+    if url.fragment().is_some() {
+        return Err(SourceUrlValidationError::Fragment);
+    }
+
+    let scheme_allowed = match kind {
+        SourceUrlKind::Archive => url.scheme() == "https",
+        SourceUrlKind::Git => matches!(url.scheme(), "https" | "ssh"),
+    };
+    if !scheme_allowed {
+        return Err(SourceUrlValidationError::UnsupportedScheme {
+            scheme: url.scheme().to_owned(),
+            expected: match kind {
+                SourceUrlKind::Archive => "https",
+                SourceUrlKind::Git => "https or ssh",
+            },
+        });
+    }
+    if url.host_str().is_none() {
+        return Err(SourceUrlValidationError::MissingHost);
+    }
+
+    Ok(url)
+}
+
+/// Failure to parse or admit one production source URL.
+///
+/// Errors never retain or render the full input because URLs commonly contain
+/// credentials or other secret-bearing data.
+#[derive(Debug, Error)]
+pub enum SourceUrlValidationError {
+    #[error("URL syntax is invalid")]
+    InvalidSyntax(#[source] url::ParseError),
+    #[error("URL must not contain embedded credentials")]
+    EmbeddedCredentials,
+    #[error("URL fragments are not supported")]
+    Fragment,
+    #[error("URL scheme `{scheme}` is not supported; expected {expected}")]
+    UnsupportedScheme { scheme: String, expected: &'static str },
+    #[error("URL must include a remote host")]
+    MissingHost,
+}
+
 impl UpstreamSpec {
     /// Validate one authored source request at the typed package boundary.
     ///
@@ -133,32 +200,29 @@ impl UpstreamSpec {
         Ok(materialization_name)
     }
 
-    fn validated_url(&self) -> Result<Url, UpstreamValidationError> {
-        let value = match self {
-            Self::Archive { url, .. } | Self::Git { url, .. } => url,
+    pub fn validated_url(&self) -> Result<Url, UpstreamValidationError> {
+        let (kind, value) = match self {
+            Self::Archive { url, .. } => (SourceUrlKind::Archive, url),
+            Self::Git { url, .. } => (SourceUrlKind::Git, url),
         };
-        Url::parse(value).map_err(|source| UpstreamValidationError::InvalidUrl {
-            value: value.clone(),
-            source,
-        })
+        validate_source_url(kind, value).map_err(|source| UpstreamValidationError::InvalidUrl { source })
     }
 }
 
 /// Failure to validate one authored source request.
 #[derive(Debug, Error)]
 pub enum UpstreamValidationError {
-    #[error("invalid URL `{value}`")]
+    #[error("invalid source URL: {source}")]
     InvalidUrl {
-        value: String,
         #[source]
-        source: url::ParseError,
+        source: SourceUrlValidationError,
     },
     #[error("expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`")]
     InvalidArchiveSha256 { value: String },
     #[error("`{value}` must be one normalized filename component")]
     InvalidMaterializationComponent { field: &'static str, value: String },
-    #[error("URL `{url}` does not end in a safe filename component; set `{override_field}` explicitly")]
-    InvalidDefaultMaterializationName { url: String, override_field: &'static str },
+    #[error("URL does not end in a safe filename component; set `{override_field}` explicitly")]
+    InvalidDefaultMaterializationName { override_field: &'static str },
     #[error("`{value}` is outside the valid 0..=255 integer range")]
     InvalidStripDirs { value: i64 },
     #[error("option has no effect unless `unpack` is true")]
@@ -200,10 +264,7 @@ fn validate_materialization_name(
 
     let value = url_file_name(url);
     if !is_safe_artifact_component(value) {
-        return Err(UpstreamValidationError::InvalidDefaultMaterializationName {
-            url: url.as_str().to_owned(),
-            override_field,
-        });
+        return Err(UpstreamValidationError::InvalidDefaultMaterializationName { override_field });
     }
     Ok(value.to_owned())
 }
@@ -290,5 +351,59 @@ mod tests {
         assert!(is_canonical_git_commit("0123456789abcdef0123456789abcdef01234567"));
         assert!(!is_canonical_git_commit("0123456789ABCDEF0123456789ABCDEF01234567"));
         assert!(!is_canonical_git_commit("01234567"));
+    }
+
+    #[test]
+    fn source_url_policy_admits_only_explicit_secure_remote_transports() {
+        assert!(validate_source_url(SourceUrlKind::Archive, "https://example.invalid/source.tar.zst").is_ok());
+        assert!(validate_source_url(SourceUrlKind::Git, "https://example.invalid/project.git").is_ok());
+        assert!(validate_source_url(SourceUrlKind::Git, "ssh://example.invalid/project.git").is_ok());
+
+        for value in [
+            "http://example.invalid/source.tar.zst",
+            "ssh://example.invalid/source.tar.zst",
+            "file:///tmp/source.tar.zst",
+            "ftp://example.invalid/source.tar.zst",
+        ] {
+            assert!(matches!(
+                validate_source_url(SourceUrlKind::Archive, value),
+                Err(SourceUrlValidationError::UnsupportedScheme { .. })
+            ));
+        }
+
+        for value in [
+            "http://example.invalid/project.git",
+            "git://example.invalid/project.git",
+            "file:///tmp/project.git",
+            "ftp://example.invalid/project.git",
+        ] {
+            assert!(matches!(
+                validate_source_url(SourceUrlKind::Git, value),
+                Err(SourceUrlValidationError::UnsupportedScheme { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn source_url_policy_rejects_secret_bearing_and_ambiguous_components_without_echoing_them() {
+        let credential_url = "https://user:do-not-print@example.invalid/source.tar.zst";
+        let error = validate_source_url(SourceUrlKind::Archive, credential_url).unwrap_err();
+        assert!(matches!(error, SourceUrlValidationError::EmbeddedCredentials));
+        assert!(!error.to_string().contains("user"));
+        assert!(!error.to_string().contains("do-not-print"));
+
+        let fragment_url = "https://example.invalid/source.tar.zst#secret-fragment";
+        let error = validate_source_url(SourceUrlKind::Archive, fragment_url).unwrap_err();
+        assert!(matches!(error, SourceUrlValidationError::Fragment));
+        assert!(!error.to_string().contains("secret-fragment"));
+
+        assert!(matches!(
+            validate_source_url(SourceUrlKind::Git, "ssh:/project.git"),
+            Err(SourceUrlValidationError::MissingHost)
+        ));
+        assert!(matches!(
+            validate_source_url(SourceUrlKind::Git, "not a URL"),
+            Err(SourceUrlValidationError::InvalidSyntax(_))
+        ));
     }
 }

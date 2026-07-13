@@ -2322,6 +2322,91 @@ mod tests {
     }
 
     #[test]
+    fn authored_sources_apply_the_shared_secure_transport_policy() {
+        for value in [
+            "http://example.com/source.tar.xz",
+            "file:///tmp/source.tar.xz",
+            "ssh://example.com/source.tar.xz",
+        ] {
+            let mut source = archive_source();
+            let UpstreamSpec::Archive { url, .. } = &mut source else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            let mut invalid = package();
+            invalid.sources.push(source);
+            let error = invalid.validate().unwrap_err();
+            assert_eq!(error.field(), "sources[0].url");
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidUrl {
+                        source: crate::spec::SourceUrlValidationError::UnsupportedScheme { .. },
+                    },
+                    ..
+                }
+            ));
+        }
+
+        for value in ["https://example.com/source.git", "ssh://example.com/source.git"] {
+            let mut source = git_source();
+            let UpstreamSpec::Git { url, .. } = &mut source else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            let mut valid = package();
+            valid.sources.push(source);
+            valid.validate().unwrap();
+        }
+
+        for value in [
+            "http://example.com/source.git",
+            "git://example.com/source.git",
+            "file:///tmp/source.git",
+        ] {
+            let mut source = git_source();
+            let UpstreamSpec::Git { url, .. } = &mut source else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            let mut invalid = package();
+            invalid.sources.push(source);
+            let error = invalid.validate().unwrap_err();
+            assert_eq!(error.field(), "sources[0].url");
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidUrl {
+                        source: crate::spec::SourceUrlValidationError::UnsupportedScheme { .. },
+                    },
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn authored_source_url_errors_do_not_echo_secrets() {
+        for value in [
+            "https://user:do-not-print@example.com/source.tar.xz",
+            "https://example.com/source.tar.xz#do-not-print",
+        ] {
+            let mut source = archive_source();
+            let UpstreamSpec::Archive { url, .. } = &mut source else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            let mut invalid = package();
+            invalid.sources.push(source);
+            let error = invalid.validate().unwrap_err();
+            let message = error.to_string();
+            assert!(message.starts_with("sources[0].url:"));
+            assert!(!message.contains("user"));
+            assert!(!message.contains("do-not-print"));
+        }
+    }
+
+    #[test]
     fn metadata_urls_and_license_expressions_fail_closed() {
         for homepage in ["not a URL", "ftp://example.com/package", "mailto:package@example.com"] {
             let mut invalid = package();

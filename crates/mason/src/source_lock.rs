@@ -21,10 +21,11 @@ use fs_err as fs;
 use gluon_config::{Diagnostic, Evaluator, Source as GluonSource};
 use stone_recipe::{
     UpstreamSpec,
-    spec::{is_canonical_git_commit, is_canonical_sha256},
+    spec::{
+        SourceUrlKind, SourceUrlValidationError, is_canonical_git_commit, is_canonical_sha256, validate_source_url,
+    },
 };
 use thiserror::Error;
-use url::Url;
 
 use crate::generated_lock;
 
@@ -101,15 +102,11 @@ impl SourceLock {
                 return Err(ValidationError::UnexpectedOrder { index, order });
             }
 
-            let url = match source {
-                SourceResolution::Archive(source) => &source.url,
-                SourceResolution::Git(source) => &source.url,
+            let (kind, url) = match source {
+                SourceResolution::Archive(source) => (SourceUrlKind::Archive, &source.url),
+                SourceResolution::Git(source) => (SourceUrlKind::Git, &source.url),
             };
-            Url::parse(url).map_err(|source| ValidationError::InvalidUrl {
-                field: format!("sources[{index}].url"),
-                value: url.clone(),
-                source,
-            })?;
+            validate_locked_url(index, kind, url)?;
 
             match source {
                 SourceResolution::Archive(archive) => {
@@ -151,13 +148,19 @@ impl SourceLock {
         }
 
         for (index, (locked, authored)) in self.sources.iter().zip(sources).enumerate() {
+            let (kind, authored_url) = match authored {
+                UpstreamSpec::Archive { url, .. } => (SourceUrlKind::Archive, url),
+                UpstreamSpec::Git { url, .. } => (SourceUrlKind::Git, url),
+            };
+            validate_locked_url(index, kind, authored_url)?;
+
             match (locked, authored) {
                 (SourceResolution::Archive(locked), UpstreamSpec::Archive { url, hash, .. }) => {
-                    validate_equal(index, "url", url, &locked.url)?;
+                    validate_url_equal(index, url, &locked.url)?;
                     validate_equal(index, "sha256", hash, &locked.sha256)?;
                 }
                 (SourceResolution::Git(locked), UpstreamSpec::Git { url, git_ref, .. }) => {
-                    validate_equal(index, "url", url, &locked.url)?;
+                    validate_url_equal(index, url, &locked.url)?;
                     validate_equal(index, "requested_ref", git_ref, &locked.requested_ref)?;
                 }
                 (SourceResolution::Archive(_), UpstreamSpec::Git { .. }) => {
@@ -185,6 +188,25 @@ impl SourceLock {
         self.sources
             .get(order)
             .filter(|source| usize::try_from(source.order()) == Ok(order))
+    }
+}
+
+fn validate_locked_url(index: usize, kind: SourceUrlKind, value: &str) -> Result<(), ValidationError> {
+    validate_source_url(kind, value)
+        .map(drop)
+        .map_err(|source| ValidationError::InvalidUrl {
+            field: format!("sources[{index}].url"),
+            source,
+        })
+}
+
+fn validate_url_equal(order: usize, expected: &str, found: &str) -> Result<(), ValidationError> {
+    if expected == found {
+        Ok(())
+    } else {
+        Err(ValidationError::StaleSourceUrl {
+            field: format!("sources[{order}].url"),
+        })
     }
 }
 
@@ -366,12 +388,11 @@ pub enum ValidationError {
     },
     #[error("sources[{index}].order: expected canonical order {index}, found {order}")]
     UnexpectedOrder { index: usize, order: u32 },
-    #[error("{field}: invalid URL `{value}`")]
+    #[error("{field}: invalid source URL: {source}")]
     InvalidUrl {
         field: String,
-        value: String,
         #[source]
-        source: url::ParseError,
+        source: SourceUrlValidationError,
     },
     #[error("{field}: archive digest must be exactly 64 lowercase hexadecimal characters, found `{value}`")]
     InvalidArchiveSha256 { field: String, value: String },
@@ -393,6 +414,8 @@ pub enum ValidationError {
         expected: String,
         found: String,
     },
+    #[error("{field}: stale source URL")]
+    StaleSourceUrl { field: String },
 }
 
 /// Resolution data for an archive source.
@@ -656,7 +679,7 @@ type SourceLock = {
             ),
             (
                 canonical.replacen("https://example.invalid/archive.tar.zst", "not a URL", 1),
-                "invalid URL",
+                "invalid source URL",
             ),
             (
                 canonical.replace(ARCHIVE_SHA256, &"A".repeat(64)),
@@ -695,6 +718,61 @@ type SourceLock = {
         for (source, expected) in cases {
             let error = decode_source_lock(SOURCE_LOCK_FILE_NAME, source.as_bytes()).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn decoder_applies_the_shared_transport_policy_to_every_locked_source_kind() {
+        let canonical = encode_source_lock(&sample_lock());
+        let cases = [
+            (
+                "https://example.invalid/archive.tar.zst",
+                "http://example.invalid/archive.tar.zst",
+                "sources[0].url",
+            ),
+            (
+                "https://example.invalid/archive.tar.zst",
+                "file:///tmp/archive.tar.zst",
+                "sources[0].url",
+            ),
+            (
+                "https://example.invalid/project.git",
+                "git://example.invalid/project.git",
+                "sources[1].url",
+            ),
+            (
+                "https://example.invalid/project.git",
+                "file:///tmp/project.git",
+                "sources[1].url",
+            ),
+        ];
+
+        for (valid, invalid, field) in cases {
+            let encoded = canonical.replacen(valid, invalid, 1);
+            let error = decode_source_lock(SOURCE_LOCK_FILE_NAME, encoded.as_bytes()).unwrap_err();
+            assert!(matches!(
+                error,
+                DecodeError::Validation(ValidationError::InvalidUrl {
+                    field: ref found,
+                    source: SourceUrlValidationError::UnsupportedScheme { .. },
+                }) if found == field
+            ));
+        }
+    }
+
+    #[test]
+    fn source_lock_url_errors_do_not_render_credentials_or_fragments() {
+        let canonical = encode_source_lock(&sample_lock());
+        for secret_url in [
+            "https://user:do-not-print@example.invalid/archive.tar.zst",
+            "https://example.invalid/archive.tar.zst#do-not-print",
+        ] {
+            let encoded = canonical.replacen("https://example.invalid/archive.tar.zst", secret_url, 1);
+            let error = decode_source_lock(SOURCE_LOCK_FILE_NAME, encoded.as_bytes()).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("sources[0].url"));
+            assert!(!message.contains("user"));
+            assert!(!message.contains("do-not-print"));
         }
     }
 

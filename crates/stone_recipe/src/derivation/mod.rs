@@ -25,7 +25,10 @@ use crate::build_policy::{
 };
 use crate::{
     package::valid_package_name,
-    spec::{is_canonical_git_commit, is_canonical_sha256, is_safe_artifact_component},
+    spec::{
+        SourceUrlKind, SourceUrlValidationError, is_canonical_git_commit, is_canonical_sha256,
+        is_safe_artifact_component, validate_source_url,
+    },
 };
 
 pub use self::build_lock::{
@@ -654,7 +657,7 @@ impl LockedSource {
                 url, sha256, filename, ..
             } => {
                 require_nonempty(&format!("sources[{index}].url"), url)?;
-                validate_url(index, url)?;
+                validate_url(index, SourceUrlKind::Archive, url)?;
                 if !is_canonical_sha256(sha256) {
                     return Err(DerivationValidationError::InvalidArchiveSha256 {
                         index,
@@ -672,7 +675,7 @@ impl LockedSource {
                 ..
             } => {
                 require_nonempty(&format!("sources[{index}].url"), url)?;
-                validate_url(index, url)?;
+                validate_url(index, SourceUrlKind::Git, url)?;
                 require_nonempty(&format!("sources[{index}].requested_ref"), requested_ref)?;
                 validate_source_destination(index, "directory", directory)?;
                 if !is_canonical_git_commit(commit) {
@@ -1913,12 +1916,11 @@ pub enum DerivationValidationError {
     },
     #[error("jobs[{job}].phases[{phase}].name: unsupported frozen phase {name:?}")]
     UnsupportedPhase { job: usize, phase: usize, name: String },
-    #[error("sources[{index}].url: invalid URL `{value}`")]
+    #[error("sources[{index}].url: invalid source URL: {source}")]
     InvalidSourceUrl {
         index: usize,
-        value: String,
         #[source]
-        source: url::ParseError,
+        source: SourceUrlValidationError,
     },
     #[error("sources[{index}].commit: expected exactly 40 lowercase ASCII hexadecimal characters, found `{value}`")]
     InvalidGitCommit { index: usize, value: String },
@@ -2185,13 +2187,10 @@ fn encode_optional_string(encoder: &mut CanonicalEncoder, value: Option<&str>) {
     }
 }
 
-fn validate_url(index: usize, value: &str) -> Result<(), DerivationValidationError> {
-    url::Url::parse(value).map_err(|source| DerivationValidationError::InvalidSourceUrl {
-        index,
-        value: value.to_owned(),
-        source,
-    })?;
-    Ok(())
+fn validate_url(index: usize, kind: SourceUrlKind, value: &str) -> Result<(), DerivationValidationError> {
+    validate_source_url(kind, value)
+        .map(drop)
+        .map_err(|source| DerivationValidationError::InvalidSourceUrl { index, source })
 }
 
 fn validate_source_destination(
@@ -4042,6 +4041,78 @@ mod tests {
                     ..
                 })
             ));
+        }
+    }
+
+    #[test]
+    fn frozen_sources_apply_the_shared_secure_transport_policy() {
+        let archive_cases = [
+            "http://example.invalid/hello.tar.zst",
+            "file:///tmp/hello.tar.zst",
+            "ssh://example.invalid/hello.tar.zst",
+        ];
+        for value in archive_cases {
+            let mut plan = sample_plan();
+            let LockedSource::Archive { url, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidSourceUrl {
+                    index: 0,
+                    source: SourceUrlValidationError::UnsupportedScheme { .. },
+                })
+            ));
+        }
+
+        for value in ["https://example.invalid/source.git", "ssh://example.invalid/source.git"] {
+            let mut plan = sample_plan();
+            plan.sources = vec![sample_git_source(0, "hello.git")];
+            let LockedSource::Git { url, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            plan.validate().unwrap();
+        }
+
+        for value in [
+            "http://example.invalid/source.git",
+            "git://example.invalid/source.git",
+            "file:///tmp/source.git",
+        ] {
+            let mut plan = sample_plan();
+            plan.sources = vec![sample_git_source(0, "hello.git")];
+            let LockedSource::Git { url, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidSourceUrl {
+                    index: 0,
+                    source: SourceUrlValidationError::UnsupportedScheme { .. },
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn frozen_source_url_errors_are_field_specific_and_secret_free() {
+        for value in [
+            "https://user:do-not-print@example.invalid/hello.tar.zst",
+            "https://example.invalid/hello.tar.zst#do-not-print",
+        ] {
+            let mut plan = sample_plan();
+            let LockedSource::Archive { url, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *url = value.to_owned();
+            let error = plan.validate().unwrap_err();
+            let message = error.to_string();
+            assert!(message.starts_with("sources[0].url:"));
+            assert!(!message.contains("user"));
+            assert!(!message.contains("do-not-print"));
         }
     }
 

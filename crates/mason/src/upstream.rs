@@ -11,7 +11,11 @@ use crate::{
 };
 use forge::runtime;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use stone_recipe::{UpstreamSpec, derivation::LockedSource, spec::UpstreamValidationError};
+use stone_recipe::{
+    UpstreamSpec,
+    derivation::LockedSource,
+    spec::{SourceUrlKind, SourceUrlValidationError, UpstreamValidationError, validate_source_url},
+};
 use thiserror::Error;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 
@@ -44,6 +48,10 @@ impl Upstream {
         original_index: usize,
         locked_git: Option<(&str, &str)>,
     ) -> Result<Self, Error> {
+        let validated_url = source.validated_url().map_err(|source| Error::InvalidAuthoredSource {
+            index: original_index,
+            source,
+        })?;
         let materialization_name = source
             .materialization_name()
             .map_err(|source| Error::InvalidAuthoredSource {
@@ -51,26 +59,19 @@ impl Upstream {
                 source,
             })?;
         match source {
-            UpstreamSpec::Archive { url, hash, .. } => Ok(Self::Plain(Plain {
-                url: url.parse().map_err(|source| Error::AuthoredSourceUrl {
-                    index: original_index,
-                    source,
-                })?,
+            UpstreamSpec::Archive { hash, .. } => Ok(Self::Plain(Plain {
+                url: validated_url,
                 hash: hash.parse().map_err(plain::Error::from)?,
                 // Resolve URL-derived defaults exactly once at the validated
                 // package boundary.
                 rename: Some(materialization_name),
             })),
-            UpstreamSpec::Git { url, git_ref, .. } => {
+            UpstreamSpec::Git { git_ref, .. } => {
                 let (commit, materialization_sha256) = locked_git
                     .map(|(commit, digest)| (commit.to_owned(), Some(digest.to_owned())))
                     .unwrap_or_else(|| (git_ref.clone(), None));
-                let url = url.parse().map_err(|source| Error::AuthoredSourceUrl {
-                    index: original_index,
-                    source,
-                })?;
                 Ok(Self::Git(Git {
-                    url,
+                    url: validated_url,
                     commit,
                     name: materialization_name,
                     original_index,
@@ -237,7 +238,8 @@ fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
                 LockedSource::Archive {
                     url, sha256, filename, ..
                 } => Upstream::Plain(Plain {
-                    url: url.parse().map_err(|source| Error::LockedSourceUrl { index, source })?,
+                    url: validate_source_url(SourceUrlKind::Archive, url)
+                        .map_err(|source| Error::InvalidLockedSourceUrl { index, source })?,
                     hash: sha256.parse().map_err(plain::Error::from)?,
                     rename: Some(filename.clone()),
                 }),
@@ -248,7 +250,8 @@ fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
                     directory,
                     ..
                 } => Upstream::Git(Git {
-                    url: url.parse().map_err(|source| Error::LockedSourceUrl { index, source })?,
+                    url: validate_source_url(SourceUrlKind::Git, url)
+                        .map_err(|source| Error::InvalidLockedSourceUrl { index, source })?,
                     commit: commit.clone(),
                     name: directory.clone(),
                     original_index: index,
@@ -395,17 +398,11 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
-    #[error("locked source {index} has an invalid URL")]
-    LockedSourceUrl {
+    #[error("locked source {index}.url is invalid: {source}")]
+    InvalidLockedSourceUrl {
         index: usize,
         #[source]
-        source: url::ParseError,
-    },
-    #[error("authored source {index} has an invalid URL")]
-    AuthoredSourceUrl {
-        index: usize,
-        #[source]
-        source: url::ParseError,
+        source: SourceUrlValidationError,
     },
     #[error("authored source {index} is invalid: {source}")]
     InvalidAuthoredSource {
@@ -435,23 +432,6 @@ mod tests {
     const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const SECOND_MATERIALIZATION_SHA256: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
-
-    fn gluon_git_recipe(url: &str) -> String {
-        format!(
-            r#"let cast = import! cast.package.v3
-let base = cast.mk_package (cast.meta {{
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.com",
-    license = ["MPL-2.0"],
-}})
-{{
-    sources = [cast.source.git "{url}" "main"],
-    .. base
-}}"#
-        )
-    }
 
     fn gluon_two_git_recipe(first_url: &str, second_url: &str) -> String {
         format!(
@@ -543,6 +523,82 @@ let base = cast.mk_package (cast.meta {{
         };
         assert_eq!(git.commit, FULL_COMMIT);
         assert_eq!(git.materialization_sha256.as_deref(), Some(MATERIALIZATION_SHA256));
+    }
+
+    #[test]
+    fn locked_source_url_policy_fails_before_any_storage_or_share_access() {
+        let cases = [
+            LockedSource::Archive {
+                order: 0,
+                url: "file:///tmp/source.tar.zst".to_owned(),
+                sha256: "a".repeat(64),
+                filename: "source.tar.zst".to_owned(),
+            },
+            LockedSource::Archive {
+                order: 0,
+                url: "http://example.invalid/source.tar.zst".to_owned(),
+                sha256: "a".repeat(64),
+                filename: "source.tar.zst".to_owned(),
+            },
+            LockedSource::Git {
+                order: 0,
+                url: "file:///tmp/source.git".to_owned(),
+                requested_ref: "main".to_owned(),
+                commit: FULL_COMMIT.to_owned(),
+                materialization_sha256: MATERIALIZATION_SHA256.to_owned(),
+                directory: "source.git".to_owned(),
+            },
+            LockedSource::Git {
+                order: 0,
+                url: "git://example.invalid/source.git".to_owned(),
+                requested_ref: "main".to_owned(),
+                commit: FULL_COMMIT.to_owned(),
+                materialization_sha256: MATERIALIZATION_SHA256.to_owned(),
+                directory: "source.git".to_owned(),
+            },
+        ];
+
+        for source in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let storage = directory.path().join("storage");
+            let shared = directory.path().join("shared");
+            let error = match sync_locked(&[source], &storage, &shared, 0) {
+                Ok(_) => panic!("insecure locked source URL was accepted"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error,
+                Error::InvalidLockedSourceUrl {
+                    index: 0,
+                    source: SourceUrlValidationError::UnsupportedScheme { .. },
+                }
+            ));
+            assert!(!storage.exists());
+            assert!(!shared.exists());
+        }
+    }
+
+    #[test]
+    fn fetch_boundary_url_errors_are_field_specific_and_secret_free() {
+        for value in [
+            "https://user:do-not-print@example.invalid/source.tar.zst",
+            "https://example.invalid/source.tar.zst#do-not-print",
+        ] {
+            let source = UpstreamSpec::Archive {
+                url: value.to_owned(),
+                hash: "a".repeat(64),
+                rename: None,
+                strip_dirs: None,
+                unpack: true,
+                unpack_dir: None,
+            };
+            let error = Upstream::from_package_source(&source, 7, None).unwrap_err();
+            let message = error.to_string();
+            assert!(matches!(error, Error::InvalidAuthoredSource { index: 7, .. }));
+            assert!(message.starts_with("authored source 7 is invalid:"));
+            assert!(!message.contains("user"));
+            assert!(!message.contains("do-not-print"));
+        }
     }
 
     #[test]
@@ -711,7 +767,7 @@ let base = cast.mk_package (cast.meta {{
     }
 
     #[test]
-    fn explicit_refresh_fetches_and_pins_the_latest_git_commit() {
+    fn local_git_lower_layer_resolves_and_verifies_moving_refs() {
         let directory = tempfile::tempdir().unwrap();
         let origin = directory.path().join("origin");
         fs::create_dir(&origin).unwrap();
@@ -719,86 +775,64 @@ let base = cast.mk_package (cast.meta {{
         git(&origin, &["config", "user.name", "Cast Test"]);
         git(&origin, &["config", "user.email", "cast@example.invalid"]);
         let first_commit = commit(&origin, "first\n", "first");
-        let url = url::Url::from_file_path(&origin).unwrap().to_string();
-        let authored = gluon_git_recipe(&url);
-        let recipe_path = directory.path().join("stone.glu");
-        let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
+        let url = url::Url::from_file_path(&origin).unwrap();
         let storage = directory.path().join("cache/upstreams");
-        fs::write(&recipe_path, &authored).unwrap();
-
-        let recipe = Recipe::load_authored(&recipe_path).unwrap();
-        assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Written);
-        let first_bytes = fs::read(&lock_path).unwrap();
-        let first = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &first_bytes).unwrap();
-        let SourceResolution::Git(first_source) = &first.sources[0] else {
-            panic!("expected resolved Git source")
+        let upstream = Git {
+            url,
+            commit: "main".to_owned(),
+            name: "locked-source".to_owned(),
+            original_index: 0,
+            materialization_sha256: None,
         };
-        assert_eq!(first_source.requested_ref, "main");
-        assert_eq!(first_source.commit, first_commit);
-        assert_eq!(first_source.materialization_sha256.len(), 64);
-        let first_digest = first_source.materialization_sha256.clone();
+        let mut first = runtime::block_on(upstream.resolve(&storage, &ProgressBar::new(100))).unwrap();
+        assert_eq!(first.resolved_hash, first_commit);
+        let first_digest =
+            runtime::block_on(first.export_normalized(&directory.path().join("first-export"), 0)).unwrap();
+        assert_eq!(first_digest.len(), 64);
 
-        let recipe = Recipe::load_authored(&recipe_path).unwrap();
-        assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Unchanged);
-        assert_eq!(fs::read(&lock_path).unwrap(), first_bytes);
+        let repeated = runtime::block_on(upstream.resolve(&storage, &ProgressBar::new(100))).unwrap();
+        assert_eq!(repeated.resolved_hash, first_commit);
+        let repeated_digest =
+            runtime::block_on(repeated.export_normalized(&directory.path().join("repeated-export"), 0)).unwrap();
+        assert_eq!(repeated_digest, first_digest);
 
-        let locked = LockedSource::Git {
-            order: 0,
-            url: url.clone(),
-            requested_ref: "main".to_owned(),
-            commit: first_commit.clone(),
-            materialization_sha256: first_digest.clone(),
-            directory: "locked-source".to_owned(),
-        };
+        first.materialization_sha256 = Some(first_digest.clone());
         let shared = directory.path().join("shared");
-        sync_locked(std::slice::from_ref(&locked), &storage, &shared, 1_700_000_000).unwrap();
+        fs::create_dir(&shared).unwrap();
+        runtime::block_on(first.share(&shared.join("locked-source"), 1_700_000_000)).unwrap();
         assert_eq!(
             fs::read_to_string(shared.join("locked-source/source.txt")).unwrap(),
             "first\n"
         );
 
-        let mut mismatched = locked;
-        let LockedSource::Git {
-            materialization_sha256, ..
-        } = &mut mismatched
-        else {
-            unreachable!()
-        };
-        *materialization_sha256 = "c".repeat(64);
+        first.materialization_sha256 = Some("c".repeat(64));
         let rejected = directory.path().join("rejected");
-        let error = match sync_locked(&[mismatched], &storage, &rejected, 1_700_000_000) {
-            Ok(_) => panic!("mismatched Git materialization digest was accepted"),
-            Err(error) => error,
-        };
+        fs::create_dir(&rejected).unwrap();
+        let error = runtime::block_on(first.share(&rejected.join("locked-source"), 1_700_000_000)).unwrap_err();
         assert!(matches!(
             error,
-            Error::Git(git::Error::MaterializationDigestMismatch {
+            git::Error::MaterializationDigestMismatch {
                 index: 0,
                 commit,
                 expected,
                 found,
-            }) if commit == first_commit
+            } if commit == first_commit
                 && expected == "c".repeat(64)
                 && found == first_digest
         ));
         assert!(!rejected.join("locked-source").exists());
 
         let second_commit = commit(&origin, "second\n", "second");
-        let recipe = Recipe::load_authored(&recipe_path).unwrap();
-        assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Written);
-        let second = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &fs::read(&lock_path).unwrap()).unwrap();
-        let SourceResolution::Git(second_source) = &second.sources[0] else {
-            panic!("expected resolved Git source")
-        };
-        assert_eq!(second_source.requested_ref, "main");
-        assert_eq!(second_source.commit, second_commit);
-        assert_ne!(second_source.materialization_sha256, first_digest);
+        let second = runtime::block_on(upstream.resolve(&storage, &ProgressBar::new(100))).unwrap();
+        assert_eq!(second.resolved_hash, second_commit);
+        let second_digest =
+            runtime::block_on(second.export_normalized(&directory.path().join("second-export"), 0)).unwrap();
+        assert_ne!(second_digest, first_digest);
         assert_ne!(first_commit, second_commit);
-        assert_eq!(fs::read_to_string(recipe_path).unwrap(), authored);
     }
 
     #[test]
-    fn source_lock_refresh_rejects_implicit_git_submodules() {
+    fn local_git_lower_layer_rejects_implicit_submodules() {
         let directory = tempfile::tempdir().unwrap();
         let origin = directory.path().join("origin");
         fs::create_dir(&origin).unwrap();
@@ -811,19 +845,22 @@ let base = cast.mk_package (cast.meta {{
         git(&origin, &["commit", "-m", "implicit submodule"]);
         let commit = git(&origin, &["rev-parse", "HEAD"]);
 
-        let recipe_path = directory.path().join("stone.glu");
-        let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
         let storage = directory.path().join("cache/upstreams");
-        let url = url::Url::from_file_path(&origin).unwrap().to_string();
-        fs::write(&recipe_path, gluon_git_recipe(&url)).unwrap();
-        let recipe = Recipe::load_authored(&recipe_path).unwrap();
-
-        let error = refresh_source_lock(&recipe, &storage).unwrap_err();
+        let upstream = Git {
+            url: url::Url::from_file_path(&origin).unwrap(),
+            commit: "main".to_owned(),
+            name: "source".to_owned(),
+            original_index: 0,
+            materialization_sha256: None,
+        };
+        let error = match runtime::block_on(upstream.resolve(&storage, &ProgressBar::new(100))) {
+            Ok(_) => panic!("Git source with an implicit submodule was accepted"),
+            Err(error) => error,
+        };
 
         assert!(matches!(
             error,
-            Error::Git(git::Error::UnsupportedSubmodules { commit: rejected }) if rejected == commit
+            git::Error::UnsupportedSubmodules { commit: rejected } if rejected == commit
         ));
-        assert!(!lock_path.exists());
     }
 }
