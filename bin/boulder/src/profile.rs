@@ -11,8 +11,9 @@ use std::{
 
 use config::{Config, DecodedGluon, GluonCodec, GluonCodecError};
 use derive_more::{Debug, Display};
-use gluon_config::{EvaluationFingerprint, Evaluator, Source as GluonSource};
+use gluon_config::{Evaluator, Source as GluonSource};
 use moss::{Repository, repository};
+use stone_recipe::derivation::ProfileFragmentProvenance;
 use thiserror::Error;
 
 use crate::Env;
@@ -582,16 +583,22 @@ fn gluon_string(value: &str) -> String {
 
 pub struct Manager<'a> {
     pub profiles: Map,
-    /// Complete fingerprints of every loaded profile layer, retained so the
-    /// selected repository policy can become a derivation input.
-    pub fingerprints: Vec<EvaluationFingerprint>,
+    /// Ordered, portable provenance for every profile fragment before values
+    /// are merged according to configuration precedence.
+    pub fragments: Vec<ProfileFragmentProvenance>,
     env: &'a Env,
 }
 
 impl<'a> Manager<'a> {
     pub fn new(env: &'a Env) -> Result<Manager<'a>, Error> {
         let loaded = env.config.load_gluon(&Evaluator::default(), &ProfileCodec)?;
-        let fingerprints = loaded.iter().map(|loaded| loaded.fingerprint.clone()).collect();
+        let fragments = loaded
+            .iter()
+            .map(|loaded| ProfileFragmentProvenance {
+                logical_name: loaded.logical_name.clone(),
+                evaluation: loaded.fingerprint.clone(),
+            })
+            .collect();
         let profiles = loaded
             .into_iter()
             .map(|loaded| loaded.value)
@@ -601,7 +608,7 @@ impl<'a> Manager<'a> {
         Ok(Self {
             env,
             profiles,
-            fingerprints,
+            fragments,
         })
     }
 
@@ -639,9 +646,16 @@ impl<'a> Manager<'a> {
     }
 
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
-        let map = Map::with([(id.clone(), profile.clone())]);
-        self.env.config.save_gluon(id.clone(), &map, &ProfileCodec)?;
-        self.profiles.add(id, profile);
+        let map = Map::with([(id.clone(), profile)]);
+        self.env.config.save_gluon(id, &map, &ProfileCodec)?;
+
+        // Saving changes both the resolved profile map and the ordered
+        // evaluation provenance used by planning. Reload them atomically so a
+        // reused manager cannot pair new repository values with stale
+        // fingerprints.
+        let reloaded = Self::new(self.env)?;
+        self.profiles = reloaded.profiles;
+        self.fragments = reloaded.fragments;
 
         Ok(())
     }
@@ -686,6 +700,30 @@ mod tests {
     use fs_err as fs;
 
     use super::*;
+
+    fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_root: &Path) {
+        fragment.evaluation.validate().unwrap();
+        assert!(!Path::new(&fragment.logical_name).is_absolute());
+        assert!(!Path::new(&fragment.evaluation.root_logical_name).is_absolute());
+        assert!(
+            fragment
+                .evaluation
+                .imported_modules
+                .iter()
+                .all(|module| !Path::new(&module.logical_name).is_absolute())
+        );
+
+        let host_root = host_root.to_string_lossy();
+        assert!(!fragment.logical_name.contains(host_root.as_ref()));
+        assert!(!fragment.evaluation.root_logical_name.contains(host_root.as_ref()));
+        assert!(
+            fragment
+                .evaluation
+                .imported_modules
+                .iter()
+                .all(|module| !module.logical_name.contains(host_root.as_ref()))
+        );
+    }
 
     fn write(path: &Path, source: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -744,9 +782,19 @@ mod tests {
 
         let env = environment(temporary.path());
         let manager = Manager::new(&env).unwrap();
-        assert_eq!(manager.fingerprints.len(), 1);
+        assert_eq!(
+            manager
+                .fragments
+                .iter()
+                .map(|fragment| fragment.logical_name.as_str())
+                .collect::<Vec<_>>(),
+            ["authored"]
+        );
+        let fragment = &manager.fragments[0];
+        assert_portable_complete_fragment(fragment, temporary.path());
         assert!(
-            manager.fingerprints[0]
+            fragment
+                .evaluation
                 .imported_modules
                 .iter()
                 .any(|module| module.logical_name == "boulder.profile.v1")
@@ -938,9 +986,26 @@ mod tests {
             &single_profile(r#"boulder.repository.direct "source" "file:///a.index""#),
         );
         let env = environment(temporary.path());
+        let mut expected_fragments = None;
 
         for _ in 0..3 {
             let manager = Manager::new(&env).unwrap();
+            assert_eq!(
+                manager
+                    .fragments
+                    .iter()
+                    .map(|fragment| fragment.logical_name.as_str())
+                    .collect::<Vec<_>>(),
+                ["a", "z"]
+            );
+            for fragment in &manager.fragments {
+                assert_portable_complete_fragment(fragment, temporary.path());
+            }
+            if let Some(expected) = &expected_fragments {
+                assert_eq!(&manager.fragments, expected);
+            } else {
+                expected_fragments = Some(manager.fragments.clone());
+            }
             let source = manager
                 .repositories(&Id::new("test"))
                 .unwrap()
@@ -951,6 +1016,33 @@ mod tests {
             };
             assert_eq!(uri.as_str(), "file:///z.index");
         }
+    }
+
+    #[test]
+    fn saving_a_profile_refreshes_values_and_provenance_together() {
+        let temporary = tempfile::tempdir().unwrap();
+        let env = environment(temporary.path());
+        let mut manager = Manager::new(&env).unwrap();
+
+        manager
+            .save_profile(
+                Id::new("saved"),
+                Profile {
+                    repositories: repository::Map::default(),
+                },
+            )
+            .unwrap();
+
+        assert!(manager.profiles.get(&Id::new("saved")).is_some());
+        assert_eq!(
+            manager
+                .fragments
+                .iter()
+                .map(|fragment| fragment.logical_name.as_str())
+                .collect::<Vec<_>>(),
+            ["saved"]
+        );
+        assert_portable_complete_fragment(&manager.fragments[0], temporary.path());
     }
 
     #[test]

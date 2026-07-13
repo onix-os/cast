@@ -9,58 +9,22 @@
 
 use std::path::{Path, PathBuf};
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, SourceRoot};
+use gluon_config::{Diagnostic, Evaluator, SourceRoot};
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicyEvaluationError, BuildPolicySpec, TargetPolicySpec,
     layers::{BuildPolicyOperation, BuildPolicyRootEvaluationError},
+};
+use stone_recipe::derivation::{
+    PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, policy_composition_identity,
 };
 use thiserror::Error;
 
 use crate::Env;
 
-const COMPOSITION_IDENTITY_DOMAIN: &str = "boulder-build-policy-composition-v1";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicy {
-    /// Authored repository-policy identity from the root layer manifest.
-    pub name: String,
     pub spec: BuildPolicySpec,
-    pub fingerprint: EvaluationFingerprint,
-    pub origin: String,
-    sources: Vec<PolicySource>,
-    changes: Vec<PolicyChange>,
-}
-
-/// One root or imported source which contributed to policy evaluation.
-///
-/// A configured layer module is an evaluation root too. Consequently more
-/// than one item may have `root = true`; authored operation context lives in
-/// [`PolicyChange`]. Entries remain in manifest/evaluation order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicySource {
-    pub origin: String,
-    pub fingerprint: String,
-    pub root: bool,
-}
-
-/// One successfully applied, ordered policy state transition.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyChange {
-    pub policy: String,
-    pub layer: String,
-    pub layer_order: usize,
-    pub entry_order: usize,
-    pub order: usize,
-    pub operation: BuildPolicyOperation,
-    pub origin: String,
-    /// Complete evaluation identity, including every imported module.
-    pub fingerprint: EvaluationFingerprint,
-}
-
-impl PolicyChange {
-    pub fn operation_name(&self) -> &'static str {
-        operation_name(self.operation)
-    }
+    pub provenance: PolicyProvenance,
 }
 
 impl BuildPolicy {
@@ -90,34 +54,37 @@ impl BuildPolicy {
             })?;
 
         let manifest = evaluated_root.root;
-        let mut sources = sources_for(root_source.logical_name(), &evaluated_root.fingerprint);
-        let mut changes = Vec::new();
+        let mut layers = Vec::with_capacity(manifest.layers.len());
         let mut state = None;
+        let mut operation_order = 0;
 
-        for (layer_order, layer) in manifest.layers.iter().enumerate() {
-            for (entry_order, entry) in layer.entries.iter().enumerate() {
-                let order = changes.len();
-                apply_entry(
+        for (layer_index, layer) in manifest.layers.iter().enumerate() {
+            let mut transitions = Vec::with_capacity(layer.entries.len());
+            for (entry_index, entry) in layer.entries.iter().enumerate() {
+                transitions.push(apply_entry(
                     &source_root,
                     &evaluator,
                     &manifest.name,
                     &layer.name,
-                    layer_order,
-                    entry_order,
-                    order,
+                    layer_index,
+                    entry_index,
+                    operation_order,
                     entry.operation,
                     &entry.origin,
                     &mut state,
-                    &mut sources,
-                    &mut changes,
-                )?;
+                )?);
+                operation_order += 1;
             }
+            layers.push(PolicyLayerProvenance {
+                name: layer.name.clone(),
+                transitions,
+            });
         }
 
         let spec = state.ok_or_else(|| Error::MissingPolicy {
             policy: manifest.name.clone(),
         })?;
-        let identity_inputs = composition_identity(&manifest.name, &manifest.layers, &changes);
+        let identity_inputs = policy_composition_identity(&manifest.name, &layers);
         let finalized_root =
             stone_recipe::build_policy::layers::evaluate_gluon_with_inputs(&evaluator, &root_source, &identity_inputs)
                 .map_err(|source| Error::FinalizeRoot {
@@ -129,12 +96,12 @@ impl BuildPolicy {
         }
 
         Ok(Self {
-            name: manifest.name,
             spec,
-            fingerprint: finalized_root.fingerprint,
-            origin: root_source.logical_name().to_owned(),
-            sources,
-            changes,
+            provenance: PolicyProvenance {
+                name: manifest.name,
+                root: finalized_root.fingerprint,
+                layers,
+            },
         })
     }
 
@@ -156,14 +123,6 @@ impl BuildPolicy {
         })
     }
 
-    pub fn sources(&self) -> Vec<PolicySource> {
-        self.sources.clone()
-    }
-
-    pub fn changes(&self) -> &[PolicyChange] {
-        &self.changes
-    }
-
     #[cfg(test)]
     pub(crate) fn repository_for_tests() -> Self {
         static REPOSITORY: std::sync::OnceLock<BuildPolicy> = std::sync::OnceLock::new();
@@ -172,26 +131,25 @@ impl BuildPolicy {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn apply_entry(
     source_root: &SourceRoot,
     evaluator: &Evaluator,
     policy: &str,
     layer: &str,
-    layer_order: usize,
-    entry_order: usize,
+    layer_index: usize,
+    entry_index: usize,
     order: usize,
     operation: BuildPolicyOperation,
     origin: &str,
     state: &mut Option<BuildPolicySpec>,
-    sources: &mut Vec<PolicySource>,
-    changes: &mut Vec<PolicyChange>,
-) -> Result<(), Error> {
+) -> Result<PolicyTransitionProvenance, Error> {
     match operation {
         BuildPolicyOperation::Add if state.is_some() => {
             return Err(Error::InvalidTransition {
                 policy: policy.to_owned(),
                 layer: layer.to_owned(),
+                layer_index,
+                entry_index,
                 order,
                 operation,
                 origin: origin.to_owned(),
@@ -202,6 +160,8 @@ fn apply_entry(
             return Err(Error::InvalidTransition {
                 policy: policy.to_owned(),
                 layer: layer.to_owned(),
+                layer_index,
+                entry_index,
                 order,
                 operation,
                 origin: origin.to_owned(),
@@ -217,6 +177,8 @@ fn apply_entry(
         .map_err(|source| Error::LoadEntry {
             policy: policy.to_owned(),
             layer: layer.to_owned(),
+            layer_index,
+            entry_index,
             order,
             operation,
             origin: origin.to_owned(),
@@ -230,6 +192,8 @@ fn apply_entry(
                 Error::EvaluateEntry {
                     policy: policy.to_owned(),
                     layer: layer.to_owned(),
+                    layer_index,
+                    entry_index,
                     order,
                     operation,
                     origin: origin.to_owned(),
@@ -245,6 +209,8 @@ fn apply_entry(
                     Error::EvaluateEntry {
                         policy: policy.to_owned(),
                         layer: layer.to_owned(),
+                        layer_index,
+                        entry_index,
                         order,
                         operation,
                         origin: origin.to_owned(),
@@ -258,6 +224,8 @@ fn apply_entry(
                 .map_err(|source| Error::ApplyPatch {
                     policy: policy.to_owned(),
                     layer: layer.to_owned(),
+                    layer_index,
+                    entry_index,
                     order,
                     operation,
                     origin: origin.to_owned(),
@@ -268,108 +236,11 @@ fn apply_entry(
         }
     };
 
-    sources.extend(sources_for(source.logical_name(), &fingerprint));
-    changes.push(PolicyChange {
-        policy: policy.to_owned(),
-        layer: layer.to_owned(),
-        layer_order,
-        entry_order,
-        order,
+    Ok(PolicyTransitionProvenance {
         operation,
         origin: origin.to_owned(),
-        fingerprint,
-    });
-    Ok(())
-}
-
-fn sources_for(origin: &str, fingerprint: &EvaluationFingerprint) -> Vec<PolicySource> {
-    std::iter::once(PolicySource {
-        origin: origin.to_owned(),
-        fingerprint: fingerprint.root_source_sha256.clone(),
-        root: true,
+        evaluation: fingerprint,
     })
-    .chain(fingerprint.imported_modules.iter().map(|module| PolicySource {
-        origin: module.logical_name.clone(),
-        fingerprint: module.sha256.clone(),
-        root: false,
-    }))
-    .collect()
-}
-
-fn composition_identity(
-    policy: &str,
-    layers: &[stone_recipe::build_policy::layers::BuildPolicyLayerSpec],
-    changes: &[PolicyChange],
-) -> Vec<u8> {
-    let mut output = Vec::new();
-    encode_field(&mut output, COMPOSITION_IDENTITY_DOMAIN.as_bytes());
-    encode_field(&mut output, policy.as_bytes());
-    encode_count(&mut output, layers.len());
-
-    let mut next_change = 0;
-    for (layer_order, layer) in layers.iter().enumerate() {
-        encode_index(&mut output, layer_order);
-        encode_field(&mut output, layer.name.as_bytes());
-        encode_count(&mut output, layer.entries.len());
-        for (entry_order, entry) in layer.entries.iter().enumerate() {
-            let change = &changes[next_change];
-            next_change += 1;
-            debug_assert_eq!(change.layer_order, layer_order);
-            debug_assert_eq!(change.entry_order, entry_order);
-            debug_assert_eq!(change.operation, entry.operation);
-            debug_assert_eq!(change.origin, entry.origin);
-
-            encode_index(&mut output, entry_order);
-            encode_field(&mut output, operation_name(entry.operation).as_bytes());
-            encode_field(&mut output, entry.origin.as_bytes());
-            encode_fingerprint(&mut output, &change.fingerprint);
-        }
-    }
-    debug_assert_eq!(next_change, changes.len());
-    output
-}
-
-fn encode_fingerprint(output: &mut Vec<u8>, fingerprint: &EvaluationFingerprint) {
-    encode_field(output, fingerprint.root_source_sha256.as_bytes());
-    encode_count(output, fingerprint.imported_modules.len());
-    for module in &fingerprint.imported_modules {
-        encode_field(output, module.logical_name.as_bytes());
-        encode_field(output, module.sha256.as_bytes());
-    }
-    encode_field(output, fingerprint.gluon_version.as_bytes());
-    output.extend_from_slice(&fingerprint.configuration_abi_version.to_le_bytes());
-    output.extend_from_slice(&fingerprint.evaluator_policy_version.to_le_bytes());
-    encode_field(output, fingerprint.explicit_inputs_sha256.as_bytes());
-    encode_field(output, fingerprint.sha256.as_bytes());
-}
-
-fn encode_count(output: &mut Vec<u8>, count: usize) {
-    output.extend_from_slice(
-        &u64::try_from(count)
-            .expect("supported collection length fits u64")
-            .to_le_bytes(),
-    );
-}
-
-fn encode_index(output: &mut Vec<u8>, index: usize) {
-    output.extend_from_slice(
-        &u64::try_from(index)
-            .expect("supported policy index fits u64")
-            .to_le_bytes(),
-    );
-}
-
-fn encode_field(output: &mut Vec<u8>, value: &[u8]) {
-    encode_count(output, value.len());
-    output.extend_from_slice(value);
-}
-
-const fn operation_name(operation: BuildPolicyOperation) -> &'static str {
-    match operation {
-        BuildPolicyOperation::Add => "add",
-        BuildPolicyOperation::Replace => "replace",
-        BuildPolicyOperation::Modify => "modify",
-    }
 }
 
 #[derive(Debug, Error)]
@@ -398,19 +269,27 @@ pub enum Error {
         #[source]
         source: Box<BuildPolicyRootEvaluationError>,
     },
-    #[error("policy `{policy}` layer `{layer}` operation {order} ({operation:?}) from `{origin}` is invalid: {reason}")]
+    #[error(
+        "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) from `{origin}` is invalid: {reason}"
+    )]
     InvalidTransition {
         policy: String,
         layer: String,
+        layer_index: usize,
+        entry_index: usize,
         order: usize,
         operation: BuildPolicyOperation,
         origin: String,
         reason: &'static str,
     },
-    #[error("policy `{policy}` layer `{layer}` operation {order} ({operation:?}) cannot load `{origin}` at {path:?}")]
+    #[error(
+        "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) cannot load `{origin}` at {path:?}"
+    )]
     LoadEntry {
         policy: String,
         layer: String,
+        layer_index: usize,
+        entry_index: usize,
         order: usize,
         operation: BuildPolicyOperation,
         origin: String,
@@ -418,20 +297,28 @@ pub enum Error {
         #[source]
         source: Box<Diagnostic>,
     },
-    #[error("policy `{policy}` layer `{layer}` operation {order} ({operation:?}) cannot evaluate `{origin}`")]
+    #[error(
+        "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) cannot evaluate `{origin}`"
+    )]
     EvaluateEntry {
         policy: String,
         layer: String,
+        layer_index: usize,
+        entry_index: usize,
         order: usize,
         operation: BuildPolicyOperation,
         origin: String,
         #[source]
         source: Box<BuildPolicyEvaluationError>,
     },
-    #[error("policy `{policy}` layer `{layer}` operation {order} ({operation:?}) cannot apply `{origin}`")]
+    #[error(
+        "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) cannot apply `{origin}`"
+    )]
     ApplyPatch {
         policy: String,
         layer: String,
+        layer_index: usize,
+        entry_index: usize,
         order: usize,
         operation: BuildPolicyOperation,
         origin: String,
@@ -451,6 +338,7 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use fs_err as fs;
+    use sha2::{Digest, Sha256};
 
     use super::*;
 
@@ -464,25 +352,40 @@ mod tests {
         root
     }
 
+    fn composition_digest(provenance: &PolicyProvenance) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(policy_composition_identity(&provenance.name, &provenance.layers))
+        )
+    }
+
     #[test]
     fn loads_the_explicit_repository_policy_layers() {
         let policy = BuildPolicy::repository_for_tests();
 
-        assert_eq!(policy.name, "aerynos");
-        assert_eq!(policy.origin, "policy.glu");
+        assert_eq!(policy.provenance.name, "aerynos");
+        assert_eq!(policy.provenance.root.root_logical_name, "policy.glu");
         assert_eq!(policy.spec.build_subdir, "aerynos-builddir");
         assert_eq!(
             policy.target("x86_64").unwrap().target_triple,
             "x86_64-unknown-linux-gnu"
         );
-        assert_eq!(policy.changes.len(), 1);
-        assert_eq!(policy.changes[0].policy, "aerynos");
-        assert_eq!(policy.changes[0].layer, "foundation");
-        assert_eq!(policy.changes[0].operation, BuildPolicyOperation::Add);
-        assert_eq!(policy.changes[0].origin, "default.glu");
+        assert_eq!(policy.provenance.layers.len(), 1);
+        assert_eq!(policy.provenance.layers[0].name, "foundation");
+        assert_eq!(policy.provenance.layers[0].transitions.len(), 1);
+        let transition = &policy.provenance.layers[0].transitions[0];
+        assert_eq!(transition.operation, BuildPolicyOperation::Add);
+        assert_eq!(transition.origin, "default.glu");
+        assert_eq!(transition.evaluation.root_logical_name, "default.glu");
+        transition.evaluation.validate().unwrap();
+        policy.provenance.root.validate().unwrap();
         assert_ne!(
-            policy.fingerprint.explicit_inputs_sha256,
+            policy.provenance.root.explicit_inputs_sha256,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            policy.provenance.root.explicit_inputs_sha256,
+            composition_digest(&policy.provenance)
         );
     }
 
@@ -512,23 +415,67 @@ mod tests {
     }
 
     #[test]
-    fn exposes_manifest_and_layer_root_import_provenance() {
+    fn retains_complete_manifest_and_transition_evaluation_provenance() {
         let policy = BuildPolicy::repository_for_tests();
-        let sources = policy.sources();
+        assert!(
+            policy
+                .provenance
+                .root
+                .imported_modules
+                .iter()
+                .any(|module| module.logical_name == "boulder.build_policy.layers.v1")
+        );
+        let transition = &policy.provenance.layers[0].transitions[0];
+        assert_eq!(transition.evaluation.root_logical_name, "default.glu");
+        assert_eq!(transition.evaluation.root_source_sha256.len(), 64);
+        assert_eq!(transition.evaluation.explicit_inputs_sha256.len(), 64);
+        assert_eq!(transition.evaluation.sha256.len(), 64);
+        assert_eq!(transition.evaluation.gluon_version, gluon_config::GLUON_VERSION);
+        assert_eq!(
+            transition.evaluation.configuration_abi_version,
+            gluon_config::CONFIGURATION_ABI_VERSION
+        );
+        assert_eq!(
+            transition.evaluation.evaluator_policy_version,
+            gluon_config::EVALUATOR_POLICY_VERSION
+        );
+        assert!(
+            transition
+                .evaluation
+                .imported_modules
+                .iter()
+                .any(|module| module.logical_name == "boulder.build_policy.v1")
+        );
+    }
 
-        assert_eq!(sources[0].origin, "policy.glu");
-        assert!(sources[0].root);
-        assert!(
-            sources
-                .iter()
-                .any(|source| source.origin == "boulder.build_policy.layers.v1")
+    #[test]
+    fn preserves_named_empty_layers_in_manifest_order_and_v2_identity() {
+        let root = fixture(
+            r#"
+let l = import! boulder.build_policy.layers.v1
+l.policy "empty-layer-policy" [
+    l.layer "foundation" [l.add "default.glu"],
+    l.layer "reserved-site-layer" [],
+]
+"#,
         );
-        assert!(
-            sources
+
+        let policy = BuildPolicy::load_from(root.path()).unwrap();
+
+        assert_eq!(
+            policy
+                .provenance
+                .layers
                 .iter()
-                .any(|source| source.origin == "default.glu" && source.root)
+                .map(|layer| layer.name.as_str())
+                .collect::<Vec<_>>(),
+            ["foundation", "reserved-site-layer"]
         );
-        assert!(sources.iter().any(|source| source.origin == "boulder.build_policy.v1"));
+        assert!(policy.provenance.layers[1].transitions.is_empty());
+        assert_eq!(
+            policy.provenance.root.explicit_inputs_sha256,
+            composition_digest(&policy.provenance)
+        );
     }
 
     #[test]
@@ -567,15 +514,20 @@ b.policy_patch {
         assert_eq!(policy.spec.build_subdir, "final-builddir");
         assert_eq!(
             policy
-                .changes()
+                .provenance
+                .layers
                 .iter()
-                .map(PolicyChange::operation_name)
+                .flat_map(|layer| layer.transitions.iter())
+                .map(|transition| transition.operation)
                 .collect::<Vec<_>>(),
-            ["add", "modify", "replace"]
+            [
+                BuildPolicyOperation::Add,
+                BuildPolicyOperation::Modify,
+                BuildPolicyOperation::Replace
+            ]
         );
-        assert_eq!(policy.changes[1].layer_order, 1);
-        assert_eq!(policy.changes[1].entry_order, 0);
-        assert_eq!(policy.changes[1].order, 1);
+        assert_eq!(policy.provenance.layers[1].name, "site");
+        assert_eq!(policy.provenance.layers[1].transitions[0].origin, "modify.glu");
     }
 
     #[test]
@@ -604,12 +556,16 @@ l.policy "strict-policy" [l.layer "strict-layer" [{entries}]]
                 Error::InvalidTransition {
                     policy,
                     layer,
+                    layer_index,
+                    entry_index,
                     order,
                     operation,
                     origin: _,
                     reason: _,
                 } if policy == "strict-policy"
                     && layer == "strict-layer"
+                    && layer_index == 0
+                    && entry_index == expected_order
                     && order == expected_order
                     && operation == expected_operation
             ));
@@ -645,6 +601,8 @@ b.policy_patch {
             Error::ApplyPatch {
                 policy,
                 layer,
+                layer_index: 0,
+                entry_index: 1,
                 order: 1,
                 operation: BuildPolicyOperation::Modify,
                 origin,
@@ -669,13 +627,18 @@ b.policy_patch {
         let changed = BuildPolicy::load_from(changed_root.path()).unwrap();
 
         assert_eq!(first.spec, repeated.spec);
-        assert_eq!(first.fingerprint.sha256, repeated.fingerprint.sha256);
+        assert_eq!(first.provenance.root.sha256, repeated.provenance.root.sha256);
         assert_eq!(first.spec, changed.spec);
         assert_ne!(
-            first.changes[0].fingerprint.sha256,
-            changed.changes[0].fingerprint.sha256
+            first.provenance.layers[0].transitions[0].evaluation.sha256,
+            changed.provenance.layers[0].transitions[0].evaluation.sha256
         );
-        assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+        assert_ne!(first.provenance.root.sha256, changed.provenance.root.sha256);
+        assert_eq!(first.provenance.root.root_logical_name, "policy.glu");
+        assert_eq!(
+            first.provenance.root.explicit_inputs_sha256,
+            composition_digest(&first.provenance)
+        );
     }
 
     #[test]
@@ -686,6 +649,24 @@ b.policy_patch {
         let policy = BuildPolicy::load_from(root.path()).unwrap();
 
         assert_eq!(policy.spec.targets.len(), 6);
-        assert!(policy.sources.iter().all(|source| source.origin != "ignored.glu"));
+        assert_ne!(policy.provenance.root.root_logical_name, "ignored.glu");
+        assert!(
+            policy
+                .provenance
+                .root
+                .imported_modules
+                .iter()
+                .all(|module| module.logical_name != "ignored.glu")
+        );
+        assert!(policy.provenance.layers.iter().all(|layer| {
+            layer.transitions.iter().all(|transition| {
+                transition.evaluation.root_logical_name != "ignored.glu"
+                    && transition
+                        .evaluation
+                        .imported_modules
+                        .iter()
+                        .all(|module| module.logical_name != "ignored.glu")
+            })
+        }));
     }
 }

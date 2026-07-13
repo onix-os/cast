@@ -338,6 +338,7 @@ pub struct BuildRootPolicySpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicySpec {
     pub hostname: String,
+    pub filesystems: SandboxFilesystemPolicySpec,
     pub guest_root: String,
     pub artifacts_dir: String,
     pub build_dir: String,
@@ -345,6 +346,40 @@ pub struct SandboxPolicySpec {
     pub recipe_dir: String,
     pub package_dir: String,
     pub install_dir: String,
+}
+
+/// Repository-authorized pseudo-filesystems available to a build sandbox.
+///
+/// The finite modes deliberately cannot express a writable proc, any `/sys`
+/// mount, or a full host `/dev` view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SandboxFilesystemPolicySpec {
+    pub proc: SandboxProcPolicySpec,
+    pub tmp: SandboxTmpPolicySpec,
+    pub sys: SandboxSysPolicySpec,
+    pub dev: SandboxDevPolicySpec,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxProcPolicySpec {
+    None,
+    ReadOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxTmpPolicySpec {
+    Empty,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxSysPolicySpec {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxDevPolicySpec {
+    None,
+    Minimal,
 }
 
 /// An argv-preserving command template. Package-specific flags and binary

@@ -235,8 +235,30 @@ type BuildRootPolicySpec = {
     mold : MoldPolicySpec,
 }
 
+type SandboxProcPolicySpec =
+    | NoProc
+    | ReadOnlyProc
+
+type SandboxTmpPolicySpec =
+    | EmptyTmp
+
+type SandboxSysPolicySpec =
+    | NoSys
+
+type SandboxDevPolicySpec =
+    | NoDev
+    | MinimalDev
+
+type SandboxFilesystemPolicySpec = {
+    proc : SandboxProcPolicySpec,
+    tmp : SandboxTmpPolicySpec,
+    sys : SandboxSysPolicySpec,
+    dev : SandboxDevPolicySpec,
+}
+
 type SandboxPolicySpec = {
     hostname : String,
+    filesystems : SandboxFilesystemPolicySpec,
     guest_root : String,
     artifacts_dir : String,
     build_dir : String,
@@ -546,6 +568,22 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
     boolean = {
         false = False,
         true = True,
+    },
+    sandbox_filesystems = {
+        proc = {
+            none = NoProc,
+            read_only = ReadOnlyProc,
+        },
+        tmp = {
+            empty = EmptyTmp,
+        },
+        sys = {
+            none = NoSys,
+        },
+        dev = {
+            none = NoDev,
+            minimal = MinimalDev,
+        },
     },
     env = {
         always = binding Always,

@@ -11,35 +11,14 @@ use stone_recipe::derivation::{
     Platform, RelationKind, RelationPlan, StepPlan,
 };
 
-use crate::{
-    planner::Planned,
-    policy::{PolicyChange, PolicySource},
-};
+use stone_recipe::build_policy::layers::BuildPolicyOperation;
 
-pub(super) fn format(planned: &Planned) -> String {
-    Explanation::from(planned).render()
+pub(super) fn format(plan: &DerivationPlan) -> String {
+    Explanation { plan }.render()
 }
 
 struct Explanation<'a> {
     plan: &'a DerivationPlan,
-    request_fingerprint: &'a str,
-    requested_providers: &'a [String],
-    policy_sources: &'a [PolicySource],
-    policy_changes: &'a [PolicyChange],
-    profile_fragments: &'a [String],
-}
-
-impl<'a> From<&'a Planned> for Explanation<'a> {
-    fn from(planned: &'a Planned) -> Self {
-        Self {
-            plan: &planned.plan,
-            request_fingerprint: &planned.request_fingerprint,
-            requested_providers: &planned.requested_packages,
-            policy_sources: &planned.policy_provenance,
-            policy_changes: &planned.policy_changes,
-            profile_fragments: &planned.profile_fingerprints,
-        }
-    }
 }
 
 impl Explanation<'_> {
@@ -48,12 +27,12 @@ impl Explanation<'_> {
         formatter.open(0, "derivation_explain");
         self.schema(&mut formatter);
         self.identity(&mut formatter);
+        self.recipe_provenance(&mut formatter);
         self.package(&mut formatter);
         self.platforms(&mut formatter);
         self.resolved_identities(&mut formatter);
-        self.policy_sources(&mut formatter);
-        self.policy_operations(&mut formatter);
         self.profile_fragments(&mut formatter);
+        self.policy_provenance(&mut formatter);
         self.locked_sources(&mut formatter);
         self.requested_providers(&mut formatter);
         self.repositories(&mut formatter);
@@ -84,11 +63,16 @@ impl Explanation<'_> {
         formatter.open(1, "identity");
         formatter.string(2, "boulder_version", &self.plan.boulder_version);
         formatter.string(2, "boulder_fingerprint", &self.plan.boulder_fingerprint);
-        formatter.string(2, "recipe", &self.plan.recipe_fingerprint);
+        formatter.string(2, "recipe", &self.plan.provenance.recipe.sha256);
         formatter.string(2, "source_lock", &self.plan.source_lock_digest);
         formatter.string(2, "build_lock", &self.plan.build_lock.digest());
-        formatter.string(2, "request", self.request_fingerprint);
-        formatter.string(2, "locked_request", &self.plan.build_lock.request_fingerprint);
+        formatter.string(2, "request", &self.plan.build_lock.request_fingerprint);
+        formatter.close(1);
+    }
+
+    fn recipe_provenance(&self, formatter: &mut Formatter) {
+        formatter.open(1, "recipe_provenance");
+        format_evaluation_fingerprint(formatter, 2, &self.plan.provenance.recipe);
         formatter.close(1);
     }
 
@@ -126,51 +110,48 @@ impl Explanation<'_> {
         formatter.close(1);
     }
 
-    fn policy_sources(&self, formatter: &mut Formatter) {
-        formatter.open(1, "policy_sources");
-        for (index, source) in self.policy_sources.iter().enumerate() {
-            formatter.indexed_open(2, "source", index);
-            formatter.field(3, "root", source.root);
-            formatter.string(3, "origin", &source.origin);
-            formatter.string(3, "fingerprint", &source.fingerprint);
-            formatter.close(2);
-        }
-        formatter.close(1);
-    }
-
-    fn policy_operations(&self, formatter: &mut Formatter) {
-        let mut changes = self.policy_changes.iter().collect::<Vec<_>>();
-        changes.sort_by(|left, right| {
-            left.order
-                .cmp(&right.order)
-                .then_with(|| left.layer_order.cmp(&right.layer_order))
-                .then_with(|| left.entry_order.cmp(&right.entry_order))
-        });
-
-        formatter.open(1, "policy_operations");
-        for change in changes {
-            formatter.indexed_open(2, "operation", change.order);
-            formatter.string(3, "policy", &change.policy);
-            formatter.string(3, "layer", &change.layer);
-            formatter.field(3, "layer_order", change.layer_order);
-            formatter.field(3, "entry_order", change.entry_order);
-            formatter.field(3, "order", change.order);
-            formatter.string(3, "kind", change.operation_name());
-            formatter.string(3, "origin", &change.origin);
-            format_evaluation_fingerprint(formatter, 3, &change.fingerprint);
-            formatter.close(2);
-        }
-        formatter.close(1);
-    }
-
     fn profile_fragments(&self, formatter: &mut Formatter) {
         formatter.open(1, "profile_fragments");
-        for (order, fingerprint) in self.profile_fragments.iter().enumerate() {
+        for (order, fragment) in self.plan.provenance.profiles.iter().enumerate() {
             formatter.indexed_open(2, "fragment", order);
             formatter.field(3, "order", order);
-            formatter.string(3, "fingerprint", fingerprint);
+            formatter.string(3, "logical_name", &fragment.logical_name);
+            format_evaluation_fingerprint(formatter, 3, &fragment.evaluation);
             formatter.close(2);
         }
+        formatter.close(1);
+    }
+
+    fn policy_provenance(&self, formatter: &mut Formatter) {
+        let policy = &self.plan.provenance.policy;
+        let mut global_order = 0;
+
+        formatter.open(1, "policy_provenance");
+        formatter.string(2, "name", &policy.name);
+        formatter.open(2, "final_root");
+        format_evaluation_fingerprint(formatter, 3, &policy.root);
+        formatter.close(2);
+        formatter.open(2, "layers");
+        for (layer_order, layer) in policy.layers.iter().enumerate() {
+            formatter.indexed_open(3, "layer", layer_order);
+            formatter.field(4, "layer_order", layer_order);
+            formatter.string(4, "name", &layer.name);
+            formatter.open(4, "transitions");
+            for (entry_order, transition) in layer.transitions.iter().enumerate() {
+                formatter.indexed_open(5, "transition", entry_order);
+                formatter.field(6, "layer_order", layer_order);
+                formatter.field(6, "entry_order", entry_order);
+                formatter.field(6, "global_order", global_order);
+                formatter.string(6, "operation", policy_operation(transition.operation));
+                formatter.string(6, "origin", &transition.origin);
+                format_evaluation_fingerprint(formatter, 6, &transition.evaluation);
+                formatter.close(5);
+                global_order += 1;
+            }
+            formatter.close(4);
+            formatter.close(3);
+        }
+        formatter.close(2);
         formatter.close(1);
     }
 
@@ -215,7 +196,13 @@ impl Explanation<'_> {
     }
 
     fn requested_providers(&self, formatter: &mut Formatter) {
-        let mut providers = self.requested_providers.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut providers = self
+            .plan
+            .build_lock
+            .requests
+            .iter()
+            .map(|request| request.request.as_str())
+            .collect::<Vec<_>>();
         providers.sort_unstable();
 
         formatter.open(1, "requested_providers");
@@ -365,6 +352,12 @@ impl Explanation<'_> {
                 NetworkMode::Enabled => "enabled",
             },
         );
+        formatter.open(2, "filesystems");
+        formatter.string(3, "proc", self.plan.execution.filesystems.proc.as_str());
+        formatter.string(3, "tmp", self.plan.execution.filesystems.tmp.as_str());
+        formatter.string(3, "sys", self.plan.execution.filesystems.sys.as_str());
+        formatter.string(3, "dev", self.plan.execution.filesystems.dev.as_str());
+        formatter.close(2);
         formatter.field(2, "compiler_cache", self.plan.execution.compiler_cache);
         formatter.field(2, "jobs", self.plan.execution.jobs);
         formatter.close(1);
@@ -510,6 +503,7 @@ fn format_evaluation_fingerprint(
     fingerprint: &gluon_config::EvaluationFingerprint,
 ) {
     formatter.open(indent, "evaluation");
+    formatter.string(indent + 1, "root_logical_name", &fingerprint.root_logical_name);
     formatter.string(indent + 1, "root_source_sha256", &fingerprint.root_source_sha256);
     formatter.string(indent + 1, "gluon_version", fingerprint.gluon_version);
     formatter.field(
@@ -529,10 +523,8 @@ fn format_evaluation_fingerprint(
     );
     formatter.string(indent + 1, "sha256", &fingerprint.sha256);
 
-    let mut modules = fingerprint.imported_modules.iter().collect::<Vec<_>>();
-    modules.sort();
     formatter.open(indent + 1, "imported_modules");
-    for (index, module) in modules.into_iter().enumerate() {
+    for (index, module) in fingerprint.imported_modules.iter().enumerate() {
         formatter.indexed_open(indent + 2, "module", index);
         formatter.string(indent + 3, "logical_name", &module.logical_name);
         formatter.string(indent + 3, "sha256", &module.sha256);
@@ -540,6 +532,14 @@ fn format_evaluation_fingerprint(
     }
     formatter.close(indent + 1);
     formatter.close(indent);
+}
+
+const fn policy_operation(operation: BuildPolicyOperation) -> &'static str {
+    match operation {
+        BuildPolicyOperation::Add => "add",
+        BuildPolicyOperation::Replace => "replace",
+        BuildPolicyOperation::Modify => "modify",
+    }
 }
 
 fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[StepPlan]) {
@@ -681,13 +681,15 @@ impl Formatter {
 mod tests {
     use std::collections::BTreeMap;
 
-    use gluon_config::{EvaluationFingerprint, ModuleFingerprint};
+    use gluon_config::{EvaluationFingerprint, Evaluator, ImportPolicy, Source};
     use stone_recipe::{
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
-            AnalysisPlan, BuildLock, BuilderLayout, CollectionRulePlan, DERIVATION_PLAN_SCHEMA_VERSION,
-            ExecutionPolicy, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
-            PackageIdentity, PhasePlan, RepositorySnapshot,
+            AnalysisPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
+            DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutionPolicy, JobPlan, LockedOutput,
+            LockedOutputRef, LockedPackage, LockedRequest, OutputPlan, PackageIdentity, PhasePlan,
+            PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
+            RepositorySnapshot, policy_composition_identity, profile_aggregate_fingerprint,
         },
     };
 
@@ -695,24 +697,11 @@ mod tests {
 
     struct Fixture {
         plan: DerivationPlan,
-        request_fingerprint: String,
-        requested_providers: Vec<String>,
-        policy_sources: Vec<PolicySource>,
-        policy_changes: Vec<PolicyChange>,
-        profile_fragments: Vec<String>,
     }
 
     impl Fixture {
         fn render(&self) -> String {
-            Explanation {
-                plan: &self.plan,
-                request_fingerprint: &self.request_fingerprint,
-                requested_providers: &self.requested_providers,
-                policy_sources: &self.policy_sources,
-                policy_changes: &self.policy_changes,
-                profile_fragments: &self.profile_fragments,
-            }
-            .render()
+            format(&self.plan)
         }
     }
 
@@ -723,31 +712,74 @@ mod tests {
         }
     }
 
-    fn evaluation(name: &str) -> EvaluationFingerprint {
-        EvaluationFingerprint {
-            root_logical_name: format!("{name}.glu"),
-            root_source_sha256: format!("{name}-root"),
-            imported_modules: vec![
-                ModuleFingerprint {
-                    logical_name: "z.module".to_owned(),
-                    sha256: "z-module-fingerprint".to_owned(),
-                },
-                ModuleFingerprint {
-                    logical_name: "a.module".to_owned(),
-                    sha256: "a-module-fingerprint".to_owned(),
-                },
-            ],
-            gluon_version: "test-gluon",
-            configuration_abi_version: 7,
-            evaluator_policy_version: 9,
-            explicit_inputs_sha256: format!("{name}-inputs"),
-            sha256: format!("{name}-evaluation"),
-        }
+    fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+        Evaluator::default()
+            .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
+            .expect("fixture evaluation must succeed")
+            .fingerprint
+    }
+
+    fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+        let policy = ImportPolicy::new()
+            .with_embedded_module("fixture.provenance", "41")
+            .expect("fixture module name must be valid");
+        Evaluator::default()
+            .with_import_policy(policy)
+            .evaluate_with_inputs::<i64>(
+                &Source::new(logical_name, "import! fixture.provenance"),
+                explicit_inputs,
+            )
+            .expect("fixture import evaluation must succeed")
+            .fingerprint
     }
 
     fn fixture() -> Fixture {
+        const SOURCE_LOCK_BYTES: &[u8] = b"canonical explanation source lock";
+
+        let profiles = vec![
+            ProfileFragmentProvenance {
+                logical_name: "vendor/base".to_owned(),
+                evaluation: evaluation_with_import("profile.d/base.glu", &[]),
+            },
+            ProfileFragmentProvenance {
+                logical_name: "site/local".to_owned(),
+                evaluation: evaluation("profile.d/local.glu", "42", &[]),
+            },
+        ];
+        let layers = vec![
+            PolicyLayerProvenance {
+                name: "foundation".to_owned(),
+                transitions: vec![PolicyTransitionProvenance {
+                    operation: BuildPolicyOperation::Add,
+                    origin: "default.glu".to_owned(),
+                    evaluation: evaluation_with_import("default.glu", &[]),
+                }],
+            },
+            PolicyLayerProvenance {
+                name: "site-empty".to_owned(),
+                transitions: Vec::new(),
+            },
+            PolicyLayerProvenance {
+                name: "override".to_owned(),
+                transitions: vec![PolicyTransitionProvenance {
+                    operation: BuildPolicyOperation::Modify,
+                    origin: "override.glu".to_owned(),
+                    evaluation: evaluation("override.glu", "43", &[]),
+                }],
+            },
+        ];
+        let policy_inputs = policy_composition_identity("repository-policy", &layers);
+        let provenance = DerivationProvenance {
+            recipe: evaluation_with_import("stone.glu", SOURCE_LOCK_BYTES),
+            profiles,
+            policy: PolicyProvenance {
+                name: "repository-policy".to_owned(),
+                root: evaluation("policy.glu", "44", &policy_inputs),
+                layers,
+            },
+        };
         let lock = BuildLock {
-            schema_version: 2,
+            schema_version: BUILD_LOCK_SCHEMA_VERSION,
             request_fingerprint: "locked-request-fingerprint".to_owned(),
             repositories: vec![
                 RepositorySnapshot {
@@ -819,9 +851,15 @@ mod tests {
                 operating_system: "linux".to_owned(),
                 abi: "stone".to_owned(),
             },
-            policy: identity("repository-policy"),
+            policy: LockedIdentity {
+                name: provenance.policy.name.clone(),
+                fingerprint: provenance.policy.root.sha256.clone(),
+            },
             target: identity("x86_64"),
-            profile: identity("default-x86_64"),
+            profile: LockedIdentity {
+                name: "default-x86_64".to_owned(),
+                fingerprint: profile_aggregate_fingerprint(&provenance.profiles),
+            },
             toolchain: identity("llvm"),
             builder: identity("boulder-executor-v1"),
         };
@@ -839,9 +877,15 @@ mod tests {
                 licenses: vec!["Zlib".to_owned(), "MIT".to_owned()],
                 architecture: "x86_64".to_owned(),
             },
-            recipe_fingerprint: "recipe-fingerprint".to_owned(),
-            source_lock_digest: "source-lock-digest".to_owned(),
+            source_lock_digest: provenance.recipe.explicit_inputs_sha256.clone(),
+            provenance,
             sources: vec![
+                LockedSource::Archive {
+                    order: 0,
+                    url: "https://src.invalid/demo.tar.xz".to_owned(),
+                    sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    filename: "demo.tar.xz".to_owned(),
+                },
                 LockedSource::Git {
                     order: 1,
                     url: "https://git.invalid/demo".to_owned(),
@@ -849,19 +893,13 @@ mod tests {
                     commit: "1111111111111111111111111111111111111111".to_owned(),
                     directory: "demo-git".to_owned(),
                 },
-                LockedSource::Archive {
-                    order: 0,
-                    url: "https://src.invalid/demo.tar.xz".to_owned(),
-                    sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-                    filename: "demo.tar.xz".to_owned(),
-                },
             ],
             build_lock: lock,
             jobs: vec![JobPlan {
                 pgo_stage: Some("one".to_owned()),
-                pgo_dir: Some("/build/pgo".to_owned()),
-                build_dir: "/build/job".to_owned(),
-                work_dir: "/build/job/work".to_owned(),
+                pgo_dir: Some("/sandbox/build/pgo".to_owned()),
+                build_dir: "/sandbox/build/job".to_owned(),
+                work_dir: "/sandbox/build/job/work".to_owned(),
                 phases: vec![PhasePlan {
                     name: "build".to_owned(),
                     pre: vec![StepPlan::Run {
@@ -871,19 +909,19 @@ mod tests {
                             ("Z_PRE".to_owned(), "z".to_owned()),
                             ("A_PRE".to_owned(), "a".to_owned()),
                         ]),
-                        working_dir: "/build/job/work".to_owned(),
+                        working_dir: "/sandbox/build/job/work".to_owned(),
                     }],
                     steps: vec![StepPlan::Shell {
                         interpreter: "/bin/sh".to_owned(),
                         script: "printf 'build\\n'".to_owned(),
                         environment: BTreeMap::from([("BUILD_MODE".to_owned(), "release".to_owned())]),
-                        working_dir: "/build/job/work".to_owned(),
+                        working_dir: "/sandbox/build/job/work".to_owned(),
                     }],
                     post: vec![StepPlan::Run {
                         program: "finish".to_owned(),
                         args: Vec::new(),
                         environment: BTreeMap::new(),
-                        working_dir: "/build/job".to_owned(),
+                        working_dir: "/sandbox/build/job".to_owned(),
                     }],
                 }],
             }],
@@ -908,7 +946,8 @@ mod tests {
                 zig_cache_dir: "/sandbox/cache/zig".to_owned(),
             },
             execution: ExecutionPolicy {
-                network: NetworkMode::Enabled,
+                network: NetworkMode::Disabled,
+                filesystems: Default::default(),
                 compiler_cache: true,
                 jobs: 8,
             },
@@ -989,108 +1028,17 @@ mod tests {
             source_date_epoch: 1_700_000_000,
         };
 
-        Fixture {
-            plan,
-            request_fingerprint: "planner-request-fingerprint".to_owned(),
-            requested_providers: vec!["pkg(zeta)".to_owned(), "binary(alpha)".to_owned()],
-            policy_sources: vec![
-                PolicySource {
-                    origin: "policy.glu".to_owned(),
-                    fingerprint: "policy-root-fingerprint".to_owned(),
-                    root: true,
-                },
-                PolicySource {
-                    origin: "default.glu".to_owned(),
-                    fingerprint: "default-module-fingerprint".to_owned(),
-                    root: false,
-                },
-            ],
-            policy_changes: vec![
-                PolicyChange {
-                    policy: "repository".to_owned(),
-                    layer: "override".to_owned(),
-                    layer_order: 1,
-                    entry_order: 0,
-                    order: 1,
-                    operation: BuildPolicyOperation::Modify,
-                    origin: "override.glu".to_owned(),
-                    fingerprint: evaluation("modify"),
-                },
-                PolicyChange {
-                    policy: "repository".to_owned(),
-                    layer: "foundation".to_owned(),
-                    layer_order: 0,
-                    entry_order: 0,
-                    order: 0,
-                    operation: BuildPolicyOperation::Add,
-                    origin: "default.glu".to_owned(),
-                    fingerprint: evaluation("add"),
-                },
-            ],
-            profile_fragments: vec!["profile-base".to_owned(), "profile-local".to_owned()],
-        }
+        plan.validate()
+            .expect("explanation fixture must be a valid frozen plan");
+        Fixture { plan }
     }
 
     #[test]
-    fn top_level_category_order_matches_the_golden_outline() {
-        let rendered = fixture().render();
-        let actual = rendered
-            .lines()
-            .filter(|line| {
-                line.strip_prefix("  ")
-                    .is_some_and(|line| !line.starts_with(' ') && line.ends_with(" {"))
-            })
-            .fold(String::new(), |mut output, line| {
-                writeln!(output, "{line}").unwrap();
-                output
-            });
-        assert_eq!(actual, include_str!("../../../tests/golden/recipe-explain.txt"));
-    }
-
-    #[test]
-    fn every_frozen_semantic_category_is_rendered_with_concrete_values() {
-        let fixture = fixture();
-        let rendered = fixture.render();
-        for expected in [
-            "derivation_plan = 4",
-            "boulder_version = \"0.26.6\"",
-            "boulder_fingerprint = \"sha256:boulder\"",
-            "build_lock = \"",
-            "locked_request = \"locked-request-fingerprint\"",
-            "licenses = [\"MIT\", \"Zlib\"]",
-            "vendor = \"unknown\"",
-            "name = \"repository-policy\"",
-            "origin = \"policy.glu\"",
-            "kind = \"add\"",
-            "logical_name = \"a.module\"",
-            "fingerprint = \"profile-base\"",
-            "kind = \"archive\"",
-            "kind = \"git\"",
-            "request = \"binary(alpha)\"",
-            "id = \"a-repository\"",
-            "provider = \"binary(alpha)\"",
-            "package_id = \"alpha-id\"",
-            "pgo_stage = \"one\"",
-            "program = \"prepare\"",
-            "args = [\"--first\", \"second value\"]",
-            "kind = \"shell\"",
-            "\"A_GLOBAL\" = \"a\"",
-            "source_dir = \"/sandbox/sources\"",
-            "network = \"enabled\"",
-            "kind = \"Elf\"",
-            "toolchain = \"gnu\"",
-            "name = \"zlib-devel\"",
-            "pattern = \"usr/bin/*\"",
-            "provides_exclude = [\"a-pattern\", \"z-pattern\"]",
-            "relation_kind = \"binary\"",
-            "kind = \"planned\"",
-            "name = \"z-conflict\"",
-            "source_date_epoch = 1700000000",
-        ] {
-            assert!(rendered.contains(expected), "missing explanation value: {expected}");
-        }
-        assert!(rendered.contains(fixture.plan.build_lock.digest().as_str()));
-        assert!(rendered.contains(fixture.plan.derivation_id().as_str()));
+    fn complete_explanation_matches_the_golden() {
+        assert_eq!(
+            fixture().render(),
+            include_str!("../../../tests/golden/recipe-explain.txt")
+        );
     }
 
     #[test]
@@ -1105,11 +1053,6 @@ mod tests {
         for package in &mut second.plan.build_lock.packages {
             package.outputs.reverse();
             package.dependencies.reverse();
-        }
-        second.requested_providers.reverse();
-        second.policy_changes.reverse();
-        for change in &mut second.policy_changes {
-            change.fingerprint.imported_modules.reverse();
         }
         second.plan.manifest_build_inputs.reverse();
         second.plan.outputs.reverse();
@@ -1135,6 +1078,22 @@ mod tests {
             first.render(),
             second.render(),
             "collector matching precedence must remain visible"
+        );
+        second.plan.collection_rules.reverse();
+
+        second.plan.provenance.profiles.swap(0, 1);
+        assert_ne!(
+            first.render(),
+            second.render(),
+            "profile fragment precedence must remain visible"
+        );
+        second.plan.provenance.profiles.swap(0, 1);
+
+        second.plan.provenance.policy.layers.swap(1, 2);
+        assert_ne!(
+            first.render(),
+            second.render(),
+            "policy layer order, including empty layers, must remain visible"
         );
     }
 }

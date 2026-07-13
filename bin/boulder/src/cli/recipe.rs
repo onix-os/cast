@@ -232,7 +232,10 @@ fn plan(env: Env, command: PlanCommand) -> Result<(), Error> {
         println!("build_lock = {outcome:?} ({})", planned.lock_path.display());
     }
     println!("derivation_id = {:?}", planned.plan.derivation_id().as_str());
-    println!("request_fingerprint = {:?}", planned.request_fingerprint);
+    println!(
+        "request_fingerprint = {:?}",
+        planned.plan.build_lock.request_fingerprint
+    );
     println!("target = {:?}", planned.plan.build_lock.target.name);
     println!("source_date_epoch = {}", planned.plan.source_date_epoch);
     println!("packages = {}", planned.plan.build_lock.packages.len());
@@ -261,7 +264,7 @@ fn explain(env: Env, command: ExplainCommand) -> Result<(), Error> {
             refresh_repositories: false,
         },
     )?;
-    print!("{}", explanation::format(&planned));
+    print!("{}", explanation::format(&planned.plan));
     Ok(())
 }
 

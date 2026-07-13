@@ -6,7 +6,7 @@ use std::{io, num::NonZeroUsize, path::PathBuf};
 use fs_err as fs;
 use moss::{repository, util};
 use stone_recipe::build_policy::TargetPolicySpec;
-use stone_recipe::derivation::{BuilderLayout, DerivationPlan};
+use stone_recipe::derivation::{BuilderLayout, DerivationPlan, ProfileFragmentProvenance};
 use thiserror::Error;
 use tui::Styled;
 
@@ -24,7 +24,7 @@ pub struct Builder {
     pub recipe: Recipe,
     pub paths: Paths,
     pub profile: profile::Id,
-    pub profile_fingerprints: Vec<gluon_config::EvaluationFingerprint>,
+    pub profile_fragments: Vec<ProfileFragmentProvenance>,
     pub ccache: bool,
     pub env: Env,
     repos: repository::Map,
@@ -122,14 +122,14 @@ impl Builder {
         let repos = profiles
             .repositories_for_architecture(&profile, &target.target_policy.build_platform.architecture)?
             .clone();
-        let profile_fingerprints = profiles.fingerprints.clone();
+        let profile_fragments = profiles.fragments.clone();
 
         Ok(Self {
             target,
             recipe,
             paths,
             profile,
-            profile_fingerprints,
+            profile_fragments,
             ccache: compiler_cache,
             env,
             repos,

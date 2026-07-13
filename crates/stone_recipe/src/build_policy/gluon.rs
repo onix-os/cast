@@ -12,7 +12,8 @@ use super::{
     CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
     EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec,
     NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec,
-    PlatformPolicySpec, RetiredTargetPolicySpec, SandboxPolicySpec, SourcePreparationPolicySpec,
+    PlatformPolicySpec, RetiredTargetPolicySpec, SandboxDevPolicySpec, SandboxFilesystemPolicySpec, SandboxPolicySpec,
+    SandboxProcPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, SourcePreparationPolicySpec,
     StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec,
     ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
@@ -316,8 +317,39 @@ struct GluonBuildRootPolicySpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonSandboxProcPolicySpec {
+    NoProc,
+    ReadOnlyProc,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonSandboxTmpPolicySpec {
+    EmptyTmp,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonSandboxSysPolicySpec {
+    NoSys,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonSandboxDevPolicySpec {
+    NoDev,
+    MinimalDev,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonSandboxFilesystemPolicySpec {
+    proc: GluonSandboxProcPolicySpec,
+    tmp: GluonSandboxTmpPolicySpec,
+    sys: GluonSandboxSysPolicySpec,
+    dev: GluonSandboxDevPolicySpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonSandboxPolicySpec {
     hostname: String,
+    filesystems: GluonSandboxFilesystemPolicySpec,
     guest_root: String,
     artifacts_dir: String,
     build_dir: String,
@@ -675,8 +707,9 @@ impl From<GluonTargetPolicySpec> for TargetPolicySpec {
 }
 convert_record!(GluonRetiredTargetPolicySpec => RetiredTargetPolicySpec { name, reason });
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
+convert_record!(GluonSandboxFilesystemPolicySpec => SandboxFilesystemPolicySpec { proc, tmp, sys, dev });
 convert_record!(GluonSandboxPolicySpec => SandboxPolicySpec {
-    hostname, guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
+    hostname, filesystems, guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
 });
 convert_record!(GluonSourcePreparationPolicySpec => SourcePreparationPolicySpec { archive, git });
 convert_record!(GluonBuildersPolicySpec => BuildersPolicySpec { cmake, meson, cargo, autotools });
@@ -933,6 +966,40 @@ impl From<GluonAnalyzerKind> for AnalyzerKind {
             GluonAnalyzerKind::AnalyzerCMake => Self::CMake,
             GluonAnalyzerKind::AnalyzerCompressMan => Self::CompressMan,
             GluonAnalyzerKind::AnalyzerIncludeAny => Self::IncludeAny,
+        }
+    }
+}
+
+impl From<GluonSandboxProcPolicySpec> for SandboxProcPolicySpec {
+    fn from(value: GluonSandboxProcPolicySpec) -> Self {
+        match value {
+            GluonSandboxProcPolicySpec::NoProc => Self::None,
+            GluonSandboxProcPolicySpec::ReadOnlyProc => Self::ReadOnly,
+        }
+    }
+}
+
+impl From<GluonSandboxTmpPolicySpec> for SandboxTmpPolicySpec {
+    fn from(value: GluonSandboxTmpPolicySpec) -> Self {
+        match value {
+            GluonSandboxTmpPolicySpec::EmptyTmp => Self::Empty,
+        }
+    }
+}
+
+impl From<GluonSandboxSysPolicySpec> for SandboxSysPolicySpec {
+    fn from(value: GluonSandboxSysPolicySpec) -> Self {
+        match value {
+            GluonSandboxSysPolicySpec::NoSys => Self::None,
+        }
+    }
+}
+
+impl From<GluonSandboxDevPolicySpec> for SandboxDevPolicySpec {
+    fn from(value: GluonSandboxDevPolicySpec) -> Self {
+        match value {
+            GluonSandboxDevPolicySpec::NoDev => Self::None,
+            GluonSandboxDevPolicySpec::MinimalDev => Self::Minimal,
         }
     }
 }

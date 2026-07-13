@@ -1,23 +1,453 @@
+derivation_explain {
   schema {
+    derivation_plan = 6
+    build_lock = 2
+  }
   identity {
+    boulder_version = "0.26.6"
+    boulder_fingerprint = "sha256:boulder"
+    recipe = "9a77dd152cbee683b8f15a7f9747c7c3bd9bc00c1532cbf58b4c917dbdb0ad69"
+    source_lock = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
+    build_lock = "14f3ca72f62a0ab4b22f619c479a3304ba39e26998e0994cd89cd6489aacd2a8"
+    request = "locked-request-fingerprint"
+  }
+  recipe_provenance {
+    evaluation {
+      root_logical_name = "stone.glu"
+      root_source_sha256 = "305b4fdebe940fa90481a84bf75452824b060810284a4887c87b9c1ae4181a04"
+      gluon_version = "0.18.3"
+      configuration_abi_version = 1
+      evaluator_policy_version = 1
+      explicit_inputs_sha256 = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
+      sha256 = "9a77dd152cbee683b8f15a7f9747c7c3bd9bc00c1532cbf58b4c917dbdb0ad69"
+      imported_modules {
+        module 0 {
+          logical_name = "fixture.provenance"
+          sha256 = "3d914f9348c9cc0ff8a79716700b9fcd4d2f3e711608004eb8f138bcba7f14d9"
+        }
+      }
+    }
+  }
   package {
+    name = "demo"
+    version = "1.2.3"
+    source_release = 4
+    build_release = 5
+    homepage = "https://demo.invalid"
+    licenses = ["MIT", "Zlib"]
+    architecture = "x86_64"
+  }
   platforms {
+    build {
+      architecture = "x86_64"
+      vendor = "unknown"
+      operating_system = "linux"
+      abi = "gnu"
+    }
+    host {
+      architecture = "x86_64"
+      vendor = "aeryn"
+      operating_system = "linux"
+      abi = "gnu"
+    }
+    target {
+      architecture = "x86_64"
+      vendor = "aeryn"
+      operating_system = "linux"
+      abi = "stone"
+    }
+  }
   resolved_identities {
-  policy_sources {
-  policy_operations {
+    policy {
+      name = "repository-policy"
+      fingerprint = "c5ee5d76f5605e3eedd5314bd68b9829b6d108848b437ba7b7af7e492d067c86"
+    }
+    target {
+      name = "x86_64"
+      fingerprint = "x86_64-fingerprint"
+    }
+    profile {
+      name = "default-x86_64"
+      fingerprint = "e0456373f75fb75ab6e2d088791aea21d86cc935638f1c3f0652c3f55a8478b5"
+    }
+    toolchain {
+      name = "llvm"
+      fingerprint = "llvm-fingerprint"
+    }
+    builder {
+      name = "boulder-executor-v1"
+      fingerprint = "boulder-executor-v1-fingerprint"
+    }
+  }
   profile_fragments {
+    fragment 0 {
+      order = 0
+      logical_name = "vendor/base"
+      evaluation {
+        root_logical_name = "profile.d/base.glu"
+        root_source_sha256 = "305b4fdebe940fa90481a84bf75452824b060810284a4887c87b9c1ae4181a04"
+        gluon_version = "0.18.3"
+        configuration_abi_version = 1
+        evaluator_policy_version = 1
+        explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        sha256 = "118f4084c7a164c63a8da3a5b4813f6ce49217cf897302d95b49620a21999028"
+        imported_modules {
+          module 0 {
+            logical_name = "fixture.provenance"
+            sha256 = "3d914f9348c9cc0ff8a79716700b9fcd4d2f3e711608004eb8f138bcba7f14d9"
+          }
+        }
+      }
+    }
+    fragment 1 {
+      order = 1
+      logical_name = "site/local"
+      evaluation {
+        root_logical_name = "profile.d/local.glu"
+        root_source_sha256 = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
+        gluon_version = "0.18.3"
+        configuration_abi_version = 1
+        evaluator_policy_version = 1
+        explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        sha256 = "8001ba7eeff1b32f20ced9fcdfbe45958f47afdc8bfcee420ab7115e63d065f4"
+        imported_modules {
+        }
+      }
+    }
+  }
+  policy_provenance {
+    name = "repository-policy"
+    final_root {
+      evaluation {
+        root_logical_name = "policy.glu"
+        root_source_sha256 = "71ee45a3c0db9a9865f7313dd3372cf60dca6479d46261f3542eb9346e4a04d6"
+        gluon_version = "0.18.3"
+        configuration_abi_version = 1
+        evaluator_policy_version = 1
+        explicit_inputs_sha256 = "ac77ca1e07c93cc53d9c002868e2f350b8a969b949b69799fb40acceae4e8c55"
+        sha256 = "c5ee5d76f5605e3eedd5314bd68b9829b6d108848b437ba7b7af7e492d067c86"
+        imported_modules {
+        }
+      }
+    }
+    layers {
+      layer 0 {
+        layer_order = 0
+        name = "foundation"
+        transitions {
+          transition 0 {
+            layer_order = 0
+            entry_order = 0
+            global_order = 0
+            operation = "add"
+            origin = "default.glu"
+            evaluation {
+              root_logical_name = "default.glu"
+              root_source_sha256 = "305b4fdebe940fa90481a84bf75452824b060810284a4887c87b9c1ae4181a04"
+              gluon_version = "0.18.3"
+              configuration_abi_version = 1
+              evaluator_policy_version = 1
+              explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              sha256 = "6f04c180e52bb32b558e03254c5e1c0eb62f67984dd444dfd64ab78f30fbb11f"
+              imported_modules {
+                module 0 {
+                  logical_name = "fixture.provenance"
+                  sha256 = "3d914f9348c9cc0ff8a79716700b9fcd4d2f3e711608004eb8f138bcba7f14d9"
+                }
+              }
+            }
+          }
+        }
+      }
+      layer 1 {
+        layer_order = 1
+        name = "site-empty"
+        transitions {
+        }
+      }
+      layer 2 {
+        layer_order = 2
+        name = "override"
+        transitions {
+          transition 0 {
+            layer_order = 2
+            entry_order = 0
+            global_order = 1
+            operation = "modify"
+            origin = "override.glu"
+            evaluation {
+              root_logical_name = "override.glu"
+              root_source_sha256 = "44cb730c420480a0477b505ae68af508fb90f96cf0ec54c6ad16949dd427f13a"
+              gluon_version = "0.18.3"
+              configuration_abi_version = 1
+              evaluator_policy_version = 1
+              explicit_inputs_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              sha256 = "4733ddb66baa5d1adf74d957a31e42e492adb6737703593dd0e4c03c9c53c31d"
+              imported_modules {
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   locked_sources {
+    source 0 {
+      kind = "archive"
+      order = 0
+      url = "https://src.invalid/demo.tar.xz"
+      sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      filename = "demo.tar.xz"
+    }
+    source 1 {
+      kind = "git"
+      order = 1
+      url = "https://git.invalid/demo"
+      requested_ref = "v1.2.3"
+      commit = "1111111111111111111111111111111111111111"
+      directory = "demo-git"
+    }
+  }
   requested_providers {
+    provider 0 {
+      request = "binary(alpha)"
+    }
+    provider 1 {
+      request = "pkg(zeta)"
+    }
+  }
   repositories {
+    repository 0 {
+      id = "a-repository"
+      index_uri = "https://a.invalid/index"
+      snapshot = "a-snapshot"
+    }
+    repository 1 {
+      id = "z-repository"
+      index_uri = "https://z.invalid/index"
+      snapshot = "z-snapshot"
+    }
+  }
   lock_requests {
+    request 0 {
+      provider = "binary(alpha)"
+      package_id = "alpha-id"
+      output = "out"
+    }
+    request 1 {
+      provider = "pkg(zeta)"
+      package_id = "zeta-id"
+      output = "devel"
+    }
+  }
   locked_packages {
+    package 0 {
+      package_id = "alpha-id"
+      name = "alpha"
+      version = "1.0-1-1"
+      architecture = "x86_64"
+      repository = "a-repository"
+      outputs {
+        output 0 {
+          name = "out"
+        }
+      }
+      dependencies {
+      }
+    }
+    package 1 {
+      package_id = "zeta-id"
+      name = "zeta"
+      version = "2.0-1-1"
+      architecture = "x86_64"
+      repository = "z-repository"
+      outputs {
+        output 0 {
+          name = "devel"
+        }
+        output 1 {
+          name = "out"
+        }
+      }
+      dependencies {
+        dependency 0 {
+          package_id = "alpha-id"
+          output = "out"
+        }
+      }
+    }
+  }
   jobs {
+    job 0 {
+      pgo_stage = "one"
+      pgo_dir = "/sandbox/build/pgo"
+      build_dir = "/sandbox/build/job"
+      work_dir = "/sandbox/build/job/work"
+      phases {
+        phase 0 {
+          name = "build"
+          pre {
+            step 0 {
+              kind = "run"
+              program = "prepare"
+              args = ["--first", "second value"]
+              environment {
+                "A_PRE" = "a"
+                "Z_PRE" = "z"
+              }
+              working_dir = "/sandbox/build/job/work"
+            }
+          }
+          steps {
+            step 0 {
+              kind = "shell"
+              interpreter = "/bin/sh"
+              script = "printf 'build\\n'"
+              environment {
+                "BUILD_MODE" = "release"
+              }
+              working_dir = "/sandbox/build/job/work"
+            }
+          }
+          post {
+            step 0 {
+              kind = "run"
+              program = "finish"
+              args = []
+              environment {
+              }
+              working_dir = "/sandbox/build/job"
+            }
+          }
+        }
+      }
+    }
+  }
   environment {
+    "A_GLOBAL" = "a"
+    "Z_GLOBAL" = "z"
+  }
   layout {
+    hostname = "sandbox-test"
+    guest_root = "/sandbox"
+    artifacts_dir = "/sandbox/artifacts"
+    build_dir = "/sandbox/build"
+    source_dir = "/sandbox/sources"
+    recipe_dir = "/sandbox/recipe"
+    install_dir = "/sandbox/install"
+    package_dir = "/sandbox/recipe/pkg"
+    ccache_dir = "/sandbox/cache/ccache"
+    sccache_dir = "/sandbox/cache/sccache"
+    go_cache_dir = "/sandbox/cache/go-build"
+    go_mod_cache_dir = "/sandbox/cache/go-mod"
+    cargo_cache_dir = "/sandbox/cache/cargo"
+    zig_cache_dir = "/sandbox/cache/zig"
+  }
   execution {
+    network = "disabled"
+    filesystems {
+      proc = "read-only"
+      tmp = "empty"
+      sys = "none"
+      dev = "minimal"
+    }
+    compiler_cache = true
+    jobs = 8
+  }
   analyzers {
+    analyzer 0 {
+      order = 0
+      kind = "Elf"
+    }
+    analyzer 1 {
+      order = 1
+      kind = "Binary"
+    }
+    analyzer 2 {
+      order = 2
+      kind = "IncludeAny"
+    }
+  }
   analysis {
+    toolchain = "gnu"
+    debug = true
+    strip = false
+    compress_man = true
+    remove_libtool = false
+  }
   manifest_build_inputs {
+    input 0 {
+      kind = "package_name"
+      name = "zlib-devel"
+    }
+    input 1 {
+      kind = "binary"
+      name = "cmake"
+    }
+  }
   collection_rules {
+    rule 0 {
+      order = 0
+      output = "out"
+      kind = "executable"
+      pattern = "usr/bin/*"
+    }
+    rule 1 {
+      order = 1
+      output = "dev"
+      kind = "any"
+      pattern = "usr/include/**"
+    }
+  }
   outputs {
+    output 0 {
+      name = "dev"
+      package_name = "demo-devel"
+      include_in_manifest = true
+      summary = null
+      description = "Development files"
+      provides_exclude = []
+      runtime_exclude = []
+      runtime_inputs {
+        relation 0 {
+          kind = "planned"
+          output = "out"
+        }
+      }
+      conflicts {
+      }
+    }
+    output 1 {
+      name = "out"
+      package_name = "demo"
+      include_in_manifest = true
+      summary = "Demo summary"
+      description = null
+      provides_exclude = ["a-pattern", "z-pattern"]
+      runtime_exclude = ["a-runtime", "z-runtime"]
+      runtime_inputs {
+        relation 0 {
+          kind = "locked"
+          relation_kind = "binary"
+          name = "alpha"
+          package_id = "alpha-id"
+          output = "out"
+        }
+      }
+      conflicts {
+        conflict 0 {
+          kind = "package_name"
+          name = "z-conflict"
+        }
+        conflict 1 {
+          kind = "binary"
+          name = "a-conflict"
+        }
+      }
+    }
+  }
   result {
+    source_date_epoch = 1700000000
+    derivation_id = "55f24d327980ca3c0d18678fae314c4b3d70a2bb4f5408cbdccae0b73dd5c008"
+  }
+}

@@ -16,7 +16,13 @@ use sha2::{Digest, Sha256};
 use stone::relation::{Dependency, Kind as StoneRelationKind, Provider};
 use thiserror::Error;
 
-use crate::build_policy::{AnalyzerKind, CompilerCachePolicySpec, SUPPORTED_ARTIFACT_ARCHITECTURES, SandboxPolicySpec};
+use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
+
+use crate::build_policy::{
+    AnalyzerKind, CompilerCachePolicySpec, SUPPORTED_ARTIFACT_ARCHITECTURES, SandboxDevPolicySpec,
+    SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxProcPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
+    layers::BuildPolicyOperation,
+};
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
@@ -27,9 +33,294 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 4;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 6;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
+const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
+const POLICY_COMPOSITION_IDENTITY_DOMAIN: &str = "boulder-build-policy-composition-v2";
+
+/// Complete authored and repository-policy provenance frozen into a plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivationProvenance {
+    pub recipe: EvaluationFingerprint,
+    /// Profile fragments retain configuration precedence order.
+    pub profiles: Vec<ProfileFragmentProvenance>,
+    pub policy: PolicyProvenance,
+}
+
+/// One ordered profile fragment and its complete evaluation identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileFragmentProvenance {
+    /// Stable loader merge key; distinct from the evaluation root's logical
+    /// source name so both identities remain explicit.
+    pub logical_name: String,
+    pub evaluation: EvaluationFingerprint,
+}
+
+/// The explicit repository policy root and its ordered composition graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyProvenance {
+    pub name: String,
+    /// Final root evaluation whose explicit input is
+    /// [`policy_composition_identity`].
+    pub root: EvaluationFingerprint,
+    /// Manifest order is semantic, including named layers with no transitions.
+    pub layers: Vec<PolicyLayerProvenance>,
+}
+
+/// One named policy layer in manifest order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyLayerProvenance {
+    pub name: String,
+    pub transitions: Vec<PolicyTransitionProvenance>,
+}
+
+/// One successfully evaluated policy state transition in layer order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyTransitionProvenance {
+    pub operation: BuildPolicyOperation,
+    pub origin: String,
+    pub evaluation: EvaluationFingerprint,
+}
+
+impl DerivationProvenance {
+    fn validate(&self, source_lock_digest: &str, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
+        validate_evaluation_fingerprint("provenance.recipe", &self.recipe)?;
+        if self.recipe.explicit_inputs_sha256 != source_lock_digest {
+            return Err(DerivationValidationError::RecipeSourceLockDigestMismatch {
+                recipe: self.recipe.explicit_inputs_sha256.clone(),
+                source_lock: source_lock_digest.to_owned(),
+            });
+        }
+
+        let mut profile_keys = BTreeMap::new();
+        for (index, fragment) in self.profiles.iter().enumerate() {
+            let field = format!("provenance.profiles[{index}]");
+            validate_logical_name(&format!("{field}.logical_name"), &fragment.logical_name)?;
+            if let Some(first_index) = profile_keys.insert(fragment.logical_name.as_str(), index) {
+                return Err(DerivationValidationError::DuplicateProfileLogicalName {
+                    logical_name: fragment.logical_name.clone(),
+                    first_index,
+                    duplicate_index: index,
+                });
+            }
+            validate_evaluation_fingerprint(&format!("{field}.evaluation"), &fragment.evaluation)?;
+        }
+        let profile_fingerprint = profile_aggregate_fingerprint(&self.profiles);
+        if profile_fingerprint != build_lock.profile.fingerprint {
+            return Err(DerivationValidationError::ProfileAggregateMismatch {
+                expected: profile_fingerprint,
+                found: build_lock.profile.fingerprint.clone(),
+            });
+        }
+
+        self.policy.validate(&build_lock.policy)
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encode_evaluation_fingerprint(encoder, &self.recipe);
+        encoder.sequence(&self.profiles, |encoder, fragment| fragment.encode(encoder));
+        self.policy.encode(encoder);
+    }
+}
+
+impl ProfileFragmentProvenance {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.logical_name);
+        encode_evaluation_fingerprint(encoder, &self.evaluation);
+    }
+}
+
+impl PolicyProvenance {
+    fn validate(&self, locked: &LockedIdentity) -> Result<(), DerivationValidationError> {
+        require_nonblank("provenance.policy.name", &self.name)?;
+        validate_evaluation_fingerprint("provenance.policy.root", &self.root)?;
+        if self.name != locked.name {
+            return Err(DerivationValidationError::PolicyNameMismatch {
+                expected: self.name.clone(),
+                found: locked.name.clone(),
+            });
+        }
+        if self.root.sha256 != locked.fingerprint {
+            return Err(DerivationValidationError::PolicyAggregateMismatch {
+                expected: self.root.sha256.clone(),
+                found: locked.fingerprint.clone(),
+            });
+        }
+
+        let mut layer_names = BTreeMap::new();
+        let mut has_policy = false;
+        for (layer_index, layer) in self.layers.iter().enumerate() {
+            let field = format!("provenance.policy.layers[{layer_index}]");
+            require_nonblank(&format!("{field}.name"), &layer.name)?;
+            if let Some(first_index) = layer_names.insert(layer.name.as_str(), layer_index) {
+                return Err(DerivationValidationError::DuplicatePolicyLayer {
+                    name: layer.name.clone(),
+                    first_index,
+                    duplicate_index: layer_index,
+                });
+            }
+            for (transition_index, transition) in layer.transitions.iter().enumerate() {
+                let transition_field = format!("{field}.transitions[{transition_index}]");
+                validate_policy_origin(&format!("{transition_field}.origin"), &transition.origin)?;
+                validate_evaluation_fingerprint(&format!("{transition_field}.evaluation"), &transition.evaluation)?;
+                match transition.operation {
+                    BuildPolicyOperation::Add if has_policy => {
+                        return Err(DerivationValidationError::InvalidPolicyTransition {
+                            field: format!("{transition_field}.operation"),
+                            operation: transition.operation,
+                            reason: "add requires an absent policy",
+                        });
+                    }
+                    BuildPolicyOperation::Replace | BuildPolicyOperation::Modify if !has_policy => {
+                        return Err(DerivationValidationError::InvalidPolicyTransition {
+                            field: format!("{transition_field}.operation"),
+                            operation: transition.operation,
+                            reason: "replace and modify require an existing policy",
+                        });
+                    }
+                    BuildPolicyOperation::Add => has_policy = true,
+                    BuildPolicyOperation::Replace | BuildPolicyOperation::Modify => {}
+                }
+            }
+        }
+        if !has_policy {
+            return Err(DerivationValidationError::MissingPolicyState);
+        }
+
+        let expected_explicit_inputs = sha256(&policy_composition_identity(&self.name, &self.layers));
+        if self.root.explicit_inputs_sha256 != expected_explicit_inputs {
+            return Err(DerivationValidationError::PolicyCompositionDigestMismatch {
+                expected: expected_explicit_inputs,
+                found: self.root.explicit_inputs_sha256.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.name);
+        encode_evaluation_fingerprint(encoder, &self.root);
+        encoder.sequence(&self.layers, |encoder, layer| layer.encode(encoder));
+    }
+}
+
+impl PolicyLayerProvenance {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.name);
+        encoder.sequence(&self.transitions, |encoder, transition| transition.encode(encoder));
+    }
+}
+
+impl PolicyTransitionProvenance {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encode_policy_operation(encoder, self.operation);
+        encoder.string(&self.origin);
+        encode_evaluation_fingerprint(encoder, &self.evaluation);
+    }
+}
+
+/// Compute the v2 aggregate identity of profile fragments in precedence order.
+pub fn profile_aggregate_fingerprint(fragments: &[ProfileFragmentProvenance]) -> String {
+    let mut encoder = CanonicalEncoder::new(PROFILE_AGGREGATE_DOMAIN);
+    encoder.sequence(fragments, |encoder, fragment| fragment.encode(encoder));
+    sha256(&encoder.finish())
+}
+
+/// Encode the ordered nested input used to finalize a repository policy root.
+///
+/// The root evaluation itself is deliberately excluded to avoid a recursive
+/// identity. Its `explicit_inputs_sha256` must equal the SHA-256 of these bytes.
+pub fn policy_composition_identity(policy: &str, layers: &[PolicyLayerProvenance]) -> Vec<u8> {
+    let mut encoder = CanonicalEncoder::new(&[]);
+    encoder.string(POLICY_COMPOSITION_IDENTITY_DOMAIN);
+    encoder.string(policy);
+    encoder.u64(layers.len() as u64);
+    for (layer_index, layer) in layers.iter().enumerate() {
+        encoder.u64(layer_index as u64);
+        encoder.string(&layer.name);
+        encoder.u64(layer.transitions.len() as u64);
+        for (transition_index, transition) in layer.transitions.iter().enumerate() {
+            encoder.u64(transition_index as u64);
+            transition.encode(&mut encoder);
+        }
+    }
+    encoder.finish()
+}
+
+fn encode_evaluation_fingerprint(encoder: &mut CanonicalEncoder, fingerprint: &EvaluationFingerprint) {
+    encoder.string(&fingerprint.root_logical_name);
+    encoder.string(&fingerprint.root_source_sha256);
+    encoder.sequence(&fingerprint.imported_modules, |encoder, module| {
+        encoder.string(&module.logical_name);
+        encoder.string(&module.sha256);
+    });
+    encoder.string(fingerprint.gluon_version);
+    encoder.u32(fingerprint.configuration_abi_version);
+    encoder.u32(fingerprint.evaluator_policy_version);
+    encoder.string(&fingerprint.explicit_inputs_sha256);
+    encoder.string(&fingerprint.sha256);
+}
+
+fn encode_policy_operation(encoder: &mut CanonicalEncoder, operation: BuildPolicyOperation) {
+    encoder.variant(match operation {
+        BuildPolicyOperation::Add => 0,
+        BuildPolicyOperation::Replace => 1,
+        BuildPolicyOperation::Modify => 2,
+    });
+}
+
+fn validate_evaluation_fingerprint(
+    field: &str,
+    fingerprint: &EvaluationFingerprint,
+) -> Result<(), DerivationValidationError> {
+    validate_logical_name(&format!("{field}.root_logical_name"), &fingerprint.root_logical_name)?;
+    for (index, module) in fingerprint.imported_modules.iter().enumerate() {
+        validate_logical_name(
+            &format!("{field}.imported_modules[{index}].logical_name"),
+            &module.logical_name,
+        )?;
+    }
+    fingerprint
+        .validate()
+        .map_err(|source| DerivationValidationError::InvalidEvaluationFingerprint {
+            field: field.to_owned(),
+            source,
+        })
+}
+
+fn validate_logical_name(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    require_nonblank(field, value)?;
+    if is_normalized_logical_name(value) {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::InvalidLogicalName {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
+    }
+}
+
+fn is_normalized_logical_name(value: &str) -> bool {
+    !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.contains(':')
+        && !value
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+}
+
+fn validate_policy_origin(field: &str, origin: &str) -> Result<(), DerivationValidationError> {
+    require_nonblank(field, origin)?;
+    if !is_normalized_logical_name(origin) {
+        Err(DerivationValidationError::InvalidPolicyOrigin {
+            field: field.to_owned(),
+            value: origin.to_owned(),
+        })
+    } else {
+        Ok(())
+    }
+}
 
 /// A completely resolved, target-specific build description.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +329,7 @@ pub struct DerivationPlan {
     pub boulder_version: String,
     pub boulder_fingerprint: String,
     pub package: PackageIdentity,
-    pub recipe_fingerprint: String,
+    pub provenance: DerivationProvenance,
     pub source_lock_digest: String,
     pub sources: Vec<LockedSource>,
     pub build_lock: BuildLock,
@@ -55,13 +346,13 @@ pub struct DerivationPlan {
 
 impl DerivationPlan {
     /// Construct a plan using the current schema.
-    pub fn new(package: PackageIdentity, build_lock: BuildLock) -> Self {
+    pub fn new(package: PackageIdentity, build_lock: BuildLock, provenance: DerivationProvenance) -> Self {
         Self {
             schema_version: DERIVATION_PLAN_SCHEMA_VERSION,
             boulder_version: String::new(),
             boulder_fingerprint: String::new(),
             package,
-            recipe_fingerprint: String::new(),
+            provenance,
             source_lock_digest: String::new(),
             sources: Vec::new(),
             build_lock,
@@ -96,9 +387,9 @@ impl DerivationPlan {
                 supported: SUPPORTED_ARTIFACT_ARCHITECTURES.join(", "),
             });
         }
-        require_nonempty("recipe_fingerprint", &self.recipe_fingerprint)?;
         require_nonempty("source_lock_digest", &self.source_lock_digest)?;
         self.build_lock.validate()?;
+        self.provenance.validate(&self.source_lock_digest, &self.build_lock)?;
         if self.package.architecture != self.build_lock.target_platform.architecture {
             return Err(DerivationValidationError::ArtifactTargetArchitectureMismatch {
                 artifact: self.package.architecture.clone(),
@@ -106,9 +397,7 @@ impl DerivationPlan {
             });
         }
         self.layout.validate()?;
-        if self.execution.jobs == 0 {
-            return Err(DerivationValidationError::ZeroJobs);
-        }
+        self.execution.validate()?;
 
         let mut source_orders = BTreeSet::new();
         let mut source_destinations = BTreeMap::new();
@@ -169,6 +458,9 @@ impl DerivationPlan {
                 found: root.package_name.clone(),
             });
         }
+        if !root.include_in_manifest {
+            return Err(DerivationValidationError::RootOutputExcludedFromManifest { index: root_index });
+        }
         for (index, rule) in self.collection_rules.iter().enumerate() {
             rule.validate(index)?;
             if !output_names.contains(rule.output.as_str()) {
@@ -226,7 +518,7 @@ impl DerivationPlan {
         encoder.string(&self.boulder_version);
         encoder.string(&self.boulder_fingerprint);
         self.package.encode(&mut encoder);
-        encoder.string(&self.recipe_fingerprint);
+        self.provenance.encode(&mut encoder);
         encoder.string(&self.source_lock_digest);
 
         let mut sources = self.sources.iter().collect::<Vec<_>>();
@@ -705,6 +997,7 @@ impl BuilderLayout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionPolicy {
     pub network: NetworkMode,
+    pub filesystems: FilesystemPolicy,
     pub compiler_cache: bool,
     pub jobs: u32,
 }
@@ -713,6 +1006,7 @@ impl Default for ExecutionPolicy {
     fn default() -> Self {
         Self {
             network: NetworkMode::Disabled,
+            filesystems: FilesystemPolicy::default(),
             compiler_cache: false,
             jobs: 1,
         }
@@ -720,13 +1014,143 @@ impl Default for ExecutionPolicy {
 }
 
 impl ExecutionPolicy {
+    fn validate(&self) -> Result<(), DerivationValidationError> {
+        if matches!(self.network, NetworkMode::Enabled) {
+            return Err(DerivationValidationError::NetworkEnabled);
+        }
+        if self.jobs == 0 {
+            return Err(DerivationValidationError::ZeroJobs);
+        }
+        Ok(())
+    }
+
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.variant(match self.network {
             NetworkMode::Disabled => 0,
             NetworkMode::Enabled => 1,
         });
+        self.filesystems.encode(encoder);
         encoder.bool(self.compiler_cache);
         encoder.u32(self.jobs);
+    }
+}
+
+/// Complete pseudo-filesystem selection frozen into an execution plan.
+///
+/// Unlike the generic container API, this type cannot express writable proc,
+/// any `/sys` mount, or a full host `/dev` view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilesystemPolicy {
+    pub proc: ProcFilesystem,
+    pub tmp: TmpFilesystem,
+    pub sys: SysFilesystem,
+    pub dev: DevFilesystem,
+}
+
+impl Default for FilesystemPolicy {
+    fn default() -> Self {
+        Self {
+            proc: ProcFilesystem::ReadOnly,
+            tmp: TmpFilesystem::Empty,
+            sys: SysFilesystem::None,
+            dev: DevFilesystem::Minimal,
+        }
+    }
+}
+
+impl From<&SandboxFilesystemPolicySpec> for FilesystemPolicy {
+    fn from(policy: &SandboxFilesystemPolicySpec) -> Self {
+        Self {
+            proc: match policy.proc {
+                SandboxProcPolicySpec::None => ProcFilesystem::None,
+                SandboxProcPolicySpec::ReadOnly => ProcFilesystem::ReadOnly,
+            },
+            tmp: match policy.tmp {
+                SandboxTmpPolicySpec::Empty => TmpFilesystem::Empty,
+            },
+            sys: match policy.sys {
+                SandboxSysPolicySpec::None => SysFilesystem::None,
+            },
+            dev: match policy.dev {
+                SandboxDevPolicySpec::None => DevFilesystem::None,
+                SandboxDevPolicySpec::Minimal => DevFilesystem::Minimal,
+            },
+        }
+    }
+}
+
+impl FilesystemPolicy {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.variant(match self.proc {
+            ProcFilesystem::None => 0,
+            ProcFilesystem::ReadOnly => 1,
+        });
+        encoder.variant(match self.tmp {
+            TmpFilesystem::Empty => 0,
+        });
+        encoder.variant(match self.sys {
+            SysFilesystem::None => 0,
+        });
+        encoder.variant(match self.dev {
+            DevFilesystem::None => 0,
+            DevFilesystem::Minimal => 1,
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcFilesystem {
+    None,
+    ReadOnly,
+}
+
+impl ProcFilesystem {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ReadOnly => "read-only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TmpFilesystem {
+    Empty,
+}
+
+impl TmpFilesystem {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SysFilesystem {
+    None,
+}
+
+impl SysFilesystem {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevFilesystem {
+    None,
+    Minimal,
+}
+
+impl DevFilesystem {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+        }
     }
 }
 
@@ -1075,12 +1499,60 @@ pub enum DerivationValidationError {
     UnsupportedSchema { found: u32, expected: u32 },
     #[error("{field}: value must not be empty")]
     Empty { field: String },
+    #[error("{field}: invalid evaluation fingerprint: {source}")]
+    InvalidEvaluationFingerprint {
+        field: String,
+        #[source]
+        source: EvaluationFingerprintValidationError,
+    },
+    #[error("{field}: logical name {value:?} must be normalized and relative")]
+    InvalidLogicalName { field: String, value: String },
+    #[error("provenance.recipe.explicit_inputs_sha256 {recipe:?} does not match source_lock_digest {source_lock:?}")]
+    RecipeSourceLockDigestMismatch { recipe: String, source_lock: String },
+    #[error(
+        "provenance.profiles[{duplicate_index}].logical_name: duplicate profile fragment {logical_name:?}; first declared at provenance.profiles[{first_index}]"
+    )]
+    DuplicateProfileLogicalName {
+        logical_name: String,
+        first_index: usize,
+        duplicate_index: usize,
+    },
+    #[error("build_lock.profile.fingerprint: expected v2 profile aggregate {expected:?}, found {found:?}")]
+    ProfileAggregateMismatch { expected: String, found: String },
+    #[error("build_lock.policy.name: expected provenance policy {expected:?}, found {found:?}")]
+    PolicyNameMismatch { expected: String, found: String },
+    #[error("build_lock.policy.fingerprint: expected policy root aggregate {expected:?}, found {found:?}")]
+    PolicyAggregateMismatch { expected: String, found: String },
+    #[error(
+        "provenance.policy.layers[{duplicate_index}].name: duplicate policy layer {name:?}; first declared at provenance.policy.layers[{first_index}]"
+    )]
+    DuplicatePolicyLayer {
+        name: String,
+        first_index: usize,
+        duplicate_index: usize,
+    },
+    #[error("{field}: module origin {value:?} must be a normalized relative path")]
+    InvalidPolicyOrigin { field: String, value: String },
+    #[error("{field}: invalid {operation:?} transition: {reason}")]
+    InvalidPolicyTransition {
+        field: String,
+        operation: BuildPolicyOperation,
+        reason: &'static str,
+    },
+    #[error("provenance.policy.layers: ordered transitions never create a policy state")]
+    MissingPolicyState,
+    #[error(
+        "provenance.policy.root.explicit_inputs_sha256: expected policy composition digest {expected:?}, found {found:?}"
+    )]
+    PolicyCompositionDigestMismatch { expected: String, found: String },
     #[error("package.build_release: value must be greater than zero")]
     ZeroBuildRelease,
     #[error("package.source_release: value must be greater than zero")]
     ZeroSourceRelease,
     #[error("execution.jobs: value must be greater than zero")]
     ZeroJobs,
+    #[error("execution.network: enabled networking is not permitted in a frozen derivation")]
+    NetworkEnabled,
     #[error("package.architecture: unsupported Stone artifact architecture {value:?}; expected one of {supported}")]
     UnsupportedArtifactArchitecture { value: String, supported: String },
     #[error(
@@ -1115,6 +1587,8 @@ pub enum DerivationValidationError {
         expected: String,
         found: String,
     },
+    #[error("outputs[{index}].include_in_manifest: root output must be present in the binary build manifest")]
+    RootOutputExcludedFromManifest { index: usize },
     #[error("analysis.handlers: duplicate analyzer `{name}`")]
     DuplicateAnalyzer { name: String },
     #[error("analysis.handlers: required analyzer `{name}` is missing")]
@@ -1275,6 +1749,20 @@ fn require_nonempty(field: &str, value: &str) -> Result<(), DerivationValidation
     } else {
         Ok(())
     }
+}
+
+fn require_nonblank(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    if value.trim().is_empty() {
+        Err(DerivationValidationError::Empty {
+            field: field.to_owned(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn validate_regex(field: &str, value: &str) -> Result<(), DerivationValidationError> {
@@ -1505,9 +1993,74 @@ impl CanonicalEncoder {
 
 #[cfg(test)]
 mod tests {
+    use gluon_config::{Evaluator, ImportPolicy, Source};
+
     use super::*;
 
+    const SOURCE_LOCK_BYTES: &[u8] = b"canonical sample source lock";
+    type NamedMutation<T> = (&'static str, Box<dyn Fn(&mut T)>);
+
+    fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+        Evaluator::default()
+            .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
+            .unwrap()
+            .fingerprint
+    }
+
+    fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+        let policy = ImportPolicy::new()
+            .with_embedded_module("sample.provenance", "4")
+            .unwrap();
+        Evaluator::default()
+            .with_import_policy(policy)
+            .evaluate_with_inputs::<i64>(&Source::new(logical_name, "import! sample.provenance"), explicit_inputs)
+            .unwrap()
+            .fingerprint
+    }
+
+    fn sample_provenance() -> DerivationProvenance {
+        let profiles = vec![
+            ProfileFragmentProvenance {
+                logical_name: "vendor/profile.glu".to_owned(),
+                evaluation: evaluation_with_import("profile.glu", &[]),
+            },
+            ProfileFragmentProvenance {
+                logical_name: "admin/profile.d/local.glu".to_owned(),
+                evaluation: evaluation("profile.d/local.glu", "2", &[]),
+            },
+        ];
+        let layers = vec![
+            PolicyLayerProvenance {
+                name: "foundation".to_owned(),
+                transitions: vec![PolicyTransitionProvenance {
+                    operation: BuildPolicyOperation::Add,
+                    origin: "default.glu".to_owned(),
+                    evaluation: evaluation_with_import("default.glu", &[]),
+                }],
+            },
+            PolicyLayerProvenance {
+                name: "site".to_owned(),
+                transitions: Vec::new(),
+            },
+        ];
+        let policy_inputs = policy_composition_identity("aerynos", &layers);
+        DerivationProvenance {
+            recipe: evaluation_with_import("stone.glu", SOURCE_LOCK_BYTES),
+            profiles,
+            policy: PolicyProvenance {
+                name: "aerynos".to_owned(),
+                root: evaluation("policy.glu", "5", &policy_inputs),
+                layers,
+            },
+        }
+    }
+
     fn sample_plan() -> DerivationPlan {
+        let provenance = sample_provenance();
+        let mut build_lock = build_lock::sample_lock();
+        build_lock.policy.name = provenance.policy.name.clone();
+        build_lock.policy.fingerprint = provenance.policy.root.sha256.clone();
+        build_lock.profile.fingerprint = profile_aggregate_fingerprint(&provenance.profiles);
         let mut plan = DerivationPlan::new(
             PackageIdentity {
                 name: "hello".to_owned(),
@@ -1518,12 +2071,12 @@ mod tests {
                 licenses: vec!["MPL-2.0".to_owned()],
                 architecture: "x86_64".to_owned(),
             },
-            build_lock::sample_lock(),
+            build_lock,
+            provenance,
         );
         plan.boulder_version = "0.26.6".to_owned();
         plan.boulder_fingerprint = "sha256:test-boulder-semantics".to_owned();
-        plan.recipe_fingerprint = "recipe-fingerprint".to_owned();
-        plan.source_lock_digest = "source-lock-digest".to_owned();
+        plan.source_lock_digest = sha256(SOURCE_LOCK_BYTES);
         plan.sources = vec![LockedSource::Archive {
             order: 0,
             url: "https://example.invalid/hello.tar.zst".to_owned(),
@@ -1569,6 +2122,7 @@ mod tests {
         };
         plan.execution = ExecutionPolicy {
             network: NetworkMode::Disabled,
+            filesystems: FilesystemPolicy::default(),
             compiler_cache: false,
             jobs: 4,
         };
@@ -1616,6 +2170,410 @@ mod tests {
         assert_eq!(first.derivation_id(), repeated.derivation_id());
         assert_eq!(first.derivation_id().as_str().len(), 64);
         first.validate().unwrap();
+    }
+
+    #[test]
+    fn frozen_filesystem_policy_is_explicit_restricted_and_ordered() {
+        let policy = FilesystemPolicy::default();
+        assert_eq!(policy.proc, ProcFilesystem::ReadOnly);
+        assert_eq!(policy.tmp, TmpFilesystem::Empty);
+        assert_eq!(policy.sys, SysFilesystem::None);
+        assert_eq!(policy.dev, DevFilesystem::Minimal);
+
+        let mut encoder = CanonicalEncoder::new(&[]);
+        policy.encode(&mut encoder);
+        assert_eq!(encoder.finish(), [1, 0, 0, 1]);
+    }
+
+    #[test]
+    fn every_allowed_filesystem_policy_change_changes_derivation_identity() {
+        let original = sample_plan();
+        let original_id = original.derivation_id();
+
+        let mut without_proc = original.clone();
+        without_proc.execution.filesystems.proc = ProcFilesystem::None;
+        assert_ne!(original_id, without_proc.derivation_id());
+
+        let mut without_dev = original;
+        without_dev.execution.filesystems.dev = DevFilesystem::None;
+        assert_ne!(original_id, without_dev.derivation_id());
+    }
+
+    #[test]
+    fn validation_rejects_enabled_frozen_networking() {
+        let mut plan = sample_plan();
+        plan.execution.network = NetworkMode::Enabled;
+
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::NetworkEnabled)
+        ));
+    }
+
+    #[test]
+    fn complete_evaluation_fingerprint_is_part_of_canonical_identity() {
+        let original = sample_plan();
+        let original_id = original.derivation_id();
+        assert_eq!(original.provenance.recipe.imported_modules.len(), 1);
+        assert_eq!(
+            original.provenance.recipe.imported_modules[0].logical_name,
+            "sample.provenance"
+        );
+        let mutations: Vec<NamedMutation<EvaluationFingerprint>> = vec![
+            (
+                "root-logical-name",
+                Box::new(|fingerprint| fingerprint.root_logical_name.push_str("-changed")),
+            ),
+            (
+                "root-source-sha256",
+                Box::new(|fingerprint| fingerprint.root_source_sha256.push('0')),
+            ),
+            (
+                "import-logical-name",
+                Box::new(|fingerprint| fingerprint.imported_modules[0].logical_name.push_str("-changed")),
+            ),
+            (
+                "import-sha256",
+                Box::new(|fingerprint| fingerprint.imported_modules[0].sha256.push('0')),
+            ),
+            (
+                "gluon-version",
+                Box::new(|fingerprint| fingerprint.gluon_version = "test-gluon-version"),
+            ),
+            (
+                "configuration-abi",
+                Box::new(|fingerprint| fingerprint.configuration_abi_version += 1),
+            ),
+            (
+                "evaluator-policy-abi",
+                Box::new(|fingerprint| fingerprint.evaluator_policy_version += 1),
+            ),
+            (
+                "explicit-inputs-sha256",
+                Box::new(|fingerprint| fingerprint.explicit_inputs_sha256.push('0')),
+            ),
+            ("aggregate-sha256", Box::new(|fingerprint| fingerprint.sha256.push('0'))),
+        ];
+
+        for (name, mutate) in mutations {
+            let mut changed = original.clone();
+            mutate(&mut changed.provenance.recipe);
+            assert_ne!(original_id, changed.derivation_id(), "{name} was not hashed");
+        }
+    }
+
+    #[test]
+    fn nested_provenance_shape_and_order_are_part_of_canonical_identity() {
+        let original = sample_plan();
+        let original_id = original.derivation_id();
+        let mutations: Vec<NamedMutation<DerivationProvenance>> = vec![
+            (
+                "profile-logical-name",
+                Box::new(|provenance| provenance.profiles[0].logical_name.push_str("-changed")),
+            ),
+            ("profile-order", Box::new(|provenance| provenance.profiles.reverse())),
+            (
+                "profile-evaluation",
+                Box::new(|provenance| provenance.profiles[0].evaluation.root_logical_name.push_str("-changed")),
+            ),
+            (
+                "policy-name",
+                Box::new(|provenance| provenance.policy.name.push_str("-changed")),
+            ),
+            (
+                "policy-root",
+                Box::new(|provenance| provenance.policy.root.root_logical_name.push_str("-changed")),
+            ),
+            (
+                "empty-policy-layer",
+                Box::new(|provenance| {
+                    provenance.policy.layers.pop();
+                }),
+            ),
+            (
+                "policy-layer-order",
+                Box::new(|provenance| provenance.policy.layers.reverse()),
+            ),
+            (
+                "policy-layer-name",
+                Box::new(|provenance| provenance.policy.layers[0].name.push_str("-changed")),
+            ),
+            (
+                "policy-transition-operation",
+                Box::new(|provenance| {
+                    provenance.policy.layers[0].transitions[0].operation = BuildPolicyOperation::Replace;
+                }),
+            ),
+            (
+                "policy-transition-origin",
+                Box::new(|provenance| provenance.policy.layers[0].transitions[0].origin.push_str("-changed")),
+            ),
+            (
+                "policy-transition-evaluation",
+                Box::new(|provenance| {
+                    provenance.policy.layers[0].transitions[0]
+                        .evaluation
+                        .root_logical_name
+                        .push_str("-changed");
+                }),
+            ),
+        ];
+
+        for (name, mutate) in mutations {
+            let mut changed = original.clone();
+            mutate(&mut changed.provenance);
+            assert_ne!(original_id, changed.derivation_id(), "{name} was not hashed");
+        }
+    }
+
+    #[test]
+    fn v2_provenance_aggregate_helpers_preserve_nested_semantics() {
+        let provenance = sample_provenance();
+        let profile_identity = profile_aggregate_fingerprint(&provenance.profiles);
+        let policy_identity = policy_composition_identity(&provenance.policy.name, &provenance.policy.layers);
+
+        assert_eq!(profile_identity, profile_aggregate_fingerprint(&provenance.profiles));
+        assert_eq!(
+            policy_identity,
+            policy_composition_identity(&provenance.policy.name, &provenance.policy.layers)
+        );
+
+        let mut profiles = provenance.profiles.clone();
+        profiles.reverse();
+        assert_ne!(profile_identity, profile_aggregate_fingerprint(&profiles));
+        profiles = provenance.profiles.clone();
+        profiles[0].logical_name.push_str("-changed");
+        assert_ne!(profile_identity, profile_aggregate_fingerprint(&profiles));
+        profiles = provenance.profiles.clone();
+        profiles[0].evaluation.evaluator_policy_version += 1;
+        assert_ne!(profile_identity, profile_aggregate_fingerprint(&profiles));
+
+        let mut layers = provenance.policy.layers.clone();
+        layers.pop();
+        assert_ne!(
+            policy_identity,
+            policy_composition_identity(&provenance.policy.name, &layers),
+            "an empty named layer is semantic"
+        );
+        layers = provenance.policy.layers.clone();
+        layers.reverse();
+        assert_ne!(
+            policy_identity,
+            policy_composition_identity(&provenance.policy.name, &layers)
+        );
+        layers = provenance.policy.layers.clone();
+        layers[0].transitions[0].evaluation.configuration_abi_version += 1;
+        assert_ne!(
+            policy_identity,
+            policy_composition_identity(&provenance.policy.name, &layers)
+        );
+    }
+
+    #[test]
+    fn validation_rejects_invalid_nested_evaluation_fingerprints_at_the_exact_field() {
+        let cases: Vec<NamedMutation<DerivationPlan>> = vec![
+            (
+                "provenance.recipe",
+                Box::new(|plan| plan.provenance.recipe.sha256.push('0')),
+            ),
+            (
+                "provenance.profiles[0].evaluation",
+                Box::new(|plan| plan.provenance.profiles[0].evaluation.sha256.push('0')),
+            ),
+            (
+                "provenance.policy.root",
+                Box::new(|plan| plan.provenance.policy.root.sha256.push('0')),
+            ),
+            (
+                "provenance.policy.layers[0].transitions[0].evaluation",
+                Box::new(|plan| {
+                    plan.provenance.policy.layers[0].transitions[0]
+                        .evaluation
+                        .sha256
+                        .push('0');
+                }),
+            ),
+        ];
+
+        for (expected, corrupt) in cases {
+            let mut plan = sample_plan();
+            corrupt(&mut plan);
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidEvaluationFingerprint { field, .. })
+                    if field == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn validation_rejects_ambient_or_non_normalized_provenance_names() {
+        let cases: Vec<NamedMutation<DerivationPlan>> = vec![
+            (
+                "provenance.recipe.root_logical_name",
+                Box::new(|plan| plan.provenance.recipe.root_logical_name = "/home/user/stone.glu".to_owned()),
+            ),
+            (
+                "provenance.recipe.imported_modules[0].logical_name",
+                Box::new(|plan| {
+                    plan.provenance.recipe.imported_modules[0].logical_name = "nested/../module.glu".to_owned();
+                }),
+            ),
+            (
+                "provenance.profiles[0].logical_name",
+                Box::new(|plan| plan.provenance.profiles[0].logical_name = "C:\\profile.glu".to_owned()),
+            ),
+            (
+                "provenance.profiles[0].evaluation.root_logical_name",
+                Box::new(|plan| {
+                    plan.provenance.profiles[0].evaluation.root_logical_name = "./profile.glu".to_owned();
+                }),
+            ),
+            (
+                "provenance.policy.root.root_logical_name",
+                Box::new(|plan| plan.provenance.policy.root.root_logical_name = "policy//root.glu".to_owned()),
+            ),
+            (
+                "provenance.policy.layers[0].transitions[0].evaluation.root_logical_name",
+                Box::new(|plan| {
+                    plan.provenance.policy.layers[0].transitions[0]
+                        .evaluation
+                        .root_logical_name = "/etc/policy.glu".to_owned();
+                }),
+            ),
+        ];
+
+        for (expected, corrupt) in cases {
+            let mut plan = sample_plan();
+            corrupt(&mut plan);
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidLogicalName { field, .. })
+                    if field == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn validation_binds_recipe_and_profiles_to_their_locked_inputs() {
+        let mut recipe = sample_plan();
+        recipe.source_lock_digest = sha256(b"different source lock");
+        assert!(matches!(
+            recipe.validate(),
+            Err(DerivationValidationError::RecipeSourceLockDigestMismatch { .. })
+        ));
+
+        let mut blank = sample_plan();
+        blank.provenance.profiles[0].logical_name = "  ".to_owned();
+        assert!(matches!(
+            blank.validate(),
+            Err(DerivationValidationError::Empty { field })
+                if field == "provenance.profiles[0].logical_name"
+        ));
+
+        let mut duplicate = sample_plan();
+        duplicate.provenance.profiles[1].logical_name = duplicate.provenance.profiles[0].logical_name.clone();
+        assert!(matches!(
+            duplicate.validate(),
+            Err(DerivationValidationError::DuplicateProfileLogicalName {
+                first_index: 0,
+                duplicate_index: 1,
+                ..
+            })
+        ));
+
+        let mut aggregate = sample_plan();
+        aggregate.build_lock.profile.fingerprint.push_str("-changed");
+        assert!(matches!(
+            aggregate.validate(),
+            Err(DerivationValidationError::ProfileAggregateMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_binds_policy_name_root_and_composition_to_the_build_lock() {
+        let mut name = sample_plan();
+        name.build_lock.policy.name.push_str("-changed");
+        assert!(matches!(
+            name.validate(),
+            Err(DerivationValidationError::PolicyNameMismatch { .. })
+        ));
+
+        let mut root = sample_plan();
+        root.build_lock.policy.fingerprint.push_str("-changed");
+        assert!(matches!(
+            root.validate(),
+            Err(DerivationValidationError::PolicyAggregateMismatch { .. })
+        ));
+
+        let mut duplicate = sample_plan();
+        duplicate.provenance.policy.layers[1].name = duplicate.provenance.policy.layers[0].name.clone();
+        assert!(matches!(
+            duplicate.validate(),
+            Err(DerivationValidationError::DuplicatePolicyLayer {
+                first_index: 0,
+                duplicate_index: 1,
+                ..
+            })
+        ));
+
+        let mut composition = sample_plan();
+        composition.provenance.policy.layers[1].name.push_str("-changed");
+        assert!(matches!(
+            composition.validate(),
+            Err(DerivationValidationError::PolicyCompositionDigestMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_non_normalized_policy_origins() {
+        for origin in [
+            "/absolute.glu",
+            "C:\\policy.glu",
+            "nested//policy.glu",
+            "nested/./policy.glu",
+            "nested/../policy.glu",
+        ] {
+            let mut plan = sample_plan();
+            plan.provenance.policy.layers[0].transitions[0].origin = origin.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidPolicyOrigin { value, .. }) if value == origin
+            ));
+        }
+    }
+
+    #[test]
+    fn validation_replays_policy_transition_state() {
+        for operation in [BuildPolicyOperation::Replace, BuildPolicyOperation::Modify] {
+            let mut missing_initial_state = sample_plan();
+            missing_initial_state.provenance.policy.layers[0].transitions[0].operation = operation;
+            assert!(matches!(
+                missing_initial_state.validate(),
+                Err(DerivationValidationError::InvalidPolicyTransition {
+                    operation: actual,
+                    ..
+                }) if actual == operation
+            ));
+        }
+
+        let mut second_add = sample_plan();
+        let repeated_add = second_add.provenance.policy.layers[0].transitions[0].clone();
+        second_add.provenance.policy.layers[0].transitions.push(repeated_add);
+        assert!(matches!(
+            second_add.validate(),
+            Err(DerivationValidationError::InvalidPolicyTransition {
+                operation: BuildPolicyOperation::Add,
+                ..
+            })
+        ));
+
+        let mut absent = sample_plan();
+        absent.provenance.policy.layers[0].transitions.clear();
+        assert!(matches!(
+            absent.validate(),
+            Err(DerivationValidationError::MissingPolicyState)
+        ));
     }
 
     #[test]
@@ -1736,6 +2694,13 @@ mod tests {
                 expected,
                 found,
             }) if expected == "hello" && found == "other"
+        ));
+
+        let mut excluded = sample_plan();
+        excluded.outputs[0].include_in_manifest = false;
+        assert!(matches!(
+            excluded.validate(),
+            Err(DerivationValidationError::RootOutputExcludedFromManifest { index: 0 })
         ));
 
         let mut empty_split = sample_plan();

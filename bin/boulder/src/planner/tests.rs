@@ -13,6 +13,7 @@ use moss::{
     package::{Meta, Name},
 };
 use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
+use stone_recipe::derivation::{FilesystemPolicy, NetworkMode};
 use tempfile::TempDir;
 use url::Url;
 
@@ -25,6 +26,7 @@ use crate::{
 };
 
 const PROFILE: &str = "planner-hermetic";
+const ALTERNATE_PROFILE: &str = "planner-hermetic-alternate";
 const TARGET: &str = "x86_64";
 const SOURCE_DATE_EPOCH: i64 = 1_700_000_000;
 
@@ -104,6 +106,9 @@ impl Fixture {
 
 boulder.profiles [
     boulder.profile "{PROFILE}" [
+        boulder.repository.direct "fixture" "{index_uri}",
+    ],
+    boulder.profile "{ALTERNATE_PROFILE}" [
         boulder.repository.direct "fixture" "{index_uri}",
     ],
 ]
@@ -217,7 +222,9 @@ fn identical_explicit_inputs_produce_identical_plans_and_locks() {
     let first_lock = fs::read(&first.lock_path).unwrap();
 
     assert_eq!(first.lock_outcome, Some(WriteOutcome::Written));
-    assert!(!first.requested_packages.is_empty());
+    assert_eq!(first.plan.execution.network, NetworkMode::Disabled);
+    assert_eq!(first.plan.execution.filesystems, FilesystemPolicy::default());
+    assert!(!first.plan.build_lock.requests.is_empty());
     assert!(
         first
             .plan
@@ -230,9 +237,35 @@ fn identical_explicit_inputs_produce_identical_plans_and_locks() {
     let repeated = plan(fixture.env(), fixture.request()).unwrap();
 
     assert_eq!(repeated.lock_outcome, Some(WriteOutcome::Unchanged));
-    assert_eq!(repeated.request_fingerprint, first.request_fingerprint);
-    assert_eq!(repeated.requested_packages, first.requested_packages);
+    assert_eq!(
+        repeated.plan.build_lock.request_fingerprint,
+        first.plan.build_lock.request_fingerprint
+    );
+    assert_eq!(repeated.plan.build_lock.requests, first.plan.build_lock.requests);
+    assert_eq!(repeated.plan.provenance, first.plan.provenance);
     assert_eq!(repeated.plan.canonical_bytes(), first_plan);
     assert_eq!(repeated.plan.derivation_id(), first_id);
     assert_eq!(fs::read(&repeated.lock_path).unwrap(), first_lock);
+}
+
+#[test]
+fn selected_profile_name_participates_in_the_request_fingerprint() {
+    let fixture = Fixture::new();
+    let first = plan(fixture.env(), fixture.request()).unwrap();
+    let mut alternate_request = fixture.request();
+    alternate_request.profile = profile::Id::new(ALTERNATE_PROFILE);
+    let alternate = plan(fixture.env(), alternate_request).unwrap();
+
+    assert_eq!(
+        first.plan.build_lock.profile.fingerprint, alternate.plan.build_lock.profile.fingerprint,
+        "both selections intentionally share the same ordered fragment aggregate"
+    );
+    assert_ne!(
+        first.plan.build_lock.profile.name,
+        alternate.plan.build_lock.profile.name
+    );
+    assert_ne!(
+        first.plan.build_lock.request_fingerprint,
+        alternate.plan.build_lock.request_fingerprint
+    );
 }

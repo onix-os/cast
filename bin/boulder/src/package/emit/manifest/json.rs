@@ -135,8 +135,7 @@ boulder.mk_package (boulder.meta {
 "#;
 
     #[test]
-    fn emitted_fingerprint_changes_with_source_lock_bytes() {
-        let derivation_id = emit::test_derivation_id();
+    fn emitted_recipe_aggregate_and_derivation_id_follow_plan_provenance() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), RECIPE_SOURCE).unwrap();
         let lock = encode_source_lock(&SourceLock::default());
@@ -144,44 +143,61 @@ boulder.mk_package (boulder.meta {
         fs::write(&lock_path, &lock).unwrap();
 
         let first_recipe = Recipe::load(root.path()).unwrap();
+        let first_plan = plan_with_recipe(&first_recipe);
+        let first_derivation_id = first_plan.derivation_id();
         let first_identity = identity(&first_recipe);
         let first_path = root.path().join("first.jsonc");
         write(
             &first_path,
             &first_identity,
-            &first_recipe.fingerprint.sha256,
+            &first_plan.provenance.recipe.sha256,
             &[],
             &BTreeSet::new(),
-            &derivation_id,
+            &first_derivation_id,
         )
         .unwrap();
         let first_manifest = read_jsonc(&first_path);
 
         fs::write(&lock_path, format!("{lock}// semantically inert provenance change\n")).unwrap();
         let changed_recipe = Recipe::load(root.path()).unwrap();
+        let changed_plan = plan_with_recipe(&changed_recipe);
+        let changed_derivation_id = changed_plan.derivation_id();
         let changed_identity = identity(&changed_recipe);
         let changed_path = root.path().join("changed.jsonc");
         write(
             &changed_path,
             &changed_identity,
-            &changed_recipe.fingerprint.sha256,
+            &changed_plan.provenance.recipe.sha256,
             &[],
             &BTreeSet::new(),
-            &derivation_id,
+            &changed_derivation_id,
         )
         .unwrap();
         let changed_manifest = read_jsonc(&changed_path);
 
-        assert_eq!(first_manifest["recipe-fingerprint"], first_recipe.fingerprint.sha256);
-        assert_eq!(first_manifest["derivation-id"], derivation_id.as_str());
+        assert_eq!(
+            first_manifest["recipe-fingerprint"],
+            first_plan.provenance.recipe.sha256
+        );
+        assert_eq!(first_manifest["derivation-id"], first_derivation_id.as_str());
         assert_eq!(
             changed_manifest["recipe-fingerprint"],
-            changed_recipe.fingerprint.sha256
+            changed_plan.provenance.recipe.sha256
         );
+        assert_eq!(changed_manifest["derivation-id"], changed_derivation_id.as_str());
         assert_ne!(
             first_manifest["recipe-fingerprint"],
             changed_manifest["recipe-fingerprint"]
         );
+        assert_ne!(first_manifest["derivation-id"], changed_manifest["derivation-id"]);
+    }
+
+    fn plan_with_recipe(recipe: &Recipe) -> stone_recipe::derivation::DerivationPlan {
+        let mut plan = emit::test_derivation_plan();
+        plan.provenance.recipe = recipe.fingerprint.clone();
+        plan.source_lock_digest = recipe.fingerprint.explicit_inputs_sha256.clone();
+        plan.validate().unwrap();
+        plan
     }
 
     fn identity(recipe: &Recipe) -> PackageIdentity {

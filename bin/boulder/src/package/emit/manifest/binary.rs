@@ -60,15 +60,15 @@ mod tests {
 
     use super::*;
     use crate::package::emit::{
-        DERIVATION_ID_SOURCE_REF_PREFIX, RECIPE_FINGERPRINT_SOURCE_REF_PREFIX, test_derivation_id,
+        DERIVATION_ID_SOURCE_REF_PREFIX, RECIPE_FINGERPRINT_SOURCE_REF_PREFIX, test_derivation_plan,
     };
     use crate::package::{ResolvedOutput, analysis::Bucket};
 
-    const FINGERPRINT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
     #[test]
-    fn package_and_binary_manifest_metadata_record_recipe_and_derivation_provenance() {
-        let derivation_id = test_derivation_id();
+    fn package_and_binary_manifest_metadata_record_plan_recipe_and_derivation_provenance() {
+        let plan = test_derivation_plan();
+        let recipe_fingerprint = &plan.provenance.recipe.sha256;
+        let derivation_id = plan.derivation_id();
         let identity = stone_recipe::derivation::PackageIdentity {
             name: "example".to_owned(),
             version: "1.2.3".to_owned(),
@@ -94,14 +94,14 @@ mod tests {
             crate::Architecture::X86_64,
             1,
         );
-        let recipe_ref = format!("{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{FINGERPRINT}");
+        let recipe_ref = format!("{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{recipe_fingerprint}");
         let derivation_ref = format!("{DERIVATION_ID_SOURCE_REF_PREFIX}{derivation_id}");
         let expected = BTreeSet::from([recipe_ref.as_str(), derivation_ref.as_str()]);
 
         let mut package_output = Cursor::new(Vec::new());
         let mut package_writer = StoneWriter::new(&mut package_output, StoneHeaderV1FileType::Binary).unwrap();
         package_writer
-            .add_payload(package.meta_payload(FINGERPRINT, &derivation_id).as_slice())
+            .add_payload(package.meta_payload(recipe_fingerprint, &derivation_id).as_slice())
             .unwrap();
         package_writer.finalize().unwrap();
         package_output.set_position(0);
@@ -115,7 +115,7 @@ mod tests {
             &mut output,
             &[&package],
             &BTreeSet::from([Dependency::package_name("build-tool")]),
-            FINGERPRINT,
+            recipe_fingerprint,
             &derivation_id,
         )
         .unwrap();

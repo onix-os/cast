@@ -123,7 +123,7 @@ impl<'a> FrozenPackager<'a> {
             packages,
             collector,
             build_release: NonZeroU64::new(plan.package.build_release).expect("validated build release"),
-            recipe_fingerprint: plan.recipe_fingerprint.clone(),
+            recipe_fingerprint: plan.provenance.recipe.sha256.clone(),
             analysis: plan.analysis.clone(),
             architecture: frozen_architecture(&plan.package.architecture),
             manifest_build_inputs,
@@ -506,6 +506,7 @@ mod tests {
         assert_eq!(packager.identity.homepage, "https://frozen.invalid");
         assert_eq!(packager.architecture, crate::Architecture::X86);
         assert_eq!(packager.analysis, plan.analysis);
+        assert_eq!(packager.recipe_fingerprint, plan.provenance.recipe.sha256);
         assert_eq!(
             packager
                 .manifest_build_inputs

@@ -307,17 +307,53 @@ fn emit_package(
 }
 
 #[cfg(test)]
-pub(crate) fn test_derivation_id() -> DerivationId {
-    test_derivation_plan().derivation_id()
+pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
+    static PLAN: std::sync::OnceLock<stone_recipe::derivation::DerivationPlan> = std::sync::OnceLock::new();
+
+    PLAN.get_or_init(build_test_derivation_plan).clone()
 }
 
 #[cfg(test)]
-pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
-    use stone_recipe::build_policy::AnalyzerKind;
+fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> gluon_config::EvaluationFingerprint {
+    gluon_config::Evaluator::default()
+        .evaluate_with_inputs::<i64>(&gluon_config::Source::new(logical_name, source), explicit_inputs)
+        .expect("test provenance must be a real restricted evaluation")
+        .fingerprint
+}
+
+#[cfg(test)]
+fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
+    use stone_recipe::build_policy::{AnalyzerKind, layers::BuildPolicyOperation};
     use stone_recipe::derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, LockedIdentity, OutputPlan, PackageIdentity, Platform,
+        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, LockedIdentity, OutputPlan,
+        PackageIdentity, Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
+        ProfileFragmentProvenance, policy_composition_identity, profile_aggregate_fingerprint,
     };
 
+    const SOURCE_LOCK_BYTES: &[u8] = b"test source lock bytes";
+
+    let profiles = vec![ProfileFragmentProvenance {
+        logical_name: "default".to_owned(),
+        evaluation: test_evaluation("profile.d/default.glu", "1", &[]),
+    }];
+    let layers = vec![PolicyLayerProvenance {
+        name: "foundation".to_owned(),
+        transitions: vec![PolicyTransitionProvenance {
+            operation: BuildPolicyOperation::Add,
+            origin: "default.glu".to_owned(),
+            evaluation: test_evaluation("default.glu", "2", &[]),
+        }],
+    }];
+    let policy_inputs = policy_composition_identity("aerynos", &layers);
+    let provenance = DerivationProvenance {
+        recipe: test_evaluation("stone.glu", "3", SOURCE_LOCK_BYTES),
+        profiles,
+        policy: PolicyProvenance {
+            name: "aerynos".to_owned(),
+            root: test_evaluation("policy.glu", "4", &policy_inputs),
+            layers,
+        },
+    };
     let platform = Platform {
         architecture: "x86_64".to_owned(),
         vendor: "unknown".to_owned(),
@@ -337,9 +373,15 @@ pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan
         build_platform: platform.clone(),
         host_platform: platform.clone(),
         target_platform: platform,
-        policy: identity("aerynos"),
+        policy: LockedIdentity {
+            name: provenance.policy.name.clone(),
+            fingerprint: provenance.policy.root.sha256.clone(),
+        },
         target: identity("x86_64"),
-        profile: identity("profile"),
+        profile: LockedIdentity {
+            name: "profile".to_owned(),
+            fingerprint: profile_aggregate_fingerprint(&provenance.profiles),
+        },
         toolchain: identity("toolchain"),
         builder: identity("builder"),
     };
@@ -354,11 +396,11 @@ pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan
             architecture: "x86_64".to_owned(),
         },
         build_lock,
+        provenance,
     );
     plan.boulder_version = "test-boulder".to_owned();
     plan.boulder_fingerprint = "sha256:test-boulder-semantics".to_owned();
-    plan.recipe_fingerprint = "recipe-fingerprint".to_owned();
-    plan.source_lock_digest = "source-lock-digest".to_owned();
+    plan.source_lock_digest = plan.provenance.recipe.explicit_inputs_sha256.clone();
     plan.layout = BuilderLayout {
         hostname: "boulder".to_owned(),
         guest_root: "/mason".to_owned(),

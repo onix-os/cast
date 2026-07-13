@@ -14,9 +14,9 @@ use moss::{Installation, runtime};
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
-    DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage,
-    LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan,
-    RepositorySnapshot, StepPlan,
+    DerivationProvenance, DerivationValidationError, ExecutionPolicy, FilesystemPolicy, JobPlan, LockedIdentity,
+    LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation,
+    PackageIdentity, Platform, RelationPlan, RepositorySnapshot, StepPlan, profile_aggregate_fingerprint,
 };
 use thiserror::Error;
 
@@ -49,11 +49,6 @@ pub struct Planned {
     pub runtime: build::Runtime,
     pub lock_path: PathBuf,
     pub lock_outcome: Option<build_lock::WriteOutcome>,
-    pub request_fingerprint: String,
-    pub requested_packages: Vec<String>,
-    pub policy_provenance: Vec<crate::policy::PolicySource>,
-    pub policy_changes: Vec<crate::policy::PolicyChange>,
-    pub profile_fingerprints: Vec<String>,
 }
 
 pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
@@ -107,7 +102,8 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         Err(source) => return Err(Error::ReadSourceLock(source)),
     };
     let source_lock_digest = sha256(&source_lock_bytes);
-    let profile_fingerprint = combined_profile_fingerprint(&builder.profile_fingerprints);
+    let profile_fingerprint = profile_aggregate_fingerprint(&builder.profile_fragments);
+    let profile_name = builder.profile.to_string();
     let toolchain_name = match builder.recipe.declaration.options.toolchain {
         stone_recipe::ToolchainSpec::Llvm => "llvm",
         stone_recipe::ToolchainSpec::Gnu => "gnu",
@@ -118,7 +114,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     let builder_fingerprint = builder_fingerprint(
         &boulder_version,
         boulder_fingerprint,
-        &target.build_policy.fingerprint.sha256,
+        &target.build_policy.provenance.root.sha256,
     );
     let expected_lock = build_lock::ExpectedBuildLockContext {
         requested_providers: requested_packages.clone(),
@@ -126,20 +122,20 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         host_platform: platform(&target_policy.host_platform),
         target_platform: platform(&target_policy.target_platform),
         policy: LockedIdentity {
-            name: target.build_policy.name.clone(),
-            fingerprint: target.build_policy.fingerprint.sha256.clone(),
+            name: target.build_policy.provenance.name.clone(),
+            fingerprint: target.build_policy.provenance.root.sha256.clone(),
         },
         target: LockedIdentity {
             name: target_name.clone(),
-            fingerprint: target_fingerprint(target_name, &target.build_policy.fingerprint.sha256),
+            fingerprint: target_fingerprint(target_name, &target.build_policy.provenance.root.sha256),
         },
         profile: LockedIdentity {
-            name: builder.profile.to_string(),
+            name: profile_name.clone(),
             fingerprint: profile_fingerprint.clone(),
         },
         toolchain: LockedIdentity {
             name: toolchain_name.to_owned(),
-            fingerprint: toolchain_fingerprint(toolchain_name, &target.build_policy.fingerprint.sha256),
+            fingerprint: toolchain_fingerprint(toolchain_name, &target.build_policy.provenance.root.sha256),
         },
         builder: LockedIdentity {
             name: EXECUTOR_ABI.to_owned(),
@@ -152,7 +148,8 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
             builder.recipe.fingerprint.sha256.as_str(),
             source_lock_digest.as_str(),
             target_name.as_str(),
-            target.build_policy.fingerprint.sha256.as_str(),
+            target.build_policy.provenance.root.sha256.as_str(),
+            profile_name.as_str(),
             profile_fingerprint.as_str(),
             toolchain_name,
             builder_fingerprint.as_str(),
@@ -190,6 +187,11 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         packager.resolved_packages(),
         &build_lock,
     )?;
+    let provenance = DerivationProvenance {
+        recipe: builder.recipe.fingerprint.clone(),
+        profiles: builder.profile_fragments.clone(),
+        policy: target.build_policy.provenance.clone(),
+    };
     let mut plan = DerivationPlan::new(
         PackageIdentity {
             name: builder.recipe.declaration.meta.pname.clone(),
@@ -201,10 +203,10 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
             architecture: target_policy.artifact_architecture.clone(),
         },
         build_lock,
+        provenance,
     );
     plan.boulder_version = boulder_version;
     plan.boulder_fingerprint = boulder_fingerprint.to_owned();
-    plan.recipe_fingerprint = builder.recipe.fingerprint.sha256.clone();
     plan.source_lock_digest = source_lock_digest;
     plan.sources = freeze_sources(&builder.recipe);
     plan.jobs = jobs;
@@ -219,6 +221,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         } else {
             NetworkMode::Disabled
         },
+        filesystems: FilesystemPolicy::from(&target.build_policy.spec.sandbox.filesystems),
         compiler_cache: request.compiler_cache,
         jobs: request.jobs.get(),
     };
@@ -245,13 +248,6 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.outputs = outputs;
     plan.source_date_epoch = request.source_date_epoch;
     plan.validate()?;
-    let policy_provenance = target.build_policy.sources();
-    let policy_changes = target.build_policy.changes().to_vec();
-    let profile_fingerprints = builder
-        .profile_fingerprints
-        .iter()
-        .map(|fingerprint| fingerprint.sha256.clone())
-        .collect();
     let runtime = builder.into_runtime();
 
     Ok(Planned {
@@ -259,11 +255,6 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         runtime,
         lock_path,
         lock_outcome,
-        request_fingerprint,
-        requested_packages,
-        policy_provenance,
-        policy_changes,
-        profile_fingerprints,
     })
 }
 
@@ -492,13 +483,6 @@ fn freeze_sources(recipe: &crate::Recipe) -> Vec<LockedSource> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn combined_profile_fingerprint(fingerprints: &[gluon_config::EvaluationFingerprint]) -> String {
-    hash_fields(
-        std::iter::once("boulder-profile-fragments-v1")
-            .chain(fingerprints.iter().map(|fingerprint| fingerprint.sha256.as_str())),
-    )
 }
 
 pub(crate) fn builder_fingerprint(
