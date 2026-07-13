@@ -81,8 +81,11 @@ impl Builder {
             BuilderLayout::from_policy(&build_policy.spec.sandbox, &build_policy.spec.build_root.compiler_cache);
         let paths = Paths::new(&recipe, layout, &env.cache_dir, output_dir)?;
 
-        let target_policy = build_policy.target(&requested_target)?.clone();
-        if !recipe.supports_target(&target_policy) {
+        // Keep the exact validated policy member borrowed while lowering jobs.
+        // BuildContext intentionally rejects an equal-but-cloned target because
+        // pointer membership is what proves it came from this policy value.
+        let target_policy = build_policy.target(&requested_target)?;
+        if !recipe.supports_target(target_policy) {
             let supported = build_policy
                 .spec
                 .targets
@@ -95,14 +98,14 @@ impl Builder {
                 supported,
             });
         }
-        let stages = pgo::stages(&recipe, &target_policy)
+        let stages = pgo::stages(&recipe, target_policy)
             .map(|stages| stages.into_iter().map(Some).collect::<Vec<_>>())
             .unwrap_or_else(|| vec![None]);
         let target_jobs = stages
             .into_iter()
             .map(|stage| {
                 Job::new(
-                    &target_policy,
+                    target_policy,
                     stage,
                     &recipe,
                     &paths,
@@ -113,7 +116,7 @@ impl Builder {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let target = Target {
-            target_policy,
+            target_policy: target_policy.clone(),
             build_policy,
             jobs: target_jobs,
         };
