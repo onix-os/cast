@@ -7,7 +7,7 @@ use astr::AStr;
 use derive_more::{Debug, Display, From, Into};
 use itertools::Itertools;
 
-pub use self::meta::{Meta, MissingMetaFieldError, Name};
+pub use self::meta::{Meta, MissingMetaFieldError, Name, RepositoryMetaError};
 
 pub mod meta;
 pub mod render;

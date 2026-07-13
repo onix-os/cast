@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
+    collections::TryReserveError,
     fmt,
     sync::{Arc, Mutex},
 };
@@ -67,6 +68,12 @@ pub enum Error {
     LayoutEntryDecode,
     #[error("invalid timestamp: {0}")]
     InvalidTimestamp(i64),
+    #[error("duplicate package identifier in metadata batch")]
+    DuplicatePackageId,
+    #[error("reserve package identities for metadata batch validation")]
+    ReservePackageIds(#[source] TryReserveError),
+    #[error("metadata field `{field}` value {value} is outside the SQLite storage range")]
+    MetaIntegerOutOfRange { field: &'static str, value: u64 },
     #[error("diesel")]
     Diesel(#[from] diesel::result::Error),
     #[error("diesel connection")]

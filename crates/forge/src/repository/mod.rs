@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use derive_more::{AsRef, Debug, Display, From, Into};
@@ -28,6 +29,9 @@ pub mod manager;
 
 pub const DEFAULT_CHANNEL: &str = "main";
 pub const DEFAULT_ARCH: &str = "x86_64";
+const MIB: u64 = 1024 * 1024;
+pub(crate) const REPOSITORY_INDEX_DOWNLOAD_LIMITS: request::DownloadLimits =
+    request::DownloadLimits::new(16 * MIB, Duration::from_secs(120));
 
 /// A unique [`Repository`] identifier
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd, From, Display, AsRef)]
@@ -193,7 +197,7 @@ impl Config for Map {
 }
 
 async fn fetch_index(url: Url, out_path: impl Into<PathBuf>) -> Result<(), FetchError> {
-    request::download(url, &out_path.into()).await?;
+    request::download_with_limits(url, &out_path.into(), REPOSITORY_INDEX_DOWNLOAD_LIMITS).await?;
     Ok(())
 }
 

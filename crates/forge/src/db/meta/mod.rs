@@ -16,6 +16,7 @@ pub use super::Error;
 use super::MAX_VARIABLE_NUMBER;
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/meta/migrations");
+const PACKAGE_INSERT_CHUNK_SIZE: usize = 128;
 
 mod schema;
 
@@ -255,98 +256,30 @@ impl Database {
     }
 
     pub fn batch_add(&self, packages: Vec<(package::Id, Meta)>) -> Result<(), Error> {
+        validate_package_batch(&packages)?;
         self.conn.exclusive_tx(|tx| {
             let ids = packages.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
-            let entries = packages
-                .iter()
-                .map(|(package, meta)| model::NewMeta {
-                    package: package.as_str(),
-                    name: meta.name.as_str(),
-                    version_identifier: &meta.version_identifier,
-                    source_release: meta.source_release as i32,
-                    build_release: meta.build_release as i32,
-                    architecture: &meta.architecture,
-                    summary: &meta.summary,
-                    description: &meta.description,
-                    source_id: &meta.source_id,
-                    homepage: &meta.homepage,
-                    uri: meta.uri.as_deref(),
-                    hash: meta.hash.as_deref(),
-                    download_size: meta.download_size.map(|size| size as i64),
-                })
-                .collect::<Vec<_>>();
-            let licenses = packages
-                .iter()
-                .flat_map(|(package, meta)| {
-                    meta.licenses.iter().map(|license| {
-                        (
-                            model::meta_licenses::package.eq(package.as_str()),
-                            model::meta_licenses::license.eq(license),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            let dependencies = packages
-                .iter()
-                .flat_map(|(package, meta)| {
-                    meta.dependencies.iter().map(|dependency| {
-                        (
-                            model::meta_dependencies::package.eq(package.as_str()),
-                            model::meta_dependencies::dependency.eq(dependency.to_string()),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            let providers = packages
-                .iter()
-                .flat_map(|(package, meta)| {
-                    meta.providers.iter().map(|provider| {
-                        (
-                            model::meta_providers::package.eq(package.as_str()),
-                            model::meta_providers::provider.eq(provider.to_string()),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            let conflicts = packages
-                .iter()
-                .flat_map(|(package, meta)| {
-                    meta.conflicts.iter().map(|conflict| {
-                        (
-                            model::meta_conflicts::package.eq(package.as_str()),
-                            model::meta_conflicts::conflict.eq(conflict.to_string()),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-
             batch_remove_impl(&ids, tx)?;
+            insert_packages_impl(&packages, tx)
+        })
+    }
 
-            for chunk in entries.chunks(MAX_VARIABLE_NUMBER / 13) {
-                diesel::insert_into(model::meta::table).values(chunk).execute(tx)?;
-            }
-            for chunk in licenses.chunks(MAX_VARIABLE_NUMBER / 2) {
-                diesel::insert_or_ignore_into(model::meta_licenses::table)
-                    .values(chunk)
-                    .execute(tx)?;
-            }
-            for chunk in dependencies.chunks(MAX_VARIABLE_NUMBER / 2) {
-                diesel::insert_or_ignore_into(model::meta_dependencies::table)
-                    .values(chunk)
-                    .execute(tx)?;
-            }
-            for chunk in providers.chunks(MAX_VARIABLE_NUMBER / 2) {
-                diesel::insert_or_ignore_into(model::meta_providers::table)
-                    .values(chunk)
-                    .execute(tx)?;
-            }
-            for chunk in conflicts.chunks(MAX_VARIABLE_NUMBER / 2) {
-                diesel::insert_or_ignore_into(model::meta_conflicts::table)
-                    .values(chunk)
-                    .execute(tx)?;
-            }
-
-            Ok(())
+    /// Replace the complete repository metadata set as one atomic operation.
+    ///
+    /// The complete candidate is validated before the transaction deletes any
+    /// existing rows. Any later SQLite error rolls the delete and every partial
+    /// insert back together.
+    pub fn replace_all(&self, packages: Vec<(package::Id, Meta)>) -> Result<(), Error> {
+        validate_package_batch(&packages)?;
+        self.conn.exclusive_tx(|tx| {
+            // Be explicit rather than depending on a connection-local foreign
+            // key pragma for cascading deletes.
+            diesel::delete(model::meta_conflicts::table).execute(tx)?;
+            diesel::delete(model::meta_providers::table).execute(tx)?;
+            diesel::delete(model::meta_dependencies::table).execute(tx)?;
+            diesel::delete(model::meta_licenses::table).execute(tx)?;
+            diesel::delete(model::meta::table).execute(tx)?;
+            insert_packages_impl(&packages, tx)
         })
     }
 
@@ -361,6 +294,139 @@ impl Database {
             Ok(())
         })
     }
+}
+
+fn validate_package_batch(packages: &[(package::Id, Meta)]) -> Result<(), Error> {
+    let mut ids = Vec::new();
+    ids.try_reserve_exact(packages.len())
+        .map_err(Error::ReservePackageIds)?;
+    ids.extend(packages.iter().map(|(id, _)| id.as_str()));
+    ids.sort_unstable();
+    if ids.windows(2).any(|ids| ids[0] == ids[1]) {
+        return Err(Error::DuplicatePackageId);
+    }
+
+    for (_, meta) in packages {
+        checked_meta_numbers(meta)?;
+    }
+    Ok(())
+}
+
+fn checked_meta_numbers(meta: &Meta) -> Result<(i32, i32, Option<i64>), Error> {
+    let source_release = i32::try_from(meta.source_release).map_err(|_| Error::MetaIntegerOutOfRange {
+        field: "source_release",
+        value: meta.source_release,
+    })?;
+    let build_release = i32::try_from(meta.build_release).map_err(|_| Error::MetaIntegerOutOfRange {
+        field: "build_release",
+        value: meta.build_release,
+    })?;
+    let download_size = meta
+        .download_size
+        .map(|value| {
+            i64::try_from(value).map_err(|_| Error::MetaIntegerOutOfRange {
+                field: "download_size",
+                value,
+            })
+        })
+        .transpose()?;
+    Ok((source_release, build_release, download_size))
+}
+
+fn insert_packages_impl(packages: &[(package::Id, Meta)], tx: &mut SqliteConnection) -> Result<(), Error> {
+    for packages in packages.chunks(PACKAGE_INSERT_CHUNK_SIZE) {
+        let entries = packages
+            .iter()
+            .map(|(package, meta)| {
+                let (source_release, build_release, download_size) = checked_meta_numbers(meta)?;
+                Ok(model::NewMeta {
+                    package: package.as_str(),
+                    name: meta.name.as_str(),
+                    version_identifier: &meta.version_identifier,
+                    source_release,
+                    build_release,
+                    architecture: &meta.architecture,
+                    summary: &meta.summary,
+                    description: &meta.description,
+                    source_id: &meta.source_id,
+                    homepage: &meta.homepage,
+                    uri: meta.uri.as_deref(),
+                    hash: meta.hash.as_deref(),
+                    download_size,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let licenses = packages
+            .iter()
+            .flat_map(|(package, meta)| {
+                meta.licenses.iter().map(|license| {
+                    (
+                        model::meta_licenses::package.eq(package.as_str()),
+                        model::meta_licenses::license.eq(license),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let dependencies = packages
+            .iter()
+            .flat_map(|(package, meta)| {
+                meta.dependencies.iter().map(|dependency| {
+                    (
+                        model::meta_dependencies::package.eq(package.as_str()),
+                        model::meta_dependencies::dependency.eq(dependency.to_string()),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let providers = packages
+            .iter()
+            .flat_map(|(package, meta)| {
+                meta.providers.iter().map(|provider| {
+                    (
+                        model::meta_providers::package.eq(package.as_str()),
+                        model::meta_providers::provider.eq(provider.to_string()),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let conflicts = packages
+            .iter()
+            .flat_map(|(package, meta)| {
+                meta.conflicts.iter().map(|conflict| {
+                    (
+                        model::meta_conflicts::package.eq(package.as_str()),
+                        model::meta_conflicts::conflict.eq(conflict.to_string()),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for chunk in entries.chunks(MAX_VARIABLE_NUMBER / 13) {
+            diesel::insert_into(model::meta::table).values(chunk).execute(tx)?;
+        }
+        for chunk in licenses.chunks(MAX_VARIABLE_NUMBER / 2) {
+            diesel::insert_or_ignore_into(model::meta_licenses::table)
+                .values(chunk)
+                .execute(tx)?;
+        }
+        for chunk in dependencies.chunks(MAX_VARIABLE_NUMBER / 2) {
+            diesel::insert_or_ignore_into(model::meta_dependencies::table)
+                .values(chunk)
+                .execute(tx)?;
+        }
+        for chunk in providers.chunks(MAX_VARIABLE_NUMBER / 2) {
+            diesel::insert_or_ignore_into(model::meta_providers::table)
+                .values(chunk)
+                .execute(tx)?;
+        }
+        for chunk in conflicts.chunks(MAX_VARIABLE_NUMBER / 2) {
+            diesel::insert_or_ignore_into(model::meta_conflicts::table)
+                .values(chunk)
+                .execute(tx)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn batch_remove_impl(packages: &[&str], tx: &mut SqliteConnection) -> Result<(), Error> {
@@ -479,6 +545,14 @@ mod test {
 
     use super::*;
 
+    fn fixture_meta() -> Meta {
+        let bytes = include_bytes!("../../../../../tests/fixtures/bash-completion-2.11-1-1-x86_64.stone");
+        let mut stone = stone::read_bytes(bytes).unwrap();
+        let payloads = stone.payloads().unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        let payload = payloads.iter().find_map(StoneDecodedPayload::meta).unwrap();
+        Meta::from_stone_payload(&payload.body).unwrap()
+    }
+
     #[test]
     fn create_insert_select() {
         let db = Database::new(":memory:").unwrap();
@@ -558,5 +632,86 @@ mod test {
         // Ensure that the conflicts field is inserted into and can be queried from our database
         // correctly.
         assert_eq!(retrieved_conflicts, vec![&pineapple_provider]);
+    }
+
+    #[test]
+    fn replace_all_commits_complete_metadata_and_relations() {
+        let db = Database::new(":memory:").unwrap();
+        let old = package::Id::from("old");
+        db.add(old.clone(), fixture_meta()).unwrap();
+
+        let first = package::Id::from("first");
+        let second = package::Id::from("second");
+        db.replace_all(vec![(first.clone(), fixture_meta()), (second.clone(), fixture_meta())])
+            .unwrap();
+
+        assert!(!db.package_ids().unwrap().contains(&old));
+        assert!(!db.get(&first).unwrap().providers.is_empty());
+        assert!(!db.get(&second).unwrap().licenses.is_empty());
+        assert_eq!(db.package_ids().unwrap(), BTreeSet::from([first, second]));
+    }
+
+    #[test]
+    fn replace_all_validates_complete_batch_before_deleting_existing_metadata() {
+        let db = Database::new(":memory:").unwrap();
+        let sentinel = package::Id::from("sentinel");
+        db.add(sentinel.clone(), fixture_meta()).unwrap();
+
+        let duplicate = package::Id::from("duplicate");
+        let error = db
+            .replace_all(vec![(duplicate.clone(), fixture_meta()), (duplicate, fixture_meta())])
+            .unwrap_err();
+        assert!(matches!(error, Error::DuplicatePackageId));
+        assert!(db.get(&sentinel).is_ok());
+
+        let mut overflowing = fixture_meta();
+        overflowing.source_release = u64::MAX;
+        let error = db
+            .replace_all(vec![(package::Id::from("overflowing"), overflowing)])
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::MetaIntegerOutOfRange {
+                field: "source_release",
+                ..
+            }
+        ));
+        assert!(db.get(&sentinel).is_ok());
+    }
+
+    #[test]
+    fn replace_all_rolls_back_delete_and_partial_insert_on_sqlite_failure() {
+        let db = Database::new(":memory:").unwrap();
+        let sentinel = package::Id::from("sentinel");
+        let sentinel_meta = fixture_meta();
+        db.add(sentinel.clone(), sentinel_meta.clone()).unwrap();
+
+        db.conn.exec(|conn| {
+            diesel::sql_query(
+                "CREATE TRIGGER reject_broken_package \
+                 BEFORE INSERT ON meta \
+                 WHEN NEW.package = 'broken' \
+                 BEGIN SELECT RAISE(ABORT, 'injected replacement failure'); END",
+            )
+            .execute(conn)
+            .unwrap();
+        });
+
+        let replacement_meta = fixture_meta();
+        let mut candidates = (0..PACKAGE_INSERT_CHUNK_SIZE)
+            .map(|index| {
+                (
+                    package::Id::from(format!("candidate-{index:03}")),
+                    replacement_meta.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.push((package::Id::from("broken"), replacement_meta));
+
+        let error = db.replace_all(candidates).unwrap_err();
+        assert!(matches!(error, Error::Diesel(_)));
+
+        assert_eq!(db.get(&sentinel).unwrap(), sentinel_meta);
+        assert_eq!(db.package_ids().unwrap(), BTreeSet::from([sentinel]));
     }
 }

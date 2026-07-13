@@ -1,18 +1,20 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, TryReserveError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use astr::AStr;
 use fs_err::{self as fs, File};
 use futures_util::{StreamExt, stream};
 use gluon_config::Evaluator;
 use sha2::{Digest, Sha256};
-use stone::{StoneDecodedPayload, StonePayloadMetaTag, StoneReadError};
+use stone::{
+    StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StonePayloadKind, StonePayloadMetaTag,
+    StoneReadError,
+};
 use thiserror::Error;
 use url::Url;
 use xxhash_rust::xxh3::xxh3_64;
@@ -27,6 +29,21 @@ use crate::{
     runtime,
     system_model::LoadedSystemModel,
 };
+
+fn repository_index_decode_limits() -> StoneDecodeLimits {
+    StoneDecodeLimits {
+        max_payloads: 8_192,
+        max_records_per_payload: 512,
+        max_record_bytes: 64 * 1024,
+        max_stored_payload_bytes: 64 * 1024,
+        max_plain_payload_bytes: 256 * 1024,
+        max_total_records: 262_144,
+        max_total_record_bytes: 16 * 1024 * 1024,
+        max_total_stored_bytes: 8 * 1024 * 1024,
+        max_total_plain_bytes: 16 * 1024 * 1024,
+        max_zstd_window_log: 20,
+    }
+}
 
 #[derive(Debug)]
 pub enum Source {
@@ -190,8 +207,8 @@ impl Manager {
         };
 
         if repo.repository.active {
-            let file = fetch_index(&self.source, &repo, &self.installation).await?;
-            runtime::unblock(move || update_meta_db(&repo, &file)).await?;
+            let (file, index_uri) = fetch_index(&self.source, &repo, &self.installation).await?;
+            runtime::unblock(move || update_meta_db(&repo, &file, &index_uri)).await?;
         }
 
         Ok(())
@@ -336,7 +353,7 @@ impl Manager {
                 .ok_or_else(|| Error::MissingIndexUri(repository.id.clone()))?;
             meta.uri = meta
                 .uri
-                .and_then(|relative| index_uri.join(&relative).ok())
+                .and_then(|stored| Url::parse(&stored).or_else(|_| index_uri.join(&stored)).ok())
                 .map(|uri| uri.to_string());
 
             return Ok(Some((
@@ -517,7 +534,7 @@ async fn fetch_index(
     source: &Arc<Source>,
     state: &repository::Cached,
     installation: &Installation,
-) -> Result<PathBuf, Error> {
+) -> Result<(PathBuf, Url), Error> {
     let out_dir = cache_dir(source.identifier(), &state.repository, installation);
 
     fs_err::tokio::create_dir_all(&out_dir)
@@ -557,50 +574,82 @@ async fn fetch_index(
     let out_path = out_dir.join("stone.index");
 
     // Fetch index & write to `out_path`
-    repository::fetch_index(index_uri, &out_path).await?;
+    repository::fetch_index(index_uri.clone(), &out_path).await?;
 
-    Ok(out_path)
+    Ok((out_path, index_uri))
 }
 
 /// Updates a stones metadata into the meta db
-fn update_meta_db(state: &repository::Cached, index_path: &Path) -> Result<(), Error> {
-    // Wipe db since we're refreshing from a new index file
-    state.db.wipe()?;
-
-    // Get a stream of payloads
+fn update_meta_db(state: &repository::Cached, index_path: &Path, index_uri: &Url) -> Result<(), Error> {
     let mut file = File::open(index_path).map_err(Error::OpenIndex)?;
-    let mut reader = stone::read(&mut file)?;
+    let mut reader = stone::read_with_limits(&mut file, repository_index_decode_limits())?;
+    let file_type = match reader.header {
+        StoneHeader::V1(header) => header.file_type,
+    };
+    if file_type != StoneHeaderV1FileType::Repository {
+        return Err(Error::UnexpectedIndexFileType(file_type));
+    }
 
-    let payloads = reader.payloads()?.collect::<Result<Vec<_>, _>>()?;
+    let package_count = usize::from(reader.header.num_payloads());
+    let mut packages = Vec::new();
+    packages
+        .try_reserve_exact(package_count)
+        .map_err(Error::ReserveIndexPackages)?;
+    let mut package_ids = HashSet::new();
+    package_ids
+        .try_reserve(package_count)
+        .map_err(Error::ReserveIndexPackageIds)?;
 
-    // Construct Meta for each payload
-    let packages = payloads
-        .into_iter()
-        .filter_map(|payload| {
-            if let StoneDecodedPayload::Meta(meta) = payload {
-                Some(meta)
-            } else {
-                None
-            }
-        })
-        .map(|payload| {
-            let meta = package::Meta::from_stone_payload(&payload.body)?;
+    for (index, payload) in reader.payloads()?.enumerate() {
+        let payload = payload?;
+        let StoneDecodedPayload::Meta(payload) = payload else {
+            return Err(Error::UnexpectedIndexPayload {
+                index,
+                kind: payload.header().kind,
+            });
+        };
+        let mut meta = package::Meta::from_repository_index_payload(&payload.body)
+            .map_err(|source| Error::InvalidRepositoryMeta { index, source })?;
+        let hash = meta.hash.clone().ok_or(Error::RepositoryMetaInvariant { index })?;
+        let id = package::Id::from(hash);
+        if !package_ids.insert(id.clone()) {
+            return Err(Error::DuplicateIndexPackage { index });
+        }
+        let raw_uri = meta.uri.as_deref().ok_or(Error::RepositoryMetaInvariant { index })?;
+        let uri = normalize_repository_package_uri(index_uri, raw_uri)
+            .map_err(|source| Error::InvalidRepositoryPackageUri { index, source })?;
+        meta.uri = Some(uri.into());
+        packages.push((id, meta));
+    }
 
-            // Create id from hash of meta
-            let hash = meta
-                .hash
-                .as_deref()
-                .ok_or(Error::MissingMetaField(StonePayloadMetaTag::PackageHash))?;
-            let id = package::Id::from(AStr::from(hash));
-
-            Ok((id, meta))
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-
-    // Batch add to db
-    state.db.batch_add(packages)?;
+    state.db.replace_all(packages)?;
 
     Ok(())
+}
+
+fn normalize_repository_package_uri(index_uri: &Url, raw_uri: &str) -> Result<Url, PackageUriError> {
+    if raw_uri.is_empty() {
+        return Err(PackageUriError::Empty);
+    }
+    if Url::parse(raw_uri).is_ok() {
+        return Err(PackageUriError::AbsoluteReference);
+    }
+
+    let resolved = index_uri.join(raw_uri).map_err(PackageUriError::Resolve)?;
+    if !resolved.username().is_empty() || resolved.password().is_some() {
+        return Err(PackageUriError::Credentials);
+    }
+    if resolved.fragment().is_some() {
+        return Err(PackageUriError::Fragment);
+    }
+    if resolved.scheme() != index_uri.scheme()
+        || resolved.host_str() != index_uri.host_str()
+        || resolved.port_or_known_default() != index_uri.port_or_known_default()
+    {
+        return Err(PackageUriError::CrossOrigin);
+    }
+
+    Ok(resolved)
 }
 
 async fn resolve_index_from_root(
@@ -636,6 +685,22 @@ async fn resolve_index_from_root(
 }
 
 #[derive(Debug, Error)]
+pub enum PackageUriError {
+    #[error("package URI is empty")]
+    Empty,
+    #[error("package URI must be a relative reference")]
+    AbsoluteReference,
+    #[error("package URI cannot be resolved against the repository index")]
+    Resolve(#[source] url::ParseError),
+    #[error("resolved package URI contains credentials")]
+    Credentials,
+    #[error("resolved package URI contains a fragment")]
+    Fragment,
+    #[error("resolved package URI changes repository origin")]
+    CrossOrigin,
+}
+
+#[derive(Debug, Error)]
 pub enum Error {
     #[error("Can't modify repos when using explicit configs or authored Gluon system intent")]
     ExplicitUnsupported,
@@ -651,6 +716,30 @@ pub enum Error {
     OpenIndex(#[source] io::Error),
     #[error("read index file")]
     ReadStone(#[from] StoneReadError),
+    #[error("repository index has file type {0:?}; expected Repository")]
+    UnexpectedIndexFileType(StoneHeaderV1FileType),
+    #[error("repository index payload {index} has kind {kind:?}; expected Meta")]
+    UnexpectedIndexPayload { index: usize, kind: StonePayloadKind },
+    #[error("reserve bounded repository package metadata")]
+    ReserveIndexPackages(#[source] TryReserveError),
+    #[error("reserve bounded repository package identities")]
+    ReserveIndexPackageIds(#[source] TryReserveError),
+    #[error("repository index metadata entry {index} is invalid")]
+    InvalidRepositoryMeta {
+        index: usize,
+        #[source]
+        source: package::RepositoryMetaError,
+    },
+    #[error("repository index metadata entry {index} violated a validated-field invariant")]
+    RepositoryMetaInvariant { index: usize },
+    #[error("repository index contains a duplicate package identity at entry {index}")]
+    DuplicateIndexPackage { index: usize },
+    #[error("repository index package URI at entry {index} is invalid")]
+    InvalidRepositoryPackageUri {
+        index: usize,
+        #[source]
+        source: PackageUriError,
+    },
     #[error("meta db")]
     Database(#[from] meta::Error),
     #[error("save config")]
@@ -768,5 +857,284 @@ fn identify_legacy_index_uri(uri: &Url) -> Option<LegacyIndexUri> {
         Some(LegacyIndexUri { base_uri, stream })
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use stone::{
+        StoneHeaderV1, StonePayloadCompression, StonePayloadHeader, StonePayloadLayoutRecord,
+        StonePayloadMetaDependency, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StoneWriter,
+        read_bytes_with_limits,
+    };
+
+    use super::*;
+
+    fn string(tag: StonePayloadMetaTag, value: impl Into<String>) -> StonePayloadMetaRecord {
+        StonePayloadMetaRecord {
+            tag,
+            primitive: StonePayloadMetaPrimitive::String(value.into()),
+        }
+    }
+
+    fn integer(tag: StonePayloadMetaTag, value: u64) -> StonePayloadMetaRecord {
+        StonePayloadMetaRecord {
+            tag,
+            primitive: StonePayloadMetaPrimitive::Uint64(value),
+        }
+    }
+
+    fn valid_meta(hash: char, uri: &str) -> Vec<StonePayloadMetaRecord> {
+        vec![
+            string(StonePayloadMetaTag::Name, format!("package-{hash}")),
+            string(StonePayloadMetaTag::Architecture, "x86_64"),
+            string(StonePayloadMetaTag::Version, "1.0"),
+            string(StonePayloadMetaTag::Summary, "A package"),
+            string(StonePayloadMetaTag::Description, "A package for repository tests"),
+            string(StonePayloadMetaTag::Homepage, "https://example.test"),
+            string(StonePayloadMetaTag::SourceID, format!("package-{hash}")),
+            integer(StonePayloadMetaTag::Release, 1),
+            integer(StonePayloadMetaTag::BuildRelease, 1),
+            string(StonePayloadMetaTag::PackageURI, uri),
+            string(StonePayloadMetaTag::PackageHash, hash.to_string().repeat(64)),
+            integer(StonePayloadMetaTag::PackageSize, 4_096),
+            string(StonePayloadMetaTag::License, "MPL-2.0"),
+            StonePayloadMetaRecord {
+                tag: StonePayloadMetaTag::Depends,
+                primitive: StonePayloadMetaPrimitive::Dependency(
+                    StonePayloadMetaDependency::PackageName,
+                    "runtime".to_owned(),
+                ),
+            },
+        ]
+    }
+
+    fn meta_index(file_type: StoneHeaderV1FileType, payloads: &[Vec<StonePayloadMetaRecord>]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut writer = StoneWriter::new(&mut bytes, file_type).unwrap();
+        for payload in payloads {
+            writer.add_payload(payload.as_slice()).unwrap();
+        }
+        writer.finalize().unwrap();
+        bytes
+    }
+
+    fn layout_index() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut writer = StoneWriter::new(&mut bytes, StoneHeaderV1FileType::Repository).unwrap();
+        let layout = Vec::<StonePayloadLayoutRecord>::new();
+        writer.add_payload(layout.as_slice()).unwrap();
+        writer.finalize().unwrap();
+        bytes
+    }
+
+    fn test_index_uri() -> Url {
+        "https://cdn.example.test/main/history/1783706384/x86_64/stone.index"
+            .parse()
+            .unwrap()
+    }
+
+    fn cached(db: meta::Database) -> repository::Cached {
+        let index_uri = test_index_uri();
+        repository::Cached::new(
+            repository::Id::new("test"),
+            Repository {
+                description: "test".to_owned(),
+                source: repository::Source::DirectIndex(index_uri.clone()),
+                priority: repository::Priority::new(0),
+                active: true,
+            },
+            db,
+            None,
+            Some(index_uri),
+        )
+    }
+
+    fn sentinel_meta() -> package::Meta {
+        let mut meta = package::Meta::from_repository_index_payload(&valid_meta(
+            'f',
+            "../../../pool/v0/f/foo/foo-1.0-1-1-x86_64.stone",
+        ))
+        .unwrap();
+        meta.uri = Some("https://cdn.example.test/main/pool/v0/f/foo/foo-1.0-1-1-x86_64.stone".to_owned());
+        meta
+    }
+
+    fn write_index(bytes: &[u8]) -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), bytes).unwrap();
+        file
+    }
+
+    fn empty_payload_archive(payloads: u16) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        StoneHeader::V1(StoneHeaderV1 {
+            num_payloads: payloads,
+            file_type: StoneHeaderV1FileType::Repository,
+        })
+        .encode(&mut bytes)
+        .unwrap();
+        let header = StonePayloadHeader {
+            stored_size: 0,
+            plain_size: 0,
+            checksum: xxh3_64(&[]).to_be_bytes(),
+            num_records: 0,
+            version: 1,
+            kind: StonePayloadKind::Unknown,
+            compression: StonePayloadCompression::None,
+        };
+        for _ in 0..payloads {
+            header.encode(&mut bytes).unwrap();
+        }
+        bytes
+    }
+
+    #[test]
+    fn observed_pinned_aerynos_index_shape_fits_repository_limits() {
+        // Audited by fully decoding the official immutable snapshot at
+        // https://cdn.aerynos.dev/main/history/1783706384/x86_64/stone.index
+        // with SHA-256 0f986f19f4e88f74ed5ae3452fbd9cc34ab53915f391555952d68ac90b202efc.
+        let limits = repository_index_decode_limits();
+        let download_limits = repository::REPOSITORY_INDEX_DOWNLOAD_LIMITS;
+        assert_eq!(download_limits.max_bytes, 16 * 1024 * 1024);
+        assert_eq!(download_limits.total_timeout, Duration::from_secs(120));
+        assert_eq!(limits.max_payloads, 8_192);
+        assert!(5_463 <= limits.max_payloads);
+        assert!(334 <= limits.max_records_per_payload);
+        assert!(18_812 <= limits.max_plain_payload_bytes);
+        assert!(18_812 <= limits.max_record_bytes);
+        assert!(2_715 <= limits.max_stored_payload_bytes);
+        assert!(114_447 <= limits.max_total_records);
+        assert!(4_113_121 <= limits.max_total_plain_bytes);
+        assert!(4_113_121 <= limits.max_total_record_bytes);
+        assert!(2_257_339 <= limits.max_total_stored_bytes);
+        assert!(2_432_187 <= download_limits.max_bytes);
+    }
+
+    #[test]
+    fn repository_payload_limit_accepts_n_and_rejects_n_plus_one() {
+        let limits = repository_index_decode_limits();
+        let accepted = empty_payload_archive(8_192);
+        let mut reader = read_bytes_with_limits(&accepted, limits).unwrap();
+        let decoded = reader
+            .payloads()
+            .unwrap()
+            .try_fold(0, |count, payload| payload.map(|_| count + 1))
+            .unwrap();
+        assert_eq!(decoded, 8_192);
+
+        let rejected = empty_payload_archive(8_193);
+        assert!(matches!(
+            read_bytes_with_limits(&rejected, limits),
+            Err(StoneReadError::LimitExceeded {
+                resource: "payload count",
+                limit: 8_192,
+                actual: 8_193,
+            })
+        ));
+    }
+
+    #[test]
+    fn repository_package_uri_accepts_official_parent_paths_and_rejects_origin_changes() {
+        let index = test_index_uri();
+        let resolved =
+            normalize_repository_package_uri(&index, "../../../pool/v0/e/example/example-1.0-1-1-x86_64.stone")
+                .unwrap();
+        assert_eq!(
+            resolved.as_str(),
+            "https://cdn.example.test/main/pool/v0/e/example/example-1.0-1-1-x86_64.stone"
+        );
+
+        assert!(matches!(
+            normalize_repository_package_uri(&index, "https://cdn.example.test/package.stone"),
+            Err(PackageUriError::AbsoluteReference)
+        ));
+        assert!(matches!(
+            normalize_repository_package_uri(&index, "//other.example.test/package.stone"),
+            Err(PackageUriError::CrossOrigin)
+        ));
+        assert!(matches!(
+            normalize_repository_package_uri(&index, "../../../pool/package.stone#fragment"),
+            Err(PackageUriError::Fragment)
+        ));
+    }
+
+    #[test]
+    fn update_rejects_wrong_container_or_payload_without_changing_database() {
+        let db = meta::Database::new(":memory:").unwrap();
+        let sentinel = package::Id::from("sentinel");
+        db.add(sentinel.clone(), sentinel_meta()).unwrap();
+        let state = cached(db);
+
+        let wrong_container = write_index(&meta_index(
+            StoneHeaderV1FileType::Binary,
+            &[valid_meta('a', "../../../pool/v0/a/a/a-1.0-1-1-x86_64.stone")],
+        ));
+        assert!(matches!(
+            update_meta_db(&state, wrong_container.path(), &test_index_uri()),
+            Err(Error::UnexpectedIndexFileType(StoneHeaderV1FileType::Binary))
+        ));
+        assert!(state.db.get(&sentinel).is_ok());
+
+        let wrong_payload = write_index(&layout_index());
+        assert!(matches!(
+            update_meta_db(&state, wrong_payload.path(), &test_index_uri()),
+            Err(Error::UnexpectedIndexPayload {
+                index: 0,
+                kind: StonePayloadKind::Layout,
+            })
+        ));
+        assert!(state.db.get(&sentinel).is_ok());
+    }
+
+    #[test]
+    fn invalid_late_entry_and_duplicate_identity_preserve_existing_database() {
+        let db = meta::Database::new(":memory:").unwrap();
+        let sentinel = package::Id::from("sentinel");
+        db.add(sentinel.clone(), sentinel_meta()).unwrap();
+        let state = cached(db);
+
+        let first = valid_meta('a', "../../../pool/v0/a/a/a-1.0-1-1-x86_64.stone");
+        let mut invalid = valid_meta('b', "../../../pool/v0/b/b/b-1.0-1-1-x86_64.stone");
+        invalid.retain(|record| record.tag != StonePayloadMetaTag::PackageSize);
+        let invalid_index = write_index(&meta_index(
+            StoneHeaderV1FileType::Repository,
+            &[first.clone(), invalid],
+        ));
+        assert!(matches!(
+            update_meta_db(&state, invalid_index.path(), &test_index_uri()),
+            Err(Error::InvalidRepositoryMeta { index: 1, .. })
+        ));
+        assert!(state.db.get(&sentinel).is_ok());
+        assert!(state.db.get(&package::Id::from("a".repeat(64))).is_err());
+
+        let duplicate_index = write_index(&meta_index(StoneHeaderV1FileType::Repository, &[first.clone(), first]));
+        assert!(matches!(
+            update_meta_db(&state, duplicate_index.path(), &test_index_uri()),
+            Err(Error::DuplicateIndexPackage { index: 1 })
+        ));
+        assert!(state.db.get(&sentinel).is_ok());
+    }
+
+    #[test]
+    fn valid_repository_index_replaces_database_and_normalizes_package_uri() {
+        let db = meta::Database::new(":memory:").unwrap();
+        let sentinel = package::Id::from("sentinel");
+        db.add(sentinel.clone(), sentinel_meta()).unwrap();
+        let state = cached(db);
+        let hash = "a".repeat(64);
+        let index = write_index(&meta_index(
+            StoneHeaderV1FileType::Repository,
+            &[valid_meta('a', "../../../pool/v0/a/a/a-1.0-1-1-x86_64.stone")],
+        ));
+
+        update_meta_db(&state, index.path(), &test_index_uri()).unwrap();
+
+        assert!(state.db.get(&sentinel).is_err());
+        let stored = state.db.get(&package::Id::from(hash)).unwrap();
+        assert_eq!(
+            stored.uri.as_deref(),
+            Some("https://cdn.example.test/main/pool/v0/a/a/a-1.0-1-1-x86_64.stone")
+        );
     }
 }
