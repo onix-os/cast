@@ -1931,7 +1931,7 @@ impl WitnessGraph {
 
             for name in &names {
                 context.check_time(&task.directory.display_path)?;
-                while let Some(expected) = expected_children.get(expected_index)
+                if let Some(expected) = expected_children.get(expected_index)
                     && expected.name < *name
                 {
                     return Err(changed(
