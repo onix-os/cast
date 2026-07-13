@@ -97,6 +97,7 @@ impl DerivationPlan {
         }
 
         let mut source_orders = BTreeSet::new();
+        let mut source_destinations = BTreeMap::new();
         for (index, source) in self.sources.iter().enumerate() {
             let order = source.order();
             if !source_orders.insert(order) {
@@ -106,6 +107,16 @@ impl DerivationPlan {
                 return Err(DerivationValidationError::UnexpectedSourceOrder { index, order });
             }
             source.validate(index)?;
+            let (field, destination) = source.destination();
+            if let Some((first_index, first_field)) = source_destinations.insert(destination, (index, field)) {
+                return Err(DerivationValidationError::DuplicateSourceDestination {
+                    index,
+                    field,
+                    value: destination.to_owned(),
+                    first_index,
+                    first_field,
+                });
+            }
         }
 
         for (index, job) in self.jobs.iter().enumerate() {
@@ -175,6 +186,7 @@ impl DerivationPlan {
                 }
             }
         }
+        validate_planned_output_cycles(&self.outputs)?;
 
         Ok(())
     }
@@ -310,6 +322,13 @@ impl LockedSource {
         }
     }
 
+    fn destination(&self) -> (&'static str, &str) {
+        match self {
+            Self::Archive { filename, .. } => ("filename", filename),
+            Self::Git { directory, .. } => ("directory", directory),
+        }
+    }
+
     fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
         match self {
             Self::Archive {
@@ -317,7 +336,12 @@ impl LockedSource {
             } => {
                 require_nonempty(&format!("sources[{index}].url"), url)?;
                 validate_url(index, url)?;
-                require_nonempty(&format!("sources[{index}].sha256"), sha256)?;
+                if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(DerivationValidationError::InvalidArchiveSha256 {
+                        index,
+                        value: sha256.clone(),
+                    });
+                }
                 validate_source_destination(index, "filename", filename)
             }
             Self::Git {
@@ -765,6 +789,16 @@ pub enum DerivationValidationError {
     DuplicateSourceOrder { order: u32 },
     #[error("sources[{index}].order: expected canonical order {index}, found {order}")]
     UnexpectedSourceOrder { index: usize, order: u32 },
+    #[error(
+        "sources[{index}].{field}: duplicate materialization destination {value:?}; first declared at sources[{first_index}].{first_field}"
+    )]
+    DuplicateSourceDestination {
+        index: usize,
+        field: &'static str,
+        value: String,
+        first_index: usize,
+        first_field: &'static str,
+    },
     #[error("jobs[{job}].phases: duplicate phase name `{name}`")]
     DuplicatePhase { job: usize, name: String },
     #[error("outputs: duplicate output name `{name}`")]
@@ -781,6 +815,8 @@ pub enum DerivationValidationError {
     },
     #[error("{field}: unknown planned output `{output}`")]
     UnknownPlannedOutput { field: String, output: String },
+    #[error("{field}: planned output dependency cycle: {}", cycle.join(" -> "))]
+    PlannedOutputCycle { field: String, cycle: Vec<String> },
     #[error("{field}: guest path must be absolute, found `{value}`")]
     NonAbsoluteGuestPath { field: String, value: String },
     #[error("sources[{index}].url: invalid URL `{value}`")]
@@ -792,6 +828,8 @@ pub enum DerivationValidationError {
     },
     #[error("sources[{index}].commit: expected a complete 40-hex Git commit, found `{value}`")]
     InvalidGitCommit { index: usize, value: String },
+    #[error("sources[{index}].sha256: expected exactly 64 ASCII hexadecimal characters, found `{value}`")]
+    InvalidArchiveSha256 { index: usize, value: String },
     #[error("sources[{index}].{field}: unsafe relative materialization path {value:?}")]
     UnsafeSourceDestination {
         index: usize,
@@ -800,6 +838,70 @@ pub enum DerivationValidationError {
     },
     #[error(transparent)]
     BuildLock(#[from] BuildLockValidationError),
+}
+
+fn validate_planned_output_cycles(outputs: &[OutputPlan]) -> Result<(), DerivationValidationError> {
+    let edges = outputs
+        .iter()
+        .enumerate()
+        .map(|(output_index, output)| {
+            let dependencies = output
+                .runtime_inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(dependency_index, dependency)| match dependency {
+                    OutputRelation::Planned { output } => Some((
+                        output.as_str(),
+                        format!("outputs[{output_index}].runtime_inputs[{dependency_index}]"),
+                    )),
+                    OutputRelation::Locked { .. } => None,
+                })
+                .collect();
+            (output.name.as_str(), dependencies)
+        })
+        .collect::<BTreeMap<_, Vec<_>>>();
+
+    let mut visited = BTreeSet::new();
+    for output in outputs {
+        let mut visiting = BTreeSet::new();
+        let mut path = Vec::new();
+        visit_planned_output(&output.name, &edges, &mut visiting, &mut visited, &mut path)?;
+    }
+    Ok(())
+}
+
+fn visit_planned_output<'a>(
+    output: &'a str,
+    edges: &BTreeMap<&'a str, Vec<(&'a str, String)>>,
+    visiting: &mut BTreeSet<&'a str>,
+    visited: &mut BTreeSet<&'a str>,
+    path: &mut Vec<&'a str>,
+) -> Result<(), DerivationValidationError> {
+    if visited.contains(output) {
+        return Ok(());
+    }
+
+    visiting.insert(output);
+    path.push(output);
+    for (dependency, field) in edges.get(output).into_iter().flatten() {
+        if visiting.contains(dependency) {
+            let start = path.iter().position(|entry| entry == dependency).unwrap_or(0);
+            let mut cycle = path[start..]
+                .iter()
+                .map(|entry| (*entry).to_owned())
+                .collect::<Vec<_>>();
+            cycle.push((*dependency).to_owned());
+            return Err(DerivationValidationError::PlannedOutputCycle {
+                field: field.clone(),
+                cycle,
+            });
+        }
+        visit_planned_output(dependency, edges, visiting, visited, path)?;
+    }
+    path.pop();
+    visiting.remove(output);
+    visited.insert(output);
+    Ok(())
 }
 
 fn require_nonempty(field: &str, value: &str) -> Result<(), DerivationValidationError> {
@@ -934,7 +1036,7 @@ mod tests {
         plan.sources = vec![LockedSource::Archive {
             order: 0,
             url: "https://example.invalid/hello.tar.zst".to_owned(),
-            sha256: "archive-sha256".to_owned(),
+            sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             filename: "hello.tar.zst".to_owned(),
         }];
         plan.jobs = vec![JobPlan {
@@ -1191,6 +1293,94 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn validation_requires_a_complete_archive_sha256() {
+        for value in [
+            "",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag",
+        ] {
+            let mut plan = sample_plan();
+            let LockedSource::Archive { sha256, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *sha256 = value.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidArchiveSha256 { index: 0, .. })
+            ));
+        }
+
+        let mut uppercase = sample_plan();
+        let LockedSource::Archive { sha256, .. } = &mut uppercase.sources[0] else {
+            unreachable!()
+        };
+        *sha256 = "ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD".to_owned();
+        uppercase.validate().unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_source_materialization_destinations_across_kinds() {
+        let mut plan = sample_plan();
+        plan.sources.push(LockedSource::Git {
+            order: 1,
+            url: "https://example.invalid/other.git".to_owned(),
+            requested_ref: "main".to_owned(),
+            commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            directory: "hello.tar.zst".to_owned(),
+        });
+
+        let error = plan.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            DerivationValidationError::DuplicateSourceDestination {
+                index: 1,
+                field: "directory",
+                first_index: 0,
+                first_field: "filename",
+                ref value,
+            } if value == "hello.tar.zst"
+        ));
+        assert_eq!(
+            error.to_string(),
+            "sources[1].directory: duplicate materialization destination \"hello.tar.zst\"; first declared at sources[0].filename"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_planned_output_cycles_with_the_closing_edge() {
+        let mut plan = sample_plan();
+        plan.outputs[0].runtime_inputs.push(OutputRelation::Planned {
+            output: "dev".to_owned(),
+        });
+        plan.outputs.push(OutputPlan {
+            name: "dev".to_owned(),
+            package_name: "hello-devel".to_owned(),
+            summary: None,
+            description: None,
+            provides_exclude: Vec::new(),
+            runtime_exclude: Vec::new(),
+            paths: Vec::new(),
+            runtime_inputs: vec![OutputRelation::Planned {
+                output: "out".to_owned(),
+            }],
+            conflicts: Vec::new(),
+        });
+
+        let error = plan.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            DerivationValidationError::PlannedOutputCycle { ref field, ref cycle }
+                if field == "outputs[1].runtime_inputs[0]"
+                    && cycle.iter().map(String::as_str).eq(["out", "dev", "out"])
+        ));
+        assert_eq!(
+            error.to_string(),
+            "outputs[1].runtime_inputs[0]: planned output dependency cycle: out -> dev -> out"
+        );
     }
 
     #[test]
