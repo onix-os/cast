@@ -15,7 +15,7 @@ use nc::{
     SYS_MOUNT_SETATTR, mount_attr_t, move_mount, open_tree,
 };
 use nix::errno::Errno;
-use nix::libc::SIGCHLD;
+use nix::libc::{AT_RECURSIVE, SIGCHLD};
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, clone};
 use nix::sys::prctl::set_pdeathsig;
@@ -30,6 +30,55 @@ use self::idmap::idmap;
 
 mod idmap;
 
+/// Typed policy for pseudo-filesystems mounted while entering a container.
+///
+/// The default preserves the historical container behavior: a writable proc,
+/// an empty tmpfs at `/tmp`, and recursive writable host views of `/sys` and
+/// `/dev`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PseudoFilesystemPolicy {
+    pub proc: ProcPolicy,
+    pub tmp: TmpPolicy,
+    pub sys: SysPolicy,
+    pub dev: DevPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProcPolicy {
+    None,
+    ReadOnly,
+    #[default]
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TmpPolicy {
+    Disabled,
+    /// Mount a fresh, empty tmpfs at `/tmp`.
+    #[default]
+    Empty,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SysPolicy {
+    None,
+    HostReadOnly,
+    #[default]
+    HostReadWrite,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DevPolicy {
+    None,
+    HostReadOnly,
+    #[default]
+    HostReadWrite,
+    /// Mount a fresh tmpfs containing read-only host binds for `/dev/null`,
+    /// `/dev/zero`, `/dev/full`, `/dev/random`, and `/dev/urandom`, plus
+    /// `/dev/tty` when that host node exists. No other host device is exposed.
+    Minimal,
+}
+
 pub struct Container {
     root: PathBuf,
     work_dir: Option<PathBuf>,
@@ -37,6 +86,7 @@ pub struct Container {
     networking: bool,
     hostname: Option<String>,
     ignore_host_sigint: bool,
+    pseudo_filesystems: PseudoFilesystemPolicy,
 }
 
 impl Container {
@@ -49,6 +99,7 @@ impl Container {
             networking: false,
             hostname: None,
             ignore_host_sigint: false,
+            pseudo_filesystems: PseudoFilesystemPolicy::default(),
         }
     }
 
@@ -116,6 +167,15 @@ impl Container {
     pub fn ignore_host_sigint(self, ignore: bool) -> Self {
         Self {
             ignore_host_sigint: ignore,
+            ..self
+        }
+    }
+
+    /// Select which pseudo-filesystems and host kernel trees are mounted into
+    /// the container. Unselected paths remain as provided by the root tree.
+    pub fn pseudo_filesystems(self, policy: PseudoFilesystemPolicy) -> Self {
+        Self {
+            pseudo_filesystems: policy,
             ..self
         }
     }
@@ -242,7 +302,7 @@ fn setup(container: &Container) -> Result<(), ContainerError> {
 
     setup_localhost()?;
 
-    pivot(&container.root, &container.binds)?;
+    pivot(&container.root, &container.binds, container.pseudo_filesystems)?;
 
     if let Some(hostname) = &container.hostname {
         sethostname(hostname).context(SetHostnameSnafu)?;
@@ -256,7 +316,7 @@ fn setup(container: &Container) -> Result<(), ContainerError> {
 }
 
 /// Pivot the process into the rootfs
-fn pivot(root: &Path, binds: &[Bind]) -> Result<(), ContainerError> {
+fn pivot(root: &Path, binds: &[Bind], pseudo_filesystems: PseudoFilesystemPolicy) -> Result<(), ContainerError> {
     const OLD_PATH: &str = "old_root";
 
     let old_root = root.join(OLD_PATH);
@@ -276,20 +336,9 @@ fn pivot(root: &Path, binds: &[Bind]) -> Result<(), ContainerError> {
 
     set_current_dir("/")?;
 
-    add_mount(Some("proc"), "proc", Some("proc"), MsFlags::empty())?;
-    add_mount(Some("tmpfs"), "tmp", Some("tmpfs"), MsFlags::empty())?;
-    add_mount(
-        Some(format!("/{OLD_PATH}/sys").as_str()),
-        "sys",
-        None,
-        MsFlags::MS_BIND | MsFlags::MS_REC | MsFlags::MS_SLAVE,
-    )?;
-    add_mount(
-        Some(format!("/{OLD_PATH}/dev").as_str()),
-        "dev",
-        None,
-        MsFlags::MS_BIND | MsFlags::MS_REC | MsFlags::MS_SLAVE,
-    )?;
+    for decision in pseudo_mount_decisions(pseudo_filesystems) {
+        apply_pseudo_mount(decision, OLD_PATH)?;
+    }
 
     umount2(OLD_PATH, MntFlags::MNT_DETACH).context(UnmountOldRootSnafu)?;
     fs::remove_dir(OLD_PATH).context(FsErrSnafu)?;
@@ -297,6 +346,137 @@ fn pivot(root: &Path, binds: &[Bind]) -> Result<(), ContainerError> {
     umask(Mode::S_IWGRP | Mode::S_IWOTH);
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PseudoMountDecision {
+    Proc { read_only: bool },
+    EmptyTmp,
+    HostSys { read_only: bool },
+    HostDev { read_only: bool },
+    MinimalDev,
+}
+
+fn pseudo_mount_decisions(policy: PseudoFilesystemPolicy) -> Vec<PseudoMountDecision> {
+    let mut decisions = Vec::with_capacity(4);
+    match policy.proc {
+        ProcPolicy::None => {}
+        ProcPolicy::ReadOnly => decisions.push(PseudoMountDecision::Proc { read_only: true }),
+        ProcPolicy::ReadWrite => decisions.push(PseudoMountDecision::Proc { read_only: false }),
+    }
+    if matches!(policy.tmp, TmpPolicy::Empty) {
+        decisions.push(PseudoMountDecision::EmptyTmp);
+    }
+    match policy.sys {
+        SysPolicy::None => {}
+        SysPolicy::HostReadOnly => decisions.push(PseudoMountDecision::HostSys { read_only: true }),
+        SysPolicy::HostReadWrite => decisions.push(PseudoMountDecision::HostSys { read_only: false }),
+    }
+    match policy.dev {
+        DevPolicy::None => {}
+        DevPolicy::HostReadOnly => decisions.push(PseudoMountDecision::HostDev { read_only: true }),
+        DevPolicy::HostReadWrite => decisions.push(PseudoMountDecision::HostDev { read_only: false }),
+        DevPolicy::Minimal => decisions.push(PseudoMountDecision::MinimalDev),
+    }
+    decisions
+}
+
+fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) -> Result<(), ContainerError> {
+    match decision {
+        PseudoMountDecision::Proc { read_only } => add_mount(
+            Some(Path::new("proc")),
+            Path::new("proc"),
+            Some("proc"),
+            if read_only {
+                MsFlags::MS_RDONLY
+            } else {
+                MsFlags::empty()
+            },
+        ),
+        PseudoMountDecision::EmptyTmp => add_mount(
+            Some(Path::new("tmpfs")),
+            Path::new("tmp"),
+            Some("tmpfs"),
+            MsFlags::empty(),
+        ),
+        PseudoMountDecision::HostSys { read_only } => mount_host_tree(old_path, "sys", read_only),
+        PseudoMountDecision::HostDev { read_only } => mount_host_tree(old_path, "dev", read_only),
+        PseudoMountDecision::MinimalDev => mount_minimal_dev(old_path),
+    }
+}
+
+fn mount_host_tree(old_path: &str, name: &str, read_only: bool) -> Result<(), ContainerError> {
+    let source = Path::new("/").join(old_path).join(name);
+    let target = Path::new(name);
+    add_mount(
+        Some(source.as_path()),
+        target,
+        None,
+        MsFlags::MS_BIND | MsFlags::MS_REC | MsFlags::MS_SLAVE,
+    )?;
+    if read_only {
+        set_mount_read_only(target, true)?;
+    }
+    Ok(())
+}
+
+fn mount_minimal_dev(old_path: &str) -> Result<(), ContainerError> {
+    const REQUIRED_DEVICES: &[&str] = &["null", "zero", "full", "random", "urandom"];
+
+    add_mount(
+        Some(Path::new("tmpfs")),
+        Path::new("dev"),
+        Some("tmpfs"),
+        MsFlags::empty(),
+    )?;
+    for device in REQUIRED_DEVICES {
+        bind_minimal_device(old_path, device)?;
+    }
+
+    let tty = Path::new("/").join(old_path).join("dev/tty");
+    if tty.exists() {
+        bind_mount(&tty, Path::new("dev/tty"), true)?;
+    }
+    Ok(())
+}
+
+fn bind_minimal_device(old_path: &str, device: &str) -> Result<(), ContainerError> {
+    let source = Path::new("/").join(old_path).join("dev").join(device);
+    let target = Path::new("dev").join(device);
+    bind_mount(&source, &target, true)
+}
+
+fn set_mount_read_only(target: &Path, recursive: bool) -> Result<(), ContainerError> {
+    unsafe {
+        let inner = || {
+            let fd = open_tree(AT_FDCWD, target, OPEN_TREE_CLOEXEC).map_err(Errno::from_i32)?;
+            let attr = mount_attr_t {
+                attr_set: MOUNT_ATTR_RDONLY as u64,
+                attr_clr: 0,
+                program: 0,
+                userns_fd: 0,
+            };
+            let flags = AT_EMPTY_PATH as usize | if recursive { AT_RECURSIVE as usize } else { 0 };
+            let result = syscall5(
+                SYS_MOUNT_SETATTR,
+                fd as usize,
+                c"".as_ptr() as usize,
+                flags,
+                &attr as *const mount_attr_t as usize,
+                size_of::<mount_attr_t>(),
+            )
+            .map_err(Errno::from_i32);
+            let close_result = close(fd);
+
+            result?;
+            close_result?;
+            Ok(())
+        };
+
+        inner().context(MountSnafu {
+            target: target.to_owned(),
+        })
+    }
 }
 
 fn setup_networking(root: &Path) -> Result<(), ContainerError> {
@@ -332,44 +512,55 @@ fn ensure_empty_file(path: impl AsRef<Path>) -> Result<(), ContainerError> {
     Ok(())
 }
 
-fn bind_mount(source: &Path, target: &Path, read_only: bool) -> Result<(), ContainerError> {
-    if source.is_dir() {
+fn prepare_bind_target(source: &Path, target: &Path) -> Result<(), ContainerError> {
+    let metadata = fs::metadata(source).context(FsErrSnafu)?;
+    if metadata.is_dir() {
         ensure_directory(target)?;
-    } else if source.is_file() {
+    } else {
         if let Some(parent) = target.parent() {
             ensure_directory(parent)?;
         }
 
         ensure_empty_file(target)?;
     }
+    Ok(())
+}
+
+fn bind_mount(source: &Path, target: &Path, read_only: bool) -> Result<(), ContainerError> {
+    prepare_bind_target(source, target)?;
 
     unsafe {
         let inner = || {
             // Bind mount to fd
             let fd = open_tree(AT_FDCWD, source, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC).map_err(Errno::from_i32)?;
 
-            // Set rd flag if applicable
-            if read_only {
-                let attr = mount_attr_t {
-                    attr_set: MOUNT_ATTR_RDONLY as u64,
-                    attr_clr: 0,
-                    program: 0,
-                    userns_fd: 0,
-                };
-                syscall5(
-                    SYS_MOUNT_SETATTR,
-                    fd as usize,
-                    c"".as_ptr() as usize,
-                    AT_EMPTY_PATH as usize,
-                    &attr as *const mount_attr_t as usize,
-                    size_of::<mount_attr_t>(),
-                )
-                .map_err(Errno::from_i32)?;
-            }
+            let result = (|| {
+                // Set rd flag if applicable
+                if read_only {
+                    let attr = mount_attr_t {
+                        attr_set: MOUNT_ATTR_RDONLY as u64,
+                        attr_clr: 0,
+                        program: 0,
+                        userns_fd: 0,
+                    };
+                    syscall5(
+                        SYS_MOUNT_SETATTR,
+                        fd as usize,
+                        c"".as_ptr() as usize,
+                        AT_EMPTY_PATH as usize,
+                        &attr as *const mount_attr_t as usize,
+                        size_of::<mount_attr_t>(),
+                    )
+                    .map_err(Errno::from_i32)?;
+                }
 
-            // Move detached mount to target
-            move_mount(fd, Path::new(""), AT_FDCWD, target, MOVE_MOUNT_F_EMPTY_PATH).map_err(Errno::from_i32)?;
+                // Move detached mount to target
+                move_mount(fd, Path::new(""), AT_FDCWD, target, MOVE_MOUNT_F_EMPTY_PATH).map_err(Errno::from_i32)
+            })();
+            let close_result = close(fd);
 
+            result?;
+            close_result?;
             Ok(())
         };
 
@@ -524,4 +715,81 @@ enum ContainerError {
 #[repr(u8)]
 enum Message {
     Continue = 1,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::FileTypeExt as _;
+    use std::os::unix::net::UnixListener;
+
+    use fs_err as fs;
+
+    use super::{
+        Container, DevPolicy, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, SysPolicy, TmpPolicy,
+        prepare_bind_target, pseudo_mount_decisions,
+    };
+
+    #[test]
+    fn default_policy_preserves_historical_mounts() {
+        let container = Container::new("/");
+
+        assert_eq!(container.pseudo_filesystems, PseudoFilesystemPolicy::default());
+        assert_eq!(
+            pseudo_mount_decisions(PseudoFilesystemPolicy::default()),
+            vec![
+                PseudoMountDecision::Proc { read_only: false },
+                PseudoMountDecision::EmptyTmp,
+                PseudoMountDecision::HostSys { read_only: false },
+                PseudoMountDecision::HostDev { read_only: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn disabled_policy_produces_no_mount_decisions() {
+        let policy = PseudoFilesystemPolicy {
+            proc: ProcPolicy::None,
+            tmp: TmpPolicy::Disabled,
+            sys: SysPolicy::None,
+            dev: DevPolicy::None,
+        };
+
+        assert!(pseudo_mount_decisions(policy).is_empty());
+    }
+
+    #[test]
+    fn policy_maps_to_ordered_mount_decisions() {
+        let policy = PseudoFilesystemPolicy {
+            proc: ProcPolicy::ReadOnly,
+            tmp: TmpPolicy::Disabled,
+            sys: SysPolicy::HostReadOnly,
+            dev: DevPolicy::Minimal,
+        };
+        let container = Container::new("/").pseudo_filesystems(policy);
+
+        assert_eq!(container.pseudo_filesystems, policy);
+        assert_eq!(
+            pseudo_mount_decisions(policy),
+            vec![
+                PseudoMountDecision::Proc { read_only: true },
+                PseudoMountDecision::HostSys { read_only: true },
+                PseudoMountDecision::MinimalDev,
+            ]
+        );
+    }
+
+    #[test]
+    fn special_file_bind_gets_a_file_mountpoint() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("device.sock");
+        let _listener = UnixListener::bind(&source).unwrap();
+        let target = temporary.path().join("mountpoints/device");
+
+        assert!(fs::metadata(&source).unwrap().file_type().is_socket());
+        prepare_bind_target(&source, &target).unwrap();
+
+        let target_metadata = fs::metadata(target).unwrap();
+        assert!(target_metadata.is_file());
+        assert_eq!(target_metadata.len(), 0);
+    }
 }

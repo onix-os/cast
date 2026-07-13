@@ -26,6 +26,19 @@ Below is a walkthrough to build and enter a container. The logic is simple but d
      - `pivot_root` is more secure than the well-known `chroot`, in that it's not possible to escape it.
   1. Bill finally builds/tests the package as the parent waits for it to finish.
 
+## Pseudo-filesystem policy
+
+`Container::pseudo_filesystems` controls the container's `proc`, `tmp`, `sys`,
+and `dev` mounts. The default keeps the historical behavior: writable proc,
+an empty tmpfs at `/tmp`, and writable recursive host views of `/sys` and
+`/dev`.
+
+Callers can disable individual mounts, make proc or the host trees read-only,
+or choose `DevPolicy::Minimal`. Minimal device policy creates a fresh tmpfs at
+`/dev` and exposes only read-only binds of `null`, `zero`, `full`, `random`,
+and `urandom`, plus `tty` when the host provides it. It never exposes the full
+host `/dev` tree.
+
 #### References
 
 [`clone` syscall](https://linux.die.net/man/2/clone). [Linux namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html). [Linux user namespaces](https://man7.org/linux/man-pages/man7/user_namespaces.7.html) (a particular case of namespace). [`pipe`](https://linux.die.net/man/2/pipe). [newuidmap](https://man7.org/linux/man-pages/man1/newuidmap.1.html). [newgidmap](https://man7.org/linux/man-pages/man1/newgidmap.1.html). [`pivot_root`](https://linux.die.net/man/8/pivot_root).

@@ -716,6 +716,7 @@ dependencies = [
  "nix 0.27.1",
  "snafu",
  "strum",
+ "tempfile",
 ]
 
 [[package]]
