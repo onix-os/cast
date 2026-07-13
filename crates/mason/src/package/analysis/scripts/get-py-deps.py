@@ -9,24 +9,23 @@ import unittest
 from importlib.metadata import Distribution
 
 from packaging.requirements import Requirement
-from packaging.markers import Marker
 
 parser = argparse.ArgumentParser()
 parser.add_argument("location", type=str, help="Location of .egg-info or .dist-info directory")
 
-@staticmethod
+
 def get_dependencies(dependencies: list, env=None) -> list:
     sanitized = []
     for dep in dependencies:
         req = Requirement(dep)
-        if not req.extras:
-            if req.marker:
-                mark = req.marker
-                if mark.evaluate(environment=env) is True:
-                    sanitized.append(req.name)
-                    continue
-            else:
+        if req.marker:
+            mark = req.marker
+            if mark.evaluate(environment=env) is True:
                 sanitized.append(req.name)
+        else:
+            # Extras select additional dependencies of the required
+            # distribution; they do not make the base distribution optional.
+            sanitized.append(req.name)
     return sanitized
 
 def usage(msg=None, ex=1):
@@ -36,7 +35,8 @@ def usage(msg=None, ex=1):
         parser.print_help()
     sys.exit(ex)
 
-if __name__ == "__main__":
+
+def main():
     args = parser.parse_args()
 
     if not os.path.exists(args.location):
@@ -70,6 +70,22 @@ class Tests(unittest.TestCase):
     def test_excludes_extras_no_deps(self):
         self.assertEqual(get_dependencies(['Babel>=2.7; extra == "i18n"', 'pytest; extra == "testing"']), [])
 
+    def test_dependency_extras_keep_the_base_distribution(self):
+        self.assertEqual(
+            get_dependencies(['requests[socks]>=2', 'urllib3[brotli,zstd]']),
+            ['requests', 'urllib3'],
+        )
+
+    def test_dependency_extras_still_obey_markers(self):
+        env = {'python_version': '3.11'}
+        self.assertEqual(
+            get_dependencies([
+                "importlib-metadata[perf]; python_version < '3.10'",
+                "requests[socks]; python_version >= '3.10'",
+            ], env),
+            ['requests'],
+        )
+
     def test_excludes_extras_comprehensive(self):
         list2 = ['MarkupSafe>=0.9.2', 'Babel; extra == "babel"', 'lingua; extra == "lingua"', 'pytest; extra == "testing"']
         self.assertEqual(get_dependencies(list2), ['MarkupSafe'])
@@ -92,3 +108,10 @@ class Tests(unittest.TestCase):
     def test_comprehensive2(self):
         list6 = ["brotli; implementation_name == 'cpython'", "brotlicffi; implementation_name != 'cpython'", 'certifi', 'mutagen', 'pycryptodomex', 'requests<3,>=2.32.2', 'urllib3<3,>=1.26.17', 'websockets>=12.0', "build; extra == 'build'", "hatchling; extra == 'build'", "pip; extra == 'build'", "setuptools>=71.0.2; extra == 'build'", "wheel; extra == 'build'", "curl-cffi!=0.6.*,<0.8,>=0.5.10; (os_name != 'nt' and implementation_name == 'cpython') and extra == 'curl-cffi'", "curl-cffi==0.5.10; (os_name == 'nt' and implementation_name == 'cpython') and extra == 'curl-cffi'", "pre-commit; extra == 'dev'", "yt-dlp[static-analysis]; extra == 'dev'", "yt-dlp[test]; extra == 'dev'", "py2exe>=0.12; extra == 'py2exe'", "pyinstaller>=6.7.0; extra == 'pyinstaller'", "cffi; extra == 'secretstorage'", "secretstorage; extra == 'secretstorage'", "autopep8~=2.0; extra == 'static-analysis'", "ruff~=0.5.0; extra == 'static-analysis'", "pytest~=8.1; extra == 'test'"]
         self.assertEqual(get_dependencies(list6), ['brotli', 'certifi', 'mutagen', 'pycryptodomex', 'requests', 'urllib3', 'websockets'])
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        unittest.main(argv=[sys.argv[0]])
+    else:
+        main()
