@@ -54,6 +54,16 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(policy.pgo.stage_one.finish.as_ref().unwrap().inputs.len(), 1);
     assert_eq!(policy.pgo.stage_two.finish.as_ref().unwrap().inputs.len(), 2);
+    assert_eq!(policy.pgo.merge_program, TextSpec::Literal("llvm-profdata".to_owned()));
+    assert_eq!(
+        policy.pgo.merge_args,
+        [
+            TextSpec::Literal("merge".to_owned()),
+            TextSpec::Literal("--failure-mode=all".to_owned()),
+        ]
+    );
+    assert_eq!(policy.pgo.copy_program, TextSpec::Literal("cp".to_owned()));
+    assert_eq!(policy.pgo.remove_program, TextSpec::Literal("rm".to_owned()));
     assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
         "boulder.build_policy.v1"
@@ -672,6 +682,23 @@ fn target_environment_bindings_are_validated_at_the_target_path() {
         policy.validate(),
         Err(BuildPolicyConversionError::Empty { field })
             if field == "targets[0].environment[0].value"
+    ));
+}
+
+#[test]
+fn pgo_command_policy_is_complete_before_lowering() {
+    let mut policy = repository_policy_value();
+    policy.pgo.merge_args.clear();
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Empty { field }) if field == "pgo.merge_args"
+    ));
+
+    let mut policy = repository_policy_value();
+    policy.pgo.copy_program = TextSpec::Literal(String::new());
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Empty { field }) if field == "pgo.copy_program"
     ));
 }
 

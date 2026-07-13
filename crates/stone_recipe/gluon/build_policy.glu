@@ -351,6 +351,10 @@ type PgoStagePolicySpec = {
 
 type PgoPolicySpec = {
     required_tools : Array BuildToolSpec,
+    merge_program : TextSpec,
+    merge_args : Array TextSpec,
+    copy_program : TextSpec,
+    remove_program : TextSpec,
     sample : ToolchainFlagsSpec,
     stage_one : PgoStagePolicySpec,
     stage_two : PgoStagePolicySpec,

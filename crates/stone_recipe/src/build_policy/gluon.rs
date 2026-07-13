@@ -453,6 +453,10 @@ struct GluonPgoStagePolicySpec {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonPgoPolicySpec {
     required_tools: Vec<GluonBuildToolSpec>,
+    merge_program: GluonTextSpec,
+    merge_args: Vec<GluonTextSpec>,
+    copy_program: GluonTextSpec,
+    remove_program: GluonTextSpec,
     sample: GluonToolchainFlagsSpec,
     stage_one: GluonPgoStagePolicySpec,
     stage_two: GluonPgoStagePolicySpec,
@@ -806,6 +810,10 @@ impl From<GluonPgoPolicySpec> for PgoPolicySpec {
     fn from(value: GluonPgoPolicySpec) -> Self {
         Self {
             required_tools: value.required_tools.into_iter().map(Into::into).collect(),
+            merge_program: value.merge_program.into(),
+            merge_args: value.merge_args.into_iter().map(Into::into).collect(),
+            copy_program: value.copy_program.into(),
+            remove_program: value.remove_program.into(),
             sample: value.sample.into(),
             stage_one: value.stage_one.into(),
             stage_two: value.stage_two.into(),

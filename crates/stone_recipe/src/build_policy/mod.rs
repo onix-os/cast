@@ -433,6 +433,10 @@ pub struct PgoStagePolicySpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PgoPolicySpec {
     pub required_tools: Vec<BuildToolSpec>,
+    pub merge_program: TextSpec,
+    pub merge_args: Vec<TextSpec>,
+    pub copy_program: TextSpec,
+    pub remove_program: TextSpec,
     pub sample: ToolchainFlagsSpec,
     pub stage_one: PgoStagePolicySpec,
     pub stage_two: PgoStagePolicySpec,
@@ -546,6 +550,17 @@ impl BuildPolicySpec {
         }
 
         validate_tools("pgo.required_tools", &self.pgo.required_tools)?;
+        require_text("pgo.merge_program", &self.pgo.merge_program)?;
+        if self.pgo.merge_args.is_empty() {
+            return Err(BuildPolicyConversionError::Empty {
+                field: "pgo.merge_args".to_owned(),
+            });
+        }
+        for (index, argument) in self.pgo.merge_args.iter().enumerate() {
+            require_text(&format!("pgo.merge_args[{index}]"), argument)?;
+        }
+        require_text("pgo.copy_program", &self.pgo.copy_program)?;
+        require_text("pgo.remove_program", &self.pgo.remove_program)?;
         validate_pgo_stage("pgo.stage_one", &self.pgo.stage_one)?;
         validate_pgo_stage("pgo.stage_two", &self.pgo.stage_two)?;
         validate_pgo_stage("pgo.use_profile", &self.pgo.use_profile)

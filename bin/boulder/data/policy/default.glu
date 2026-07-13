@@ -2322,6 +2322,10 @@ p.policy {
     },
     pgo = {
         required_tools = [p.tool.binary "llvm-profdata"],
+        merge_program = lit "llvm-profdata",
+        merge_args = [lit "merge", lit "--failure-mode=all"],
+        copy_program = lit "cp",
+        remove_program = lit "rm",
         sample = pgo_sample,
         stage_one = p.pgo_stage {
             flags = pgo_stage_one_flags,
