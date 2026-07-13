@@ -743,7 +743,7 @@ fn verify_sandbox_inventory(
     expected_snapshot: SandboxSnapshot,
 ) -> Result<(), BoxError> {
     // Enumerate a duplicate of the pinned descriptor, not the mutable
-    // pathname. Restatting on both sides turns concurrent directory mutation
+    // pathname. Checking metadata on both sides turns concurrent directory mutation
     // into a verification failure rather than a clean-path TOCTOU bypass.
     require_sandbox_snapshot(
         display_path,
