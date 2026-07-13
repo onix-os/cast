@@ -363,10 +363,20 @@ pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan
     plan.recipe_fingerprint = "recipe-fingerprint".to_owned();
     plan.source_lock_digest = "source-lock-digest".to_owned();
     plan.layout = BuilderLayout {
+        hostname: "boulder".to_owned(),
+        guest_root: "/mason".to_owned(),
+        artifacts_dir: "/mason/artefacts".to_owned(),
         build_dir: "/mason/build".to_owned(),
         source_dir: "/mason/sources".to_owned(),
+        recipe_dir: "/mason/recipe".to_owned(),
         install_dir: "/mason/install".to_owned(),
-        package_dir: "/mason/package".to_owned(),
+        package_dir: "/mason/recipe/pkg".to_owned(),
+        ccache_dir: "/mason/ccache".to_owned(),
+        sccache_dir: "/mason/sccache".to_owned(),
+        go_cache_dir: "/mason/gocache".to_owned(),
+        go_mod_cache_dir: "/mason/gomodcache".to_owned(),
+        cargo_cache_dir: "/mason/cargocache".to_owned(),
+        zig_cache_dir: "/mason/zigcache".to_owned(),
     };
     plan.source_date_epoch = 1_700_000_000;
     plan.validate().unwrap();

@@ -434,6 +434,7 @@ mod direct_tests {
 
     fn context_for(recipe: &Recipe, paths: &Paths, policy: &BuildPolicy, stage: Option<pgo::Stage>) -> BuildContext {
         let target_policy = policy.target("x86_64").unwrap();
+        let target_build = paths.build().guest.join("x86_64");
         BuildContext::resolve(
             &policy.spec,
             target_policy,
@@ -443,9 +444,9 @@ mod direct_tests {
                 package_release: recipe.declaration.meta.release,
                 source_dir: paths.upstreams().guest.display().to_string(),
                 install_root: paths.install().guest.display().to_string(),
-                build_root: "/mason/build/x86_64".to_owned(),
-                work_dir: "/mason/build/x86_64".to_owned(),
-                pgo_dir: "/mason/build/x86_64-pgo".to_owned(),
+                build_root: target_build.display().to_string(),
+                work_dir: target_build.display().to_string(),
+                pgo_dir: format!("{}-pgo", target_build.display()),
                 jobs: 2,
                 source_date_epoch: recipe.build_time.timestamp(),
                 pgo_stage: pgo_context_stage(stage),
@@ -458,6 +459,14 @@ mod direct_tests {
         .unwrap()
     }
 
+    fn test_paths(recipe: &Recipe, policy: &BuildPolicy, root: &Path) -> Paths {
+        let layout = stone_recipe::derivation::BuilderLayout::from_policy(
+            &policy.spec.sandbox,
+            &policy.spec.build_root.compiler_cache,
+        );
+        Paths::new(recipe, layout, root, root).unwrap()
+    }
+
     #[test]
     fn standard_steps_freeze_as_run_with_exact_context() {
         let (mut recipe, policy, root) = fixture();
@@ -465,7 +474,7 @@ mod direct_tests {
             flags: vec!["-DBUILD_TESTS=OFF".to_owned()],
             run_tests: false,
         };
-        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
+        let paths = test_paths(&recipe, &policy, root.path());
         let target = policy.target("x86_64").unwrap();
         let plan = Phase::Setup
             .plan(
@@ -509,7 +518,7 @@ mod direct_tests {
             },
             required_tools: Vec::new(),
         };
-        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
+        let paths = test_paths(&recipe, &policy, root.path());
         let target = policy.target("x86_64").unwrap();
         let plan = Phase::Build
             .plan(
@@ -532,7 +541,7 @@ mod direct_tests {
     #[test]
     fn source_preparation_is_argv_preserving_and_never_parsed_as_shell() {
         let (recipe, policy, root) = fixture();
-        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
+        let paths = test_paths(&recipe, &policy, root.path());
         let archive_name = "source archive;echo-not-shell.tar.xz";
         let sources = [
             UpstreamSpec::Archive {
@@ -575,7 +584,7 @@ mod direct_tests {
     fn pgo_finish_uses_typed_policy_commands_and_controlled_globs() {
         let (recipe, mut policy, root) = fixture();
         policy.spec.pgo.merge_program = TextSpec::Literal("policy-profdata".to_owned());
-        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
+        let paths = test_paths(&recipe, &policy, root.path());
         let context = context_for(&recipe, &paths, &policy, Some(pgo::Stage::One));
 
         let StepPlan::Shell {
@@ -602,7 +611,7 @@ mod direct_tests {
         let (recipe, mut policy, root) = fixture();
         policy.spec.pgo.stage_one.finish.as_mut().unwrap().inputs =
             vec![TextSpec::Literal("/tmp/default*.profraw".to_owned())];
-        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
+        let paths = test_paths(&recipe, &policy, root.path());
         let context = context_for(&recipe, &paths, &policy, Some(pgo::Stage::One));
 
         assert!(matches!(

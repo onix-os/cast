@@ -8,7 +8,7 @@
 //! string interpolation or action expansion at this boundary.
 
 use std::collections::BTreeSet;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
@@ -337,6 +337,7 @@ pub struct BuildRootPolicySpec {
 /// policy identity instead of being ambient Boulder constants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicySpec {
+    pub hostname: String,
     pub guest_root: String,
     pub artifacts_dir: String,
     pub build_dir: String,
@@ -599,6 +600,8 @@ pub enum BuildPolicyConversionError {
     ConflictingTuningFlag { field: String, value: String },
     #[error("{field}: guest path `{value}` must be absolute and normalized")]
     InvalidGuestPath { field: String, value: String },
+    #[error("{field}: invalid sandbox hostname `{value}`")]
+    InvalidHostname { field: String, value: String },
     #[error("{field}: target name `{value}` must be a normalized safe relative path")]
     InvalidTargetName { field: String, value: String },
     #[error("{field}: unsupported artifact architecture `{value}`; expected one of {supported}")]
@@ -612,6 +615,13 @@ pub enum BuildPolicyConversionError {
         field: String,
         value: String,
         guest_root: String,
+    },
+    #[error("{field}: guest path `{value}` overlaps {other_field} `{other}`")]
+    OverlappingGuestPath {
+        field: String,
+        value: String,
+        other_field: String,
+        other: String,
     },
     #[error("{field}: platform component must be explicit, found `{value}`")]
     InvalidPlatformComponent { field: String, value: String },
@@ -791,6 +801,7 @@ fn require_architecture(field: &str, value: &str, expected: &str) -> Result<(), 
 }
 
 fn validate_sandbox(sandbox: &SandboxPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    validate_hostname("sandbox.hostname", &sandbox.hostname)?;
     validate_guest_path("sandbox.guest_root", &sandbox.guest_root)?;
     let mut paths = BTreeSet::new();
     for (name, value) in [
@@ -817,7 +828,34 @@ fn validate_sandbox(sandbox: &SandboxPolicySpec) -> Result<(), BuildPolicyConver
             guest_root: sandbox.recipe_dir.clone(),
         });
     }
+    reject_guest_path_overlaps(&[
+        ("sandbox.artifacts_dir", &sandbox.artifacts_dir),
+        ("sandbox.build_dir", &sandbox.build_dir),
+        ("sandbox.source_dir", &sandbox.source_dir),
+        ("sandbox.recipe_dir", &sandbox.recipe_dir),
+        ("sandbox.install_dir", &sandbox.install_dir),
+    ])?;
     Ok(())
+}
+
+fn validate_hostname(field: &str, value: &str) -> Result<(), BuildPolicyConversionError> {
+    let labels_are_valid = !value.is_empty()
+        && value.len() <= 64
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        });
+    if labels_are_valid {
+        Ok(())
+    } else {
+        Err(BuildPolicyConversionError::InvalidHostname {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
+    }
 }
 
 fn validate_build_root(
@@ -843,11 +881,40 @@ fn validate_build_root(
     ] {
         validate_guest_child(&format!("build_root.compiler_cache.{name}"), value, &sandbox.guest_root)?;
     }
+    reject_guest_path_overlaps(&[
+        ("sandbox.artifacts_dir", &sandbox.artifacts_dir),
+        ("sandbox.build_dir", &sandbox.build_dir),
+        ("sandbox.source_dir", &sandbox.source_dir),
+        ("sandbox.recipe_dir", &sandbox.recipe_dir),
+        ("sandbox.install_dir", &sandbox.install_dir),
+        ("build_root.compiler_cache.ccache_dir", &cache.ccache_dir),
+        ("build_root.compiler_cache.sccache_dir", &cache.sccache_dir),
+        ("build_root.compiler_cache.go_cache_dir", &cache.go_cache_dir),
+        ("build_root.compiler_cache.go_mod_cache_dir", &cache.go_mod_cache_dir),
+        ("build_root.compiler_cache.cargo_cache_dir", &cache.cargo_cache_dir),
+        ("build_root.compiler_cache.zig_cache_dir", &cache.zig_cache_dir),
+    ])?;
     validate_guest_path("build_root.compiler_cache.rustc_wrapper", &cache.rustc_wrapper)?;
 
     validate_tools("build_root.mold.required_tools", &build_root.mold.required_tools)?;
     require_text("build_root.mold.linker", &build_root.mold.linker)?;
     validate_compiler_flags("build_root.mold.flags", &build_root.mold.flags)
+}
+
+fn reject_guest_path_overlaps(paths: &[(&str, &str)]) -> Result<(), BuildPolicyConversionError> {
+    for (index, (field, value)) in paths.iter().enumerate() {
+        for (other_field, other) in &paths[..index] {
+            if Path::new(value).starts_with(other) || Path::new(other).starts_with(value) {
+                return Err(BuildPolicyConversionError::OverlappingGuestPath {
+                    field: (*field).to_owned(),
+                    value: (*value).to_owned(),
+                    other_field: (*other_field).to_owned(),
+                    other: (*other).to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_toolchain_inputs(field: &str, inputs: &ToolchainInputPolicySpec) -> Result<(), BuildPolicyConversionError> {
@@ -880,11 +947,22 @@ fn validate_guest_child(field: &str, value: &str, guest_root: &str) -> Result<()
 
 fn validate_guest_path(field: &str, value: &str) -> Result<(), BuildPolicyConversionError> {
     let path = Path::new(value);
-    let normalized = path.is_absolute()
-        && !path
-            .components()
-            .any(|component| matches!(component, Component::CurDir | Component::ParentDir));
-    if normalized {
+    let mut normalized = PathBuf::new();
+    let mut normal_components = 0usize;
+    let mut safe_components = true;
+    for component in path.components() {
+        match component {
+            Component::RootDir if normalized.as_os_str().is_empty() => normalized.push(component.as_os_str()),
+            Component::Normal(_) => {
+                normal_components += 1;
+                normalized.push(component.as_os_str());
+            }
+            Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir => {
+                safe_components = false;
+            }
+        }
+    }
+    if path.is_absolute() && normal_components > 0 && safe_components && normalized.as_os_str() == path.as_os_str() {
         Ok(())
     } else {
         Err(BuildPolicyConversionError::InvalidGuestPath {

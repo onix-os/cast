@@ -1,16 +1,12 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{
-    io,
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-};
+use std::{io, num::NonZeroUsize, path::PathBuf};
 
 use fs_err as fs;
 use moss::{repository, util};
 use stone_recipe::build_policy::TargetPolicySpec;
-use stone_recipe::derivation::DerivationPlan;
+use stone_recipe::derivation::{BuilderLayout, DerivationPlan};
 use thiserror::Error;
 use tui::Styled;
 
@@ -40,6 +36,17 @@ pub struct Target {
     pub jobs: Vec<Job>,
 }
 
+pub(crate) struct BuilderRequest {
+    pub recipe_path: PathBuf,
+    pub env: Env,
+    pub profile: profile::Id,
+    pub compiler_cache: bool,
+    pub output_dir: PathBuf,
+    pub jobs: NonZeroUsize,
+    pub source_date_epoch: Option<i64>,
+    pub requested_target: String,
+}
+
 /// Host runtime resources retained after semantic planning is complete.
 pub struct Runtime {
     pub paths: Paths,
@@ -48,30 +55,33 @@ pub struct Runtime {
 }
 
 impl Builder {
-    pub(crate) fn new_with_jobs(
-        recipe_path: &Path,
-        env: Env,
-        profile: profile::Id,
-        ccache: bool,
-        output_dir: impl Into<PathBuf>,
-        jobs: NonZeroUsize,
-        source_date_epoch: Option<i64>,
-        requested_target: &str,
-    ) -> Result<Self, Error> {
+    pub(crate) fn new(request: BuilderRequest) -> Result<Self, Error> {
+        let BuilderRequest {
+            recipe_path,
+            env,
+            profile,
+            compiler_cache,
+            output_dir,
+            jobs,
+            source_date_epoch,
+            requested_target,
+        } = request;
         let recipe = match source_date_epoch {
             Some(epoch) => {
                 let build_time =
                     chrono::DateTime::from_timestamp(epoch, 0).ok_or(Error::InvalidSourceDateEpoch(epoch))?;
-                Recipe::load_at(recipe_path, build_time)?
+                Recipe::load_at(&recipe_path, build_time)?
             }
-            None => Recipe::load(recipe_path)?,
+            None => Recipe::load(&recipe_path)?,
         };
 
         let build_policy = BuildPolicy::load(&env)?;
 
-        let paths = Paths::new(&recipe, &env.cache_dir, "/mason", output_dir)?;
+        let layout =
+            BuilderLayout::from_policy(&build_policy.spec.sandbox, &build_policy.spec.build_root.compiler_cache);
+        let paths = Paths::new(&recipe, layout, &env.cache_dir, output_dir)?;
 
-        let target_policy = build_policy.target(requested_target)?.clone();
+        let target_policy = build_policy.target(&requested_target)?.clone();
         if !recipe.supports_target(&target_policy) {
             let supported = build_policy
                 .spec
@@ -81,7 +91,7 @@ impl Builder {
                 .map(|target| target.name.clone())
                 .collect();
             return Err(Error::UnsupportedRecipeTarget {
-                requested: requested_target.to_owned(),
+                requested: requested_target,
                 supported,
             });
         }
@@ -90,7 +100,17 @@ impl Builder {
             .unwrap_or_else(|| vec![None]);
         let target_jobs = stages
             .into_iter()
-            .map(|stage| Job::new(&target_policy, stage, &recipe, &paths, &build_policy, ccache, jobs))
+            .map(|stage| {
+                Job::new(
+                    &target_policy,
+                    stage,
+                    &recipe,
+                    &paths,
+                    &build_policy,
+                    compiler_cache,
+                    jobs,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let target = Target {
             target_policy,
@@ -110,7 +130,7 @@ impl Builder {
             paths,
             profile,
             profile_fingerprints,
-            ccache,
+            ccache: compiler_cache,
             env,
             repos,
         })

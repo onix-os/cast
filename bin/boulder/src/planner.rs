@@ -13,10 +13,10 @@ use fs_err as fs;
 use moss::{Installation, runtime};
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
-    AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
-    DerivationPlan, DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef,
-    LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform,
-    RelationPlan, RepositorySnapshot, StepPlan,
+    AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
+    DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage,
+    LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan,
+    RepositorySnapshot, StepPlan,
 };
 use thiserror::Error;
 
@@ -68,17 +68,17 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     if request.refresh_repositories && !request.update_lock {
         return Err(Error::RefreshRequiresUpdate);
     }
-    let builder = Builder::new_with_jobs(
-        &request.recipe,
+    let builder = Builder::new(build::BuilderRequest {
+        recipe_path: request.recipe.clone(),
         env,
-        request.profile.clone(),
-        request.compiler_cache,
-        output_dir,
-        NonZeroUsize::new(usize::try_from(request.jobs.get()).expect("u32 fits supported usize"))
+        profile: request.profile.clone(),
+        compiler_cache: request.compiler_cache,
+        output_dir: output_dir.to_owned(),
+        jobs: NonZeroUsize::new(usize::try_from(request.jobs.get()).expect("u32 fits supported usize"))
             .expect("jobs is non-zero"),
-        Some(request.source_date_epoch),
-        &request.target,
-    )?;
+        source_date_epoch: Some(request.source_date_epoch),
+        requested_target: request.target.clone(),
+    })?;
     let target = &builder.target;
     let target_policy = &target.target_policy;
     let target_name = &target_policy.name;
@@ -181,7 +181,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
 
     let jobs = freeze_jobs(target)?;
-    let package_dir = builder.paths.recipe().guest.join("pkg").display().to_string();
+    let package_dir = builder.paths.layout().package_dir.clone();
     if jobs_use_package_directory(&jobs, &package_dir) {
         return Err(Error::UnsupportedPackageDirectoryInput { package_dir });
     }
@@ -212,12 +212,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         ("HOME".to_owned(), target.jobs[0].build_dir.display().to_string()),
         ("PATH".to_owned(), "/usr/bin:/usr/sbin".to_owned()),
     ]);
-    plan.layout = BuilderLayout {
-        build_dir: builder.paths.build().guest.display().to_string(),
-        source_dir: builder.paths.upstreams().guest.display().to_string(),
-        install_dir: builder.paths.install().guest.display().to_string(),
-        package_dir,
-    };
+    plan.layout = builder.paths.layout().clone();
     plan.execution = ExecutionPolicy {
         network: if builder.recipe.declaration.options.networking {
             NetworkMode::Enabled

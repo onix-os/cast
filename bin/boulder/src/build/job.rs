@@ -114,3 +114,53 @@ pub enum Error {
     #[error("io")]
     Io(#[from] io::Error),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BuildPolicy;
+    use stone_recipe::derivation::BuilderLayout;
+
+    #[test]
+    fn job_directories_follow_non_default_sandbox_policy() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let mut policy = BuildPolicy::repository_for_tests();
+        policy.spec.sandbox.hostname = "forge-builder".to_owned();
+        policy.spec.sandbox.guest_root = "/forge".to_owned();
+        policy.spec.sandbox.artifacts_dir = "/forge/output".to_owned();
+        policy.spec.sandbox.build_dir = "/forge/work".to_owned();
+        policy.spec.sandbox.source_dir = "/forge/sources".to_owned();
+        policy.spec.sandbox.recipe_dir = "/forge/recipe".to_owned();
+        policy.spec.sandbox.package_dir = "/forge/recipe/package".to_owned();
+        policy.spec.sandbox.install_dir = "/forge/destination".to_owned();
+        {
+            let cache = &mut policy.spec.build_root.compiler_cache;
+            cache.ccache_dir = "/forge/cache-cc".to_owned();
+            cache.sccache_dir = "/forge/cache-rust".to_owned();
+            cache.go_cache_dir = "/forge/cache-go".to_owned();
+            cache.go_mod_cache_dir = "/forge/cache-go-mod".to_owned();
+            cache.cargo_cache_dir = "/forge/cache-cargo".to_owned();
+            cache.zig_cache_dir = "/forge/cache-zig".to_owned();
+        }
+        policy.spec.validate().unwrap();
+        let layout = BuilderLayout::from_policy(&policy.spec.sandbox, &policy.spec.build_root.compiler_cache);
+        let runtime = tempfile::tempdir().unwrap();
+        let paths = Paths::new(&recipe, layout, runtime.path(), runtime.path()).unwrap();
+        let target = policy.target("x86_64").unwrap().clone();
+
+        let job = Job::new(
+            &target,
+            None,
+            &recipe,
+            &paths,
+            &policy,
+            false,
+            NonZeroUsize::new(2).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(job.build_dir, Path::new("/forge/work/x86_64"));
+        assert_eq!(job.work_dir, Path::new("/forge/work/x86_64"));
+    }
+}

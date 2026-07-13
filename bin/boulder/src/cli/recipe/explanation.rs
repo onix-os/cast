@@ -339,10 +339,20 @@ impl Explanation<'_> {
 
     fn layout(&self, formatter: &mut Formatter) {
         formatter.open(1, "layout");
+        formatter.string(2, "hostname", &self.plan.layout.hostname);
+        formatter.string(2, "guest_root", &self.plan.layout.guest_root);
+        formatter.string(2, "artifacts_dir", &self.plan.layout.artifacts_dir);
         formatter.string(2, "build_dir", &self.plan.layout.build_dir);
         formatter.string(2, "source_dir", &self.plan.layout.source_dir);
+        formatter.string(2, "recipe_dir", &self.plan.layout.recipe_dir);
         formatter.string(2, "install_dir", &self.plan.layout.install_dir);
         formatter.string(2, "package_dir", &self.plan.layout.package_dir);
+        formatter.string(2, "ccache_dir", &self.plan.layout.ccache_dir);
+        formatter.string(2, "sccache_dir", &self.plan.layout.sccache_dir);
+        formatter.string(2, "go_cache_dir", &self.plan.layout.go_cache_dir);
+        formatter.string(2, "go_mod_cache_dir", &self.plan.layout.go_mod_cache_dir);
+        formatter.string(2, "cargo_cache_dir", &self.plan.layout.cargo_cache_dir);
+        formatter.string(2, "zig_cache_dir", &self.plan.layout.zig_cache_dir);
         formatter.close(1);
     }
 
@@ -690,8 +700,9 @@ mod tests {
     use stone_recipe::{
         build_policy::layers::BuildPolicyOperation,
         derivation::{
-            AnalysisPlan, BuildLock, BuilderLayout, CollectionRulePlan, ExecutionPolicy, JobPlan, LockedOutput,
-            LockedOutputRef, LockedPackage, LockedRequest, OutputPlan, PackageIdentity, PhasePlan, RepositorySnapshot,
+            AnalysisPlan, BuildLock, BuilderLayout, CollectionRulePlan, DERIVATION_PLAN_SCHEMA_VERSION,
+            ExecutionPolicy, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
+            PackageIdentity, PhasePlan, RepositorySnapshot,
         },
     };
 
@@ -729,6 +740,7 @@ mod tests {
 
     fn evaluation(name: &str) -> EvaluationFingerprint {
         EvaluationFingerprint {
+            root_logical_name: format!("{name}.glu"),
             root_source_sha256: format!("{name}-root"),
             imported_modules: vec![
                 ModuleFingerprint {
@@ -830,7 +842,7 @@ mod tests {
         };
 
         let plan = DerivationPlan {
-            schema_version: 2,
+            schema_version: DERIVATION_PLAN_SCHEMA_VERSION,
             boulder_version: "0.26.6".to_owned(),
             boulder_fingerprint: "sha256:boulder".to_owned(),
             package: PackageIdentity {
@@ -895,10 +907,20 @@ mod tests {
                 ("A_GLOBAL".to_owned(), "a".to_owned()),
             ]),
             layout: BuilderLayout {
-                build_dir: "/build".to_owned(),
-                source_dir: "/sources".to_owned(),
-                install_dir: "/install".to_owned(),
-                package_dir: "/package".to_owned(),
+                hostname: "sandbox-test".to_owned(),
+                guest_root: "/sandbox".to_owned(),
+                artifacts_dir: "/sandbox/artifacts".to_owned(),
+                build_dir: "/sandbox/build".to_owned(),
+                source_dir: "/sandbox/sources".to_owned(),
+                recipe_dir: "/sandbox/recipe".to_owned(),
+                install_dir: "/sandbox/install".to_owned(),
+                package_dir: "/sandbox/recipe/pkg".to_owned(),
+                ccache_dir: "/sandbox/cache/ccache".to_owned(),
+                sccache_dir: "/sandbox/cache/sccache".to_owned(),
+                go_cache_dir: "/sandbox/cache/go-build".to_owned(),
+                go_mod_cache_dir: "/sandbox/cache/go-mod".to_owned(),
+                cargo_cache_dir: "/sandbox/cache/cargo".to_owned(),
+                zig_cache_dir: "/sandbox/cache/zig".to_owned(),
             },
             execution: ExecutionPolicy {
                 network: NetworkMode::Enabled,
@@ -1044,7 +1066,7 @@ mod tests {
         let fixture = fixture();
         let rendered = fixture.render();
         for expected in [
-            "derivation_plan = 2",
+            "derivation_plan = 3",
             "boulder_version = \"0.26.6\"",
             "boulder_fingerprint = \"sha256:boulder\"",
             "build_lock = \"",
@@ -1067,7 +1089,7 @@ mod tests {
             "args = [\"--first\", \"second value\"]",
             "kind = \"shell\"",
             "\"A_GLOBAL\" = \"a\"",
-            "source_dir = \"/sources\"",
+            "source_dir = \"/sandbox/sources\"",
             "network = \"enabled\"",
             "value = \"lto=thin\"",
             "name = \"a-analyzer\"",

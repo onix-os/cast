@@ -196,8 +196,8 @@ fn parse_dynamic_section(
             .ancestors()
             .find(|p| p.ends_with("usr"))
             .and_then(|p| p.parent())
-            .and_then(|p| p.to_str())
-            .unwrap_or("/mason/install");
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| bucket.paths.install().host);
 
         for rpath in runpath_offset
             .iter()
@@ -218,11 +218,10 @@ fn parse_dynamic_section(
                         return Some(private_name);
                     }
 
-                    let local_p = root_dir.to_owned() + "/" + rpath + "/" + name;
+                    let local_p = root_dir.join(rpath.trim_start_matches('/')).join(name);
                     let native_p = rpath.to_owned() + "/" + name;
-                    let path = Path::new(&local_p);
                     let native_path = Path::new(&native_p);
-                    if path.exists() {
+                    if local_p.exists() {
                         Some(
                             Path::new("/")
                                 .join(rpath)

@@ -210,6 +210,7 @@ let riscv64_architecture_flags = {
 }
 
 let sandbox = {
+    hostname = "boulder",
     guest_root = "/mason",
     artifacts_dir = "/mason/artefacts",
     build_dir = "/mason/build",

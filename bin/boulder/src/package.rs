@@ -24,6 +24,9 @@ mod analysis;
 mod collect;
 mod emit;
 
+#[cfg(test)]
+pub(crate) use emit::test_derivation_plan;
+
 pub struct Packager {
     packages: BTreeMap<String, ResolvedOutput>,
     collector: Collector,
@@ -66,6 +69,9 @@ pub struct FrozenPackager<'a> {
 impl<'a> FrozenPackager<'a> {
     pub fn from_plan(paths: &'a Paths, plan: &DerivationPlan) -> Result<Self, Error> {
         plan.validate().map_err(Error::InvalidFrozenPlan)?;
+        if paths.layout() != &plan.layout {
+            return Err(Error::FrozenLayoutMismatch);
+        }
         let output_packages = plan
             .outputs
             .iter()
@@ -101,7 +107,7 @@ impl<'a> FrozenPackager<'a> {
             })
             .collect::<Result<BTreeMap<_, _>, Error>>()?;
 
-        let mut collector = Collector::new(paths.install().guest);
+        let mut collector = Collector::new(&plan.layout.install_dir);
         for rule in &plan.collection_rules {
             let package = output_packages
                 .get(rule.output.as_str())
@@ -337,6 +343,8 @@ pub enum Error {
     InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
     #[error("frozen output {0} is missing")]
     MissingFrozenOutput(String),
+    #[error("frozen derivation layout does not match runtime paths")]
+    FrozenLayoutMismatch,
 }
 
 #[cfg(test)]
@@ -438,8 +446,8 @@ mod tests {
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         let runtime = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
-        let paths = Paths::new(&recipe, runtime.path(), "/mason", output.path()).unwrap();
-        let mut plan = emit::test_derivation_plan();
+        let mut plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
         plan.package.name = "frozen".to_owned();
         plan.package.homepage = "https://frozen.invalid".to_owned();
         plan.package.architecture = "x86".to_owned();
@@ -516,5 +524,22 @@ mod tests {
             output.conflicts.iter().map(Provider::to_name).collect::<Vec<_>>(),
             ["pkgconfig(conflict)"]
         );
+    }
+
+    #[test]
+    fn frozen_packager_rejects_runtime_and_plan_layout_mismatch() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        plan.layout.hostname = "different-builder".to_owned();
+        plan.validate().unwrap();
+
+        assert!(matches!(
+            FrozenPackager::from_plan(&paths, &plan),
+            Err(Error::FrozenLayoutMismatch)
+        ));
     }
 }

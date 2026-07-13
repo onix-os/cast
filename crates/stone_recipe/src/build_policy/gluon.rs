@@ -317,6 +317,7 @@ struct GluonBuildRootPolicySpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonSandboxPolicySpec {
+    hostname: String,
     guest_root: String,
     artifacts_dir: String,
     build_dir: String,
@@ -661,7 +662,7 @@ impl From<GluonTargetPolicySpec> for TargetPolicySpec {
 convert_record!(GluonRetiredTargetPolicySpec => RetiredTargetPolicySpec { name, reason });
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
 convert_record!(GluonSandboxPolicySpec => SandboxPolicySpec {
-    guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
+    hostname, guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
 });
 convert_record!(GluonSourcePreparationPolicySpec => SourcePreparationPolicySpec { archive, git });
 convert_record!(GluonBuildersPolicySpec => BuildersPolicySpec { cmake, meson, cargo, autotools });

@@ -55,6 +55,7 @@ pub fn populate_frozen(
 }
 
 pub fn recreate_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
+    require_frozen_layout(paths, plan)?;
     if paths.rootfs().host.exists() {
         remove_frozen(paths, plan)?;
     }
@@ -63,13 +64,11 @@ pub fn recreate_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<()
 }
 
 pub fn remove_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
+    require_frozen_layout(paths, plan)?;
     if !paths.rootfs().host.exists() {
         return Ok(());
     }
-    let build_root = paths.build().guest;
-    if plan.layout.build_dir != build_root.display().to_string() {
-        return Err(Error::FrozenBuildLayoutMismatch);
-    }
+    let build_root = PathBuf::from(&plan.layout.build_dir);
     let unsafe_job_path = plan
         .jobs
         .iter()
@@ -81,9 +80,9 @@ pub fn remove_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), 
     }
 
     container::exec_frozen(paths, plan, || {
-        let install_dir = &paths.install().guest;
+        let install_dir = PathBuf::from(&plan.layout.install_dir);
         if install_dir.exists() {
-            fs::remove_dir_all(install_dir)?;
+            fs::remove_dir_all(&install_dir)?;
         }
         if build_root.exists() {
             for entry in fs::read_dir(&build_root)? {
@@ -100,6 +99,14 @@ pub fn remove_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), 
     })?;
     fs::remove_dir_all(&paths.rootfs().host)?;
     Ok(())
+}
+
+fn require_frozen_layout(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
+    if paths.layout() == &plan.layout {
+        Ok(())
+    } else {
+        Err(Error::FrozenSandboxLayoutMismatch)
+    }
 }
 
 fn safe_child(root: &std::path::Path, path: &std::path::Path) -> bool {
@@ -346,8 +353,8 @@ pub enum Error {
     },
     #[error("locked metadata no longer matches package {package_id}")]
     LockedPackageMetadataMismatch { package_id: String },
-    #[error("frozen plan build layout does not match runtime paths")]
-    FrozenBuildLayoutMismatch,
+    #[error("frozen plan sandbox layout does not match runtime paths")]
+    FrozenSandboxLayoutMismatch,
     #[error("frozen job cleanup path escapes the runtime build directory")]
     UnsafeFrozenJobPath,
     #[error("selected package input {index} is invalid")]

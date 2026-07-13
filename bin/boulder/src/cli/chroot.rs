@@ -3,8 +3,9 @@
 
 use std::{io, path::PathBuf, process};
 
-use crate::{Env, Paths, Recipe, container, recipe};
+use crate::{BuildPolicy, Env, Paths, Recipe, container, policy, recipe};
 use clap::Parser;
+use stone_recipe::derivation::BuilderLayout;
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -21,7 +22,9 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     let Command { recipe: recipe_path } = command;
 
     let recipe = Recipe::load(recipe_path)?;
-    let paths = Paths::new(&recipe, env.cache_dir, "/mason", ".")?;
+    let policy = BuildPolicy::load(&env)?;
+    let layout = BuilderLayout::from_policy(&policy.spec.sandbox, &policy.spec.build_root.compiler_cache);
+    let paths = Paths::new(&recipe, layout, env.cache_dir, ".")?;
 
     let rootfs = paths.rootfs().host;
 
@@ -57,6 +60,8 @@ pub enum Error {
     Container(#[from] container::Error),
     #[error("recipe")]
     Recipe(#[from] recipe::Error),
+    #[error("build policy")]
+    Policy(#[from] policy::Error),
     #[error("io")]
     Io(#[from] io::Error),
 }

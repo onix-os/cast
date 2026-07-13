@@ -236,6 +236,7 @@ type BuildRootPolicySpec = {
 }
 
 type SandboxPolicySpec = {
+    hostname : String,
     guest_root : String,
     artifacts_dir : String,
     build_dir : String,

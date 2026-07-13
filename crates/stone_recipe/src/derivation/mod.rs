@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use stone::relation::{Dependency, Kind as StoneRelationKind, Provider};
 use thiserror::Error;
 
-use crate::build_policy::SUPPORTED_ARTIFACT_ARCHITECTURES;
+use crate::build_policy::{CompilerCachePolicySpec, SUPPORTED_ARTIFACT_ARCHITECTURES, SandboxPolicySpec};
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
@@ -27,7 +27,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 2;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 3;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 
@@ -604,34 +604,110 @@ impl StepPlan {
 /// Guest paths that are visible to build steps.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BuilderLayout {
+    pub hostname: String,
+    pub guest_root: String,
+    pub artifacts_dir: String,
     pub build_dir: String,
     pub source_dir: String,
+    pub recipe_dir: String,
     pub install_dir: String,
     pub package_dir: String,
+    pub ccache_dir: String,
+    pub sccache_dir: String,
+    pub go_cache_dir: String,
+    pub go_mod_cache_dir: String,
+    pub cargo_cache_dir: String,
+    pub zig_cache_dir: String,
 }
 
 impl BuilderLayout {
+    pub fn from_policy(sandbox: &SandboxPolicySpec, cache: &CompilerCachePolicySpec) -> Self {
+        Self {
+            hostname: sandbox.hostname.clone(),
+            guest_root: sandbox.guest_root.clone(),
+            artifacts_dir: sandbox.artifacts_dir.clone(),
+            build_dir: sandbox.build_dir.clone(),
+            source_dir: sandbox.source_dir.clone(),
+            recipe_dir: sandbox.recipe_dir.clone(),
+            install_dir: sandbox.install_dir.clone(),
+            package_dir: sandbox.package_dir.clone(),
+            ccache_dir: cache.ccache_dir.clone(),
+            sccache_dir: cache.sccache_dir.clone(),
+            go_cache_dir: cache.go_cache_dir.clone(),
+            go_mod_cache_dir: cache.go_mod_cache_dir.clone(),
+            cargo_cache_dir: cache.cargo_cache_dir.clone(),
+            zig_cache_dir: cache.zig_cache_dir.clone(),
+        }
+    }
+
+    pub fn cache_destinations(&self) -> [(&'static str, &str); 6] {
+        [
+            ("ccache", &self.ccache_dir),
+            ("sccache", &self.sccache_dir),
+            ("gocache", &self.go_cache_dir),
+            ("gomodcache", &self.go_mod_cache_dir),
+            ("cargocache", &self.cargo_cache_dir),
+            ("zigcache", &self.zig_cache_dir),
+        ]
+    }
+
     fn validate(&self) -> Result<(), DerivationValidationError> {
-        let build_dir = validate_normalized_absolute_path("layout.build_dir", &self.build_dir)?;
-        let guest_root = build_dir
-            .parent()
-            .expect("a safe absolute managed path always has a parent");
+        validate_sandbox_hostname(&self.hostname)?;
+        let guest_root = validate_normalized_absolute_path("layout.guest_root", &self.guest_root)?;
         for (field, value) in [
+            ("layout.artifacts_dir", &self.artifacts_dir),
+            ("layout.build_dir", &self.build_dir),
             ("layout.source_dir", &self.source_dir),
+            ("layout.recipe_dir", &self.recipe_dir),
             ("layout.install_dir", &self.install_dir),
             ("layout.package_dir", &self.package_dir),
+            ("layout.ccache_dir", &self.ccache_dir),
+            ("layout.sccache_dir", &self.sccache_dir),
+            ("layout.go_cache_dir", &self.go_cache_dir),
+            ("layout.go_mod_cache_dir", &self.go_mod_cache_dir),
+            ("layout.cargo_cache_dir", &self.cargo_cache_dir),
+            ("layout.zig_cache_dir", &self.zig_cache_dir),
         ] {
             let path = validate_normalized_absolute_path(field, value)?;
-            require_path_contained(field, path, "layout guest root", guest_root)?;
+            require_proper_path_child(field, path, "layout.guest_root", guest_root)?;
         }
+        require_proper_path_child(
+            "layout.package_dir",
+            Path::new(&self.package_dir),
+            "layout.recipe_dir",
+            Path::new(&self.recipe_dir),
+        )?;
+        reject_layout_path_overlaps(&[
+            ("layout.artifacts_dir", &self.artifacts_dir),
+            ("layout.build_dir", &self.build_dir),
+            ("layout.source_dir", &self.source_dir),
+            ("layout.recipe_dir", &self.recipe_dir),
+            ("layout.install_dir", &self.install_dir),
+            ("layout.ccache_dir", &self.ccache_dir),
+            ("layout.sccache_dir", &self.sccache_dir),
+            ("layout.go_cache_dir", &self.go_cache_dir),
+            ("layout.go_mod_cache_dir", &self.go_mod_cache_dir),
+            ("layout.cargo_cache_dir", &self.cargo_cache_dir),
+            ("layout.zig_cache_dir", &self.zig_cache_dir),
+        ])?;
         Ok(())
     }
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.hostname);
+        encoder.string(&self.guest_root);
+        encoder.string(&self.artifacts_dir);
         encoder.string(&self.build_dir);
         encoder.string(&self.source_dir);
+        encoder.string(&self.recipe_dir);
         encoder.string(&self.install_dir);
         encoder.string(&self.package_dir);
+        encoder.string(&self.ccache_dir);
+        encoder.string(&self.sccache_dir);
+        encoder.string(&self.go_cache_dir);
+        encoder.string(&self.go_mod_cache_dir);
+        encoder.string(&self.cargo_cache_dir);
+        encoder.string(&self.zig_cache_dir);
     }
 }
 
@@ -1033,6 +1109,15 @@ pub enum DerivationValidationError {
         root_field: String,
         root: String,
     },
+    #[error("layout.hostname: invalid sandbox hostname {value:?}")]
+    InvalidSandboxHostname { value: String },
+    #[error("{field}: path {value:?} overlaps {other_field} {other:?}")]
+    OverlappingLayoutPath {
+        field: String,
+        value: String,
+        other_field: String,
+        other: String,
+    },
     #[error("jobs[{job}].pgo_stage: unsupported frozen PGO stage {stage:?}")]
     UnsupportedPgoStage { job: usize, stage: String },
     #[error(
@@ -1204,6 +1289,59 @@ fn require_path_contained(
     }
 }
 
+fn require_proper_path_child(
+    field: &str,
+    path: &Path,
+    root_field: &str,
+    root: &Path,
+) -> Result<(), DerivationValidationError> {
+    if path != root && path.starts_with(root) {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::PathOutsideRoot {
+            field: field.to_owned(),
+            value: path.display().to_string(),
+            root_field: root_field.to_owned(),
+            root: root.display().to_string(),
+        })
+    }
+}
+
+fn validate_sandbox_hostname(value: &str) -> Result<(), DerivationValidationError> {
+    let labels_are_valid = !value.is_empty()
+        && value.len() <= 64
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        });
+    if labels_are_valid {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::InvalidSandboxHostname {
+            value: value.to_owned(),
+        })
+    }
+}
+
+fn reject_layout_path_overlaps(paths: &[(&str, &str)]) -> Result<(), DerivationValidationError> {
+    for (index, (field, value)) in paths.iter().enumerate() {
+        for (other_field, other) in &paths[..index] {
+            if Path::new(value).starts_with(other) || Path::new(other).starts_with(value) {
+                return Err(DerivationValidationError::OverlappingLayoutPath {
+                    field: (*field).to_owned(),
+                    value: (*value).to_owned(),
+                    other_field: (*other_field).to_owned(),
+                    other: (*other).to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_step_working_dir(
     step_field: &str,
     working_dir: &str,
@@ -1362,10 +1500,20 @@ mod tests {
             ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
         ]);
         plan.layout = BuilderLayout {
+            hostname: "boulder".to_owned(),
+            guest_root: "/mason".to_owned(),
+            artifacts_dir: "/mason/artefacts".to_owned(),
             build_dir: "/mason/build".to_owned(),
             source_dir: "/mason/sources".to_owned(),
+            recipe_dir: "/mason/recipe".to_owned(),
             install_dir: "/mason/install".to_owned(),
-            package_dir: "/mason/package".to_owned(),
+            package_dir: "/mason/recipe/pkg".to_owned(),
+            ccache_dir: "/mason/ccache".to_owned(),
+            sccache_dir: "/mason/sccache".to_owned(),
+            go_cache_dir: "/mason/gocache".to_owned(),
+            go_mod_cache_dir: "/mason/gomodcache".to_owned(),
+            cargo_cache_dir: "/mason/cargocache".to_owned(),
+            zig_cache_dir: "/mason/zigcache".to_owned(),
         };
         plan.execution = ExecutionPolicy {
             network: NetworkMode::Disabled,
@@ -1666,6 +1814,90 @@ mod tests {
     }
 
     #[test]
+    fn every_frozen_layout_value_changes_identity() {
+        let original = sample_plan();
+        let original_id = original.derivation_id();
+        let mutations: Vec<(&str, Box<dyn Fn(&mut BuilderLayout)>)> = vec![
+            ("hostname", Box::new(|layout| layout.hostname.push_str("-changed"))),
+            ("guest-root", Box::new(|layout| layout.guest_root.push_str("-changed"))),
+            (
+                "artifacts-dir",
+                Box::new(|layout| layout.artifacts_dir.push_str("-changed")),
+            ),
+            ("build-dir", Box::new(|layout| layout.build_dir.push_str("-changed"))),
+            ("source-dir", Box::new(|layout| layout.source_dir.push_str("-changed"))),
+            ("recipe-dir", Box::new(|layout| layout.recipe_dir.push_str("-changed"))),
+            (
+                "install-dir",
+                Box::new(|layout| layout.install_dir.push_str("-changed")),
+            ),
+            (
+                "package-dir",
+                Box::new(|layout| layout.package_dir.push_str("-changed")),
+            ),
+            ("ccache-dir", Box::new(|layout| layout.ccache_dir.push_str("-changed"))),
+            (
+                "sccache-dir",
+                Box::new(|layout| layout.sccache_dir.push_str("-changed")),
+            ),
+            (
+                "go-cache-dir",
+                Box::new(|layout| layout.go_cache_dir.push_str("-changed")),
+            ),
+            (
+                "go-mod-cache-dir",
+                Box::new(|layout| layout.go_mod_cache_dir.push_str("-changed")),
+            ),
+            (
+                "cargo-cache-dir",
+                Box::new(|layout| layout.cargo_cache_dir.push_str("-changed")),
+            ),
+            (
+                "zig-cache-dir",
+                Box::new(|layout| layout.zig_cache_dir.push_str("-changed")),
+            ),
+        ];
+
+        for (name, mutate) in mutations {
+            let mut changed = original.clone();
+            mutate(&mut changed.layout);
+            assert_ne!(original_id, changed.derivation_id(), "{name} mutation was not hashed");
+        }
+    }
+
+    #[test]
+    fn non_default_frozen_layout_is_valid_and_changes_identity() {
+        let original = sample_plan();
+        let mut changed = original.clone();
+        changed.layout = BuilderLayout {
+            hostname: "forge-builder".to_owned(),
+            guest_root: "/forge".to_owned(),
+            artifacts_dir: "/forge/output".to_owned(),
+            build_dir: "/forge/work".to_owned(),
+            source_dir: "/forge/sources".to_owned(),
+            recipe_dir: "/forge/recipe".to_owned(),
+            install_dir: "/forge/destination".to_owned(),
+            package_dir: "/forge/recipe/package".to_owned(),
+            ccache_dir: "/forge/cache-cc".to_owned(),
+            sccache_dir: "/forge/cache-rust".to_owned(),
+            go_cache_dir: "/forge/cache-go".to_owned(),
+            go_mod_cache_dir: "/forge/cache-go-mod".to_owned(),
+            cargo_cache_dir: "/forge/cache-cargo".to_owned(),
+            zig_cache_dir: "/forge/cache-zig".to_owned(),
+        };
+        changed.jobs[0].build_dir = "/forge/work".to_owned();
+        changed.jobs[0].work_dir = "/forge/work/hello".to_owned();
+        let StepPlan::Run { working_dir, .. } = &mut changed.jobs[0].phases[0].steps[0] else {
+            unreachable!()
+        };
+        *working_dir = "/forge/work".to_owned();
+        changed.environment.insert("HOME".to_owned(), "/forge/work".to_owned());
+
+        changed.validate().unwrap();
+        assert_ne!(original.derivation_id(), changed.derivation_id());
+    }
+
+    #[test]
     fn phase_order_remains_semantic() {
         let mut first = sample_plan();
         first.jobs.push(JobPlan {
@@ -1699,6 +1931,29 @@ mod tests {
                     if field == "layout.build_dir" && found == value
             ));
         }
+    }
+
+    #[test]
+    fn validation_rejects_invalid_hostnames_and_overlapping_layout_paths() {
+        for hostname in ["", "-builder", "builder-", "bad host", "bad/host"] {
+            let mut plan = sample_plan();
+            plan.layout.hostname = hostname.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::InvalidSandboxHostname { value }) if value == hostname
+            ));
+        }
+
+        let mut overlapping = sample_plan();
+        overlapping.layout.ccache_dir = "/mason/build/cache".to_owned();
+        assert!(matches!(
+            overlapping.validate(),
+            Err(DerivationValidationError::OverlappingLayoutPath {
+                field,
+                other_field,
+                ..
+            }) if field == "layout.ccache_dir" && other_field == "layout.build_dir"
+        ));
     }
 
     #[test]
