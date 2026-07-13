@@ -275,7 +275,10 @@ cycle and diagnostic complexity.
 
 `DerivationPlan` must include every input that can change the build:
 
-- schema version and Boulder implementation version;
+- schema version plus Boulder implementation version and semantic fingerprint,
+  including the production source tree, Rust compiler context, and effective
+  native compiler, linker, archiver, flags, dependency controls, and tool
+  identities;
 - recipe and imported-module fingerprints;
 - locked sources and source-lock digest;
 - exact Moss-resolved package and output identities;

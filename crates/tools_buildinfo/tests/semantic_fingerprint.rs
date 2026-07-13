@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{fs, path::Path};
+use std::{ffi::OsString, fs, os::unix::ffi::OsStrExt as _, path::Path};
 
 use tempfile::TempDir;
 
 #[path = "../src/semantic_fingerprint.rs"]
 mod semantic_fingerprint;
+
+#[path = "../src/native_build_context.rs"]
+mod native_build_context;
 
 use semantic_fingerprint::{ExplicitInput, calculate};
 
@@ -48,6 +51,7 @@ fn base_fixture() -> TempDir {
 
 fn context() -> Vec<ExplicitInput> {
     vec![
+        ("env.HOST".to_owned(), b"x86_64-unknown-linux-gnu".to_vec()),
         ("env.PROFILE".to_owned(), b"release".to_vec()),
         ("env.TARGET".to_owned(), b"x86_64-unknown-linux-gnu".to_vec()),
         ("toolchain.rustc-vV".to_owned(), b"rustc fixture".to_vec()),
@@ -56,6 +60,45 @@ fn context() -> Vec<ExplicitInput> {
 
 fn value(root: &Path) -> String {
     calculate(root, context()).unwrap().value().to_owned()
+}
+
+fn native_environment(values: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    [
+        ("HOST", "x86_64-unknown-linux-gnu"),
+        ("TARGET", "x86_64-unknown-linux-gnu"),
+    ]
+    .into_iter()
+    .chain(values.iter().copied())
+    .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+    .collect()
+}
+
+fn native_context(values: &[(&str, &str)], tool_revision: &str, workspace: &Path) -> Vec<ExplicitInput> {
+    native_context_with_probe(values, workspace, |command| {
+        let program = command
+            .first()
+            .map(|value| value.as_os_str().as_bytes())
+            .unwrap_or_default();
+        let mut identity = program.to_vec();
+        identity.extend_from_slice(b" version ");
+        identity.extend_from_slice(tool_revision.as_bytes());
+        Ok(Some(identity))
+    })
+}
+
+fn native_context_with_probe<F>(values: &[(&str, &str)], workspace: &Path, probe: F) -> Vec<ExplicitInput>
+where
+    F: FnMut(&[OsString]) -> std::io::Result<Option<Vec<u8>>>,
+{
+    native_build_context::collect(native_environment(values), workspace, probe)
+        .unwrap()
+        .inputs()
+}
+
+fn native_value(root: &Path, values: &[(&str, &str)], tool_revision: &str, workspace: &Path) -> String {
+    let mut inputs = context();
+    inputs.extend(native_context(values, tool_revision, workspace));
+    calculate(root, inputs).unwrap().value().to_owned()
 }
 
 #[test]
@@ -175,6 +218,7 @@ fn target_profile_features_compiler_and_flags_are_length_prefixed_inputs() {
     let original = value(repository.path());
 
     for (name, changed) in [
+        ("env.HOST", b"aarch64-unknown-linux-gnu".as_slice()),
         ("env.PROFILE", b"debug".as_slice()),
         ("env.TARGET", b"aarch64-unknown-linux-gnu".as_slice()),
         ("env.CARGO_FEATURE_EXPERIMENTAL", b"1".as_slice()),
@@ -196,4 +240,213 @@ fn target_profile_features_compiler_and_flags_are_length_prefixed_inputs() {
     let left = calculate(repository.path(), [("a".to_owned(), b"bc".to_vec())]).unwrap();
     let right = calculate(repository.path(), [("ab".to_owned(), b"c".to_vec())]).unwrap();
     assert_ne!(left.value(), right.value());
+}
+
+#[test]
+fn native_tool_flags_and_dependency_selection_mutations_change_identity() {
+    let repository = base_fixture();
+    let workspace = Path::new("/workspace/os-tools");
+    let original = native_value(repository.path(), &[], "1", workspace);
+
+    for (key, value) in [
+        ("CC_x86_64_unknown_linux_gnu", "clang"),
+        ("CXX", "clang++"),
+        ("AR", "llvm-ar"),
+        ("ARFLAGS", "crsD"),
+        ("RANLIB", "llvm-ranlib"),
+        ("RANLIBFLAGS", "-D"),
+        ("LD", "ld.lld"),
+        ("AS", "llvm-as"),
+        ("NM", "llvm-nm"),
+        ("RUSTC_LINKER", "clang"),
+        ("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER", "clang"),
+        ("CFLAGS_x86_64-unknown-linux-gnu", "-O3 -march=x86-64-v3"),
+        ("CXXFLAGS", "-stdlib=libc++"),
+        ("CPPFLAGS", "-DNATIVE_API=2"),
+        ("LDFLAGS", "-Wl,-z,now"),
+        ("CPATH", "/native/include"),
+        ("C_INCLUDE_PATH", "/native/c/include"),
+        ("CPLUS_INCLUDE_PATH", "/native/cxx/include"),
+        ("LIBRARY_PATH", "/native/lib"),
+        ("COMPILER_PATH", "/native/toolchain/bin"),
+        ("LD_RUN_PATH", "/native/runtime/lib"),
+        ("PKG_CONFIG_PATH", "/native/pkgconfig"),
+        ("PKG_CONFIG_ALL_STATIC", "1"),
+        ("CMAKE", "cmake3"),
+        ("CMAKE_GENERATOR", "Ninja"),
+        ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+        ("LIBZSTD_STATIC", "1"),
+        ("LIBSQLITE3_SYS_USE_PKG_CONFIG", "1"),
+        ("SQLITE3_LIB_DIR", "/native/sqlite/lib"),
+        ("AWS_LC_SYS_NO_ASM", "1"),
+        ("AWS_LC_SYS_STATIC", "1"),
+        ("AWS_LC_SYS_CMAKE", "cmake-aws"),
+        ("AWS_LC_SYS_CMAKE_GENERATOR", "Ninja"),
+        ("AWS_LC_SYS_CMAKE_TOOLCHAIN_FILE", "/native/aws-toolchain.cmake"),
+        ("SQLITE3_DLL_NAME", "sqlite3-custom"),
+        ("NIX_CFLAGS_COMPILE", "-fstack-protector-strong"),
+    ] {
+        let changed = native_value(repository.path(), &[(key, value)], "1", workspace);
+        assert_ne!(changed, original, "{key} must affect native implementation identity");
+    }
+
+    let changed_tool = native_value(repository.path(), &[], "2", workspace);
+    assert_ne!(changed_tool, original, "resolved native tool versions must be semantic");
+}
+
+#[test]
+fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state() {
+    let workspace = Path::new("/workspace/os-tools");
+    let values = [
+        ("CC_x86_64_unknown_linux_gnu", "clang -fno-plt"),
+        ("CC", "shadowed-gcc"),
+        ("CFLAGS", "-O2"),
+        ("TARGET_CFLAGS", "-fPIC"),
+        ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+    ];
+
+    let forward = native_context(&values, "1", workspace);
+    let reverse_values = values.into_iter().rev().collect::<Vec<_>>();
+    let reverse = native_context(&reverse_values, "1", workspace);
+    assert_eq!(forward, reverse, "environment iteration order must not be semantic");
+
+    let changed_shadow = native_context(
+        &[
+            ("CC_x86_64_unknown_linux_gnu", "clang -fno-plt"),
+            ("CC", "another-shadowed-compiler"),
+            ("CFLAGS", "-O2"),
+            ("TARGET_CFLAGS", "-fPIC"),
+            ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+        ],
+        "1",
+        workspace,
+    );
+    assert_eq!(forward, changed_shadow, "shadowed tool selectors must be canonical");
+
+    let with_irrelevant = native_context(
+        &[
+            ("CC_x86_64_unknown_linux_gnu", "clang -fno-plt"),
+            ("CC", "shadowed-gcc"),
+            ("CFLAGS", "-O2"),
+            ("TARGET_CFLAGS", "-fPIC"),
+            ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+            ("EDITOR", "not-a-build-input"),
+        ],
+        "1",
+        workspace,
+    );
+    assert_eq!(forward, with_irrelevant, "unrelated ambient state must be ignored");
+
+    let without_optional = native_context(&[], "1", workspace);
+    let present_empty = native_context(&[("ZSTD_SYS_USE_PKG_CONFIG", "")], "1", workspace);
+    assert_ne!(
+        without_optional, present_empty,
+        "present-empty dependency controls are distinct from absence"
+    );
+
+    let collected = native_build_context::collect(native_environment(&values), workspace, |_| Ok(None)).unwrap();
+    assert!(collected.watched_environment().contains(&"CFLAGS".to_owned()));
+    assert!(
+        collected
+            .watched_environment()
+            .contains(&"CC_x86_64_unknown_linux_gnu".to_owned())
+    );
+    assert!(!collected.watched_environment().contains(&"EDITOR".to_owned()));
+}
+
+#[test]
+fn workspace_paths_and_equivalent_tool_aliases_have_one_native_identity() {
+    let first = native_context(
+        &[
+            ("HOST_CC", "/workspace/first/toolchain/bin/clang --target=x86_64-linux"),
+            ("CFLAGS", "-I/workspace/first/native/include"),
+        ],
+        "1",
+        Path::new("/workspace/first"),
+    );
+    let second = native_context(
+        &[
+            (
+                "CC_x86_64_unknown_linux_gnu",
+                "/different/checkout/toolchain/bin/clang --target=x86_64-linux",
+            ),
+            ("CFLAGS", "-I/different/checkout/native/include"),
+        ],
+        "1",
+        Path::new("/different/checkout"),
+    );
+
+    assert_eq!(first, second);
+}
+
+#[test]
+fn only_the_selected_cmake_generator_tool_is_semantic() {
+    let selected = native_context(
+        &[
+            ("CMAKE_GENERATOR", "Ninja"),
+            ("NINJA", "ninja-one"),
+            ("MAKE", "ignored-make-one"),
+        ],
+        "1",
+        Path::new("/workspace/os-tools"),
+    );
+    let changed_shadow = native_context(
+        &[
+            ("CMAKE_GENERATOR", "Ninja"),
+            ("NINJA", "ninja-one"),
+            ("MAKE", "ignored-make-two"),
+        ],
+        "1",
+        Path::new("/workspace/os-tools"),
+    );
+    let changed_selected = native_context(
+        &[
+            ("CMAKE_GENERATOR", "Ninja"),
+            ("NINJA", "ninja-two"),
+            ("MAKE", "ignored-make-one"),
+        ],
+        "1",
+        Path::new("/workspace/os-tools"),
+    );
+
+    assert_eq!(selected, changed_shadow);
+    assert_ne!(selected, changed_selected);
+}
+
+#[test]
+fn aws_lc_cmake_fallback_and_explicit_precedence_match_the_build_script() {
+    let workspace = Path::new("/workspace/os-tools");
+    let probe = |cmake3_available: bool| {
+        move |command: &[OsString]| {
+            let program = command[0].as_os_str().as_bytes();
+            if program == b"cmake3" && !cmake3_available {
+                return Ok(None);
+            }
+            let mut identity = program.to_vec();
+            identity.extend_from_slice(b" version 1");
+            Ok(Some(identity))
+        }
+    };
+
+    let with_cmake3 = native_context_with_probe(&[], workspace, probe(true));
+    let with_cmake = native_context_with_probe(&[], workspace, probe(false));
+    assert_ne!(with_cmake3, with_cmake, "cmake3 must win the implicit AWS-LC fallback");
+
+    let explicit_with_cmake3 =
+        native_context_with_probe(&[("AWS_LC_SYS_CMAKE", "custom-cmake")], workspace, probe(true));
+    let explicit_without_cmake3 =
+        native_context_with_probe(&[("AWS_LC_SYS_CMAKE", "custom-cmake")], workspace, probe(false));
+    assert_eq!(
+        explicit_with_cmake3, explicit_without_cmake3,
+        "an explicit AWS-LC CMake selector must bypass fallback discovery"
+    );
+}
+
+#[test]
+fn workspace_normalization_does_not_collapse_near_prefix_paths() {
+    let values = &[("CFLAGS", "-I/workspace/fooish/native/include")];
+    let near_prefix = native_context(values, "1", Path::new("/workspace/foo"));
+    let unrelated = native_context(values, "1", Path::new("/somewhere/else"));
+
+    assert_eq!(near_prefix, unrelated);
 }

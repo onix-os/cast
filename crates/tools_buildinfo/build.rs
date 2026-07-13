@@ -2,18 +2,21 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // build.rs
-use std::{collections::BTreeMap, os::unix::ffi::OsStringExt, path::Path};
+use std::{collections::BTreeMap, ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
 
 use chrono::{DateTime, Utc};
 
 #[path = "src/semantic_fingerprint.rs"]
 mod semantic_fingerprint;
 
+#[path = "src/native_build_context.rs"]
+mod native_build_context;
+
 /// Returns value of given environment variable or error if missing.
 ///
 /// This also outputs necessary ‘cargo:rerun-if-env-changed’ tag to make sure
 /// build script is rerun if the environment variable changes.
-fn env(key: &str) -> Result<std::ffi::OsString, Box<dyn std::error::Error>> {
+fn env(key: &str) -> Result<OsString, Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed={key}");
     std::env::var_os(key).ok_or_else(|| Box::from(format!("Missing `{key}` environmental variable")))
 }
@@ -72,11 +75,50 @@ fn trim_trailing_newline(mut value: Vec<u8>) -> Vec<u8> {
     value
 }
 
+/// Probe an optional native build tool without making it a new build
+/// requirement.  The selected command itself remains in the fingerprint when
+/// a tool is unavailable; successful probes additionally identify the exact
+/// implementation which would compile or link native dependencies.
+fn native_tool_identity(command: &[OsString]) -> Result<Option<Vec<u8>>, std::io::Error> {
+    let Some((program, arguments)) = command.split_first() else {
+        return Ok(None);
+    };
+    if program.is_empty() {
+        return Ok(None);
+    }
+
+    let output = match std::process::Command::new(program)
+        .args(arguments)
+        .arg("--version")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return Ok(None),
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = trim_trailing_newline(output.stdout);
+    let stderr = trim_trailing_newline(output.stderr);
+    let mut identity = Vec::with_capacity(stdout.len() + stderr.len() + 16);
+    for value in [&stdout, &stderr] {
+        let length = u64::try_from(value.len()).expect("native tool version output fits in u64");
+        identity.extend_from_slice(&length.to_be_bytes());
+        identity.extend_from_slice(value);
+    }
+    Ok(Some(identity))
+}
+
 /// Collect build context which can change compiled behavior without changing
 /// repository contents.  Absolute compiler paths are deliberately replaced by
-/// `rustc -vV`; flags and wrappers remain verbatim because their values are
-/// themselves compiler inputs.
-fn semantic_build_context() -> Result<Vec<semantic_fingerprint::ExplicitInput>, Box<dyn std::error::Error>> {
+/// stable Rust and native tool identities, while effective flags, selectors,
+/// and dependency build-script controls retain their semantic values.
+fn semantic_build_context(
+    top_level: &Path,
+) -> Result<Vec<semantic_fingerprint::ExplicitInput>, Box<dyn std::error::Error>> {
     const OPTIONAL_KEYS: &[&str] = &[
         "HOST",
         "TARGET",
@@ -115,11 +157,18 @@ fn semantic_build_context() -> Result<Vec<semantic_fingerprint::ExplicitInput>, 
         }
     }
 
+    println!("cargo:rerun-if-env-changed=PATH");
+    let native = native_build_context::collect(std::env::vars_os(), top_level, native_tool_identity)?;
+    for key in native.watched_environment() {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    inputs.extend(native.inputs());
+
     Ok(inputs.into_iter().collect())
 }
 
 fn get_semantic_fingerprint(top_level: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let fingerprint = semantic_fingerprint::calculate(top_level, semantic_build_context()?)?;
+    let fingerprint = semantic_fingerprint::calculate(top_level, semantic_build_context(top_level)?)?;
     for path in fingerprint.watched_paths() {
         println!("cargo:rerun-if-changed={}", path.display());
     }
@@ -139,7 +188,7 @@ fn get_git_info() -> Result<(), Box<dyn std::error::Error>> {
         Ok(git_dir) => {
             println!("cargo:rustc-cfg=BUILDINFO_IS_GIT_BUILD");
 
-            std::path::PathBuf::from(std::ffi::OsString::from_vec(git_dir))
+            std::path::PathBuf::from(OsString::from_vec(git_dir))
         }
         Err(msg) => {
             // We're not in a git repo, most likely we're building from a source archive

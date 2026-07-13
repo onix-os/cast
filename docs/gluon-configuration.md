@@ -269,11 +269,20 @@ valid only while updating the lock.
 
 The builder identity names the selected structural family for explanation and
 fingerprints the complete target-selected `BuilderSpec`, `HooksSpec`, and
-package-profile key. It is not the Boulder executable identity. Derivation
-schema v9 freezes the executor ABI and implementation fingerprint separately
-inside `ExecutionPolicy`, so changing execution compatibility cannot be
+package-profile key. It is not the Boulder executable identity. The derivation
+schema freezes the executor ABI and implementation fingerprint separately inside
+`ExecutionPolicy`, so changing execution compatibility cannot be
 mistaken for changing authored builder structure. It also freezes the selected
 credential contract and every reachable analyzer program and provider request.
+
+The Boulder implementation fingerprint is produced at compile time from the
+production source tree and effective build context. In addition to the Rust
+target, profile, features, compiler, and flags, it binds the selected native C
+and C++ compilers, linker, assembler, archiver, ranlib, symbol tool, CMake and
+generator tools, their stable version output, compiler/linker search paths,
+and the curated native-dependency build controls used by the workspace. Build
+timestamps, Git metadata, checkout location, and shadowed tool aliases are not
+semantic inputs.
 
 The lock is an explicit resolution input, not an authenticated statement from
 a remote service. Boulder validates its graph and selected planner context,
