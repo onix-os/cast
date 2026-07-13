@@ -1,55 +1,33 @@
 // SPDX-FileCopyrightText: 2025 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-use fs_err::{self as fs, os::unix::fs::OpenOptionsExt};
-use regex::Regex;
+use mailparse::{MailHeaderMap, parse_mail};
 use stone::relation::{Dependency, Kind, Provider};
 use thiserror::Error;
 
 use crate::package::collect::PathInfo;
 
-use mailparse::{MailHeaderMap, parse_mail};
-
-use super::{BoxError, BucketMut, Decision, Response, analyzer_command, checked_output};
+use super::{
+    BoxError, BucketMut, Decision, ExternalAnalyzerInput, Response, VerifiedAnalyzerInput, analyzer_command,
+    checked_output_for,
+};
 
 const PYTHON_METADATA_BYTES: usize = 1024 * 1024;
 
 pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
-    let file_path = info.path.clone().into_os_string().into_string().unwrap_or_default();
-    let is_dist_info = file_path.contains(".dist-info") && info.file_name().ends_with("METADATA");
-    let is_egg_info = file_path.contains(".egg-info") && info.file_name().ends_with("PKG-INFO");
-
-    if !(is_dist_info || is_egg_info) {
+    let Some(metadata_name) = python_metadata_name(&info.target_path)? else {
         return Ok(Decision::NextHandler.into());
-    }
+    };
 
-    let data = read_python_metadata(&info.path, PYTHON_METADATA_BYTES)?;
+    let input = VerifiedAnalyzerInput::from_path_info(info, PYTHON_METADATA_BYTES as u64)?;
+    let data = input.read_all(PYTHON_METADATA_BYTES)?;
+    info.check_deadline()?;
     let mail = parse_mail(&data)?;
-    let python_name_raw = mail
-        .get_headers()
-        .get_first_value("Name")
-        .unwrap_or_else(|| panic!("Failed to parse {}", info.file_name()));
-
-    let python_name = pep_503_normalize(&python_name_raw)?;
-
-    /* Insert generic provider */
-    bucket.providers.insert(Provider {
-        kind: Kind::Python,
-        name: python_name.clone(),
-    });
-
-    /* Now parse dependencies */
-    let dist_path = info
-        .path
-        .parent()
-        .unwrap_or_else(|| panic!("Failed to get parent path for {}", info.file_name()));
+    let python_name_raw = unique_python_name(&mail, &info.target_path)?;
+    let provider = Provider::new(Kind::Python, pep_503_normalize(&python_name_raw)?)?;
     let find_deps_script = include_str!("../scripts/get-py-deps.py");
-
     let program = &bucket
         .analysis
         .tools
@@ -57,196 +35,171 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
         .as_ref()
         .expect("validated analysis plan requires Python for the Python handler")
         .path;
-    let mut command = analyzer_command(program);
-    command.arg("-c").arg(find_deps_script).arg(dist_path).envs([
-        ("LC_ALL", "C"),
-        ("PYTHONDONTWRITEBYTECODE", "1"),
-        ("PYTHONHASHSEED", "0"),
-        ("PYTHONNOUSERSITE", "1"),
-    ]);
-    let output = checked_output(command)?;
+    let directory_suffix = if metadata_name == "METADATA" {
+        ".dist-info"
+    } else {
+        ".egg-info"
+    };
+    let sandbox = ExternalAnalyzerInput::new(&input, &info.target_path, metadata_name, directory_suffix)?;
+    let operation = (|| {
+        let mut command = analyzer_command(program);
+        command
+            .current_dir(sandbox.working_directory())
+            .args(["-I", "-B", "-c"])
+            .arg(find_deps_script)
+            .arg(sandbox.working_directory())
+            .envs([
+                ("LC_ALL", "C"),
+                ("PYTHONDONTWRITEBYTECODE", "1"),
+                ("PYTHONHASHSEED", "0"),
+                ("PYTHONNOUSERSITE", "1"),
+                ("PYTHONSAFEPATH", "1"),
+            ]);
+        let output = checked_output_for(info, command)?;
+        let stdout = String::from_utf8(output.stdout)?;
+        let mut dependencies = Vec::new();
+        dependencies.try_reserve(stdout.lines().count())?;
+        for dependency in stdout.lines() {
+            info.check_deadline()?;
+            dependencies.push(Dependency::new(Kind::Python, pep_503_normalize(dependency)?)?);
+        }
+        info.check_deadline()?;
+        Ok(dependencies)
+    })();
+    let dependencies = sandbox.finish(info, operation)?;
 
-    let deps = String::from_utf8_lossy(&output.stdout);
-    for dep in deps.lines() {
-        bucket.dependencies.insert(Dependency {
-            kind: Kind::Python,
-            name: pep_503_normalize(dep)?,
-        });
-    }
-
+    // Commit relations only after strict decoding, canonical validation,
+    // sandbox verification/cleanup, and the shared deadline all succeed.
+    bucket.providers.insert(provider);
+    bucket.dependencies.extend(dependencies);
     Ok(Decision::NextHandler.into())
 }
 
-fn read_python_metadata(path: &Path, limit: usize) -> Result<Vec<u8>, PythonMetadataReadError> {
-    let metadata = fs::symlink_metadata(path).map_err(|source| PythonMetadataReadError::Inspect {
-        path: path.to_owned(),
-        source,
-    })?;
-    require_bounded_regular_metadata(path, &metadata, limit)?;
-
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|source| PythonMetadataReadError::Open {
-            path: path.to_owned(),
-            source,
-        })?;
-    let opened_metadata = file
-        .metadata()
-        .map_err(|source| PythonMetadataReadError::InspectOpened {
-            path: path.to_owned(),
-            source,
-        })?;
-    require_bounded_regular_metadata(path, &opened_metadata, limit)?;
-
-    let capacity = usize::try_from(opened_metadata.len()).unwrap_or(limit).min(limit);
-    let mut bytes = Vec::with_capacity(capacity);
-    file.by_ref()
-        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|source| PythonMetadataReadError::Read {
-            path: path.to_owned(),
-            source,
-        })?;
-    if bytes.len() > limit {
-        return Err(PythonMetadataReadError::TooLarge {
-            path: path.to_owned(),
-            size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-            limit,
-        });
+fn python_metadata_name(path: &Path) -> Result<Option<&str>, PythonMetadataError> {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    if file_name != "METADATA" && file_name != "PKG-INFO" {
+        return Ok(None);
     }
-    Ok(bytes)
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| PythonMetadataError::MissingParent { path: path.to_owned() })?;
+    let Some(parent_name) = parent.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    let recognized = (file_name == "METADATA" && parent_name.ends_with(".dist-info"))
+        || (file_name == "PKG-INFO" && parent_name.ends_with(".egg-info"));
+    Ok(recognized.then_some(file_name))
 }
 
-fn require_bounded_regular_metadata(
-    path: &Path,
-    metadata: &std::fs::Metadata,
-    limit: usize,
-) -> Result<(), PythonMetadataReadError> {
-    if !metadata.file_type().is_file() {
-        return Err(PythonMetadataReadError::NotRegular { path: path.to_owned() });
-    }
-    if metadata.len() > u64::try_from(limit).unwrap_or(u64::MAX) {
-        return Err(PythonMetadataReadError::TooLarge {
+fn unique_python_name(mail: &mailparse::ParsedMail<'_>, path: &Path) -> Result<String, PythonMetadataError> {
+    let names = mail.get_headers().get_all_values("Name");
+    match names.as_slice() {
+        [] => Err(PythonMetadataError::MissingName { path: path.to_owned() }),
+        [name] => Ok(name.clone()),
+        _ => Err(PythonMetadataError::DuplicateName {
             path: path.to_owned(),
-            size: metadata.len(),
-            limit,
-        });
+            count: names.len(),
+        }),
     }
-    Ok(())
 }
 
 #[derive(Debug, Error)]
-enum PythonMetadataReadError {
-    #[error("failed to inspect Python metadata {path}: {source}")]
-    Inspect {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("Python metadata {path} is not a regular file")]
-    NotRegular { path: PathBuf },
-    #[error("Python metadata {path} is {size} bytes, exceeding the {limit}-byte limit")]
-    TooLarge { path: PathBuf, size: u64, limit: usize },
-    #[error("failed to open Python metadata {path}: {source}")]
-    Open {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("failed to inspect opened Python metadata {path}: {source}")]
-    InspectOpened {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("failed to read Python metadata {path}: {source}")]
-    Read {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
+enum PythonMetadataError {
+    #[error("Python metadata path {path} has no parent distribution directory")]
+    MissingParent { path: PathBuf },
+    #[error("Python metadata {path} has no Name header")]
+    MissingName { path: PathBuf },
+    #[error("Python metadata {path} has {count} Name headers; exactly one is required")]
+    DuplicateName { path: PathBuf, count: usize },
+    #[error("invalid Python distribution name {name:?}")]
+    InvalidName { name: String },
 }
 
-/* Normalize name per https://peps.python.org/pep-0503/#normalized-names, replacing
-all runs of `_` and `.` with `-` and lowercaseing */
 fn pep_503_normalize(input: &str) -> Result<String, BoxError> {
-    let re = Regex::new(r"[-_.]+")?;
+    let bytes = input.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(Box::new(PythonMetadataError::InvalidName { name: input.to_owned() }));
+    }
 
-    Ok(re.replace_all(input, "-").to_lowercase())
+    let mut normalized = String::with_capacity(bytes.len());
+    let mut previous_was_separator = false;
+    for byte in bytes {
+        if matches!(byte, b'-' | b'_' | b'.') {
+            if !previous_was_separator {
+                normalized.push('-');
+                previous_was_separator = true;
+            }
+        } else {
+            normalized.push(char::from(byte.to_ascii_lowercase()));
+            previous_was_separator = false;
+        }
+    }
+    Ok(normalized)
 }
 
 #[cfg(test)]
-mod test {
-    use std::{
-        os::unix::fs::symlink,
-        time::{Duration, Instant},
-    };
-
-    use nix::{sys::stat::Mode, unistd::mkfifo};
-
+mod tests {
     use super::*;
 
     #[test]
-    fn test_normalization() {
+    fn normalizes_valid_names_and_rejects_empty_or_malformed_names() {
         assert_eq!(pep_503_normalize("PyThOn-_-foo").unwrap(), "python-foo");
         assert_eq!(pep_503_normalize("PyThOn.-f-oo").unwrap(), "python-f-oo");
+        for invalid in ["", "-demo", "demo-", "demo name", "demo/name", "Kelvin", "ſetuptools"] {
+            assert!(pep_503_normalize(invalid).is_err(), "accepted {invalid:?}");
+        }
     }
 
     #[test]
-    fn python_metadata_accepts_exact_byte_limit() {
-        const LIMIT: usize = 64;
-        let temporary = tempfile::tempdir().unwrap();
-        let metadata = temporary.path().join("METADATA");
-        fs::write(&metadata, vec![b'x'; LIMIT]).unwrap();
-
-        assert_eq!(read_python_metadata(&metadata, LIMIT).unwrap(), vec![b'x'; LIMIT]);
+    fn recognizes_only_metadata_in_a_distribution_directory() {
+        assert_eq!(
+            python_metadata_name(Path::new("/usr/lib/python/site-packages/demo.dist-info/METADATA")).unwrap(),
+            Some("METADATA")
+        );
+        assert_eq!(
+            python_metadata_name(Path::new("/usr/lib/python/site-packages/demo.egg-info/PKG-INFO")).unwrap(),
+            Some("PKG-INFO")
+        );
+        assert_eq!(python_metadata_name(Path::new("/tmp/METADATA")).unwrap(), None);
     }
 
     #[test]
-    fn python_metadata_rejects_one_byte_over_limit() {
-        const LIMIT: usize = 64;
-        let temporary = tempfile::tempdir().unwrap();
-        let metadata = temporary.path().join("PKG-INFO");
-        fs::write(&metadata, vec![b'x'; LIMIT + 1]).unwrap();
-
-        let error = read_python_metadata(&metadata, LIMIT).unwrap_err();
+    fn candidate_without_parent_is_a_structured_error() {
         assert!(matches!(
-            error,
-            PythonMetadataReadError::TooLarge {
-                size: 65,
-                limit: LIMIT,
-                ..
-            }
+            python_metadata_name(Path::new("METADATA")),
+            Err(PythonMetadataError::MissingParent { .. })
         ));
     }
 
     #[test]
-    fn python_metadata_rejects_symlinks_without_reading_the_target() {
-        let temporary = tempfile::tempdir().unwrap();
-        let target = temporary.path().join("outside");
-        let metadata = temporary.path().join("METADATA");
-        fs::write(&target, b"Name: escaped\n").unwrap();
-        symlink(&target, &metadata).unwrap();
-
+    fn missing_name_is_a_structured_error() {
+        let mail = parse_mail(b"Version: 1.0\n").unwrap();
         assert!(matches!(
-            read_python_metadata(&metadata, 64),
-            Err(PythonMetadataReadError::NotRegular { .. })
+            unique_python_name(&mail, Path::new("/demo.dist-info/METADATA")),
+            Err(PythonMetadataError::MissingName { .. })
         ));
     }
 
     #[test]
-    fn python_metadata_rejects_fifo_without_waiting_for_a_writer() {
-        let temporary = tempfile::tempdir().unwrap();
-        let metadata = temporary.path().join("PKG-INFO");
-        mkfifo(&metadata, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
-
-        let started = Instant::now();
+    fn duplicate_names_are_rejected_even_when_the_values_match() {
+        let conflicting = parse_mail(b"Name: demo\nName: other\nVersion: 1.0\n").unwrap();
         assert!(matches!(
-            read_python_metadata(&metadata, 64),
-            Err(PythonMetadataReadError::NotRegular { .. })
+            unique_python_name(&conflicting, Path::new("/demo.dist-info/METADATA")),
+            Err(PythonMetadataError::DuplicateName { count: 2, .. })
         ));
-        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let repeated = parse_mail(b"Name: demo\nName: demo\nVersion: 1.0\n").unwrap();
+        assert!(matches!(
+            unique_python_name(&repeated, Path::new("/demo.dist-info/METADATA")),
+            Err(PythonMetadataError::DuplicateName { count: 2, .. })
+        ));
     }
 }
