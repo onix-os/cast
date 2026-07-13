@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use itertools::Itertools;
 use moss::util;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -10,14 +9,15 @@ use std::{
 };
 use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
+    build_policy::{ContextValue, TextSpec},
     derivation::{PhasePlan, StepPlan},
     package::{PhaseSpec, StepSpec},
-    script, tuning,
+    script,
 };
 use tui::Styled;
 
 use crate::build::{context::BuildContext, pgo};
-use crate::{Macros, Paths, Recipe, architecture::BuildTarget};
+use crate::{BuildPolicy, Macros, Paths, Recipe, architecture::BuildTarget};
 
 use super::{Error, work_dir};
 
@@ -77,6 +77,7 @@ impl Phase {
         recipe: &Recipe,
         paths: &Paths,
         macros: &Macros,
+        policy: &BuildPolicy,
         ccache: bool,
         num_jobs: NonZeroUsize,
     ) -> Result<Option<PhasePlan>, Error> {
@@ -206,7 +207,7 @@ impl Phase {
 
         parser.add_definition("pgo_dir", format!("{}-pgo", build_dir.display()));
 
-        add_tuning(target, pgo_stage, recipe, macros, &mut parser)?;
+        add_tuning(target, pgo_stage, recipe, policy, &mut parser, num_jobs)?;
 
         let context = resolved_context(
             &parser,
@@ -514,144 +515,79 @@ fn add_tuning(
     target: BuildTarget,
     pgo_stage: Option<pgo::Stage>,
     recipe: &Recipe,
-    macros: &Macros,
+    policy: &BuildPolicy,
     parser: &mut script::Parser,
+    jobs: NonZeroUsize,
 ) -> Result<(), Error> {
-    let mut tuning = tuning::Builder::new();
-
-    let build_target = target.to_string();
-
-    for arch in ["base", &build_target] {
-        let macros = macros
-            .arch
-            .get(arch)
-            .cloned()
-            .ok_or_else(|| Error::MissingArchMacros(arch.to_owned()))?;
-
-        tuning.add_macros(macros);
-    }
-
-    for macros in macros.actions.clone() {
-        tuning.add_macros(macros);
-    }
-
-    tuning.enable("architecture", None)?;
-
-    for kv in &recipe.declaration.tuning {
-        match &kv.value {
-            stone_recipe::TuningSpec::Enable => tuning.enable(&kv.key, None)?,
-            stone_recipe::TuningSpec::Disable => tuning.disable(&kv.key)?,
-            stone_recipe::TuningSpec::Config { value } => tuning.enable(&kv.key, Some(value.clone()))?,
-        }
-    }
-
-    // Add defaults that aren't already in recipe
-    for group in default_tuning_groups(target, macros) {
-        if !recipe.declaration.tuning.iter().any(|kv| &kv.key == group) {
-            tuning.enable(group, None)?;
-        }
-    }
+    let target = policy.target(&target.to_string())?;
+    let toolchain = recipe.declaration.options.toolchain;
+    let mut selection =
+        crate::build::tuning::resolve(&policy.spec.tuning, target, toolchain, &recipe.declaration.tuning)?;
 
     if let Some(stage) = pgo_stage {
-        match stage {
-            pgo::Stage::One => tuning.enable("pgostage1", None)?,
-            pgo::Stage::Two => tuning.enable("pgostage2", None)?,
-            pgo::Stage::Use => {
-                tuning.enable("pgouse", None)?;
-                if recipe.declaration.options.samplepgo {
-                    tuning.enable("pgosample", None)?;
-                }
-            }
+        let stage = match stage {
+            pgo::Stage::One => &policy.spec.pgo.stage_one,
+            pgo::Stage::Two => &policy.spec.pgo.stage_two,
+            pgo::Stage::Use => &policy.spec.pgo.use_profile,
+        };
+        crate::build::tuning::extend_toolchain_flags(&mut selection.flags, &stage.flags, toolchain);
+        if matches!(pgo_stage, Some(pgo::Stage::Use)) && recipe.declaration.options.samplepgo {
+            crate::build::tuning::extend_toolchain_flags(&mut selection.flags, &policy.spec.pgo.sample, toolchain);
         }
     }
 
-    fn fmt_flags<'a>(flags: impl Iterator<Item = &'a str>) -> String {
-        flags
-            .map(|s| s.trim())
-            .filter(|s| s.len() > 1)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .join(" ")
-    }
-
-    let toolchain = recipe.declaration.options.toolchain.into();
-    let flags = tuning.build()?;
-
-    let mut cflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::C, toolchain)),
-    );
-    let mut cxxflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::Cxx, toolchain)),
-    );
-    let fflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::F, toolchain)),
-    );
-    let ldflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::Ld, toolchain)),
-    );
-    let dflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::D, toolchain)),
-    );
-    let mut rustflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::Rust, toolchain)),
-    );
-    let valaflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::Vala, toolchain)),
-    );
-    let goflags = fmt_flags(
-        flags
-            .iter()
-            .filter_map(|flag| flag.get(tuning::CompilerFlag::Go, toolchain)),
-    );
-
+    // Mold becomes policy-owned in the next policy-data slice. Until then this
+    // explicit typed overlay preserves current package semantics without macro
+    // interpolation.
     if recipe.declaration.mold {
-        cflags.push_str(" -fuse-ld=mold");
-        cxxflags.push_str(" -fuse-ld=mold");
-        rustflags.push_str(" -Clink-arg=-fuse-ld=mold");
+        selection.flags.c.push(TextSpec::Literal("-fuse-ld=mold".to_owned()));
+        selection.flags.cxx.push(TextSpec::Literal("-fuse-ld=mold".to_owned()));
+        selection
+            .flags
+            .rust
+            .push(TextSpec::Literal("-Clink-arg=-fuse-ld=mold".to_owned()));
     }
 
-    parser.add_definition("cflags", cflags);
-    parser.add_definition("cxxflags", cxxflags);
-    parser.add_definition("fflags", fflags);
-    parser.add_definition("ldflags", ldflags);
-    parser.add_definition("dflags", dflags);
-    parser.add_definition("rustflags", rustflags);
-    parser.add_definition("valaflags", valaflags);
-    parser.add_definition("goflags", goflags);
+    let pgo_dir = format!("{}-pgo", parser.parse_content("%(buildroot)")?);
+    let resolve = |values: &[TextSpec]| resolve_flags(values, jobs, &pgo_dir);
+    parser.add_definition("cflags", resolve(&selection.flags.c)?);
+    parser.add_definition("cxxflags", resolve(&selection.flags.cxx)?);
+    parser.add_definition("fflags", resolve(&selection.flags.f)?);
+    parser.add_definition("ldflags", resolve(&selection.flags.ld)?);
+    parser.add_definition("dflags", resolve(&selection.flags.d)?);
+    parser.add_definition("rustflags", resolve(&selection.flags.rust)?);
+    parser.add_definition("valaflags", resolve(&selection.flags.vala)?);
+    parser.add_definition("goflags", resolve(&selection.flags.go)?);
 
     Ok(())
 }
 
-fn default_tuning_groups(target: BuildTarget, macros: &Macros) -> &[String] {
-    let build_target = target.to_string();
-
-    for arch in [&build_target, "base"] {
-        let Some(arch_macros) = macros.arch.get(arch) else {
-            continue;
-        };
-
-        if arch_macros.default_tuning_groups.is_empty() {
-            continue;
+fn resolve_flags(values: &[TextSpec], jobs: NonZeroUsize, pgo_dir: &str) -> Result<String, Error> {
+    fn resolve(value: &TextSpec, jobs: NonZeroUsize, pgo_dir: &str) -> Result<String, Error> {
+        match value {
+            TextSpec::Literal(value) => Ok(value.clone()),
+            TextSpec::Context(ContextValue::Jobs) => Ok(jobs.to_string()),
+            TextSpec::Context(ContextValue::PgoDir) => Ok(pgo_dir.to_owned()),
+            TextSpec::Context(context) => Err(Error::UnsupportedTuningContext(*context)),
+            TextSpec::Concat(parts) => parts
+                .iter()
+                .map(|part| resolve(part, jobs, pgo_dir))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|parts| parts.concat()),
         }
-
-        return &arch_macros.default_tuning_groups;
     }
 
-    &[]
+    values
+        .iter()
+        .map(|value| resolve(value, jobs, pgo_dir))
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map(|values| {
+            values
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
 }
 
 #[cfg(test)]
@@ -660,21 +596,25 @@ mod direct_tests {
     use stone_recipe::{
         derivation::StepPlan,
         package::{BuilderSpec, PhaseSpec, ScriptsSpec, StepSpec},
-        tuning::{Builder, CompilerFlag, Toolchain},
     };
 
     use super::*;
-    use crate::{Architecture, Macros, Paths, Recipe};
+    use crate::{Architecture, BuildPolicy, Macros, Paths, Recipe};
 
-    fn fixture() -> (Recipe, Macros, tempfile::TempDir) {
+    fn fixture() -> (Recipe, Macros, BuildPolicy, tempfile::TempDir) {
         let recipe_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu");
         let recipe = Recipe::load_at(recipe_path, DateTime::from_timestamp(1_700_000_000, 0).unwrap()).unwrap();
-        (recipe, Macros::repository_for_tests(), tempfile::tempdir().unwrap())
+        (
+            recipe,
+            Macros::repository_for_tests(),
+            BuildPolicy::repository_for_tests(),
+            tempfile::tempdir().unwrap(),
+        )
     }
 
     #[test]
     fn standard_steps_freeze_as_run_with_exact_context() {
-        let (mut recipe, macros, root) = fixture();
+        let (mut recipe, macros, policy, root) = fixture();
         recipe.declaration.builder = BuilderSpec::CMake {
             flags: vec!["-DBUILD_TESTS=OFF".to_owned()],
             run_tests: false,
@@ -687,6 +627,7 @@ mod direct_tests {
                 &recipe,
                 &paths,
                 &macros,
+                &policy,
                 false,
                 NonZeroUsize::new(3).unwrap(),
             )
@@ -711,7 +652,7 @@ mod direct_tests {
 
     #[test]
     fn authored_shell_percent_text_is_literal() {
-        let (mut recipe, macros, root) = fixture();
+        let (mut recipe, macros, policy, root) = fixture();
         let literal = "%cargo_fetch $BOULDER_INSTALL_ROOT %(jobs)";
         recipe.declaration.builder = BuilderSpec::Custom {
             scripts: ScriptsSpec {
@@ -730,6 +671,7 @@ mod direct_tests {
                 &recipe,
                 &paths,
                 &macros,
+                &policy,
                 false,
                 NonZeroUsize::new(2).unwrap(),
             )
@@ -743,7 +685,7 @@ mod direct_tests {
 
     #[test]
     fn source_preparation_is_argv_preserving_and_never_parsed_as_shell() {
-        let (recipe, _, root) = fixture();
+        let (recipe, _, _, root) = fixture();
         let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
         let archive_name = "source archive;echo-not-shell.tar.xz";
         let sources = [
@@ -780,27 +722,5 @@ mod direct_tests {
         assert_eq!(program, "cp");
         assert_eq!(args[2], "/mason/sourcedir/project.git/.");
         assert_eq!(args[3], "git tree");
-    }
-
-    #[test]
-    fn repository_architecture_tuning_overrides_base_and_selects_base_defaults() {
-        let macros = Macros::repository_for_tests();
-        let target = BuildTarget::Native(Architecture::X86_64);
-        let mut tuning = Builder::new();
-        tuning.add_macros(macros.arch["base"].clone());
-        tuning.add_macros(macros.arch["x86_64"].clone());
-        tuning.enable("architecture", None).unwrap();
-        let flags = tuning.build().unwrap();
-
-        assert_eq!(flags.len(), 1);
-        assert_eq!(
-            flags[0].get(CompilerFlag::C, Toolchain::Llvm),
-            Some("-march=x86-64-v2 -mtune=ivybridge")
-        );
-        assert_eq!(
-            flags[0].get(CompilerFlag::Rust, Toolchain::Llvm),
-            Some("-C target-cpu=x86-64-v2")
-        );
-        assert!(default_tuning_groups(target, &macros).contains(&"optimize".to_owned()));
     }
 }

@@ -9,12 +9,12 @@ use std::{
 };
 
 use moss::util;
-use stone_recipe::{UpstreamSpec, derivation::PhasePlan, script, tuning};
+use stone_recipe::{UpstreamSpec, build_policy::ContextValue, derivation::PhasePlan, script};
 use thiserror::Error;
 
 pub use self::phase::Phase;
 use crate::build::pgo;
-use crate::{Macros, Paths, Recipe, architecture::BuildTarget};
+use crate::{BuildPolicy, Macros, Paths, Recipe, architecture::BuildTarget};
 
 mod phase;
 
@@ -33,6 +33,7 @@ impl Job {
         recipe: &Recipe,
         paths: &Paths,
         macros: &Macros,
+        policy: &BuildPolicy,
         ccache: bool,
         jobs: NonZeroUsize,
     ) -> Result<Self, Error> {
@@ -43,7 +44,7 @@ impl Job {
             .into_iter()
             .filter_map(|phase| {
                 let result = phase
-                    .plan(target, pgo_stage, recipe, paths, macros, ccache, jobs)
+                    .plan(target, pgo_stage, recipe, paths, macros, policy, ccache, jobs)
                     .transpose()?;
                 Some(result.map(|plan| (phase, plan)))
             })
@@ -105,8 +106,12 @@ pub enum Error {
     MissingArchMacros(String),
     #[error("script")]
     Script(#[from] script::Error),
-    #[error("tuning")]
-    Tuning(#[from] tuning::Error),
+    #[error("typed tuning policy")]
+    Tuning(#[from] crate::build::tuning::Error),
+    #[error("build policy")]
+    BuildPolicy(#[from] crate::policy::Error),
+    #[error("unsupported context {0:?} in a compiler tuning flag")]
+    UnsupportedTuningContext(ContextValue),
     #[error("an environment phase may only contain Shell or CargoEnvironment steps")]
     UnsupportedEnvironmentStep,
     #[error("Shell and CargoEnvironment steps cannot be rendered as structural executable commands")]
