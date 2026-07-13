@@ -5,6 +5,7 @@
 
 let _ = import! std.types
 let arrays = import! std.array.prim
+let strings = import! std.string.prim
 
 type Optional a =
     | Unset
@@ -248,7 +249,7 @@ let default_options: OptionsSpec = {
     lastrip = True,
 }
 
-let output = \name -> {
+let output: String -> OutputSpec = \name -> {
     name,
     summary = Unset,
     description = Unset,
@@ -259,6 +260,170 @@ let output = \name -> {
     conflicts = [],
 }
 let output_with: OutputSpec -> OutputSpec = \value -> value
+
+let local_output = \pname output -> Output {
+    value = {
+        package = { name = pname },
+        output,
+    },
+}
+
+// Repository-owned split policy is part of the pure package factory. Output
+// relations remain symbolic here and are validated before Boulder sees the
+// concrete PackageSpec.
+let default_output_set = \pname -> {
+    root = output_with {
+        paths = [Any { path = "*" }],
+        .. output "out"
+    },
+    docs = output_with {
+        summary = Set (strings.append "Documentation for " pname),
+        description = Set (strings.append (strings.append "Documentation files for the " pname) " package"),
+        paths = [Any { path = "/usr/share/gtk-doc" }],
+        .. output "docs"
+    },
+    devel = output_with {
+        summary = Set (strings.append "Development files for " pname),
+        description = Set (strings.append
+            (strings.append "Install this package if you intend to build software against\nthe " pname)
+            " package."),
+        runtime_inputs = [local_output pname "out"],
+        paths = [
+            Any { path = "/usr/include" },
+            Any { path = "/usr/lib/*.a" },
+            Any { path = "/usr/lib/cmake" },
+            Any { path = "/usr/lib/lib*.so" },
+            Any { path = "/usr/lib/pkgconfig" },
+            Any { path = "/usr/share/aclocal" },
+            Any { path = "/usr/share/cmake" },
+            Any { path = "/usr/share/man/man2" },
+            Any { path = "/usr/share/man/man3" },
+            Any { path = "/usr/share/man/man9" },
+            Any { path = "/usr/share/pkgconfig" },
+            Any { path = "/usr/share/gir-1.0/*.gir" },
+            Any { path = "/usr/share/vala/vapi/*.deps" },
+            Any { path = "/usr/share/vala/vapi/*.vapi" },
+            Any { path = "/usr/lib/*.prl" },
+            Any { path = "/usr/lib/metatypes" },
+            Any { path = "/usr/lib/qt*/metatypes/qt*.json" },
+            Any { path = "/usr/lib/qt*/mkspecs" },
+            Any { path = "/usr/lib/qt*/modules/*.json" },
+            Any { path = "/usr/lib/qt*/sbom" },
+            Any { path = "/usr/lib/qt*/plugins/designer/*.so" },
+            Any { path = "/usr/share/doc/qt5/*.qch" },
+            Any { path = "/usr/share/doc/qt5/*.tags" },
+            Any { path = "/usr/share/doc/qt6/*.qch" },
+            Any { path = "/usr/share/doc/qt6/*.tags" },
+        ],
+        .. output "devel"
+    },
+    dbginfo = output_with {
+        summary = Set (strings.append "Debugging symbols for " pname),
+        description = Set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            " package."),
+        paths = [Any { path = "/usr/lib/debug" }],
+        .. output "dbginfo"
+    },
+    libs = output_with {
+        summary = Set (strings.append "Library files for " pname),
+        description = Set (strings.append
+            (strings.append "Library files for " pname)
+            ", typically pulled in as a dependency of another package."),
+        .. output "libs"
+    },
+    bit32 = output_with {
+        summary = Set (strings.append "Provides 32-bit runtime libraries for " pname),
+        description = Set (strings.append
+            (strings.append "Install this package if you need the 32-bit versions of the\n" pname)
+            " package libraries."),
+        runtime_inputs = [local_output pname "out"],
+        paths = [
+            Any { path = "/usr/lib32" },
+            Any { path = "/usr/lib32/lib*.so.*" },
+        ],
+        .. output "32bit"
+    },
+    bit32_devel = output_with {
+        summary = Set (strings.append "Provides development files for " (strings.append pname "-32bit")),
+        description = Set (strings.append
+            (strings.append
+                (strings.append "Install this package if you need to build software against\nthe 32-bit version of " pname)
+                ", ")
+            (strings.append pname "-32bit.")),
+        runtime_inputs = [
+            local_output pname "32bit",
+            local_output pname "devel",
+        ],
+        paths = [
+            Any { path = "/usr/lib32/*.a" },
+            Any { path = "/usr/lib32/cmake" },
+            Any { path = "/usr/lib32/lib*.so" },
+            Any { path = "/usr/lib32/pkgconfig" },
+        ],
+        .. output "32bit-devel"
+    },
+    bit32_dbginfo = output_with {
+        summary = Set (strings.append "Debugging symbols for " (strings.append pname "-32bit")),
+        description = Set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            "-32bit package."),
+        paths = [Any { path = "/usr/lib32/debug" }],
+        .. output "32bit-dbginfo"
+    },
+    demos = output_with {
+        summary = Set (strings.append "Example files for " pname),
+        description = Set (strings.append (strings.append "Example files for the " pname) " package"),
+        paths = [Any { path = "/usr/lib/qt*/examples" }],
+        .. output "demos"
+    },
+}
+
+let default_outputs = \pname ->
+    let defaults = default_output_set pname
+    [
+        defaults.root,
+        defaults.docs,
+        defaults.devel,
+        defaults.dbginfo,
+        defaults.libs,
+        defaults.bit32,
+        defaults.bit32_devel,
+        defaults.bit32_dbginfo,
+        defaults.demos,
+    ]
+
+let choose_optional = \authored default ->
+    match authored with
+    | Unset -> default
+    | Set value -> Set value
+
+// Overlay one authored output on its factory default. Lists which historically
+// accumulated through Boulder's package-template merge remain cumulative.
+let overlay_output = \authored default -> {
+    name = authored.name,
+    summary = choose_optional authored.summary default.summary,
+    description = choose_optional authored.description default.description,
+    provides_exclude = authored.provides_exclude,
+    runtime_inputs = arrays.append authored.runtime_inputs default.runtime_inputs,
+    runtime_exclude = arrays.append authored.runtime_exclude default.runtime_exclude,
+    paths = arrays.append authored.paths default.paths,
+    conflicts = authored.conflicts,
+}
+
+let outputs_with_root = \pname root ->
+    let defaults = default_output_set pname
+    [
+        overlay_output root defaults.root,
+        defaults.docs,
+        defaults.devel,
+        defaults.dbginfo,
+        defaults.libs,
+        defaults.bit32,
+        defaults.bit32_devel,
+        defaults.bit32_dbginfo,
+        defaults.demos,
+    ]
 
 let profile = \name -> {
     name,
@@ -276,7 +441,7 @@ let mk_package: MetaSpec -> PackageSpec = \meta -> {
     native_build_inputs = [],
     build_inputs = [],
     check_inputs = [],
-    outputs = [output "out"],
+    outputs = default_outputs meta.pname,
     options = default_options,
     profiles = [],
     sources = [],
@@ -364,6 +529,12 @@ let git = \url git_ref -> GitSource {
     hooks = \value -> value,
     output,
     output_with,
+    outputs = {
+        defaults = default_outputs,
+        named = default_output_set,
+        overlay = overlay_output,
+        with_root = outputs_with_root,
+    },
     profile,
     profile_with = \value -> value,
     options = \value -> value,

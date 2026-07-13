@@ -32,8 +32,8 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     let evaluated = evaluate_gluon_with(&evaluator, &source).unwrap();
 
     assert_eq!(evaluated.package.meta.pname, "factory-hello");
-    assert_eq!(evaluated.package.outputs.len(), 2);
-    assert_eq!(evaluated.package.outputs[1].name, "dev");
+    assert_eq!(evaluated.package.outputs.len(), 10);
+    assert_eq!(evaluated.package.outputs[9].name, "dev");
     assert!(matches!(
         evaluated.package.build_inputs[0],
         DependencySpec::Package(ref package) if package.name == "zlib"
@@ -68,14 +68,25 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
             .iter()
             .map(|output| output.name.as_str())
             .collect::<Vec<_>>(),
-        ["out", "dev"]
+        [
+            "out",
+            "docs",
+            "devel",
+            "dbginfo",
+            "libs",
+            "32bit",
+            "32bit-devel",
+            "32bit-dbginfo",
+            "demos",
+            "dev",
+        ]
     );
     assert_eq!(
         dependency_names(&evaluated.package.outputs[0].runtime_inputs),
         ["pkgconfig(libressl)"]
     );
     assert_eq!(
-        dependency_names(&evaluated.package.outputs[1].runtime_inputs),
+        dependency_names(&evaluated.package.outputs[9].runtime_inputs),
         ["factory-hello"]
     );
     assert_eq!(evaluated.package.architectures, ["x86_64"]);

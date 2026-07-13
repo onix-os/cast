@@ -365,7 +365,13 @@ boulder.mk_package (boulder.meta source)
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
-            ["boulder.package.v2", "source.glu", "std.array.prim", "std.types",]
+            [
+                "boulder.package.v2",
+                "source.glu",
+                "std.array.prim",
+                "std.string.prim",
+                "std.types",
+            ]
         );
     }
 

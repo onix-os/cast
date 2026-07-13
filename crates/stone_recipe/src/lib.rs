@@ -3,8 +3,8 @@
 
 pub use self::macros::{
     ActionSpec, EvaluatedMacros, EvaluatedPolicy, GLUON_MACROS_ABI, GLUON_POLICY_ABI, MACROS_ABI_VERSION, Macros,
-    MacrosConversionError, MacrosEvaluationError, MacrosSpec, OutputTemplateSpec, POLICY_ABI_VERSION,
-    PolicyEvaluationError, PolicyKind, PolicyLayer, PolicyModule, PolicyOperation, encode_gluon as encode_macros_gluon,
+    MacrosConversionError, MacrosEvaluationError, MacrosSpec, POLICY_ABI_VERSION, PolicyEvaluationError, PolicyKind,
+    PolicyLayer, PolicyModule, PolicyOperation, encode_gluon as encode_macros_gluon,
     encode_gluon_spec as encode_macros_gluon_spec, evaluate_gluon as evaluate_macros_gluon,
     evaluate_gluon_with as evaluate_macros_gluon_with, evaluate_policy_gluon_with, evaluate_policy_gluon_with_inputs,
 };

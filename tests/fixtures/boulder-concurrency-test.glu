@@ -20,7 +20,7 @@ let root = {
 
 {
     builder = b.builder.shell scripts [],
-    outputs = [root],
+    outputs = b.outputs.with_root "boulder-concurrency-test" root,
     .. b.mk_package (b.meta {
         pname = "boulder-concurrency-test",
         version = "1",

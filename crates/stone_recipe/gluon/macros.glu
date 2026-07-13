@@ -52,22 +52,6 @@ type TuningGroupSpec = {
     choices: Array TuningChoice,
 }
 
-type PathSpec =
-    | Any { path: String }
-    | Exe { path: String }
-    | Symlink { path: String }
-    | Special { path: String }
-
-type PackageSpec = {
-    summary: Optional String,
-    description: Optional String,
-    provides_exclude: Array String,
-    run_deps: Array String,
-    run_deps_exclude: Array String,
-    paths: Array PathSpec,
-    conflicts: Array String,
-}
-
 type DefinitionEntry = {
     key: String,
     value: String,
@@ -83,17 +67,11 @@ type TuningEntry = {
     value: TuningGroupSpec,
 }
 
-type PackageEntry = {
-    key: String,
-    value: PackageSpec,
-}
-
 type MacrosSpec = {
     actions: Array ActionEntry,
     definitions: Array DefinitionEntry,
     flags: Array FlagEntry,
     tuning: Array TuningEntry,
-    packages: Array PackageEntry,
     default_tuning_groups: Array String,
 }
 
@@ -125,22 +103,11 @@ let empty_tuning_group: TuningGroupSpec = {
     choices = [],
 }
 
-let empty_package: PackageSpec = {
-    summary = None,
-    description = None,
-    provides_exclude = [],
-    run_deps = [],
-    run_deps_exclude = [],
-    paths = [],
-    conflicts = [],
-}
-
 let empty_macros: MacrosSpec = {
     actions = [],
     definitions = [],
     flags = [],
     tuning = [],
-    packages = [],
     default_tuning_groups = [],
 }
 
@@ -178,8 +145,6 @@ let tuning_group: TuningOptionSpec -> TuningGroupSpec = \root -> {
 }
 let tuning_group_with: TuningGroupSpec -> TuningGroupSpec = \value -> value
 
-let package: PackageSpec = empty_package
-let package_with: PackageSpec -> PackageSpec = \value -> value
 let module_with: MacrosSpec -> MacrosSpec = \value -> value
 
 let with_actions: Array ActionEntry -> MacrosSpec -> MacrosSpec = \actions value -> {
@@ -196,10 +161,6 @@ let with_flags: Array FlagEntry -> MacrosSpec -> MacrosSpec = \flags value -> {
 }
 let with_tuning: Array TuningEntry -> MacrosSpec -> MacrosSpec = \tuning value -> {
     tuning,
-    .. value
-}
-let with_packages: Array PackageEntry -> MacrosSpec -> MacrosSpec = \packages value -> {
-    packages,
     .. value
 }
 let with_default_tuning_groups: Array String -> MacrosSpec -> MacrosSpec = \default_tuning_groups value -> {
@@ -222,7 +183,6 @@ let with_default_tuning_groups: Array String -> MacrosSpec -> MacrosSpec = \defa
         flag = empty_tuning_flag,
         tuning_option = empty_tuning_option,
         tuning_group = empty_tuning_group,
-        package = empty_package,
         macros = empty_macros,
     },
     action = {
@@ -241,22 +201,11 @@ let with_default_tuning_groups: Array String -> MacrosSpec -> MacrosSpec = \defa
         group_with = tuning_group_with,
         choice = named,
     },
-    package = {
-        default = empty_package,
-        from_record = package_with,
-        path = {
-            any = \path -> Any { path },
-            exe = \path -> Exe { path },
-            symlink = \path -> Symlink { path },
-            special = \path -> Special { path },
-        },
-    },
     set = {
         actions = with_actions,
         definitions = with_definitions,
         flags = with_flags,
         tuning = with_tuning,
-        packages = with_packages,
         default_tuning_groups = with_default_tuning_groups,
     },
 }

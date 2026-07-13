@@ -13,6 +13,6 @@ let meta = boulder.meta {
 }
 
 {
-    outputs = [package_policy (boulder.output "out")],
+    outputs = boulder.outputs.with_root meta.pname (package_policy (boulder.output "out")),
     .. boulder.mk_package meta
 }

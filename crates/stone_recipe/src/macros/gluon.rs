@@ -7,11 +7,9 @@ use std::{error::Error, fmt, fmt::Write as _};
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 
-use super::{
-    Action, ActionSpec, Macros, MacrosSpec, OutputTemplateSpec, PolicyKind, PolicyLayer, PolicyModule, PolicyOperation,
-};
+use super::{Action, ActionSpec, Macros, MacrosSpec, PolicyKind, PolicyLayer, PolicyModule, PolicyOperation};
 use crate::{
-    PathSpec, ValidationError,
+    ValidationError,
     spec::KeyValueSpec,
     tuning::{CompilerFlagsSpec, TuningFlagSpec, TuningGroupSpec, TuningOptionSpec},
     validation,
@@ -78,22 +76,6 @@ type TuningGroupSpec = {
     choices : Array TuningChoice,
 }
 
-type PathSpec =
-    | Any { path : String }
-    | Exe { path : String }
-    | Symlink { path : String }
-    | Special { path : String }
-
-type PackageSpec = {
-    summary : Optional String,
-    description : Optional String,
-    provides_exclude : Array String,
-    run_deps : Array String,
-    run_deps_exclude : Array String,
-    paths : Array PathSpec,
-    conflicts : Array String,
-}
-
 type DefinitionEntry = {
     key : String,
     value : String,
@@ -109,17 +91,11 @@ type TuningEntry = {
     value : TuningGroupSpec,
 }
 
-type PackageEntry = {
-    key : String,
-    value : PackageSpec,
-}
-
 type MacrosSpec = {
     actions : Array ActionEntry,
     definitions : Array DefinitionEntry,
     flags : Array FlagEntry,
     tuning : Array TuningEntry,
-    packages : Array PackageEntry,
     default_tuning_groups : Array String,
 }
 
@@ -144,16 +120,13 @@ pub struct EvaluatedPolicy {
 pub enum MacrosConversionError {
     EmptyKey { field: String },
     UnknownTuningDefault { field: String, value: String },
-    EmptyPackagePath { field: String },
     InvalidRelation(ValidationError),
 }
 
 impl MacrosConversionError {
     pub fn field(&self) -> &str {
         match self {
-            Self::EmptyKey { field } | Self::UnknownTuningDefault { field, .. } | Self::EmptyPackagePath { field } => {
-                field
-            }
+            Self::EmptyKey { field } | Self::UnknownTuningDefault { field, .. } => field,
             Self::InvalidRelation(error) => error.field(),
         }
     }
@@ -166,7 +139,6 @@ impl fmt::Display for MacrosConversionError {
             Self::UnknownTuningDefault { field, value } => {
                 write!(formatter, "{field}: default `{value}` is not one of the tuning choices")
             }
-            Self::EmptyPackagePath { field } => write!(formatter, "{field}: package path must not be empty"),
             Self::InvalidRelation(error) => write!(formatter, "{error}"),
         }
     }
@@ -257,7 +229,6 @@ struct GluonMacrosSpec {
     definitions: Vec<GluonKeyValueSpec<String>>,
     flags: Vec<GluonKeyValueSpec<GluonTuningFlagSpec>>,
     tuning: Vec<GluonKeyValueSpec<GluonTuningGroupSpec>>,
-    packages: Vec<GluonKeyValueSpec<GluonPackageSpec>>,
     default_tuning_groups: Vec<String>,
 }
 
@@ -328,25 +299,6 @@ struct GluonTuningGroupSpec {
     choices: Vec<GluonKeyValueSpec<GluonTuningOptionSpec>>,
 }
 
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonPackageSpec {
-    summary: GluonOptional<String>,
-    description: GluonOptional<String>,
-    provides_exclude: Vec<String>,
-    run_deps: Vec<String>,
-    run_deps_exclude: Vec<String>,
-    paths: Vec<GluonPathSpec>,
-    conflicts: Vec<String>,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-enum GluonPathSpec {
-    Any { path: String },
-    Exe { path: String },
-    Symlink { path: String },
-    Special { path: String },
-}
-
 impl<T> From<GluonOptional<T>> for Option<T> {
     fn from(value: GluonOptional<T>) -> Self {
         match value {
@@ -375,7 +327,6 @@ impl From<GluonMacrosSpec> for MacrosSpec {
             definitions: value.definitions.into_iter().map(Into::into).collect(),
             flags: value.flags.into_iter().map(Into::into).collect(),
             tuning: value.tuning.into_iter().map(Into::into).collect(),
-            packages: value.packages.into_iter().map(Into::into).collect(),
             default_tuning_groups: value.default_tuning_groups,
         }
     }
@@ -455,38 +406,12 @@ impl From<GluonTuningGroupSpec> for TuningGroupSpec {
     }
 }
 
-impl From<GluonPackageSpec> for OutputTemplateSpec {
-    fn from(value: GluonPackageSpec) -> Self {
-        Self {
-            summary: value.summary.into(),
-            description: value.description.into(),
-            provides_exclude: value.provides_exclude,
-            runtime_inputs: value.run_deps,
-            runtime_exclude: value.run_deps_exclude,
-            paths: value.paths.into_iter().map(Into::into).collect(),
-            conflicts: value.conflicts,
-        }
-    }
-}
-
-impl From<GluonPathSpec> for PathSpec {
-    fn from(value: GluonPathSpec) -> Self {
-        match value {
-            GluonPathSpec::Any { path } => Self::Any { path },
-            GluonPathSpec::Exe { path } => Self::Exe { path },
-            GluonPathSpec::Symlink { path } => Self::Symlink { path },
-            GluonPathSpec::Special { path } => Self::Special { path },
-        }
-    }
-}
-
 impl MacrosSpec {
     pub fn validate(&self) -> Result<(), MacrosConversionError> {
         validate_keys("actions", &self.actions)?;
         validate_keys("definitions", &self.definitions)?;
         validate_keys("flags", &self.flags)?;
         validate_keys("tuning", &self.tuning)?;
-        validate_keys("packages", &self.packages)?;
 
         for (index, action) in self.actions.iter().enumerate() {
             validation::validate_dependencies(
@@ -503,23 +428,6 @@ impl MacrosSpec {
                     field: format!("tuning[{index}].value.default"),
                     value: default.clone(),
                 });
-            }
-        }
-        for (package_index, package) in self.packages.iter().enumerate() {
-            validation::validate_package_templates(&package.value, &format!("packages[{package_index}].value"))
-                .map_err(MacrosConversionError::InvalidRelation)?;
-            for (path_index, path) in package.value.paths.iter().enumerate() {
-                let path = match path {
-                    PathSpec::Any { path }
-                    | PathSpec::Exe { path }
-                    | PathSpec::Symlink { path }
-                    | PathSpec::Special { path } => path,
-                };
-                if path.trim().is_empty() {
-                    return Err(MacrosConversionError::EmptyPackagePath {
-                        field: format!("packages[{package_index}].value.paths[{path_index}].path"),
-                    });
-                }
             }
         }
         for (index, group) in self.default_tuning_groups.iter().enumerate() {
@@ -577,14 +485,6 @@ impl From<&Macros> for MacrosSpec {
                 .map(|value| KeyValueSpec {
                     key: value.key.clone(),
                     value: (&value.value).into(),
-                })
-                .collect(),
-            packages: macros
-                .packages
-                .iter()
-                .map(|value| KeyValueSpec {
-                    key: value.key.clone(),
-                    value: value.value.clone(),
                 })
                 .collect(),
             default_tuning_groups: macros.default_tuning_groups.clone(),
@@ -690,7 +590,6 @@ fn encode_valid_spec(spec: &MacrosSpec) -> String {
     });
     encode_key_values(&mut output, "flags", &spec.flags, encode_tuning_flag);
     encode_key_values(&mut output, "tuning", &spec.tuning, encode_tuning_group);
-    encode_key_values(&mut output, "packages", &spec.packages, encode_package);
     encode_string_array_field(&mut output, 1, "default_tuning_groups", &spec.default_tuning_groups);
     output.push_str("}\n");
     output
@@ -790,43 +689,6 @@ fn encode_tuning_option(output: &mut String, option: &TuningOptionSpec, indent: 
     output.push('}');
 }
 
-fn encode_package(output: &mut String, package: &OutputTemplateSpec) {
-    output.push_str("{\n");
-    writeln!(
-        output,
-        "                summary = {},",
-        gluon_optional_text(package.summary.as_deref())
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "                description = {},",
-        gluon_optional_text(package.description.as_deref())
-    )
-    .unwrap();
-    encode_string_array_field(output, 4, "provides_exclude", &package.provides_exclude);
-    encode_string_array_field(output, 4, "run_deps", &package.runtime_inputs);
-    encode_string_array_field(output, 4, "run_deps_exclude", &package.runtime_exclude);
-    output.push_str("                paths = [\n");
-    for path in &package.paths {
-        let (variant, path) = match path {
-            PathSpec::Any { path } => ("Any", path),
-            PathSpec::Exe { path } => ("Exe", path),
-            PathSpec::Symlink { path } => ("Symlink", path),
-            PathSpec::Special { path } => ("Special", path),
-        };
-        writeln!(
-            output,
-            "                    {variant} {{ path = {} }},",
-            gluon_string(path)
-        )
-        .unwrap();
-    }
-    output.push_str("                ],\n");
-    encode_string_array_field(output, 4, "conflicts", &package.conflicts);
-    output.push_str("            }");
-}
-
 fn encode_string_array_field(output: &mut String, indent: usize, field: &str, values: &[String]) {
     write_indent(output, indent);
     writeln!(output, "{field} = [").unwrap();
@@ -914,7 +776,6 @@ mod tests {
         assert_eq!(flag.get(CompilerFlag::C, Toolchain::Gnu), Some("-O3"));
         assert_eq!(flag.get(CompilerFlag::Cxx, Toolchain::Llvm), Some("-stdlib=libc++"));
         assert_eq!(evaluated.macros.tuning[0].value.default.as_deref(), Some("fast"));
-        assert_eq!(evaluated.macros.packages[0].value.paths.len(), 4);
         assert_eq!(evaluated.macros.default_tuning_groups, ["optimize"]);
     }
 
@@ -975,19 +836,18 @@ boulder.set.actions actions definitions"#,
     }
 
     #[test]
-    fn flag_tuning_and_package_conversion_matches_the_format_neutral_spec() {
+    fn flag_and_tuning_conversion_matches_the_format_neutral_spec() {
         let evaluated = evaluate_gluon(&authored(maximal_gluon())).unwrap();
 
         assert_eq!(MacrosSpec::from(&evaluated.macros), maximal_spec());
     }
 
     #[test]
-    fn flag_tuning_and_package_defaults_are_explicit() {
+    fn flag_and_tuning_defaults_are_explicit() {
         let evaluated = evaluate_gluon(&authored(
             r#"{
     flags = [boulder.named "empty" boulder.defaults.flag],
     tuning = [boulder.named "empty" boulder.defaults.tuning_group],
-    packages = [boulder.named "empty" boulder.package.default],
     .. boulder.macros
 }"#,
         ))
@@ -996,11 +856,10 @@ boulder.set.actions actions definitions"#,
 
         assert_eq!(spec.flags[0].value, TuningFlagSpec::default());
         assert_eq!(spec.tuning[0].value, TuningGroupSpec::default());
-        assert_eq!(spec.packages[0].value, OutputTemplateSpec::default());
     }
 
     #[test]
-    fn invalid_types_option_ranges_and_paths_are_structured() {
+    fn invalid_types_and_option_ranges_are_structured() {
         let wrong_type = evaluate_gluon(&authored("{ actions = 1, .. boulder.macros }")).unwrap_err();
         assert!(matches!(
             wrong_type,
@@ -1024,22 +883,6 @@ boulder.set.actions actions definitions"#,
                 if error.field() == "tuning[0].value.default"
         ));
 
-        let empty_path = evaluate_gluon(&authored(
-            r#"{
-    packages = [boulder.named "bad" (boulder.package.from_record {
-        paths = [boulder.package.path.any ""],
-        .. boulder.package.default
-    })],
-    .. boulder.macros
-}"#,
-        ))
-        .unwrap_err();
-        assert!(matches!(
-            empty_path,
-            MacrosEvaluationError::Conversion(ref error)
-                if error.field() == "packages[0].value.paths[0].path"
-        ));
-
         let limits = Limits {
             max_source_bytes: 8,
             ..Limits::default()
@@ -1053,22 +896,7 @@ boulder.set.actions actions definitions"#,
     }
 
     #[test]
-    fn macro_relations_distinguish_strict_actions_from_deferred_packages() {
-        let deferred_package = evaluate_gluon(&authored(
-            r#"{
-    packages = [boulder.named "devel" (boulder.package.from_record {
-        run_deps = ["%(name)", "binary(%(tool))"],
-        .. boulder.package.default
-    })],
-    .. boulder.macros
-}"#,
-        ))
-        .unwrap();
-        assert_eq!(
-            deferred_package.macros.packages[0].value.runtime_inputs,
-            ["%(name)", "binary(%(tool))"]
-        );
-
+    fn action_relations_are_strict() {
         let invalid_action = evaluate_gluon(&authored(
             r#"{
     actions = [boulder.named "build" (boulder.action.with_dependencies
@@ -1083,23 +911,6 @@ boulder.set.actions actions definitions"#,
             MacrosEvaluationError::Conversion(MacrosConversionError::InvalidRelation(
                 ValidationError::InvalidDependency { ref field, .. }
             )) if field == "actions[0].value.dependencies[1]"
-        ));
-
-        let invalid_package = evaluate_gluon(&authored(
-            r#"{
-    packages = [boulder.named "devel" (boulder.package.from_record {
-        conflicts = ["valid", "binary(unclosed"],
-        .. boulder.package.default
-    })],
-    .. boulder.macros
-}"#,
-        ))
-        .unwrap_err();
-        assert!(matches!(
-            invalid_package,
-            MacrosEvaluationError::Conversion(MacrosConversionError::InvalidRelation(
-                ValidationError::InvalidProvider { ref field, .. }
-            )) if field == "packages[0].value.conflicts[1]"
         ));
     }
 
@@ -1169,20 +980,6 @@ boulder.set.actions actions definitions"#,
         default = boulder.optional.some "fast",
         choices = [boulder.tuning.choice "fast" (boulder.tuning.option ["optimize-fast"] [])],
     })],
-    packages = [boulder.named "main" (boulder.package.from_record {
-        summary = boulder.optional.some "Main package",
-        description = boulder.optional.some "All runtime files",
-        provides_exclude = ["provided(*)"],
-        run_deps = ["runtime"],
-        run_deps_exclude = ["excluded(*)"],
-        paths = [
-            boulder.package.path.any "/usr/share/example",
-            boulder.package.path.exe "/usr/bin/example",
-            boulder.package.path.symlink "/usr/bin/example-link",
-            boulder.package.path.special "/usr/lib/example.special",
-        ],
-        conflicts = ["other"],
-    })],
     default_tuning_groups = ["optimize"],
 }"##
     }
@@ -1240,31 +1037,6 @@ boulder.set.actions actions definitions"#,
                             disabled: Vec::new(),
                         },
                     }],
-                },
-            }],
-            packages: vec![KeyValueSpec {
-                key: "main".to_owned(),
-                value: OutputTemplateSpec {
-                    summary: Some("Main package".to_owned()),
-                    description: Some("All runtime files".to_owned()),
-                    provides_exclude: vec!["provided(*)".to_owned()],
-                    runtime_inputs: vec!["runtime".to_owned()],
-                    runtime_exclude: vec!["excluded(*)".to_owned()],
-                    paths: vec![
-                        PathSpec::Any {
-                            path: "/usr/share/example".to_owned(),
-                        },
-                        PathSpec::Exe {
-                            path: "/usr/bin/example".to_owned(),
-                        },
-                        PathSpec::Symlink {
-                            path: "/usr/bin/example-link".to_owned(),
-                        },
-                        PathSpec::Special {
-                            path: "/usr/lib/example.special".to_owned(),
-                        },
-                    ],
-                    conflicts: vec!["other".to_owned()],
                 },
             }],
             default_tuning_groups: vec!["optimize".to_owned()],

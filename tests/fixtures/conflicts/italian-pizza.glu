@@ -16,7 +16,7 @@ let root = {
 }
 {
     builder = b.builder.shell scripts [],
-    outputs = [root],
+    outputs = b.outputs.with_root "italian-pizza" root,
     .. b.mk_package (b.meta {
         pname = "italian-pizza",
         version = "1",

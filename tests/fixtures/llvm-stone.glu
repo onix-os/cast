@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 let b = import! boulder.package.v2
+let output_defaults = b.outputs.named "llvm"
 
 let scripts = b.scripts {
     setup = b.phase [
@@ -103,7 +104,21 @@ let lld_development = {
         b.dep.package "libcxx-32bit-devel",
         b.dep.package "clang-32bit",
     ],
-    outputs = [root, development, libraries, clang, clang_development, lld, lld_development],
+    outputs = [
+        b.outputs.overlay root output_defaults.root,
+        output_defaults.docs,
+        b.outputs.overlay development output_defaults.devel,
+        output_defaults.dbginfo,
+        b.outputs.overlay libraries output_defaults.libs,
+        output_defaults.bit32,
+        output_defaults.bit32_devel,
+        output_defaults.bit32_dbginfo,
+        output_defaults.demos,
+        clang,
+        clang_development,
+        lld,
+        lld_development,
+    ],
     sources = [
         b.source.archive
             "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.4/llvm-project-16.0.4.src.tar.xz"

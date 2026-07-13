@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
-use std::collections::{BTreeMap, btree_map};
+use std::collections::BTreeMap;
 use std::{io, num::NonZeroU64};
 
 use fs_err as fs;
-use itertools::Itertools;
 use stone::{
     StoneDigestWriterHasher,
     relation::{Dependency, ParseError, Provider},
@@ -15,10 +14,9 @@ use moss::util;
 use stone_recipe::{
     derivation::{AnalysisPlan, DerivationId, DerivationPlan, OutputRelation, PackageIdentity, PathRuleKind},
     package::OutputSpec,
-    script,
 };
 
-use crate::{Macros, Paths, Recipe, Timing, build, timing};
+use crate::{Paths, Recipe, Timing, timing};
 
 use self::collect::Collector;
 
@@ -31,17 +29,15 @@ pub struct Packager {
     collector: Collector,
 }
 
-/// One path selection rule after authored output and repository policy
-/// composition. The derivation vocabulary is retained so planning can copy it
-/// without passing through the legacy recipe path model.
+/// One path selection rule after pure package-factory composition. The
+/// derivation vocabulary is retained so planning can copy it directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedPath {
     pub(crate) pattern: String,
     pub(crate) kind: PathRuleKind,
 }
 
-/// One emitted package after direct package-v2 outputs and repository policy
-/// templates have been resolved.
+/// One emitted package resolved from a direct package-v2 output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedOutput {
     pub(crate) summary: Option<String>,
@@ -51,17 +47,6 @@ pub(crate) struct ResolvedOutput {
     pub(crate) runtime_exclude: Vec<String>,
     pub(crate) paths: Vec<ResolvedPath>,
     pub(crate) conflicts: Vec<Provider>,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PendingOutput {
-    summary: Option<String>,
-    description: Option<String>,
-    provides_exclude: Vec<String>,
-    runtime_inputs: Vec<String>,
-    runtime_exclude: Vec<String>,
-    paths: Vec<ResolvedPath>,
-    conflicts: Vec<String>,
 }
 
 pub struct FrozenPackager<'a> {
@@ -224,19 +209,9 @@ fn parse_frozen_architecture(value: &str) -> Result<crate::Architecture, Error> 
 }
 
 impl Packager {
-    pub fn new(paths: &Paths, recipe: &Recipe, macros: &Macros, targets: &[build::Target]) -> Result<Self, Error> {
+    pub fn new(paths: &Paths, recipe: &Recipe) -> Result<Self, Error> {
         let mut collector = Collector::new(paths.install().guest);
-
-        // Arch names used to parse [`Macros`] for package templates
-        //
-        // We always use "base" plus whatever build targets we've built
-        let arches = Some("base".to_owned())
-            .into_iter()
-            .chain(targets.iter().map(|target| target.build_target.to_string()));
-
-        // Resolves all package templates from arch macros + recipe file. Also adds
-        // package paths to [`Collector`]
-        let packages = resolve_packages(arches, macros, recipe, &mut collector)?;
+        let packages = resolve_packages(recipe, &mut collector)?;
 
         Ok(Self { collector, packages })
     }
@@ -253,20 +228,8 @@ impl Packager {
     }
 }
 
-/// Resolve all package templates from the arch macros and
-/// incoming recipe. Package templates may have variables so
-/// they are fully expanded before returned.
-fn resolve_packages(
-    arches: impl IntoIterator<Item = String>,
-    macros: &Macros,
-    recipe: &Recipe,
-    collector: &mut Collector,
-) -> Result<BTreeMap<String, ResolvedOutput>, Error> {
-    let mut parser = script::Parser::new();
-    parser.add_definition("name", &recipe.declaration.meta.pname);
-    parser.add_definition("version", &recipe.declaration.meta.version);
-    parser.add_definition("release", recipe.declaration.meta.release);
-
+/// Resolve the concrete typed outputs returned by the Gluon package factory.
+fn resolve_packages(recipe: &Recipe, collector: &mut Collector) -> Result<BTreeMap<String, ResolvedOutput>, Error> {
     let root_output = recipe
         .declaration
         .outputs
@@ -275,63 +238,9 @@ fn resolve_packages(
         .expect("validated package has one root output");
 
     let mut packages = BTreeMap::new();
-
-    // Add a package, ensuring it's fully expanded
-    //
-    // If a name collision occurs, merge the incoming and stored
-    // packages
-    let mut add_package = |mut name: String, pending: PendingOutput| {
-        name = parser.parse_content(&name)?;
-
-        let summary = pending
-            .summary
-            .as_ref()
-            .or(root_output.summary.as_ref())
-            .map(|summary| parser.parse_content(summary))
-            .transpose()?;
-        let description = pending
-            .description
-            .as_ref()
-            .or(root_output.description.as_ref())
-            .map(|description| parser.parse_content(description))
-            .transpose()?;
-        let runtime_inputs = pending
-            .runtime_inputs
-            .into_iter()
-            .enumerate()
-            .map(|(index, dependency)| {
-                let value = parser.parse_content(&dependency)?;
-                parse_dependency(format!("packages[{name}].runtime_inputs[{index}]"), &value)
-            })
-            .collect::<Result<_, Error>>()?;
-        let conflicts = pending
-            .conflicts
-            .into_iter()
-            .enumerate()
-            .map(|(index, provider)| {
-                let value = parser.parse_content(&provider)?;
-                parse_provider(format!("packages[{name}].conflicts[{index}]"), &value)
-            })
-            .collect::<Result<_, Error>>()?;
-        let paths = pending
-            .paths
-            .into_iter()
-            .map(|mut path| {
-                path.pattern = parser.parse_content(&path.pattern)?;
-                Ok(path)
-            })
-            .collect::<Result<_, Error>>()?;
-        let mut package = ResolvedOutput {
-            summary,
-            description,
-            provides_exclude: pending.provides_exclude,
-            runtime_inputs,
-            runtime_exclude: pending.runtime_exclude,
-            paths,
-            conflicts,
-        };
-
-        // Add each path to collector
+    for (index, output) in recipe.declaration.outputs.iter().enumerate() {
+        let name = emitted_output_name(&recipe.declaration.meta.pname, &output.name);
+        let package = resolved_output(output, root_output, index)?;
         for path in &package.paths {
             collector.add_rule(collect::Rule {
                 pattern: path.pattern.clone(),
@@ -339,54 +248,7 @@ fn resolve_packages(
                 kind: path.kind,
             });
         }
-
-        match packages.entry(name.clone()) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(package);
-            }
-            btree_map::Entry::Occupied(entry) => {
-                let prev = entry.remove();
-
-                package.runtime_inputs = package
-                    .runtime_inputs
-                    .into_iter()
-                    .chain(prev.runtime_inputs)
-                    .sorted()
-                    .collect();
-                package.runtime_exclude = package
-                    .runtime_exclude
-                    .into_iter()
-                    .chain(prev.runtime_exclude)
-                    .sorted()
-                    .collect();
-                package.paths = package
-                    .paths
-                    .into_iter()
-                    .chain(prev.paths)
-                    .sorted_by_key(|path| path.pattern.clone())
-                    .collect();
-
-                packages.insert(name, package);
-            }
-        }
-
-        Result::<_, Error>::Ok(())
-    };
-
-    // Add packages templates from each architecture
-    for arch in arches.into_iter() {
-        if let Some(macros) = macros.arch.get(&arch) {
-            for entry in macros.packages.clone().into_iter() {
-                add_package(entry.key, pending_policy_output(entry.value))?;
-            }
-        }
-    }
-
-    for (index, output) in recipe.declaration.outputs.iter().enumerate() {
-        add_package(
-            emitted_output_name(&recipe.declaration.meta.pname, &output.name),
-            pending_direct_output(output, index)?,
-        )?;
+        packages.insert(name, package);
     }
 
     Ok(packages)
@@ -400,24 +262,21 @@ fn emitted_output_name(pname: &str, output: &str) -> String {
     }
 }
 
-fn pending_direct_output(output: &OutputSpec, output_index: usize) -> Result<PendingOutput, Error> {
-    Ok(PendingOutput {
-        summary: output.summary.clone(),
-        description: output.description.clone(),
+fn resolved_output(output: &OutputSpec, root: &OutputSpec, output_index: usize) -> Result<ResolvedOutput, Error> {
+    Ok(ResolvedOutput {
+        summary: output.summary.clone().or_else(|| root.summary.clone()),
+        description: output.description.clone().or_else(|| root.description.clone()),
         provides_exclude: output.provides_exclude.clone(),
         runtime_inputs: output
             .runtime_inputs
             .iter()
             .enumerate()
             .map(|(index, dependency)| {
-                dependency
-                    .dependency()
-                    .map(|dependency| dependency.to_name())
-                    .map_err(|source| Error::InvalidDependency {
-                        field: format!("outputs[{output_index}].runtime_inputs[{index}]"),
-                        value: format!("{dependency:?}"),
-                        source,
-                    })
+                dependency.dependency().map_err(|source| Error::InvalidDependency {
+                    field: format!("outputs[{output_index}].runtime_inputs[{index}]"),
+                    value: format!("{dependency:?}"),
+                    source,
+                })
             })
             .collect::<Result<_, _>>()?,
         runtime_exclude: output.runtime_exclude.clone(),
@@ -427,29 +286,14 @@ fn pending_direct_output(output: &OutputSpec, output_index: usize) -> Result<Pen
             .iter()
             .enumerate()
             .map(|(index, provider)| {
-                provider
-                    .provider()
-                    .map(|provider| provider.to_name())
-                    .map_err(|source| Error::InvalidProvider {
-                        field: format!("outputs[{output_index}].conflicts[{index}]"),
-                        value: format!("{provider:?}"),
-                        source,
-                    })
+                provider.provider().map_err(|source| Error::InvalidProvider {
+                    field: format!("outputs[{output_index}].conflicts[{index}]"),
+                    value: format!("{provider:?}"),
+                    source,
+                })
             })
             .collect::<Result<_, _>>()?,
     })
-}
-
-fn pending_policy_output(package: stone_recipe::OutputTemplateSpec) -> PendingOutput {
-    PendingOutput {
-        summary: package.summary,
-        description: package.description,
-        provides_exclude: package.provides_exclude,
-        runtime_inputs: package.runtime_inputs,
-        runtime_exclude: package.runtime_exclude,
-        paths: package.paths.iter().map(resolved_path).collect(),
-        conflicts: package.conflicts,
-    }
 }
 
 fn resolved_path(path: &stone_recipe::PathSpec) -> ResolvedPath {
@@ -506,8 +350,6 @@ pub fn sync_artefacts(paths: &Paths) -> io::Result<()> {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("script")]
-    Script(#[from] script::Error),
     #[error("collect install paths")]
     CollectPaths(#[source] collect::Error),
     #[error("analyzing paths")]
@@ -544,23 +386,15 @@ mod tests {
     use stone_recipe::derivation::{AnalysisToolchain, CollectionRulePlan, OutputPlan, PathRuleKind, PathRulePlan};
 
     #[test]
-    fn repository_package_policy_expands_and_merges_for_x86_64() {
-        let macros = Macros::repository_for_tests();
+    fn package_factory_defaults_resolve_directly() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         let install = tempfile::tempdir().unwrap();
         let mut collector = Collector::new(install.path());
 
-        let packages = resolve_packages(
-            ["base".to_owned(), "x86_64".to_owned()],
-            &macros,
-            &recipe,
-            &mut collector,
-        )
-        .unwrap();
+        let packages = resolve_packages(&recipe, &mut collector).unwrap();
 
-        // Golden inherited base-policy package templates captured at 80d7ac5, expanded
-        // and merged through the same boundary used by the packager.
+        // Golden split policy is now returned as typed values by mk_package.
         assert_eq!(
             packages.keys().map(String::as_str).collect::<Vec<_>>(),
             [
@@ -633,24 +467,6 @@ mod tests {
                 "/usr/share/doc/qt6/*.tags",
             ]
         );
-    }
-
-    #[test]
-    fn invalid_relation_after_macro_expansion_is_a_structured_error() {
-        let macros = Macros::repository_for_tests();
-        let mut recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        recipe.declaration.meta.pname = "unknown(target)".to_owned();
-        let install = tempfile::tempdir().unwrap();
-        let mut collector = Collector::new(install.path());
-
-        let error = resolve_packages(["base".to_owned()], &macros, &recipe, &mut collector).unwrap_err();
-
-        assert!(matches!(
-            error,
-            Error::InvalidDependency { ref field, .. }
-                if field == "packages[unknown(target)-devel].runtime_inputs[0]"
-        ));
     }
 
     #[test]

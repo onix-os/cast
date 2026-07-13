@@ -559,6 +559,7 @@ pub fn evaluate_gluon_with_inputs(
 ) -> Result<EvaluatedPackage, PackageEvaluationError> {
     let mut import_policy = evaluator.import_policy().clone();
     import_policy.enable_array_primitives();
+    import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
     import_policy.insert_embedded_module("boulder.package.v2", GLUON_PACKAGE_ABI)?;
     import_policy.insert_embedded_module("boulder.builders.cmake.v1", GLUON_CMAKE_BUILDER_ABI)?;

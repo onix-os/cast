@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::{
-    KeyValue, PathSpec,
+    KeyValue,
     spec::KeyValueSpec,
     tuning::{TuningFlag, TuningFlagSpec, TuningGroup, TuningGroupSpec},
 };
@@ -21,7 +21,6 @@ pub struct Macros {
     pub definitions: Vec<KeyValue<String>>,
     pub flags: Vec<KeyValue<TuningFlag>>,
     pub tuning: Vec<KeyValue<TuningGroup>>,
-    pub packages: Vec<KeyValue<OutputTemplateSpec>>,
     pub default_tuning_groups: Vec<String>,
 }
 
@@ -75,7 +74,6 @@ pub struct MacrosSpec {
     pub definitions: Vec<KeyValueSpec<String>>,
     pub flags: Vec<KeyValueSpec<TuningFlagSpec>>,
     pub tuning: Vec<KeyValueSpec<TuningGroupSpec>>,
-    pub packages: Vec<KeyValueSpec<OutputTemplateSpec>>,
     pub default_tuning_groups: Vec<String>,
 }
 
@@ -88,22 +86,6 @@ pub struct ActionSpec {
     pub dependencies: Vec<String>,
 }
 
-/// Repository-policy template for one emitted package output.
-///
-/// Relationship strings deliberately remain deferred templates because the
-/// policy layer expands `%()` definitions against a concrete package before
-/// converting them to canonical Stone relations.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OutputTemplateSpec {
-    pub summary: Option<String>,
-    pub description: Option<String>,
-    pub provides_exclude: Vec<String>,
-    pub runtime_inputs: Vec<String>,
-    pub runtime_exclude: Vec<String>,
-    pub paths: Vec<PathSpec>,
-    pub conflicts: Vec<String>,
-}
-
 impl From<MacrosSpec> for Macros {
     fn from(spec: MacrosSpec) -> Self {
         Self {
@@ -111,7 +93,6 @@ impl From<MacrosSpec> for Macros {
             definitions: spec.definitions.into_iter().map(Into::into).collect(),
             flags: spec.flags.into_iter().map(Into::into).collect(),
             tuning: spec.tuning.into_iter().map(Into::into).collect(),
-            packages: spec.packages.into_iter().map(Into::into).collect(),
             default_tuning_groups: spec.default_tuning_groups,
         }
     }
@@ -170,13 +151,6 @@ mod test {
                     choices: Vec::new(),
                 },
             }],
-            packages: vec![KeyValueSpec {
-                key: "main".to_owned(),
-                value: OutputTemplateSpec {
-                    summary: Some("Main package".to_owned()),
-                    ..Default::default()
-                },
-            }],
             default_tuning_groups: vec!["release".to_owned()],
         });
 
@@ -184,7 +158,6 @@ mod test {
         assert_eq!(macros.definitions[0].value, "/usr");
         assert_eq!(macros.flags[0].value.get(CompilerFlag::C, Toolchain::Llvm), Some("-O2"));
         assert_eq!(macros.tuning[0].value.root.enabled, ["optimize"]);
-        assert_eq!(macros.packages[0].value.summary.as_deref(), Some("Main package"));
         assert_eq!(macros.default_tuning_groups, ["release"]);
     }
 }

@@ -255,7 +255,6 @@ fn merge(current: &mut stone_recipe::Macros, mut incoming: stone_recipe::Macros)
     current.definitions.append(&mut incoming.definitions);
     current.flags.append(&mut incoming.flags);
     current.tuning.append(&mut incoming.tuning);
-    current.packages.append(&mut incoming.packages);
     current
         .default_tuning_groups
         .append(&mut incoming.default_tuning_groups);
@@ -596,7 +595,6 @@ policy.policy [
                 || !macros.definitions.is_empty()
                 || !macros.flags.is_empty()
                 || !macros.tuning.is_empty()
-                || !macros.packages.is_empty()
         }));
         assert_eq!(macros.provenance.len(), 9);
         assert!(

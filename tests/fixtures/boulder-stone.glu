@@ -38,7 +38,7 @@ let base = b.mk_package (b.meta {
         b.dep.pkgconfig "libxxhash",
         b.dep.pkgconfig "libzstd",
     ],
-    outputs = [root],
+    outputs = b.outputs.with_root base.meta.pname root,
     sources = [
         b.source.git "https://github.com/serpent-os/boulder" "v1.0.1",
         b.source.archive_with {

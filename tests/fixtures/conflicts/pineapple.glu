@@ -15,7 +15,7 @@ let root = {
 }
 {
     builder = b.builder.shell scripts [],
-    outputs = [root],
+    outputs = b.outputs.with_root "pineapple" root,
     .. b.mk_package (b.meta {
         pname = "pineapple",
         version = "1",

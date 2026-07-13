@@ -32,7 +32,7 @@ let cmake = import! boulder.builders.cmake.v1
             .. b.defaults.hooks
         },
         build_inputs = [deps.zlib],
-        outputs = [root],
+        outputs = b.outputs.with_root base.meta.pname root,
         sources = [
             b.source.archive
                 "https://example.invalid/factory-hello-1.0.0.tar.xz"

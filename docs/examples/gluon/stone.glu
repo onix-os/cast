@@ -12,9 +12,9 @@ let base = boulder.mk_package (boulder.meta {
 })
 
 {
-    outputs = [{
+    outputs = boulder.outputs.with_root base.meta.pname {
         summary = boulder.optional.set "Minimal Gluon recipe example",
         .. boulder.output "out"
-    }],
+    },
     .. base
 }
