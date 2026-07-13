@@ -215,17 +215,10 @@ impl Packager {
 
 /// Resolve the concrete typed outputs returned by the Gluon package factory.
 fn resolve_packages(recipe: &Recipe, collector: &mut Collector) -> Result<BTreeMap<String, ResolvedOutput>, Error> {
-    let root_output = recipe
-        .declaration
-        .outputs
-        .iter()
-        .find(|output| output.name == "out")
-        .expect("validated package has one root output");
-
     let mut packages = BTreeMap::new();
     for (index, output) in recipe.declaration.outputs.iter().enumerate() {
         let name = emitted_output_name(&recipe.declaration.meta.pname, &output.name);
-        let package = resolved_output(output, root_output, index)?;
+        let package = resolved_output(output, index)?;
         for path in &output.paths {
             let (kind, pattern) = collection_rule(path);
             collector.add_rule(collect::Rule {
@@ -248,11 +241,11 @@ fn emitted_output_name(pname: &str, output: &str) -> String {
     }
 }
 
-fn resolved_output(output: &OutputSpec, root: &OutputSpec, output_index: usize) -> Result<ResolvedOutput, Error> {
+fn resolved_output(output: &OutputSpec, output_index: usize) -> Result<ResolvedOutput, Error> {
     Ok(ResolvedOutput {
         include_in_manifest: output.include_in_manifest,
-        summary: output.summary.clone().or_else(|| root.summary.clone()),
-        description: output.description.clone().or_else(|| root.description.clone()),
+        summary: output.summary.clone(),
+        description: output.description.clone(),
         provides_exclude: output.provides_exclude.clone(),
         runtime_inputs: output
             .runtime_inputs
@@ -789,6 +782,37 @@ mod tests {
                 "/usr/share/doc/qt6/*.tags",
             ]
         );
+    }
+
+    #[test]
+    fn resolved_outputs_do_not_inherit_root_metadata() {
+        let mut recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let root = recipe
+            .declaration
+            .outputs
+            .iter_mut()
+            .find(|output| output.name == "out")
+            .unwrap();
+        root.summary = Some("Root summary only".to_owned());
+        root.description = Some("Root description only".to_owned());
+        let split = recipe
+            .declaration
+            .outputs
+            .iter_mut()
+            .find(|output| output.name == "libs")
+            .unwrap();
+        split.summary = None;
+        split.description = None;
+
+        let install = tempfile::tempdir().unwrap();
+        let mut collector = Collector::new(install.path());
+        let packages = resolve_packages(&recipe, &mut collector).unwrap();
+
+        assert_eq!(packages["hello"].summary.as_deref(), Some("Root summary only"));
+        assert_eq!(packages["hello"].description.as_deref(), Some("Root description only"));
+        assert_eq!(packages["hello-libs"].summary, None);
+        assert_eq!(packages["hello-libs"].description, None);
     }
 
     #[test]
