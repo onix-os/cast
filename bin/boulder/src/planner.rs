@@ -15,10 +15,10 @@ use sha2::{Digest, Sha256};
 use stone_recipe::{
     PathKind,
     derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationPlan, DerivationValidationError,
-        ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
-        LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, PathRuleKind, PathRulePlan, PhasePlan,
-        Platform, RepositorySnapshot, StepPlan,
+        AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
+        DerivationPlan, DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput,
+        LockedOutputRef, LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation,
+        PackageIdentity, PathRuleKind, PathRulePlan, PhasePlan, Platform, RepositorySnapshot, StepPlan,
     },
     script,
     tuning::Toolchain,
@@ -33,6 +33,8 @@ use crate::{
     profile,
     source_lock::{SOURCE_LOCK_FILE_NAME, SourceResolution},
 };
+
+pub(crate) const EXECUTOR_ABI: &str = "boulder-executor-v1";
 
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -133,7 +135,7 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
     let target_name = target.build_target.to_string();
     let request_fingerprint = hash_fields(
         [
-            "boulder-build-lock-request-v1",
+            "boulder-build-lock-request-v2",
             builder.recipe.fingerprint.sha256.as_str(),
             source_lock_digest.as_str(),
             target_name.as_str(),
@@ -177,6 +179,9 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
             version: builder.recipe.parsed.source.version.clone(),
             source_release: builder.recipe.parsed.source.release,
             build_release: request.build_release.get(),
+            homepage: builder.recipe.parsed.source.homepage.clone(),
+            licenses: builder.recipe.parsed.source.license.clone(),
+            architecture: artifact_architecture(target.build_target)?.to_string(),
         },
         build_lock,
     );
@@ -215,9 +220,47 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
         name: "boulder-package-analysis".to_owned(),
         fingerprint: tools_buildinfo::get_simple_version(),
     }];
+    plan.analysis = AnalysisPlan {
+        toolchain: match builder.recipe.parsed.options.toolchain {
+            Toolchain::Llvm => AnalysisToolchain::Llvm,
+            Toolchain::Gnu => AnalysisToolchain::Gnu,
+        },
+        debug: builder.recipe.parsed.options.debug,
+        strip: builder.recipe.parsed.options.strip,
+        compress_man: builder.recipe.parsed.options.compressman,
+        remove_libtool: builder.recipe.parsed.options.lastrip,
+    };
+    plan.manifest_build_inputs = builder
+        .recipe
+        .parsed
+        .build
+        .build_deps
+        .iter()
+        .chain(&builder.recipe.parsed.build.check_deps)
+        .cloned()
+        .collect();
+    plan.collection_rules = packager
+        .collection_rules()
+        .map(|(package, kind, pattern)| CollectionRulePlan {
+            output: output_name(&builder.recipe.parsed.source.name, package),
+            kind: path_rule_kind(kind),
+            pattern: pattern.to_owned(),
+        })
+        .collect();
     plan.outputs = outputs;
     plan.source_date_epoch = request.source_date_epoch;
     plan.validate()?;
+    let policy_origins = target
+        .policy
+        .changes
+        .iter()
+        .map(|change| change.origin.clone())
+        .collect();
+    let profile_fingerprints = builder
+        .profile_fingerprints
+        .iter()
+        .map(|fingerprint| fingerprint.sha256.clone())
+        .collect();
 
     Ok(Planned {
         plan,
@@ -225,17 +268,8 @@ pub fn plan(env: Env, request: Request) -> Result<Planned, Error> {
         lock_outcome,
         request_fingerprint,
         requested_packages,
-        policy_origins: target
-            .policy
-            .changes
-            .iter()
-            .map(|change| change.origin.clone())
-            .collect(),
-        profile_fingerprints: builder
-            .profile_fingerprints
-            .iter()
-            .map(|fingerprint| fingerprint.sha256.clone())
-            .collect(),
+        policy_origins,
+        profile_fingerprints,
     })
 }
 
@@ -332,7 +366,7 @@ fn resolve_build_lock(
             fingerprint: hash_fields([toolchain_name, target.policy.fingerprint.sha256.as_str()]),
         },
         builder: LockedIdentity {
-            name: "legacy-script-v1".to_owned(),
+            name: EXECUTOR_ABI.to_owned(),
             fingerprint: builder_fingerprint.to_owned(),
         },
     };
@@ -347,13 +381,18 @@ fn freeze_jobs(target: &build::Target) -> Result<Vec<JobPlan>, Error> {
         let mut phases = Vec::new();
         for (phase, script) in &job.phases {
             let mut steps = Vec::new();
+            let working_dir = if matches!(phase, build::job::Phase::Prepare) {
+                &job.build_dir
+            } else {
+                &job.work_dir
+            };
             for command in &script.commands {
                 match command {
                     script::Command::Content(content) => steps.push(StepPlan::Shell {
                         interpreter: "/usr/bin/bash".to_owned(),
                         script: content.clone(),
                         environment: BTreeMap::new(),
-                        working_dir: job.work_dir.display().to_string(),
+                        working_dir: working_dir.display().to_string(),
                     }),
                     script::Command::Break(_) => {
                         return Err(Error::InteractiveBreakpoint {
@@ -398,10 +437,13 @@ fn freeze_outputs(
                     if let Some(output) = names.get(dependency) {
                         Ok(OutputRelation::Planned { output: output.clone() })
                     } else if let Some(request) = lock.requests.iter().find(|request| request.request == *dependency) {
-                        Ok(OutputRelation::Locked(LockedOutputRef {
-                            package_id: request.package_id.clone(),
-                            output: request.output.clone(),
-                        }))
+                        Ok(OutputRelation::Locked {
+                            request: request.request.clone(),
+                            reference: LockedOutputRef {
+                                package_id: request.package_id.clone(),
+                                output: request.output.clone(),
+                            },
+                        })
                     } else {
                         Err(Error::UnlockedRuntimeDependency {
                             package: name.clone(),
@@ -412,6 +454,11 @@ fn freeze_outputs(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(OutputPlan {
                 name: names[name].clone(),
+                package_name: name.clone(),
+                summary: package.summary.clone(),
+                description: package.description.clone(),
+                provides_exclude: package.provides_exclude.clone(),
+                runtime_exclude: package.run_deps_exclude.clone(),
                 paths: package
                     .paths
                     .iter()
@@ -430,6 +477,15 @@ fn freeze_outputs(
             })
         })
         .collect()
+}
+
+fn path_rule_kind(kind: PathKind) -> PathRuleKind {
+    match kind {
+        PathKind::Any => PathRuleKind::Any,
+        PathKind::Exe => PathRuleKind::Executable,
+        PathKind::Symlink => PathRuleKind::Symlink,
+        PathKind::Special => PathRuleKind::Special,
+    }
 }
 
 fn output_name(root: &str, package: &str) -> String {
@@ -452,12 +508,28 @@ fn freeze_sources(recipe: &crate::Recipe) -> Vec<LockedSource> {
                         order: source.order,
                         url: source.url.clone(),
                         sha256: source.sha256.clone(),
+                        filename: recipe
+                            .parsed
+                            .upstreams
+                            .get(source.order as usize)
+                            .and_then(|upstream| match &upstream.props {
+                                stone_recipe::upstream::Props::Plain { rename, .. } => rename.clone(),
+                                stone_recipe::upstream::Props::Git { .. } => None,
+                            })
+                            .unwrap_or_else(|| {
+                                url::Url::parse(&source.url)
+                                    .map(|url| moss::util::uri_file_name(&url).to_owned())
+                                    .unwrap_or_default()
+                            }),
                     },
                     SourceResolution::Git(source) => LockedSource::Git {
                         order: source.order,
                         url: source.url.clone(),
                         requested_ref: source.requested_ref.clone(),
                         commit: source.commit.clone(),
+                        directory: url::Url::parse(&source.url)
+                            .map(|url| moss::util::uri_file_name(&url).to_owned())
+                            .unwrap_or_default(),
                     },
                 })
                 .collect()
@@ -478,6 +550,18 @@ fn platform(architecture: impl Into<String>) -> Platform {
         vendor: "unknown".to_owned(),
         operating_system: "linux".to_owned(),
         abi: "gnu".to_owned(),
+    }
+}
+
+fn artifact_architecture(target: crate::architecture::BuildTarget) -> Result<crate::Architecture, Error> {
+    match target {
+        crate::architecture::BuildTarget::Native(architecture) => Ok(architecture),
+        crate::architecture::BuildTarget::Emul32(crate::Architecture::X86_64 | crate::Architecture::X86) => {
+            Ok(crate::Architecture::X86)
+        }
+        crate::architecture::BuildTarget::Emul32(architecture) => {
+            Err(Error::UnsupportedEmul32ArtifactArchitecture(architecture.to_string()))
+        }
     }
 }
 
@@ -524,10 +608,31 @@ pub enum Error {
     InteractiveBreakpoint { phase: String },
     #[error("output package `{package}` has runtime dependency `{dependency}` absent from the locked closure")]
     UnlockedRuntimeDependency { package: String, dependency: String },
+    #[error("no emitted Stone architecture mapping for emul32/{0}")]
+    UnsupportedEmul32ArtifactArchitecture(String),
 }
 
 impl From<build::Error> for Error {
     fn from(error: build::Error) -> Self {
         Self::Builder(Box::new(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::architecture::BuildTarget;
+
+    #[test]
+    fn emitted_architecture_mapping_is_explicit_for_emul32() {
+        assert_eq!(
+            artifact_architecture(BuildTarget::Native(crate::Architecture::X86_64)).unwrap(),
+            crate::Architecture::X86_64
+        );
+        assert_eq!(
+            artifact_architecture(BuildTarget::Emul32(crate::Architecture::X86_64)).unwrap(),
+            crate::Architecture::X86
+        );
+        assert!(artifact_architecture(BuildTarget::Emul32(crate::Architecture::Aarch64)).is_err());
     }
 }

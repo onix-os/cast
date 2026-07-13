@@ -14,11 +14,13 @@ use glob::Pattern;
 use nix::libc::{S_IFDIR, S_IRGRP, S_IROTH, S_IRWXU, S_IXGRP, S_IXOTH};
 use snafu::{ResultExt as _, Snafu};
 use stone::{StoneDigestWriter, StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
+use stone_recipe::PathKind;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Rule {
     pub pattern: String,
     pub package: String,
+    pub kind: PathKind,
 }
 
 impl Rule {
@@ -59,6 +61,10 @@ impl Collector {
 
     pub fn add_rule(&mut self, rule: Rule) {
         self.rules.push(rule);
+    }
+
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
     }
 
     fn matching_package(&self, path: &str) -> Option<&str> {

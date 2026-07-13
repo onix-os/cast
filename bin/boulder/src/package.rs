@@ -9,7 +9,7 @@ use stone::StoneDigestWriterHasher;
 use thiserror::Error;
 
 use moss::util;
-use stone_recipe::{Package, derivation::DerivationId, script};
+use stone_recipe::{Package, PathKind, derivation::DerivationId, script};
 
 use crate::{Macros, Paths, Recipe, Timing, build, container, timing};
 
@@ -114,6 +114,13 @@ impl<'a> Packager<'a> {
     pub(crate) fn resolved_packages(&self) -> &BTreeMap<String, Package> {
         &self.packages
     }
+
+    pub(crate) fn collection_rules(&self) -> impl Iterator<Item = (&str, PathKind, &str)> {
+        self.collector
+            .rules()
+            .iter()
+            .map(|rule| (rule.package.as_str(), rule.kind, rule.pattern.as_str()))
+    }
 }
 
 /// Resolve all package templates from the arch macros and
@@ -180,6 +187,7 @@ fn resolve_packages(
             collector.add_rule(collect::Rule {
                 pattern: path.path.clone(),
                 package: name.clone(),
+                kind: path.kind,
             });
         }
 
@@ -286,7 +294,7 @@ mod tests {
         )
         .unwrap();
 
-        // Golden package templates from arch/base.yaml at 80d7ac5, expanded
+        // Golden inherited base-policy package templates captured at 80d7ac5, expanded
         // and merged through the same boundary used by the packager.
         assert_eq!(
             packages.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -301,6 +309,16 @@ mod tests {
                 "hello-docs",
                 "hello-libs",
             ]
+        );
+        let rules = collector.rules();
+        assert_eq!(
+            rules.last().map(|rule| (rule.package.as_str(), rule.pattern.as_str())),
+            Some(("hello-demos", "/usr/lib/qt*/examples"))
+        );
+        assert_ne!(
+            rules.last().map(|rule| rule.package.as_str()),
+            packages.keys().last().map(String::as_str),
+            "collector precedence must retain composition order rather than package-map order"
         );
 
         let root = &packages["hello"];

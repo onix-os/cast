@@ -419,6 +419,9 @@ pub(crate) fn test_derivation_id() -> DerivationId {
             version: "1.2.3".to_owned(),
             source_release: 1,
             build_release: 1,
+            homepage: "https://example.invalid".to_owned(),
+            licenses: vec!["MPL-2.0".to_owned()],
+            architecture: "x86_64".to_owned(),
         },
         build_lock,
     );

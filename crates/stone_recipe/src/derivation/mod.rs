@@ -7,7 +7,10 @@
 //! execution. It contains values only: the executor may index or borrow these
 //! values, but must not infer another dependency, phase, policy, or output.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path},
+};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -41,6 +44,9 @@ pub struct DerivationPlan {
     pub execution: ExecutionPolicy,
     pub tuning: Vec<String>,
     pub analyzers: Vec<LockedIdentity>,
+    pub analysis: AnalysisPlan,
+    pub manifest_build_inputs: Vec<String>,
+    pub collection_rules: Vec<CollectionRulePlan>,
     pub outputs: Vec<OutputPlan>,
     pub source_date_epoch: i64,
 }
@@ -62,6 +68,9 @@ impl DerivationPlan {
             execution: ExecutionPolicy::default(),
             tuning: Vec::new(),
             analyzers: Vec::new(),
+            analysis: AnalysisPlan::default(),
+            manifest_build_inputs: Vec::new(),
+            collection_rules: Vec::new(),
             outputs: Vec::new(),
             source_date_epoch: 0,
         }
@@ -124,14 +133,30 @@ impl DerivationPlan {
                 });
             }
         }
+        for (index, rule) in self.collection_rules.iter().enumerate() {
+            rule.validate(index)?;
+            if !output_names.contains(rule.output.as_str()) {
+                return Err(DerivationValidationError::UnknownPlannedOutput {
+                    field: format!("collection_rules[{index}].output"),
+                    output: rule.output.clone(),
+                });
+            }
+        }
         for (index, output) in self.outputs.iter().enumerate() {
             for (dependency_index, dependency) in output.runtime_inputs.iter().enumerate() {
                 match dependency {
-                    OutputRelation::Locked(dependency) if !self.build_lock.contains_output(dependency) => {
+                    OutputRelation::Locked { request, reference }
+                        if !self.build_lock.contains_output(reference)
+                            || !self.build_lock.requests.iter().any(|locked| {
+                                locked.request == *request
+                                    && locked.package_id == reference.package_id
+                                    && locked.output == reference.output
+                            }) =>
+                    {
                         return Err(DerivationValidationError::UnknownOutputReference {
                             field: format!("outputs[{index}].runtime_inputs[{dependency_index}]"),
-                            package: dependency.package_id.clone(),
-                            output: dependency.output.clone(),
+                            package: reference.package_id.clone(),
+                            output: reference.output.clone(),
                         });
                     }
                     OutputRelation::Planned { output } if !output_names.contains(output.as_str()) => {
@@ -180,6 +205,11 @@ impl DerivationPlan {
                 .then_with(|| left.fingerprint.cmp(&right.fingerprint))
         });
         encoder.sequence(&analyzers, |encoder, analyzer| analyzer.encode(encoder));
+        self.analysis.encode(&mut encoder);
+        let mut manifest_build_inputs = self.manifest_build_inputs.clone();
+        manifest_build_inputs.sort();
+        encoder.strings(&manifest_build_inputs);
+        encoder.sequence(&self.collection_rules, |encoder, rule| rule.encode(encoder));
 
         let mut outputs = self.outputs.iter().collect::<Vec<_>>();
         outputs.sort_by(|left, right| left.name.cmp(&right.name));
@@ -217,12 +247,16 @@ pub struct PackageIdentity {
     pub version: String,
     pub source_release: u64,
     pub build_release: u64,
+    pub homepage: String,
+    pub licenses: Vec<String>,
+    pub architecture: String,
 }
 
 impl PackageIdentity {
     fn validate(&self) -> Result<(), DerivationValidationError> {
         require_nonempty("package.name", &self.name)?;
         require_nonempty("package.version", &self.version)?;
+        require_nonempty("package.architecture", &self.architecture)?;
         if self.source_release == 0 {
             return Err(DerivationValidationError::ZeroSourceRelease);
         }
@@ -237,6 +271,11 @@ impl PackageIdentity {
         encoder.string(&self.version);
         encoder.u64(self.source_release);
         encoder.u64(self.build_release);
+        encoder.string(&self.homepage);
+        let mut licenses = self.licenses.clone();
+        licenses.sort();
+        encoder.strings(&licenses);
+        encoder.string(&self.architecture);
     }
 }
 
@@ -247,12 +286,14 @@ pub enum LockedSource {
         order: u32,
         url: String,
         sha256: String,
+        filename: String,
     },
     Git {
         order: u32,
         url: String,
         requested_ref: String,
         commit: String,
+        directory: String,
     },
 }
 
@@ -265,20 +306,25 @@ impl LockedSource {
 
     fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
         match self {
-            Self::Archive { url, sha256, .. } => {
+            Self::Archive {
+                url, sha256, filename, ..
+            } => {
                 require_nonempty(&format!("sources[{index}].url"), url)?;
                 validate_url(index, url)?;
-                require_nonempty(&format!("sources[{index}].sha256"), sha256)
+                require_nonempty(&format!("sources[{index}].sha256"), sha256)?;
+                validate_source_destination(index, "filename", filename)
             }
             Self::Git {
                 url,
                 requested_ref,
                 commit,
+                directory,
                 ..
             } => {
                 require_nonempty(&format!("sources[{index}].url"), url)?;
                 validate_url(index, url)?;
                 require_nonempty(&format!("sources[{index}].requested_ref"), requested_ref)?;
+                validate_source_destination(index, "directory", directory)?;
                 if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(DerivationValidationError::InvalidGitCommit {
                         index,
@@ -292,23 +338,31 @@ impl LockedSource {
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         match self {
-            Self::Archive { order, url, sha256 } => {
+            Self::Archive {
+                order,
+                url,
+                sha256,
+                filename,
+            } => {
                 encoder.variant(0);
                 encoder.u32(*order);
                 encoder.string(url);
                 encoder.string(sha256);
+                encoder.string(filename);
             }
             Self::Git {
                 order,
                 url,
                 requested_ref,
                 commit,
+                directory,
             } => {
                 encoder.variant(1);
                 encoder.u32(*order);
                 encoder.string(url);
                 encoder.string(requested_ref);
                 encoder.string(commit);
+                encoder.string(directory);
             }
         }
     }
@@ -523,10 +577,56 @@ pub enum NetworkMode {
     Enabled,
 }
 
+/// Frozen switches consumed by package analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisPlan {
+    pub toolchain: AnalysisToolchain,
+    pub debug: bool,
+    pub strip: bool,
+    pub compress_man: bool,
+    pub remove_libtool: bool,
+}
+
+impl Default for AnalysisPlan {
+    fn default() -> Self {
+        Self {
+            toolchain: AnalysisToolchain::Llvm,
+            debug: false,
+            strip: true,
+            compress_man: true,
+            remove_libtool: true,
+        }
+    }
+}
+
+impl AnalysisPlan {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.variant(match self.toolchain {
+            AnalysisToolchain::Llvm => 0,
+            AnalysisToolchain::Gnu => 1,
+        });
+        encoder.bool(self.debug);
+        encoder.bool(self.strip);
+        encoder.bool(self.compress_man);
+        encoder.bool(self.remove_libtool);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisToolchain {
+    Llvm,
+    Gnu,
+}
+
 /// One declared package output after template and package composition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputPlan {
     pub name: String,
+    pub package_name: String,
+    pub summary: Option<String>,
+    pub description: Option<String>,
+    pub provides_exclude: Vec<String>,
+    pub runtime_exclude: Vec<String>,
     pub paths: Vec<PathRulePlan>,
     pub runtime_inputs: Vec<OutputRelation>,
     pub conflicts: Vec<String>,
@@ -535,6 +635,7 @@ pub struct OutputPlan {
 impl OutputPlan {
     fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
         require_nonempty(&format!("outputs[{index}].name"), &self.name)?;
+        require_nonempty(&format!("outputs[{index}].package_name"), &self.package_name)?;
         for (rule_index, rule) in self.paths.iter().enumerate() {
             require_nonempty(&format!("outputs[{index}].paths[{rule_index}].pattern"), &rule.pattern)?;
         }
@@ -543,6 +644,15 @@ impl OutputPlan {
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.string(&self.name);
+        encoder.string(&self.package_name);
+        encode_optional_string(encoder, self.summary.as_deref());
+        encode_optional_string(encoder, self.description.as_deref());
+        let mut provides_exclude = self.provides_exclude.clone();
+        provides_exclude.sort();
+        encoder.strings(&provides_exclude);
+        let mut runtime_exclude = self.runtime_exclude.clone();
+        runtime_exclude.sort();
+        encoder.strings(&runtime_exclude);
         encoder.sequence(&self.paths, |encoder, path| path.encode(encoder));
 
         let mut runtime_inputs = self.runtime_inputs.iter().collect::<Vec<_>>();
@@ -556,15 +666,21 @@ impl OutputPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OutputRelation {
-    Locked(LockedOutputRef),
-    Planned { output: String },
+    Locked {
+        request: String,
+        reference: LockedOutputRef,
+    },
+    Planned {
+        output: String,
+    },
 }
 
 impl OutputRelation {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         match self {
-            Self::Locked(reference) => {
+            Self::Locked { request, reference } => {
                 encoder.variant(0);
+                encoder.string(request);
                 reference.encode(encoder);
             }
             Self::Planned { output } => {
@@ -599,6 +715,32 @@ pub enum PathRuleKind {
     Executable,
     Symlink,
     Special,
+}
+
+/// One collector rule in exact matching precedence order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionRulePlan {
+    pub output: String,
+    pub kind: PathRuleKind,
+    pub pattern: String,
+}
+
+impl CollectionRulePlan {
+    fn validate(&self, index: usize) -> Result<(), DerivationValidationError> {
+        require_nonempty(&format!("collection_rules[{index}].output"), &self.output)?;
+        require_nonempty(&format!("collection_rules[{index}].pattern"), &self.pattern)
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.output);
+        encoder.variant(match self.kind {
+            PathRuleKind::Any => 0,
+            PathRuleKind::Executable => 1,
+            PathRuleKind::Symlink => 2,
+            PathRuleKind::Special => 3,
+        });
+        encoder.string(&self.pattern);
+    }
 }
 
 #[derive(Debug, Error)]
@@ -642,6 +784,12 @@ pub enum DerivationValidationError {
     },
     #[error("sources[{index}].commit: expected a complete 40-hex Git commit, found `{value}`")]
     InvalidGitCommit { index: usize, value: String },
+    #[error("sources[{index}].{field}: unsafe relative materialization path {value:?}")]
+    UnsafeSourceDestination {
+        index: usize,
+        field: &'static str,
+        value: String,
+    },
     #[error(transparent)]
     BuildLock(#[from] BuildLockValidationError),
 }
@@ -656,12 +804,44 @@ fn require_nonempty(field: &str, value: &str) -> Result<(), DerivationValidation
     }
 }
 
+fn encode_optional_string(encoder: &mut CanonicalEncoder, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            encoder.variant(1);
+            encoder.string(value);
+        }
+        None => encoder.variant(0),
+    }
+}
+
 fn validate_url(index: usize, value: &str) -> Result<(), DerivationValidationError> {
     url::Url::parse(value).map_err(|source| DerivationValidationError::InvalidSourceUrl {
         index,
         value: value.to_owned(),
         source,
     })?;
+    Ok(())
+}
+
+fn validate_source_destination(
+    index: usize,
+    field: &'static str,
+    value: &str,
+) -> Result<(), DerivationValidationError> {
+    let path = Path::new(value);
+    if value.is_empty()
+        || path.is_absolute()
+        || path.components().count() != 1
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(DerivationValidationError::UnsafeSourceDestination {
+            index,
+            field,
+            value: value.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -734,6 +914,9 @@ mod tests {
                 version: "1.0.0".to_owned(),
                 source_release: 1,
                 build_release: 1,
+                homepage: "https://example.invalid/hello".to_owned(),
+                licenses: vec!["MPL-2.0".to_owned()],
+                architecture: "x86_64".to_owned(),
             },
             build_lock::sample_lock(),
         );
@@ -744,6 +927,7 @@ mod tests {
             order: 0,
             url: "https://example.invalid/hello.tar.zst".to_owned(),
             sha256: "archive-sha256".to_owned(),
+            filename: "hello.tar.zst".to_owned(),
         }];
         plan.jobs = vec![JobPlan {
             pgo_stage: None,
@@ -781,8 +965,25 @@ mod tests {
             name: "elf".to_owned(),
             fingerprint: "elf-analyzer-v1".to_owned(),
         }];
+        plan.collection_rules = vec![
+            CollectionRulePlan {
+                output: "out".to_owned(),
+                kind: PathRuleKind::Any,
+                pattern: "*".to_owned(),
+            },
+            CollectionRulePlan {
+                output: "out".to_owned(),
+                kind: PathRuleKind::Executable,
+                pattern: "/usr/bin/*".to_owned(),
+            },
+        ];
         plan.outputs = vec![OutputPlan {
             name: "out".to_owned(),
+            package_name: "hello".to_owned(),
+            summary: Some("Hello".to_owned()),
+            description: None,
+            provides_exclude: Vec::new(),
+            runtime_exclude: Vec::new(),
             paths: vec![PathRulePlan {
                 kind: PathRuleKind::Any,
                 pattern: "*".to_owned(),
@@ -814,6 +1015,11 @@ mod tests {
         });
         first.outputs.push(OutputPlan {
             name: "dev".to_owned(),
+            package_name: "hello-devel".to_owned(),
+            summary: None,
+            description: None,
+            provides_exclude: Vec::new(),
+            runtime_exclude: Vec::new(),
             paths: Vec::new(),
             runtime_inputs: Vec::new(),
             conflicts: Vec::new(),
@@ -835,6 +1041,13 @@ mod tests {
                 "source",
                 Box::new(|plan| match &mut plan.sources[0] {
                     LockedSource::Archive { sha256, .. } => sha256.push_str("-changed"),
+                    LockedSource::Git { .. } => unreachable!(),
+                }),
+            ),
+            (
+                "source-materialization",
+                Box::new(|plan| match &mut plan.sources[0] {
+                    LockedSource::Archive { filename, .. } => filename.push_str("-changed"),
                     LockedSource::Git { .. } => unreachable!(),
                 }),
             ),
@@ -876,6 +1089,23 @@ mod tests {
                 }),
             ),
             (
+                "package-metadata",
+                Box::new(|plan| plan.package.homepage.push_str("/changed")),
+            ),
+            (
+                "package-architecture",
+                Box::new(|plan| plan.package.architecture = "aarch64".to_owned()),
+            ),
+            ("analysis", Box::new(|plan| plan.analysis.strip = !plan.analysis.strip)),
+            (
+                "manifest-build-input",
+                Box::new(|plan| plan.manifest_build_inputs.push("cmake".to_owned())),
+            ),
+            (
+                "collection-rule-order",
+                Box::new(|plan| plan.collection_rules.reverse()),
+            ),
+            (
                 "output",
                 Box::new(|plan| plan.outputs[0].paths[0].pattern = "/usr/bin/*".to_owned()),
             ),
@@ -907,17 +1137,71 @@ mod tests {
     #[test]
     fn validation_rejects_output_relations_outside_the_locked_closure() {
         let mut plan = sample_plan();
-        plan.outputs[0]
-            .runtime_inputs
-            .push(OutputRelation::Locked(LockedOutputRef {
+        plan.outputs[0].runtime_inputs.push(OutputRelation::Locked {
+            request: "missing".to_owned(),
+            reference: LockedOutputRef {
                 package_id: "missing".to_owned(),
                 output: "out".to_owned(),
-            }));
+            },
+        });
 
         assert!(matches!(
             plan.validate(),
             Err(DerivationValidationError::UnknownOutputReference { field, .. })
                 if field == "outputs[0].runtime_inputs[0]"
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_source_materialization_path_escape() {
+        for value in ["", ".", "../escape", "/absolute", "nested/file"] {
+            let mut plan = sample_plan();
+            let LockedSource::Archive { filename, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *filename = value.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::UnsafeSourceDestination {
+                    index: 0,
+                    field: "filename",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn git_materialization_directory_is_validated_and_hashed() {
+        let mut first = sample_plan();
+        first.sources = vec![LockedSource::Git {
+            order: 0,
+            url: "https://example.invalid/hello.git".to_owned(),
+            requested_ref: "main".to_owned(),
+            commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            directory: "hello.git".to_owned(),
+        }];
+        first.validate().unwrap();
+
+        let mut changed = first.clone();
+        if let LockedSource::Git { directory, .. } = &mut changed.sources[0] {
+            *directory = "other.git".to_owned();
+        } else {
+            unreachable!()
+        }
+        changed.validate().unwrap();
+        assert_ne!(first.derivation_id(), changed.derivation_id());
+
+        if let LockedSource::Git { directory, .. } = &mut changed.sources[0] {
+            *directory = "../escape".to_owned();
+        }
+        assert!(matches!(
+            changed.validate(),
+            Err(DerivationValidationError::UnsafeSourceDestination {
+                index: 0,
+                field: "directory",
+                ..
+            })
         ));
     }
 }
