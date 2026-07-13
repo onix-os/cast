@@ -8,22 +8,18 @@ use std::{
 };
 
 use crate::{
-    Env, Macros, architecture,
+    Env,
     draft::{self, Drafter, upstream::fetched_upstream_cache_path},
-    macros, planner, profile, recipe,
+    planner, profile, recipe,
     source_lock::{SOURCE_LOCK_FILE_NAME, WriteOutcome},
 };
 use clap::{Args, Parser};
 use fs_err::{self as fs};
-use itertools::Itertools;
 use moss::{request, runtime, util};
 use stone_recipe::{UpstreamSpec, upstream};
 use tempfile::NamedTempFile;
 use thiserror::Error;
-use tui::{
-    MultiProgress, ProgressBar, ProgressStyle, Styled,
-    pretty::{self, ColumnDisplay},
-};
+use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 use url::Url;
 use version_parse::VersionExtractor;
 
@@ -122,11 +118,6 @@ pub enum Subcommand {
         )]
         no_bump: bool,
     },
-    #[command(about = "Print macro definitions")]
-    Macros {
-        #[arg(name = "macro", help = "Print definition and example for the provided macro")]
-        _macro: Option<String>,
-    },
 }
 
 #[derive(Debug, Args)]
@@ -217,7 +208,6 @@ pub fn handle(command: Command, env: Env, _yes: bool, _verbose: bool) -> Result<
             upstreams,
             no_bump,
         } => update(env, &recipe, version, upstreams, no_bump),
-        Subcommand::Macros { _macro } => macros(_macro, env),
     }
 }
 
@@ -575,87 +565,6 @@ async fn fetch_and_cache_upstream(env: &Env, uri: Url, mpb: &MultiProgress) -> R
     Ok(hash)
 }
 
-fn macros(_macro: Option<String>, env: Env) -> Result<(), Error> {
-    let macros = Macros::load(&env).map_err(|error| Error::LoadMacros(Box::new(error)))?;
-
-    let mut items = macros
-        .actions
-        .iter()
-        .flat_map(|m| {
-            m.actions.iter().map(|action| PrintMacro {
-                name: format!("%{}", action.key),
-                // Multi-line strings need to be in `example`
-                description: action.value.description.lines().next().unwrap_or_default(),
-                example: action.value.example.as_deref(),
-            })
-        })
-        .sorted()
-        .collect::<Vec<_>>();
-
-    let mut definitions = vec![];
-    for arch in ["base", &architecture::host().to_string()] {
-        if let Some(macros) = macros.arch.get(arch) {
-            definitions.extend(macros.definitions.iter().map(|def| PrintMacro {
-                name: format!("%({})", def.key),
-                description: &def.value,
-                example: None,
-            }));
-        }
-    }
-    definitions.sort();
-    definitions.dedup();
-
-    items.extend(definitions);
-
-    match _macro {
-        Some(name) => {
-            let Some(action) = items
-                .into_iter()
-                .find(|a| a.name == format!("%{name}") || a.name == format!("%({name})"))
-            else {
-                return Err(Error::MacroNotFound(name));
-            };
-
-            println!("{} - {}", action.name.bold(), action.description);
-
-            if let Some(example) = action.example {
-                println!("\n{}", "Example:".bold());
-                for line in example.lines() {
-                    println!("  {line}");
-                }
-            }
-        }
-        None => {
-            pretty::print_columns(&items, 1);
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-struct PrintMacro<'a> {
-    name: String,
-    description: &'a str,
-    example: Option<&'a str>,
-}
-
-impl ColumnDisplay for PrintMacro<'_> {
-    fn get_display_width(&self) -> usize {
-        self.name.len()
-    }
-
-    fn display_column(&self, writer: &mut impl io::prelude::Write, _col: pretty::Column, width: usize) {
-        let _ = write!(
-            writer,
-            "{}{}  {}",
-            self.name.clone().bold(),
-            " ".repeat(width),
-            self.description,
-        );
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("check recipe")]
@@ -686,10 +595,6 @@ pub enum Error {
     TooManyUpstreamUpdates { supplied: usize, available: usize },
     #[error("Mismatch for upstream[{0}], expected {1} got {2}")]
     UpstreamMismatch(usize, &'static str, &'static str),
-    #[error("load macros")]
-    LoadMacros(#[source] Box<macros::Error>),
-    #[error("Macro doesn't exist: {0}")]
-    MacroNotFound(String),
     #[error("writing recipe")]
     Write(#[source] io::Error),
     #[error("creating output directory")]
