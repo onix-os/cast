@@ -51,10 +51,58 @@ fn get_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::ClientBuilder::new()
             .referer(false)
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                match validate_redirect(attempt.previous(), attempt.url()) {
+                    Ok(()) => attempt.follow(),
+                    Err(error) => attempt.error(error),
+                }
+            }))
             .user_agent(concat!("cast/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("build reqwest client")
     })
+}
+
+/// Preserve the security properties of the URL which the caller admitted.
+///
+/// Reqwest's default policy limits redirect count, but it permits a secure URL
+/// to redirect to plaintext HTTP and permits authority-like URL components in
+/// `Location`. Source hashes protect reproducibility after locking; they do
+/// not make a transport downgrade or redirect-borne credential safe while a
+/// lock is being created.
+fn validate_redirect(previous: &[Url], next: &Url) -> Result<(), RedirectPolicyError> {
+    // Match reqwest's default ten-hop ceiling. `previous` contains the initial
+    // request as well as every URL already followed.
+    if previous.len() > 10 {
+        return Err(RedirectPolicyError::TooManyHops);
+    }
+    if !next.username().is_empty() || next.password().is_some() {
+        return Err(RedirectPolicyError::EmbeddedCredentials);
+    }
+    if next.fragment().is_some() {
+        return Err(RedirectPolicyError::Fragment);
+    }
+    if !matches!(next.scheme(), "http" | "https") || next.host_str().is_none() {
+        return Err(RedirectPolicyError::UnsupportedTarget);
+    }
+    if previous.last().is_some_and(|url| url.scheme() == "https") && next.scheme() != "https" {
+        return Err(RedirectPolicyError::TransportDowngrade);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+enum RedirectPolicyError {
+    #[error("download redirect chain exceeds ten hops")]
+    TooManyHops,
+    #[error("download redirect target contains embedded credentials")]
+    EmbeddedCredentials,
+    #[error("download redirect target contains a fragment")]
+    Fragment,
+    #[error("download redirect target is not an absolute HTTP(S) URL")]
+    UnsupportedTarget,
+    #[error("download redirect attempts to downgrade HTTPS transport")]
+    TransportDowngrade,
 }
 
 /// Downloads a file using [`DEFAULT_DOWNLOAD_LIMITS`].
@@ -157,6 +205,7 @@ struct Fetched {
 /// Fetch a resource at the provided [`Url`] and return its reader and any
 /// trustworthy-enough-to-preflight (but never sufficient) length hint.
 async fn fetch(url: Url) -> Result<Fetched, Error> {
+    validate_fetch_url(&url)?;
     if let Ok(path) = url.to_file_path() {
         // O_NONBLOCK prevents a file URL naming a FIFO/device from consuming a
         // blocking-pool thread beyond the operation timeout. O_NOFOLLOW closes
@@ -180,6 +229,36 @@ async fn fetch(url: Url) -> Result<Fetched, Error> {
         })
     } else {
         http_get(url).await
+    }
+}
+
+/// Admit only URL forms whose authority and local-path meaning are explicit.
+///
+/// Fragments are never sent to an HTTP server, and file-URL queries are not
+/// part of the opened pathname. Accepting either would let two different
+/// authored identities retrieve the same bytes. Credentials belong in an
+/// explicit transport credential mechanism, not in a URL which can be copied
+/// into diagnostics, locks, or process arguments.
+fn validate_fetch_url(url: &Url) -> Result<(), Error> {
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::UrlPolicy {
+            reason: "embedded credentials are not allowed",
+        });
+    }
+    if url.fragment().is_some() {
+        return Err(Error::UrlPolicy {
+            reason: "fragments are not allowed",
+        });
+    }
+    match url.scheme() {
+        "http" | "https" if url.host_str().is_some() => Ok(()),
+        "file" if url.query().is_none() && url.to_file_path().is_ok() => Ok(()),
+        "file" => Err(Error::UrlPolicy {
+            reason: "file URL must be an absolute local path without a query",
+        }),
+        _ => Err(Error::UrlPolicy {
+            reason: "only absolute HTTP(S) and local file URLs are supported",
+        }),
     }
 }
 
@@ -300,6 +379,19 @@ async fn write_fetched_to_file(
         target: to.to_owned(),
         source: error.error,
     })?;
+    let directory = tokio::fs::File::open(parent)
+        .await
+        .map_err(|source| Error::SyncInstallDirectory {
+            directory: parent.to_owned(),
+            source,
+        })?;
+    directory
+        .sync_all()
+        .await
+        .map_err(|source| Error::SyncInstallDirectory {
+            directory: parent.to_owned(),
+            source,
+        })?;
 
     Ok(actual_sha256)
 }
@@ -362,6 +454,8 @@ pub enum Error {
     TooLarge { limit: u64 },
     #[error("download exceeded total timeout of {timeout:?}")]
     Timeout { timeout: Duration },
+    #[error("download URL violates transport policy: {reason}")]
+    UrlPolicy { reason: &'static str },
     #[error("download SHA-256 mismatch: expected {expected}, got {actual}")]
     HashMismatch { expected: String, actual: String },
     #[error("create private download staging file in {parent:?}")]
@@ -373,6 +467,12 @@ pub enum Error {
     #[error("atomically install completed download at {target:?}")]
     Install {
         target: std::path::PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("sync completed download directory at {directory:?}")]
+    SyncInstallDirectory {
+        directory: std::path::PathBuf,
         #[source]
         source: io::Error,
     },
@@ -401,6 +501,69 @@ mod tests {
             reader: Box::new(Cursor::new(bytes.to_vec())),
             content_length,
         }
+    }
+
+    #[test]
+    fn redirects_preserve_secure_transport_and_reject_authority_components() {
+        let secure = Url::parse("https://example.invalid/source").unwrap();
+        assert!(validate_redirect(std::slice::from_ref(&secure), &secure).is_ok());
+
+        let plaintext = Url::parse("http://example.invalid/source").unwrap();
+        assert!(matches!(
+            validate_redirect(std::slice::from_ref(&secure), &plaintext),
+            Err(RedirectPolicyError::TransportDowngrade)
+        ));
+        assert!(validate_redirect(std::slice::from_ref(&plaintext), &plaintext).is_ok());
+
+        for (target, expected) in [
+            (
+                "https://user:secret@example.invalid/source",
+                RedirectPolicyError::EmbeddedCredentials,
+            ),
+            ("https://example.invalid/source#fragment", RedirectPolicyError::Fragment),
+            ("file:///tmp/source", RedirectPolicyError::UnsupportedTarget),
+        ] {
+            let error = validate_redirect(std::slice::from_ref(&secure), &Url::parse(target).unwrap()).unwrap_err();
+            assert_eq!(error, expected);
+            assert!(!error.to_string().contains("secret"));
+            assert!(!error.to_string().contains(target));
+        }
+    }
+
+    #[test]
+    fn initial_download_urls_reject_ambiguous_or_secret_components() {
+        for accepted in [
+            "https://example.invalid/source?version=1",
+            "http://127.0.0.1/source",
+            "file:///tmp/source",
+        ] {
+            validate_fetch_url(&Url::parse(accepted).unwrap()).unwrap();
+        }
+
+        for rejected in [
+            "https://user:secret@example.invalid/source",
+            "https://example.invalid/source#fragment",
+            "file:///tmp/source?ignored=true",
+            "data:text/plain,source",
+        ] {
+            let error = validate_fetch_url(&Url::parse(rejected).unwrap()).unwrap_err();
+            assert!(matches!(error, Error::UrlPolicy { .. }));
+            assert!(!error.to_string().contains("secret"));
+            assert!(!error.to_string().contains(rejected));
+        }
+    }
+
+    #[test]
+    fn redirect_hop_limit_accepts_n_and_rejects_n_plus_one() {
+        let target = Url::parse("https://example.invalid/source").unwrap();
+        let ten = vec![target.clone(); 10];
+        assert!(validate_redirect(&ten, &target).is_ok());
+
+        let eleven = vec![target.clone(); 11];
+        assert!(matches!(
+            validate_redirect(&eleven, &target),
+            Err(RedirectPolicyError::TooManyHops)
+        ));
     }
 
     #[tokio::test]
