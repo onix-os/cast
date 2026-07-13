@@ -9,6 +9,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    mem::size_of,
     path::{Component, Path, PathBuf},
 };
 
@@ -42,6 +43,59 @@ mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
 pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 13;
+
+/// Resource limits for process-facing data in one frozen derivation.
+///
+/// These limits are enforced again at the freeze boundary even though an
+/// evaluated package has its own limits. A [`DerivationPlan`] can also be
+/// constructed programmatically, and planning expands policy commands and
+/// environments which are not all present in the authored package value.
+/// Keeping the final argv, environment, path, and step budgets here prevents
+/// a validly encoded plan from failing late in `execve(2)` or from making the
+/// executor traverse unbounded process data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DerivationValidationLimits {
+    pub max_jobs: usize,
+    pub max_phases_per_job: usize,
+    pub max_steps_per_section: usize,
+    pub max_total_steps: usize,
+    pub max_arguments_per_step: usize,
+    pub max_declared_programs_per_step: usize,
+    pub max_environment_entries: usize,
+    pub max_environment_name_bytes: usize,
+    pub max_process_string_bytes: usize,
+    pub max_path_bytes: usize,
+    pub max_execve_bytes: usize,
+    pub max_total_process_items: usize,
+    pub max_total_process_text_bytes: usize,
+}
+
+impl Default for DerivationValidationLimits {
+    fn default() -> Self {
+        Self {
+            max_jobs: 64,
+            // A job can contain each of the six supported phases at most once.
+            max_phases_per_job: 6,
+            max_steps_per_section: 4 * 1024,
+            max_total_steps: 16 * 1024,
+            max_arguments_per_step: 1024,
+            max_declared_programs_per_step: 256,
+            max_environment_entries: 1024,
+            max_environment_name_bytes: 255,
+            // Linux accepts a larger single argv/environment string, but the
+            // smaller frozen ABI limit leaves room for the complete vector.
+            max_process_string_bytes: 64 * 1024,
+            // Leave one byte for the terminating NUL beneath Linux PATH_MAX.
+            max_path_bytes: 4095,
+            // Includes string terminators and argv/envp pointer storage. Linux
+            // guarantees at least 32 pages for argv+envp; 96 KiB remains below
+            // that floor on the supported 4 KiB-or-larger page sizes.
+            max_execve_bytes: 96 * 1024,
+            max_total_process_items: 128 * 1024,
+            max_total_process_text_bytes: 8 * 1024 * 1024,
+        }
+    }
+}
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"cast-profile-fragments-v2\0";
@@ -379,12 +433,25 @@ impl DerivationPlan {
     /// Validate invariants required before a plan can cross the freeze
     /// boundary.
     pub fn validate(&self) -> Result<(), DerivationValidationError> {
+        self.validate_with_limits(DerivationValidationLimits::default())
+    }
+
+    /// Validate a plan with explicit process-data limits.
+    ///
+    /// Production execution uses [`Self::validate`] and therefore the stable
+    /// default limits. This entry point makes boundary behavior testable and
+    /// lets importers apply a stricter admission policy without weakening the
+    /// executor's defaults.
+    pub fn validate_with_limits(&self, limits: DerivationValidationLimits) -> Result<(), DerivationValidationError> {
         if self.schema_version != DERIVATION_PLAN_SCHEMA_VERSION {
             return Err(DerivationValidationError::UnsupportedSchema {
                 found: self.schema_version,
                 expected: DERIVATION_PLAN_SCHEMA_VERSION,
             });
         }
+
+        let mut process_data = ProcessDataBudget::new(limits);
+        process_data.validate(self)?;
 
         require_nonempty("cast_version", &self.cast_version)?;
         require_nonempty("cast_fingerprint", &self.cast_fingerprint)?;
@@ -1725,12 +1792,350 @@ impl CollectionRulePlan {
     }
 }
 
+/// Admission accounting for process-facing paths, strings, and collections
+/// in a frozen plan.
+struct ProcessDataBudget {
+    limits: DerivationValidationLimits,
+    total_steps: usize,
+    total_items: usize,
+    total_text_bytes: usize,
+}
+
+impl ProcessDataBudget {
+    fn new(limits: DerivationValidationLimits) -> Self {
+        Self {
+            limits,
+            total_steps: 0,
+            total_items: 0,
+            total_text_bytes: 0,
+        }
+    }
+
+    fn validate(&mut self, plan: &DerivationPlan) -> Result<(), DerivationValidationError> {
+        self.collection_with_limit("jobs", plan.jobs.len(), self.limits.max_jobs)?;
+        self.environment("environment", &plan.environment)?;
+
+        for (field, value) in [
+            ("layout.guest_root", plan.layout.guest_root.as_str()),
+            ("layout.artifacts_dir", plan.layout.artifacts_dir.as_str()),
+            ("layout.build_dir", plan.layout.build_dir.as_str()),
+            ("layout.source_dir", plan.layout.source_dir.as_str()),
+            ("layout.recipe_dir", plan.layout.recipe_dir.as_str()),
+            ("layout.install_dir", plan.layout.install_dir.as_str()),
+            ("layout.package_dir", plan.layout.package_dir.as_str()),
+            ("layout.ccache_dir", plan.layout.ccache_dir.as_str()),
+            ("layout.sccache_dir", plan.layout.sccache_dir.as_str()),
+            ("layout.go_cache_dir", plan.layout.go_cache_dir.as_str()),
+            ("layout.go_mod_cache_dir", plan.layout.go_mod_cache_dir.as_str()),
+            ("layout.cargo_cache_dir", plan.layout.cargo_cache_dir.as_str()),
+            ("layout.zig_cache_dir", plan.layout.zig_cache_dir.as_str()),
+        ] {
+            self.path(field, value)?;
+        }
+
+        for (field, tool) in [
+            ("analysis.tools.pkg_config", plan.analysis.tools.pkg_config.as_ref()),
+            ("analysis.tools.python", plan.analysis.tools.python.as_ref()),
+            ("analysis.tools.objcopy", plan.analysis.tools.objcopy.as_ref()),
+            ("analysis.tools.strip", plan.analysis.tools.strip.as_ref()),
+        ] {
+            if let Some(tool) = tool {
+                self.executable(field, tool)?;
+            }
+        }
+
+        for (job_index, job) in plan.jobs.iter().enumerate() {
+            let field = format!("jobs[{job_index}]");
+            self.path(&format!("{field}.build_dir"), &job.build_dir)?;
+            self.path(&format!("{field}.work_dir"), &job.work_dir)?;
+            if let Some(pgo_dir) = &job.pgo_dir {
+                self.path(&format!("{field}.pgo_dir"), pgo_dir)?;
+            }
+            self.collection_with_limit(
+                &format!("{field}.phases"),
+                job.phases.len(),
+                self.limits.max_phases_per_job,
+            )?;
+            for (phase_index, phase) in job.phases.iter().enumerate() {
+                self.phase(&format!("{field}.phases[{phase_index}]"), phase, &plan.environment)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn phase(
+        &mut self,
+        field: &str,
+        phase: &PhasePlan,
+        global_environment: &BTreeMap<String, String>,
+    ) -> Result<(), DerivationValidationError> {
+        for (section, steps) in [("pre", &phase.pre), ("steps", &phase.steps), ("post", &phase.post)] {
+            let section_field = format!("{field}.{section}");
+            self.collection_with_limit(&section_field, steps.len(), self.limits.max_steps_per_section)?;
+            self.total_steps =
+                self.total_steps
+                    .checked_add(steps.len())
+                    .ok_or_else(|| DerivationValidationError::LimitExceeded {
+                        field: section_field.clone(),
+                        actual: usize::MAX,
+                        limit: self.limits.max_total_steps,
+                        unit: "total steps",
+                    })?;
+            if self.total_steps > self.limits.max_total_steps {
+                return Err(DerivationValidationError::LimitExceeded {
+                    field: section_field,
+                    actual: self.total_steps,
+                    limit: self.limits.max_total_steps,
+                    unit: "total steps",
+                });
+            }
+            for (step_index, step) in steps.iter().enumerate() {
+                self.step(&format!("{field}.{section}[{step_index}]"), step, global_environment)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn step(
+        &mut self,
+        field: &str,
+        step: &StepPlan,
+        global_environment: &BTreeMap<String, String>,
+    ) -> Result<(), DerivationValidationError> {
+        match step {
+            StepPlan::Run {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => {
+                self.executable(&format!("{field}.program"), program)?;
+                self.collection_with_limit(&format!("{field}.args"), args.len(), self.limits.max_arguments_per_step)?;
+                for (index, argument) in args.iter().enumerate() {
+                    self.process_string(&format!("{field}.args[{index}]"), argument)?;
+                }
+                self.environment(&format!("{field}.environment"), environment)?;
+                self.path(&format!("{field}.working_dir"), working_dir)?;
+                self.validate_effective_environment(field, global_environment, environment)?;
+                self.validate_execve(
+                    field,
+                    &program.path,
+                    args.iter().map(String::as_str),
+                    global_environment,
+                    environment,
+                )
+            }
+            StepPlan::Shell {
+                interpreter,
+                declared_programs,
+                script,
+                environment,
+                working_dir,
+            } => {
+                self.executable(&format!("{field}.interpreter"), interpreter)?;
+                self.collection_with_limit(
+                    &format!("{field}.declared_programs"),
+                    declared_programs.len(),
+                    self.limits.max_declared_programs_per_step,
+                )?;
+                for (index, program) in declared_programs.iter().enumerate() {
+                    self.executable(&format!("{field}.declared_programs[{index}]"), program)?;
+                }
+                self.process_string(&format!("{field}.script"), script)?;
+                self.environment(&format!("{field}.environment"), environment)?;
+                self.path(&format!("{field}.working_dir"), working_dir)?;
+                self.validate_effective_environment(field, global_environment, environment)?;
+                self.validate_execve(
+                    field,
+                    &interpreter.path,
+                    ["-c", script.as_str()],
+                    global_environment,
+                    environment,
+                )
+            }
+        }
+    }
+
+    fn executable(&mut self, field: &str, executable: &ExecutablePlan) -> Result<(), DerivationValidationError> {
+        let path_field = format!("{field}.path");
+        self.path(&path_field, &executable.path)?;
+        self.require_limit(
+            &path_field,
+            executable.path.len(),
+            self.limits.max_process_string_bytes,
+            "bytes",
+        )
+    }
+
+    fn environment(
+        &mut self,
+        field: &str,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<(), DerivationValidationError> {
+        self.collection_with_limit(field, environment.len(), self.limits.max_environment_entries)?;
+        for (index, (name, value)) in environment.iter().enumerate() {
+            self.environment_name(&format!("{field}[{index}].name"), name)?;
+            self.process_string(&format!("{field}[{index}].value"), value)?;
+        }
+        Ok(())
+    }
+
+    fn environment_name(&mut self, field: &str, value: &str) -> Result<(), DerivationValidationError> {
+        self.require_limit(field, value.len(), self.limits.max_environment_name_bytes, "bytes")?;
+        reject_embedded_nul(field, value)?;
+        if !valid_environment_name(value) {
+            return Err(DerivationValidationError::InvalidEnvironmentName {
+                field: field.to_owned(),
+            });
+        }
+        self.add_text(field, value.len())
+    }
+
+    fn process_string(&mut self, field: &str, value: &str) -> Result<(), DerivationValidationError> {
+        self.require_limit(field, value.len(), self.limits.max_process_string_bytes, "bytes")?;
+        reject_embedded_nul(field, value)?;
+        self.add_text(field, value.len())
+    }
+
+    fn path(&mut self, field: &str, value: &str) -> Result<(), DerivationValidationError> {
+        self.require_limit(field, value.len(), self.limits.max_path_bytes, "path bytes")?;
+        reject_embedded_nul(field, value)?;
+        self.add_text(field, value.len())
+    }
+
+    fn validate_effective_environment(
+        &self,
+        field: &str,
+        global: &BTreeMap<String, String>,
+        step: &BTreeMap<String, String>,
+    ) -> Result<(), DerivationValidationError> {
+        let added = step.keys().filter(|name| !global.contains_key(name.as_str())).count();
+        let actual = global.len().saturating_add(added);
+        self.require_limit(
+            &format!("{field}.effective_environment"),
+            actual,
+            self.limits.max_environment_entries,
+            "items",
+        )
+    }
+
+    fn validate_execve<'a>(
+        &self,
+        field: &str,
+        program: &str,
+        arguments: impl IntoIterator<Item = &'a str>,
+        global: &BTreeMap<String, String>,
+        step: &BTreeMap<String, String>,
+    ) -> Result<(), DerivationValidationError> {
+        let mut bytes = program.len().saturating_add(1);
+        let mut strings = 1usize;
+        for argument in arguments {
+            bytes = bytes.saturating_add(argument.len().saturating_add(1));
+            strings = strings.saturating_add(1);
+        }
+        for (name, value) in global
+            .iter()
+            .filter(|(name, _)| !step.contains_key(name.as_str()))
+            .chain(step.iter())
+        {
+            // NAME=VALUE plus the terminating NUL.
+            let entry = name.len().saturating_add(value.len()).saturating_add(2);
+            bytes = bytes.saturating_add(entry);
+            strings = strings.saturating_add(1);
+        }
+        // Account for the terminating pointer in each of argv and envp.
+        let pointers = strings.saturating_add(2).saturating_mul(size_of::<*const u8>());
+        bytes = bytes.saturating_add(pointers);
+        self.require_limit(&format!("{field}.execve"), bytes, self.limits.max_execve_bytes, "bytes")
+    }
+
+    fn collection_with_limit(
+        &mut self,
+        field: &str,
+        actual: usize,
+        limit: usize,
+    ) -> Result<(), DerivationValidationError> {
+        self.require_limit(field, actual, limit, "items")?;
+        self.total_items = self.total_items.saturating_add(actual);
+        if self.total_items > self.limits.max_total_process_items {
+            return Err(DerivationValidationError::LimitExceeded {
+                field: field.to_owned(),
+                actual: self.total_items,
+                limit: self.limits.max_total_process_items,
+                unit: "total process items",
+            });
+        }
+        Ok(())
+    }
+
+    fn add_text(&mut self, field: &str, bytes: usize) -> Result<(), DerivationValidationError> {
+        self.total_text_bytes = self.total_text_bytes.saturating_add(bytes);
+        if self.total_text_bytes > self.limits.max_total_process_text_bytes {
+            return Err(DerivationValidationError::LimitExceeded {
+                field: field.to_owned(),
+                actual: self.total_text_bytes,
+                limit: self.limits.max_total_process_text_bytes,
+                unit: "total process text bytes",
+            });
+        }
+        Ok(())
+    }
+
+    fn require_limit(
+        &self,
+        field: &str,
+        actual: usize,
+        limit: usize,
+        unit: &'static str,
+    ) -> Result<(), DerivationValidationError> {
+        if actual > limit {
+            Err(DerivationValidationError::LimitExceeded {
+                field: field.to_owned(),
+                actual,
+                limit,
+                unit,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn valid_environment_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn reject_embedded_nul(field: &str, value: &str) -> Result<(), DerivationValidationError> {
+    if value.as_bytes().contains(&0) {
+        Err(DerivationValidationError::EmbeddedNul {
+            field: field.to_owned(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DerivationValidationError {
     #[error("schema_version: unsupported schema {found}; expected {expected}")]
     UnsupportedSchema { found: u32, expected: u32 },
     #[error("{field}: value must not be empty")]
     Empty { field: String },
+    #[error("{field}: value contains an embedded NUL byte")]
+    EmbeddedNul { field: String },
+    #[error("{field}: environment name must match [A-Za-z_][A-Za-z0-9_]*")]
+    InvalidEnvironmentName { field: String },
+    #[error("{field}: process-data limit exceeded ({actual} {unit}; maximum {limit})")]
+    LimitExceeded {
+        field: String,
+        actual: usize,
+        limit: usize,
+        unit: &'static str,
+    },
     #[error("{field}: package name {value:?} must use only ASCII letters, digits, '+', '-', '.', or '_'")]
     InvalidPackageName { field: String, value: String },
     #[error("{field}: value {value:?} must be one normalized filename component")]
@@ -2071,6 +2476,7 @@ fn validate_glob(field: &str, value: &str) -> Result<(), DerivationValidationErr
 }
 
 fn validate_normalized_absolute_path<'a>(field: &str, value: &'a str) -> Result<&'a Path, DerivationValidationError> {
+    reject_embedded_nul(field, value)?;
     let path = Path::new(value);
     let mut normalized = PathBuf::new();
     let mut normal_components = 0usize;
@@ -2495,6 +2901,56 @@ mod tests {
         }
     }
 
+    fn sample_step_mut(plan: &mut DerivationPlan) -> &mut StepPlan {
+        &mut plan.jobs[0].phases[0].steps[0]
+    }
+
+    fn make_sample_shell(plan: &mut DerivationPlan) {
+        let (environment, working_dir) = match sample_step_mut(plan) {
+            StepPlan::Run {
+                environment,
+                working_dir,
+                ..
+            } => (environment.clone(), working_dir.clone()),
+            StepPlan::Shell { .. } => return,
+        };
+        *sample_step_mut(plan) = StepPlan::Shell {
+            interpreter: sample_analyzer_tool("bash"),
+            declared_programs: vec![sample_analyzer_tool("cmake")],
+            script: "printf '%s\\n' hardened".to_owned(),
+            environment,
+            working_dir,
+        };
+    }
+
+    fn measured_process_budget(plan: &DerivationPlan) -> ProcessDataBudget {
+        let mut budget = ProcessDataBudget::new(DerivationValidationLimits::default());
+        budget.validate(plan).unwrap();
+        budget
+    }
+
+    fn assert_process_limit(
+        error: DerivationValidationError,
+        expected_field: &str,
+        expected_actual: usize,
+        expected_limit: usize,
+        expected_unit: &'static str,
+    ) {
+        let DerivationValidationError::LimitExceeded {
+            field,
+            actual,
+            limit,
+            unit,
+        } = error
+        else {
+            panic!("expected a process-data limit, found: {error}");
+        };
+        assert_eq!(field, expected_field);
+        assert_eq!(actual, expected_actual);
+        assert_eq!(limit, expected_limit);
+        assert_eq!(unit, expected_unit);
+    }
+
     #[test]
     fn identical_plans_have_identical_bytes_and_ids() {
         let first = sample_plan();
@@ -2518,6 +2974,488 @@ mod tests {
                 expected: DERIVATION_PLAN_SCHEMA_VERSION,
             })
         ));
+    }
+
+    #[test]
+    fn validation_rejects_embedded_nul_in_every_process_data_class() {
+        let mutations: Vec<(&str, Box<dyn Fn(&mut DerivationPlan)>)> = vec![
+            (
+                "environment[0].name",
+                Box::new(|plan| {
+                    plan.environment.clear();
+                    plan.environment.insert("BAD\0NAME".to_owned(), String::new());
+                }),
+            ),
+            (
+                "environment[0].value",
+                Box::new(|plan| {
+                    plan.environment.clear();
+                    plan.environment.insert("GOOD".to_owned(), "bad\0value".to_owned());
+                }),
+            ),
+            (
+                "layout.build_dir",
+                Box::new(|plan| plan.layout.build_dir = "/mason/bu\0ild".to_owned()),
+            ),
+            (
+                "jobs[0].pgo_dir",
+                Box::new(|plan| {
+                    plan.jobs[0].pgo_stage = Some("one".to_owned());
+                    plan.jobs[0].pgo_dir = Some("/mason/pgo\0one".to_owned());
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].program.path",
+                Box::new(|plan| {
+                    let StepPlan::Run { program, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    program.path = "/usr/bin/cm\0ake".to_owned();
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].args[0]",
+                Box::new(|plan| {
+                    let StepPlan::Run { args, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    args[0] = "--bu\0ild".to_owned();
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].environment[0].name",
+                Box::new(|plan| {
+                    let StepPlan::Run { environment, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    environment.clear();
+                    environment.insert("BAD\0NAME".to_owned(), String::new());
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].environment[0].value",
+                Box::new(|plan| {
+                    let StepPlan::Run { environment, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    environment.clear();
+                    environment.insert("GOOD".to_owned(), "bad\0value".to_owned());
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].working_dir",
+                Box::new(|plan| {
+                    let StepPlan::Run { working_dir, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    *working_dir = "/mason/bu\0ild".to_owned();
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].interpreter.path",
+                Box::new(|plan| {
+                    make_sample_shell(plan);
+                    let StepPlan::Shell { interpreter, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    interpreter.path = "/usr/bin/ba\0sh".to_owned();
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].declared_programs[0].path",
+                Box::new(|plan| {
+                    make_sample_shell(plan);
+                    let StepPlan::Shell { declared_programs, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    declared_programs[0].path = "/usr/bin/cm\0ake".to_owned();
+                }),
+            ),
+            (
+                "jobs[0].phases[0].steps[0].script",
+                Box::new(|plan| {
+                    make_sample_shell(plan);
+                    let StepPlan::Shell { script, .. } = sample_step_mut(plan) else {
+                        unreachable!()
+                    };
+                    *script = "printf bad\0script".to_owned();
+                }),
+            ),
+        ];
+
+        for (expected_field, mutate) in mutations {
+            let mut plan = sample_plan();
+            mutate(&mut plan);
+            assert!(
+                matches!(
+                    plan.validate(),
+                    Err(DerivationValidationError::EmbeddedNul { field }) if field == expected_field
+                ),
+                "NUL in {expected_field} crossed the freeze boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_requires_portable_environment_names_globally_and_per_step() {
+        for invalid in ["", "9STARTS_WITH_DIGIT", "HAS-DASH", "HAS=EQUALS", "NÖN_ASCII"] {
+            let mut global = sample_plan();
+            global.environment.clear();
+            global.environment.insert(invalid.to_owned(), String::new());
+            assert!(matches!(
+                global.validate(),
+                Err(DerivationValidationError::InvalidEnvironmentName { field })
+                    if field == "environment[0].name"
+            ));
+
+            let mut local = sample_plan();
+            let StepPlan::Run { environment, .. } = sample_step_mut(&mut local) else {
+                unreachable!()
+            };
+            environment.clear();
+            environment.insert(invalid.to_owned(), String::new());
+            assert!(matches!(
+                local.validate(),
+                Err(DerivationValidationError::InvalidEnvironmentName { field })
+                    if field == "jobs[0].phases[0].steps[0].environment[0].name"
+            ));
+        }
+
+        for valid in ["_", "A", "A9_B"] {
+            let mut plan = sample_plan();
+            plan.environment.clear();
+            plan.environment.insert(valid.to_owned(), String::new());
+            plan.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn validation_distinguishes_safe_empty_arguments_from_missing_programs_and_scripts() {
+        let mut no_arguments = sample_plan();
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut no_arguments) else {
+            unreachable!()
+        };
+        args.clear();
+        no_arguments.validate().unwrap();
+
+        let mut empty_argument = sample_plan();
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut empty_argument) else {
+            unreachable!()
+        };
+        *args = vec![String::new()];
+        empty_argument.validate().unwrap();
+
+        let mut missing_program = sample_plan();
+        let StepPlan::Run { program, .. } = sample_step_mut(&mut missing_program) else {
+            unreachable!()
+        };
+        program.path.clear();
+        assert!(matches!(
+            missing_program.validate(),
+            Err(DerivationValidationError::UnsafeAbsolutePath { field, .. })
+                if field == "jobs[0].phases[0].steps[0].program.path"
+        ));
+
+        let mut missing_script = sample_plan();
+        make_sample_shell(&mut missing_script);
+        let StepPlan::Shell { script, .. } = sample_step_mut(&mut missing_script) else {
+            unreachable!()
+        };
+        script.clear();
+        assert!(matches!(
+            missing_script.validate(),
+            Err(DerivationValidationError::Empty { field })
+                if field == "jobs[0].phases[0].steps[0].script"
+        ));
+
+        let mut missing_interpreter = sample_plan();
+        make_sample_shell(&mut missing_interpreter);
+        let StepPlan::Shell { interpreter, .. } = sample_step_mut(&mut missing_interpreter) else {
+            unreachable!()
+        };
+        interpreter.path.clear();
+        assert!(matches!(
+            missing_interpreter.validate(),
+            Err(DerivationValidationError::UnsafeAbsolutePath { field, .. })
+                if field == "jobs[0].phases[0].steps[0].interpreter.path"
+        ));
+    }
+
+    #[test]
+    fn process_collection_limits_accept_n_and_reject_n_plus_one() {
+        let mut two_jobs = sample_plan();
+        two_jobs.jobs.push(two_jobs.jobs[0].clone());
+        let job_limits = DerivationValidationLimits {
+            max_jobs: 2,
+            ..DerivationValidationLimits::default()
+        };
+        two_jobs.validate_with_limits(job_limits).unwrap();
+        let mut three_jobs = two_jobs;
+        three_jobs.jobs.push(three_jobs.jobs[0].clone());
+        assert_process_limit(
+            three_jobs.validate_with_limits(job_limits).unwrap_err(),
+            "jobs",
+            3,
+            2,
+            "items",
+        );
+
+        let mut two_phases = sample_plan();
+        let mut second_phase = two_phases.jobs[0].phases[0].clone();
+        second_phase.name = "check".to_owned();
+        two_phases.jobs[0].phases.push(second_phase);
+        let phase_limits = DerivationValidationLimits {
+            max_phases_per_job: 2,
+            ..DerivationValidationLimits::default()
+        };
+        two_phases.validate_with_limits(phase_limits).unwrap();
+        let mut three_phases = two_phases;
+        let mut third_phase = three_phases.jobs[0].phases[0].clone();
+        third_phase.name = "install".to_owned();
+        three_phases.jobs[0].phases.push(third_phase);
+        assert_process_limit(
+            three_phases.validate_with_limits(phase_limits).unwrap_err(),
+            "jobs[0].phases",
+            3,
+            2,
+            "items",
+        );
+
+        let mut two_steps = sample_plan();
+        let second_step = two_steps.jobs[0].phases[0].steps[0].clone();
+        two_steps.jobs[0].phases[0].steps.push(second_step);
+        let section_limits = DerivationValidationLimits {
+            max_steps_per_section: 2,
+            max_total_steps: 2,
+            ..DerivationValidationLimits::default()
+        };
+        two_steps.validate_with_limits(section_limits).unwrap();
+        let mut three_steps = two_steps;
+        let third_step = three_steps.jobs[0].phases[0].steps[0].clone();
+        three_steps.jobs[0].phases[0].steps.push(third_step);
+        assert_process_limit(
+            three_steps.validate_with_limits(section_limits).unwrap_err(),
+            "jobs[0].phases[0].steps",
+            3,
+            2,
+            "items",
+        );
+
+        let mut two_total_steps = sample_plan();
+        let pre_step = two_total_steps.jobs[0].phases[0].steps[0].clone();
+        two_total_steps.jobs[0].phases[0].pre = vec![pre_step];
+        let total_step_limits = DerivationValidationLimits {
+            max_steps_per_section: 2,
+            max_total_steps: 2,
+            ..DerivationValidationLimits::default()
+        };
+        two_total_steps.validate_with_limits(total_step_limits).unwrap();
+        let mut three_total_steps = two_total_steps;
+        let post_step = three_total_steps.jobs[0].phases[0].steps[0].clone();
+        three_total_steps.jobs[0].phases[0].post = vec![post_step];
+        assert_process_limit(
+            three_total_steps.validate_with_limits(total_step_limits).unwrap_err(),
+            "jobs[0].phases[0].post",
+            3,
+            2,
+            "total steps",
+        );
+
+        let argument_limits = DerivationValidationLimits {
+            max_arguments_per_step: 2,
+            ..DerivationValidationLimits::default()
+        };
+        sample_plan().validate_with_limits(argument_limits).unwrap();
+        let mut three_arguments = sample_plan();
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut three_arguments) else {
+            unreachable!()
+        };
+        args.push("--verbose".to_owned());
+        assert_process_limit(
+            three_arguments.validate_with_limits(argument_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].args",
+            3,
+            2,
+            "items",
+        );
+
+        let mut two_programs = sample_plan();
+        make_sample_shell(&mut two_programs);
+        let StepPlan::Shell { declared_programs, .. } = sample_step_mut(&mut two_programs) else {
+            unreachable!()
+        };
+        declared_programs.push(declared_programs[0].clone());
+        let program_limits = DerivationValidationLimits {
+            max_declared_programs_per_step: 2,
+            ..DerivationValidationLimits::default()
+        };
+        two_programs.validate_with_limits(program_limits).unwrap();
+        let mut three_programs = two_programs;
+        let StepPlan::Shell { declared_programs, .. } = sample_step_mut(&mut three_programs) else {
+            unreachable!()
+        };
+        declared_programs.push(declared_programs[0].clone());
+        assert_process_limit(
+            three_programs.validate_with_limits(program_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].declared_programs",
+            3,
+            2,
+            "items",
+        );
+    }
+
+    #[test]
+    fn environment_and_string_limits_accept_n_and_reject_n_plus_one() {
+        let environment_limits = DerivationValidationLimits {
+            max_environment_entries: 3,
+            ..DerivationValidationLimits::default()
+        };
+        sample_plan().validate_with_limits(environment_limits).unwrap();
+        let mut four_effective = sample_plan();
+        let StepPlan::Run { environment, .. } = sample_step_mut(&mut four_effective) else {
+            unreachable!()
+        };
+        environment.insert("LDFLAGS".to_owned(), "-Wl,--as-needed".to_owned());
+        assert_process_limit(
+            four_effective.validate_with_limits(environment_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].effective_environment",
+            4,
+            3,
+            "items",
+        );
+
+        let name_limits = DerivationValidationLimits {
+            max_environment_name_bytes: 6,
+            ..DerivationValidationLimits::default()
+        };
+        sample_plan().validate_with_limits(name_limits).unwrap();
+        let mut seven_byte_name = sample_plan();
+        let StepPlan::Run { environment, .. } = sample_step_mut(&mut seven_byte_name) else {
+            unreachable!()
+        };
+        environment.clear();
+        environment.insert("CFLAGSS".to_owned(), String::new());
+        assert_process_limit(
+            seven_byte_name.validate_with_limits(name_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].environment[0].name",
+            7,
+            6,
+            "bytes",
+        );
+
+        let mut sixty_four_bytes = sample_plan();
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut sixty_four_bytes) else {
+            unreachable!()
+        };
+        args[0] = "x".repeat(64);
+        let string_limits = DerivationValidationLimits {
+            max_process_string_bytes: 64,
+            ..DerivationValidationLimits::default()
+        };
+        sixty_four_bytes.validate_with_limits(string_limits).unwrap();
+        let mut sixty_five_bytes = sixty_four_bytes;
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut sixty_five_bytes) else {
+            unreachable!()
+        };
+        args[0].push('x');
+        assert_process_limit(
+            sixty_five_bytes.validate_with_limits(string_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].args[0]",
+            65,
+            64,
+            "bytes",
+        );
+
+        let mut sixty_four_byte_path = sample_plan();
+        sixty_four_byte_path.layout.cargo_cache_dir = format!("/mason/{}", "x".repeat(57));
+        assert_eq!(sixty_four_byte_path.layout.cargo_cache_dir.len(), 64);
+        let path_limits = DerivationValidationLimits {
+            max_path_bytes: 64,
+            ..DerivationValidationLimits::default()
+        };
+        sixty_four_byte_path.validate_with_limits(path_limits).unwrap();
+        let mut sixty_five_byte_path = sixty_four_byte_path;
+        sixty_five_byte_path.layout.cargo_cache_dir.push('x');
+        assert_process_limit(
+            sixty_five_byte_path.validate_with_limits(path_limits).unwrap_err(),
+            "layout.cargo_cache_dir",
+            65,
+            64,
+            "path bytes",
+        );
+    }
+
+    #[test]
+    fn execve_and_aggregate_limits_accept_n_and_reject_n_plus_one() {
+        let plan = sample_plan();
+        let probe_limits = DerivationValidationLimits {
+            max_execve_bytes: 0,
+            ..DerivationValidationLimits::default()
+        };
+        let DerivationValidationError::LimitExceeded {
+            actual: execve_bytes,
+            field,
+            ..
+        } = plan.validate_with_limits(probe_limits).unwrap_err()
+        else {
+            unreachable!()
+        };
+        assert_eq!(field, "jobs[0].phases[0].steps[0].execve");
+
+        let execve_limits = DerivationValidationLimits {
+            max_execve_bytes: execve_bytes,
+            ..DerivationValidationLimits::default()
+        };
+        plan.validate_with_limits(execve_limits).unwrap();
+        let mut one_more_execve_byte = plan.clone();
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut one_more_execve_byte) else {
+            unreachable!()
+        };
+        args[0].push('x');
+        assert_process_limit(
+            one_more_execve_byte.validate_with_limits(execve_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].execve",
+            execve_bytes + 1,
+            execve_bytes,
+            "bytes",
+        );
+
+        let measured = measured_process_budget(&plan);
+        let item_limits = DerivationValidationLimits {
+            max_total_process_items: measured.total_items,
+            ..DerivationValidationLimits::default()
+        };
+        plan.validate_with_limits(item_limits).unwrap();
+        let mut one_more_item = plan.clone();
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut one_more_item) else {
+            unreachable!()
+        };
+        args.push(String::new());
+        assert_process_limit(
+            one_more_item.validate_with_limits(item_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].environment",
+            measured.total_items + 1,
+            measured.total_items,
+            "total process items",
+        );
+
+        let text_limits = DerivationValidationLimits {
+            max_total_process_text_bytes: measured.total_text_bytes,
+            ..DerivationValidationLimits::default()
+        };
+        plan.validate_with_limits(text_limits).unwrap();
+        let mut one_more_text_byte = plan;
+        let StepPlan::Run { args, .. } = sample_step_mut(&mut one_more_text_byte) else {
+            unreachable!()
+        };
+        args[0].push('x');
+        assert_process_limit(
+            one_more_text_byte.validate_with_limits(text_limits).unwrap_err(),
+            "jobs[0].phases[0].steps[0].working_dir",
+            measured.total_text_bytes + 1,
+            measured.total_text_bytes,
+            "total process text bytes",
+        );
     }
 
     #[test]
