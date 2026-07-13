@@ -13,7 +13,6 @@ use chrono::Local;
 use clap::Parser;
 use moss::signal::inhibit;
 use thiserror::Error;
-use thread_priority::{NormalThreadSchedulePolicy, ThreadPriority, ThreadSchedulePolicy, thread_native_id};
 
 #[derive(Debug, Parser)]
 #[command(about = "Build stone package(s) from a stone recipe file")]
@@ -46,12 +45,6 @@ pub struct Command {
     source_date_epoch: i64,
     #[arg(long, default_value = "1", help = "Explicit parallel job count")]
     jobs: NonZeroU32,
-    #[arg(
-        long = "normal-priority",
-        help = "Run the build without lowering the process priority",
-        default_value_t = false
-    )]
-    normal_priority: bool,
     #[arg(short, long, default_value = ".", help = "Directory to store build results")]
     output: PathBuf,
     #[arg(
@@ -88,7 +81,6 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         ccache,
         update_lock,
         refresh_repositories,
-        normal_priority,
         build_release,
         cleanup,
         verify_against,
@@ -154,26 +146,6 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     runtime.setup(&plan, &execution_lock, &mut timing, timer)?;
 
     let paths = &runtime.paths;
-
-    // Set the current thread priority to SCHED_BATCH so that it's inherited by all child processes
-    if !normal_priority {
-        println!("Changing boulder thread priority to SCHED_BATCH during build:");
-        match thread_priority::set_thread_priority_and_policy(
-            thread_native_id(),
-            ThreadPriority::Min,
-            ThreadSchedulePolicy::Normal(NormalThreadSchedulePolicy::Batch),
-        ) {
-            Ok(_) => {
-                println!("└─ priority set.\n");
-            }
-            Err(e) => {
-                println!("└─ unable to change boulder thread scheduling priority to SCHED_BATCH.");
-                println!("└─ error message: {e:?}");
-                println!("└─ priority left at its default value.\n");
-            }
-        }
-        println!("Continuing build:\n");
-    }
 
     // hold a fd
     let _fd = inhibit(
@@ -248,8 +220,6 @@ pub enum Error {
     PublishArtefacts(#[source] package::PublishError),
     #[error("container")]
     Container(#[from] container::Error),
-    #[error("setting thread priority")]
-    Priority(#[from] thread_priority::Error),
     #[error("cleanup")]
     Cleanup(#[source] Box<build::Error>),
     #[error("Binary manifest required for verification, got {0:?}")]
@@ -294,6 +264,21 @@ mod tests {
     #[test]
     fn frozen_build_requires_target_and_timestamp() {
         assert!(Command::try_parse_from(["build"]).is_err());
+    }
+
+    #[test]
+    fn build_cli_has_no_ambient_scheduler_override() {
+        assert!(
+            Command::try_parse_from([
+                "build",
+                "--target",
+                "x86_64",
+                "--source-date-epoch",
+                "1700000000",
+                "--normal-priority",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
