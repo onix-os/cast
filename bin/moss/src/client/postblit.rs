@@ -105,11 +105,11 @@ impl TriggerScope<'_> {
         match self {
             TriggerScope::Transaction(install, scope) => match scope {
                 super::Scope::Stateful => install.staging_dir().clone(),
-                super::Scope::Ephemeral { blit_root } => blit_root.clone(),
+                super::Scope::Ephemeral { blit_root } | super::Scope::Frozen { blit_root } => blit_root.clone(),
             },
             TriggerScope::System(install, scope) => match scope {
                 super::Scope::Stateful => install.root.clone(),
-                super::Scope::Ephemeral { blit_root } => blit_root.clone(),
+                super::Scope::Ephemeral { blit_root } | super::Scope::Frozen { blit_root } => blit_root.clone(),
             },
         }
     }
@@ -119,11 +119,11 @@ impl TriggerScope<'_> {
         match self {
             TriggerScope::Transaction(install, scope) => match scope {
                 super::Scope::Stateful => install.root.join(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+                super::Scope::Ephemeral { blit_root } | super::Scope::Frozen { blit_root } => blit_root.join(path),
             },
             TriggerScope::System(install, scope) => match scope {
                 super::Scope::Stateful => install.root.join(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+                super::Scope::Ephemeral { blit_root } | super::Scope::Frozen { blit_root } => blit_root.join(path),
             },
         }
     }
@@ -133,11 +133,11 @@ impl TriggerScope<'_> {
         match self {
             TriggerScope::Transaction(install, scope) => match scope {
                 super::Scope::Stateful => install.staging_path(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+                super::Scope::Ephemeral { blit_root } | super::Scope::Frozen { blit_root } => blit_root.join(path),
             },
             TriggerScope::System(install, scope) => match scope {
                 super::Scope::Stateful => install.root.join(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+                super::Scope::Ephemeral { blit_root } | super::Scope::Frozen { blit_root } => blit_root.join(path),
             },
         }
     }

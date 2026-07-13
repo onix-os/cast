@@ -20,7 +20,7 @@ use xxhash_rust::xxh3::xxh3_64;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 
 use crate::{
-    Installation,
+    Installation, Package,
     db::meta,
     environment, package,
     repository::{self, Format, OutdatedRepoIndexUri, Repository, format},
@@ -309,6 +309,47 @@ impl Manager {
     /// Returns the active repositories held by this manager
     pub(crate) fn active(&self) -> impl Iterator<Item = repository::Cached> + '_ {
         self.repositories.values().filter(|c| c.repository.active).cloned()
+    }
+
+    /// Resolve an exact package only from explicitly configured, active
+    /// repositories. Repository priority and ID provide a stable selection
+    /// order when the same content identity appears in multiple indexes.
+    pub(crate) fn resolve_exact_package(
+        &self,
+        package: &package::Id,
+    ) -> Result<Option<(repository::Id, Package)>, Error> {
+        let mut repositories = self.active().collect::<Vec<_>>();
+        repositories.sort_by(|left, right| {
+            let left_priority = u64::from(left.repository.priority);
+            let right_priority = u64::from(right.repository.priority);
+            right_priority.cmp(&left_priority).then_with(|| left.id.cmp(&right.id))
+        });
+
+        for repository in repositories {
+            let mut meta = match repository.db.get(package) {
+                Ok(meta) => meta,
+                Err(meta::Error::RowNotFound) => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let index_uri = repository
+                .index_uri()
+                .ok_or_else(|| Error::MissingIndexUri(repository.id.clone()))?;
+            meta.uri = meta
+                .uri
+                .and_then(|relative| index_uri.join(&relative).ok())
+                .map(|uri| uri.to_string());
+
+            return Ok(Some((
+                repository.id,
+                Package {
+                    id: package.clone(),
+                    meta,
+                    flags: package::Flags::new().with_available(),
+                },
+            )));
+        }
+
+        Ok(None)
     }
 
     /// Return the active repository which supplied an exact package ID, using

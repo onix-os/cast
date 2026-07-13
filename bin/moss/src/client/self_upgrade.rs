@@ -17,6 +17,7 @@ use crate::{
 #[allow(unused, clippy::diverging_sub_expression)]
 #[instrument(skip(client))]
 pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
+    client.require_non_frozen()?;
     // Ensure client is stateful
     if client.is_ephemeral() {
         return todo!("error can't self upgrade with epehemeral client");

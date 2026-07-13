@@ -10,13 +10,18 @@
 
 use std::{
     borrow::Borrow,
+    collections::{BTreeMap, BTreeSet},
     fmt, io,
-    os::{fd::RawFd, unix::fs::symlink},
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+        unix::fs::{PermissionsExt, symlink},
+    },
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
 use astr::AStr;
+use filetime::{FileTime, set_file_times, set_symlink_file_times};
 use fs_err as fs;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
@@ -24,8 +29,8 @@ use nix::{
     errno::Errno,
     fcntl::{self, OFlag},
     libc::{AT_FDCWD, RENAME_EXCHANGE, SYS_renameat2, syscall},
-    sys::stat::{Mode, fchmodat, mkdirat},
-    unistd::{UnlinkatFlags, close, linkat, mkdir, read, symlinkat, unlinkat, write},
+    sys::stat::{Mode, fchmod, fchmodat, mkdirat},
+    unistd::{UnlinkatFlags, linkat, mkdir, read, symlinkat, unlinkat, write},
 };
 use postblit::TriggerScope;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -128,7 +133,7 @@ impl ClientBuilder {
         let registry = build_registry(&self.installation, &repositories, &install_db, &state_db)?;
 
         let mut client = Client {
-            config,
+            config: Some(config),
             installation: self.installation,
             repositories,
             registry,
@@ -158,7 +163,7 @@ pub struct Client {
     /// All layouts for all packages
     layout_db: db::layout::Database,
     /// Runtime configuration for the moss package manager
-    config: config::Manager,
+    config: Option<config::Manager>,
     /// All of our configured repositories, to seed the [`crate::registry::Registry`]
     repositories: repository::Manager,
     /// Operational scope (real systems, ephemeral, etc)
@@ -182,13 +187,61 @@ impl Client {
         Self::builder(client_name.to_string(), installation).build()
     }
 
+    /// Construct a cache-only client for one frozen root materialization.
+    ///
+    /// The installation must have been opened with [`Installation::open_frozen`].
+    /// Only the supplied active repositories are registered: authored system
+    /// intent, active-state metadata, local cobble packages, and moss config
+    /// files cannot participate in exact package selection.
+    pub fn frozen(
+        client_name: impl ToString,
+        installation: Installation,
+        repositories: repository::Map,
+        blit_root: impl Into<PathBuf>,
+    ) -> Result<Client, Error> {
+        if !installation.is_frozen_cache() {
+            return Err(Error::FrozenInstallationRequired);
+        }
+
+        let blit_root = blit_root.into();
+        if blit_root.canonicalize()? == installation.root.canonicalize()? {
+            return Err(Error::EphemeralInstallationRoot);
+        }
+
+        let install_db = db::meta::Database::new(installation.db_path("install").to_str().unwrap_or_default())?;
+        let state_db = db::state::Database::new(":memory:")?;
+        let layout_db = db::layout::Database::new(installation.db_path("layout").to_str().unwrap_or_default())?;
+        let repositories = repository::Manager::with_explicit(client_name, repositories, installation.clone())?;
+        let registry = build_repository_registry(&repositories);
+
+        Ok(Client {
+            installation,
+            registry,
+            install_db,
+            state_db,
+            layout_db,
+            config: None,
+            repositories,
+            scope: Scope::Frozen { blit_root },
+        })
+    }
+
     /// Returns `true` if this is an ephemeral client
     pub fn is_ephemeral(&self) -> bool {
-        matches!(self.scope, Scope::Ephemeral { .. })
+        self.scope.is_ephemeral()
+    }
+
+    fn require_non_frozen(&self) -> Result<(), Error> {
+        if matches!(self.scope, Scope::Frozen { .. }) {
+            Err(Error::FrozenClientProhibitedOperation)
+        } else {
+            Ok(())
+        }
     }
 
     /// Perform package installation
     pub fn install(&mut self, packages: &[&str], yes: bool, simulate: bool) -> Result<install::Timing, Error> {
+        self.require_non_frozen()?;
         install(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
     }
 
@@ -203,21 +256,42 @@ impl Client {
         yes: bool,
         simulate: bool,
     ) -> Result<install::Timing, Error> {
+        self.require_non_frozen()?;
         install::install_exact(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
+    }
+
+    /// Materialize an exact package closure into a dedicated frozen root.
+    ///
+    /// Package IDs are treated as a canonical set and sorted by ID. No
+    /// provider lookup, dependency traversal, state creation, system-model
+    /// generation, triggers, boot synchronization, or isolation-root writes
+    /// occur on this path. The resulting root uses independent file inodes and
+    /// normalizes content, inode type, mode, atime, and mtime. Kernel-assigned
+    /// inode/dev/ctime/btime values are deliberately outside this contract.
+    pub fn materialize_frozen_root(
+        &mut self,
+        packages: &[package::Id],
+        source_date_epoch: i64,
+    ) -> Result<install::Timing, Error> {
+        install::materialize_frozen_root(self, packages, source_date_epoch)
+            .map_err(|error| Error::Install(Box::new(error)))
     }
 
     /// Perform package removals
     pub fn remove(&mut self, packages: &[&str], yes: bool, simulate: bool) -> Result<remove::Timing, Error> {
+        self.require_non_frozen()?;
         remove(self, packages, yes, simulate).map_err(|error| Error::Remove(Box::new(error)))
     }
 
     /// Perform package fetches
     pub fn fetch(&mut self, packages: &[&str], output_dir: &Path, verbose: bool) -> Result<fetch::Timing, Error> {
+        self.require_non_frozen()?;
         fetch(self, packages, output_dir, verbose).map_err(|error| Error::Fetch(Box::new(error)))
     }
 
     /// Perform a sync
     pub fn sync(&mut self, yes: bool, simulate: bool) -> Result<sync::Timing, Error> {
+        self.require_non_frozen()?;
         sync(self, yes, simulate).map_err(|error| Error::Sync(Box::new(error)))
     }
 
@@ -230,6 +304,7 @@ impl Client {
     /// Returns an error if `blit_root` is the same as the installation root,
     /// since the system client should always be stateful.
     pub fn ephemeral(self, blit_root: impl Into<PathBuf>) -> Result<Self, Error> {
+        self.require_non_frozen()?;
         let blit_root = blit_root.into();
 
         if blit_root.canonicalize()? == self.installation.root.canonicalize()? {
@@ -245,25 +320,40 @@ impl Client {
     /// Ensures all repositories have been initialized by ensuring their stone indexes
     /// are downloaded and added to the meta db
     pub async fn ensure_repos_initialized(&mut self) -> Result<usize, Error> {
+        self.require_non_frozen()?;
         let num_initialized = self.repositories.ensure_all_initialized().await?;
-        self.registry = build_registry(&self.installation, &self.repositories, &self.install_db, &self.state_db)?;
+        self.rebuild_registry()?;
         Ok(num_initialized)
     }
 
     /// Reload all configured repositories and refreshes their index file, then update
     /// registry with all active repositories.
     pub async fn refresh_repositories(&mut self) -> Result<(), Error> {
+        self.require_non_frozen()?;
         // Reload manager if config sourced to pickup config changes
         // then refresh indexes
         if self.repositories.is_config_source() {
-            self.repositories =
-                repository::Manager::with_config_manager(self.config.clone(), self.installation.clone())?;
+            let config = self
+                .config
+                .clone()
+                .expect("config-sourced clients always retain their config manager");
+            self.repositories = repository::Manager::with_config_manager(config, self.installation.clone())?;
         };
         self.repositories.refresh_all().await?;
 
         // Rebuild registry
-        self.registry = build_registry(&self.installation, &self.repositories, &self.install_db, &self.state_db)?;
+        self.rebuild_registry()?;
 
+        Ok(())
+    }
+
+    fn rebuild_registry(&mut self) -> Result<(), Error> {
+        self.registry = match &self.scope {
+            Scope::Frozen { .. } => build_repository_registry(&self.repositories),
+            Scope::Stateful | Scope::Ephemeral { .. } => {
+                build_registry(&self.installation, &self.repositories, &self.install_db, &self.state_db)?
+            }
+        };
         Ok(())
     }
 
@@ -314,6 +404,14 @@ impl Client {
             .by_id(package)
             .next()
             .ok_or(Error::MissingMetadata(package.clone()))
+    }
+
+    fn resolve_frozen_repository_package(&self, package: &package::Id) -> Result<Package, Error> {
+        self.frozen_root()?;
+        self.repositories
+            .resolve_exact_package(package)?
+            .map(|(_, package)| package)
+            .ok_or_else(|| Error::MissingMetadata(package.clone()))
     }
 
     /// Resolves the provided id's with the underlying registry, returning
@@ -367,6 +465,7 @@ impl Client {
     /// The current state gets archived.\
     /// Returns the old state that was archived.
     pub fn activate_state(&self, id: state::Id, skip_triggers: bool, skip_boot: bool) -> Result<state::Id, Error> {
+        self.require_non_frozen()?;
         // Fetch the new state
         let new = self.state_db.get(id).map_err(|_| Error::StateDoesntExist(id))?;
 
@@ -417,6 +516,7 @@ impl Client {
     ///
     /// Returns `None` if the client is ephemeral
     pub fn new_state(&self, selections: &[Selection], summary: impl ToString) -> Result<Option<State>, Error> {
+        self.require_non_frozen()?;
         let _guard = signal::ignore([Signal::SIGINT])?;
         let _fd = signal::inhibit(
             vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
@@ -465,6 +565,7 @@ impl Client {
 
                 Ok(None)
             }
+            Scope::Frozen { .. } => unreachable!("frozen scope rejected before state creation"),
         };
 
         info!(
@@ -540,6 +641,7 @@ impl Client {
         old_state: Option<state::Id>,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
+        self.require_non_frozen()?;
         record_state_id(&self.installation.staging_dir(), state.id)?;
         record_os_release(&self.installation.staging_dir())?;
         record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
@@ -580,6 +682,7 @@ impl Client {
         blit_root: &Path,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
+        self.require_non_frozen()?;
         record_os_release(blit_root)?;
         record_system_snapshot(blit_root, system_snapshot)?;
 
@@ -663,7 +766,7 @@ impl Client {
     }
 
     /// Download & unpack the provided packages. Packages already cached will be validated & skipped.
-    pub async fn cache_packages<T>(&self, packages: &[T]) -> Result<(), Error>
+    pub(crate) async fn cache_packages<T>(&self, packages: &[T]) -> Result<(), Error>
     where
         T: Borrow<Package>,
     {
@@ -847,6 +950,49 @@ impl Client {
         vfs(self.layout_db.query(packages)?)
     }
 
+    fn canonical_frozen_package_ids(&self, packages: &[package::Id]) -> Result<Vec<package::Id>, Error> {
+        let mut canonical = packages.to_vec();
+        canonical.sort();
+        if canonical.is_empty() {
+            return Err(Error::EmptyFrozenPackageClosure);
+        }
+        for duplicate in canonical.windows(2) {
+            if duplicate[0] == duplicate[1] {
+                return Err(Error::DuplicateFrozenPackage(duplicate[0].clone()));
+            }
+        }
+        Ok(canonical)
+    }
+
+    fn frozen_root(&self) -> Result<&Path, Error> {
+        match &self.scope {
+            Scope::Frozen { blit_root } => Ok(blit_root),
+            Scope::Stateful | Scope::Ephemeral { .. } => Err(Error::FrozenRootRequiresFrozenClient),
+        }
+    }
+
+    /// Materialize already-cached package layouts through the frozen-root
+    /// filesystem path. This deliberately bypasses every stateful and legacy
+    /// ephemeral post-blit operation.
+    fn blit_frozen_root(&self, packages: &[package::Id], source_date_epoch: i64) -> Result<(), Error> {
+        let blit_target = self.frozen_root()?.to_owned();
+        let packages = self.canonical_frozen_package_ids(packages)?;
+        let layouts = self.layout_db.query(packages.iter())?;
+        let fstree = frozen_vfs(&packages, layouts)?;
+
+        blit_root_with_materialization(
+            &self.installation,
+            &fstree,
+            &blit_target,
+            AssetMaterialization::IndependentCopy,
+            BlitExecution::Sequential,
+        )?;
+        create_frozen_root_links(&blit_target)?;
+        normalize_frozen_tree(&blit_target, FileTime::from_unix_time(source_date_epoch, 0))?;
+
+        Ok(())
+    }
+
     /// Blit the packages to a filesystem root
     ///
     /// This functionality is core to all moss filesystem transactions, forming the entire
@@ -868,6 +1014,7 @@ impl Client {
         let blit_target = match &self.scope {
             Scope::Stateful => self.installation.staging_dir(),
             Scope::Ephemeral { blit_root } => blit_root.to_owned(),
+            Scope::Frozen { .. } => return Err(Error::FrozenClientProhibitedOperation),
         };
 
         let fstree = self.vfs(packages)?;
@@ -875,8 +1022,15 @@ impl Client {
         let materialization = match &self.scope {
             Scope::Stateful => AssetMaterialization::HardLink,
             Scope::Ephemeral { .. } => AssetMaterialization::IndependentCopy,
+            Scope::Frozen { .. } => unreachable!("frozen scope returned above"),
         };
-        blit_root_with_materialization(&self.installation, &fstree, &blit_target, materialization)?;
+        blit_root_with_materialization(
+            &self.installation,
+            &fstree,
+            &blit_target,
+            materialization,
+            BlitExecution::Parallel,
+        )?;
 
         Ok(fstree)
     }
@@ -925,6 +1079,7 @@ impl Client {
 
     /// Synchronize boot for the active state
     pub fn synchronize_boot(&self) -> Result<(), Error> {
+        self.require_non_frozen()?;
         let Some(state_id) = self.installation.active_state else {
             return Err(Error::NoActiveState);
         };
@@ -972,7 +1127,7 @@ impl Client {
         let repositories = repository::Manager::with_config_manager(config.clone(), installation.clone())?;
 
         Ok(Client {
-            config,
+            config: Some(config),
             installation,
             repositories,
             registry,
@@ -984,17 +1139,17 @@ impl Client {
     }
 }
 
+const ROOT_ABI_LINKS: [(&str, &str); 5] = [
+    ("usr/sbin", "sbin"),
+    ("usr/bin", "bin"),
+    ("usr/lib", "lib"),
+    ("usr/lib", "lib64"),
+    ("usr/lib32", "lib32"),
+];
+
 /// Add root symlinks & os-release file
 fn create_root_links(root: &Path) -> io::Result<()> {
-    let links = vec![
-        ("usr/sbin", "sbin"),
-        ("usr/bin", "bin"),
-        ("usr/lib", "lib"),
-        ("usr/lib", "lib64"),
-        ("usr/lib32", "lib32"),
-    ];
-
-    'linker: for (source, target) in links.into_iter() {
+    'linker: for (source, target) in ROOT_ABI_LINKS {
         let final_target = root.join(target);
         let staging_target = root.join(format!("{target}.next"));
 
@@ -1009,6 +1164,63 @@ fn create_root_links(root: &Path) -> io::Result<()> {
         fs::rename(staging_target, final_target)?;
     }
 
+    Ok(())
+}
+
+/// Create only the stable root ABI links required by a frozen build root.
+///
+/// The root has just been recreated, so any pre-existing entry is an invariant
+/// violation rather than something to merge or replace.
+fn create_frozen_root_links(root: &Path) -> io::Result<()> {
+    for (source, target) in ROOT_ABI_LINKS {
+        symlink(source, root.join(target))?;
+    }
+    Ok(())
+}
+
+/// Normalize every materialized inode after the complete frozen tree and its
+/// root ABI links exist. Directories are updated after their children so
+/// traversal cannot leave ambient access or modification timestamps behind.
+fn normalize_frozen_tree(path: &Path, timestamp: FileTime) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        set_symlink_file_times(path, timestamp, timestamp)?;
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        let mut children = fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<io::Result<Vec<_>>>()?;
+        children.sort();
+        for child in children {
+            normalize_frozen_tree(&child, timestamp)?;
+        }
+    }
+    set_file_times(path, timestamp, timestamp)
+}
+
+/// Restore owner traversal and mutation permissions before replacing a tree.
+///
+/// Frozen package metadata may legitimately make a directory read-only. The
+/// next materialization still has to be able to remove children within that
+/// directory. Symlinks are never followed.
+fn make_tree_removable(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(permissions.mode() | 0o700);
+    fs::set_permissions(path, permissions)?;
+
+    let mut children = fs::read_dir(path)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<io::Result<Vec<_>>>()?;
+    children.sort();
+    for child in children {
+        make_tree_removable(&child)?;
+    }
     Ok(())
 }
 
@@ -1028,6 +1240,286 @@ pub fn vfs(layouts: Vec<(package::Id, StonePayloadLayoutRecord)>) -> Result<vfs:
     Ok(tbuild.tree()?)
 }
 
+#[derive(Debug)]
+struct FrozenLayoutEntry {
+    package: package::Id,
+    layout: StonePayloadLayoutRecord,
+    path: String,
+    package_order: usize,
+    kind_order: u8,
+    source_order: String,
+}
+
+impl FrozenLayoutEntry {
+    fn new(package: package::Id, layout: StonePayloadLayoutRecord, package_order: usize) -> Result<Self, Error> {
+        let path = PendingFile {
+            id: package.clone(),
+            layout: layout.clone(),
+        }
+        .path()
+        .to_string();
+        if !is_normalized_frozen_path(&path) {
+            return Err(Error::InvalidFrozenLayoutPath { package, path });
+        }
+        if layout.uid != 0 || layout.gid != 0 {
+            return Err(Error::UnsupportedFrozenOwnership {
+                package,
+                path,
+                uid: layout.uid,
+                gid: layout.gid,
+            });
+        }
+
+        let expected_file_type = match &layout.file {
+            StonePayloadLayoutFile::Regular(..) => nix::libc::S_IFREG,
+            StonePayloadLayoutFile::Directory(_) => nix::libc::S_IFDIR,
+            StonePayloadLayoutFile::Symlink(..) => nix::libc::S_IFLNK,
+            StonePayloadLayoutFile::CharacterDevice(_)
+            | StonePayloadLayoutFile::BlockDevice(_)
+            | StonePayloadLayoutFile::Fifo(_)
+            | StonePayloadLayoutFile::Socket(_)
+            | StonePayloadLayoutFile::Unknown(..) => {
+                return Err(Error::UnsupportedFrozenLayout { package, path });
+            }
+        };
+        let actual_file_type = layout.mode & nix::libc::S_IFMT;
+        let unsupported_mode_bits = layout.mode & !(nix::libc::S_IFMT | 0o7777);
+        let symlink_mode_is_enforceable = expected_file_type != nix::libc::S_IFLNK || layout.mode & 0o7777 == 0o777;
+        if actual_file_type != expected_file_type || unsupported_mode_bits != 0 || !symlink_mode_is_enforceable {
+            return Err(Error::InvalidFrozenLayoutMode {
+                package,
+                path,
+                mode: layout.mode,
+            });
+        }
+
+        let (kind_order, source_order) = match &layout.file {
+            StonePayloadLayoutFile::Directory(_) => (0, String::new()),
+            StonePayloadLayoutFile::Regular(source, _) => (1, format!("{source:032x}")),
+            StonePayloadLayoutFile::Symlink(source, _) => (2, source.to_string()),
+            StonePayloadLayoutFile::CharacterDevice(_)
+            | StonePayloadLayoutFile::BlockDevice(_)
+            | StonePayloadLayoutFile::Fifo(_)
+            | StonePayloadLayoutFile::Socket(_)
+            | StonePayloadLayoutFile::Unknown(..) => unreachable!("unsupported inode returned above"),
+        };
+
+        Ok(Self {
+            package,
+            layout,
+            path,
+            package_order,
+            kind_order,
+            source_order,
+        })
+    }
+
+    fn is_directory(&self) -> bool {
+        matches!(self.layout.file, StonePayloadLayoutFile::Directory(_))
+    }
+
+    fn pending(&self) -> PendingFile {
+        PendingFile {
+            id: self.package.clone(),
+            layout: self.layout.clone(),
+        }
+    }
+}
+
+/// Build a deterministic tree for a frozen package closure.
+///
+/// SQLite row order and concurrent cache completion are deliberately ignored.
+/// Package IDs establish canonical precedence, entries are sorted by their
+/// complete materialization data, byte-identical directory records collapse,
+/// and every metadata disagreement or non-directory collision is rejected
+/// before the destination root is touched.
+fn frozen_vfs(
+    packages: &[package::Id],
+    layouts: Vec<(package::Id, StonePayloadLayoutRecord)>,
+) -> Result<vfs::Tree<PendingFile>, Error> {
+    let package_order = packages
+        .iter()
+        .enumerate()
+        .map(|(order, package)| (package.clone(), order))
+        .collect::<BTreeMap<_, _>>();
+    let mut entries = layouts
+        .into_iter()
+        .map(|(package, layout)| {
+            let order = package_order
+                .get(&package)
+                .copied()
+                .ok_or_else(|| Error::UnexpectedFrozenLayoutPackage(package.clone()))?;
+            FrozenLayoutEntry::new(package, layout, order)
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    entries.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.package_order.cmp(&right.package_order))
+            .then_with(|| left.kind_order.cmp(&right.kind_order))
+            .then_with(|| left.source_order.cmp(&right.source_order))
+            .then_with(|| left.layout.uid.cmp(&right.layout.uid))
+            .then_with(|| left.layout.gid.cmp(&right.layout.gid))
+            .then_with(|| left.layout.mode.cmp(&right.layout.mode))
+            .then_with(|| left.layout.tag.cmp(&right.layout.tag))
+    });
+
+    let mut selected: Vec<FrozenLayoutEntry> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if let Some(previous) = selected.last()
+            && previous.path == entry.path
+        {
+            if identical_directory_metadata(previous, &entry) {
+                continue;
+            }
+            return Err(frozen_collision(&entry.path, previous, &entry));
+        }
+        selected.push(entry);
+    }
+
+    validate_frozen_tree_collisions(&selected)?;
+
+    let mut builder = TreeBuilder::new();
+    for entry in &selected {
+        builder.push(entry.pending());
+    }
+    builder.bake();
+    Ok(builder.tree()?)
+}
+
+fn is_normalized_frozen_path(path: &str) -> bool {
+    path.starts_with("/usr/")
+        && !path.as_bytes().contains(&0)
+        && !path.ends_with('/')
+        && !path.contains("//")
+        && !path.split('/').any(|component| component == "." || component == "..")
+}
+
+fn validate_frozen_tree_collisions(entries: &[FrozenLayoutEntry]) -> Result<(), Error> {
+    let explicit = entries
+        .iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut directories = BTreeSet::new();
+    for entry in entries {
+        let mut parent = Path::new(&entry.path).parent();
+        while let Some(path) = parent {
+            directories.insert(path.to_string_lossy().into_owned());
+            parent = path.parent();
+        }
+    }
+    for entry in entries {
+        if entry.is_directory() {
+            directories.insert(entry.path.clone());
+        } else {
+            directories.remove(&entry.path);
+        }
+    }
+
+    let redirects = entries
+        .iter()
+        .filter_map(|entry| {
+            let StonePayloadLayoutFile::Symlink(target, _) = &entry.layout.file else {
+                return None;
+            };
+            let target = if target.starts_with('/') {
+                target.to_string()
+            } else {
+                let parent = Path::new(&entry.path)
+                    .parent()
+                    .expect("validated frozen path has a parent")
+                    .to_string_lossy();
+                vfs::path::join(parent.as_ref(), target.as_str()).to_string()
+            };
+            directories.contains(&target).then_some((entry.path.clone(), target))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut effective = BTreeMap::<String, &FrozenLayoutEntry>::new();
+    for entry in entries {
+        let path = redirected_frozen_path(&entry.path, &redirects)?;
+        if !is_normalized_frozen_path(&path) {
+            return Err(Error::FrozenRedirectOutsideUsr {
+                package: entry.package.clone(),
+                path,
+            });
+        }
+        if let Some(previous) = effective.get(&path) {
+            if !identical_directory_metadata(previous, entry) {
+                return Err(frozen_collision(&path, previous, entry));
+            }
+        } else {
+            effective.insert(path, entry);
+        }
+    }
+
+    for (path, entry) in &effective {
+        let mut parent = Path::new(path).parent();
+        while let Some(parent_path) = parent {
+            if let Some(ancestor) = effective.get(parent_path.to_string_lossy().as_ref())
+                && !ancestor.is_directory()
+            {
+                return Err(frozen_collision(path, ancestor, entry));
+            }
+            parent = parent_path.parent();
+        }
+    }
+
+    // A non-directory explicit parent which redirects to a real directory is
+    // valid; every other original child-under-file relation is not.
+    for entry in entries {
+        let mut parent = Path::new(&entry.path).parent();
+        while let Some(parent_path) = parent {
+            let parent_name = parent_path.to_string_lossy();
+            if let Some(ancestor) = explicit.get(parent_name.as_ref())
+                && !ancestor.is_directory()
+                && !redirects.contains_key(parent_name.as_ref())
+            {
+                return Err(frozen_collision(&entry.path, ancestor, entry));
+            }
+            parent = parent_path.parent();
+        }
+    }
+
+    Ok(())
+}
+
+fn identical_directory_metadata(first: &FrozenLayoutEntry, second: &FrozenLayoutEntry) -> bool {
+    first.is_directory()
+        && second.is_directory()
+        && first.layout.uid == second.layout.uid
+        && first.layout.gid == second.layout.gid
+        && first.layout.mode == second.layout.mode
+        && first.layout.tag == second.layout.tag
+}
+
+fn redirected_frozen_path(path: &str, redirects: &BTreeMap<String, String>) -> Result<String, Error> {
+    let mut path = path.to_owned();
+    let mut visited = BTreeSet::new();
+    loop {
+        let Some((source, target)) = redirects
+            .iter()
+            .filter(|(source, _)| path.starts_with(&format!("{source}/")))
+            .max_by_key(|(source, _)| source.len())
+        else {
+            return Ok(path);
+        };
+        if !visited.insert(path.clone()) {
+            return Err(Error::FrozenSymlinkRedirectCycle { path });
+        }
+        path = format!("{}{}", target.trim_end_matches('/'), &path[source.len()..]);
+    }
+}
+
+fn frozen_collision(path: &str, first: &FrozenLayoutEntry, second: &FrozenLayoutEntry) -> Error {
+    Error::FrozenPathCollision {
+        path: path.to_owned(),
+        first: first.package.clone(),
+        second: second.package.clone(),
+    }
+}
+
 /// Blit the packages to a filesystem root
 ///
 /// This functionality is core to all moss filesystem transactions, forming the entire
@@ -1041,7 +1533,13 @@ pub fn vfs(layouts: Vec<(package::Id, StonePayloadLayoutRecord)>) -> Result<vfs:
 /// This provides a very quick means to generate a hardlinked "snapshot" on-demand,
 /// which can then be activated via [`Self::promote_staging`]
 pub fn blit_root(installation: &Installation, tree: &vfs::Tree<PendingFile>, blit_target: &Path) -> Result<(), Error> {
-    blit_root_with_materialization(installation, tree, blit_target, AssetMaterialization::HardLink)
+    blit_root_with_materialization(
+        installation,
+        tree,
+        blit_target,
+        AssetMaterialization::HardLink,
+        BlitExecution::Parallel,
+    )
 }
 
 fn blit_root_with_materialization(
@@ -1049,8 +1547,12 @@ fn blit_root_with_materialization(
     tree: &vfs::Tree<PendingFile>,
     blit_target: &Path,
     materialization: AssetMaterialization,
+    execution: BlitExecution,
 ) -> Result<(), Error> {
     // undirt.
+    if materialization == AssetMaterialization::IndependentCopy {
+        make_tree_removable(blit_target)?;
+    }
     fs::remove_dir_all(blit_target)?;
 
     let progress = ProgressBar::new(1).with_style(
@@ -1063,42 +1565,53 @@ fn blit_root_with_materialization(
     progress.tick();
 
     let now = Instant::now();
-    let mut stats = BlitStats::default();
 
     progress.set_length(tree.len());
     progress.set_position(0_u64);
 
     let cache_dir = installation.assets_path("v2");
-    let cache_fd = fcntl::open(&cache_dir, OFlag::O_DIRECTORY | OFlag::O_RDONLY, Mode::empty())?;
+    let cache_fd = open_owned(
+        &cache_dir,
+        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
+        Mode::empty(),
+    )?;
 
-    // We need to ensure this runtime is dropped so it doesn't linger
-    // since this is in the boulder call path & boulder can't have
-    // multithreading when CLONE into a user namespace / "container"
-    let rayon_runtime = rayon::ThreadPoolBuilder::new().build().expect("rayon runtime");
-
-    rayon_runtime.install(|| -> Result<(), Error> {
+    let blit = || -> Result<BlitStats, Error> {
+        let mut stats = BlitStats::default();
         if let Some(root) = tree.structured() {
             mkdir(blit_target, Mode::from_bits_truncate(0o755))?;
-            let root_dir = fcntl::open(blit_target, OFlag::O_DIRECTORY | OFlag::O_RDONLY, Mode::empty())?;
+            let root_dir = open_owned(
+                blit_target,
+                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
+                Mode::empty(),
+            )?;
+            fchmod(root_dir.as_raw_fd(), Mode::from_bits_truncate(0o755))?;
 
             if let Element::Directory(_, _, children) = root {
-                let current_span = tracing::Span::current();
-                stats = stats.merge(
-                    children
-                        .into_par_iter()
-                        .map(|child| {
-                            let _guard = current_span.enter();
-                            blit_element(root_dir, cache_fd, child, &progress, materialization)
-                        })
-                        .try_reduce(BlitStats::default, |a, b| Ok(a.merge(b)))?,
-                );
+                stats = stats.merge(blit_children(
+                    root_dir.as_raw_fd(),
+                    cache_fd.as_raw_fd(),
+                    children,
+                    &progress,
+                    materialization,
+                    execution,
+                )?);
             }
-
-            close(root_dir)?;
         }
 
-        Ok(())
-    })?;
+        Ok(stats)
+    };
+
+    let stats = match execution {
+        BlitExecution::Parallel => {
+            // Stateful transactions retain the established parallel blit
+            // path. The pool is dropped before Boulder enters a namespace.
+            let rayon_runtime = rayon::ThreadPoolBuilder::new().build().expect("rayon runtime");
+            rayon_runtime.install(blit)?
+        }
+        // Frozen roots use canonical tree order without host-sized scheduling.
+        BlitExecution::Sequential => blit()?,
+    };
 
     progress.finish_and_clear();
 
@@ -1124,6 +1637,7 @@ fn blit_element(
     element: Element<'_, PendingFile>,
     progress: &ProgressBar,
     materialization: AssetMaterialization,
+    execution: BlitExecution,
 ) -> Result<BlitStats, Error> {
     let mut stats = BlitStats::default();
 
@@ -1149,20 +1663,30 @@ fn blit_element(
             blit_element_item(parent, cache, name, item, &mut stats, materialization)?;
 
             // open the new dir
-            let newdir = fcntl::openat(parent, name, OFlag::O_RDONLY | OFlag::O_DIRECTORY, Mode::empty())?;
+            let newdir = openat_owned(
+                parent,
+                name,
+                OFlag::O_CLOEXEC | OFlag::O_RDONLY | OFlag::O_DIRECTORY,
+                Mode::empty(),
+            )?;
 
-            let current_span = tracing::Span::current();
-            stats = stats.merge(
-                children
-                    .into_par_iter()
-                    .map(|child| {
-                        let _guard = current_span.enter();
-                        blit_element(newdir, cache, child, progress, materialization)
-                    })
-                    .try_reduce(BlitStats::default, |a, b| Ok(a.merge(b)))?,
-            );
+            stats = stats.merge(blit_children(
+                newdir.as_raw_fd(),
+                cache,
+                children,
+                progress,
+                materialization,
+                execution,
+            )?);
 
-            close(newdir)?;
+            // Frozen directories are created owner-accessible so restrictive
+            // final modes cannot prevent their own children from being
+            // materialized. Apply the declared mode only after the complete
+            // subtree exists. Stateful blits retain their established mode
+            // timing.
+            if materialization == AssetMaterialization::IndependentCopy {
+                fchmod(newdir.as_raw_fd(), Mode::from_bits_truncate(item.layout.mode))?;
+            }
 
             Ok(stats)
         }
@@ -1171,6 +1695,32 @@ fn blit_element(
 
             Ok(stats)
         }
+    }
+}
+
+fn blit_children(
+    parent: RawFd,
+    cache: RawFd,
+    children: Vec<Element<'_, PendingFile>>,
+    progress: &ProgressBar,
+    materialization: AssetMaterialization,
+    execution: BlitExecution,
+) -> Result<BlitStats, Error> {
+    match execution {
+        BlitExecution::Parallel => {
+            let current_span = tracing::Span::current();
+            children
+                .into_par_iter()
+                .map(|child| {
+                    let _guard = current_span.enter();
+                    blit_element(parent, cache, child, progress, materialization, execution)
+                })
+                .try_reduce(BlitStats::default, |left, right| Ok(left.merge(right)))
+        }
+        BlitExecution::Sequential => children.into_iter().try_fold(BlitStats::default(), |stats, child| {
+            blit_element(parent, cache, child, progress, materialization, execution)
+                .map(|child_stats| stats.merge(child_stats))
+        }),
     }
 }
 
@@ -1206,40 +1756,38 @@ fn blit_element_item(
                 // Mystery empty-file hash. Do not allow dupes!
                 // https://github.com/serpent-os/tools/issues/372
                 0x99aa_06d3_0147_98d8_6001_c324_468d_497f => {
-                    let fd = fcntl::openat(
+                    let _file = openat_owned(
                         parent,
                         subpath,
-                        OFlag::O_CREAT | OFlag::O_WRONLY | OFlag::O_TRUNC,
-                        Mode::from_bits_truncate(item.layout.mode),
+                        OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_WRONLY,
+                        Mode::from_bits_truncate(0o600),
                     )?;
-                    close(fd)?;
                 }
                 // Regular file
-                _ => {
-                    match materialization {
-                        AssetMaterialization::HardLink => {
-                            linkat(
-                                Some(cache),
-                                fp.to_str().unwrap(),
-                                Some(parent),
-                                subpath,
-                                nix::unistd::LinkatFlags::NoSymlinkFollow,
-                            )?;
-                        }
-                        AssetMaterialization::IndependentCopy => {
-                            copy_asset(cache, &fp, parent, subpath)?;
-                        }
+                _ => match materialization {
+                    AssetMaterialization::HardLink => {
+                        linkat(
+                            Some(cache),
+                            fp.to_str().unwrap(),
+                            Some(parent),
+                            subpath,
+                            nix::unistd::LinkatFlags::NoSymlinkFollow,
+                        )?;
                     }
-
-                    // Fix permissions
-                    fchmodat(
-                        Some(parent),
-                        subpath,
-                        Mode::from_bits_truncate(item.layout.mode),
-                        nix::sys::stat::FchmodatFlags::NoFollowSymlink,
-                    )?;
-                }
+                    AssetMaterialization::IndependentCopy => {
+                        copy_asset(cache, &fp, parent, subpath)?;
+                    }
+                },
             }
+
+            // Creation modes are filtered through the process umask. Apply
+            // the package's complete mode after materialization instead.
+            fchmodat(
+                Some(parent),
+                subpath,
+                Mode::from_bits_truncate(item.layout.mode),
+                nix::sys::stat::FchmodatFlags::NoFollowSymlink,
+            )?;
 
             stats.num_files += 1;
         }
@@ -1248,7 +1796,17 @@ fn blit_element_item(
             stats.num_symlinks += 1;
         }
         StonePayloadLayoutFile::Directory(_) => {
-            mkdirat(parent, subpath, Mode::from_bits_truncate(item.layout.mode))?;
+            let mode = match materialization {
+                AssetMaterialization::HardLink => item.layout.mode,
+                AssetMaterialization::IndependentCopy => item.layout.mode | 0o700,
+            };
+            mkdirat(parent, subpath, Mode::from_bits_truncate(mode))?;
+            fchmodat(
+                Some(parent),
+                subpath,
+                Mode::from_bits_truncate(mode),
+                nix::sys::stat::FchmodatFlags::NoFollowSymlink,
+            )?;
             stats.num_dirs += 1;
         }
 
@@ -1270,37 +1828,39 @@ fn blit_element_item(
 /// asset. Keep the descriptor-relative traversal used by the blitter while
 /// giving the destination independent bytes and metadata.
 fn copy_asset(cache: RawFd, source: &Path, parent: RawFd, target: &str) -> Result<(), Errno> {
-    let source_fd = fcntl::openat(
+    let source_fd = openat_owned(
         cache,
         source,
         OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
         Mode::empty(),
     )?;
-    let target_fd = match fcntl::openat(
+    let target_fd = openat_owned(
         parent,
         target,
         OFlag::O_CLOEXEC | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_WRONLY,
         Mode::from_bits_truncate(0o600),
-    ) {
-        Ok(fd) => fd,
-        Err(error) => {
-            let _ = close(source_fd);
-            return Err(error);
-        }
-    };
+    )?;
 
-    let copy_result = copy_fd(source_fd, target_fd);
-    let source_close_result = close(source_fd);
-    let target_close_result = close(target_fd);
-
-    if let Err(error) = copy_result {
+    if let Err(error) = copy_fd(source_fd.as_raw_fd(), target_fd.as_raw_fd()) {
         let _ = unlinkat(Some(parent), target, UnlinkatFlags::NoRemoveDir);
         return Err(error);
     }
-    source_close_result?;
-    target_close_result?;
 
     Ok(())
+}
+
+fn open_owned(path: &Path, flags: OFlag, mode: Mode) -> Result<OwnedFd, Errno> {
+    fcntl::open(path, flags, mode).map(raw_fd_into_owned)
+}
+
+fn openat_owned<P: ?Sized + nix::NixPath>(parent: RawFd, path: &P, flags: OFlag, mode: Mode) -> Result<OwnedFd, Errno> {
+    fcntl::openat(parent, path, flags, mode).map(raw_fd_into_owned)
+}
+
+fn raw_fd_into_owned(fd: RawFd) -> OwnedFd {
+    // SAFETY: every successful nix open/openat call returns one newly owned
+    // descriptor. Ownership is transferred exactly once to OwnedFd here.
+    unsafe { OwnedFd::from_raw_fd(fd) }
 }
 
 fn copy_fd(source: RawFd, target: RawFd) -> Result<(), Errno> {
@@ -1417,11 +1977,12 @@ fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(
 enum Scope {
     Stateful,
     Ephemeral { blit_root: PathBuf },
+    Frozen { blit_root: PathBuf },
 }
 
 impl Scope {
     fn is_ephemeral(&self) -> bool {
-        matches!(self, Self::Ephemeral { .. })
+        matches!(self, Self::Ephemeral { .. } | Self::Frozen { .. })
     }
 }
 
@@ -1429,6 +1990,12 @@ impl Scope {
 enum AssetMaterialization {
     HardLink,
     IndependentCopy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlitExecution {
+    Parallel,
+    Sequential,
 }
 
 /// A pending file for blitting
@@ -1541,6 +2108,14 @@ fn build_registry(
     Ok(registry)
 }
 
+fn build_repository_registry(repositories: &repository::Manager) -> Registry {
+    let mut registry = Registry::default();
+    for repository in repositories.active() {
+        registry.add_plugin(Plugin::Repository(plugin::Repository::new(repository)));
+    }
+    registry
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct BlitStats {
     num_files: u64,
@@ -1577,6 +2152,45 @@ pub enum Error {
     EphemeralInstallationRoot,
     #[error("Operation not allowed with ephemeral client")]
     EphemeralProhibitedOperation,
+    #[error("frozen-root materialization requires a dedicated frozen client")]
+    FrozenRootRequiresFrozenClient,
+    #[error("frozen clients require an installation opened with Installation::open_frozen")]
+    FrozenInstallationRequired,
+    #[error("operation is not available on a dedicated frozen client")]
+    FrozenClientProhibitedOperation,
+    #[error("duplicate package ID in frozen closure: {0}")]
+    DuplicateFrozenPackage(package::Id),
+    #[error("frozen package closure must not be empty")]
+    EmptyFrozenPackageClosure,
+    #[error("layout query returned package outside the frozen closure: {0}")]
+    UnexpectedFrozenLayoutPackage(package::Id),
+    #[error("package {package} has an invalid frozen-root layout path: {path:?}")]
+    InvalidFrozenLayoutPath { package: package::Id, path: String },
+    #[error("package {package} has an invalid or unenforceable frozen-root mode {mode:#o} at {path:?}")]
+    InvalidFrozenLayoutMode {
+        package: package::Id,
+        path: String,
+        mode: u32,
+    },
+    #[error("package {package} has an unsupported frozen-root inode at {path:?}")]
+    UnsupportedFrozenLayout { package: package::Id, path: String },
+    #[error("package {package} requests unsupported frozen-root ownership {uid}:{gid} at {path:?}")]
+    UnsupportedFrozenOwnership {
+        package: package::Id,
+        path: String,
+        uid: u32,
+        gid: u32,
+    },
+    #[error("frozen-root path collision at {path:?}: packages {first} and {second}")]
+    FrozenPathCollision {
+        path: String,
+        first: package::Id,
+        second: package::Id,
+    },
+    #[error("frozen-root directory-symlink redirect cycle at {path:?}")]
+    FrozenSymlinkRedirectCycle { path: String },
+    #[error("package {package} redirects a frozen-root path outside /usr: {path:?}")]
+    FrozenRedirectOutsideUsr { package: package::Id, path: String },
     #[error("installation")]
     Installation(#[from] installation::Error),
     #[error("fetch package {1}")]
@@ -1629,6 +2243,7 @@ mod tests {
         collections::BTreeSet,
         fs::Permissions,
         os::unix::fs::{MetadataExt, PermissionsExt},
+        process::Command,
     };
 
     use gluon_config::Source;
@@ -1805,6 +2420,558 @@ let moss = import! moss.system.v1
 
         assert_eq!(fs::read(&asset_path).unwrap(), b"persistent cached bytes");
         assert_eq!(fs::metadata(&asset_path).unwrap().permissions().mode() & 0o7777, 0o640);
+    }
+
+    #[test]
+    fn frozen_root_normalizes_enforceable_metadata_in_canonical_order() {
+        const CHILD: &str = "MOSS_FROZEN_ROOT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            run_frozen_root_materialization_test();
+            return;
+        }
+
+        // umask is process-global. Run the hostile-umask proof in a dedicated
+        // test process so unrelated parallel tests cannot observe it.
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("frozen_root_normalizes_enforceable_metadata_in_canonical_order")
+            .arg("--test-threads=1")
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    fn run_frozen_root_materialization_test() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("frozen-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+
+        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let client = Client::frozen("frozen-root-test", installation, repository::Map::default(), &blit_root).unwrap();
+        let isolation_marker = client.installation.isolation_dir().join("must-remain");
+        fs::create_dir_all(isolation_marker.parent().unwrap()).unwrap();
+        fs::write(&isolation_marker, b"isolation root is out of scope").unwrap();
+
+        let first = package::Id::from("a-frozen-package");
+        let second = package::Id::from("z-frozen-package");
+        let omitted = package::Id::from("zz-omitted-package");
+        let asset_id = 0x1234_5678_90ab_cdef_1234_5678_90ab_cdef_u128;
+        let empty_id = 0x99aa_06d3_0147_98d8_6001_c324_468d_497f_u128;
+        let layouts = [
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFDIR | 0o751,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Directory("bin".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFREG | 0o755,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(asset_id, "bin/tool".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFLNK | 0o777,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Symlink("tool".into(), "bin/tool-link".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFREG | 0o640,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(empty_id, "share/empty".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFDIR | 0o555,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Directory("share/restricted".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFREG | 0o644,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(asset_id, "share/restricted/tool".into()),
+                },
+            ),
+            // Identical directory records may be shared by packages.
+            (
+                &second,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFDIR | 0o751,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Directory("bin".into()),
+                },
+            ),
+            (
+                &omitted,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFREG | 0o600,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(asset_id, "share/omitted".into()),
+                },
+            ),
+        ];
+        client
+            .layout_db
+            .batch_add(layouts.iter().map(|(package, layout)| (*package, layout)))
+            .unwrap();
+
+        let asset_path = cache::asset_path(&client.installation, &format!("{asset_id:02x}"));
+        fs::create_dir_all(asset_path.parent().unwrap()).unwrap();
+        fs::write(&asset_path, b"persistent cached bytes").unwrap();
+        fs::set_permissions(&asset_path, Permissions::from_mode(0o640)).unwrap();
+        let asset_metadata = fs::metadata(&asset_path).unwrap();
+
+        nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
+        const EPOCH: i64 = 1_700_000_123;
+        client
+            .blit_frozen_root(&[second.clone(), first.clone()], EPOCH)
+            .unwrap();
+
+        let tool = blit_root.join("usr/bin/tool");
+        let empty = blit_root.join("usr/share/empty");
+        let tool_link = blit_root.join("usr/bin/tool-link");
+        let timestamped = [
+            blit_root.clone(),
+            blit_root.join("usr"),
+            blit_root.join("usr/bin"),
+            blit_root.join("usr/share"),
+            blit_root.join("usr/share/restricted"),
+            blit_root.join("usr/share/restricted/tool"),
+            tool.clone(),
+            empty.clone(),
+            tool_link.clone(),
+            blit_root.join("bin"),
+            blit_root.join("sbin"),
+            blit_root.join("lib"),
+            blit_root.join("lib64"),
+            blit_root.join("lib32"),
+        ];
+        for path in &timestamped {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert_eq!(
+                FileTime::from_last_access_time(&metadata).unix_seconds(),
+                EPOCH,
+                "{path:?}"
+            );
+            assert_eq!(
+                FileTime::from_last_modification_time(&metadata).unix_seconds(),
+                EPOCH,
+                "{path:?}"
+            );
+        }
+        // This manifest intentionally covers only metadata the materializer
+        // can enforce: path, inode type, mode, bytes/link target, atime and
+        // mtime. Kernel-assigned inode/dev/ctime/btime are outside the claim.
+        let first_manifest = frozen_enforceable_manifest(&blit_root);
+
+        assert_eq!(fs::metadata(&blit_root).unwrap().permissions().mode() & 0o7777, 0o755);
+        assert_eq!(
+            fs::metadata(blit_root.join("usr/bin")).unwrap().permissions().mode() & 0o7777,
+            0o751
+        );
+        assert_eq!(fs::metadata(&tool).unwrap().permissions().mode() & 0o7777, 0o755);
+        assert_eq!(fs::metadata(&empty).unwrap().permissions().mode() & 0o7777, 0o640);
+        assert_eq!(
+            fs::metadata(blit_root.join("usr/share/restricted"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o555
+        );
+        assert_eq!(
+            fs::read(blit_root.join("usr/share/restricted/tool")).unwrap(),
+            b"persistent cached bytes"
+        );
+        assert_eq!(fs::read(&tool).unwrap(), b"persistent cached bytes");
+        assert_eq!(
+            fs::metadata(&tool).unwrap().len(),
+            b"persistent cached bytes".len() as u64
+        );
+        assert_ne!(
+            (asset_metadata.dev(), asset_metadata.ino()),
+            (fs::metadata(&tool).unwrap().dev(), fs::metadata(&tool).unwrap().ino())
+        );
+        assert_eq!(fs::read_link(&tool_link).unwrap(), PathBuf::from("tool"));
+        for (source, target) in ROOT_ABI_LINKS {
+            assert_eq!(fs::read_link(blit_root.join(target)).unwrap(), PathBuf::from(source));
+        }
+
+        assert!(!blit_root.join("usr/share/omitted").exists());
+        assert!(!blit_root.join("usr/.stateID").exists());
+        assert!(!blit_root.join("usr/lib/os-release").exists());
+        assert!(!system_model::snapshot_path(&blit_root).exists());
+        assert!(!blit_root.join("etc").exists());
+        assert_eq!(fs::read(&isolation_marker).unwrap(), b"isolation root is out of scope");
+        assert_eq!(fs::read(&asset_path).unwrap(), b"persistent cached bytes");
+        assert_eq!(fs::metadata(&asset_path).unwrap().permissions().mode() & 0o7777, 0o640);
+
+        // A second materialization reverses caller and database order, changes
+        // the process umask, and still reproduces all enforceable metadata.
+        fs::write(&tool, b"mutated build root").unwrap();
+        fs::set_permissions(&tool, Permissions::from_mode(0o600)).unwrap();
+        client
+            .layout_db
+            .batch_add(layouts.iter().rev().map(|(package, layout)| (*package, layout)))
+            .unwrap();
+        nix::sys::stat::umask(Mode::from_bits_truncate(0o022));
+        client
+            .blit_frozen_root(&[first.clone(), second.clone()], EPOCH)
+            .unwrap();
+        assert_eq!(frozen_enforceable_manifest(&blit_root), first_manifest);
+        assert_eq!(fs::read(&tool).unwrap(), b"persistent cached bytes");
+        assert_eq!(fs::metadata(&tool).unwrap().permissions().mode() & 0o7777, 0o755);
+        assert_eq!(
+            FileTime::from_last_modification_time(&fs::metadata(&tool).unwrap()).unix_seconds(),
+            EPOCH
+        );
+        make_tree_removable(&blit_root).unwrap();
+    }
+
+    fn frozen_enforceable_manifest(root: &Path) -> Vec<(String, &'static str, u32, i64, i64, Vec<u8>)> {
+        fn visit(root: &Path, path: &Path, manifest: &mut Vec<(String, &'static str, u32, i64, i64, Vec<u8>)>) {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            let (kind, content) = if metadata.file_type().is_symlink() {
+                (
+                    "symlink",
+                    fs::read_link(path).unwrap().to_string_lossy().into_owned().into_bytes(),
+                )
+            } else if metadata.is_dir() {
+                ("directory", Vec::new())
+            } else {
+                ("regular", fs::read(path).unwrap())
+            };
+            let relative = path.strip_prefix(root).unwrap();
+            manifest.push((
+                if relative.as_os_str().is_empty() {
+                    ".".to_owned()
+                } else {
+                    relative.to_string_lossy().into_owned()
+                },
+                kind,
+                metadata.mode() & 0o7777,
+                metadata.atime(),
+                metadata.mtime(),
+                content,
+            ));
+
+            if metadata.is_dir() {
+                let mut children = fs::read_dir(path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect::<Vec<_>>();
+                children.sort();
+                for child in children {
+                    visit(root, &child, manifest);
+                }
+            }
+        }
+
+        let mut manifest = Vec::new();
+        visit(root, root, &mut manifest);
+        manifest
+    }
+
+    #[test]
+    fn frozen_root_rejects_non_directory_collisions_before_touching_destination() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("frozen-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+        let marker = blit_root.join("untouched");
+        fs::write(&marker, b"original root").unwrap();
+
+        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let client = Client::frozen(
+            "frozen-collision-test",
+            installation,
+            repository::Map::default(),
+            &blit_root,
+        )
+        .unwrap();
+        let first = package::Id::from("a-collision");
+        let second = package::Id::from("z-collision");
+        let first_layout = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFREG | 0o644,
+            tag: 0,
+            file: StonePayloadLayoutFile::Regular(1, "bin/conflict".into()),
+        };
+        let second_layout = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFREG | 0o755,
+            tag: 0,
+            file: StonePayloadLayoutFile::Regular(2, "bin/conflict".into()),
+        };
+        client
+            .layout_db
+            .batch_add([(&second, &second_layout), (&first, &first_layout)])
+            .unwrap();
+
+        let error = client
+            .blit_frozen_root(&[second.clone(), first.clone()], 1_700_000_000)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenPathCollision { path, first: found_first, second: found_second }
+                if path == "/usr/bin/conflict" && found_first == first && found_second == second
+        ));
+        assert_eq!(fs::read(marker).unwrap(), b"original root");
+    }
+
+    #[test]
+    fn frozen_root_rejects_unenforceable_ownership_before_touching_destination() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("frozen-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+        let marker = blit_root.join("untouched");
+        fs::write(&marker, b"original root").unwrap();
+        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let client = Client::frozen(
+            "frozen-ownership-test",
+            installation,
+            repository::Map::default(),
+            &blit_root,
+        )
+        .unwrap();
+        let package = package::Id::from("owned-by-another-user");
+        client
+            .layout_db
+            .add(
+                &package,
+                &StonePayloadLayoutRecord {
+                    uid: 1000,
+                    gid: 1000,
+                    mode: nix::libc::S_IFREG | 0o644,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(1, "share/owned".into()),
+                },
+            )
+            .unwrap();
+
+        let error = client
+            .blit_frozen_root(std::slice::from_ref(&package), 1_700_000_000)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::UnsupportedFrozenOwnership {
+                package: found,
+                path,
+                uid: 1000,
+                gid: 1000,
+            } if found == package && path == "/usr/share/owned"
+        ));
+        assert_eq!(fs::read(marker).unwrap(), b"original root");
+    }
+
+    fn assert_frozen_layout_rejected_before_touching_destination(
+        layout: StonePayloadLayoutRecord,
+        assert_error: impl FnOnce(Error),
+    ) {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("frozen-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+        let marker = blit_root.join("untouched");
+        fs::write(&marker, b"original root").unwrap();
+        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let client = Client::frozen(
+            "frozen-invalid-layout-test",
+            installation,
+            repository::Map::default(),
+            &blit_root,
+        )
+        .unwrap();
+        let package = package::Id::from("invalid-layout");
+        client.layout_db.add(&package, &layout).unwrap();
+
+        assert_error(
+            client
+                .blit_frozen_root(std::slice::from_ref(&package), 1_700_000_000)
+                .unwrap_err(),
+        );
+        assert_eq!(fs::read(marker).unwrap(), b"original root");
+    }
+
+    #[test]
+    fn frozen_root_rejects_inconsistent_or_unenforceable_modes_before_touching_destination() {
+        let cases = [
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFDIR | 0o644,
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(1, "share/type-mismatch".into()),
+            },
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFREG | 0o777 | (1 << 31),
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(1, "share/unsupported-mode-bit".into()),
+            },
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFLNK | 0o644,
+                tag: 0,
+                file: StonePayloadLayoutFile::Symlink("target".into(), "share/symlink-mode".into()),
+            },
+        ];
+
+        for layout in cases {
+            assert_frozen_layout_rejected_before_touching_destination(layout, |error| {
+                assert!(matches!(error, Error::InvalidFrozenLayoutMode { .. }));
+            });
+        }
+    }
+
+    #[test]
+    fn frozen_root_rejects_nul_paths_before_touching_destination() {
+        assert_frozen_layout_rejected_before_touching_destination(
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFREG | 0o644,
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(1, "share/nul\0path".into()),
+            },
+            |error| assert!(matches!(error, Error::InvalidFrozenLayoutPath { .. })),
+        );
+    }
+
+    #[test]
+    fn frozen_root_rejects_conflicting_duplicate_directory_metadata() {
+        let first = package::Id::from("a-directory-owner");
+        let second = package::Id::from("z-directory-owner");
+        let first_layout = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFDIR | 0o755,
+            tag: 0,
+            file: StonePayloadLayoutFile::Directory("share/collision".into()),
+        };
+        let second_layout = StonePayloadLayoutRecord {
+            mode: nix::libc::S_IFDIR | 0o700,
+            ..first_layout.clone()
+        };
+
+        let error = frozen_vfs(
+            &[first.clone(), second.clone()],
+            vec![(second.clone(), second_layout), (first.clone(), first_layout)],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenPathCollision { path, first: found_first, second: found_second }
+                if path == "/usr/share/collision" && found_first == first && found_second == second
+        ));
+    }
+
+    #[test]
+    fn frozen_root_rejects_directory_symlink_redirects_outside_usr() {
+        let package = package::Id::from("redirect-escape");
+        let link = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFLNK | 0o777,
+            tag: 0,
+            file: StonePayloadLayoutFile::Symlink("/".into(), "escape".into()),
+        };
+        let child = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFREG | 0o644,
+            tag: 0,
+            file: StonePayloadLayoutFile::Regular(1, "escape/etc/passwd".into()),
+        };
+
+        let error = frozen_vfs(
+            std::slice::from_ref(&package),
+            vec![(package.clone(), link), (package.clone(), child)],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenRedirectOutsideUsr { package: found, path }
+                if found == package && path == "/etc/passwd"
+        ));
+    }
+
+    #[test]
+    fn frozen_root_rejects_conflicting_directory_metadata_after_redirect() {
+        let first = package::Id::from("a-redirected-directory");
+        let second = package::Id::from("z-real-directory");
+        let directory = |mode: u32, target: &str| StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFDIR | mode,
+            tag: 0,
+            file: StonePayloadLayoutFile::Directory(target.into()),
+        };
+        let link = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFLNK | 0o777,
+            tag: 0,
+            file: StonePayloadLayoutFile::Symlink("/usr/real".into(), "alias".into()),
+        };
+
+        let error = frozen_vfs(
+            &[first.clone(), second.clone()],
+            vec![
+                (first.clone(), link),
+                (first.clone(), directory(0o700, "alias/shared")),
+                (second.clone(), directory(0o755, "real")),
+                (second.clone(), directory(0o755, "real/shared")),
+            ],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenPathCollision { path, first: found_first, second: found_second }
+                if path == "/usr/real/shared"
+                    && found_first == first
+                    && found_second == second
+        ));
     }
 
     #[test]

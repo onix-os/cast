@@ -50,6 +50,16 @@ pub struct Installation {
     /// Acquired locks that guarantee exclusive access
     /// to the installation for mutable operations
     _locks: Vec<lockfile::Lock>,
+
+    /// Whether host system intent and active state discovery was permitted
+    /// while opening this installation.
+    discovery: Discovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Discovery {
+    System,
+    FrozenCache,
 }
 
 impl Installation {
@@ -58,8 +68,20 @@ impl Installation {
     /// and determine the mutability per the current user identity
     /// and ACL permissions.
     pub fn open(root: impl Into<PathBuf>, cache_dir: Option<PathBuf>) -> Result<Self, Error> {
-        let root: PathBuf = root.into();
+        Self::open_with_discovery(root.into(), cache_dir, Discovery::System)
+    }
 
+    /// Open only the persistent package cache used to materialize a frozen
+    /// root.
+    ///
+    /// Unlike [`Self::open`], this never reads the installation's active state
+    /// or authored `system.glu`. Frozen callers must supply their complete
+    /// repository and package intent explicitly.
+    pub fn open_frozen(root: impl Into<PathBuf>, cache_dir: Option<PathBuf>) -> Result<Self, Error> {
+        Self::open_with_discovery(root.into(), cache_dir, Discovery::FrozenCache)
+    }
+
+    fn open_with_discovery(root: PathBuf, cache_dir: Option<PathBuf>, discovery: Discovery) -> Result<Self, Error> {
         if !root.exists() || !root.is_dir() {
             return Err(Error::RootInvalid);
         }
@@ -94,15 +116,22 @@ impl Installation {
             vec![]
         };
 
-        let active_state = read_state_id(&root);
+        let (active_state, system_model) = match discovery {
+            Discovery::System => {
+                let active_state = read_state_id(&root);
 
-        if let Some(id) = &active_state {
-            trace!("Active State ID: {id}");
-        } else {
-            warn!("Unable to discover Active State ID");
-        }
+                if let Some(id) = &active_state {
+                    trace!("Active State ID: {id}");
+                } else {
+                    warn!("Unable to discover Active State ID");
+                }
 
-        let system_model = system_model::load(&system_model::intent_path(&root)).map_err(Error::LoadSystemModel)?;
+                let system_model =
+                    system_model::load(&system_model::intent_path(&root)).map_err(Error::LoadSystemModel)?;
+                (active_state, system_model)
+            }
+            Discovery::FrozenCache => (None, None),
+        };
 
         Ok(Self {
             root,
@@ -111,7 +140,12 @@ impl Installation {
             cache_dir,
             system_model,
             _locks,
+            discovery,
         })
+    }
+
+    pub(crate) fn is_frozen_cache(&self) -> bool {
+        matches!(self.discovery, Discovery::FrozenCache)
     }
 
     /// Return true if we lack write access
@@ -302,5 +336,26 @@ mod tests {
         assert_eq!(intent.authored_source(), authored);
         assert!(intent.packages.contains(&Provider::package_name("alpha")));
         assert!(!system_model::snapshot_path(temporary.path()).exists());
+    }
+
+    #[test]
+    fn frozen_open_skips_active_state_and_invalid_system_intent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let intent_path = system_model::intent_path(temporary.path());
+        fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        fs::write(&intent_path, b"invalid Gluon that normal open must reject").unwrap();
+        fs::create_dir_all(temporary.path().join("usr")).unwrap();
+        fs::write(temporary.path().join("usr/.stateID"), b"73").unwrap();
+
+        let frozen = Installation::open_frozen(temporary.path(), None).unwrap();
+        assert!(frozen.active_state.is_none());
+        assert!(frozen.system_model.is_none());
+        assert!(frozen.is_frozen_cache());
+        drop(frozen);
+
+        assert!(matches!(
+            Installation::open(temporary.path(), None),
+            Err(Error::LoadSystemModel(_))
+        ));
     }
 }
