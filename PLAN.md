@@ -170,6 +170,11 @@ There is no automatic argument-name reflection in the first implementation.
 Explicit records preserve Gluon's type checking and make missing dependencies
 visible.
 
+The initial split-output set is a deterministic `boulder.package.v2` ABI
+default. It is evaluated into the concrete `PackageSpec` and can be replaced
+by a package factory; it is neither hidden Rust policy nor a repository layer.
+Changing that default incompatibly requires a new package ABI version.
+
 ### Three specification layers
 
 1. **`PackageSpec`** records authored package intent: metadata, sources,
@@ -467,6 +472,10 @@ The final architecture must demonstrate:
 - Building a lazy recursive Nixpkgs clone inside Gluon.
 - Automatic `callPackage` argument-name reflection in the initial design.
 - Evaluation-time fetching or import-from-derivation.
+- Accepting mutable recipe-directory inputs before a content-addressed local
+  source ABI exists. Frozen execution deliberately has no recipe mount and
+  rejects commands which depend on `pkg/`; a future ABI must hash file type,
+  mode, symlink target, content, and destination before this can change.
 - Unrestricted global overlays or user-home policy discovery.
 - Removing Moss provider resolution in favor of a second dependency solver.
 - Eliminating all shell execution.

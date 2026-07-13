@@ -207,6 +207,14 @@ Every package must contain exactly one output named `out`. Additional output
 names are local names; Boulder currently lowers `dev` to `<pname>-dev` at the
 internal packaging boundary.
 
+`b.mk_package` starts with the deterministic output set exported by
+`boulder.package.v2` (root, documentation, development, debug, libraries,
+32-bit, and demos). These are versioned package-ABI defaults: they are ordinary
+Gluon values present in the concrete evaluated `PackageSpec`, not a hidden Rust
+merge or a repository policy layer. A package can replace `outputs` explicitly
+as below, and an incompatible change to the default set requires a new package
+ABI version.
+
 ```gluon
 let root = {
     summary = b.optional.set "Hello executable",
@@ -297,10 +305,12 @@ derivation can be planned.
 
 ## Build closure and derivation planning
 
-`build.lock.glu` is also generated beside `stone.glu`. It records the exact
-package/output closure, base state, repository index snapshots, platform roles,
-and selected policy, profile, toolchain, and builder identities. It is not an
-authored overlay.
+`build.lock.glu` is also generated beside `stone.glu`. Schema v2 records the
+exact reachable package/output closure, its used repository index snapshots,
+platform roles, and separate policy-root, target, profile, toolchain, and
+builder identities. It is not an authored overlay. Reuse validates every
+selected identity, platform component, and requested provider root rather than
+trusting only the generated request-fingerprint field.
 
 Create or refresh it while freezing a target-specific plan:
 

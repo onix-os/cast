@@ -73,10 +73,12 @@ Implemented:
 - manifest and Stone metadata record the recipe and derivation provenance from
   the executed plan.
 
-Still transitional:
+Deliberately unsupported:
 
 - mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
-  hash their content and destination into the derivation.
+  hash their content and destination into the derivation. Supporting that ABI
+  is an explicit non-goal of the current contract; frozen containers do not
+  mount the recipe directory, so the limitation cannot become an ambient input.
 
 ## Layer invariants
 
@@ -92,8 +94,11 @@ Still transitional:
   relations.
 - Declares sources, builder selection, hooks, network requirements, package
   outputs, and path rules explicitly.
-- Has deterministic defaults in the ABI. Defaults do not depend on the host,
-  process environment, directory contents, or evaluation order.
+- Has deterministic defaults in the versioned package ABI, including the
+  initial output set. Those defaults are evaluated into the concrete
+  `PackageSpec`, can be replaced by the factory, and are not policy-layer
+  state. They do not depend on the host, process environment, directory
+  contents, or evaluation order.
 - Is validated before any source or dependency resolution begins.
 
 ### `PolicySpec`

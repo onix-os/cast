@@ -92,8 +92,9 @@ Authored `stone.glu` modules are never rewritten by Boulder. Two adjacent,
 generated files freeze I/O-backed resolution:
 
 - `sources.lock.glu` records resolved archives and full Git commits;
-- `build.lock.glu` records the exact package/output closure, repository
-  snapshots, platforms, and policy/profile/toolchain/builder identities.
+- `build.lock.glu` schema v2 records the exact reachable package/output
+  closure, used repository snapshots, platforms, and independent
+  policy/target/profile/toolchain/builder identities.
 
 After refreshing source resolution, create the build lock and plan with
 explicit target, timestamp, and concurrency inputs:

@@ -220,13 +220,23 @@ suggestion.
 
 `build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
 planning, including `boulder build --update-lock`. Its request fingerprint
-binds the evaluated recipe and source lock, selected target and policy, profile, toolchain,
-builder, job count, and requested providers. The lock contains the exact
-Moss-resolved package/output closure, repository index snapshots, base state,
-build/host/target platforms, and selected policy identities. Planning without
-`--update-lock` requires a current lock; missing and stale locks are errors
-with an explicit refresh command. `--refresh-repositories` is valid only while
-updating the lock.
+binds the evaluated recipe and source lock, selected target and policy,
+profile, toolchain, builder, job count, and requested providers. Schema v2
+contains the exact Moss-resolved package/output closure, only the repository
+snapshots used by that closure, build/host/target platforms, and independent
+policy-root, target, profile, toolchain, and builder identities. It rejects
+disconnected packages, unused snapshots, and any reusable lock whose selected
+context or request roots differ even when its header fingerprint was retained.
+Planning without `--update-lock` requires a current lock; missing and stale
+locks are errors with an explicit refresh command. `--refresh-repositories` is
+valid only while updating the lock.
+
+The lock is an explicit resolution input, not an authenticated statement from
+a remote service. Boulder validates its graph and selected planner context,
+and frozen setup verifies the recorded repository snapshots and exact package
+metadata. Any other valid lock content changes the lock digest and derivation
+identity; cryptographic publisher trust remains the repository/index layer's
+responsibility.
 
 Moss similarly keeps desired intent separate from normalized state. `moss sync
 --import path/to/system.glu` evaluates an alternate intent, while `moss state
