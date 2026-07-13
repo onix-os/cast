@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{fs::Permissions, io, os::unix::fs::PermissionsExt, path::Path, time::Duration};
+use std::{io, path::Path, time::Duration};
 
 use crate::{
     recipe::Recipe,
@@ -11,17 +11,19 @@ use crate::{
 };
 use futures_util::{StreamExt, TryStreamExt, stream};
 use moss::runtime;
-use stone_recipe::{UpstreamSpec, derivation::LockedSource};
+use stone_recipe::{UpstreamSpec, derivation::LockedSource, spec::UpstreamValidationError};
 use thiserror::Error;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 
 use crate::upstream::{
     git::{Git, StoredGit},
     plain::{Plain, StoredPlain},
+    share_root::ShareRoot,
 };
 
 mod git;
 mod plain;
+mod share_root;
 
 /// An upstream is a backend where
 /// to get source code from.
@@ -42,20 +44,24 @@ impl Upstream {
         original_index: usize,
         locked_git: Option<(&str, &str)>,
     ) -> Result<Self, Error> {
+        let materialization_name = source
+            .materialization_name()
+            .map_err(|source| Error::InvalidAuthoredSource {
+                index: original_index,
+                source,
+            })?;
         match source {
-            UpstreamSpec::Archive { url, hash, rename, .. } => Ok(Self::Plain(Plain {
+            UpstreamSpec::Archive { url, hash, .. } => Ok(Self::Plain(Plain {
                 url: url.parse().map_err(|source| Error::AuthoredSourceUrl {
                     index: original_index,
                     source,
                 })?,
                 hash: hash.parse().map_err(plain::Error::from)?,
-                rename: rename.clone(),
+                // Resolve URL-derived defaults exactly once at the validated
+                // package boundary.
+                rename: Some(materialization_name),
             })),
-            UpstreamSpec::Git {
-                url,
-                git_ref,
-                clone_dir,
-            } => {
+            UpstreamSpec::Git { url, git_ref, .. } => {
                 let (commit, materialization_sha256) = locked_git
                     .map(|(commit, digest)| (commit.to_owned(), Some(digest.to_owned())))
                     .unwrap_or_else(|| (git_ref.clone(), None));
@@ -63,13 +69,10 @@ impl Upstream {
                     index: original_index,
                     source,
                 })?;
-                let name = clone_dir
-                    .clone()
-                    .unwrap_or_else(|| moss::util::uri_file_name(&url).to_owned());
                 Ok(Self::Git(Git {
                     url,
                     commit,
-                    name,
+                    name: materialization_name,
                     original_index,
                     materialization_sha256,
                 }))
@@ -262,6 +265,7 @@ fn sync_upstreams(
     share_dir: &Path,
     source_date_epoch: i64,
 ) -> Result<Vec<Stored>, Error> {
+    let share_root = ShareRoot::prepare(share_dir)?;
     println!();
     println!("Sharing {} upstream(s) with the build container:", upstreams.len());
 
@@ -297,7 +301,7 @@ fn sync_upstreams(
                         .tick_chars("--=≡■≡=--"),
                 );
 
-                stored.share(share_dir, source_date_epoch).await?;
+                stored.share(share_root.descriptor_path(), source_date_epoch).await?;
 
                 let cached_tag = stored
                     .was_cached()
@@ -316,18 +320,10 @@ fn sync_upstreams(
     )?;
 
     mp.clear()?;
-    normalize_share_root(share_dir, source_date_epoch)?;
+    share_root.normalize_and_verify(source_date_epoch)?;
     println!();
 
     Ok(stored)
-}
-
-fn normalize_share_root(share_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
-    fs_err::create_dir_all(share_dir)?;
-    fs_err::set_permissions(share_dir, Permissions::from_mode(0o755))?;
-    let timestamp = filetime::FileTime::from_unix_time(source_date_epoch, 0);
-    filetime::set_file_times(share_dir, timestamp, timestamp)?;
-    Ok(())
 }
 
 pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<WriteOutcome, Error> {
@@ -411,6 +407,14 @@ pub enum Error {
         #[source]
         source: url::ParseError,
     },
+    #[error("authored source {index} is invalid: {source}")]
+    InvalidAuthoredSource {
+        index: usize,
+        #[source]
+        source: UpstreamValidationError,
+    },
+    #[error("prepare build-visible source root")]
+    ShareRoot(#[from] share_root::Error),
     #[error("io")]
     // A generic I/O error occurred.
     Io(#[from] io::Error),
@@ -496,6 +500,9 @@ let base = boulder.mk_package (boulder.meta {{
             Stored::Plain(StoredPlain {
                 name: "source.tar.xz".to_owned(),
                 path: "/tmp/source.tar.xz".into(),
+                hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .parse()
+                    .unwrap(),
                 was_cached: false,
             }),
             Stored::Git(StoredGit {
@@ -561,11 +568,43 @@ let base = boulder.mk_package (boulder.meta {{
 
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("sources");
-        normalize_share_root(&root, 1_700_000_000).unwrap();
+        let share_root = ShareRoot::prepare(&root).unwrap();
+        share_root.normalize_and_verify(1_700_000_000).unwrap();
 
         let metadata = fs::metadata(root).unwrap();
         assert_eq!(metadata.mode() & 0o7777, 0o755);
         assert_eq!(metadata.mtime(), 1_700_000_000);
+    }
+
+    #[test]
+    fn source_sync_rejects_share_root_and_destination_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let linked_root = temporary.path().join("linked-root");
+        symlink(&outside, &linked_root).unwrap();
+
+        let error = match sync_upstreams(&[], &temporary.path().join("cache"), &linked_root, 0) {
+            Ok(_) => panic!("symlink source root was accepted"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::ShareRoot(share_root::Error::Open { .. })));
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
+
+        let root = temporary.path().join("root");
+        fs::create_dir(&root).unwrap();
+        symlink(&outside, root.join("source.git")).unwrap();
+        let error = match sync_upstreams(&[], &temporary.path().join("cache"), &root, 0) {
+            Ok(_) => panic!("pre-existing source destination was accepted"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            Error::ShareRoot(share_root::Error::NotEmpty(path)) if path == root
+        ));
+        assert!(fs::read_dir(&outside).unwrap().next().is_none());
     }
 
     #[test]

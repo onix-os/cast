@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    ffi::OsStr,
+    ffi::{CString, OsStr},
     io,
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
 };
 
 use fs_err as fs;
 use moss::util;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tui::{ProgressBar, ProgressStyle};
 use url::Url;
@@ -50,7 +52,7 @@ impl Git {
                     fetch(&repo, pb).await?;
                 }
             }
-            Err(Error::Git(_)) => {
+            Err(Error::Git(_) | Error::OriginMismatch { .. }) => {
                 cached = false;
                 self.remove(storage_dir)?;
                 let stored_path = self.stored_path(storage_dir);
@@ -86,7 +88,7 @@ impl Git {
                 fetch(&stored.repo, pb).await?;
                 stored.repo
             }
-            Err(Error::Git(_)) => {
+            Err(Error::Git(_) | Error::OriginMismatch { .. }) => {
                 self.remove(storage_dir)?;
                 let stored_path = self.stored_path(storage_dir);
                 if let Some(parent) = stored_path.parent() {
@@ -128,7 +130,12 @@ impl Git {
     /// stored upstream and a boolean flag, indicating whether
     /// the stored Git repository contains [Self::commit].
     pub async fn stored(&self, storage_dir: &Path) -> Result<(StoredGit, bool), Error> {
-        let repo = gitwrap::Repository::open_bare(&self.stored_path(storage_dir)).await?;
+        let stored_path = self.stored_path(storage_dir);
+        let repo = gitwrap::Repository::open_bare(&stored_path).await?;
+        let origin = repo.get_remote_url("origin").await?;
+        if origin != self.url.as_str() {
+            return Err(Error::OriginMismatch { cache: stored_path });
+        }
         let has_ref = repo.has_commit(&self.commit).await?;
         let resolved_hash = repo.peel_commit(&self.commit).await?;
         Ok((
@@ -152,19 +159,42 @@ impl Git {
 
     /// Returns the name of the directory that should contain
     /// the Git repository.
-    /// It is a composition of the hostname and the repository name
-    /// so that it's unique.
+    /// The readable prefix is deliberately cosmetic. The SHA-256 suffix binds
+    /// the cache identity to every byte of the canonical URL, including its
+    /// scheme, authority, port, path, query, and user information.
     fn directory_name(&self) -> PathBuf {
-        let host = self.url.host_str();
-        let path = self.url.path();
+        const MAX_READABLE_BYTES: usize = 48;
 
-        let mut name = String::with_capacity(host.unwrap_or("").len() + 1 + path.len());
-        if let Some(host) = host {
-            name.push_str(host);
-            name.push('_');
+        let basename = self
+            .url
+            .path_segments()
+            .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+            .unwrap_or("repository");
+        let basename = basename.strip_suffix(".git").unwrap_or(basename);
+        let mut readable = basename
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .take(MAX_READABLE_BYTES)
+            .collect::<String>();
+        while readable.ends_with('-') || readable.ends_with('_') {
+            readable.pop();
         }
-        name.push_str(&path.trim_start_matches('/').replace('/', "."));
-        name.into()
+        let first_safe = readable
+            .find(|character: char| character.is_ascii_alphanumeric())
+            .unwrap_or(readable.len());
+        readable.drain(..first_safe);
+        if readable.is_empty() {
+            readable.push_str("repository");
+        }
+
+        let digest = Sha256::digest(self.url.as_str().as_bytes());
+        format!("{readable}-{digest:x}").into()
     }
 }
 
@@ -186,9 +216,21 @@ impl StoredGit {
     /// Export one exact commit, remove Git administration data, normalize the
     /// build-visible tree, and return its canonical SHA-256 identity.
     pub(crate) async fn export_normalized(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<String, Error> {
+        self.export_normalized_with_root_access(dest_dir, source_date_epoch, false)
+            .await
+    }
+
+    async fn export_normalized_with_root_access(
+        &self,
+        dest_dir: &Path,
+        source_date_epoch: i64,
+        descriptor_rooted: bool,
+    ) -> Result<String, Error> {
         reject_gitlinks(&self.repo, &self.resolved_hash).await?;
-        if let Some(parent) = dest_dir.parent() {
-            fs::create_dir_all(parent)?;
+        match fs::symlink_metadata(dest_dir) {
+            Ok(_) => return Err(Error::DestinationExists(dest_dir.to_owned())),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source.into()),
         }
 
         // Clone from our mirror to destdir
@@ -205,7 +247,12 @@ impl StoredGit {
         // Git administration data contains checkout-time and host-specific
         // state and is not part of the locked commit tree.
         remove_git_administration(dest_dir)?;
-        materialization::normalize_and_hash(dest_dir, source_date_epoch).map_err(|source| Error::Materialization {
+        let digest = if descriptor_rooted {
+            materialization::normalize_and_hash_descriptor_path(dest_dir, source_date_epoch)
+        } else {
+            materialization::normalize_and_hash(dest_dir, source_date_epoch)
+        };
+        digest.map_err(|source| Error::Materialization {
             root: dest_dir.to_owned(),
             source,
         })
@@ -221,9 +268,21 @@ impl StoredGit {
                 index: self.original_index,
                 commit: self.resolved_hash.clone(),
             })?;
-        let found = self.export_normalized(dest_dir, source_date_epoch).await?;
+        let parent = dest_dir
+            .parent()
+            .ok_or_else(|| Error::MissingDestinationParent(dest_dir.to_owned()))?;
+        let staging = tempfile::Builder::new()
+            .prefix(".boulder-git-")
+            .tempdir_in(parent)
+            .map_err(|source| Error::CreateStaging {
+                parent: parent.to_owned(),
+                source,
+            })?;
+        let checkout = staging.path().join("checkout");
+        let found = self
+            .export_normalized_with_root_access(&checkout, source_date_epoch, true)
+            .await?;
         if found != expected {
-            let _ = util::remove_dir_all(dest_dir);
             return Err(Error::MaterializationDigestMismatch {
                 index: self.original_index,
                 commit: self.resolved_hash.clone(),
@@ -231,6 +290,11 @@ impl StoredGit {
                 found,
             });
         }
+        rename_noreplace(&checkout, dest_dir).map_err(|source| Error::Install {
+            source_path: checkout,
+            destination: dest_dir.to_owned(),
+            source,
+        })?;
 
         Ok(())
     }
@@ -276,18 +340,68 @@ fn walk_error(error: walkdir::Error) -> io::Error {
     error.into_io_error().unwrap_or_else(|| io::Error::other(message))
 }
 
+/// Atomically install a verified checkout without ever replacing or following
+/// a destination that appeared after the source-root preflight.
+fn rename_noreplace(source: &Path, target: &Path) -> io::Result<()> {
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "staged checkout path contains NUL"))?;
+    let target = CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "final checkout path contains NUL"))?;
+    // nix exposes renameat2 only on some libc targets. Boulder supports musl,
+    // so use the Linux syscall directly with RENAME_NOREPLACE.
+    let result = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_renameat2,
+            nix::libc::AT_FDCWD,
+            source.as_ptr(),
+            nix::libc::AT_FDCWD,
+            target.as_ptr(),
+            1_u32, // RENAME_NOREPLACE
+        )
+    };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 /// Possible errors returned by functions in this module.
 #[derive(Debug, Error)]
 pub enum Error {
     /// An error occurred while handling a Git repository.
     #[error("{0}")]
     Git(#[from] gitwrap::Error),
+    /// A cache entry belongs to a different canonical source URL.
+    #[error("cached Git mirror at {cache:?} does not belong to the requested source URL")]
+    OriginMismatch { cache: PathBuf },
     /// Submodules require their own explicit, locked source model.
     #[error("Git commit {commit} contains submodules, which are not supported as implicit sources")]
     UnsupportedSubmodules { commit: String },
     /// A frozen source has no expected normalized-tree identity.
     #[error("Git source {index} at commit {commit} has no locked materialization digest")]
     MissingMaterializationDigest { index: usize, commit: String },
+    /// A caller attempted to export over an existing path of any type.
+    #[error("refusing to export Git source over existing destination {0:?}")]
+    DestinationExists(PathBuf),
+    /// A build-visible checkout destination had no containing directory.
+    #[error("Git checkout destination has no parent: {0:?}")]
+    MissingDestinationParent(PathBuf),
+    /// A private staging directory could not be created beside the final path.
+    #[error("create private Git checkout staging directory in {parent:?}")]
+    CreateStaging {
+        parent: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    /// The verified staging tree could not be installed atomically.
+    #[error("atomically install verified Git checkout from {source_path:?} at {destination:?}")]
+    Install {
+        source_path: PathBuf,
+        destination: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     /// The normalized checkout differs from the bytes admitted by lock refresh.
     #[error("Git source {index} at commit {commit} materialized as {found}, but sources.lock.glu requires {expected}")]
     MaterializationDigestMismatch {
@@ -342,9 +456,171 @@ fn set_progress_bar_style(pb: &ProgressBar) -> impl Fn(gitwrap::FetchProgress) {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
+    use std::{collections::HashSet, os::unix::fs::symlink, process::Command};
 
     use super::*;
+
+    fn fixture_git(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn source(url: Url) -> Git {
+        Git {
+            url,
+            commit: "HEAD".to_owned(),
+            name: "source".to_owned(),
+            original_index: 0,
+            materialization_sha256: None,
+        }
+    }
+
+    fn create_repository(path: &Path, contents: &[u8]) -> String {
+        fs::create_dir(path).unwrap();
+        fixture_git(path, &["init", "--initial-branch=main"]);
+        fixture_git(path, &["config", "user.name", "Boulder Test"]);
+        fixture_git(path, &["config", "user.email", "boulder@example.invalid"]);
+        fs::write(path.join("source.txt"), contents).unwrap();
+        fixture_git(path, &["add", "source.txt"]);
+        fixture_git(path, &["commit", "-m", "source"]);
+        fixture_git(path, &["rev-parse", "HEAD"])
+    }
+
+    #[test]
+    fn cache_identity_binds_the_complete_canonical_url() {
+        let urls = [
+            "https://alice:secret@example.invalid:8443/org/repo.git?transport=one#release",
+            "http://alice:secret@example.invalid:8443/org/repo.git?transport=one#release",
+            "https://bob:secret@example.invalid:8443/org/repo.git?transport=one#release",
+            "https://alice:different@example.invalid:8443/org/repo.git?transport=one#release",
+            "https://alice:secret@example.invalid:9443/org/repo.git?transport=one#release",
+            "https://alice:secret@example.invalid:8443/other/repo.git?transport=one#release",
+            "https://alice:secret@example.invalid:8443/org/repo.git?transport=two#release",
+            "https://alice:secret@example.invalid:8443/org/repo.git?transport=one#other",
+        ]
+        .map(|url| Url::parse(url).unwrap());
+
+        let names = urls
+            .iter()
+            .map(|url| {
+                let name = source(url.clone()).directory_name();
+                let name = name.to_str().unwrap();
+                let expected_digest = format!("{:x}", Sha256::digest(url.as_str().as_bytes()));
+                assert!(name.starts_with("repo-"));
+                assert!(name.ends_with(&expected_digest));
+                assert!(
+                    name.bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+                );
+                assert!(!name.contains("alice"));
+                assert!(!name.contains("secret"));
+                name.to_owned()
+            })
+            .collect::<HashSet<_>>();
+
+        assert_eq!(names.len(), urls.len());
+    }
+
+    #[test]
+    fn cache_identity_never_uses_unsafe_url_path_bytes() {
+        let url = Url::parse("https://example.invalid/a/%2E%2E/%2Fbad%5Cname%00.git?path=/tmp/escape").unwrap();
+        let name = source(url).directory_name();
+        let name = name.to_str().unwrap();
+
+        assert_eq!(Path::new(name).components().count(), 1);
+        assert!(
+            name.bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        );
+        assert!(!matches!(name, "." | ".."));
+    }
+
+    #[tokio::test]
+    async fn mismatched_cache_origin_is_rejected_and_repaired_before_reuse() {
+        let temporary = tempfile::tempdir().unwrap();
+        let requested_path = temporary.path().join("requested");
+        let wrong_path = temporary.path().join("wrong");
+        let requested_commit = create_repository(&requested_path, b"requested source\n");
+        create_repository(&wrong_path, b"wrong source\n");
+        let requested_url = Url::from_directory_path(&requested_path).unwrap();
+        let wrong_url = Url::from_directory_path(&wrong_path).unwrap();
+        let requested = source(requested_url.clone());
+        let storage = temporary.path().join("storage");
+        let cached_path = requested.stored_path(&storage);
+        fs::create_dir_all(cached_path.parent().unwrap()).unwrap();
+        gitwrap::Repository::clone_mirror(&cached_path, &wrong_url)
+            .await
+            .unwrap();
+
+        match requested.stored(&storage).await {
+            Err(Error::OriginMismatch { cache }) => assert_eq!(cache, cached_path),
+            Err(error) => panic!("unexpected cache error: {error}"),
+            Ok(_) => panic!("a mirror for another origin was accepted"),
+        }
+
+        let stored = requested.store(&storage, &ProgressBar::new(100)).await.unwrap();
+        assert_eq!(
+            stored.repo.get_remote_url("origin").await.unwrap(),
+            requested_url.as_str()
+        );
+        assert_eq!(stored.resolved_hash, requested_commit);
+    }
+
+    #[test]
+    fn verified_checkout_install_never_replaces_a_destination_symlink() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("staged");
+        let destination = temporary.path().join("destination");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("source.txt"), b"verified").unwrap();
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, &destination).unwrap();
+
+        let error = rename_noreplace(&source, &destination).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(source.join("source.txt").is_file());
+        assert!(fs::symlink_metadata(&destination).unwrap().file_type().is_symlink());
+        assert!(fs::read_dir(outside).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_materialization_verification_leaves_no_checkout_or_staging_tree() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_path = temporary.path().join("source");
+        let commit = create_repository(&source_path, b"locked source\n");
+        let source_url = Url::from_directory_path(&source_path).unwrap();
+        let mirror_path = temporary.path().join("mirror.git");
+        let repo = gitwrap::Repository::clone_mirror(&mirror_path, &source_url)
+            .await
+            .unwrap();
+        let stored = StoredGit {
+            name: "source".to_owned(),
+            was_cached: false,
+            resolved_hash: commit,
+            original_index: 0,
+            materialization_sha256: Some("0".repeat(64)),
+            repo,
+        };
+        let share_root = temporary.path().join("share");
+        fs::create_dir(&share_root).unwrap();
+
+        assert!(matches!(
+            stored.share(&share_root.join("source"), 0).await,
+            Err(Error::MaterializationDigestMismatch { .. })
+        ));
+        assert!(fs::read_dir(share_root).unwrap().next().is_none());
+    }
 
     #[test]
     fn exported_git_tree_removes_only_git_administration_state() {

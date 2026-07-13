@@ -110,16 +110,30 @@ impl Repository {
 
     /// Returns the hash of the commit. If a commit hash is passed,
     /// the output is equal to `commit`. If a Git reference is passed, the
-    /// reference is resolved into a commit hash.
+    /// reference is peeled through annotated tags into the commit object.
     pub async fn peel_commit(&self, commit: &str) -> Result<String, Error> {
+        let commit = format!("{commit}^{{commit}}");
         let output = run_git(&[
             OsStr::new("-C"),
             self.path.as_os_str(),
             OsStr::new("rev-parse"),
-            OsStr::new(commit),
+            OsStr::new("--verify"),
+            OsStr::new("--end-of-options"),
+            OsStr::new(&commit),
         ])
         .await?;
-        Ok(str::from_utf8(output.stdout.trim_ascii_end()).unwrap_or("").to_owned())
+        let object_id = str::from_utf8(output.stdout.trim_ascii_end()).unwrap_or("");
+        if object_id.len() != 40
+            || !object_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(InnerError::Run {
+                code: None,
+                stderr: Some("Git returned a commit object ID that is not a lowercase 40-hex SHA-1".to_owned()),
+            })?;
+        }
+        Ok(object_id.to_owned())
     }
 
     /// Returns the remote URL for the provided `remote`
@@ -132,7 +146,7 @@ impl Repository {
             OsStr::new(remote),
         ])
         .await?;
-        Ok(str::from_utf8(&output.stdout).unwrap_or("").to_owned())
+        Ok(str::from_utf8(output.stdout.trim_ascii_end()).unwrap_or("").to_owned())
     }
 
     /// Sets the remote URL for the provided `remote` to `url`
@@ -432,5 +446,33 @@ mod tests {
         let gitlink_commit = fixture_git(&repository_path, &["rev-parse", "HEAD"]);
 
         assert!(repository.contains_gitlinks(&gitlink_commit).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn annotated_tags_are_peeled_to_the_commit_object() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository_path = temporary.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        fixture_git(&repository_path, &["init", "--initial-branch=main"]);
+        fixture_git(&repository_path, &["config", "user.name", "Gitwrap Test"]);
+        fixture_git(&repository_path, &["config", "user.email", "gitwrap@example.invalid"]);
+        std::fs::write(repository_path.join("source.txt"), b"locked source\n").unwrap();
+        fixture_git(&repository_path, &["add", "source.txt"]);
+        fixture_git(&repository_path, &["commit", "-m", "source"]);
+        fixture_git(
+            &repository_path,
+            &["tag", "--annotate", "v1", "--message", "release v1"],
+        );
+
+        let commit = fixture_git(&repository_path, &["rev-parse", "HEAD"]);
+        let tag_object = fixture_git(&repository_path, &["rev-parse", "v1"]);
+        assert_ne!(tag_object, commit, "the fixture must use an annotated tag object");
+
+        let repository = Repository { path: repository_path };
+        let peeled = repository.peel_commit("v1").await.unwrap();
+
+        assert_eq!(peeled, commit);
+        assert_eq!(peeled.len(), 40);
+        assert!(peeled.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
     }
 }

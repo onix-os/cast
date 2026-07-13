@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{fs::Permissions, ops::Deref, os::unix::fs::PermissionsExt};
 use std::{
-    io,
+    fs::Permissions,
+    io::{self, Read, Write},
+    ops::Deref,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -11,6 +13,7 @@ use std::{
 use fs_err as fs;
 use moss::{request, util};
 use sha2::{Digest, Sha256};
+use stone_recipe::spec::is_canonical_sha256;
 use thiserror::Error;
 use tui::{ProgressBar, ProgressStyle};
 use url::Url;
@@ -72,6 +75,7 @@ impl Plain {
         Ok(StoredPlain {
             name: self.name().to_owned(),
             path,
+            hash: self.hash.clone(),
             was_cached: false,
         })
     }
@@ -96,6 +100,7 @@ impl Plain {
         Ok(StoredPlain {
             name: self.name().to_owned(),
             path,
+            hash: self.hash.clone(),
             was_cached: true,
         })
     }
@@ -129,6 +134,9 @@ pub struct StoredPlain {
     pub name: String,
     /// Path of the source archive after it was stored.
     pub path: PathBuf,
+    /// Exact digest admitted by the source lock. Sharing hashes the bytes it
+    /// copies rather than trusting an earlier check of the cache pathname.
+    pub hash: Hash,
     /// Whether the source archived was already stored with valid hash.
     pub was_cached: bool,
 }
@@ -141,14 +149,40 @@ impl StoredPlain {
     /// hard link here would silently mutate the verified cache entry too.
     pub fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
         let target = dest_dir.join(self.name.clone());
-
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
+        let mut source = fs::File::open(&self.path)?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".boulder-archive-")
+            .tempfile_in(dest_dir)
+            .map_err(|source| Error::CreateStaging {
+                parent: dest_dir.to_owned(),
+                source,
+            })?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = source.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            temporary.as_file_mut().write_all(&buffer[..read])?;
         }
-        fs::copy(&self.path, &target)?;
-        fs::set_permissions(&target, Permissions::from_mode(0o644))?;
+        let found = Hash(hex::encode(hasher.finalize()));
+        if found != self.hash {
+            return Err(Error::HashMismatch {
+                name: self.name.clone(),
+                expected: self.hash.to_string(),
+                got: found,
+            });
+        }
+
+        temporary.as_file().set_permissions(Permissions::from_mode(0o644))?;
         let timestamp = filetime::FileTime::from_unix_time(source_date_epoch, 0);
-        filetime::set_file_times(&target, timestamp, timestamp)?;
+        filetime::set_file_handle_times(temporary.as_file(), Some(timestamp), Some(timestamp))?;
+        temporary.persist_noclobber(&target).map_err(|error| Error::Install {
+            target,
+            source: error.error,
+        })?;
 
         Ok(())
     }
@@ -170,8 +204,10 @@ mod tests {
         let source = StoredPlain {
             name: "source.tar.zst".to_owned(),
             path: cached.clone(),
+            hash: Hash(hex::encode(Sha256::digest(b"verified archive"))),
             was_cached: true,
         };
+        fs::create_dir_all(&shared).unwrap();
 
         source.share(&shared, 1_700_000_000).unwrap();
         let build_visible = shared.join("source.tar.zst");
@@ -190,6 +226,66 @@ mod tests {
         assert_eq!(fs::read(&cached).unwrap(), b"verified archive");
         assert_eq!(fs::read(&build_visible).unwrap(), b"mutated by build");
     }
+
+    #[test]
+    fn sharing_rehashes_copied_bytes_and_removes_failed_staging_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let cached = directory.path().join("cache/source.tar.zst");
+        let shared = directory.path().join("build/sources");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(&cached, b"cache bytes changed after the first verification").unwrap();
+        let source = StoredPlain {
+            name: "source.tar.zst".to_owned(),
+            path: cached,
+            hash: Hash(hex::encode(Sha256::digest(b"original locked archive"))),
+            was_cached: true,
+        };
+
+        assert!(matches!(source.share(&shared, 0), Err(Error::HashMismatch { .. })));
+        assert!(fs::read_dir(shared).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn sharing_never_replaces_a_destination_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let cached = directory.path().join("cache/source.tar.zst");
+        let shared = directory.path().join("build/sources");
+        let outside = directory.path().join("outside");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(&cached, b"verified archive").unwrap();
+        symlink(&outside, shared.join("source.tar.zst")).unwrap();
+        let source = StoredPlain {
+            name: "source.tar.zst".to_owned(),
+            path: cached,
+            hash: Hash(hex::encode(Sha256::digest(b"verified archive"))),
+            was_cached: true,
+        };
+
+        assert!(matches!(source.share(&shared, 0), Err(Error::Install { .. })));
+        assert!(
+            fs::symlink_metadata(shared.join("source.tar.zst"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(fs::read_dir(outside).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn archive_hash_parser_uses_the_canonical_source_digest_contract() {
+        assert!("a".repeat(64).parse::<Hash>().is_ok());
+        for invalid in ["a".repeat(63), "A".repeat(64), format!("{}g", "a".repeat(63))] {
+            assert!(matches!(
+                invalid.parse::<Hash>(),
+                Err(ParseHashError::NotCanonical(value)) if value == invalid
+            ));
+        }
+    }
 }
 
 /// Thin wrapper around String that represents a
@@ -201,8 +297,8 @@ impl FromStr for Hash {
     type Err = ParseHashError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 5 {
-            return Err(ParseHashError::TooShort(s.to_owned()));
+        if !is_canonical_sha256(s) {
+            return Err(ParseHashError::NotCanonical(s.to_owned()));
         }
 
         Ok(Self(s.to_owned()))
@@ -213,8 +309,8 @@ impl TryFrom<String> for Hash {
     type Error = ParseHashError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() < 5 {
-            return Err(ParseHashError::TooShort(value));
+        if !is_canonical_sha256(&value) {
+            return Err(ParseHashError::NotCanonical(value));
         }
         Ok(Self(value))
     }
@@ -231,8 +327,8 @@ impl Deref for Hash {
 /// Reasons why [Hash] may be invalid.
 #[derive(Debug, Error)]
 pub enum ParseHashError {
-    #[error("hash too short: {0}")]
-    TooShort(String),
+    #[error("SHA-256 must be exactly 64 lowercase hexadecimal characters: {0}")]
+    NotCanonical(String),
 }
 
 /// Possible errors returned by functions in this module.
@@ -247,6 +343,18 @@ pub enum Error {
     #[error("request")]
     /// A local or remote fetch failed.
     Request(#[from] request::Error),
+    #[error("create private archive staging file in {parent:?}")]
+    CreateStaging {
+        parent: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("atomically install verified archive at {target:?}")]
+    Install {
+        target: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("io")]
     /// A generic I/O error occurred.
     Io(#[from] io::Error),
