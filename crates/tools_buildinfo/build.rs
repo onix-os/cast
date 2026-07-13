@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // build.rs
-use std::os::unix::ffi::OsStringExt;
+use std::{collections::BTreeMap, os::unix::ffi::OsStringExt, path::Path};
 
 use chrono::{DateTime, Utc};
+
+#[path = "src/semantic_fingerprint.rs"]
+mod semantic_fingerprint;
 
 /// Returns value of given environment variable or error if missing.
 ///
@@ -41,6 +44,87 @@ fn command(prog: &str, args: &[&str], cwd: Option<std::path::PathBuf>) -> Result
     } else {
         Err(Box::from(format!("{prog}: killed by signal")))
     }
+}
+
+/// Return a stable description of the compiler Cargo selected for this build.
+fn rustc_identity() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let rustc = env("RUSTC")?;
+    let mut cmd = std::process::Command::new(&rustc);
+    cmd.arg("-vV");
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Err(Box::from(format!(
+            "{} -vV terminated with {}",
+            rustc.to_string_lossy(),
+            out.status
+        )));
+    }
+    Ok(trim_trailing_newline(out.stdout))
+}
+
+fn trim_trailing_newline(mut value: Vec<u8>) -> Vec<u8> {
+    if value.last() == Some(&b'\n') {
+        value.pop();
+        if value.last() == Some(&b'\r') {
+            value.pop();
+        }
+    }
+    value
+}
+
+/// Collect build context which can change compiled behavior without changing
+/// repository contents.  Absolute compiler paths are deliberately replaced by
+/// `rustc -vV`; flags and wrappers remain verbatim because their values are
+/// themselves compiler inputs.
+fn semantic_build_context() -> Result<Vec<semantic_fingerprint::ExplicitInput>, Box<dyn std::error::Error>> {
+    const OPTIONAL_KEYS: &[&str] = &[
+        "HOST",
+        "TARGET",
+        "PROFILE",
+        "OPT_LEVEL",
+        "DEBUG",
+        "CARGO_BUILD_TARGET",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTFLAGS",
+        "RUSTC_BOOTSTRAP",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+    ];
+
+    let mut inputs = BTreeMap::<String, Vec<u8>>::new();
+    inputs.insert("toolchain.rustc-vV".to_owned(), rustc_identity()?);
+
+    for key in OPTIONAL_KEYS {
+        println!("cargo:rerun-if-env-changed={key}");
+        if let Some(value) = std::env::var_os(key) {
+            inputs.insert(format!("env.{key}"), value.into_vec());
+        }
+    }
+
+    // Cargo's target cfgs, enabled package features, and profile overrides are
+    // open-ended name sets.  Cargo already reruns build scripts when its own
+    // feature/cfg calculation changes; the directives also cover explicit
+    // environment overrides for variables present in this invocation.
+    for (key, value) in std::env::vars_os() {
+        let Some(key) = key.to_str() else {
+            continue;
+        };
+        if key.starts_with("CARGO_CFG_") || key.starts_with("CARGO_FEATURE_") || key.starts_with("CARGO_PROFILE_") {
+            println!("cargo:rerun-if-env-changed={key}");
+            inputs.insert(format!("env.{key}"), value.into_vec());
+        }
+    }
+
+    Ok(inputs.into_iter().collect())
+}
+
+fn get_semantic_fingerprint(top_level: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let fingerprint = semantic_fingerprint::calculate(top_level, semantic_build_context()?)?;
+    for path in fingerprint.watched_paths() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    println!("cargo:rustc-env=BUILDINFO_SEMANTIC_FINGERPRINT={}", fingerprint.value());
+    Ok(())
 }
 
 /// Checks to see if we're building from a git source and if so attempts to gather information about the git status
@@ -136,13 +220,10 @@ fn get_build_time() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // This should include all top-level directories that contain source code or otherwise modify the build in meaningful ways
-    let top_level = std::path::PathBuf::from("../..").canonicalize()?;
-    println!("cargo::rerun-if-changed={}/bin/boulder", top_level.display());
-    println!("cargo::rerun-if-changed={}/crates", top_level.display());
-    println!("cargo::rerun-if-changed={}/bin/moss", top_level.display());
-    println!("cargo::rerun-if-changed={}/tests", top_level.display());
-    println!("cargo::rerun-if-changed={}/Cargo.toml", top_level.display());
+    let package_dir = std::path::PathBuf::from(env("CARGO_MANIFEST_DIR")?);
+    let top_level = package_dir.join("../..").canonicalize()?;
+
+    get_semantic_fingerprint(&top_level)?;
 
     let version = env("CARGO_PKG_VERSION")?;
     println!("cargo:rustc-env=BUILDINFO_VERSION={}", version.to_string_lossy());

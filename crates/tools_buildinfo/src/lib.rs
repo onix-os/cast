@@ -12,6 +12,19 @@ pub const fn get_version() -> &'static str {
     values::VERSION
 }
 
+/// Returns the content-strong identity of the OS Tools implementation and its
+/// build context.
+///
+/// The value is a `sha256:` fingerprint computed at build time from all
+/// production Rust and Gluon sources, embedded policy/data, Cargo manifests
+/// and lockfile, repository toolchain configuration, active Cargo features,
+/// target cfgs, profile, compiler identity, and Rust flags.  Git metadata and
+/// build timestamps are deliberately not inputs, so the same inputs have the
+/// same value in a worktree or source archive.
+pub const fn get_semantic_fingerprint() -> &'static str {
+    values::SEMANTIC_FINGERPRINT
+}
+
 /// Returns the build time of the project, printed in UTC time format
 ///
 /// If SOURCE_DATE_EPOCH is set during the build then that will be the timestamp returned
