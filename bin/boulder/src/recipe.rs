@@ -257,6 +257,7 @@ mod tests {
     const GIT_URL: &str = "https://example.com/source.git";
     const GIT_REF: &str = "main";
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     fn gluon_recipe(source: &str) -> String {
         format!("let boulder = import! boulder.package.v3\nboulder.mk_package (boulder.meta {source})")
@@ -378,6 +379,7 @@ let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
                 url: GIT_URL.to_owned(),
                 requested_ref: GIT_REF.to_owned(),
                 commit: FULL_COMMIT.to_owned(),
+                materialization_sha256: MATERIALIZATION_SHA256.to_owned(),
             }),
         ])
     }
@@ -516,7 +518,7 @@ boulder.mk_package (boulder.meta {
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
 
         let mut wrong_schema = matching_source_lock();
-        wrong_schema.schema_version = 2;
+        wrong_schema.schema_version = 3;
         let mut short_commit = matching_source_lock();
         let source_lock::SourceResolution::Git(git) = &mut short_commit.sources[1] else {
             unreachable!();
@@ -570,6 +572,7 @@ boulder.mk_package (boulder.meta {
             url: ARCHIVE_URL.to_owned(),
             requested_ref: "archive".to_owned(),
             commit: FULL_COMMIT.to_owned(),
+            materialization_sha256: MATERIALIZATION_SHA256.to_owned(),
         });
 
         let mut url = matching_source_lock();

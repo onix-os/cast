@@ -180,6 +180,7 @@ impl Explanation<'_> {
                     url,
                     requested_ref,
                     commit,
+                    materialization_sha256,
                     directory,
                 } => {
                     formatter.string(3, "kind", "git");
@@ -187,6 +188,7 @@ impl Explanation<'_> {
                     formatter.string(3, "url", url);
                     formatter.string(3, "requested_ref", requested_ref);
                     formatter.string(3, "commit", commit);
+                    formatter.string(3, "materialization_sha256", materialization_sha256);
                     formatter.string(3, "directory", directory);
                 }
             }
@@ -976,6 +978,8 @@ mod tests {
                     url: "https://git.invalid/demo".to_owned(),
                     requested_ref: "v1.2.3".to_owned(),
                     commit: "1111111111111111111111111111111111111111".to_owned(),
+                    materialization_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
                     directory: "demo-git".to_owned(),
                 },
             ],

@@ -3,9 +3,7 @@
 
 use std::{
     ffi::OsStr,
-    fs::Permissions,
     io,
-    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -14,6 +12,8 @@ use moss::util;
 use thiserror::Error;
 use tui::{ProgressBar, ProgressStyle};
 use url::Url;
+
+mod materialization;
 
 /// Upstream based on a Git repository.
 #[derive(Clone, Debug)]
@@ -25,6 +25,9 @@ pub struct Git {
     /// Exact directory name used when sharing this source with the build.
     pub name: String,
     pub original_index: usize,
+    /// Expected normalized checkout identity. Authored moving references have
+    /// no value until explicit lock refresh materializes them.
+    pub materialization_sha256: Option<String>,
 }
 
 impl Git {
@@ -56,8 +59,7 @@ impl Git {
                 }
                 repo = clone(&self.url, &stored_path, pb).await?;
             }
-            Err(Error::Io(e)) => return Err(Error::from(e)),
-            Err(error @ Error::UnsupportedSubmodules { .. }) => return Err(error),
+            Err(error) => return Err(error),
         }
 
         let resolved_hash = repo.peel_commit(&self.commit).await?;
@@ -69,6 +71,7 @@ impl Git {
             repo,
             resolved_hash,
             original_index: self.original_index,
+            materialization_sha256: self.materialization_sha256.clone(),
         })
     }
 
@@ -91,8 +94,7 @@ impl Git {
                 }
                 clone(&self.url, &stored_path, pb).await?
             }
-            Err(Error::Io(error)) => return Err(Error::Io(error)),
-            Err(error @ Error::UnsupportedSubmodules { .. }) => return Err(error),
+            Err(error) => return Err(error),
         };
         let resolved_hash = repo.peel_commit(&self.commit).await?;
         reject_gitlinks(&repo, &resolved_hash).await?;
@@ -103,6 +105,7 @@ impl Git {
             repo,
             resolved_hash,
             original_index: self.original_index,
+            materialization_sha256: self.materialization_sha256.clone(),
         })
     }
 
@@ -135,6 +138,7 @@ impl Git {
                 repo,
                 resolved_hash,
                 original_index: self.original_index,
+                materialization_sha256: self.materialization_sha256.clone(),
             },
             has_ref,
         ))
@@ -174,12 +178,14 @@ pub struct StoredGit {
     pub was_cached: bool,
     pub resolved_hash: String,
     pub original_index: usize,
+    pub materialization_sha256: Option<String>,
     pub repo: gitwrap::Repository,
 }
 
 impl StoredGit {
-    /// Shares the Git repository in preparation of a build.
-    pub async fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
+    /// Export one exact commit, remove Git administration data, normalize the
+    /// build-visible tree, and return its canonical SHA-256 identity.
+    pub(crate) async fn export_normalized(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<String, Error> {
         reject_gitlinks(&self.repo, &self.resolved_hash).await?;
         if let Some(parent) = dest_dir.parent() {
             fs::create_dir_all(parent)?;
@@ -199,7 +205,32 @@ impl StoredGit {
         // Git administration data contains checkout-time and host-specific
         // state and is not part of the locked commit tree.
         remove_git_administration(dest_dir)?;
-        normalize_exported_tree(dest_dir, source_date_epoch)?;
+        materialization::normalize_and_hash(dest_dir, source_date_epoch).map_err(|source| Error::Materialization {
+            root: dest_dir.to_owned(),
+            source,
+        })
+    }
+
+    /// Shares the exact Git repository in preparation of a frozen build and
+    /// rejects any checkout whose normalized bytes differ from the source lock.
+    pub async fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
+        let expected = self
+            .materialization_sha256
+            .as_deref()
+            .ok_or_else(|| Error::MissingMaterializationDigest {
+                index: self.original_index,
+                commit: self.resolved_hash.clone(),
+            })?;
+        let found = self.export_normalized(dest_dir, source_date_epoch).await?;
+        if found != expected {
+            let _ = util::remove_dir_all(dest_dir);
+            return Err(Error::MaterializationDigestMismatch {
+                index: self.original_index,
+                commit: self.resolved_hash.clone(),
+                expected: expected.to_owned(),
+                found,
+            });
+        }
 
         Ok(())
     }
@@ -236,30 +267,6 @@ fn remove_git_administration(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn normalize_exported_tree(root: &Path, source_date_epoch: i64) -> Result<(), Error> {
-    let timestamp = filetime::FileTime::from_unix_time(source_date_epoch, 0);
-    for entry in walkdir::WalkDir::new(root).contents_first(true).follow_links(false) {
-        let entry = entry.map_err(walk_error)?;
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(path)?;
-        if metadata.file_type().is_symlink() {
-            filetime::set_symlink_file_times(path, timestamp, timestamp)?;
-            continue;
-        }
-
-        let mode = if metadata.is_dir() {
-            0o755
-        } else if metadata.mode() & 0o111 == 0 {
-            0o644
-        } else {
-            0o755
-        };
-        fs::set_permissions(path, Permissions::from_mode(mode))?;
-        filetime::set_file_times(path, timestamp, timestamp)?;
-    }
-    Ok(())
-}
-
 fn walk_error(error: walkdir::Error) -> io::Error {
     let message = error.to_string();
     error.into_io_error().unwrap_or_else(|| io::Error::other(message))
@@ -274,6 +281,24 @@ pub enum Error {
     /// Submodules require their own explicit, locked source model.
     #[error("Git commit {commit} contains submodules, which are not supported as implicit sources")]
     UnsupportedSubmodules { commit: String },
+    /// A frozen source has no expected normalized-tree identity.
+    #[error("Git source {index} at commit {commit} has no locked materialization digest")]
+    MissingMaterializationDigest { index: usize, commit: String },
+    /// The normalized checkout differs from the bytes admitted by lock refresh.
+    #[error("Git source {index} at commit {commit} materialized as {found}, but sources.lock.glu requires {expected}")]
+    MaterializationDigestMismatch {
+        index: usize,
+        commit: String,
+        expected: String,
+        found: String,
+    },
+    /// Canonical tree normalization or hashing failed.
+    #[error("normalize and hash Git materialization at {root:?}")]
+    Materialization {
+        root: PathBuf,
+        #[source]
+        source: materialization::Error,
+    },
     /// A generic I/O error occurred.
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -313,33 +338,23 @@ fn set_progress_bar_style(pb: &ProgressBar) -> impl Fn(gitwrap::FetchProgress) {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{MetadataExt, symlink};
+    use std::os::unix::fs::symlink;
 
     use super::*;
 
     #[test]
-    fn exported_git_tree_has_fixed_modes_and_timestamps_without_admin_state() {
+    fn exported_git_tree_removes_only_git_administration_state() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("checkout");
         fs::create_dir_all(root.join(".git/objects")).unwrap();
         fs::create_dir_all(root.join("nested")).unwrap();
         fs::write(root.join("nested/.git"), b"gitdir: ../.git/modules/nested\n").unwrap();
         fs::write(root.join("regular"), b"regular").unwrap();
-        fs::write(root.join("executable"), b"executable").unwrap();
-        fs::set_permissions(root.join("regular"), Permissions::from_mode(0o666)).unwrap();
-        fs::set_permissions(root.join("executable"), Permissions::from_mode(0o711)).unwrap();
         symlink("regular", root.join("link")).unwrap();
         fs::write(root.join(".git-marker"), b"ordinary committed name").unwrap();
 
         remove_git_administration(&root).unwrap();
-        normalize_exported_tree(&root, 1_700_000_000).unwrap();
 
-        assert_eq!(fs::metadata(root.join("regular")).unwrap().mode() & 0o7777, 0o644);
-        assert_eq!(fs::metadata(root.join("executable")).unwrap().mode() & 0o7777, 0o755);
-        assert_eq!(fs::metadata(root.join("nested")).unwrap().mode() & 0o7777, 0o755);
-        for path in [root.clone(), root.join("regular"), root.join("executable")] {
-            assert_eq!(fs::metadata(path).unwrap().mtime(), 1_700_000_000);
-        }
         assert!(!root.join(".git").exists());
         assert!(!root.join("nested/.git").exists());
         assert!(

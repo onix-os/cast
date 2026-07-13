@@ -533,9 +533,20 @@ fn freeze_sources(recipe: &crate::Recipe) -> Vec<LockedSource> {
                         url: source.url.clone(),
                         requested_ref: source.requested_ref.clone(),
                         commit: source.commit.clone(),
-                        directory: url::Url::parse(&source.url)
-                            .map(|url| moss::util::uri_file_name(&url).to_owned())
-                            .unwrap_or_default(),
+                        materialization_sha256: source.materialization_sha256.clone(),
+                        directory: recipe
+                            .declaration
+                            .sources
+                            .get(source.order as usize)
+                            .and_then(|upstream| match upstream {
+                                stone_recipe::UpstreamSpec::Git { clone_dir, .. } => clone_dir.clone(),
+                                stone_recipe::UpstreamSpec::Archive { .. } => None,
+                            })
+                            .unwrap_or_else(|| {
+                                url::Url::parse(&source.url)
+                                    .map(|url| moss::util::uri_file_name(&url).to_owned())
+                                    .unwrap_or_default()
+                            }),
                     },
                 })
                 .collect()

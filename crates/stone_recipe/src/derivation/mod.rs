@@ -34,7 +34,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 10;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 11;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
@@ -625,6 +625,7 @@ pub enum LockedSource {
         url: String,
         requested_ref: String,
         commit: String,
+        materialization_sha256: String,
         directory: String,
     },
 }
@@ -662,6 +663,7 @@ impl LockedSource {
                 url,
                 requested_ref,
                 commit,
+                materialization_sha256,
                 directory,
                 ..
             } => {
@@ -673,6 +675,16 @@ impl LockedSource {
                     return Err(DerivationValidationError::InvalidGitCommit {
                         index,
                         value: commit.clone(),
+                    });
+                }
+                if materialization_sha256.len() != 64
+                    || !materialization_sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                {
+                    return Err(DerivationValidationError::InvalidGitMaterializationSha256 {
+                        index,
+                        value: materialization_sha256.clone(),
                     });
                 }
                 Ok(())
@@ -699,6 +711,7 @@ impl LockedSource {
                 url,
                 requested_ref,
                 commit,
+                materialization_sha256,
                 directory,
             } => {
                 encoder.variant(1);
@@ -706,6 +719,7 @@ impl LockedSource {
                 encoder.string(url);
                 encoder.string(requested_ref);
                 encoder.string(commit);
+                encoder.string(materialization_sha256);
                 encoder.string(directory);
             }
         }
@@ -1908,6 +1922,10 @@ pub enum DerivationValidationError {
     },
     #[error("sources[{index}].commit: expected a complete 40-hex Git commit, found `{value}`")]
     InvalidGitCommit { index: usize, value: String },
+    #[error(
+        "sources[{index}].materialization_sha256: expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`"
+    )]
+    InvalidGitMaterializationSha256 { index: usize, value: String },
     #[error("sources[{index}].sha256: expected exactly 64 ASCII hexadecimal characters, found `{value}`")]
     InvalidArchiveSha256 { index: usize, value: String },
     #[error("sources[{index}].{field}: unsafe relative materialization path {value:?}")]
@@ -2466,6 +2484,17 @@ mod tests {
                 kind: RelationKind::Binary,
                 name: name.to_owned(),
             },
+        }
+    }
+
+    fn sample_git_source(order: u32, directory: &str) -> LockedSource {
+        LockedSource::Git {
+            order,
+            url: format!("https://example.invalid/source-{order}.git"),
+            requested_ref: "main".to_owned(),
+            commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            materialization_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+            directory: directory.to_owned(),
         }
     }
 
@@ -3976,6 +4005,43 @@ mod tests {
     }
 
     #[test]
+    fn validation_requires_a_lowercase_git_materialization_sha256() {
+        for value in [
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            format!("{}g", "a".repeat(63)),
+            "A".repeat(64),
+            "é".repeat(32),
+        ] {
+            let mut plan = sample_plan();
+            plan.sources = vec![sample_git_source(0, "hello.git")];
+            let LockedSource::Git {
+                materialization_sha256, ..
+            } = &mut plan.sources[0]
+            else {
+                unreachable!()
+            };
+            *materialization_sha256 = value.clone();
+
+            let error = plan.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                DerivationValidationError::InvalidGitMaterializationSha256 {
+                    index: 0,
+                    value: ref found,
+                } if found == &value
+            ));
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "sources[0].materialization_sha256: expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn validation_rejects_duplicate_source_materialization_destinations_across_kinds() {
         let mut plan = sample_plan();
         plan.sources.push(LockedSource::Git {
@@ -3983,6 +4049,7 @@ mod tests {
             url: "https://example.invalid/other.git".to_owned(),
             requested_ref: "main".to_owned(),
             commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            materialization_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
             directory: "hello.tar.zst".to_owned(),
         });
 
@@ -4037,6 +4104,39 @@ mod tests {
     }
 
     #[test]
+    fn changing_only_git_materialization_digest_changes_derivation_identity() {
+        let mut first = sample_plan();
+        first.sources = vec![sample_git_source(0, "hello.git")];
+        first.validate().unwrap();
+
+        let mut changed = first.clone();
+        let LockedSource::Git {
+            materialization_sha256, ..
+        } = &mut changed.sources[0]
+        else {
+            unreachable!()
+        };
+        *materialization_sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned();
+        changed.validate().unwrap();
+
+        assert_ne!(first.canonical_bytes(), changed.canonical_bytes());
+        assert_ne!(first.derivation_id(), changed.derivation_id());
+    }
+
+    #[test]
+    fn source_construction_order_has_a_stable_canonical_identity() {
+        let mut canonical = sample_plan();
+        canonical.sources.push(sample_git_source(1, "hello.git"));
+        canonical.validate().unwrap();
+
+        let mut constructed_in_reverse = canonical.clone();
+        constructed_in_reverse.sources.reverse();
+
+        assert_eq!(canonical.canonical_bytes(), constructed_in_reverse.canonical_bytes());
+        assert_eq!(canonical.derivation_id(), constructed_in_reverse.derivation_id());
+    }
+
+    #[test]
     fn git_materialization_directory_is_validated_and_hashed() {
         let mut first = sample_plan();
         first.sources = vec![LockedSource::Git {
@@ -4044,6 +4144,7 @@ mod tests {
             url: "https://example.invalid/hello.git".to_owned(),
             requested_ref: "main".to_owned(),
             commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            materialization_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
             directory: "hello.git".to_owned(),
         }];
         first.validate().unwrap();

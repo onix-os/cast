@@ -344,6 +344,8 @@ pub enum PackageConversionError {
         #[source]
         source: url::ParseError,
     },
+    #[error("{field}: source materialization directory `{value}` must be one normalized filename component")]
+    InvalidSourceMaterializationComponent { field: String, value: String },
     #[error("{field}: `{value}` is outside the valid {expected} range")]
     IntegerOutOfRange {
         field: String,
@@ -419,6 +421,7 @@ impl PackageConversionError {
             Self::ReleaseMustBePositive { .. } => "meta.release",
             Self::FrozenBuildNetworkingUnsupported => "options.networking",
             Self::InvalidUrl { field, .. }
+            | Self::InvalidSourceMaterializationComponent { field, .. }
             | Self::IntegerOutOfRange { field, .. }
             | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
@@ -471,9 +474,9 @@ impl PackageSpec {
         }
 
         for (index, source) in self.sources.iter().enumerate() {
-            let (url, strip_dirs) = match source {
-                UpstreamSpec::Archive { url, strip_dirs, .. } => (url, *strip_dirs),
-                UpstreamSpec::Git { url, .. } => (url, None),
+            let (url, strip_dirs, materialization_component) = match source {
+                UpstreamSpec::Archive { url, strip_dirs, .. } => (url, *strip_dirs, None),
+                UpstreamSpec::Git { url, clone_dir, .. } => (url, None, clone_dir.as_deref()),
             };
             Url::parse(url).map_err(|source| PackageConversionError::InvalidUrl {
                 field: format!("sources[{index}].url"),
@@ -486,6 +489,14 @@ impl PackageSpec {
                     value,
                     expected: "0..=255 integer",
                 })?;
+            }
+            if let Some(value) = materialization_component
+                && !is_safe_artifact_component(value)
+            {
+                return Err(PackageConversionError::InvalidSourceMaterializationComponent {
+                    field: format!("sources[{index}].clone_dir"),
+                    value: value.to_owned(),
+                });
             }
         }
 
@@ -1425,6 +1436,29 @@ mod tests {
         let error = invalid.validate().unwrap_err();
         assert!(matches!(error, PackageConversionError::InvalidUrl { .. }));
         assert_eq!(error.field(), "sources[0].url");
+
+        for clone_dir in ["", ".", "..", "nested/source", "nested\\source", "source\nname"] {
+            let mut invalid = package();
+            invalid.sources.push(UpstreamSpec::Git {
+                url: "https://example.com/source.git".to_owned(),
+                git_ref: "main".to_owned(),
+                clone_dir: Some(clone_dir.to_owned()),
+            });
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSourceMaterializationComponent { .. }
+            ));
+            assert_eq!(error.field(), "sources[0].clone_dir");
+        }
+
+        let mut valid = package();
+        valid.sources.push(UpstreamSpec::Git {
+            url: "https://example.com/source.git".to_owned(),
+            git_ref: "main".to_owned(),
+            clone_dir: Some("custom-source.git".to_owned()),
+        });
+        valid.validate().unwrap();
 
         let mut invalid = package();
         invalid.sources.push(UpstreamSpec::Archive {

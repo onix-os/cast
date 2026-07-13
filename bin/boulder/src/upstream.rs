@@ -40,7 +40,7 @@ impl Upstream {
     pub fn from_package_source(
         source: &UpstreamSpec,
         original_index: usize,
-        locked_commit: Option<&str>,
+        locked_git: Option<(&str, &str)>,
     ) -> Result<Self, Error> {
         match source {
             UpstreamSpec::Archive { url, hash, rename, .. } => Ok(Self::Plain(Plain {
@@ -51,18 +51,27 @@ impl Upstream {
                 hash: hash.parse().map_err(plain::Error::from)?,
                 rename: rename.clone(),
             })),
-            UpstreamSpec::Git { url, git_ref, .. } => {
-                let commit = locked_commit.unwrap_or(git_ref).to_owned();
+            UpstreamSpec::Git {
+                url,
+                git_ref,
+                clone_dir,
+            } => {
+                let (commit, materialization_sha256) = locked_git
+                    .map(|(commit, digest)| (commit.to_owned(), Some(digest.to_owned())))
+                    .unwrap_or_else(|| (git_ref.clone(), None));
                 let url = url.parse().map_err(|source| Error::AuthoredSourceUrl {
                     index: original_index,
                     source,
                 })?;
-                let name = moss::util::uri_file_name(&url).to_owned();
+                let name = clone_dir
+                    .clone()
+                    .unwrap_or_else(|| moss::util::uri_file_name(&url).to_owned());
                 Ok(Self::Git(Git {
                     url,
                     commit,
                     name,
                     original_index,
+                    materialization_sha256,
                 }))
             }
         }
@@ -137,15 +146,17 @@ pub fn parse_recipe(recipe: &Recipe) -> Result<Vec<Upstream>, Error> {
         .iter()
         .enumerate()
         .map(|(index, source)| {
-            let locked_commit = recipe
+            let locked_git = recipe
                 .source_lock
                 .as_ref()
                 .and_then(|lock| lock.source(index))
                 .and_then(|source| match source {
-                    SourceResolution::Git(source) => Some(source.commit.as_str()),
+                    SourceResolution::Git(source) => {
+                        Some((source.commit.as_str(), source.materialization_sha256.as_str()))
+                    }
                     SourceResolution::Archive(_) => None,
                 });
-            Upstream::from_package_source(source, index, locked_commit)
+            Upstream::from_package_source(source, index, locked_git)
         })
         .collect()
 }
@@ -175,7 +186,19 @@ pub(crate) fn refresh_source_lock(recipe: &Recipe, storage_dir: &Path) -> Result
                             ),
                     );
                     bar.enable_steady_tick(Duration::from_millis(150));
-                    let stored = upstream.resolve(storage_dir, &bar).await;
+                    let stored: Result<Stored, Error> = async {
+                        let stored = upstream.resolve(storage_dir, &bar).await?;
+                        match stored {
+                            Stored::Git(mut git) => {
+                                let temporary = tempfile::tempdir()?;
+                                let destination = temporary.path().join(&git.name);
+                                git.materialization_sha256 = Some(git.export_normalized(&destination, 0).await?);
+                                Ok(Stored::Git(git))
+                            }
+                            stored @ Stored::Plain(_) => Ok(stored),
+                        }
+                    }
+                    .await;
                     bar.finish_and_clear();
                     progress.remove(&bar);
                     stored
@@ -216,12 +239,17 @@ fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
                     rename: Some(filename.clone()),
                 }),
                 LockedSource::Git {
-                    url, commit, directory, ..
+                    url,
+                    commit,
+                    materialization_sha256,
+                    directory,
+                    ..
                 } => Upstream::Git(Git {
                     url: url.parse().map_err(|source| Error::LockedSourceUrl { index, source })?,
                     commit: commit.clone(),
                     name: directory.clone(),
                     original_index: index,
+                    materialization_sha256: Some(materialization_sha256.clone()),
                 }),
             })
         })
@@ -329,6 +357,10 @@ pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> 
                         url: url.clone(),
                         requested_ref: git_ref.clone(),
                         commit: stored.resolved_hash.clone(),
+                        materialization_sha256: stored
+                            .materialization_sha256
+                            .clone()
+                            .ok_or(Error::MissingMaterializationDigest(index))?,
                     })
                 }
             })
@@ -357,6 +389,8 @@ pub enum Error {
     SourceOrderTooLarge(usize),
     #[error("resolved Git source {0} is missing after synchronization")]
     MissingStoredSource(usize),
+    #[error("resolved Git source {0} has no canonical materialization digest")]
+    MissingMaterializationDigest(usize),
     #[error("validate generated source lock")]
     GeneratedSourceLock(#[source] Box<source_lock::ValidationError>),
     #[error("write Gluon source lock {path:?}")]
@@ -393,6 +427,7 @@ mod tests {
 
     use fs_err as fs;
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
 
     fn gluon_git_recipe(url: &str) -> String {
@@ -447,6 +482,7 @@ let base = boulder.mk_package (boulder.meta {{
                 was_cached: false,
                 resolved_hash: FULL_COMMIT.to_owned(),
                 original_index: 1,
+                materialization_sha256: Some(MATERIALIZATION_SHA256.to_owned()),
             }),
         ]
     }
@@ -465,6 +501,7 @@ let base = boulder.mk_package (boulder.meta {{
                 url: "https://example.invalid/source.git".to_owned(),
                 requested_ref: "main".to_owned(),
                 commit: FULL_COMMIT.to_owned(),
+                materialization_sha256: MATERIALIZATION_SHA256.to_owned(),
                 directory: "frozen-source.git".to_owned(),
             },
         ];
@@ -476,6 +513,24 @@ let base = boulder.mk_package (boulder.meta {{
             panic!("expected locked Git source")
         };
         assert_eq!(git.commit, FULL_COMMIT);
+        assert_eq!(git.materialization_sha256.as_deref(), Some(MATERIALIZATION_SHA256));
+    }
+
+    #[test]
+    fn authored_git_clone_dir_is_the_materialization_name() {
+        let source = UpstreamSpec::Git {
+            url: "https://example.invalid/source.git".to_owned(),
+            git_ref: "main".to_owned(),
+            clone_dir: Some("chosen-source".to_owned()),
+        };
+
+        let upstream = Upstream::from_package_source(&source, 0, None).unwrap();
+
+        assert_eq!(upstream.name(), "chosen-source");
+        let Upstream::Git(git) = upstream else {
+            panic!("expected Git source")
+        };
+        assert_eq!(git.materialization_sha256, None);
     }
 
     #[test]
@@ -515,7 +570,9 @@ let base = boulder.mk_package (boulder.meta {{
         assert!(matches!(
             &lock.sources[1],
             SourceResolution::Git(source)
-                if source.requested_ref == "main" && source.commit == FULL_COMMIT
+                if source.requested_ref == "main"
+                    && source.commit == FULL_COMMIT
+                    && source.materialization_sha256 == MATERIALIZATION_SHA256
         ));
 
         let loaded = Recipe::load(directory.path()).unwrap();
@@ -524,6 +581,7 @@ let base = boulder.mk_package (boulder.meta {{
             &parsed[1],
             Upstream::Git(source)
                 if source.commit == FULL_COMMIT
+                    && source.materialization_sha256.as_deref() == Some(MATERIALIZATION_SHA256)
         ));
 
         let before = fs::metadata(&lock_path).unwrap();
@@ -558,22 +616,71 @@ let base = boulder.mk_package (boulder.meta {{
 
         let recipe = Recipe::load_authored(&recipe_path).unwrap();
         assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Written);
-        let first = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &fs::read(&lock_path).unwrap()).unwrap();
+        let first_bytes = fs::read(&lock_path).unwrap();
+        let first = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &first_bytes).unwrap();
+        let SourceResolution::Git(first_source) = &first.sources[0] else {
+            panic!("expected resolved Git source")
+        };
+        assert_eq!(first_source.requested_ref, "main");
+        assert_eq!(first_source.commit, first_commit);
+        assert_eq!(first_source.materialization_sha256.len(), 64);
+        let first_digest = first_source.materialization_sha256.clone();
+
+        let recipe = Recipe::load_authored(&recipe_path).unwrap();
+        assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Unchanged);
+        assert_eq!(fs::read(&lock_path).unwrap(), first_bytes);
+
+        let locked = LockedSource::Git {
+            order: 0,
+            url: url.clone(),
+            requested_ref: "main".to_owned(),
+            commit: first_commit.clone(),
+            materialization_sha256: first_digest.clone(),
+            directory: "locked-source".to_owned(),
+        };
+        let shared = directory.path().join("shared");
+        sync_locked(std::slice::from_ref(&locked), &storage, &shared, 1_700_000_000).unwrap();
+        assert_eq!(
+            fs::read_to_string(shared.join("locked-source/source.txt")).unwrap(),
+            "first\n"
+        );
+
+        let mut mismatched = locked;
+        let LockedSource::Git {
+            materialization_sha256, ..
+        } = &mut mismatched
+        else {
+            unreachable!()
+        };
+        *materialization_sha256 = "c".repeat(64);
+        let rejected = directory.path().join("rejected");
+        let error = match sync_locked(&[mismatched], &storage, &rejected, 1_700_000_000) {
+            Ok(_) => panic!("mismatched Git materialization digest was accepted"),
+            Err(error) => error,
+        };
         assert!(matches!(
-            &first.sources[0],
-            SourceResolution::Git(source)
-                if source.requested_ref == "main" && source.commit == first_commit
+            error,
+            Error::Git(git::Error::MaterializationDigestMismatch {
+                index: 0,
+                commit,
+                expected,
+                found,
+            }) if commit == first_commit
+                && expected == "c".repeat(64)
+                && found == first_digest
         ));
+        assert!(!rejected.join("locked-source").exists());
 
         let second_commit = commit(&origin, "second\n", "second");
         let recipe = Recipe::load_authored(&recipe_path).unwrap();
         assert_eq!(refresh_source_lock(&recipe, &storage).unwrap(), WriteOutcome::Written);
         let second = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &fs::read(&lock_path).unwrap()).unwrap();
-        assert!(matches!(
-            &second.sources[0],
-            SourceResolution::Git(source)
-                if source.requested_ref == "main" && source.commit == second_commit
-        ));
+        let SourceResolution::Git(second_source) = &second.sources[0] else {
+            panic!("expected resolved Git source")
+        };
+        assert_eq!(second_source.requested_ref, "main");
+        assert_eq!(second_source.commit, second_commit);
+        assert_ne!(second_source.materialization_sha256, first_digest);
         assert_ne!(first_commit, second_commit);
         assert_eq!(fs::read_to_string(recipe_path).unwrap(), authored);
     }
