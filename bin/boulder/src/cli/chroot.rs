@@ -3,13 +3,8 @@
 
 use std::{io, path::PathBuf, process};
 
-use crate::{
-    Env, Macros, Paths, Recipe,
-    architecture::{self, BuildTarget},
-    build, container, macros, recipe,
-};
+use crate::{Env, Paths, Recipe, container, recipe};
 use clap::Parser;
-use fs_err as fs;
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -26,7 +21,6 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     let Command { recipe: recipe_path } = command;
 
     let recipe = Recipe::load(recipe_path)?;
-    let macros = Macros::load(&env)?;
     let paths = Paths::new(&recipe, None, env.cache_dir, "/mason", ".")?;
 
     let rootfs = paths.rootfs().host;
@@ -36,32 +30,9 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         return Err(Error::MissingRootFs);
     }
 
-    // Generate a script so we can inject a .profile
-    // to the container environment with all actions
-    // and definitions
-    //
-    // The phase doesn't matter, but we use `prepare`
-    // since it uses hardcoded content that's always
-    // available to create a script from
-    let script = build::job::Phase::Prepare
-        .script(
-            BuildTarget::Native(architecture::host()),
-            None,
-            &recipe,
-            &paths,
-            &macros,
-            false,
-            moss::util::num_cpus(),
-        )
-        .map_err(Error::BuildScript)?
-        .expect("script always available for prepare phase");
-    let profile = &build::format_profile(&script);
-
     let home = &paths.build().guest;
 
     container::exec(&paths, recipe.declaration.options.networking, || {
-        fs::write(home.join(".profile"), profile)?;
-
         let mut child = process::Command::new("/bin/bash")
             .arg("--login")
             .env_clear()
@@ -84,10 +55,6 @@ pub enum Error {
     MissingRootFs,
     #[error("container")]
     Container(#[from] container::Error),
-    #[error("macros")]
-    Macros(#[from] macros::Error),
-    #[error("build script")]
-    BuildScript(#[source] build::job::Error),
     #[error("recipe")]
     Recipe(#[from] recipe::Error),
     #[error("io")]

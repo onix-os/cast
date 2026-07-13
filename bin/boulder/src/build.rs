@@ -8,15 +8,15 @@ use std::{
 };
 
 use fs_err as fs;
-use itertools::Itertools;
 use moss::{repository, util};
-use stone_recipe::{Script, derivation::DerivationPlan};
+use stone_recipe::derivation::DerivationPlan;
 use thiserror::Error;
 use tui::Styled;
 
 use self::job::Job;
 use crate::{Env, Macros, Paths, Recipe, Timing, architecture::BuildTarget, macros, profile, recipe, timing, upstream};
 
+pub mod context;
 pub mod job;
 pub mod pgo;
 pub(crate) mod root;
@@ -115,14 +115,6 @@ impl Builder {
         })
     }
 
-    pub fn extra_deps(&self) -> impl Iterator<Item = &str> {
-        self.target.jobs.iter().flat_map(|job| {
-            job.phases
-                .values()
-                .flat_map(|script| script.dependencies.iter().map(String::as_str))
-        })
-    }
-
     pub(crate) fn repositories(&self) -> &repository::Map {
         &self.repos
     }
@@ -200,30 +192,6 @@ pub fn phase_prefix(phase: job::Phase, is_pgo: bool, i: usize) -> String {
     let newline = if i > 0 { format!("{pipes}\n") } else { String::default() };
 
     format!("{newline}{pipes}{}", phase.styled(phase))
-}
-
-pub fn format_profile(script: &Script) -> String {
-    let env = script
-        .env
-        .as_deref()
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.starts_with("#!") && !line.starts_with("set -") && !line.starts_with("TERM="))
-        .join("\n");
-
-    let action_functions = script
-        .resolved_actions
-        .iter()
-        .map(|(identifier, command)| format!("a_{identifier}() {{\n{command}\n}}\nexport -f a_{identifier}"))
-        .join("\n");
-
-    let definition_vars = script
-        .resolved_definitions
-        .iter()
-        .map(|(identifier, var)| format!("d_{identifier}=\"{var}\"; export d_{identifier}"))
-        .join("\n");
-
-    format!("{env}\n{action_functions}\n{definition_vars}")
 }
 
 #[derive(Debug, Error)]

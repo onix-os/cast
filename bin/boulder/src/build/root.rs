@@ -237,9 +237,6 @@ pub(crate) fn packages(builder: &Builder) -> Result<Vec<String>, Error> {
         }
     }
 
-    // Dependencies from all scripts in the builder
-    packages.extend(builder.extra_deps().map(str::to_owned));
-
     Ok(packages
         .into_iter()
         // Remove dupes

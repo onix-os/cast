@@ -9,7 +9,7 @@ use std::{
 };
 
 use moss::util;
-use stone_recipe::{Script, UpstreamSpec, script, tuning};
+use stone_recipe::{UpstreamSpec, derivation::PhasePlan, script, tuning};
 use thiserror::Error;
 
 pub use self::phase::Phase;
@@ -21,7 +21,7 @@ mod phase;
 #[derive(Debug)]
 pub struct Job {
     pub pgo_stage: Option<pgo::Stage>,
-    pub phases: BTreeMap<Phase, Script>,
+    pub phases: BTreeMap<Phase, PhasePlan>,
     pub work_dir: PathBuf,
     pub build_dir: PathBuf,
 }
@@ -43,9 +43,9 @@ impl Job {
             .into_iter()
             .filter_map(|phase| {
                 let result = phase
-                    .script(target, pgo_stage, recipe, paths, macros, ccache, jobs)
+                    .plan(target, pgo_stage, recipe, paths, macros, ccache, jobs)
                     .transpose()?;
-                Some(result.map(|script| (phase, script)))
+                Some(result.map(|plan| (phase, plan)))
             })
             .collect::<Result<_, _>>()?;
 

@@ -16,9 +16,8 @@ use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
     DerivationPlan, DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef,
     LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, PathRulePlan,
-    PhasePlan, Platform, RepositorySnapshot, StepPlan,
+    Platform, RepositorySnapshot, StepPlan,
 };
-use stone_recipe::script;
 use thiserror::Error;
 
 use crate::{
@@ -360,47 +359,17 @@ fn resolve_build_lock(
 }
 
 fn freeze_jobs(target: &build::Target) -> Result<Vec<JobPlan>, Error> {
-    let mut jobs = Vec::new();
-    for job in &target.jobs {
-        let mut phases = Vec::new();
-        for (phase, script) in &job.phases {
-            let mut steps = Vec::new();
-            let working_dir = if matches!(phase, build::job::Phase::Prepare) {
-                &job.build_dir
-            } else {
-                &job.work_dir
-            };
-            for command in &script.commands {
-                match command {
-                    script::Command::Content(content) => steps.push(StepPlan::Shell {
-                        interpreter: "/usr/bin/bash".to_owned(),
-                        script: content.clone(),
-                        environment: BTreeMap::new(),
-                        working_dir: working_dir.display().to_string(),
-                    }),
-                    script::Command::Break(_) => {
-                        return Err(Error::InteractiveBreakpoint {
-                            phase: phase.to_string(),
-                        });
-                    }
-                }
-            }
-            phases.push(PhasePlan {
-                name: phase.to_string(),
-                pre: Vec::new(),
-                steps,
-                post: Vec::new(),
-            });
-        }
-        jobs.push(JobPlan {
+    Ok(target
+        .jobs
+        .iter()
+        .map(|job| JobPlan {
             pgo_stage: job.pgo_stage.map(|stage| format!("{stage:?}").to_lowercase()),
             pgo_dir: job.pgo_stage.map(|_| format!("{}-pgo", job.build_dir.display())),
             build_dir: job.build_dir.display().to_string(),
             work_dir: job.work_dir.display().to_string(),
-            phases,
-        });
-    }
-    Ok(jobs)
+            phases: job.phases.values().cloned().collect(),
+        })
+        .collect())
 }
 
 fn jobs_use_package_directory(jobs: &[JobPlan], package_dir: &str) -> bool {
@@ -604,8 +573,6 @@ pub enum Error {
     MissingSourceLock,
     #[error("read sources.lock.glu")]
     ReadSourceLock(#[source] std::io::Error),
-    #[error("interactive breakpoint in phase `{phase}` cannot be frozen into a derivation plan")]
-    InteractiveBreakpoint { phase: String },
     #[error("output package `{package}` has runtime dependency `{dependency}` absent from the locked closure")]
     UnlockedRuntimeDependency { package: String, dependency: String },
     #[error("no emitted Stone architecture mapping for emul32/{0}")]
@@ -624,6 +591,7 @@ impl From<build::Error> for Error {
 mod tests {
     use super::*;
     use crate::architecture::BuildTarget;
+    use stone_recipe::derivation::PhasePlan;
 
     #[test]
     fn emitted_architecture_mapping_is_explicit_for_emul32() {
