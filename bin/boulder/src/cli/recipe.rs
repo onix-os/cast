@@ -23,6 +23,8 @@ use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 use url::Url;
 use version_parse::VersionExtractor;
 
+mod explanation;
+
 const LONG_UPDATE_ABOUT: &str = concat!(
     "Refresh generated source resolution or suggest authored changes\n\n",
     "Boulder typechecks the recipe and reports explicit field changes, but never\n",
@@ -259,41 +261,7 @@ fn explain(env: Env, command: ExplainCommand) -> Result<(), Error> {
             refresh_repositories: false,
         },
     )?;
-    println!("derivation {:?} {{", planned.plan.derivation_id().as_str());
-    println!("  recipe = {:?}", planned.plan.recipe_fingerprint);
-    println!("  source_lock = {:?}", planned.plan.source_lock_digest);
-    println!("  build_lock = {:?}", planned.plan.build_lock.digest());
-    println!("  request = {:?}", planned.request_fingerprint);
-    println!("  policy = {:?}", planned.plan.build_lock.policy.fingerprint);
-    for source in planned.policy_provenance {
-        println!(
-            "  policy_source = {{ root = {}, origin = {:?}, fingerprint = {:?} }}",
-            source.root, source.origin, source.fingerprint
-        );
-    }
-    for change in planned.policy_changes {
-        println!(
-            "  policy_operation = {{ policy = {:?}, layer = {:?}, layer_order = {}, entry_order = {}, order = {}, operation = {:?}, origin = {:?}, fingerprint = {:?} }}",
-            change.policy,
-            change.layer,
-            change.layer_order,
-            change.entry_order,
-            change.order,
-            change.operation_name(),
-            change.origin,
-            change.fingerprint.sha256,
-        );
-    }
-    for fingerprint in planned.profile_fingerprints {
-        println!("  profile_fragment = {fingerprint:?}");
-    }
-    for package in planned.requested_packages {
-        println!("  requested_package = {package:?}");
-    }
-    for package in &planned.plan.build_lock.packages {
-        println!("  locked_package = {:?}", package.package_id);
-    }
-    println!("}}");
+    print!("{}", explanation::format(&planned));
     Ok(())
 }
 
