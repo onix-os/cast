@@ -13,8 +13,9 @@ use std::path::{Component, Path};
 use thiserror::Error;
 
 pub use self::gluon::{
-    BUILD_POLICY_ABI_VERSION, BuildPolicyEvaluationError, EvaluatedBuildPolicy, GLUON_BUILD_POLICY_ABI, evaluate_gluon,
-    evaluate_gluon_with, evaluate_gluon_with_inputs,
+    BUILD_POLICY_ABI_VERSION, BuildPolicyEvaluationError, EvaluatedBuildPolicy, EvaluatedBuildPolicyPatch,
+    GLUON_BUILD_POLICY_ABI, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs, evaluate_patch_gluon,
+    evaluate_patch_gluon_with, evaluate_patch_gluon_with_inputs,
 };
 
 mod gluon;
@@ -451,6 +452,137 @@ pub struct BuildPolicySpec {
     pub environment: Vec<EnvironmentBindingSpec>,
     pub builders: BuildersPolicySpec,
     pub pgo: PgoPolicySpec,
+}
+
+/// A scalar or structured policy field which is either preserved or replaced.
+///
+/// This is deliberately distinct from [`ArrayPatch`]: replacing an array with
+/// an explicitly empty array must not collapse into keeping its current value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ValuePatch<T> {
+    #[default]
+    Keep,
+    Set(T),
+}
+
+impl<T> ValuePatch<T> {
+    /// Apply this operation to one existing value.
+    pub fn apply(self, current: T) -> T {
+        match self {
+            Self::Keep => current,
+            Self::Set(value) => value,
+        }
+    }
+}
+
+/// A total ordered-array operation used by repository policy layers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ArrayPatch<T> {
+    #[default]
+    Keep,
+    Replace(Vec<T>),
+    Prepend(Vec<T>),
+    Append(Vec<T>),
+}
+
+impl<T> ArrayPatch<T> {
+    /// Apply this operation without deduplicating, sorting, or otherwise
+    /// changing authored order and multiplicity.
+    pub fn apply(self, mut current: Vec<T>) -> Vec<T> {
+        match self {
+            Self::Keep => current,
+            Self::Replace(values) => values,
+            Self::Prepend(mut values) => {
+                values.append(&mut current);
+                values
+            }
+            Self::Append(values) => {
+                current.extend(values);
+                current
+            }
+        }
+    }
+}
+
+/// Total top-level patch for [`BuildPolicySpec`].
+///
+/// Every policy field is named explicitly so adding a policy field requires a
+/// deliberate patch-semantics decision at compile time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BuildPolicyPatchSpec {
+    pub vendor_id: ValuePatch<String>,
+    pub build_subdir: ValuePatch<String>,
+    pub layout: ValuePatch<InstallLayoutSpec>,
+    pub toolchains: ValuePatch<ToolchainsSpec>,
+    pub targets: ArrayPatch<TargetPolicySpec>,
+    pub retired_targets: ArrayPatch<RetiredTargetPolicySpec>,
+    pub sandbox: ValuePatch<SandboxPolicySpec>,
+    pub build_root: ValuePatch<BuildRootPolicySpec>,
+    pub sources: ValuePatch<SourcePreparationPolicySpec>,
+    pub tuning: ValuePatch<TuningPolicySpec>,
+    pub environment: ArrayPatch<EnvironmentBindingSpec>,
+    pub builders: ValuePatch<BuildersPolicySpec>,
+    pub pgo: ValuePatch<PgoPolicySpec>,
+}
+
+impl BuildPolicyPatchSpec {
+    /// Apply every patch operation to a complete policy.
+    pub fn apply(self, policy: BuildPolicySpec) -> BuildPolicySpec {
+        let Self {
+            vendor_id,
+            build_subdir,
+            layout,
+            toolchains,
+            targets,
+            retired_targets,
+            sandbox,
+            build_root,
+            sources,
+            tuning,
+            environment,
+            builders,
+            pgo,
+        } = self;
+        let BuildPolicySpec {
+            vendor_id: current_vendor_id,
+            build_subdir: current_build_subdir,
+            layout: current_layout,
+            toolchains: current_toolchains,
+            targets: current_targets,
+            retired_targets: current_retired_targets,
+            sandbox: current_sandbox,
+            build_root: current_build_root,
+            sources: current_sources,
+            tuning: current_tuning,
+            environment: current_environment,
+            builders: current_builders,
+            pgo: current_pgo,
+        } = policy;
+
+        BuildPolicySpec {
+            vendor_id: vendor_id.apply(current_vendor_id),
+            build_subdir: build_subdir.apply(current_build_subdir),
+            layout: layout.apply(current_layout),
+            toolchains: toolchains.apply(current_toolchains),
+            targets: targets.apply(current_targets),
+            retired_targets: retired_targets.apply(current_retired_targets),
+            sandbox: sandbox.apply(current_sandbox),
+            build_root: build_root.apply(current_build_root),
+            sources: sources.apply(current_sources),
+            tuning: tuning.apply(current_tuning),
+            environment: environment.apply(current_environment),
+            builders: builders.apply(current_builders),
+            pgo: pgo.apply(current_pgo),
+        }
+    }
+
+    /// Apply the patch and reject a resulting policy which violates the same
+    /// invariants as a directly evaluated policy root.
+    pub fn apply_validated(self, policy: BuildPolicySpec) -> Result<BuildPolicySpec, BuildPolicyConversionError> {
+        let policy = self.apply(policy);
+        policy.validate()?;
+        Ok(policy)
+    }
 }
 
 /// Semantic policy error with a stable field path.

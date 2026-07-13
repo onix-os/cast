@@ -7,13 +7,14 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    ArchivePreparationPolicySpec, BuildPolicyConversionError, BuildPolicySpec, BuildRootPolicySpec, BuildToolSpec,
-    BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec,
-    ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec,
-    InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec,
-    PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec, RetiredTargetPolicySpec, SandboxPolicySpec,
-    SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec,
-    ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
+    ArchivePreparationPolicySpec, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
+    BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
+    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
+    EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec,
+    NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
+    RetiredTargetPolicySpec, SandboxPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec,
+    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
+    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
 
 /// Version of the typed repository build-policy ABI.
@@ -46,6 +47,14 @@ type Ordering =
 #[derive(Debug, Clone)]
 pub struct EvaluatedBuildPolicy {
     pub policy: BuildPolicySpec,
+    pub fingerprint: EvaluationFingerprint,
+}
+
+/// A normalized total policy patch and the provenance of every evaluated
+/// input. Applying and validating it requires an explicit base policy.
+#[derive(Debug, Clone)]
+pub struct EvaluatedBuildPolicyPatch {
+    pub patch: BuildPolicyPatchSpec,
     pub fingerprint: EvaluationFingerprint,
 }
 
@@ -472,6 +481,38 @@ struct GluonBuildPolicySpec {
     pgo: GluonPgoPolicySpec,
 }
 
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonValuePatch<T> {
+    KeepValue,
+    SetValue(T),
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonArrayPatch<T> {
+    KeepArray,
+    ReplaceArray(Vec<T>),
+    PrependArray(Vec<T>),
+    AppendArray(Vec<T>),
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuildPolicyPatchSpec {
+    vendor_id: GluonValuePatch<String>,
+    build_subdir: GluonValuePatch<String>,
+    layout: GluonValuePatch<GluonInstallLayoutSpec>,
+    toolchains: GluonValuePatch<GluonToolchainsSpec>,
+    targets: GluonArrayPatch<GluonTargetPolicySpec>,
+    retired_targets: GluonArrayPatch<GluonRetiredTargetPolicySpec>,
+    sandbox: GluonValuePatch<GluonSandboxPolicySpec>,
+    build_root: GluonValuePatch<GluonBuildRootPolicySpec>,
+    sources: GluonValuePatch<GluonSourcePreparationPolicySpec>,
+    tuning: GluonValuePatch<GluonTuningPolicySpec>,
+    environment: GluonArrayPatch<GluonEnvironmentBindingSpec>,
+    builders: GluonValuePatch<GluonBuildersPolicySpec>,
+    pgo: GluonValuePatch<GluonPgoPolicySpec>,
+}
+
 impl From<GluonBoolean> for bool {
     fn from(value: GluonBoolean) -> Self {
         matches!(value, GluonBoolean::True)
@@ -824,6 +865,53 @@ impl From<GluonBuildPolicySpec> for BuildPolicySpec {
     }
 }
 
+impl<T, U> From<GluonValuePatch<T>> for ValuePatch<U>
+where
+    T: Into<U>,
+{
+    fn from(value: GluonValuePatch<T>) -> Self {
+        match value {
+            GluonValuePatch::KeepValue => Self::Keep,
+            GluonValuePatch::SetValue(value) => Self::Set(value.into()),
+        }
+    }
+}
+
+impl<T, U> From<GluonArrayPatch<T>> for ArrayPatch<U>
+where
+    T: Into<U>,
+{
+    fn from(value: GluonArrayPatch<T>) -> Self {
+        let convert = |values: Vec<T>| values.into_iter().map(Into::into).collect();
+        match value {
+            GluonArrayPatch::KeepArray => Self::Keep,
+            GluonArrayPatch::ReplaceArray(values) => Self::Replace(convert(values)),
+            GluonArrayPatch::PrependArray(values) => Self::Prepend(convert(values)),
+            GluonArrayPatch::AppendArray(values) => Self::Append(convert(values)),
+        }
+    }
+}
+
+impl From<GluonBuildPolicyPatchSpec> for BuildPolicyPatchSpec {
+    fn from(value: GluonBuildPolicyPatchSpec) -> Self {
+        Self {
+            vendor_id: value.vendor_id.into(),
+            build_subdir: value.build_subdir.into(),
+            layout: value.layout.into(),
+            toolchains: value.toolchains.into(),
+            targets: value.targets.into(),
+            retired_targets: value.retired_targets.into(),
+            sandbox: value.sandbox.into(),
+            build_root: value.build_root.into(),
+            sources: value.sources.into(),
+            tuning: value.tuning.into(),
+            environment: value.environment.into(),
+            builders: value.builders.into(),
+            pgo: value.pgo.into(),
+        }
+    }
+}
+
 impl From<GluonEnvironmentCondition> for EnvironmentCondition {
     fn from(value: GluonEnvironmentCondition) -> Self {
         match value {
@@ -884,6 +972,43 @@ pub fn evaluate_gluon_with_inputs(
 
     Ok(EvaluatedBuildPolicy {
         policy,
+        fingerprint: evaluation.fingerprint,
+    })
+}
+
+/// Evaluate a total typed policy patch with the restricted default evaluator.
+pub fn evaluate_patch_gluon(source: &Source) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
+    evaluate_patch_gluon_with(&Evaluator::default(), source)
+}
+
+/// Evaluate a total typed policy patch with caller-selected limits and
+/// imports.
+pub fn evaluate_patch_gluon_with(
+    evaluator: &Evaluator,
+    source: &Source,
+) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
+    evaluate_patch_gluon_with_inputs(evaluator, source, &[])
+}
+
+/// Evaluate a policy patch and bind host-resolved inputs into its fingerprint.
+///
+/// A patch is intentionally not validated in isolation: `Keep` operations
+/// need a concrete base. Call [`BuildPolicyPatchSpec::apply_validated`] before
+/// accepting a composed policy.
+pub fn evaluate_patch_gluon_with_inputs(
+    evaluator: &Evaluator,
+    source: &Source,
+    explicit_inputs: &[u8],
+) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
+    let mut import_policy = evaluator.import_policy().clone();
+    import_policy.enable_array_primitives();
+    import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
+    import_policy.insert_embedded_module("boulder.build_policy.v1", GLUON_BUILD_POLICY_ABI)?;
+    let evaluator = evaluator.clone().with_import_policy(import_policy);
+    let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)?;
+
+    Ok(EvaluatedBuildPolicyPatch {
+        patch: evaluation.value.into(),
         fingerprint: evaluation.fingerprint,
     })
 }

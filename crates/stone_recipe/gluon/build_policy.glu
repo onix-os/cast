@@ -371,6 +371,37 @@ type BuildPolicySpec = {
     pgo : PgoPolicySpec,
 }
 
+// Scalar/record changes and arrays intentionally use different variants so
+// keeping an array is distinct from replacing it with an explicitly empty one.
+type ValuePatch a =
+    | KeepValue
+    | SetValue a
+
+type ArrayPatch a =
+    | KeepArray
+    | ReplaceArray (Array a)
+    | PrependArray (Array a)
+    | AppendArray (Array a)
+
+// This record mirrors every top-level BuildPolicySpec field. Composition is
+// performed by the Rust policy state machine so each intermediate result can
+// be validated and fingerprinted.
+type BuildPolicyPatchSpec = {
+    vendor_id : ValuePatch String,
+    build_subdir : ValuePatch String,
+    layout : ValuePatch InstallLayoutSpec,
+    toolchains : ValuePatch ToolchainsSpec,
+    targets : ArrayPatch TargetPolicySpec,
+    retired_targets : ArrayPatch RetiredTargetPolicySpec,
+    sandbox : ValuePatch SandboxPolicySpec,
+    build_root : ValuePatch BuildRootPolicySpec,
+    sources : ValuePatch SourcePreparationPolicySpec,
+    tuning : ValuePatch TuningPolicySpec,
+    environment : ArrayPatch EnvironmentBindingSpec,
+    builders : ValuePatch BuildersPolicySpec,
+    pgo : ValuePatch PgoPolicySpec,
+}
+
 let literal = \value -> { parts = [LiteralPart { value }] }
 let context = \value -> { parts = [ContextPart { value }] }
 let concat: Array TextSpec -> TextSpec = \values ->
@@ -396,10 +427,28 @@ let tuning_flag: NamedTuningFlagSpec -> NamedTuningFlagSpec = \value -> value
 let tuning_option: TuningOptionSpec -> TuningOptionSpec = \value -> value
 let tuning_choice: NamedTuningChoiceSpec -> NamedTuningChoiceSpec = \value -> value
 let tuning_group: NamedTuningGroupSpec -> NamedTuningGroupSpec = \value -> value
+let policy_patch: BuildPolicyPatchSpec -> BuildPolicyPatchSpec = \value -> value
+
+let empty_policy_patch: BuildPolicyPatchSpec = {
+    vendor_id = KeepValue,
+    build_subdir = KeepValue,
+    layout = KeepValue,
+    toolchains = KeepValue,
+    targets = KeepArray,
+    retired_targets = KeepArray,
+    sandbox = KeepValue,
+    build_root = KeepValue,
+    sources = KeepValue,
+    tuning = KeepValue,
+    environment = KeepArray,
+    builders = KeepValue,
+    pgo = KeepValue,
+}
 
 {
     abi_version = 1,
     policy,
+    policy_patch,
     text = {
         literal,
         context,
@@ -503,6 +552,19 @@ let tuning_group: NamedTuningGroupSpec -> NamedTuningGroupSpec = \value -> value
     target_emulation = {
         native = Native,
         emul32 = \host_architecture -> Emul32 { host_architecture },
+    },
+    defaults = {
+        policy_patch = empty_policy_patch,
+    },
+    patch = {
+        keep = KeepValue,
+        set = \value -> SetValue value,
+        array = {
+            keep = KeepArray,
+            replace = \values -> ReplaceArray values,
+            prepend = \values -> PrependArray values,
+            append = \values -> AppendArray values,
+        },
     },
     flags,
     target,
