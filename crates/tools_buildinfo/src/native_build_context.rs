@@ -45,7 +45,9 @@ const EXACT_VALUES: &[&str] = &[
     "CPLUS_INCLUDE_PATH",
     "C_INCLUDE_PATH",
     "CMAKE_GENERATOR",
+    "CMAKE_GENERATOR_INSTANCE",
     "CMAKE_GENERATOR_PLATFORM",
+    "CMAKE_GENERATOR_TOOLSET",
     "CMAKE_INCLUDE_PATH",
     "CMAKE_LIBRARY_PATH",
     "CMAKE_PREFIX_PATH",
@@ -134,14 +136,9 @@ const TARGET_SCOPED_TOOLS: &[ToolSpec] = &[
     ToolSpec::targeted("linker", "LD", "ld"),
     ToolSpec::targeted("assembler", "AS", "as"),
     ToolSpec::targeted("symbol-reader", "NM", "nm"),
-    ToolSpec::targeted("pkg-config", "PKG_CONFIG", "pkg-config"),
 ];
 
-const EXACT_TOOLS: &[ToolSpec] = &[
-    ToolSpec::exact("cmake", "CMAKE", "cmake"),
-    ToolSpec::exact("rust-linker", "RUSTC_LINKER", "cc"),
-    ToolSpec::aws_targeted("aws-lc-cmake", "CMAKE", "cmake"),
-];
+const EXACT_TOOLS: &[ToolSpec] = &[ToolSpec::exact("rust-linker", "RUSTC_LINKER", "cc")];
 
 // aws-lc-sys first applies crate-specific TARGET_CC/TARGET_CXX and CC/CXX
 // overrides, then writes the result back into cc-rs' target-specific
@@ -151,8 +148,6 @@ const AWS_COMPILER_TOOLS: &[ToolSpec] = &[
     ToolSpec::aws_compiler("aws-lc-cc", "CC", "cc"),
     ToolSpec::aws_compiler("aws-lc-cxx", "CXX", "c++"),
 ];
-
-const GENERATOR_TOOL_VARIABLES: &[&str] = &["CMAKE_MAKE_PROGRAM", "MAKE", "NINJA", "NMAKE"];
 
 #[derive(Clone, Copy)]
 struct ToolSpec {
@@ -166,7 +161,6 @@ struct ToolSpec {
 enum ToolSelection {
     Targeted,
     Exact,
-    AwsTargeted,
     AwsCompiler,
 }
 
@@ -186,15 +180,6 @@ impl ToolSpec {
             variable,
             default_program,
             selection: ToolSelection::Exact,
-        }
-    }
-
-    const fn aws_targeted(role: &'static str, variable: &'static str, default_program: &'static str) -> Self {
-        Self {
-            role,
-            variable,
-            default_program,
-            selection: ToolSelection::AwsTargeted,
         }
     }
 
@@ -226,12 +211,10 @@ impl NativeBuildContext {
 
 /// Collect the effective native build context from an explicit environment.
 ///
-/// `probe` receives the tool role and selected command and returns its content-strong
-/// executable identity, including stable `--version` output.  `None` is used
-/// only while reproducing AWS-LC's implicit
-/// `cmake3`-then-`cmake` discovery.  Every command that is ultimately selected
-/// must have an identity; otherwise two different implementations could share
-/// one Boulder semantic fingerprint.
+/// `probe` receives the tool role and selected command and returns its
+/// content-strong executable identity, including stable `--version` output.
+/// Every selected command must return an identity; otherwise two different
+/// implementations could share one Boulder semantic fingerprint.
 pub(crate) fn collect<I, F>(environment: I, workspace_root: &Path, mut probe: F) -> io::Result<NativeBuildContext>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
@@ -240,22 +223,34 @@ where
     let environment = normalize_environment(environment)?;
     let host = required_utf8(&environment, "HOST")?;
     let target = required_utf8(&environment, "TARGET")?;
+    let target_os = required_utf8(&environment, "CARGO_CFG_TARGET_OS")?;
+    let target_env = required_utf8(&environment, "CARGO_CFG_TARGET_ENV")?;
     let kind = if host == target { "HOST" } else { "TARGET" };
     let target_underscored = target.replace(['-', '.'], "_");
     let workspace = workspace_root.as_os_str().as_bytes();
 
+    if target_os != "linux" {
+        return Err(invalid_data(format!(
+            "unsupported native target OS {target_os:?} for {target}: exact native-tool identity is currently Linux-only"
+        )));
+    }
     validate_cross_tool_selection(&environment, host, target, kind, &target_underscored)?;
-    validate_aws_lc_bindgen_selection(&environment, target)?;
+    validate_aws_lc_external_tools(&environment, target)?;
+    validate_aws_lc_builder_selection(&environment, target, target_env)?;
+    validate_cmake_context(&environment, kind, target)?;
+    validate_external_native_libraries(&environment)?;
 
     let mut watched = watched_environment(kind, target, &target_underscored);
     let mut inputs = BTreeMap::<String, Vec<u8>>::new();
 
     for key in &watched {
-        if matches!(key.as_str(), "HOST" | "TARGET") {
+        if matches!(
+            key.as_str(),
+            "HOST" | "TARGET" | "CARGO_CFG_TARGET_OS" | "CARGO_CFG_TARGET_ENV"
+        ) {
             continue;
         }
-        if is_tool_selector(key, kind, target, &target_underscored) || GENERATOR_TOOL_VARIABLES.contains(&key.as_str())
-        {
+        if is_tool_selector(key, kind, target, &target_underscored) {
             continue;
         }
         if let Some(value) = environment.get(key) {
@@ -268,22 +263,9 @@ where
 
     for spec in TARGET_SCOPED_TOOLS.iter().chain(EXACT_TOOLS) {
         let selector = select_tool(&environment, *spec, kind, target, &target_underscored);
-        let (command, identity) = if spec.selection == ToolSelection::AwsTargeted && selector.is_none() {
-            let cmake3 = vec![OsString::from("cmake3")];
-            match probe(spec.role, &cmake3)? {
-                Some(identity) => (cmake3, identity),
-                None => {
-                    let cmake = vec![OsString::from("cmake")];
-                    let identity = require_tool_identity(spec.role, &cmake, probe(spec.role, &cmake)?)?;
-                    (cmake, identity)
-                }
-            }
-        } else {
-            let selector = selector.unwrap_or_else(|| OsString::from(spec.default_program));
-            let command = command_for_tool(*spec, selector)?;
-            let identity = require_tool_identity(spec.role, &command, probe(spec.role, &command)?)?;
-            (command, identity)
-        };
+        let selector = selector.unwrap_or_else(|| OsString::from(spec.default_program));
+        let command = command_for_tool(*spec, selector)?;
+        let identity = require_tool_identity(spec.role, &command, probe(spec.role, &command)?)?;
         let encoded_command = encode_command(&command, workspace);
         inputs.insert(format!("native.tool.{}.command", spec.role), encoded_command);
         inputs.insert(
@@ -307,19 +289,6 @@ where
         );
         inputs.insert(
             format!("native.tool.{}.identity", spec.role),
-            identity.encode(workspace_root),
-        );
-    }
-
-    if let Some(selector) = select_cmake_generator_tool(&environment, kind, target) {
-        let command = direct_command("cmake-generator", selector)?;
-        inputs.insert(
-            "native.tool.cmake-generator.command".to_owned(),
-            encode_command(&command, workspace),
-        );
-        let identity = require_tool_identity("cmake-generator", &command, probe("cmake-generator", &command)?)?;
-        inputs.insert(
-            "native.tool.cmake-generator.identity".to_owned(),
             identity.encode(workspace_root),
         );
     }
@@ -421,20 +390,32 @@ fn validate_cross_tool_selection(
     )))
 }
 
-fn validate_aws_lc_bindgen_selection(environment: &BTreeMap<String, OsString>, target: &str) -> io::Result<()> {
+fn validate_aws_lc_external_tools(environment: &BTreeMap<String, OsString>, target: &str) -> io::Result<()> {
     // The locked aws-lc-sys 0.40 dependency is selected through aws-lc-rs
     // with default features disabled.  Its only enabled feature is
     // `prebuilt-nasm`, so it has universal pregenerated bindings but no
-    // in-process bindgen implementation.  These controls bypass those
-    // bindings and make its build script fall back to a PATH-selected
-    // `bindgen` CLI (which in turn selects rustfmt and libclang).  That open
-    // toolchain cannot be represented by the identities collected here, so
-    // reject it before any build is assigned an incomplete fingerprint.
+    // in-process bindgen implementation.  The binding controls below bypass
+    // those pregenerated bindings and fall back to a PATH-selected `bindgen`
+    // CLI (which in turn selects rustfmt and libclang).  NO_PREGENERATED_SRC
+    // separately enables AWS-LC's external Go/Perl source generation and also
+    // forces its CMake builder.  Neither open toolchain can be represented by
+    // the identities collected here, so reject them before assigning a build
+    // an incomplete fingerprint.
     let target_underscored = target.replace('-', "_");
-    for control in ["EXTERNAL_BINDGEN", "NO_PREFIX", "PREGENERATING_BINDINGS"] {
+    for control in [
+        "EXTERNAL_BINDGEN",
+        "NO_PREFIX",
+        "PREGENERATING_BINDINGS",
+        "NO_PREGENERATED_SRC",
+    ] {
         if aws_lc_bool(environment, control, &target_underscored) == Some(true) {
+            let external_tools = if control == "NO_PREGENERATED_SRC" {
+                "Go/Perl source-generation toolchain"
+            } else {
+                "external bindgen toolchain"
+            };
             return Err(invalid_data(format!(
-                "aws-lc-sys external binding generation is unsupported for {target}: effective AWS_LC_SYS_{control} enables an unidentifiable external bindgen toolchain"
+                "unsupported aws-lc-sys native context for {target}: effective AWS_LC_SYS_{control} enables an unidentifiable {external_tools}"
             )));
         }
     }
@@ -442,10 +423,84 @@ fn validate_aws_lc_bindgen_selection(environment: &BTreeMap<String, OsString>, t
     Ok(())
 }
 
+fn validate_aws_lc_builder_selection(
+    environment: &BTreeMap<String, OsString>,
+    target: &str,
+    target_env: &str,
+) -> io::Result<()> {
+    let target_underscored = target.replace('-', "_");
+    let cmake_builder = aws_lc_bool(environment, "CMAKE_BUILDER", &target_underscored);
+    if cmake_builder == Some(true) {
+        return Err(unsupported_aws_lc_cmake(
+            target,
+            "effective AWS_LC_SYS_CMAKE_BUILDER=true",
+        ));
+    }
+
+    if aws_lc_bool(environment, "STATIC", &target_underscored) == Some(false) {
+        return Err(unsupported_aws_lc_cmake(target, "effective AWS_LC_SYS_STATIC=false"));
+    }
+    if target_env == "ohos" {
+        return Err(unsupported_aws_lc_cmake(target, "CARGO_CFG_TARGET_ENV=ohos"));
+    }
+
+    // An explicit false selector is the upstream escape hatch which chooses
+    // the static cc-rs builder before the NO_ASM/sanitizer CMake fallback.
+    if cmake_builder != Some(false) {
+        if aws_lc_bool(environment, "NO_ASM", &target_underscored) == Some(true) {
+            return Err(unsupported_aws_lc_cmake(target, "effective AWS_LC_SYS_NO_ASM=true"));
+        }
+        if aws_lc_value(environment, "SANITIZER", &target_underscored).is_some() {
+            return Err(unsupported_aws_lc_cmake(
+                target,
+                "effective AWS_LC_SYS_SANITIZER is present",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn unsupported_aws_lc_cmake(target: &str, reason: &str) -> io::Error {
+    invalid_data(format!(
+        "unsupported aws-lc-sys CMake builder lane for {target}: {reason}; the locked exact-tool contract requires the static cc-rs builder"
+    ))
+}
+
+fn validate_cmake_context(environment: &BTreeMap<String, OsString>, kind: &str, target: &str) -> io::Result<()> {
+    for key in unsupported_cmake_context_keys(kind, target) {
+        if environment.get(&key).is_some_and(|value| !value.is_empty()) {
+            return Err(invalid_data(format!(
+                "unsupported CMake native context: {key} is outside the locked static cc-rs builder contract"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_external_native_libraries(environment: &BTreeMap<String, OsString>) -> io::Result<()> {
+    // The locked zstd-sys and libsqlite3-sys feature graph builds vendored
+    // sources. Their environment escape hatches instead select arbitrary
+    // pkg-config headers and libraries whose bytes are not represented by
+    // their path strings; identifying pkg-config itself would not bind those
+    // selected bytes either. Reject the external-library lanes instead.
+    if environment.contains_key("ZSTD_SYS_USE_PKG_CONFIG") {
+        return Err(invalid_data(
+            "unsupported external zstd native library: ZSTD_SYS_USE_PKG_CONFIG must be absent",
+        ));
+    }
+    if let Some(value) = environment.get("LIBSQLITE3_SYS_USE_PKG_CONFIG")
+        && value != "0"
+    {
+        return Err(invalid_data(
+            "unsupported external SQLite native library: LIBSQLITE3_SYS_USE_PKG_CONFIG must be absent or exactly 0",
+        ));
+    }
+    Ok(())
+}
+
 fn aws_lc_bool(environment: &BTreeMap<String, OsString>, control: &str, target_underscored: &str) -> Option<bool> {
-    let value = environment
-        .get(&format!("AWS_LC_SYS_{control}_{target_underscored}"))
-        .or_else(|| environment.get(&format!("AWS_LC_SYS_{control}")))?;
+    let value = aws_lc_value(environment, control, target_underscored)?;
     let value = value.to_str()?.to_lowercase();
 
     if value.starts_with('0') || value.starts_with('n') || value.starts_with("off") || value.starts_with('f') {
@@ -461,8 +516,24 @@ fn aws_lc_bool(environment: &BTreeMap<String, OsString>, control: &str, target_u
     }
 }
 
+fn aws_lc_value<'a>(
+    environment: &'a BTreeMap<String, OsString>,
+    control: &str,
+    target_underscored: &str,
+) -> Option<&'a OsStr> {
+    environment
+        .get(&format!("AWS_LC_SYS_{control}_{target_underscored}"))
+        .or_else(|| environment.get(&format!("AWS_LC_SYS_{control}")))
+        .map(OsString::as_os_str)
+}
+
 fn watched_environment(kind: &str, target: &str, target_underscored: &str) -> BTreeSet<String> {
-    let mut watched = BTreeSet::from(["HOST".to_owned(), "TARGET".to_owned()]);
+    let mut watched = BTreeSet::from([
+        "HOST".to_owned(),
+        "TARGET".to_owned(),
+        "CARGO_CFG_TARGET_OS".to_owned(),
+        "CARGO_CFG_TARGET_ENV".to_owned(),
+    ]);
     watched.extend(EXACT_VALUES.iter().map(|key| (*key).to_owned()));
     watched.extend(DEPENDENCY_VALUES.iter().map(|key| (*key).to_owned()));
 
@@ -478,8 +549,7 @@ fn watched_environment(kind: &str, target: &str, target_underscored: &str) -> BT
     for spec in AWS_COMPILER_TOOLS {
         watched.extend(tool_keys(*spec, kind, target, target_underscored));
     }
-    watched.extend(GENERATOR_TOOL_VARIABLES.iter().map(|key| (*key).to_owned()));
-    watched.extend(cmake_generator_keys(kind, target));
+    watched.extend(unsupported_cmake_context_keys(kind, target));
 
     // libsqlite3-sys supports a target-prefix form in addition to the cc-rs
     // suffix form.  AWS-LC accepts crate-specific target suffixes.
@@ -534,12 +604,6 @@ fn tool_keys(spec: ToolSpec, kind: &str, target: &str, target_underscored: &str)
     match spec.selection {
         ToolSelection::Targeted => targeted_keys(spec.variable, kind, target, target_underscored).into(),
         ToolSelection::Exact => vec![spec.variable.to_owned()],
-        ToolSelection::AwsTargeted => vec![
-            format!("AWS_LC_SYS_{}_{target_underscored}", spec.variable),
-            format!("AWS_LC_SYS_{}", spec.variable),
-            format!("{}_{target_underscored}", spec.variable),
-            spec.variable.to_owned(),
-        ],
         ToolSelection::AwsCompiler => vec![
             format!("AWS_LC_SYS_TARGET_{}_{target_underscored}", spec.variable),
             format!("AWS_LC_SYS_TARGET_{}", spec.variable),
@@ -553,45 +617,26 @@ fn tool_keys(spec: ToolSpec, kind: &str, target: &str, target_underscored: &str)
     }
 }
 
-fn select_cmake_generator_tool(environment: &BTreeMap<String, OsString>, kind: &str, target: &str) -> Option<OsString> {
-    let generator = cmake_generator_keys(kind, target)
-        .into_iter()
-        .find_map(|key| environment.get(&key));
-    let generator = generator.and_then(|value| value.to_str()).map(str::to_ascii_lowercase);
-
-    let (override_variable, default_program) = match generator.as_deref() {
-        Some(generator) if generator.contains("ninja") => ("NINJA", "ninja"),
-        Some(generator) if generator.contains("nmake") => ("NMAKE", "nmake"),
-        Some(generator) if generator.contains("makefiles") => ("MAKE", "make"),
-        Some(_) => return None,
-        None if target.contains("windows-msvc") => return None,
-        None => ("MAKE", "make"),
-    };
-
-    Some(
-        environment
-            .get("CMAKE_MAKE_PROGRAM")
-            .or_else(|| environment.get(override_variable))
-            .cloned()
-            .unwrap_or_else(|| OsString::from(default_program)),
-    )
-}
-
-fn cmake_generator_keys(kind: &str, target: &str) -> Vec<String> {
+fn unsupported_cmake_context_keys(kind: &str, target: &str) -> Vec<String> {
     let target_underscored = target.replace('-', "_");
-
-    // aws-lc-sys copies its crate-specific generator override into the plain
-    // CMAKE_GENERATOR variable.  cmake-rs 0.1.58 subsequently applies its own
-    // target lookup, so the target and HOST_/TARGET_ forms remain above that
-    // copied plain value.  Keep the combined precedence exact.
-    vec![
-        format!("CMAKE_GENERATOR_{target}"),
-        format!("CMAKE_GENERATOR_{target_underscored}"),
-        format!("{kind}_CMAKE_GENERATOR"),
-        format!("AWS_LC_SYS_CMAKE_GENERATOR_{target_underscored}"),
-        "AWS_LC_SYS_CMAKE_GENERATOR".to_owned(),
-        "CMAKE_GENERATOR".to_owned(),
-    ]
+    let mut keys = vec![
+        format!("AWS_LC_SYS_CMAKE_TOOLCHAIN_FILE_{target_underscored}"),
+        "AWS_LC_SYS_CMAKE_TOOLCHAIN_FILE".to_owned(),
+    ];
+    for base in [
+        "CMAKE_TOOLCHAIN_FILE",
+        "CMAKE_GENERATOR_PLATFORM",
+        "CMAKE_GENERATOR_TOOLSET",
+        "CMAKE_GENERATOR_INSTANCE",
+    ] {
+        keys.extend([
+            format!("{base}_{target}"),
+            format!("{base}_{target_underscored}"),
+            format!("{kind}_{base}"),
+            base.to_owned(),
+        ]);
+    }
+    keys
 }
 
 /// Return the compiler delegated to by a wrapper syntax understood by cc-rs.

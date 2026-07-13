@@ -106,11 +106,26 @@ fn native_environment(values: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
 }
 
 fn native_environment_for(host: &str, target: &str, values: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
-    [("HOST", host), ("TARGET", target)]
-        .into_iter()
-        .chain(values.iter().copied())
-        .map(|(key, value)| (OsString::from(key), OsString::from(value)))
-        .collect()
+    native_environment_for_platform(host, target, "linux", "gnu", values)
+}
+
+fn native_environment_for_platform(
+    host: &str,
+    target: &str,
+    target_os: &str,
+    target_env: &str,
+    values: &[(&str, &str)],
+) -> Vec<(OsString, OsString)> {
+    [
+        ("HOST", host),
+        ("TARGET", target),
+        ("CARGO_CFG_TARGET_OS", target_os),
+        ("CARGO_CFG_TARGET_ENV", target_env),
+    ]
+    .into_iter()
+    .chain(values.iter().copied())
+    .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+    .collect()
 }
 
 fn fake_command_identity(command: &[OsString], tool_revision: &str) -> tool_identity::CommandIdentity {
@@ -330,17 +345,15 @@ fn native_tool_flags_and_dependency_selection_mutations_change_identity() {
         ("LD_RUN_PATH", "/native/runtime/lib"),
         ("PKG_CONFIG_PATH", "/native/pkgconfig"),
         ("PKG_CONFIG_ALL_STATIC", "1"),
-        ("CMAKE", "cmake3"),
         ("CMAKE_GENERATOR", "Ninja"),
-        ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+        ("LIBZSTD_NO_PKG_CONFIG", "1"),
         ("LIBZSTD_STATIC", "1"),
-        ("LIBSQLITE3_SYS_USE_PKG_CONFIG", "1"),
+        ("LIBSQLITE3_SYS_USE_PKG_CONFIG", "0"),
         ("SQLITE3_LIB_DIR", "/native/sqlite/lib"),
-        ("AWS_LC_SYS_NO_ASM", "1"),
+        ("AWS_LC_SYS_C_STD", "11"),
         ("AWS_LC_SYS_STATIC", "1"),
         ("AWS_LC_SYS_CMAKE", "cmake-aws"),
         ("AWS_LC_SYS_CMAKE_GENERATOR", "Ninja"),
-        ("AWS_LC_SYS_CMAKE_TOOLCHAIN_FILE", "/native/aws-toolchain.cmake"),
         ("SQLITE3_DLL_NAME", "sqlite3-custom"),
         ("NIX_CFLAGS_COMPILE", "-fstack-protector-strong"),
     ] {
@@ -360,7 +373,7 @@ fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state
         ("CC", "shadowed-gcc"),
         ("CFLAGS", "-O2"),
         ("TARGET_CFLAGS", "-fPIC"),
-        ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+        ("LIBZSTD_NO_PKG_CONFIG", "1"),
     ];
 
     let forward = native_context(&values, "1", workspace);
@@ -374,7 +387,7 @@ fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state
             ("CC", "another-shadowed-compiler"),
             ("CFLAGS", "-O2"),
             ("TARGET_CFLAGS", "-fPIC"),
-            ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+            ("LIBZSTD_NO_PKG_CONFIG", "1"),
         ],
         "1",
         workspace,
@@ -387,7 +400,7 @@ fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state
             ("CC", "shadowed-gcc"),
             ("CFLAGS", "-O2"),
             ("TARGET_CFLAGS", "-fPIC"),
-            ("ZSTD_SYS_USE_PKG_CONFIG", "1"),
+            ("LIBZSTD_NO_PKG_CONFIG", "1"),
             ("EDITOR", "not-a-build-input"),
         ],
         "1",
@@ -396,7 +409,7 @@ fn native_context_is_ordered_normalized_and_ignores_shadowed_or_irrelevant_state
     assert_eq!(forward, with_irrelevant, "unrelated ambient state must be ignored");
 
     let without_optional = native_context(&[], "1", workspace);
-    let present_empty = native_context(&[("ZSTD_SYS_USE_PKG_CONFIG", "")], "1", workspace);
+    let present_empty = native_context(&[("LIBZSTD_NO_PKG_CONFIG", "")], "1", workspace);
     assert_ne!(
         without_optional, present_empty,
         "present-empty dependency controls are distinct from absence"
@@ -558,92 +571,55 @@ fn workspace_paths_and_equivalent_tool_aliases_have_one_native_identity() {
 }
 
 #[test]
-fn only_the_selected_cmake_generator_tool_is_semantic() {
-    let selected = native_context(
+fn ambient_cmake_build_tool_aliases_are_irrelevant_to_the_static_cc_builder() {
+    let workspace = Path::new("/workspace/os-tools");
+    let first = native_context(
         &[
-            ("CMAKE_GENERATOR", "Ninja"),
+            ("MAKE", "make-one"),
             ("NINJA", "ninja-one"),
-            ("MAKE", "ignored-make-one"),
+            ("NMAKE", "nmake-one"),
+            ("CMAKE_MAKE_PROGRAM", "cmake-make-one"),
         ],
         "1",
-        Path::new("/workspace/os-tools"),
+        workspace,
     );
-    let changed_shadow = native_context(
+    let second = native_context(
         &[
-            ("CMAKE_GENERATOR", "Ninja"),
-            ("NINJA", "ninja-one"),
-            ("MAKE", "ignored-make-two"),
-        ],
-        "1",
-        Path::new("/workspace/os-tools"),
-    );
-    let changed_selected = native_context(
-        &[
-            ("CMAKE_GENERATOR", "Ninja"),
+            ("MAKE", "make-two"),
             ("NINJA", "ninja-two"),
-            ("MAKE", "ignored-make-one"),
+            ("NMAKE", "nmake-two"),
+            ("CMAKE_MAKE_PROGRAM", "cmake-make-two"),
         ],
         "1",
-        Path::new("/workspace/os-tools"),
+        workspace,
     );
 
-    assert_eq!(selected, changed_shadow);
-    assert_ne!(selected, changed_selected);
+    assert_eq!(first, second, "the locked aws-lc build never enters CMake");
 }
 
 #[test]
-fn cmake_generator_kind_and_target_precedence_match_cmake_rs() {
+fn executable_cmake_contexts_fail_closed() {
     let workspace = Path::new("/workspace/os-tools");
-    let collect = |environment: Vec<(OsString, OsString)>| {
-        let mut selected_generator_tool = None;
-        let context = native_build_context::collect(environment, workspace, |role, command| {
-            if role == "cmake-generator" {
-                selected_generator_tool = command.first().cloned();
-            }
+    for key in [
+        "AWS_LC_SYS_CMAKE_TOOLCHAIN_FILE_x86_64_unknown_linux_gnu",
+        "AWS_LC_SYS_CMAKE_TOOLCHAIN_FILE",
+        "CMAKE_TOOLCHAIN_FILE_x86_64-unknown-linux-gnu",
+        "CMAKE_TOOLCHAIN_FILE_x86_64_unknown_linux_gnu",
+        "HOST_CMAKE_TOOLCHAIN_FILE",
+        "CMAKE_TOOLCHAIN_FILE",
+        "CMAKE_GENERATOR_PLATFORM",
+        "CMAKE_GENERATOR_TOOLSET",
+        "CMAKE_GENERATOR_INSTANCE",
+    ] {
+        let error = native_build_context::collect(native_environment(&[(key, "selected")]), workspace, |_, command| {
             Ok(Some(fake_command_identity(command, "1")))
         })
-        .unwrap();
-        (selected_generator_tool, context.watched_environment().to_vec())
-    };
+        .unwrap_err();
 
-    let (host_selected, host_watched) = collect(native_environment(&[
-        ("HOST_CMAKE_GENERATOR", "Ninja"),
-        ("AWS_LC_SYS_CMAKE_GENERATOR", "Unix Makefiles"),
-        ("CMAKE_GENERATOR", "Unix Makefiles"),
-        ("NINJA", "host-ninja"),
-        ("MAKE", "shadowed-host-make"),
-    ]));
-    assert_eq!(host_selected, Some(OsString::from("host-ninja")));
-    assert!(host_watched.contains(&"HOST_CMAKE_GENERATOR".to_owned()));
-    assert!(!host_watched.contains(&"TARGET_CMAKE_GENERATOR".to_owned()));
-
-    let (target_specific_selected, _) = collect(native_environment(&[
-        ("CMAKE_GENERATOR_x86_64-unknown-linux-gnu", "Unix Makefiles"),
-        ("HOST_CMAKE_GENERATOR", "Ninja"),
-        ("CMAKE_GENERATOR", "Ninja"),
-        ("NINJA", "shadowed-target-ninja"),
-        ("MAKE", "target-make"),
-    ]));
-    assert_eq!(target_specific_selected, Some(OsString::from("target-make")));
-
-    let (cross_selected, cross_watched) = collect(native_environment_for(
-        "x86_64-unknown-linux-gnu",
-        "aarch64-unknown-linux-gnu",
-        &[
-            ("CC", "aarch64-cc"),
-            ("CXX", "aarch64-cxx"),
-            ("AR", "aarch64-ar"),
-            ("RANLIB", "aarch64-ranlib"),
-            ("TARGET_CMAKE_GENERATOR", "Ninja"),
-            ("HOST_CMAKE_GENERATOR", "Unix Makefiles"),
-            ("CMAKE_GENERATOR", "Unix Makefiles"),
-            ("NINJA", "target-ninja"),
-            ("MAKE", "shadowed-cross-make"),
-        ],
-    ));
-    assert_eq!(cross_selected, Some(OsString::from("target-ninja")));
-    assert!(cross_watched.contains(&"TARGET_CMAKE_GENERATOR".to_owned()));
-    assert!(!cross_watched.contains(&"HOST_CMAKE_GENERATOR".to_owned()));
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains(key));
+        assert!(error.to_string().contains("static cc-rs builder contract"));
+    }
 }
 
 #[test]
@@ -685,11 +661,92 @@ fn aws_lc_bindgen_controls_use_crate_target_precedence() {
     .unwrap_err();
     assert!(error.to_string().contains("AWS_LC_SYS_EXTERNAL_BINDGEN"));
 
-    // This similarly named control only disables pregenerated C sources and
-    // selects the CMake builder.  It does not disable pregenerated bindings in
-    // the locked aws-lc-sys implementation.
-    native_build_context::collect(
+    // This control does not disable pregenerated bindings, but it does enable
+    // AWS-LC's external Go/Perl source generation and must also fail closed.
+    let error = native_build_context::collect(
         native_environment(&[("AWS_LC_SYS_NO_PREGENERATED_SRC", "1")]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Go/Perl"));
+}
+
+#[test]
+fn aws_lc_cmake_builder_and_fallback_lanes_fail_closed() {
+    let workspace = Path::new("/workspace/os-tools");
+    for (control, value) in [
+        ("AWS_LC_SYS_CMAKE_BUILDER", "1"),
+        ("AWS_LC_SYS_STATIC", "0"),
+        ("AWS_LC_SYS_NO_ASM", "true"),
+        ("AWS_LC_SYS_SANITIZER", "address"),
+    ] {
+        let error = native_build_context::collect(native_environment(&[(control, value)]), workspace, |_, command| {
+            Ok(Some(fake_command_identity(command, "1")))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains(control));
+        assert!(error.to_string().contains("static cc-rs builder"));
+    }
+
+    // Upstream checks an explicit false CMAKE_BUILDER before its NO_ASM and
+    // sanitizer fallbacks, so this combination remains on the modeled cc-rs
+    // path and all effective compiler inputs are still byte-bound.
+    native_build_context::collect(
+        native_environment(&[
+            ("AWS_LC_SYS_CMAKE_BUILDER", "0"),
+            ("AWS_LC_SYS_NO_ASM", "1"),
+            ("AWS_LC_SYS_SANITIZER", "address"),
+        ]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap();
+
+    let error = native_build_context::collect(
+        native_environment_for_platform(
+            "x86_64-unknown-linux-ohos",
+            "x86_64-unknown-linux-ohos",
+            "linux",
+            "ohos",
+            &[],
+        ),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("CARGO_CFG_TARGET_ENV=ohos"));
+}
+
+#[test]
+fn aws_lc_builder_controls_use_crate_target_precedence() {
+    let workspace = Path::new("/workspace/os-tools");
+    let suffix = "AWS_LC_SYS_CMAKE_BUILDER_x86_64_unknown_linux_gnu";
+
+    native_build_context::collect(
+        native_environment(&[
+            (suffix, "0"),
+            ("AWS_LC_SYS_CMAKE_BUILDER", "1"),
+            ("AWS_LC_SYS_NO_ASM", "1"),
+        ]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap();
+
+    let error = native_build_context::collect(
+        native_environment(&[(suffix, "1"), ("AWS_LC_SYS_CMAKE_BUILDER", "0")]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("AWS_LC_SYS_CMAKE_BUILDER=true"));
+
+    native_build_context::collect(
+        native_environment(&[
+            ("AWS_LC_SYS_STATIC_x86_64_unknown_linux_gnu", "1"),
+            ("AWS_LC_SYS_STATIC", "0"),
+        ]),
         workspace,
         |_, command| Ok(Some(fake_command_identity(command, "1"))),
     )
@@ -697,30 +754,47 @@ fn aws_lc_bindgen_controls_use_crate_target_precedence() {
 }
 
 #[test]
-fn aws_lc_cmake_fallback_and_explicit_precedence_match_the_build_script() {
+fn unsupported_target_and_external_library_lanes_fail_closed() {
     let workspace = Path::new("/workspace/os-tools");
-    let probe = |cmake3_available: bool| {
-        move |_: &str, command: &[OsString]| {
-            let program = command[0].as_os_str().as_bytes();
-            if program == b"cmake3" && !cmake3_available {
-                return Ok(None);
-            }
-            Ok(Some(fake_command_identity(command, "1")))
-        }
-    };
+    let error = native_build_context::collect(
+        native_environment_for_platform(
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "windows",
+            "msvc",
+            &[],
+        ),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("currently Linux-only"));
 
-    let with_cmake3 = native_context_with_probe(&[], workspace, probe(true));
-    let with_cmake = native_context_with_probe(&[], workspace, probe(false));
-    assert_ne!(with_cmake3, with_cmake, "cmake3 must win the implicit AWS-LC fallback");
+    for value in ["", "0", "1"] {
+        let error = native_build_context::collect(
+            native_environment(&[("ZSTD_SYS_USE_PKG_CONFIG", value)]),
+            workspace,
+            |_, command| Ok(Some(fake_command_identity(command, "1"))),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ZSTD_SYS_USE_PKG_CONFIG must be absent"));
+    }
 
-    let explicit_with_cmake3 =
-        native_context_with_probe(&[("AWS_LC_SYS_CMAKE", "custom-cmake")], workspace, probe(true));
-    let explicit_without_cmake3 =
-        native_context_with_probe(&[("AWS_LC_SYS_CMAKE", "custom-cmake")], workspace, probe(false));
-    assert_eq!(
-        explicit_with_cmake3, explicit_without_cmake3,
-        "an explicit AWS-LC CMake selector must bypass fallback discovery"
-    );
+    for value in ["", "1", "yes"] {
+        let error = native_build_context::collect(
+            native_environment(&[("LIBSQLITE3_SYS_USE_PKG_CONFIG", value)]),
+            workspace,
+            |_, command| Ok(Some(fake_command_identity(command, "1"))),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must be absent or exactly 0"));
+    }
+    native_build_context::collect(
+        native_environment(&[("LIBSQLITE3_SYS_USE_PKG_CONFIG", "0")]),
+        workspace,
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -811,7 +885,7 @@ fn cc_rs_exact_tool_paths_with_spaces_remain_one_executable() {
 }
 
 #[test]
-fn direct_tool_selectors_with_spaces_are_never_shell_split() {
+fn direct_native_tool_selectors_with_spaces_are_never_shell_split() {
     let temporary = tempfile::tempdir().unwrap();
     let tool = temporary.path().join("direct tool with spaces");
     write_executable(&tool, "#!/bin/sh\nprintf 'tool 1.0\\n'\n");
@@ -820,13 +894,14 @@ fn direct_tool_selectors_with_spaces_are_never_shell_split() {
 
     native_build_context::collect(
         native_environment(&[
-            ("CMAKE", selector),
-            ("AWS_LC_SYS_CMAKE", selector),
+            ("LD", selector),
+            ("AS", selector),
+            ("NM", selector),
             ("RUSTC_LINKER", selector),
         ]),
         temporary.path(),
         |role, command| {
-            if matches!(role, "cmake" | "aws-lc-cmake" | "rust-linker") {
+            if matches!(role, "linker" | "assembler" | "symbol-reader" | "rust-linker") {
                 assert_eq!(command, &[tool.clone().into_os_string()]);
                 seen.push(role.to_owned());
             }
@@ -836,7 +911,7 @@ fn direct_tool_selectors_with_spaces_are_never_shell_split() {
     .unwrap();
 
     seen.sort();
-    assert_eq!(seen, ["aws-lc-cmake", "cmake", "rust-linker"]);
+    assert_eq!(seen, ["assembler", "linker", "rust-linker", "symbol-reader"]);
 }
 
 #[test]
