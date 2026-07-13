@@ -9,12 +9,12 @@ use std::{
 };
 
 use moss::util;
-use stone_recipe::{UpstreamSpec, build_policy::ContextValue, derivation::PhasePlan, script};
+use stone_recipe::{UpstreamSpec, derivation::PhasePlan};
 use thiserror::Error;
 
 pub use self::phase::Phase;
 use crate::build::pgo;
-use crate::{BuildPolicy, Macros, Paths, Recipe, architecture::BuildTarget};
+use crate::{BuildPolicy, Paths, Recipe, architecture::BuildTarget};
 
 mod phase;
 
@@ -32,7 +32,6 @@ impl Job {
         pgo_stage: Option<pgo::Stage>,
         recipe: &Recipe,
         paths: &Paths,
-        macros: &Macros,
         policy: &BuildPolicy,
         ccache: bool,
         jobs: NonZeroUsize,
@@ -44,7 +43,7 @@ impl Job {
             .into_iter()
             .filter_map(|phase| {
                 let result = phase
-                    .plan(target, pgo_stage, recipe, paths, macros, policy, ccache, jobs)
+                    .plan(target, pgo_stage, recipe, paths, policy, ccache, jobs)
                     .transpose()?;
                 Some(result.map(|plan| (phase, plan)))
             })
@@ -102,20 +101,16 @@ fn work_dir(build_dir: &Path, sources: &[UpstreamSpec]) -> PathBuf {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("missing arch macros: {0}")]
-    MissingArchMacros(String),
-    #[error("script")]
-    Script(#[from] script::Error),
     #[error("typed tuning policy")]
     Tuning(#[from] crate::build::tuning::Error),
+    #[error("build context")]
+    Context(#[from] crate::build::context::ContextError),
     #[error("build policy")]
     BuildPolicy(#[from] crate::policy::Error),
-    #[error("unsupported context {0:?} in a compiler tuning flag")]
-    UnsupportedTuningContext(ContextValue),
-    #[error("an environment phase may only contain Shell or CargoEnvironment steps")]
+    #[error("an environment phase may only contain CargoEnvironment markers")]
     UnsupportedEnvironmentStep,
-    #[error("Shell and CargoEnvironment steps cannot be rendered as structural executable commands")]
-    UnsupportedExecutableStep,
+    #[error("PGO path {path:?} must be normalized and remain beneath {pgo_dir:?}")]
+    UnsafePgoPath { path: String, pgo_dir: String },
     #[error("io")]
     Io(#[from] io::Error),
 }

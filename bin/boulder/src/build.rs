@@ -15,8 +15,7 @@ use tui::Styled;
 
 use self::job::Job;
 use crate::{
-    BuildPolicy, Env, Macros, Paths, Recipe, Timing, architecture::BuildTarget, macros, policy, profile, recipe,
-    timing, upstream,
+    BuildPolicy, Env, Paths, Recipe, Timing, architecture::BuildTarget, policy, profile, recipe, timing, upstream,
 };
 
 pub mod context;
@@ -70,7 +69,6 @@ impl Builder {
             None => Recipe::load(recipe_path)?,
         };
 
-        let macros = Macros::load(&env)?;
         let build_policy = BuildPolicy::load(&env)?;
 
         let paths = Paths::new(&recipe, verify_against_manifest, &env.cache_dir, "/mason", output_dir)?;
@@ -94,18 +92,7 @@ impl Builder {
             .unwrap_or_else(|| vec![None]);
         let target_jobs = stages
             .into_iter()
-            .map(|stage| {
-                Job::new(
-                    build_target,
-                    stage,
-                    &recipe,
-                    &paths,
-                    &macros,
-                    &build_policy,
-                    ccache,
-                    jobs,
-                )
-            })
+            .map(|stage| Job::new(build_target, stage, &recipe, &paths, &build_policy, ccache, jobs))
             .collect::<Result<Vec<_>, _>>()?;
         let target = Target {
             build_target,
@@ -216,8 +203,6 @@ pub enum Error {
     UnknownTarget { requested: String, available: Vec<String> },
     #[error("invalid SOURCE_DATE_EPOCH {0}")]
     InvalidSourceDateEpoch(i64),
-    #[error("macros")]
-    Macros(#[from] macros::Error),
     #[error("build policy")]
     BuildPolicy(#[from] policy::Error),
     #[error("job")]

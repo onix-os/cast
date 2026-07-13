@@ -19,256 +19,10 @@ use stone_recipe::{
 };
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstallLayout {
-    pub prefix: String,
-    pub bindir: String,
-    pub sbindir: String,
-    pub includedir: String,
-    pub libdir: String,
-    pub libexecdir: String,
-    pub datadir: String,
-    pub mandir: String,
-    pub infodir: String,
-    pub localedir: String,
-    pub sysconfdir: String,
-    pub localstatedir: String,
-    pub sharedstatedir: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuildContext {
-    pub package_name: String,
-    pub work_dir: String,
-    pub build_subdir: String,
-    pub install_root: String,
-    pub target_triple: String,
-    pub build_platform: String,
-    pub host_platform: String,
-    pub jobs: u32,
-    pub layout: InstallLayout,
-    pub environment: BTreeMap<String, String>,
-}
-
-impl BuildContext {
-    /// Lower one standard builder step to an argv-preserving frozen step.
-    ///
-    /// `Shell` is deliberately not handled here. `CargoEnvironment` contributes
-    /// to [`Self::environment`] and therefore has no executable step of its own.
-    pub fn resolve_standard_step(&self, step: &StepSpec) -> Option<StepPlan> {
-        let run = |program: &str, args: Vec<String>, environment: BTreeMap<String, String>| Run {
-            program: program.to_owned(),
-            args,
-            environment: self
-                .environment
-                .iter()
-                .chain(&environment)
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
-            working_dir: self.work_dir.clone(),
-        };
-        let values = |items: &[&str]| -> Vec<String> { items.iter().map(|item| (*item).to_owned()).collect() };
-        let jobs = self.jobs.to_string();
-
-        Some(match step {
-            StepSpec::Shell { .. } | StepSpec::CargoEnvironment => return None,
-            StepSpec::CMakeConfigure { flags } => {
-                let mut args = values(&[
-                    "-G",
-                    "Ninja",
-                    "-B",
-                    &self.build_subdir,
-                    "-DCMAKE_VERBOSE_MAKEFILE=ON",
-                    "-DCMAKE_C_FLAGS_RELEASE=-DNDEBUG",
-                    "-DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG",
-                    "-DCMAKE_Fortran_FLAGS_RELEASE=-DNDEBUG",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCMAKE_INSTALL_DO_STRIP=OFF",
-                    "-DCMAKE_INSTALL_LIBDIR=lib",
-                ]);
-                args.extend([
-                    format!("-DCMAKE_INSTALL_LIBEXECDIR={}", self.layout.libexecdir),
-                    format!("-DCMAKE_INSTALL_PREFIX={}", self.layout.prefix),
-                    format!(
-                        "-DCMAKE_LIB_SUFFIX={}",
-                        self.layout.libdir.strip_prefix("/usr/lib").unwrap_or_default()
-                    ),
-                ]);
-                args.extend(flags.iter().cloned());
-                run("cmake", args, BTreeMap::new())
-            }
-            StepSpec::CMakeBuild => run(
-                "cmake",
-                values(&["--build", &self.build_subdir, "--verbose", "--parallel", &jobs]),
-                BTreeMap::new(),
-            ),
-            StepSpec::CMakeInstall => run(
-                "cmake",
-                values(&["--install", &self.build_subdir, "--verbose"]),
-                BTreeMap::from([("DESTDIR".to_owned(), self.install_root.clone())]),
-            ),
-            StepSpec::CMakeTest => run(
-                "ctest",
-                values(&[
-                    "--test-dir",
-                    &self.build_subdir,
-                    "--verbose",
-                    "--parallel",
-                    &jobs,
-                    "--output-on-failure",
-                    "--force-new-ctest-process",
-                ]),
-                BTreeMap::new(),
-            ),
-            StepSpec::MesonSetup { flags } => {
-                let mut args = vec![
-                    "setup".to_owned(),
-                    "--buildtype=plain".to_owned(),
-                    format!("--prefix={}", self.layout.prefix),
-                    format!(
-                        "--libdir={}",
-                        self.layout.libdir.strip_prefix("/usr/").unwrap_or(&self.layout.libdir)
-                    ),
-                    format!("--bindir={}", self.layout.bindir),
-                    format!("--sbindir={}", self.layout.sbindir),
-                    format!(
-                        "--libexecdir={}",
-                        self.layout
-                            .libexecdir
-                            .strip_prefix("/usr/")
-                            .unwrap_or(&self.layout.libexecdir)
-                    ),
-                    format!("--includedir={}", self.layout.includedir),
-                    format!("--datadir={}", self.layout.datadir),
-                    format!("--mandir={}", self.layout.mandir),
-                    format!("--infodir={}", self.layout.infodir),
-                    format!("--localedir={}", self.layout.localedir),
-                    format!("--sysconfdir={}", self.layout.sysconfdir),
-                    format!("--localstatedir={}", self.layout.localstatedir),
-                    "--wrap-mode=nodownload".to_owned(),
-                ];
-                args.extend(flags.iter().cloned());
-                args.push(self.build_subdir.clone());
-                run("meson", args, BTreeMap::new())
-            }
-            StepSpec::MesonBuild => run(
-                "meson",
-                values(&["compile", "--verbose", "-j", &jobs, "-C", &self.build_subdir]),
-                BTreeMap::new(),
-            ),
-            StepSpec::MesonInstall => run(
-                "meson",
-                values(&["install", "--no-rebuild", "-C", &self.build_subdir]),
-                BTreeMap::from([("DESTDIR".to_owned(), self.install_root.clone())]),
-            ),
-            StepSpec::MesonTest => run(
-                "meson",
-                values(&[
-                    "test",
-                    "--no-rebuild",
-                    "--print-errorlogs",
-                    "--verbose",
-                    "-j",
-                    &jobs,
-                    "-C",
-                    &self.build_subdir,
-                ]),
-                BTreeMap::new(),
-            ),
-            StepSpec::CargoFetch => run("cargo", values(&["fetch", "-v", "--locked"]), BTreeMap::new()),
-            StepSpec::CargoBuild { features } => {
-                let mut args = values(&[
-                    "build",
-                    "-v",
-                    "-j",
-                    &jobs,
-                    "--frozen",
-                    "--target",
-                    &self.target_triple,
-                    "--release",
-                ]);
-                if !features.is_empty() {
-                    args.extend(["--features".to_owned(), features.join(",")]);
-                }
-                run("cargo", args, BTreeMap::new())
-            }
-            StepSpec::CargoInstall { binaries } => {
-                let binaries = if binaries.is_empty() {
-                    vec![self.package_name.as_str()]
-                } else {
-                    binaries.iter().map(String::as_str).collect()
-                };
-                let mut args = values(&[
-                    "-Dm00755",
-                    "-t",
-                    &format!("{}{}", self.install_root, self.layout.bindir),
-                ]);
-                args.extend(
-                    binaries
-                        .into_iter()
-                        .map(|binary| format!("target/{}/release/{binary}", self.target_triple)),
-                );
-                run("install", args, BTreeMap::new())
-            }
-            StepSpec::CargoTest { features } => {
-                let mut args = values(&[
-                    "test",
-                    "-v",
-                    "-j",
-                    &jobs,
-                    "--frozen",
-                    "--target",
-                    &self.target_triple,
-                    "--release",
-                ]);
-                if !features.is_empty() {
-                    args.extend(["--features".to_owned(), features.join(",")]);
-                }
-                args.push("--workspace".to_owned());
-                run("cargo", args, BTreeMap::new())
-            }
-            StepSpec::AutotoolsConfigure { flags } => {
-                let mut args = vec![
-                    "./configure".to_owned(),
-                    format!("--prefix={}", self.layout.prefix),
-                    format!("--bindir={}", self.layout.bindir),
-                    format!("--sbindir={}", self.layout.sbindir),
-                    format!("--build={}", self.build_platform),
-                    format!("--host={}", self.host_platform),
-                    format!("--libdir={}", self.layout.libdir),
-                    format!("--mandir={}", self.layout.mandir),
-                    format!("--infodir={}", self.layout.infodir),
-                    format!("--datadir={}", self.layout.datadir),
-                    format!("--sysconfdir={}", self.layout.sysconfdir),
-                    format!("--localstatedir={}", self.layout.localstatedir),
-                    format!("--sharedstatedir={}", self.layout.sharedstatedir),
-                    format!("--libexecdir={}", self.layout.libexecdir),
-                ];
-                args.extend(flags.iter().cloned());
-                run(
-                    "/usr/bin/dash",
-                    args,
-                    BTreeMap::from([
-                        ("CONFIG_SHELL".to_owned(), "/usr/bin/dash".to_owned()),
-                        ("SHELL".to_owned(), "/usr/bin/dash".to_owned()),
-                    ]),
-                )
-            }
-            StepSpec::AutotoolsBuild => run("make", values(&["VERBOSE=1", "-j", &jobs]), BTreeMap::new()),
-            StepSpec::AutotoolsInstall => run(
-                "make",
-                values(&["install", &format!("DESTDIR={}", self.install_root)]),
-                BTreeMap::new(),
-            ),
-            StepSpec::AutotoolsTest => run("make", values(&["check"]), BTreeMap::new()),
-        })
-    }
-}
-
 /// Explicit planner inputs which are not repository policy.
 ///
 /// The selected compiler flags already include the package's tuning and PGO
-/// choices. [`TypedBuildContext`] adds the policy-owned Mold flags when
+/// choices. [`BuildContext`] adds the policy-owned Mold flags when
 /// `mold_enabled` is true. Source preparation values are deliberately absent:
 /// they are supplied to individual commands through [`TextContextOverlay`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,7 +75,7 @@ pub struct TextContextOverlay {
 
 /// Fully resolved install layout retained for hooks and structural builders.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypedInstallLayout {
+pub struct InstallLayout {
     pub prefix: String,
     pub bindir: String,
     pub sbindir: String,
@@ -381,27 +135,26 @@ pub struct ResolvedCompilerFlags {
 
 /// Typed finite build context resolved from one Gluon policy value.
 ///
-/// This exists alongside the legacy [`BuildContext`] only while phase planning
-/// is migrated. New lowering must use this type: it has no definition map and
-/// cannot interpret `%action` or `%(definition)` syntax.
+/// It has no definition map and cannot interpret `%action` or
+/// `%(definition)` syntax.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypedBuildContext {
+pub struct BuildContext {
     policy: BuildPolicySpec,
     target: TargetPolicySpec,
     inputs: TypedContextInputs,
-    pub layout: TypedInstallLayout,
+    pub layout: InstallLayout,
     pub tools: ResolvedCompilerTools,
     pub flags: ResolvedCompilerFlags,
     pub environment: BTreeMap<String, String>,
 }
 
-impl TypedBuildContext {
+impl BuildContext {
     /// Resolve every repository-owned value needed by normal build steps.
     pub fn resolve(
         policy: &BuildPolicySpec,
         target: &TargetPolicySpec,
         inputs: TypedContextInputs,
-    ) -> Result<Self, TypedContextError> {
+    ) -> Result<Self, ContextError> {
         let resolver = TextResolver::new(policy, target, &inputs, TextContextOverlay::default());
         let layout = resolver.resolve_layout()?;
         let tools = resolver.resolve_tools()?;
@@ -419,17 +172,22 @@ impl TypedBuildContext {
         })
     }
 
+    /// Add a typed environment layer selected by the package's structural
+    /// environment markers.
+    pub fn extend_environment(&mut self, bindings: &[EnvironmentBindingSpec]) -> Result<(), ContextError> {
+        let resolver = TextResolver::new(&self.policy, &self.target, &self.inputs, TextContextOverlay::default());
+        let environment = resolver.resolve_environment(bindings, &[])?;
+        self.environment.extend(environment);
+        Ok(())
+    }
+
     /// Resolve arbitrary policy text against the closed context enum.
-    pub fn resolve_text(&self, value: &TextSpec) -> Result<String, TypedContextError> {
+    pub fn resolve_text(&self, value: &TextSpec) -> Result<String, ContextError> {
         self.resolve_text_with(value, &TextContextOverlay::default())
     }
 
     /// Resolve arbitrary policy text with source-local command values.
-    pub fn resolve_text_with(
-        &self,
-        value: &TextSpec,
-        overlay: &TextContextOverlay,
-    ) -> Result<String, TypedContextError> {
+    pub fn resolve_text_with(&self, value: &TextSpec, overlay: &TextContextOverlay) -> Result<String, ContextError> {
         TextResolver::new(&self.policy, &self.target, &self.inputs, overlay.clone()).resolve(value)
     }
 
@@ -438,7 +196,7 @@ impl TypedBuildContext {
         &self,
         command: &BuilderCommandSpec,
         overlay: &TextContextOverlay,
-    ) -> Result<StepPlan, TypedContextError> {
+    ) -> Result<StepPlan, ContextError> {
         self.resolve_command_with_environment(command, &[], overlay)
     }
 
@@ -447,7 +205,7 @@ impl TypedBuildContext {
     /// Package-authored flags, Cargo features and installed binaries remain
     /// structural argv entries. `Shell` and `CargoEnvironment` are markers and
     /// therefore do not produce an executable step here.
-    pub fn resolve_standard_step(&self, step: &StepSpec) -> Result<Option<StepPlan>, TypedContextError> {
+    pub fn resolve_standard_step(&self, step: &StepSpec) -> Result<Option<StepPlan>, ContextError> {
         let (builder, command) = match step {
             StepSpec::Shell { .. } | StepSpec::CargoEnvironment => return Ok(None),
             StepSpec::CMakeConfigure { .. } => (&self.policy.builders.cmake, &self.policy.builders.cmake.setup),
@@ -486,7 +244,7 @@ impl TypedBuildContext {
             StepSpec::MesonSetup { flags } => {
                 let builder_dir = args
                     .pop()
-                    .ok_or(TypedContextError::MissingBuilderDirectoryArgument { builder: "meson" })?;
+                    .ok_or(ContextError::MissingBuilderDirectoryArgument { builder: "meson" })?;
                 args.extend(flags.iter().cloned());
                 args.push(builder_dir);
             }
@@ -531,7 +289,7 @@ impl TypedBuildContext {
         command: &BuilderCommandSpec,
         builder_environment: &[EnvironmentBindingSpec],
         overlay: &TextContextOverlay,
-    ) -> Result<StepPlan, TypedContextError> {
+    ) -> Result<StepPlan, ContextError> {
         let resolver = TextResolver::new(&self.policy, &self.target, &self.inputs, overlay.clone());
         let mut environment = self.environment.clone();
         environment.extend(resolver.resolve_environment(builder_environment, &command.environment)?);
@@ -581,11 +339,11 @@ impl<'a> TextResolver<'a> {
         }
     }
 
-    fn resolve(&self, value: &TextSpec) -> Result<String, TypedContextError> {
+    fn resolve(&self, value: &TextSpec) -> Result<String, ContextError> {
         self.resolve_inner(value, &mut Vec::new())
     }
 
-    fn resolve_inner(&self, value: &TextSpec, resolving: &mut Vec<ContextValue>) -> Result<String, TypedContextError> {
+    fn resolve_inner(&self, value: &TextSpec, resolving: &mut Vec<ContextValue>) -> Result<String, ContextError> {
         match value {
             TextSpec::Literal(value) => Ok(value.clone()),
             TextSpec::Context(value) => self.resolve_context(*value, resolving),
@@ -597,15 +355,11 @@ impl<'a> TextResolver<'a> {
         }
     }
 
-    fn resolve_context(
-        &self,
-        value: ContextValue,
-        resolving: &mut Vec<ContextValue>,
-    ) -> Result<String, TypedContextError> {
+    fn resolve_context(&self, value: ContextValue, resolving: &mut Vec<ContextValue>) -> Result<String, ContextError> {
         if let Some(start) = resolving.iter().position(|candidate| *candidate == value) {
             let mut chain = resolving[start..].to_vec();
             chain.push(value);
-            return Err(TypedContextError::RecursiveContext { chain });
+            return Err(ContextError::RecursiveContext { chain });
         }
         resolving.push(value);
         let resolved = self.resolve_context_inner(value, resolving);
@@ -617,7 +371,7 @@ impl<'a> TextResolver<'a> {
         &self,
         value: ContextValue,
         resolving: &mut Vec<ContextValue>,
-    ) -> Result<String, TypedContextError> {
+    ) -> Result<String, ContextError> {
         let input = self.inputs;
         let cache = &self.policy.build_root.compiler_cache;
         let tools = self.selected_tools();
@@ -696,17 +450,17 @@ impl<'a> TextResolver<'a> {
                 .overlay
                 .source_path
                 .clone()
-                .ok_or(TypedContextError::MissingContext { value }),
+                .ok_or(ContextError::MissingContext { value }),
             ContextValue::SourceDestination => self
                 .overlay
                 .source_destination
                 .clone()
-                .ok_or(TypedContextError::MissingContext { value }),
+                .ok_or(ContextError::MissingContext { value }),
             ContextValue::SourceStripComponents => self
                 .overlay
                 .source_strip_components
                 .map(|value| value.to_string())
-                .ok_or(TypedContextError::MissingContext { value }),
+                .ok_or(ContextError::MissingContext { value }),
         }
     }
 
@@ -731,7 +485,7 @@ impl<'a> TextResolver<'a> {
         selected: &[TextSpec],
         mold: &[TextSpec],
         resolving: &mut Vec<ContextValue>,
-    ) -> Result<String, TypedContextError> {
+    ) -> Result<String, ContextError> {
         selected
             .iter()
             .chain(mold)
@@ -750,7 +504,7 @@ impl<'a> TextResolver<'a> {
         &self,
         first: &[EnvironmentBindingSpec],
         second: &[EnvironmentBindingSpec],
-    ) -> Result<BTreeMap<String, String>, TypedContextError> {
+    ) -> Result<BTreeMap<String, String>, ContextError> {
         first
             .iter()
             .chain(second)
@@ -763,9 +517,9 @@ impl<'a> TextResolver<'a> {
             .collect()
     }
 
-    fn resolve_layout(&self) -> Result<TypedInstallLayout, TypedContextError> {
+    fn resolve_layout(&self) -> Result<InstallLayout, ContextError> {
         let layout = &self.policy.layout;
-        Ok(TypedInstallLayout {
+        Ok(InstallLayout {
             prefix: self.resolve(&layout.prefix)?,
             bindir: self.resolve(&layout.bindir)?,
             sbindir: self.resolve(&layout.sbindir)?,
@@ -792,7 +546,7 @@ impl<'a> TextResolver<'a> {
         })
     }
 
-    fn resolve_tools(&self) -> Result<ResolvedCompilerTools, TypedContextError> {
+    fn resolve_tools(&self) -> Result<ResolvedCompilerTools, ContextError> {
         let value = |context| self.resolve(&TextSpec::Context(context));
         Ok(ResolvedCompilerTools {
             cc: value(ContextValue::Cc)?,
@@ -812,7 +566,7 @@ impl<'a> TextResolver<'a> {
         })
     }
 
-    fn resolve_flags_record(&self) -> Result<ResolvedCompilerFlags, TypedContextError> {
+    fn resolve_flags_record(&self) -> Result<ResolvedCompilerFlags, ContextError> {
         let value = |context| self.resolve(&TextSpec::Context(context));
         Ok(ResolvedCompilerFlags {
             c: value(ContextValue::CFlags)?,
@@ -828,7 +582,7 @@ impl<'a> TextResolver<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum TypedContextError {
+pub enum ContextError {
     #[error("policy text requires missing finite context value {value:?}")]
     MissingContext { value: ContextValue },
     #[error("policy text contains a recursive context reference: {chain:?}")]
@@ -842,40 +596,10 @@ mod tests {
     use super::*;
     use crate::BuildPolicy;
 
-    fn context() -> BuildContext {
-        let prefix = "/usr".to_owned();
-        BuildContext {
-            package_name: "example".to_owned(),
-            work_dir: "/mason/build/x86_64/source".to_owned(),
-            build_subdir: "aerynos-builddir".to_owned(),
-            install_root: "/mason/install".to_owned(),
-            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
-            build_platform: "x86_64-aerynos-linux".to_owned(),
-            host_platform: "x86_64-aerynos-linux".to_owned(),
-            jobs: 8,
-            layout: InstallLayout {
-                bindir: "/usr/bin".to_owned(),
-                sbindir: "/usr/sbin".to_owned(),
-                includedir: "/usr/include".to_owned(),
-                libdir: "/usr/lib".to_owned(),
-                libexecdir: "/usr/lib/example".to_owned(),
-                datadir: "/usr/share".to_owned(),
-                mandir: "/usr/share/man".to_owned(),
-                infodir: "/usr/share/info".to_owned(),
-                localedir: "/usr/share/locale".to_owned(),
-                sysconfdir: "/etc".to_owned(),
-                localstatedir: "/var".to_owned(),
-                sharedstatedir: "/var/lib".to_owned(),
-                prefix,
-            },
-            environment: BTreeMap::from([("SOURCE_DATE_EPOCH".to_owned(), "1700000000".to_owned())]),
-        }
-    }
-
-    fn typed_context(target_name: &str, compiler_cache_enabled: bool, mold_enabled: bool) -> TypedBuildContext {
+    fn fixture_context(target_name: &str, compiler_cache_enabled: bool, mold_enabled: bool) -> BuildContext {
         let policy = BuildPolicy::repository_for_tests();
         let target = policy.target(target_name).unwrap();
-        TypedBuildContext::resolve(
+        BuildContext::resolve(
             &policy.spec,
             target,
             TypedContextInputs {
@@ -913,83 +637,8 @@ mod tests {
     }
 
     #[test]
-    fn cmake_and_meson_are_argv_preserving_run_steps() {
-        let context = context();
-        let Run {
-            program,
-            args,
-            working_dir,
-            ..
-        } = context
-            .resolve_standard_step(&StepSpec::CMakeConfigure {
-                flags: vec!["-DBUILD_TESTS=OFF".to_owned()],
-            })
-            .unwrap()
-        else {
-            panic!("expected run")
-        };
-        assert_eq!(program, "cmake");
-        assert_eq!(working_dir, context.work_dir);
-        assert!(args.contains(&"-DBUILD_TESTS=OFF".to_owned()));
-        assert!(args.windows(2).any(|values| values == ["-B", "aerynos-builddir"]));
-
-        let Run { program, args, .. } = context.resolve_standard_step(&StepSpec::MesonBuild).unwrap() else {
-            panic!("expected run")
-        };
-        assert_eq!(program, "meson");
-        assert_eq!(args, ["compile", "--verbose", "-j", "8", "-C", "aerynos-builddir"]);
-    }
-
-    #[test]
-    fn cargo_and_autotools_resolve_context_without_templates() {
-        let context = context();
-        let Run { program, args, .. } = context
-            .resolve_standard_step(&StepSpec::CargoBuild {
-                features: vec!["cli".to_owned(), "tls".to_owned()],
-            })
-            .unwrap()
-        else {
-            panic!("expected run")
-        };
-        assert_eq!(program, "cargo");
-        assert!(
-            args.windows(2)
-                .any(|values| values == ["--target", "x86_64-unknown-linux-gnu"])
-        );
-        assert!(args.windows(2).any(|values| values == ["--features", "cli,tls"]));
-
-        let Run {
-            program,
-            args,
-            environment,
-            ..
-        } = context
-            .resolve_standard_step(&StepSpec::AutotoolsConfigure { flags: Vec::new() })
-            .unwrap()
-        else {
-            panic!("expected run")
-        };
-        assert_eq!(program, "/usr/bin/dash");
-        assert!(args.contains(&"--build=x86_64-aerynos-linux".to_owned()));
-        assert_eq!(environment["CONFIG_SHELL"], "/usr/bin/dash");
-    }
-
-    #[test]
-    fn shell_and_environment_markers_never_enter_standard_lowering() {
-        let context = context();
-        assert!(
-            context
-                .resolve_standard_step(&StepSpec::Shell {
-                    script: "%literal".to_owned()
-                })
-                .is_none()
-        );
-        assert!(context.resolve_standard_step(&StepSpec::CargoEnvironment).is_none());
-    }
-
-    #[test]
     fn typed_context_resolves_policy_layout_tools_flags_and_cache_conditions() {
-        let context = typed_context("x86_64", false, true);
+        let context = fixture_context("x86_64", false, true);
 
         assert_eq!(context.layout.libdir, "/usr/lib");
         assert_eq!(context.layout.libexecdir, "/usr/lib/example");
@@ -1010,7 +659,7 @@ mod tests {
         );
         assert!(!context.environment.contains_key("CCACHE_DIR"));
 
-        let cached = typed_context("x86_64", true, false);
+        let cached = fixture_context("x86_64", true, false);
         assert_eq!(cached.environment["PATH"], "/usr/lib/ccache/bin:/usr/bin:/bin");
         assert_eq!(cached.environment["CCACHE_DIR"], "/mason/ccache");
         assert_eq!(cached.tools.ld, "ld.lld");
@@ -1021,7 +670,7 @@ mod tests {
     fn compiler_flag_tokens_preserve_policy_order_and_multiplicity() {
         let policy = BuildPolicy::repository_for_tests();
         let target = policy.target("x86_64").unwrap();
-        let mut inputs = typed_context("x86_64", false, false).inputs;
+        let mut inputs = fixture_context("x86_64", false, false).inputs;
         inputs.flags.rust = vec![
             TextSpec::Literal("-C".to_owned()),
             TextSpec::Literal("opt-level=3".to_owned()),
@@ -1029,14 +678,14 @@ mod tests {
             TextSpec::Literal("codegen-units=1".to_owned()),
         ];
 
-        let context = TypedBuildContext::resolve(&policy.spec, target, inputs).unwrap();
+        let context = BuildContext::resolve(&policy.spec, target, inputs).unwrap();
         assert_eq!(context.flags.rust, "-C opt-level=3 -C codegen-units=1");
         assert_eq!(context.environment["RUSTFLAGS"], context.flags.rust);
     }
 
     #[test]
     fn target_environment_overrides_global_tool_values() {
-        let context = typed_context("emul32/x86_64", false, false);
+        let context = fixture_context("emul32/x86_64", false, false);
 
         assert_eq!(context.environment["CC"], "clang -m32");
         assert_eq!(context.environment["CXX"], "clang++ -m32");
@@ -1049,7 +698,7 @@ mod tests {
 
     #[test]
     fn standard_builder_commands_come_from_policy_and_keep_package_arguments() {
-        let context = typed_context("x86_64", false, false);
+        let context = fixture_context("x86_64", false, false);
         let Run {
             program,
             args,
@@ -1129,8 +778,8 @@ mod tests {
             TextSpec::Literal("--policy-build".to_owned()),
             TextSpec::Context(ContextValue::BuilderDir),
         ];
-        let inputs = typed_context("x86_64", false, false).inputs;
-        let context = TypedBuildContext::resolve(&policy.spec, &target, inputs).unwrap();
+        let inputs = fixture_context("x86_64", false, false).inputs;
+        let context = BuildContext::resolve(&policy.spec, &target, inputs).unwrap();
 
         let Run { program, args, .. } = context.resolve_standard_step(&StepSpec::CMakeBuild).unwrap().unwrap() else {
             panic!("expected run")
@@ -1141,10 +790,10 @@ mod tests {
 
     #[test]
     fn source_context_is_command_local_and_missing_values_are_actionable() {
-        let context = typed_context("x86_64", false, false);
+        let context = fixture_context("x86_64", false, false);
         assert_eq!(
             context.resolve_text(&TextSpec::Context(ContextValue::SourcePath)),
-            Err(TypedContextError::MissingContext {
+            Err(ContextError::MissingContext {
                 value: ContextValue::SourcePath,
             })
         );
@@ -1185,12 +834,12 @@ mod tests {
         let mut policy = BuildPolicy::repository_for_tests();
         policy.spec.layout.prefix = TextSpec::Context(ContextValue::Prefix);
         let target = policy.target("x86_64").unwrap().clone();
-        let mut inputs = typed_context("x86_64", false, false).inputs;
+        let mut inputs = fixture_context("x86_64", false, false).inputs;
         inputs.flags = CompilerFlagsSpec::default();
 
         assert_eq!(
-            TypedBuildContext::resolve(&policy.spec, &target, inputs),
-            Err(TypedContextError::RecursiveContext {
+            BuildContext::resolve(&policy.spec, &target, inputs),
+            Err(ContextError::RecursiveContext {
                 chain: vec![ContextValue::Prefix, ContextValue::Prefix],
             })
         );
