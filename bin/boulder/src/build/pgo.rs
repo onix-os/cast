@@ -52,7 +52,7 @@ let base = b.mk_package (b.meta {{
     homepage = "https://example.invalid", license = ["MPL-2.0"],
 }})
 let scripts = b.scripts {{
-    workload = b.phase [b.step.shell "run-workload"],
+    workload = b.phase [b.step.run (b.program.binary "run-workload") []],
     .. b.defaults.scripts
 }}
 let profile = b.profile_with {{

@@ -28,11 +28,30 @@ fn binary_program(name: &str) -> ProgramSpec {
 }
 
 #[test]
+fn removed_package_and_builder_abis_are_not_compatibility_aliases() {
+    for module in [
+        "boulder.package.v2",
+        "boulder.builders.cmake.v1",
+        "boulder.builders.meson.v1",
+        "boulder.builders.cargo.v1",
+        "boulder.builders.autotools.v1",
+    ] {
+        let error = evaluate_gluon(&Source::new("stone.glu", format!("import! {module}"))).unwrap_err();
+        assert!(matches!(
+            error,
+            PackageEvaluationError::Evaluation(ref diagnostic)
+                if diagnostic.category == DiagnosticCategory::Import
+                    && diagnostic.message.contains(module)
+        ));
+    }
+}
+
+#[test]
 fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
     let source_root = SourceRoot::new(&root).unwrap();
     let source = source_root
-        .load(Path::new("package_v2_stone.glu"), 1024 * 1024)
+        .load(Path::new("package_v3_stone.glu"), 1024 * 1024)
         .unwrap();
     let evaluator = Evaluator::default().with_source_root(source_root);
 

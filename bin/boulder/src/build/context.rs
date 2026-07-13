@@ -200,7 +200,7 @@ impl BuildContext {
         self.resolve_command_with_environment(command, overlay)
     }
 
-    /// Lower one standard package-v2 builder step from policy command data.
+    /// Lower one standard package-v3 builder step from policy command data.
     ///
     /// Package-authored flags, Cargo features and installed binaries remain
     /// structural argv entries. Package-authored `Shell` steps are lowered by

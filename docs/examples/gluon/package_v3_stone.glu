@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 let b = import! boulder.package.v3
-let make = import! "./package_v2.glu"
+let make = import! "./package_v3.glu"
 let packages = import! "./package_set.glu"
 
 // This record update is the package-argument override operation. It changes

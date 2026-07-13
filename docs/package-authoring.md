@@ -452,6 +452,6 @@ Module-owned builder graphs and explicit literal `Shell` steps both freeze
 through the typed build context; repository command/environment templates are
 resolved during planning and there is no compatibility expansion pass.
 
-See [`examples/gluon/package_v2.glu`](examples/gluon/package_v2.glu) and
-[`examples/gluon/package_v2_stone.glu`](examples/gluon/package_v2_stone.glu)
+See [`examples/gluon/package_v3.glu`](examples/gluon/package_v3.glu) and
+[`examples/gluon/package_v3_stone.glu`](examples/gluon/package_v3_stone.glu)
 for runnable factory, scope, output, and patch examples.

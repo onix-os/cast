@@ -70,11 +70,18 @@ Nix-like build description and reproducibility boundary.
   `sources.lock.glu`.
 - [x] YAML and KDL configuration paths have been removed from OS Tools.
 
-The public recipe boundary is now `boulder.package.v2`; the former
+The public recipe boundary is now `boulder.package.v3`; the former
 `boulder.recipe.v1` embedded module, encoder, evaluator, and fixtures have been
 removed. Standard builders produce typed phase steps, and the planner can
 resolve an exact package closure into `build.lock.glu`, freeze a canonical
 `DerivationPlan`, and explain its derivation ID.
+
+Package v3 and build-policy v3 make executable selection structural: every
+direct command, shell interpreter, non-builtin shell program, source-preparation
+command, PGO tool, and analyzer program binds one normalized guest path to an
+exact provider request in `build.lock.glu`. Frozen execution also enforces the
+explicit `execution.jobs` value as PID 1's inherited CPU affinity before any
+build or analyzer descendant can run.
 
 The normal build path now plans first and carries the validated
 `DerivationPlan` through exact root installation, locked-source materialization,
@@ -127,8 +134,8 @@ The current ABI expresses that contract directly:
 
 ```gluon
 // package.glu
-let b = import! boulder.package.v2
-let cmake = import! boulder.builders.cmake.v1
+let b = import! boulder.package.v3
+let cmake = import! boulder.builders.cmake.v2
 
 \deps ->
     let base = b.mk_package (b.meta {
@@ -170,7 +177,7 @@ There is no automatic argument-name reflection in the first implementation.
 Explicit records preserve Gluon's type checking and make missing dependencies
 visible.
 
-The initial split-output set is a deterministic `boulder.package.v2` ABI
+The initial split-output set is a deterministic `boulder.package.v3` ABI
 default. It is evaluated into the concrete `PackageSpec` and can be replaced
 by a package factory; it is neither hidden Rust policy nor a repository layer.
 Changing that default incompatibly requires a new package ABI version.
@@ -219,10 +226,10 @@ without making cross compilation implicit.
 Build systems become pure Gluon modules such as:
 
 ```text
-boulder.builders.cmake.v1
-boulder.builders.meson.v1
-boulder.builders.cargo.v1
-boulder.builders.autotools.v1
+boulder.builders.cmake.v2
+boulder.builders.meson.v2
+boulder.builders.cargo.v2
+boulder.builders.autotools.v2
 ```
 
 A builder returns structural data containing its tools, environment, phases,
@@ -324,13 +331,14 @@ of the three specification layers.
 **Exit gate:** policy order is visible in Gluon, duplicate semantics are
 explicit, and no policy/profile fingerprint is discarded.
 
-### Phase 3: Introduce `boulder.package.v2`
+### Phase 3: Introduce the versioned package-function ABI
 
 - [x] Add the versioned `PackageSpec` ABI without changing the executor yet.
 - [x] Establish `PackageInputs -> PackageSpec` as the package authoring
   convention.
 - [x] Add defaults and a complete typed patch algebra covering every field.
-- [x] Lower v2 deterministically into the current validated recipe/domain
+- [x] Lower the concrete package value deterministically into the validated
+  package/domain
   model.
 - [x] Add imported-package, dependency-override, attribute-override, and error
   diagnostic examples.
@@ -424,7 +432,7 @@ recursive package universe inside Gluon.
   explicit `Shell` steps remain literal.
 - [x] Remove filesystem-discovered macro composition.
 - [x] Remove the public `boulder.recipe.v1` ABI, its standalone encoders and
-  evaluator, and migrate all tracked recipes and fixtures to package v2.
+  evaluator, and migrate all tracked recipes and fixtures to package v3.
 - [x] Remove the internal `Recipe`/`RecipeSpec` lowering once the executor and
   packaging path consume `PackageSpec` and `DerivationPlan` directly.
 - [x] Remove the obsolete macro defaults, domain conversions, generic
