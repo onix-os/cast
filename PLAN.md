@@ -279,14 +279,14 @@ output-integrity checks; they do not replace the derivation identity.
 
 ### Phase 1: Freeze the contracts
 
-- [ ] Document `PackageSpec`, `PolicySpec`, and `DerivationPlan` ownership and
+- [x] Document `PackageSpec`, `PolicySpec`, and `DerivationPlan` ownership and
   invariants in the code that will own them.
-- [ ] Inventory every value Boulder currently adds after recipe evaluation.
-- [ ] Classify each value as authored intent, repository policy, resolved
+- [x] Inventory every value Boulder currently adds after recipe evaluation.
+- [x] Classify each value as authored intent, repository policy, resolved
   dependency, executor-only state, or forbidden ambient state.
-- [ ] Add regression tests proving that the same explicit inputs evaluate to
+- [x] Add regression tests proving that the same explicit inputs evaluate to
   the same result and fingerprint.
-- [ ] Rework or remove breakpoint source-line recovery that still assumes
+- [x] Rework or remove breakpoint source-line recovery that still assumes
   legacy YAML block syntax.
 
 **Exit gate:** every current hidden input has an assigned destination in one
@@ -294,14 +294,15 @@ of the three specification layers.
 
 ### Phase 2: Make policy explicit
 
-- [ ] Create one Gluon policy root that explicitly imports the base policy,
-  actions, architecture definitions, tuning, and package templates.
-- [ ] Replace directory enumeration and filesystem-order merging in
+- [x] Create one Gluon policy root that explicitly declares the base policy,
+  actions, architecture definitions, tuning, and package templates; bind every
+  declared module fingerprint into the root fingerprint.
+- [x] Replace directory enumeration and filesystem-order merging in
   `Macros::load` with evaluation of that root.
-- [ ] Implement strict `add`, `replace`, and `modify` composition.
-- [ ] Retain and propagate policy and profile fingerprints.
-- [ ] Include selected target and policy inputs in evaluation provenance.
-- [ ] Add diagnostics showing which module introduced or modified a policy
+- [x] Implement strict `add`, `replace`, and `modify` composition.
+- [x] Retain and propagate policy and profile fingerprints.
+- [x] Include selected target and policy inputs in evaluation provenance.
+- [x] Add diagnostics showing which module introduced or modified a policy
   value.
 
 **Exit gate:** policy order is visible in Gluon, duplicate semantics are
@@ -309,13 +310,13 @@ explicit, and no macro/profile fingerprint is discarded.
 
 ### Phase 3: Introduce `boulder.package.v2`
 
-- [ ] Add the versioned `PackageSpec` ABI without changing the executor yet.
-- [ ] Establish `PackageInputs -> PackageSpec` as the package authoring
+- [x] Add the versioned `PackageSpec` ABI without changing the executor yet.
+- [x] Establish `PackageInputs -> PackageSpec` as the package authoring
   convention.
-- [ ] Add defaults and a complete typed patch algebra covering every field.
-- [ ] Lower v2 deterministically into the current validated recipe/domain
+- [x] Add defaults and a complete typed patch algebra covering every field.
+- [x] Lower v2 deterministically into the current validated recipe/domain
   model.
-- [ ] Add imported-package, dependency-override, attribute-override, and error
+- [x] Add imported-package, dependency-override, attribute-override, and error
   diagnostic examples.
 - [ ] Add an evaluation command that prints the concrete normalized
   `PackageSpec`.
@@ -325,12 +326,12 @@ receives concrete, validated package data.
 
 ### Phase 4: Type dependencies and outputs
 
-- [ ] Introduce `DependencySpec`, `PackageRef`, and `OutputRef` variants.
-- [ ] Separate native build, target build, check, and runtime relations.
+- [x] Introduce `DependencySpec`, `PackageRef`, and `OutputRef` variants.
+- [x] Separate native build, target build, check, and runtime relations.
 - [ ] Move the canonical provider parser and representation into a shared
   crate used by both Boulder and Moss.
-- [ ] Make root and split outputs explicit in `PackageSpec`.
-- [ ] Detect missing references, duplicate output names, and dependency cycles
+- [x] Make root and split outputs explicit in `PackageSpec`.
+- [x] Detect missing references, duplicate output names, and dependency cycles
   before execution.
 - [ ] Remove duplicated shallow dependency-string validation.
 
@@ -339,13 +340,13 @@ validated recipe string.
 
 ### Phase 5: Add structured builders
 
-- [ ] Implement CMake, Meson, Cargo, and Autotools builder modules.
-- [ ] Make each builder return its required tools, environment, phases, and
+- [x] Implement CMake, Meson, Cargo, and Autotools builder modules.
+- [x] Make each builder return its required tools, environment, phases, and
   supported hooks.
-- [ ] Initially lower structured builders into the current shell pipeline.
-- [ ] Preserve an explicit custom builder for packages outside standard build
+- [x] Initially lower structured builders into the current shell pipeline.
+- [x] Preserve an explicit custom builder for packages outside standard build
   systems.
-- [ ] Add equivalence tests against representative existing macro-driven
+- [x] Add equivalence tests against representative existing macro-driven
   recipes.
 
 **Exit gate:** standard recipes do not use `%action` strings and their build
@@ -355,15 +356,17 @@ dependencies are structural.
 
 - [ ] Resolve sources, dependencies, target, policy, builder, profile, and
   reproducibility inputs into one canonical plan.
-- [ ] Add generated `build.lock.glu` data for the exact package/output closure,
+- [x] Add generated `build.lock.glu` data for the exact package/output closure,
   base build state, repository snapshot, toolchain, target, and policy
-  identities; define explicit missing, stale, and update behavior.
-- [ ] Keep authored package modules separate from `sources.lock.glu` and
+  identities.
+- [ ] Wire `build.lock.glu` into Boulder with explicit missing, stale, and
+  update behavior.
+- [x] Keep authored package modules separate from `sources.lock.glu` and
   `build.lock.glu`; Gluon evaluation describes requests while Rust performs and
   freezes I/O-backed resolution.
 - [ ] Eliminate wall-clock fallback or bind an explicitly selected timestamp
   into the plan.
-- [ ] Implement stable canonical encoding and derivation hashing.
+- [x] Implement stable canonical encoding and derivation hashing.
 - [ ] Add `boulder recipe plan` and `boulder recipe explain` commands.
 - [ ] Record the derivation ID in manifests and emitted Stones.
 - [ ] Change the build executor to consume only the frozen plan.
