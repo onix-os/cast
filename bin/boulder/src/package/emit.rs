@@ -18,6 +18,7 @@ use stone::{
     relation::{Dependency, ParseError, Provider},
 };
 use stone_recipe::derivation::DerivationId;
+use tempfile::NamedTempFile;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::manifest::Manifest;
@@ -73,6 +74,7 @@ pub struct Package<'a> {
     pub analysis: analysis::Bucket,
     recipe_fingerprint: &'a str,
     derivation_id: DerivationId,
+    jobs: u32,
 }
 
 impl<'a> Package<'a> {
@@ -85,15 +87,40 @@ impl<'a> Package<'a> {
         recipe_fingerprint: &'a str,
         derivation_id: &DerivationId,
     ) -> Self {
+        Self::new_with_architecture(
+            name,
+            source,
+            template,
+            analysis,
+            build_release,
+            recipe_fingerprint,
+            derivation_id,
+            architecture::host(),
+            util::num_cpus().get() as u32,
+        )
+    }
+
+    pub fn new_with_architecture(
+        name: &'a str,
+        source: &'a stone_recipe::Source,
+        template: &'a stone_recipe::Package,
+        analysis: analysis::Bucket,
+        build_release: NonZeroU64,
+        recipe_fingerprint: &'a str,
+        derivation_id: &DerivationId,
+        architecture: Architecture,
+        jobs: u32,
+    ) -> Self {
         Self {
             name,
-            architecture: architecture::host(),
+            architecture,
             source,
             definition: template,
             analysis,
             build_release,
             recipe_fingerprint,
             derivation_id: derivation_id.clone(),
+            jobs,
         }
     }
 
@@ -225,7 +252,41 @@ pub fn emit(
     packages: &[Package<'_>],
     derivation_id: &DerivationId,
 ) -> Result<(), Error> {
-    let mut manifest = Manifest::new(paths, recipe, architecture::host(), derivation_id);
+    let build_deps = recipe
+        .parsed
+        .build
+        .build_deps
+        .iter()
+        .chain(&recipe.parsed.build.check_deps)
+        .cloned();
+    emit_frozen(
+        paths,
+        &recipe.parsed.source,
+        &recipe.fingerprint.sha256,
+        build_deps,
+        architecture::host(),
+        packages,
+        derivation_id,
+    )
+}
+
+pub fn emit_frozen(
+    paths: &Paths,
+    source: &stone_recipe::Source,
+    recipe_fingerprint: &str,
+    build_deps: impl IntoIterator<Item = String>,
+    architecture: Architecture,
+    packages: &[Package<'_>],
+    derivation_id: &DerivationId,
+) -> Result<(), Error> {
+    let mut manifest = Manifest::new(
+        paths,
+        source,
+        recipe_fingerprint,
+        build_deps,
+        architecture,
+        derivation_id,
+    );
     let mut emit_manifests = true;
 
     for package in packages {
@@ -343,18 +404,13 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
 
     // Only add content payload if we have some files
     if !files.is_empty() {
-        // Temp file for building content payload
-        let temp_content_path = format!("/tmp/{filename}.tmp");
-        let mut temp_content = File::options()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(&temp_content_path)
-            .context(IoSnafu)?;
+        // Unique plan-runtime-local scratch avoids collisions between
+        // concurrent builds of the same output.
+        let mut temp_content = NamedTempFile::new_in(&paths.artefacts().guest).context(IoSnafu)?;
 
         // Convert to content writer using pledged size = total size of all files
         let mut writer = writer
-            .with_content(&mut temp_content, Some(total_file_size), util::num_cpus().get() as u32)
+            .with_content(temp_content.as_file_mut(), Some(total_file_size), package.jobs)
             .context(StoneBinaryWriterSnafu)?;
 
         for info in files {
@@ -367,9 +423,6 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
         // Finalize & flush
         writer.finalize().context(StoneBinaryWriterSnafu)?;
         out_file.flush().context(IoSnafu)?;
-
-        // Remove temp content file
-        fs::remove_file(temp_content_path).context(IoSnafu)?;
     } else {
         // Finalize & flush
         writer.finalize().context(StoneBinaryWriterSnafu)?;
@@ -384,6 +437,11 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
 
 #[cfg(test)]
 pub(crate) fn test_derivation_id() -> DerivationId {
+    test_derivation_plan().derivation_id()
+}
+
+#[cfg(test)]
+pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     use stone_recipe::derivation::{
         BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, LockedIdentity, PackageIdentity, Platform,
     };
@@ -436,7 +494,7 @@ pub(crate) fn test_derivation_id() -> DerivationId {
     };
     plan.source_date_epoch = 1_700_000_000;
     plan.validate().unwrap();
-    plan.derivation_id()
+    plan
 }
 
 #[derive(Debug, Snafu)]

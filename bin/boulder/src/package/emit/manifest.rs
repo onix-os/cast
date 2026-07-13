@@ -19,7 +19,7 @@ use stone::{
 use stone_recipe::derivation::DerivationId;
 use tempfile::NamedTempFile;
 
-use crate::{Architecture, Paths, Recipe};
+use crate::{Architecture, Paths};
 
 use super::Package;
 
@@ -28,7 +28,8 @@ mod json;
 
 #[derive(Debug)]
 pub struct Manifest<'a> {
-    recipe: &'a Recipe,
+    source: &'a stone_recipe::Source,
+    recipe_fingerprint: &'a str,
     arch: Architecture,
     output_dir: PathBuf,
     build_deps: BTreeSet<String>,
@@ -37,23 +38,22 @@ pub struct Manifest<'a> {
 }
 
 impl<'a> Manifest<'a> {
-    pub fn new(paths: &Paths, recipe: &'a Recipe, arch: Architecture, derivation_id: &DerivationId) -> Self {
+    pub fn new(
+        paths: &Paths,
+        source: &'a stone_recipe::Source,
+        recipe_fingerprint: &'a str,
+        build_deps: impl IntoIterator<Item = String>,
+        arch: Architecture,
+        derivation_id: &DerivationId,
+    ) -> Self {
         let output_dir = paths.artefacts().guest;
 
-        let build_deps = recipe
-            .parsed
-            .build
-            .build_deps
-            .iter()
-            .chain(&recipe.parsed.build.check_deps)
-            .cloned()
-            .collect();
-
         Self {
-            recipe,
+            source,
+            recipe_fingerprint,
             output_dir,
             arch,
-            build_deps,
+            build_deps: build_deps.into_iter().collect(),
             packages: BTreeSet::new(),
             derivation_id: derivation_id.clone(),
         }
@@ -73,7 +73,8 @@ impl<'a> Manifest<'a> {
     pub fn write_json(&self) -> Result<(), Error> {
         json::write(
             &self.output_dir.join(format!("manifest.{}.jsonc", self.arch)),
-            self.recipe,
+            self.source,
+            self.recipe_fingerprint,
             &self.packages,
             &self.build_deps,
             &self.derivation_id,

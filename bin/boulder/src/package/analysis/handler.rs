@@ -38,7 +38,7 @@ pub fn ignore_blocked(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result
     // libtool files break the world but very rarely a package will need them to function correctly
     if info.file_name().ends_with(".la")
         && (info.target_path.starts_with("/usr/lib") || info.target_path.starts_with("/usr/lib32"))
-        && bucket.recipe.parsed.options.lastrip
+        && bucket.analysis.remove_libtool
     {
         return Ok(Decision::IgnoreFile {
             reason: "libtool file".into(),
@@ -150,7 +150,7 @@ pub fn cmake(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response
 /// Ensure that man and info files are zst compressed for on-disk space savings.
 pub fn compressman(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
     /* if the compressman option is turned off, exit early */
-    if !bucket.recipe.parsed.options.compressman {
+    if !bucket.analysis.compress_man {
         return Ok(Decision::NextHandler.into());
     }
 

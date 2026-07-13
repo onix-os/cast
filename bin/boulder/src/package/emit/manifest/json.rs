@@ -15,11 +15,12 @@ use snafu::ResultExt;
 use stone_recipe::derivation::DerivationId;
 
 use super::{Error, IoSnafu, JsonSnafu};
-use crate::{Recipe, package::emit};
+use crate::package::emit;
 
 pub fn write(
     path: &Path,
-    recipe: &Recipe,
+    source: &stone_recipe::Source,
+    recipe_fingerprint: &str,
     packages: &BTreeSet<&emit::Package<'_>>,
     build_deps: &BTreeSet<String>,
     derivation_id: &DerivationId,
@@ -89,10 +90,10 @@ pub fn write(
         manifest_version: "0.2".to_owned(),
         packages,
         derivation_id: derivation_id.as_str().to_owned(),
-        recipe_fingerprint: recipe.fingerprint.sha256.clone(),
-        source_name: recipe.parsed.source.name.clone(),
-        source_release: recipe.parsed.source.release.to_string(),
-        source_version: recipe.parsed.source.version.clone(),
+        recipe_fingerprint: recipe_fingerprint.to_owned(),
+        source_name: source.name.clone(),
+        source_release: source.release.to_string(),
+        source_version: source.version.clone(),
     };
 
     let mut file = File::create(path).context(IoSnafu)?;
@@ -145,6 +146,7 @@ mod tests {
     use fs_err as fs;
 
     use super::*;
+    use crate::Recipe;
     use crate::source_lock::{SOURCE_LOCK_FILE_NAME, SourceLock, encode_source_lock};
 
     const RECIPE_SOURCE: &str = r#"let boulder = import! boulder.package.v2
@@ -170,7 +172,8 @@ boulder.mk_package (boulder.meta {
         let first_path = root.path().join("first.jsonc");
         write(
             &first_path,
-            &first_recipe,
+            &first_recipe.parsed.source,
+            &first_recipe.fingerprint.sha256,
             &BTreeSet::new(),
             &BTreeSet::new(),
             &derivation_id,
@@ -183,7 +186,8 @@ boulder.mk_package (boulder.meta {
         let changed_path = root.path().join("changed.jsonc");
         write(
             &changed_path,
-            &changed_recipe,
+            &changed_recipe.parsed.source,
+            &changed_recipe.fingerprint.sha256,
             &BTreeSet::new(),
             &BTreeSet::new(),
             &derivation_id,

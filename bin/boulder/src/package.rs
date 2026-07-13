@@ -9,7 +9,12 @@ use stone::StoneDigestWriterHasher;
 use thiserror::Error;
 
 use moss::util;
-use stone_recipe::{Package, PathKind, derivation::DerivationId, script};
+use stone_recipe::{
+    Package, PathKind,
+    derivation::{AnalysisPlan, AnalysisToolchain, DerivationId, DerivationPlan, OutputRelation, PathRuleKind},
+    script,
+    tuning::Toolchain,
+};
 
 use crate::{Macros, Paths, Recipe, Timing, build, container, timing};
 
@@ -26,6 +31,162 @@ pub struct Packager<'a> {
     packages: BTreeMap<String, Package>,
     collector: Collector,
     build_release: NonZeroU64,
+}
+
+pub struct FrozenPackager<'a> {
+    paths: &'a Paths,
+    source: stone_recipe::Source,
+    packages: BTreeMap<String, Package>,
+    collector: Collector,
+    build_release: NonZeroU64,
+    recipe_fingerprint: String,
+    analysis: AnalysisPlan,
+    architecture: crate::Architecture,
+    manifest_build_inputs: Vec<String>,
+    jobs: u32,
+    derivation_id: DerivationId,
+}
+
+impl<'a> FrozenPackager<'a> {
+    pub fn from_plan(paths: &'a Paths, plan: &DerivationPlan) -> Result<Self, Error> {
+        plan.validate().map_err(Error::InvalidFrozenPlan)?;
+        let output_packages = plan
+            .outputs
+            .iter()
+            .map(|output| (output.name.as_str(), output.package_name.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        let packages = plan
+            .outputs
+            .iter()
+            .map(|output| {
+                let run_deps = output
+                    .runtime_inputs
+                    .iter()
+                    .map(|relation| match relation {
+                        OutputRelation::Locked { request, .. } => Ok(request.clone()),
+                        OutputRelation::Planned { output } => output_packages
+                            .get(output.as_str())
+                            .map(|package| (*package).to_owned())
+                            .ok_or_else(|| Error::MissingFrozenOutput(output.clone())),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((
+                    output.package_name.clone(),
+                    Package {
+                        summary: output.summary.clone(),
+                        description: output.description.clone(),
+                        provides_exclude: output.provides_exclude.clone(),
+                        run_deps,
+                        run_deps_exclude: output.runtime_exclude.clone(),
+                        paths: output
+                            .paths
+                            .iter()
+                            .map(|path| stone_recipe::Path {
+                                path: path.pattern.clone(),
+                                kind: recipe_path_kind(path.kind),
+                            })
+                            .collect(),
+                        conflicts: output.conflicts.clone(),
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, Error>>()?;
+
+        let mut collector = Collector::new(paths.install().guest);
+        for rule in &plan.collection_rules {
+            let package = output_packages
+                .get(rule.output.as_str())
+                .ok_or_else(|| Error::MissingFrozenOutput(rule.output.clone()))?;
+            collector.add_rule(collect::Rule {
+                pattern: rule.pattern.clone(),
+                package: (*package).to_owned(),
+                kind: recipe_path_kind(rule.kind),
+            });
+        }
+
+        Ok(Self {
+            paths,
+            source: stone_recipe::Source {
+                name: plan.package.name.clone(),
+                version: plan.package.version.clone(),
+                release: plan.package.source_release,
+                homepage: plan.package.homepage.clone(),
+                license: plan.package.licenses.clone(),
+            },
+            packages,
+            collector,
+            build_release: NonZeroU64::new(plan.package.build_release).expect("validated build release"),
+            recipe_fingerprint: plan.recipe_fingerprint.clone(),
+            analysis: plan.analysis.clone(),
+            architecture: parse_frozen_architecture(&plan.package.architecture)?,
+            manifest_build_inputs: plan.manifest_build_inputs.clone(),
+            jobs: plan.execution.jobs,
+            derivation_id: plan.derivation_id(),
+        })
+    }
+
+    pub fn package(&self, timing: &mut Timing) -> Result<(), Error> {
+        let mut hasher = StoneDigestWriterHasher::new();
+        let timer = timing.begin(timing::Kind::Analyze);
+        let paths = self
+            .collector
+            .enumerate_paths(None, &mut hasher)
+            .map_err(Error::CollectPaths)?;
+        let mut analysis = analysis::Chain::new(self.paths, &self.analysis, &self.collector, &mut hasher);
+        analysis.process(paths).map_err(Error::Analysis)?;
+        timing.finish(timer);
+
+        let timer = timing.begin(timing::Kind::Emit);
+        let packages = self
+            .packages
+            .iter()
+            .filter_map(|(name, package)| {
+                let bucket = analysis.buckets.remove(name)?;
+                Some(emit::Package::new_with_architecture(
+                    name,
+                    &self.source,
+                    package,
+                    bucket,
+                    self.build_release,
+                    &self.recipe_fingerprint,
+                    &self.derivation_id,
+                    self.architecture,
+                    self.jobs,
+                ))
+            })
+            .collect::<Vec<_>>();
+        emit::emit_frozen(
+            self.paths,
+            &self.source,
+            &self.recipe_fingerprint,
+            self.manifest_build_inputs.clone(),
+            self.architecture,
+            &packages,
+            &self.derivation_id,
+        )
+        .map_err(Error::Emit)?;
+        timing.finish(timer);
+        Ok(())
+    }
+}
+
+fn recipe_path_kind(kind: PathRuleKind) -> PathKind {
+    match kind {
+        PathRuleKind::Any => PathKind::Any,
+        PathRuleKind::Executable => PathKind::Exe,
+        PathRuleKind::Symlink => PathKind::Symlink,
+        PathRuleKind::Special => PathKind::Special,
+    }
+}
+
+fn parse_frozen_architecture(value: &str) -> Result<crate::Architecture, Error> {
+    match value {
+        "x86_64" => Ok(crate::Architecture::X86_64),
+        "x86" => Ok(crate::Architecture::X86),
+        "aarch64" => Ok(crate::Architecture::Aarch64),
+        "riscv64" => Ok(crate::Architecture::Riscv64),
+        _ => Err(Error::UnsupportedFrozenArchitecture(value.to_owned())),
+    }
 }
 
 impl<'a> Packager<'a> {
@@ -73,7 +234,17 @@ impl<'a> Packager<'a> {
         // Process all paths with the analysis chain
         // This will determine which files get included
         // and what deps / provides they produce
-        let mut analysis = analysis::Chain::new(self.paths, self.recipe, &self.collector, &mut hasher);
+        let analysis_plan = AnalysisPlan {
+            toolchain: match self.recipe.parsed.options.toolchain {
+                Toolchain::Llvm => AnalysisToolchain::Llvm,
+                Toolchain::Gnu => AnalysisToolchain::Gnu,
+            },
+            debug: self.recipe.parsed.options.debug,
+            strip: self.recipe.parsed.options.strip,
+            compress_man: self.recipe.parsed.options.compressman,
+            remove_libtool: self.recipe.parsed.options.lastrip,
+        };
+        let mut analysis = analysis::Chain::new(self.paths, &analysis_plan, &self.collector, &mut hasher);
         analysis.process(paths).map_err(Error::Analysis)?;
 
         timing.finish(timer);
@@ -270,6 +441,12 @@ pub enum Error {
     Container(#[from] container::Error),
     #[error("invalid fully expanded package relation")]
     InvalidPackageRelation(#[source] stone_recipe::ValidationError),
+    #[error("invalid frozen derivation plan")]
+    InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
+    #[error("frozen output {0} is missing")]
+    MissingFrozenOutput(String),
+    #[error("unsupported frozen artifact architecture {0}")]
+    UnsupportedFrozenArchitecture(String),
 }
 
 #[cfg(test)]
@@ -277,6 +454,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use stone_recipe::derivation::{CollectionRulePlan, OutputPlan, PathRuleKind, PathRulePlan};
 
     #[test]
     fn repository_package_policy_expands_and_merges_for_x86_64() {
@@ -383,5 +561,75 @@ mod tests {
             Error::InvalidPackageRelation(stone_recipe::ValidationError::InvalidDependency { ref field, .. })
                 if field == "packages[unknown(target)-devel].run_deps[0]"
         ));
+    }
+
+    #[test]
+    fn frozen_packager_uses_only_plan_outputs_rules_analysis_and_identity() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let paths = Paths::new(&recipe, None, runtime.path(), "/mason", output.path()).unwrap();
+        let mut plan = emit::test_derivation_plan();
+        plan.package.name = "frozen".to_owned();
+        plan.package.homepage = "https://frozen.invalid".to_owned();
+        plan.package.architecture = "x86".to_owned();
+        plan.package.licenses = vec!["MIT".to_owned()];
+        plan.analysis = AnalysisPlan {
+            toolchain: AnalysisToolchain::Gnu,
+            debug: true,
+            strip: false,
+            compress_man: false,
+            remove_libtool: false,
+        };
+        plan.manifest_build_inputs = vec!["frozen-build-input".to_owned()];
+        plan.outputs = vec![OutputPlan {
+            name: "out".to_owned(),
+            package_name: "frozen".to_owned(),
+            summary: Some("Frozen output".to_owned()),
+            description: Some("Only plan data".to_owned()),
+            provides_exclude: vec!["excluded-provider".to_owned()],
+            runtime_exclude: vec!["excluded-runtime".to_owned()],
+            paths: vec![PathRulePlan {
+                kind: PathRuleKind::Any,
+                pattern: "*".to_owned(),
+            }],
+            runtime_inputs: Vec::new(),
+            conflicts: vec!["conflict".to_owned()],
+        }];
+        plan.collection_rules = vec![
+            CollectionRulePlan {
+                output: "out".to_owned(),
+                kind: PathRuleKind::Any,
+                pattern: "*".to_owned(),
+            },
+            CollectionRulePlan {
+                output: "out".to_owned(),
+                kind: PathRuleKind::Executable,
+                pattern: "/usr/bin/*".to_owned(),
+            },
+        ];
+        plan.validate().unwrap();
+        let expected_id = plan.derivation_id();
+
+        let packager = FrozenPackager::from_plan(&paths, &plan).unwrap();
+        assert_eq!(packager.source.name, "frozen");
+        assert_eq!(packager.source.homepage, "https://frozen.invalid");
+        assert_eq!(packager.architecture, crate::Architecture::X86);
+        assert_eq!(packager.analysis, plan.analysis);
+        assert_eq!(packager.manifest_build_inputs, ["frozen-build-input"]);
+        assert_eq!(packager.derivation_id, expected_id);
+        assert_eq!(
+            packager
+                .collector
+                .rules()
+                .iter()
+                .map(|rule| (rule.package.as_str(), rule.kind, rule.pattern.as_str()))
+                .collect::<Vec<_>>(),
+            [("frozen", PathKind::Any, "*"), ("frozen", PathKind::Exe, "/usr/bin/*"),]
+        );
+        let output = &packager.packages["frozen"];
+        assert_eq!(output.summary.as_deref(), Some("Frozen output"));
+        assert_eq!(output.conflicts, ["conflict"]);
     }
 }

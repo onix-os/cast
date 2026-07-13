@@ -125,11 +125,17 @@ impl DerivationPlan {
         }
 
         let mut output_names = BTreeSet::new();
+        let mut output_package_names = BTreeSet::new();
         for (index, output) in self.outputs.iter().enumerate() {
             output.validate(index)?;
             if !output_names.insert(output.name.as_str()) {
                 return Err(DerivationValidationError::DuplicateOutput {
                     name: output.name.clone(),
+                });
+            }
+            if !output_package_names.insert(output.package_name.as_str()) {
+                return Err(DerivationValidationError::DuplicateOutputPackage {
+                    package: output.package_name.clone(),
                 });
             }
         }
@@ -763,6 +769,8 @@ pub enum DerivationValidationError {
     DuplicatePhase { job: usize, name: String },
     #[error("outputs: duplicate output name `{name}`")]
     DuplicateOutput { name: String },
+    #[error("outputs: duplicate emitted package name {package}")]
+    DuplicateOutputPackage { package: String },
     #[error("analyzers: duplicate analyzer name `{name}`")]
     DuplicateAnalyzer { name: String },
     #[error("{field}: unknown locked output `{package}:{output}`")]
@@ -1149,6 +1157,20 @@ mod tests {
             plan.validate(),
             Err(DerivationValidationError::UnknownOutputReference { field, .. })
                 if field == "outputs[0].runtime_inputs[0]"
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_emitted_package_names() {
+        let mut plan = sample_plan();
+        let mut duplicate = plan.outputs[0].clone();
+        duplicate.name = "dev".to_owned();
+        plan.outputs.push(duplicate);
+
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::DuplicateOutputPackage { package })
+                if package == "hello"
         ));
     }
 

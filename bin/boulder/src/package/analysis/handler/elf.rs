@@ -19,7 +19,7 @@ use path_clean::clean;
 
 use moss::util;
 use stone::relation::{Dependency, Kind, Provider};
-use stone_recipe::tuning::Toolchain;
+use stone_recipe::derivation::AnalysisToolchain;
 
 use crate::package::{
     analysis::{BoxError, BucketMut, Decision, Response},
@@ -358,11 +358,11 @@ fn split_debug(
     bit_size: Class,
     build_id: &str,
 ) -> Result<Option<PathBuf>, BoxError> {
-    if !bucket.recipe.parsed.options.debug {
+    if !bucket.analysis.debug {
         return Ok(None);
     }
 
-    let use_llvm = matches!(bucket.recipe.parsed.options.toolchain, Toolchain::Llvm);
+    let use_llvm = matches!(bucket.analysis.toolchain, AnalysisToolchain::Llvm);
     let objcopy = if use_llvm {
         "/usr/bin/llvm-objcopy"
     } else {
@@ -409,11 +409,11 @@ fn split_debug(
 }
 
 fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
-    if !bucket.recipe.parsed.options.strip {
+    if !bucket.analysis.strip {
         return Ok(());
     }
 
-    let use_llvm = matches!(bucket.recipe.parsed.options.toolchain, Toolchain::Llvm);
+    let use_llvm = matches!(bucket.analysis.toolchain, AnalysisToolchain::Llvm);
     let strip = if use_llvm {
         "/usr/bin/llvm-strip"
     } else {

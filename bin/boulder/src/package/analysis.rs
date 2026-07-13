@@ -11,9 +11,10 @@ use stone::{
     StoneDigestWriterHasher,
     relation::{Dependency, Provider},
 };
+use stone_recipe::derivation::AnalysisPlan;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
-use crate::{Paths, Recipe};
+use crate::Paths;
 
 use super::collect::{Collector, PathInfo};
 
@@ -23,7 +24,7 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub struct Chain<'a> {
     handlers: Vec<Box<dyn Handler>>,
-    recipe: &'a Recipe,
+    analysis: &'a AnalysisPlan,
     paths: &'a Paths,
     collector: &'a Collector,
     hasher: &'a mut StoneDigestWriterHasher,
@@ -33,7 +34,7 @@ pub struct Chain<'a> {
 impl<'a> Chain<'a> {
     pub fn new(
         paths: &'a Paths,
-        recipe: &'a Recipe,
+        analysis: &'a AnalysisPlan,
         collector: &'a Collector,
         hasher: &'a mut StoneDigestWriterHasher,
     ) -> Self {
@@ -50,7 +51,7 @@ impl<'a> Chain<'a> {
                 Box::new(handler::include_any),
             ],
             paths,
-            recipe,
+            analysis,
             collector,
             hasher,
             buckets: Default::default(),
@@ -83,7 +84,7 @@ impl<'a> Chain<'a> {
                     providers: &mut bucket.providers,
                     dependencies: &mut bucket.dependencies,
                     hasher: self.hasher,
-                    recipe: self.recipe,
+                    analysis: self.analysis,
                     paths: self.paths,
                 };
 
@@ -164,7 +165,7 @@ pub struct BucketMut<'a> {
     pub providers: &'a mut BTreeSet<Provider>,
     pub dependencies: &'a mut BTreeSet<Dependency>,
     pub hasher: &'a mut StoneDigestWriterHasher,
-    pub recipe: &'a Recipe,
+    pub analysis: &'a AnalysisPlan,
     pub paths: &'a Paths,
 }
 
