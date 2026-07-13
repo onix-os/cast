@@ -70,7 +70,6 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     }
     let builder = Builder::new_with_jobs(
         &request.recipe,
-        None,
         env,
         request.profile.clone(),
         request.compiler_cache,

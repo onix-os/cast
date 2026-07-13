@@ -14,8 +14,8 @@ where
     run(paths, networking, f)
 }
 
-/// Execute a frozen plan without exposing mutable recipe, verification, or
-/// global cache inputs to build steps.
+/// Execute a frozen plan without exposing mutable recipe or global cache
+/// inputs to build steps.
 pub fn exec_frozen<E>(paths: &Paths, plan: &DerivationPlan, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -77,7 +77,7 @@ where
     let recipe = paths.recipe();
     let ccache_conf = paths.ccache_config();
 
-    let mut container = Container::new(rootfs)
+    let container = Container::new(rootfs)
         .hostname("boulder")
         .networking(networking)
         .ignore_host_sigint(true)
@@ -92,10 +92,6 @@ where
         .bind_rw(&rustc_wrapper.host, &rustc_wrapper.guest)
         .bind_ro(&recipe.host, &recipe.guest)
         .bind_ro_if_exists(&ccache_conf.host, &ccache_conf.guest);
-
-    if let Some(manifest) = paths.verify_manifest() {
-        container = container.bind_ro(&manifest.host, &manifest.guest);
-    }
 
     container.run::<E>(f)?;
 
@@ -118,20 +114,16 @@ mod tests {
     use crate::Recipe;
 
     #[test]
-    fn frozen_container_excludes_recipe_verify_and_disabled_caches() {
+    fn frozen_container_excludes_recipe_and_disabled_global_caches() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         let runtime = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
-        let verify = runtime.path().join("manifest.bin");
-        fs_err::write(&verify, b"verify").unwrap();
-        let paths = Paths::new(&recipe, Some(verify), runtime.path(), "/mason", output.path()).unwrap();
+        let paths = Paths::new(&recipe, runtime.path(), "/mason", output.path()).unwrap();
 
         let disabled = frozen_mounts(&paths, false, "derivation-id").unwrap();
         assert_eq!(disabled.len(), 2);
-        assert!(!disabled.iter().any(|mount| {
-            mount.host == paths.recipe().host || paths.verify_manifest().is_some_and(|verify| mount.host == verify.host)
-        }));
+        assert!(!disabled.iter().any(|mount| mount.host == paths.recipe().host));
 
         let enabled = frozen_mounts(&paths, true, "derivation-id").unwrap();
         assert_eq!(enabled.len(), 8);

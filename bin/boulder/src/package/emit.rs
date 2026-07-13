@@ -3,7 +3,6 @@
 use std::{
     io::{self, Write},
     num::NonZeroU64,
-    path::PathBuf,
     time::Duration,
 };
 
@@ -195,45 +194,10 @@ pub fn emit_frozen(
         architecture,
         derivation_id,
     );
-    let mut emit_manifests = true;
-
     for package in packages {
         if !package.is_dbginfo() {
             manifest.add_package(package);
         }
-    }
-
-    if let Some(mapping) = paths.verify_manifest() {
-        let host_path = &mapping.host;
-        let guest_path = &mapping.guest;
-
-        println!("Verifying");
-
-        // We don't override manifests when verifying. If they match,
-        // no need to output it & cause a potential recipe repo diff
-        // since we can't guarantee bit-for-bit deterministic output
-        // of manifest files
-        emit_manifests = false;
-
-        match manifest.verify(guest_path).context(ManifestSnafu)? {
-            manifest::Verification::Mismatch => {
-                return VerificationMismatchSnafu { host_path }.fail();
-            }
-            manifest::Verification::HashMatch { hash } => {
-                println!(
-                    "{} {host_path:?} matches built manifest based on hash match: {hash:?}",
-                    "Verified".green()
-                );
-            }
-            manifest::Verification::ContentMatch => {
-                println!(
-                    "{} {host_path:?} matches built manifest based on content match",
-                    "Verified".green()
-                );
-            }
-        }
-
-        println!();
     }
 
     println!("Packaging");
@@ -242,10 +206,8 @@ pub fn emit_frozen(
         emit_package(paths, package, recipe_fingerprint, derivation_id)?;
     }
 
-    if emit_manifests {
-        manifest.write_binary().context(ManifestSnafu)?;
-        manifest.write_json().context(ManifestSnafu)?;
-    }
+    manifest.write_binary().context(ManifestSnafu)?;
+    manifest.write_json().context(ManifestSnafu)?;
 
     println!();
 
@@ -418,6 +380,4 @@ pub enum Error {
     Manifest { source: manifest::Error },
     #[snafu(display("io"))]
     Io { source: io::Error },
-    #[snafu(display("Built manifest does not match verification manifest {host_path:?}"))]
-    VerificationMismatch { host_path: PathBuf },
 }

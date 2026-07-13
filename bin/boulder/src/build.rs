@@ -50,7 +50,6 @@ pub struct Runtime {
 impl Builder {
     pub(crate) fn new_with_jobs(
         recipe_path: &Path,
-        verify_against_manifest: Option<PathBuf>,
         env: Env,
         profile: profile::Id,
         ccache: bool,
@@ -70,7 +69,7 @@ impl Builder {
 
         let build_policy = BuildPolicy::load(&env)?;
 
-        let paths = Paths::new(&recipe, verify_against_manifest, &env.cache_dir, "/mason", output_dir)?;
+        let paths = Paths::new(&recipe, &env.cache_dir, "/mason", output_dir)?;
 
         let target_policy = build_policy.target(requested_target)?.clone();
         if !recipe.supports_target(&target_policy) {

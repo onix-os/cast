@@ -465,7 +465,7 @@ mod direct_tests {
             flags: vec!["-DBUILD_TESTS=OFF".to_owned()],
             run_tests: false,
         };
-        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
         let target = policy.target("x86_64").unwrap();
         let plan = Phase::Setup
             .plan(
@@ -509,7 +509,7 @@ mod direct_tests {
             },
             required_tools: Vec::new(),
         };
-        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
         let target = policy.target("x86_64").unwrap();
         let plan = Phase::Build
             .plan(
@@ -532,7 +532,7 @@ mod direct_tests {
     #[test]
     fn source_preparation_is_argv_preserving_and_never_parsed_as_shell() {
         let (recipe, policy, root) = fixture();
-        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
         let archive_name = "source archive;echo-not-shell.tar.xz";
         let sources = [
             UpstreamSpec::Archive {
@@ -575,7 +575,7 @@ mod direct_tests {
     fn pgo_finish_uses_typed_policy_commands_and_controlled_globs() {
         let (recipe, mut policy, root) = fixture();
         policy.spec.pgo.merge_program = TextSpec::Literal("policy-profdata".to_owned());
-        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
         let context = context_for(&recipe, &paths, &policy, Some(pgo::Stage::One));
 
         let StepPlan::Shell {
@@ -602,7 +602,7 @@ mod direct_tests {
         let (recipe, mut policy, root) = fixture();
         policy.spec.pgo.stage_one.finish.as_mut().unwrap().inputs =
             vec![TextSpec::Literal("/tmp/default*.profraw".to_owned())];
-        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let paths = Paths::new(&recipe, root.path(), "/mason", root.path()).unwrap();
         let context = context_for(&recipe, &paths, &policy, Some(pgo::Stage::One));
 
         assert!(matches!(

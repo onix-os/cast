@@ -438,7 +438,7 @@ mod tests {
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         let runtime = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
-        let paths = Paths::new(&recipe, None, runtime.path(), "/mason", output.path()).unwrap();
+        let paths = Paths::new(&recipe, runtime.path(), "/mason", output.path()).unwrap();
         let mut plan = emit::test_derivation_plan();
         plan.package.name = "frozen".to_owned();
         plan.package.homepage = "https://frozen.invalid".to_owned();

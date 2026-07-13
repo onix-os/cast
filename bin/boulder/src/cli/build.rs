@@ -3,7 +3,7 @@
 
 use std::io;
 use std::num::{NonZeroU32, NonZeroU64};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::build;
 use crate::executor::Executor;
@@ -214,15 +214,19 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
 fn verify_frozen_manifest(
     paths: &crate::Paths,
     plan: &stone_recipe::derivation::DerivationPlan,
-    expected: &std::path::Path,
+    expected: &Path,
 ) -> Result<(), Error> {
     let generated = paths
         .artefacts()
         .host
         .join(format!("manifest.{}.bin", plan.package.architecture));
-    if fs_err::read(&generated)? != fs_err::read(expected)? {
+    verify_manifest_bytes(&generated, expected)
+}
+
+fn verify_manifest_bytes(generated: &Path, expected: &Path) -> Result<(), Error> {
+    if fs_err::read(generated)? != fs_err::read(expected)? {
         return Err(Error::VerificationMismatch {
-            generated,
+            generated: generated.to_owned(),
             expected: expected.to_owned(),
         });
     }
@@ -287,5 +291,42 @@ mod tests {
     #[test]
     fn frozen_build_requires_target_and_timestamp() {
         assert!(Command::try_parse_from(["build"]).is_err());
+    }
+
+    #[test]
+    fn host_manifest_verification_is_an_exact_byte_comparison() {
+        let root = tempfile::tempdir().unwrap();
+        let generated = root.path().join("generated.bin");
+        let expected = root.path().join("expected.bin");
+        fs_err::write(&generated, b"same bytes\0including binary").unwrap();
+        fs_err::write(&expected, b"same bytes\0including binary").unwrap();
+
+        verify_manifest_bytes(&generated, &expected).unwrap();
+
+        fs_err::write(&expected, b"same semantic records, different bytes").unwrap();
+        let error = verify_manifest_bytes(&generated, &expected).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::VerificationMismatch {
+                generated: actual_generated,
+                expected: actual_expected,
+            } if actual_generated == generated && actual_expected == expected
+        ));
+    }
+
+    #[test]
+    fn verify_flag_remains_a_host_path_input() {
+        let command = Command::try_parse_from([
+            "build",
+            "--target",
+            "x86_64",
+            "--source-date-epoch",
+            "1700000000",
+            "--verify",
+            "/host/reference.bin",
+        ])
+        .unwrap();
+
+        assert_eq!(command.verify_against, Some(PathBuf::from("/host/reference.bin")));
     }
 }
