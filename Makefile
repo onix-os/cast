@@ -17,7 +17,8 @@ STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 .DEFAULT_GOAL := cast
 
 .PHONY: build cast get-started licenses fix lint test check fmt clean \
-	binary-layout config-formats config-formats-test migrate migrate-redo libstone help
+	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
+	libstone help
 
 build:
 	@$(CARGO) build --workspace
@@ -58,7 +59,7 @@ fix:
 	@echo "Fixing typos..."
 	@typos -w --exclude target/license-list-data/
 
-lint: binary-layout config-formats
+lint: binary-layout product-names config-formats
 	@echo "Running clippy..."
 	@$(CARGO) clippy --workspace -- --no-deps
 	@echo "Running cargo fmt..."
@@ -74,6 +75,9 @@ config-formats-test:
 
 binary-layout:
 	@"$(TOP_DIR)/misc/scripts/check-binary-layout.sh"
+
+product-names:
+	@"$(TOP_DIR)/misc/scripts/check-product-names.sh"
 
 test: lint config-formats-test
 	@echo "Running tests in all packages..."
@@ -135,6 +139,7 @@ help:
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"
 	@echo "  binary-layout  Require Cast to be the sole executable target"
+	@echo "  product-names  Reject active references to retired product names"
 	@echo "  config-formats  Reject YAML/KDL outside external-service interfaces"
 	@echo "  config-formats-test  Test the configuration-format gate"
 	@echo "  migrate       Apply all Forge database migrations"
