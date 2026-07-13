@@ -17,7 +17,7 @@ STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 .DEFAULT_GOAL := moss
 
 .PHONY: build boulder moss get-started licenses fix lint test check fmt clean \
-	migrate migrate-redo libstone help
+	config-formats migrate migrate-redo libstone help
 
 build:
 	@$(CARGO) build --workspace
@@ -63,13 +63,16 @@ fix:
 	@echo "Fixing typos..."
 	@typos -w --exclude target/license-list-data/
 
-lint:
+lint: config-formats
 	@echo "Running clippy..."
 	@$(CARGO) clippy --workspace -- --no-deps
 	@echo "Running cargo fmt..."
 	@$(CARGO) fmt --all -- --check
 	@echo "Checking for typos..."
 	@typos --exclude target/license-list-data/
+
+config-formats:
+	@"$(TOP_DIR)/misc/scripts/check-config-formats.sh"
 
 test: lint
 	@echo "Running tests in all packages..."
@@ -131,6 +134,7 @@ help:
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"
+	@echo "  config-formats  Reject YAML/KDL outside external-service interfaces"
 	@echo "  migrate       Apply all Moss database migrations"
 	@echo "  migrate-redo  Reapply all Moss database migrations"
 	@echo "  libstone      Build and run the C libstone example"
