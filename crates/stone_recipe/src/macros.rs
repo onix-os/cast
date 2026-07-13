@@ -10,8 +10,9 @@ use crate::{
 mod gluon;
 
 pub use self::gluon::{
-    EvaluatedMacros, GLUON_MACROS_ABI, MACROS_ABI_VERSION, MacrosConversionError, MacrosEvaluationError, encode_gluon,
-    encode_gluon_spec, evaluate_gluon, evaluate_gluon_with,
+    EvaluatedMacros, EvaluatedPolicy, GLUON_MACROS_ABI, GLUON_POLICY_ABI, MACROS_ABI_VERSION, MacrosConversionError,
+    MacrosEvaluationError, POLICY_ABI_VERSION, PolicyEvaluationError, encode_gluon, encode_gluon_spec, evaluate_gluon,
+    evaluate_gluon_with, evaluate_policy_gluon_with, evaluate_policy_gluon_with_inputs,
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,34 @@ pub struct Action {
     pub example: Option<String>,
     pub command: String,
     pub dependencies: Vec<String>,
+}
+
+/// Namespace containing a transitional macro-policy module.
+///
+/// This is the explicit policy-root boundary used while macro actions are
+/// lowered into the current executor. The final declarative model owns policy
+/// in `stone_recipe::policy` rather than in the legacy macro representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PolicyKind {
+    Actions,
+    Architecture,
+}
+
+/// An explicit operation in the ordered policy root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyOperation {
+    Add,
+    Replace,
+    Modify,
+}
+
+/// One evaluated module and the operation which introduced it.
+#[derive(Debug, Clone)]
+pub struct PolicyModule {
+    pub operation: PolicyOperation,
+    pub kind: PolicyKind,
+    pub key: String,
+    pub origin: String,
 }
 
 /// Format-neutral macro/policy module value.

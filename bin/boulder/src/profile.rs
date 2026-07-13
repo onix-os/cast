@@ -11,7 +11,7 @@ use std::{
 
 use config::{Config, DecodedGluon, GluonCodec, GluonCodecError};
 use derive_more::{Debug, Display};
-use gluon_config::{Evaluator, Source as GluonSource};
+use gluon_config::{EvaluationFingerprint, Evaluator, Source as GluonSource};
 use moss::{Repository, repository};
 use thiserror::Error;
 
@@ -582,20 +582,27 @@ fn gluon_string(value: &str) -> String {
 
 pub struct Manager<'a> {
     pub profiles: Map,
+    /// Complete fingerprints of every loaded profile layer, retained so the
+    /// selected repository policy can become a derivation input.
+    pub fingerprints: Vec<EvaluationFingerprint>,
     env: &'a Env,
 }
 
 impl<'a> Manager<'a> {
     pub fn new(env: &'a Env) -> Result<Manager<'a>, Error> {
-        let profiles = env
-            .config
-            .load_gluon(&Evaluator::default(), &ProfileCodec)?
+        let loaded = env.config.load_gluon(&Evaluator::default(), &ProfileCodec)?;
+        let fingerprints = loaded.iter().map(|loaded| loaded.fingerprint.clone()).collect();
+        let profiles = loaded
             .into_iter()
             .map(|loaded| loaded.value)
             .reduce(Map::merge)
             .unwrap_or_default();
 
-        Ok(Self { env, profiles })
+        Ok(Self {
+            env,
+            profiles,
+            fingerprints,
+        })
     }
 
     pub fn repositories(&self, profile: &Id) -> Result<&repository::Map, Error> {
@@ -702,6 +709,13 @@ mod tests {
 
         let env = environment(temporary.path());
         let manager = Manager::new(&env).unwrap();
+        assert_eq!(manager.fingerprints.len(), 1);
+        assert!(
+            manager.fingerprints[0]
+                .imported_modules
+                .iter()
+                .any(|module| module.logical_name == "boulder.profile.v1")
+        );
         let repositories = manager.repositories(&Id::new("test")).unwrap();
 
         let local = repositories.get(&repository::Id::new("local")).unwrap();

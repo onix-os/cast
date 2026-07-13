@@ -7,7 +7,7 @@ use std::{error::Error, fmt, fmt::Write as _};
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 
-use super::{Action, ActionSpec, Macros, MacrosSpec};
+use super::{Action, ActionSpec, Macros, MacrosSpec, PolicyKind, PolicyModule, PolicyOperation};
 use crate::{
     Package, PackageSpec, PathKind, PathSpec, ValidationError,
     spec::KeyValueSpec,
@@ -18,8 +18,14 @@ use crate::{
 /// Version of the embedded macro-policy language boundary.
 pub const MACROS_ABI_VERSION: u32 = 1;
 
+/// Version of the explicit repository-policy composition boundary.
+pub const POLICY_ABI_VERSION: u32 = 1;
+
 /// Pure helpers imported by policy modules as `boulder.macros.v1`.
 pub const GLUON_MACROS_ABI: &str = include_str!("../../gluon/macros.glu");
+
+/// Pure helpers imported by the repository policy root as `boulder.policy.v1`.
+pub const GLUON_POLICY_ABI: &str = include_str!("../../gluon/policy.glu");
 
 const STANDALONE_GLUON_TYPES: &str = r#"type Optional a =
     | None
@@ -124,6 +130,13 @@ pub struct EvaluatedMacros {
     pub fingerprint: EvaluationFingerprint,
 }
 
+/// Ordered policy operations and the complete provenance of their root.
+#[derive(Debug, Clone)]
+pub struct EvaluatedPolicy {
+    pub modules: Vec<PolicyModule>,
+    pub fingerprint: EvaluationFingerprint,
+}
+
 /// Semantic macro conversion error with a stable field path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MacrosConversionError {
@@ -196,6 +209,34 @@ impl From<MacrosConversionError> for MacrosEvaluationError {
     }
 }
 
+/// Failure to evaluate or semantically convert the explicit policy root.
+#[derive(Debug)]
+pub enum PolicyEvaluationError {
+    Evaluation(Diagnostic),
+}
+
+impl fmt::Display for PolicyEvaluationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Evaluation(error) => write!(formatter, "evaluate policy Gluon: {error}"),
+        }
+    }
+}
+
+impl Error for PolicyEvaluationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Evaluation(error) => Some(error),
+        }
+    }
+}
+
+impl From<Diagnostic> for PolicyEvaluationError {
+    fn from(error: Diagnostic) -> Self {
+        Self::Evaluation(error)
+    }
+}
+
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 enum GluonOptional<T> {
     None,
@@ -216,6 +257,27 @@ struct GluonMacrosSpec {
     tuning: Vec<GluonKeyValueSpec<GluonTuningGroupSpec>>,
     packages: Vec<GluonKeyValueSpec<GluonPackageSpec>>,
     default_tuning_groups: Vec<String>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonPolicyKind {
+    Actions,
+    Architecture,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonPolicyOperation {
+    Add,
+    Replace,
+    Modify,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonPolicyModule {
+    operation: GluonPolicyOperation,
+    kind: GluonPolicyKind,
+    key: String,
+    origin: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -307,6 +369,25 @@ impl From<GluonMacrosSpec> for MacrosSpec {
             tuning: value.tuning.into_iter().map(Into::into).collect(),
             packages: value.packages.into_iter().map(Into::into).collect(),
             default_tuning_groups: value.default_tuning_groups,
+        }
+    }
+}
+
+impl From<GluonPolicyKind> for PolicyKind {
+    fn from(value: GluonPolicyKind) -> Self {
+        match value {
+            GluonPolicyKind::Actions => Self::Actions,
+            GluonPolicyKind::Architecture => Self::Architecture,
+        }
+    }
+}
+
+impl From<GluonPolicyOperation> for PolicyOperation {
+    fn from(value: GluonPolicyOperation) -> Self {
+        match value {
+            GluonPolicyOperation::Add => Self::Add,
+            GluonPolicyOperation::Replace => Self::Replace,
+            GluonPolicyOperation::Modify => Self::Modify,
         }
     }
 }
@@ -562,6 +643,46 @@ pub fn evaluate_gluon_with(evaluator: &Evaluator, source: &Source) -> Result<Eva
 
     Ok(EvaluatedMacros {
         macros: spec.into(),
+        fingerprint: evaluation.fingerprint,
+    })
+}
+
+/// Evaluate the single explicit repository-policy root.
+///
+/// The root returns ordered module references rather than forcing all policy
+/// modules into one enormous structural Gluon value.
+pub fn evaluate_policy_gluon_with(
+    evaluator: &Evaluator,
+    source: &Source,
+) -> Result<EvaluatedPolicy, PolicyEvaluationError> {
+    evaluate_policy_gluon_with_inputs(evaluator, source, &[])
+}
+
+/// Evaluate the policy root and bind the exact bytes of its host-resolved
+/// modules into the otherwise pure evaluation fingerprint.
+pub fn evaluate_policy_gluon_with_inputs(
+    evaluator: &Evaluator,
+    source: &Source,
+    explicit_inputs: &[u8],
+) -> Result<EvaluatedPolicy, PolicyEvaluationError> {
+    let mut import_policy = evaluator.import_policy().clone();
+    import_policy.insert_embedded_module("boulder.macros.v1", GLUON_MACROS_ABI)?;
+    import_policy.insert_embedded_module("boulder.policy.v1", GLUON_POLICY_ABI)?;
+    let evaluator = evaluator.clone().with_import_policy(import_policy);
+    let evaluation = evaluator.evaluate_with_inputs::<Vec<GluonPolicyModule>>(source, explicit_inputs)?;
+    let mut modules = Vec::with_capacity(evaluation.value.len());
+
+    for module in evaluation.value {
+        modules.push(PolicyModule {
+            operation: module.operation.into(),
+            kind: module.kind.into(),
+            key: module.key,
+            origin: module.origin,
+        });
+    }
+
+    Ok(EvaluatedPolicy {
+        modules,
         fingerprint: evaluation.fingerprint,
     })
 }

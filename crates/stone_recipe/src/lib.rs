@@ -6,10 +6,11 @@ pub use self::gluon::{
     encode_gluon_spec as encode_recipe_gluon_spec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 pub use self::macros::{
-    ActionSpec, EvaluatedMacros, GLUON_MACROS_ABI, MACROS_ABI_VERSION, Macros, MacrosConversionError,
-    MacrosEvaluationError, MacrosSpec, encode_gluon as encode_macros_gluon,
-    encode_gluon_spec as encode_macros_gluon_spec, evaluate_gluon as evaluate_macros_gluon,
-    evaluate_gluon_with as evaluate_macros_gluon_with,
+    ActionSpec, EvaluatedMacros, EvaluatedPolicy, GLUON_MACROS_ABI, GLUON_POLICY_ABI, MACROS_ABI_VERSION, Macros,
+    MacrosConversionError, MacrosEvaluationError, MacrosSpec, POLICY_ABI_VERSION, PolicyEvaluationError, PolicyKind,
+    PolicyModule, PolicyOperation, encode_gluon as encode_macros_gluon, encode_gluon_spec as encode_macros_gluon_spec,
+    evaluate_gluon as evaluate_macros_gluon, evaluate_gluon_with as evaluate_macros_gluon_with,
+    evaluate_policy_gluon_with, evaluate_policy_gluon_with_inputs,
 };
 pub use self::script::Script;
 pub use self::spec::{

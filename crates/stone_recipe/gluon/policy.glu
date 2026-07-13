@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Pure embedded API imported by the repository policy root as
+// `boulder.policy.v1`.
+
+type PolicyKind =
+    | Actions
+    | Architecture
+
+type PolicyOperation =
+    | Add
+    | Replace
+    | Modify
+
+type PolicyValue = {
+    kind: PolicyKind,
+    key: String,
+    origin: String,
+}
+
+type PolicyEntry = {
+    operation: PolicyOperation,
+    kind: PolicyKind,
+    key: String,
+    origin: String,
+}
+
+let value = \kind key origin -> {
+    kind,
+    key,
+    origin,
+}
+
+let with_operation = \operation candidate -> {
+    operation,
+    kind = candidate.kind,
+    key = candidate.key,
+    origin = candidate.origin,
+}
+
+{
+    abi_version = 1,
+    policy = \entries -> entries,
+    actions = value Actions,
+    architecture = value Architecture,
+    add = with_operation Add,
+    replace = with_operation Replace,
+    modify = with_operation Modify,
+}

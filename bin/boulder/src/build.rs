@@ -39,6 +39,8 @@ pub struct Builder {
     pub recipe: Recipe,
     pub paths: Paths,
     pub macros: Macros,
+    pub profile: profile::Id,
+    pub profile_fingerprints: Vec<gluon_config::EvaluationFingerprint>,
     pub ccache: bool,
     pub env: Env,
     upstreams: Vec<Upstream>,
@@ -47,6 +49,7 @@ pub struct Builder {
 
 pub struct Target {
     pub build_target: BuildTarget,
+    pub policy: macros::PolicySelection,
     pub jobs: Vec<Job>,
 }
 
@@ -83,7 +86,11 @@ impl Builder {
                     .map(|stage| Job::new(build_target, stage, &recipe, &paths, &macros, ccache))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(Target { build_target, jobs })
+                Ok(Target {
+                    build_target,
+                    policy: macros.selection(build_target),
+                    jobs,
+                })
             })
             .collect::<Result<Vec<_>, job::Error>>()?;
 
@@ -91,12 +98,15 @@ impl Builder {
 
         let profiles = profile::Manager::new(&env)?;
         let repos = profiles.repositories(&profile)?.clone();
+        let profile_fingerprints = profiles.fingerprints.clone();
 
         Ok(Self {
             targets,
             recipe,
             paths,
             macros,
+            profile,
+            profile_fingerprints,
             ccache,
             env,
             upstreams,
