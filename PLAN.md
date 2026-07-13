@@ -87,16 +87,21 @@ Planning and packaging now consume `PackageSpec` and `DerivationPlan`
 directly. The former internal `Recipe`/`RecipeSpec` domain, its conversions,
 and its duplicated build and output values have been deleted.
 
+Phase planning resolves layout, toolchain, tuning, environment, commands, and
+source overlays through a finite typed build context. The legacy macro policy,
+`%action`/`%(definition)` parser, and its duplicated tuning domain have been
+deleted. Explicit `Shell` steps are literal data and cannot invoke hidden
+expansion syntax.
+
 ### Current blockers
 
-- `bin/boulder/src/build/job/phase.rs` resolves standard builders from typed
-  `StepSpec` values, but `Shell` steps and builder environment definitions
-  still pass through `stone_recipe::script`. `%action` is allowed only through
-  the explicit shell escape hatch; `%(definition)` removal awaits typed path,
-  toolchain, tuning, and environment values during planning.
-- Mutable local `%(pkgdir)` inputs are rejected before freeze. Supporting them
-  requires a local-source ABI which hashes their content and destination into
-  the derivation rather than exposing an untracked recipe-directory mount.
+- Mutable local recipe-directory inputs are rejected before freeze. Supporting
+  them requires a local-source ABI which hashes their content and destination
+  into the derivation rather than exposing an untracked recipe-directory mount.
+- The typed build policy currently evaluates one explicit `default.glu` root.
+  A total typed patch algebra and configured layer composition still need to
+  replace the removed transitional macro-layer implementation before external
+  policy layers can be enabled.
 - Repository output policy still uses a dedicated deferred template DTO until
   it becomes a pure typed policy factory; it no longer reuses the package or
   recipe domain.
@@ -295,18 +300,20 @@ of the three specification layers.
 ### Phase 2: Make policy explicit
 
 - [x] Create one Gluon policy root that explicitly declares the base policy,
-  actions, architecture definitions, tuning, and package templates; bind every
-  declared module fingerprint into the root fingerprint.
-- [x] Replace directory enumeration and filesystem-order merging in
-  `Macros::load` with evaluation of that root.
-- [x] Implement strict `add`, `replace`, and `modify` composition.
+  source preparation, targets, toolchains, builders, tuning, environment,
+  analyzers, and output templates; bind its imported modules into the root
+  fingerprint.
+- [x] Delete directory-enumerated macro loading and evaluate the typed
+  `BuildPolicySpec` root instead.
+- [ ] Implement strict typed `add`, `replace`, and `modify` composition over a
+  total `BuildPolicySpec` patch.
 - [x] Retain and propagate policy and profile fingerprints.
 - [x] Include selected target and policy inputs in evaluation provenance.
-- [x] Add diagnostics showing which module introduced or modified a policy
+- [ ] Add diagnostics showing which module introduced or modified a policy
   value.
 
 **Exit gate:** policy order is visible in Gluon, duplicate semantics are
-explicit, and no macro/profile fingerprint is discarded.
+explicit, and no policy/profile fingerprint is discarded.
 
 ### Phase 3: Introduce `boulder.package.v2`
 
@@ -393,7 +400,7 @@ scope graph or Rust `PackageSet` ABI is implied.
   resolution.
 - [x] Support ordinary Gluon package-argument overrides.
 - [x] Support typed whole-package patches analogous to attribute overrides.
-- [x] Allow configured, ordered policy layers only when they are visible in
+- [ ] Allow configured, ordered policy layers only when they are visible in
   `recipe explain` and included in the derivation identity.
 - [x] Detect missing scope entries and cycles with actionable diagnostics.
 
@@ -404,13 +411,15 @@ recursive package universe inside Gluon.
 
 - [x] Replace phase strings with typed `StepSpec` sequences for standard
   builders where structural steps are possible.
-- [ ] Remove `%action` and `%(definition)` parsing after golden parity tests.
+- [x] Remove `%action` and `%(definition)` parsing after golden parity tests;
+  explicit `Shell` steps remain literal.
 - [x] Remove filesystem-discovered macro composition.
 - [x] Remove the public `boulder.recipe.v1` ABI, its standalone encoders and
   evaluator, and migrate all tracked recipes and fixtures to package v2.
 - [x] Remove the internal `Recipe`/`RecipeSpec` lowering once the executor and
   packaging path consume `PackageSpec` and `DerivationPlan` directly.
-- [ ] Remove obsolete defaults and duplicated Rust/Gluon wire definitions.
+- [x] Remove the obsolete macro defaults, domain conversions, generic
+  `KeyValue`, and duplicated Rust/Gluon macro wire definitions.
 - [x] Audit the repository for YAML/KDL loaders, fallbacks, compatibility
   paths, examples, and documentation. The only owned YAML files are the
   external GitHub interfaces under `.github/`; negative tests and historical

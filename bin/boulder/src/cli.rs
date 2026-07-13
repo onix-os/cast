@@ -141,7 +141,6 @@ fn replace_aliases(args: std::env::Args) -> Vec<String> {
     const ALIASES: &[(&str, &[&str])] = &[
         ("bump", &["recipe", "bump"]),
         ("new", &["recipe", "new"]),
-        ("macros", &["recipe", "macros"]),
         ("up", &["recipe", "update"]),
     ];
 

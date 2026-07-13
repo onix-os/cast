@@ -6,7 +6,7 @@
 # Gluon configuration
 
 OS Tools uses [Gluon](https://gluon-lang.org/) as its only declarative
-configuration language. Boulder recipes, macro policy, profiles, Moss
+configuration language. Boulder recipes, typed build policy, profiles, Moss
 repositories, triggers, and system intent all cross a typed Gluon-to-Rust
 boundary. YAML and KDL are not compatibility formats and are not used as
 intermediate representations.
@@ -22,7 +22,7 @@ constructed only during that conversion.
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
 | Boulder package | `stone.glu` | `boulder.package.v2` and `boulder.builders.*.v1` |
-| Boulder macro policy | `bin/boulder/data/macros/**/*.glu` | `boulder.macros.v1` |
+| Boulder build policy | `bin/boulder/data/policy/default.glu` | `boulder.build_policy.v1` |
 | Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
 | Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
 | Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |
@@ -101,7 +101,8 @@ or terminating the process.
 ## Typed and versioned ABIs
 
 The shared configuration boundary is version `1`. The canonical Boulder
-package ABI is version `2`; the standard builder modules are version `1`.
+package ABI is version `2`; the build-policy and standard-builder modules are
+version `1`.
 The embedded modules expose constructors, defaults, explicit option/boolean
 variants, and immutable records. Gluon-facing DTOs use only stable language
 shapes such as strings, integers, arrays, records, and explicit variants.
@@ -138,10 +139,11 @@ Shell steps use the frozen `BOULDER_*` build-context variables documented in
 the package-authoring guide. The executor receives only the resulting frozen
 `StepPlan` and environment values.
 
-The former `boulder.recipe.v1` embedded module, evaluator, and standalone
-encoders have been removed. `boulder.package.v2` is the only recipe ABI, and
-Boulder plans and packages its concrete `PackageSpec` directly without a
-second internal recipe model.
+The former `boulder.recipe.v1`, `boulder.macros.v1`, and `boulder.policy.v1`
+embedded modules, evaluators, and standalone encoders have been removed.
+`boulder.package.v2` is the only recipe ABI, repository build policy evaluates
+directly as `BuildPolicySpec`, and Boulder plans and packages the concrete
+values without a second recipe or macro domain.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
@@ -153,7 +155,8 @@ Authored programs and generated values have different roles:
 | Artifact | Owner | Rule |
 |---|---|---|
 | `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Boulder |
-| Macro, profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
+| Boulder build-policy root | OS Tools/vendor | One explicit typed root is evaluated; invalid source is a visible error |
+| Profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
 | `sources.lock.glu` | Boulder | Canonical standalone source resolution data, written atomically |
 | `build.lock.glu` | Boulder planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
 | Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Boulder/Moss CLI | Canonical standalone literals marked `@generated`; authored files are protected |
@@ -292,9 +295,9 @@ frozen steps, `FrozenPackager` consumes plan-owned analysis and collection
 rules, binary-manifest verification stays on the host, and cleanup is limited
 to plan-owned paths.
 
-Mutable local recipe inputs referenced through `%(pkgdir)` are rejected before
-freeze. Supporting them requires a local-source ABI that hashes their bytes and
-destination into the derivation.
+Mutable local recipe-directory inputs are rejected before freeze. Supporting
+them requires a local-source ABI that hashes their bytes and destination into
+the derivation.
 
 Create a skeletal recipe from one or more source archives:
 

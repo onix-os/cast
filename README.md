@@ -129,10 +129,9 @@ the frozen jobs in the isolated container, packages from plan-owned analysis
 and collection rules, optionally verifies a binary manifest on the host, and
 cleans only plan-owned paths.
 
-Mutable local files referenced through `%(pkgdir)` under the recipe `pkg/`
-directory are currently rejected before plan freeze. They require a future
-local-source ABI that hashes their content into the derivation instead of
-exposing an untracked host input.
+Mutable local files under the recipe `pkg/` directory are currently rejected
+before plan freeze. They require a future local-source ABI that hashes their
+content into the derivation instead of exposing an untracked host input.
 
 ## Development
 

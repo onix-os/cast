@@ -20,7 +20,7 @@ the restricted Gluon evaluator and Boulder.
 | Contract | Target module | Owner and responsibility |
 | --- | --- | --- |
 | `PackageSpec` | `stone_recipe::package` | Authored intent returned by a pure Gluon package factory. Validation may inspect only this value and explicit function arguments. |
-| `PolicySpec` | `stone_recipe::macros` during transition; final home `stone_recipe::policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. Policy composition is pure, ordered, and fingerprinted. |
+| `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. Evaluation is pure and fingerprinted; configured typed layers remain planned. |
 | `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
 
 The target contract gives `bin/boulder` orchestration only:
@@ -46,10 +46,13 @@ Implemented:
 - reusable dependency scopes are ordinary imported Gluon records passed to
   factories; missing fields are type errors, local output cycles are rejected,
   and Moss closure cycles report their concrete path;
-- policy loads from one explicit `policy.glu` root with ordered `add`,
-  `replace`, and `modify` operations plus module fingerprints and provenance;
+- typed build policy loads from one explicit `data/policy/default.glu` root;
+  its root and imported-module fingerprints participate in derivation identity;
 - CMake, Meson, Cargo, and Autotools produce structural `StepSpec` phases and
   declare their tools without authored `%action` strings;
+- phase planning resolves layout, tools, tuning, environment, commands, and
+  sources through a finite typed context; explicit `Shell` content is literal,
+  and the legacy macro/parser/tuning stack is absent;
 - `build.lock.glu` freezes the exact Moss-resolved closure, repository
   snapshots, platforms, and selected policy identities with explicit
   missing/stale/update behavior;
@@ -67,15 +70,11 @@ Implemented:
 
 Still transitional:
 
-- explicit `Shell` steps are literal and standard builders freeze directly as
-  structural `StepPlan` values, but planning still uses `stone_recipe::script`
-  internally to resolve repository layout, toolchain, tuning, and output-policy
-  definitions before those values enter the plan;
 - mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
   hash their content and destination into the derivation;
-- the explicit repository policy root declares named layers in authored order;
-  `recipe explain` reports layer and entry provenance, and the evaluated root
-  fingerprint binds that order into derivation identity.
+- configured repository-policy layers remain disabled until the total typed
+  patch algebra, ordered composition, and per-operation provenance are wired to
+  the single build-policy root.
 
 ## Layer invariants
 
@@ -162,15 +161,15 @@ implementation status above is authoritative for completed work.
 
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
-| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicitly imported `PolicySpec` root; retain its complete fingerprint and module provenance. Implemented by `policy.glu`. |
+| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicit typed `BuildPolicySpec` root with complete evaluation fingerprint and import provenance. Implemented by `data/policy/default.glu`; the macro tree is deleted. |
 | Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Selected builder and platform policy, resolved into plan phases, tools, and environment. |
 | Architecture package templates | `package.rs::resolve_packages` | Repository policy | Typed output templates in `PolicySpec`, with explicit composition operations. |
 | Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
 | Root package and subpackage precedence | `package.rs::resolve_packages` | Authored intent | Explicit named outputs in `PackageSpec`; no collision-based merge in the executor. |
 | Template collision merge and list sorting | `package.rs::resolve_packages` | Repository policy | Typed policy patch semantics; the fully merged outputs appear in the plan. |
 | `%name`, `%version`, and `%release` expansion in package fields | `package.rs::resolve_packages` | Authored intent | Structural fields or typed interpolation resolved before plan freeze. |
-| `%action` expansion and action-provided dependencies | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Structured builders declare steps and required tools. Implemented for standard builders; explicit `Shell` is the remaining escape hatch. |
-| `%(definition)` expansion | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Typed builder arguments, paths, and environment values in the plan. |
+| `%action` expansion and action-provided dependencies | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Structured builders declare steps and required tools. Implemented; explicit `Shell` is literal and performs no macro expansion. |
+| `%(definition)` expansion | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Replaced by typed builder arguments, paths, and environment values frozen in the plan. |
 
 ### Platforms, toolchains, and build environment
 
@@ -249,7 +248,8 @@ temporary host paths, logging, progress presentation, and cleanup. It may not:
 
 - inspect an unrecorded profile, repository, policy directory, or environment
   variable;
-- add root packages based on macros, file extensions, or toolchain branches;
+- add root packages based on undeclared syntax, file extensions, or toolchain
+  branches;
 - infer a platform, timestamp, phase, PGO stage, tuning group, or compiler;
 - merge package templates, root packages, or subpackages;
 - expose the host CPU count or host paths to build steps;
@@ -273,6 +273,6 @@ never guess a source location from configuration syntax.
 Phase 1 tests prove that repeated evaluation with identical explicit source,
 imports, ABI modules, and lock bytes produces equal values and fingerprints.
 The resolver and planner freeze and validate the canonical plan, and the normal
-build path enforces it through execution and emission. The remaining work is
-to remove the internal pre-freeze recipe/macro representations without
-weakening this boundary.
+build path enforces it through execution and emission. The internal recipe and
+macro representations are gone; remaining work must extend typed policy and
+local-source contracts without weakening this boundary.

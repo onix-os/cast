@@ -737,7 +737,8 @@ All items must hold before declaring the migration complete:
 - [x] Gluon-facing DTOs are versioned and separated from domain structs.
 - [x] `stone.glu` is the canonical Boulder recipe.
 - [x] Resolved sources live in a generated lock; authored recipes are not edited.
-- [x] YAML macros and KDL control files are replaced by Gluon modules/functions.
+- [x] YAML macro configuration and KDL control files are gone; repository build
+  policy is a typed Gluon value.
 - [x] Profiles, repositories and triggers load through Gluon with visible errors.
 - [x] Moss separates `/etc` system intent from generated per-state snapshots.
 - [x] State sync/export/verify/activation behavior is covered without KDL.

@@ -368,9 +368,9 @@ Mutable local files under the recipe `pkg/` directory are deliberately not
 exposed to build steps. A future local-source ABI must hash their bytes and
 destination into the derivation before those inputs can be supported safely.
 
-The remaining pre-freeze migration is the macro-definition parser. Typed
-policy, layout, tuning, and environment values must cover its semantics before
-the compatibility parser can be deleted.
+The legacy macro policy and `%action`/`%(definition)` parser have been removed.
+Both standard builders and explicit literal `Shell` steps freeze through the
+typed build context; there is no compatibility expansion pass.
 
 See [`examples/gluon/package_v2.glu`](examples/gluon/package_v2.glu) and
 [`examples/gluon/package_v2_stone.glu`](examples/gluon/package_v2_stone.glu)

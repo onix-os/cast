@@ -7,7 +7,6 @@ use tui::Styled;
 
 pub use self::architecture::Architecture;
 pub use self::env::Env;
-pub use self::macros::Macros;
 pub use self::paths::Paths;
 pub use self::policy::BuildPolicy;
 pub use self::profile::Profile;
@@ -22,7 +21,6 @@ mod container;
 mod draft;
 mod env;
 mod executor;
-mod macros;
 mod package;
 mod paths;
 mod planner;

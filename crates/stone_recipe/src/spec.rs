@@ -38,18 +38,6 @@ pub struct KeyValueSpec<T> {
     pub value: T,
 }
 
-impl<T, U> From<KeyValueSpec<T>> for crate::KeyValue<U>
-where
-    U: From<T>,
-{
-    fn from(spec: KeyValueSpec<T>) -> Self {
-        Self {
-            key: spec.key,
-            value: spec.value.into(),
-        }
-    }
-}
-
 /// An authored source request with its kind encoded explicitly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpstreamSpec {
@@ -91,24 +79,6 @@ pub enum ToolchainSpec {
     #[default]
     Llvm,
     Gnu,
-}
-
-impl From<ToolchainSpec> for crate::tuning::Toolchain {
-    fn from(spec: ToolchainSpec) -> Self {
-        match spec {
-            ToolchainSpec::Llvm => Self::Llvm,
-            ToolchainSpec::Gnu => Self::Gnu,
-        }
-    }
-}
-
-impl From<crate::tuning::Toolchain> for ToolchainSpec {
-    fn from(toolchain: crate::tuning::Toolchain) -> Self {
-        match toolchain {
-            crate::tuning::Toolchain::Llvm => Self::Llvm,
-            crate::tuning::Toolchain::Gnu => Self::Gnu,
-        }
-    }
 }
 
 #[cfg(test)]
