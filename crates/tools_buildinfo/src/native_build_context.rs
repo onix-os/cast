@@ -12,7 +12,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     io,
-    os::unix::ffi::{OsStrExt as _, OsStringExt as _},
+    os::unix::ffi::OsStrExt as _,
     path::Path,
 };
 
@@ -143,6 +143,15 @@ const EXACT_TOOLS: &[ToolSpec] = &[
     ToolSpec::aws_targeted("aws-lc-cmake", "CMAKE", "cmake"),
 ];
 
+// aws-lc-sys first applies crate-specific TARGET_CC/TARGET_CXX and CC/CXX
+// overrides, then writes the result back into cc-rs' target-specific
+// environment.  These selectors can therefore choose a different compiler
+// from the generic cc-rs selector above and need their own byte identity.
+const AWS_COMPILER_TOOLS: &[ToolSpec] = &[
+    ToolSpec::aws_compiler("aws-lc-cc", "CC", "cc"),
+    ToolSpec::aws_compiler("aws-lc-cxx", "CXX", "c++"),
+];
+
 const GENERATOR_TOOL_VARIABLES: &[&str] = &["CMAKE_MAKE_PROGRAM", "MAKE", "NINJA", "NMAKE"];
 
 #[derive(Clone, Copy)]
@@ -158,6 +167,7 @@ enum ToolSelection {
     Targeted,
     Exact,
     AwsTargeted,
+    AwsCompiler,
 }
 
 impl ToolSpec {
@@ -185,6 +195,15 @@ impl ToolSpec {
             variable,
             default_program,
             selection: ToolSelection::AwsTargeted,
+        }
+    }
+
+    const fn aws_compiler(role: &'static str, variable: &'static str, default_program: &'static str) -> Self {
+        Self {
+            role,
+            variable,
+            default_program,
+            selection: ToolSelection::AwsCompiler,
         }
     }
 }
@@ -225,6 +244,8 @@ where
     let target_underscored = target.replace(['-', '.'], "_");
     let workspace = workspace_root.as_os_str().as_bytes();
 
+    validate_cross_tool_selection(&environment, host, target, kind, &target_underscored)?;
+
     let mut watched = watched_environment(kind, target, &target_underscored);
     let mut inputs = BTreeMap::<String, Vec<u8>>::new();
 
@@ -258,7 +279,7 @@ where
             }
         } else {
             let selector = selector.unwrap_or_else(|| OsString::from(spec.default_program));
-            let command = parse_command(selector.as_os_str()).unwrap_or_else(|| vec![selector.clone()]);
+            let command = command_for_tool(*spec, selector)?;
             let identity = require_tool_identity(spec.role, &command, probe(spec.role, &command)?)?;
             (command, identity)
         };
@@ -270,8 +291,27 @@ where
         );
     }
 
+    for spec in AWS_COMPILER_TOOLS {
+        let Some(selector) = select_tool(&environment, *spec, kind, target, &target_underscored) else {
+            // Without an AWS-specific override, aws-lc-sys delegates compiler
+            // selection to cc-rs.  The generic cc/cxx identities above are
+            // therefore the complete effective identity.
+            continue;
+        };
+        let command = command_for_tool(*spec, selector)?;
+        let identity = require_tool_identity(spec.role, &command, probe(spec.role, &command)?)?;
+        inputs.insert(
+            format!("native.tool.{}.command", spec.role),
+            encode_command(&command, workspace),
+        );
+        inputs.insert(
+            format!("native.tool.{}.identity", spec.role),
+            identity.encode(workspace_root),
+        );
+    }
+
     if let Some(selector) = select_cmake_generator_tool(&environment, target, &target_underscored) {
-        let command = parse_command(selector.as_os_str()).unwrap_or_else(|| vec![selector.clone()]);
+        let command = direct_command("cmake-generator", selector)?;
         inputs.insert(
             "native.tool.cmake-generator.command".to_owned(),
             encode_command(&command, workspace),
@@ -292,7 +332,7 @@ where
         && let Some(selector) = environment.get(&cargo_linker)
     {
         inputs.remove("native.tool.rust-linker.identity");
-        let command = parse_command(selector.as_os_str()).unwrap_or_else(|| vec![selector.clone()]);
+        let command = direct_command("rust-linker", selector.clone())?;
         inputs.insert(
             "native.tool.rust-linker.command".to_owned(),
             encode_command(&command, workspace),
@@ -348,6 +388,38 @@ fn required_utf8<'a>(environment: &'a BTreeMap<String, OsString>, key: &str) -> 
         .ok_or_else(|| invalid_data(format!("native build environment value is not UTF-8: {key}")))
 }
 
+fn validate_cross_tool_selection(
+    environment: &BTreeMap<String, OsString>,
+    host: &str,
+    target: &str,
+    kind: &str,
+    target_underscored: &str,
+) -> io::Result<()> {
+    if host == target {
+        return Ok(());
+    }
+
+    // cc-rs may derive `${CROSS_COMPILE}gcc`, `${CROSS_COMPILE}g++`, and
+    // multiple archive-tool candidates.  Reproducing that open-ended PATH
+    // discovery here would be brittle.  Cross builds instead fail closed
+    // unless every compiler/archive role has an explicit cc-rs selector which
+    // the normal collection loop can content-identify exactly.
+    let required = &TARGET_SCOPED_TOOLS[..4];
+    let missing = required
+        .iter()
+        .filter(|spec| select_tool(environment, **spec, kind, target, target_underscored).is_none())
+        .map(|spec| spec.variable)
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    Err(invalid_data(format!(
+        "cross build {host} -> {target} requires explicit target tool selectors for {}; implicit CROSS_COMPILE/PATH discovery cannot be content-identified",
+        missing.join(", ")
+    )))
+}
+
 fn watched_environment(kind: &str, target: &str, target_underscored: &str) -> BTreeSet<String> {
     let mut watched = BTreeSet::from(["HOST".to_owned(), "TARGET".to_owned()]);
     watched.extend(EXACT_VALUES.iter().map(|key| (*key).to_owned()));
@@ -360,6 +432,9 @@ fn watched_environment(kind: &str, target: &str, target_underscored: &str) -> BT
         watched.extend(tool_keys(*spec, kind, target, target_underscored));
     }
     for spec in EXACT_TOOLS {
+        watched.extend(tool_keys(*spec, kind, target, target_underscored));
+    }
+    for spec in AWS_COMPILER_TOOLS {
         watched.extend(tool_keys(*spec, kind, target, target_underscored));
     }
     watched.extend(GENERATOR_TOOL_VARIABLES.iter().map(|key| (*key).to_owned()));
@@ -403,11 +478,15 @@ fn select_tool(
 }
 
 fn is_tool_selector(key: &str, kind: &str, target: &str, target_underscored: &str) -> bool {
-    TARGET_SCOPED_TOOLS.iter().chain(EXACT_TOOLS).any(|spec| {
-        tool_keys(*spec, kind, target, target_underscored)
-            .iter()
-            .any(|candidate| candidate == key)
-    })
+    TARGET_SCOPED_TOOLS
+        .iter()
+        .chain(EXACT_TOOLS)
+        .chain(AWS_COMPILER_TOOLS)
+        .any(|spec| {
+            tool_keys(*spec, kind, target, target_underscored)
+                .iter()
+                .any(|candidate| candidate == key)
+        })
 }
 
 fn tool_keys(spec: ToolSpec, kind: &str, target: &str, target_underscored: &str) -> Vec<String> {
@@ -415,6 +494,16 @@ fn tool_keys(spec: ToolSpec, kind: &str, target: &str, target_underscored: &str)
         ToolSelection::Targeted => targeted_keys(spec.variable, kind, target, target_underscored).into(),
         ToolSelection::Exact => vec![spec.variable.to_owned()],
         ToolSelection::AwsTargeted => vec![
+            format!("AWS_LC_SYS_{}_{target_underscored}", spec.variable),
+            format!("AWS_LC_SYS_{}", spec.variable),
+            format!("{}_{target_underscored}", spec.variable),
+            spec.variable.to_owned(),
+        ],
+        ToolSelection::AwsCompiler => vec![
+            format!("AWS_LC_SYS_TARGET_{}_{target_underscored}", spec.variable),
+            format!("AWS_LC_SYS_TARGET_{}", spec.variable),
+            format!("TARGET_{}_{target_underscored}", spec.variable),
+            format!("TARGET_{}", spec.variable),
             format!("AWS_LC_SYS_{}_{target_underscored}", spec.variable),
             format!("AWS_LC_SYS_{}", spec.variable),
             format!("{}_{target_underscored}", spec.variable),
@@ -467,7 +556,7 @@ pub(crate) fn delegated_compiler<'a>(
     command: &'a [OsString],
     custom_wrapper: Option<&OsStr>,
 ) -> Option<&'a OsStr> {
-    if !matches!(role, "cc" | "cxx") {
+    if !matches!(role, "cc" | "cxx" | "aws-lc-cc" | "aws-lc-cxx") {
         return None;
     }
     let wrapper = Path::new(command.first()?).file_stem()?.to_str()?;
@@ -479,59 +568,45 @@ pub(crate) fn delegated_compiler<'a>(
     }
 }
 
-fn parse_command(value: &OsStr) -> Option<Vec<OsString>> {
-    #[derive(Clone, Copy)]
-    enum Quote {
-        None,
-        Single,
-        Double,
+fn command_for_tool(spec: ToolSpec, selector: OsString) -> io::Result<Vec<OsString>> {
+    if matches!(spec.selection, ToolSelection::AwsCompiler) || matches!(spec.role, "cc" | "cxx" | "archiver" | "ranlib")
+    {
+        cc_rs_command(spec.role, selector.as_os_str())
+    } else {
+        direct_command(spec.role, selector)
+    }
+}
+
+/// Reproduce cc-rs' environment-tool parsing rather than shell parsing.
+///
+/// An existing exact path is one executable even when it contains spaces.
+/// Otherwise cc-rs trims and splits on whitespace without interpreting quotes
+/// or escapes.  Mirroring that distinction is required to hash the executable
+/// which cc-rs actually runs.
+fn cc_rs_command(role: &str, selector: &OsStr) -> io::Result<Vec<OsString>> {
+    let selector = selector.to_string_lossy();
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return Err(invalid_data(format!("selected native tool {role} is empty")));
+    }
+    if Path::new(selector).exists() {
+        return Ok(vec![OsString::from(selector)]);
     }
 
-    let mut words = Vec::new();
-    let mut word = Vec::new();
-    let mut quote = Quote::None;
-    let mut escaped = false;
-    let mut started = false;
+    let command = selector.split_whitespace().map(OsString::from).collect::<Vec<_>>();
+    if command.is_empty() {
+        Err(invalid_data(format!("selected native tool {role} is empty")))
+    } else {
+        Ok(command)
+    }
+}
 
-    for byte in value.as_bytes() {
-        if escaped {
-            word.push(*byte);
-            escaped = false;
-            started = true;
-            continue;
-        }
-        match (quote, *byte) {
-            (Quote::None, b'\\') | (Quote::Double, b'\\') => escaped = true,
-            (Quote::None, b'\'') => {
-                quote = Quote::Single;
-                started = true;
-            }
-            (Quote::Single, b'\'') => quote = Quote::None,
-            (Quote::None, b'"') => {
-                quote = Quote::Double;
-                started = true;
-            }
-            (Quote::Double, b'"') => quote = Quote::None,
-            (Quote::None, byte) if byte.is_ascii_whitespace() => {
-                if started {
-                    words.push(OsString::from_vec(std::mem::take(&mut word)));
-                    started = false;
-                }
-            }
-            (_, byte) => {
-                word.push(byte);
-                started = true;
-            }
-        }
+fn direct_command(role: &str, selector: OsString) -> io::Result<Vec<OsString>> {
+    if selector.is_empty() {
+        Err(invalid_data(format!("selected native tool {role} is empty")))
+    } else {
+        Ok(vec![selector])
     }
-
-    if escaped || !matches!(quote, Quote::None) {
-        return None;
-    }
-    if started {
-        words.push(OsString::from_vec(word));
-    }
-    (!words.is_empty()).then_some(words)
 }
 
 fn encode_command(command: &[OsString], workspace: &[u8]) -> Vec<u8> {

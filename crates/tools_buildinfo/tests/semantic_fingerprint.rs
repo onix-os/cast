@@ -102,14 +102,15 @@ fn value(root: &Path) -> String {
 }
 
 fn native_environment(values: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
-    [
-        ("HOST", "x86_64-unknown-linux-gnu"),
-        ("TARGET", "x86_64-unknown-linux-gnu"),
-    ]
-    .into_iter()
-    .chain(values.iter().copied())
-    .map(|(key, value)| (OsString::from(key), OsString::from(value)))
-    .collect()
+    native_environment_for("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", values)
+}
+
+fn native_environment_for(host: &str, target: &str, values: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    [("HOST", host), ("TARGET", target)]
+        .into_iter()
+        .chain(values.iter().copied())
+        .map(|(key, value)| (OsString::from(key), OsString::from(value)))
+        .collect()
 }
 
 fn fake_command_identity(command: &[OsString], tool_revision: &str) -> tool_identity::CommandIdentity {
@@ -535,7 +536,7 @@ fn equivalent_workspace_executable_paths_have_one_identity() {
 fn workspace_paths_and_equivalent_tool_aliases_have_one_native_identity() {
     let first = native_context(
         &[
-            ("HOST_CC", "/workspace/first/toolchain/bin/clang --target=x86_64-linux"),
+            ("CC", "/workspace/first/toolchain/bin/clang --target=x86_64-linux"),
             ("CFLAGS", "-I/workspace/first/native/include"),
         ],
         "1",
@@ -615,6 +616,235 @@ fn aws_lc_cmake_fallback_and_explicit_precedence_match_the_build_script() {
         explicit_with_cmake3, explicit_without_cmake3,
         "an explicit AWS-LC CMake selector must bypass fallback discovery"
     );
+}
+
+#[test]
+fn aws_lc_compiler_precedence_binds_only_the_effective_override() {
+    let workspace = Path::new("/workspace/os-tools");
+    let selectors = [
+        ("AWS_LC_SYS_TARGET_CC_x86_64_unknown_linux_gnu", "selected-aws-cc"),
+        ("AWS_LC_SYS_TARGET_CC", "shadowed-aws-target-cc"),
+        ("TARGET_CC_x86_64_unknown_linux_gnu", "shadowed-target-cc-suffixed"),
+        ("TARGET_CC", "shadowed-target-cc"),
+        ("AWS_LC_SYS_CC_x86_64_unknown_linux_gnu", "shadowed-aws-cc-suffixed"),
+        ("AWS_LC_SYS_CC", "shadowed-aws-cc"),
+        ("CC_x86_64_unknown_linux_gnu", "shadowed-cc-suffixed"),
+        ("CC", "shadowed-cc"),
+    ];
+    let selected = native_context(&selectors, "1", workspace);
+    let aws_cc = |inputs: &[ExplicitInput]| {
+        inputs
+            .iter()
+            .filter(|(key, _)| key.starts_with("native.tool.aws-lc-cc."))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let changed_shadows = native_context(
+        &[
+            selectors[0],
+            ("AWS_LC_SYS_TARGET_CC", "different-shadow-1"),
+            ("TARGET_CC_x86_64_unknown_linux_gnu", "different-shadow-2"),
+            ("TARGET_CC", "different-shadow-3"),
+            ("AWS_LC_SYS_CC_x86_64_unknown_linux_gnu", "different-shadow-4"),
+            ("AWS_LC_SYS_CC", "different-shadow-5"),
+            ("CC_x86_64_unknown_linux_gnu", "different-shadow-6"),
+            ("CC", "different-shadow-7"),
+        ],
+        "1",
+        workspace,
+    );
+    assert_eq!(
+        aws_cc(&selected),
+        aws_cc(&changed_shadows),
+        "shadowed AWS-LC compiler selectors must not affect identity"
+    );
+
+    let changed_selected = native_context(
+        &[
+            (
+                "AWS_LC_SYS_TARGET_CC_x86_64_unknown_linux_gnu",
+                "different-selected-aws-cc",
+            ),
+            selectors[1],
+            selectors[2],
+            selectors[3],
+            selectors[4],
+            selectors[5],
+            selectors[6],
+            selectors[7],
+        ],
+        "1",
+        workspace,
+    );
+    assert_ne!(selected, changed_selected);
+    assert!(selected.iter().any(|(key, _)| key == "native.tool.aws-lc-cc.identity"));
+}
+
+#[test]
+fn cc_rs_exact_tool_paths_with_spaces_remain_one_executable() {
+    let temporary = tempfile::tempdir().unwrap();
+    let compiler = temporary.path().join("compiler with spaces");
+    write_executable(&compiler, "#!/bin/sh\nprintf 'compiler 1.0\\n'\n");
+
+    let selector = compiler.to_str().unwrap();
+    let mut saw_compiler = false;
+    native_build_context::collect(
+        native_environment(&[("CC", selector)]),
+        temporary.path(),
+        |role, command| {
+            if role == "cc" {
+                saw_compiler = true;
+                assert_eq!(command, &[compiler.clone().into_os_string()]);
+            }
+            Ok(Some(fake_command_identity(command, "1")))
+        },
+    )
+    .unwrap();
+
+    assert!(saw_compiler);
+}
+
+#[test]
+fn direct_tool_selectors_with_spaces_are_never_shell_split() {
+    let temporary = tempfile::tempdir().unwrap();
+    let tool = temporary.path().join("direct tool with spaces");
+    write_executable(&tool, "#!/bin/sh\nprintf 'tool 1.0\\n'\n");
+    let selector = tool.to_str().unwrap();
+    let mut seen = Vec::new();
+
+    native_build_context::collect(
+        native_environment(&[
+            ("CMAKE", selector),
+            ("AWS_LC_SYS_CMAKE", selector),
+            ("RUSTC_LINKER", selector),
+        ]),
+        temporary.path(),
+        |role, command| {
+            if matches!(role, "cmake" | "aws-lc-cmake" | "rust-linker") {
+                assert_eq!(command, &[tool.clone().into_os_string()]);
+                seen.push(role.to_owned());
+            }
+            Ok(Some(fake_command_identity(command, "1")))
+        },
+    )
+    .unwrap();
+
+    seen.sort();
+    assert_eq!(seen, ["aws-lc-cmake", "cmake", "rust-linker"]);
+}
+
+#[test]
+fn aws_lc_cxx_uses_crate_target_precedence() {
+    let workspace = Path::new("/workspace/os-tools");
+    let mut selected = None;
+    native_build_context::collect(
+        native_environment(&[
+            ("AWS_LC_SYS_TARGET_CXX_x86_64_unknown_linux_gnu", "selected-aws-cxx"),
+            ("AWS_LC_SYS_TARGET_CXX", "shadowed-aws-target-cxx"),
+            ("TARGET_CXX_x86_64_unknown_linux_gnu", "shadowed-target-cxx"),
+            ("TARGET_CXX", "shadowed-target-cxx-base"),
+            ("AWS_LC_SYS_CXX", "shadowed-aws-cxx"),
+            ("CXX", "shadowed-cxx"),
+        ]),
+        workspace,
+        |role, command| {
+            if role == "aws-lc-cxx" {
+                selected = command.first().cloned();
+            }
+            Ok(Some(fake_command_identity(command, "1")))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(selected, Some(OsString::from("selected-aws-cxx")));
+}
+
+#[test]
+fn replacing_an_aws_lc_compiler_at_one_selector_changes_native_identity() {
+    let temporary = tempfile::tempdir().unwrap();
+    let compiler = temporary.path().join("aws-cc");
+    let values = &[(
+        "AWS_LC_SYS_TARGET_CC_x86_64_unknown_linux_gnu",
+        compiler.to_str().unwrap(),
+    )];
+    let collect = || {
+        native_build_context::collect(native_environment(values), temporary.path(), |role, command| {
+            if role == "aws-lc-cc" {
+                let executable = identify_test_executable(Path::new(&command[0]), true);
+                Ok(Some(tool_identity::CommandIdentity::new(executable)))
+            } else {
+                Ok(Some(fake_command_identity(command, "1")))
+            }
+        })
+        .unwrap()
+        .inputs()
+    };
+
+    write_executable(
+        &compiler,
+        "#!/bin/sh\n# implementation one\nprintf 'aws compiler 1.0\\n'\n",
+    );
+    let first = collect();
+    write_executable(
+        &compiler,
+        "#!/bin/sh\n# implementation two\nprintf 'aws compiler 1.0\\n'\n",
+    );
+    let second = collect();
+
+    assert_ne!(
+        first, second,
+        "AWS-LC compiler bytes must remain semantic when selector and version are unchanged"
+    );
+}
+
+#[test]
+fn cross_compile_prefix_discovery_fails_closed_without_explicit_tools() {
+    let error = native_build_context::collect(
+        native_environment_for(
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            &[("CROSS_COMPILE", "aarch64-linux-gnu-")],
+        ),
+        Path::new("/workspace/os-tools"),
+        |_, command| Ok(Some(fake_command_identity(command, "1"))),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("cross build"));
+    for selector in ["CC", "CXX", "AR", "RANLIB"] {
+        assert!(error.to_string().contains(selector));
+    }
+    assert!(error.to_string().contains("CROSS_COMPILE"));
+}
+
+#[test]
+fn cross_build_with_explicit_compiler_and_archive_tools_is_content_bound() {
+    let environment = native_environment_for(
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        &[
+            ("TARGET_CC", "aarch64-cc"),
+            ("TARGET_CXX", "aarch64-cxx"),
+            ("TARGET_AR", "aarch64-ar"),
+            ("TARGET_RANLIB", "aarch64-ranlib"),
+            ("CROSS_COMPILE", "ignored-prefix-"),
+        ],
+    );
+    let first = native_build_context::collect(environment.clone(), Path::new("/workspace/os-tools"), |_, command| {
+        Ok(Some(fake_command_identity(command, "1")))
+    })
+    .unwrap()
+    .inputs();
+    let second = native_build_context::collect(environment, Path::new("/workspace/os-tools"), |role, command| {
+        let revision = if role == "archiver" { "2" } else { "1" };
+        Ok(Some(fake_command_identity(command, revision)))
+    })
+    .unwrap()
+    .inputs();
+
+    assert_ne!(first, second, "the explicit cross archiver bytes must be semantic");
 }
 
 #[test]
