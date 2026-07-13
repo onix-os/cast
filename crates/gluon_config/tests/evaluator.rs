@@ -27,6 +27,7 @@ fn evaluates_a_typed_record_literal() {
     assert_eq!(evaluation.fingerprint.gluon_version, "0.18.3");
     assert_eq!(evaluation.fingerprint.root_logical_name, "literal.glu");
     assert!(evaluation.fingerprint.imported_modules.is_empty());
+    assert_eq!(evaluation.fingerprint.validate(), Ok(()));
 }
 
 #[test]
