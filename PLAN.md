@@ -98,8 +98,12 @@ as the exact plan destination. Old source-lock schemas and digest mismatches
 fail closed instead of synthesizing compatibility state.
 
 Planning and packaging now consume `PackageSpec` and `DerivationPlan`
-directly. The former internal `Recipe`/`RecipeSpec` domain, its conversions,
-and its duplicated build and output values have been deleted.
+directly. The former `stone_recipe::RecipeSpec` semantic domain, its
+conversions, and its duplicated build and output values have been deleted.
+Boulder retains a `recipe::Recipe` loaded-input context around the concrete
+`PackageSpec`, authored path/source, source lock, evaluation provenance, and
+timestamp needed before freezing. It is not a second package model, and the
+frozen executor and packager consume only `DerivationPlan`.
 
 Phase planning resolves layout, toolchain, tuning, environment, commands, and
 source overlays through a finite typed build context. The legacy macro policy,
@@ -447,8 +451,9 @@ recursive package universe inside Gluon.
 - [x] Remove filesystem-discovered macro composition.
 - [x] Remove the public `boulder.recipe.v1` ABI, its standalone encoders and
   evaluator, and migrate all tracked recipes and fixtures to package v3.
-- [x] Remove the internal `Recipe`/`RecipeSpec` lowering once the executor and
-  packaging path consume `PackageSpec` and `DerivationPlan` directly.
+- [x] Remove legacy `stone_recipe::RecipeSpec` and its lowering/conversions;
+  retain only Boulder's loaded-input context needed before the executor and
+  packaging path consume `DerivationPlan`.
 - [x] Remove the obsolete macro defaults, domain conversions, generic
   `KeyValue`, and duplicated Rust/Gluon macro wire definitions.
 - [x] Audit the repository for YAML/KDL loaders, fallbacks, compatibility
