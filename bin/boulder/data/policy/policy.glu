@@ -1,0 +1,12 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// The complete repository policy order. Boulder loads only this manifest;
+// files next to it do not participate unless named here.
+let layers = import! boulder.build_policy.layers.v1
+
+layers.policy "aerynos" [
+    layers.layer "foundation" [
+        layers.add "default.glu",
+    ],
+]
