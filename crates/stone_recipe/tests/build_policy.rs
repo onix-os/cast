@@ -3,9 +3,10 @@
 
 use gluon_config::Source;
 use stone_recipe::build_policy::{
-    AnalyzerKind, BuildPolicyConversionError, BuildToolSpec, ContextValue, EnvironmentBindingSpec,
-    EnvironmentCondition, SandboxDevPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec,
-    TextSpec, evaluate_gluon, evaluate_gluon_with_inputs,
+    AnalyzerKind, BUILD_POLICY_ABI_VERSION, BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, ContextValue,
+    EnvironmentBindingSpec, EnvironmentCondition, SandboxCredentialPolicySpec, SandboxDevPolicySpec,
+    SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec, TextSpec, evaluate_gluon,
+    evaluate_gluon_with_inputs,
 };
 
 fn repository_policy() -> Source {
@@ -15,7 +16,7 @@ fn repository_policy() -> Source {
     )
 }
 
-fn repository_policy_value() -> stone_recipe::build_policy::BuildPolicySpec {
+fn repository_policy_value() -> BuildPolicySpec {
     evaluate_gluon(&repository_policy()).unwrap().policy
 }
 
@@ -59,6 +60,7 @@ fn evaluates_repository_build_policy_as_typed_data() {
     assert_eq!(policy.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
     assert_eq!(policy.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
     assert_eq!(policy.sandbox.filesystems.dev, SandboxDevPolicySpec::Minimal);
+    assert_eq!(policy.sandbox.credentials, SandboxCredentialPolicySpec::IsolatedRoot);
     assert_eq!(
         policy.analyzers,
         [
@@ -74,8 +76,15 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
-        "boulder.build_policy.v1"
+        "boulder.build_policy.v2"
     );
+}
+
+#[test]
+fn build_policy_v2_is_a_hard_abi_boundary() {
+    assert_eq!(BUILD_POLICY_ABI_VERSION, 2);
+    let error = evaluate_gluon(&Source::new("legacy-policy.glu", "import! boulder.build_policy.v1")).unwrap_err();
+    assert!(error.to_string().contains("boulder.build_policy.v1"));
 }
 
 #[test]
@@ -159,6 +168,49 @@ fn analyzer_catalog_is_unique() {
         Err(BuildPolicyConversionError::Duplicate { field, value })
             if field == "analyzers" && value == "Binary"
     ));
+}
+
+#[test]
+fn analyzer_tools_must_be_safe_executable_capabilities() {
+    type SelectTool = fn(&mut BuildPolicySpec) -> &mut BuildToolSpec;
+    let tools: [(&str, SelectTool); 6] = [
+        ("build_root.analyzer_tools.pkg_config", |policy| {
+            &mut policy.build_root.analyzer_tools.pkg_config
+        }),
+        ("build_root.analyzer_tools.python", |policy| {
+            &mut policy.build_root.analyzer_tools.python
+        }),
+        ("build_root.analyzer_tools.llvm.objcopy", |policy| {
+            &mut policy.build_root.analyzer_tools.llvm.objcopy
+        }),
+        ("build_root.analyzer_tools.llvm.strip", |policy| {
+            &mut policy.build_root.analyzer_tools.llvm.strip
+        }),
+        ("build_root.analyzer_tools.gnu.objcopy", |policy| {
+            &mut policy.build_root.analyzer_tools.gnu.objcopy
+        }),
+        ("build_root.analyzer_tools.gnu.strip", |policy| {
+            &mut policy.build_root.analyzer_tools.gnu.strip
+        }),
+    ];
+
+    for (field, select) in tools {
+        let mut package_capability = repository_policy_value();
+        *select(&mut package_capability) = BuildToolSpec::Package("tool-package".to_owned());
+        assert!(matches!(
+            package_capability.validate(),
+            Err(BuildPolicyConversionError::AnalyzerToolMustBeExecutable { field: actual })
+                if actual == field
+        ));
+
+        let mut unsafe_executable = repository_policy_value();
+        *select(&mut unsafe_executable) = BuildToolSpec::Binary("../tool".to_owned());
+        assert!(matches!(
+            unsafe_executable.validate(),
+            Err(BuildPolicyConversionError::InvalidAnalyzerExecutable { field: actual, value })
+                if actual == field && value == "../tool"
+        ));
+    }
 }
 
 #[test]
@@ -622,6 +674,24 @@ fn repository_build_root_inputs_preserve_relation_kinds_and_conditions() {
             BuildToolSpec::Binary("sccache".to_owned()),
         ]
     );
+    assert_eq!(
+        root.analyzer_tools.pkg_config,
+        BuildToolSpec::Binary("pkg-config".to_owned())
+    );
+    assert_eq!(root.analyzer_tools.python, BuildToolSpec::Binary("python3".to_owned()));
+    assert_eq!(
+        root.analyzer_tools.llvm.objcopy,
+        BuildToolSpec::Binary("llvm-objcopy".to_owned())
+    );
+    assert_eq!(
+        root.analyzer_tools.llvm.strip,
+        BuildToolSpec::Binary("llvm-strip".to_owned())
+    );
+    assert_eq!(
+        root.analyzer_tools.gnu.objcopy,
+        BuildToolSpec::Binary("objcopy".to_owned())
+    );
+    assert_eq!(root.analyzer_tools.gnu.strip, BuildToolSpec::Binary("strip".to_owned()));
 }
 
 #[test]

@@ -42,7 +42,14 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
         .unwrap_or_else(|| panic!("Failed to get parent path for {}", info.file_name()));
     let find_deps_script = include_str!("../scripts/get-py-deps.py");
 
-    let mut command = analyzer_command("/usr/bin/python3");
+    let program = &bucket
+        .analysis
+        .tools
+        .python
+        .as_ref()
+        .expect("validated analysis plan requires Python for the Python handler")
+        .program;
+    let mut command = analyzer_command(program);
     command.arg("-c").arg(find_deps_script).arg(dist_path).envs([
         ("LC_ALL", "C"),
         ("PYTHONDONTWRITEBYTECODE", "1"),

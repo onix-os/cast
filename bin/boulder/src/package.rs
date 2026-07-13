@@ -811,8 +811,18 @@ mod tests {
     use super::*;
     use stone_recipe::build_policy::AnalyzerKind;
     use stone_recipe::derivation::{
-        AnalysisToolchain, CollectionRulePlan, OutputPlan, PathRuleKind, RelationKind, RelationPlan,
+        AnalysisToolsPlan, CollectionRulePlan, FrozenAnalyzerTool, OutputPlan, PathRuleKind, RelationKind, RelationPlan,
     };
+
+    fn frozen_analyzer_tool(name: &str) -> FrozenAnalyzerTool {
+        FrozenAnalyzerTool {
+            program: format!("/usr/bin/{name}"),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary,
+                name: name.to_owned(),
+            },
+        }
+    }
 
     #[test]
     fn package_factory_defaults_resolve_directly() {
@@ -964,7 +974,12 @@ mod tests {
                 AnalyzerKind::CompressMan,
                 AnalyzerKind::IncludeAny,
             ],
-            toolchain: AnalysisToolchain::Gnu,
+            tools: AnalysisToolsPlan {
+                pkg_config: Some(frozen_analyzer_tool("pkg-config")),
+                python: Some(frozen_analyzer_tool("python3")),
+                objcopy: Some(frozen_analyzer_tool("objcopy")),
+                strip: None,
+            },
             debug: true,
             strip: false,
             compress_man: false,
@@ -1365,6 +1380,7 @@ mod tests {
         let package_name = stone_name(&names);
         let bundle = paths.output_dir().join(plan.derivation_id().as_str());
         fs::create_dir(&bundle).unwrap();
+        fs::set_permissions(&bundle, std::fs::Permissions::from_mode(PUBLISHED_BUNDLE_MODE)).unwrap();
         symlink("missing", bundle.join(package_name)).unwrap();
 
         let error = publish_artefacts(&paths, &plan).unwrap_err();

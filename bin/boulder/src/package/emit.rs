@@ -328,9 +328,10 @@ fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> 
 fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     use stone_recipe::build_policy::{AnalyzerKind, layers::BuildPolicyOperation};
     use stone_recipe::derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, LockedIdentity, OutputPlan,
-        PackageIdentity, Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
-        ProfileFragmentProvenance, policy_composition_identity, profile_aggregate_fingerprint,
+        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, ExecutionCredentials,
+        FrozenAnalyzerTool, LockedIdentity, LockedOutput, LockedPackage, LockedRequest, OutputPlan, PackageIdentity,
+        Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
+        RelationKind, RelationPlan, RepositorySnapshot, policy_composition_identity, profile_aggregate_fingerprint,
     };
 
     const SOURCE_LOCK_BYTES: &[u8] = b"test source lock bytes";
@@ -367,12 +368,38 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         name: name.to_owned(),
         fingerprint: format!("{name}-fingerprint"),
     };
-    let build_lock = BuildLock {
+    let mut build_lock = BuildLock {
         schema_version: BUILD_LOCK_SCHEMA_VERSION,
         request_fingerprint: "request-fingerprint".to_owned(),
-        repositories: Vec::new(),
-        requests: Vec::new(),
-        packages: Vec::new(),
+        repositories: vec![RepositorySnapshot {
+            id: "test-repository".to_owned(),
+            index_uri: "https://example.invalid/stone.index".to_owned(),
+            snapshot: "test-repository-snapshot".to_owned(),
+        }],
+        requests: [
+            "pkg-config",
+            "python3",
+            "llvm-objcopy",
+            "llvm-strip",
+            "objcopy",
+            "strip",
+        ]
+        .into_iter()
+        .map(|name| LockedRequest {
+            request: format!("binary({name})"),
+            package_id: "analyzer-tools-id".to_owned(),
+            output: "out".to_owned(),
+        })
+        .collect(),
+        packages: vec![LockedPackage {
+            package_id: "analyzer-tools-id".to_owned(),
+            name: "analyzer-tools".to_owned(),
+            version: "1.0.0-1-1".to_owned(),
+            architecture: "x86_64".to_owned(),
+            repository: "test-repository".to_owned(),
+            outputs: vec![LockedOutput { name: "out".to_owned() }],
+            dependencies: Vec::new(),
+        }],
         build_platform: platform.clone(),
         host_platform: platform.clone(),
         target_platform: platform,
@@ -388,6 +415,7 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         toolchain: identity("toolchain"),
         builder: identity("builder"),
     };
+    build_lock.normalize();
     let mut plan = stone_recipe::derivation::DerivationPlan::new(
         PackageIdentity {
             name: "example".to_owned(),
@@ -407,6 +435,7 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         name: "test-executor".to_owned(),
         fingerprint: "test-executor-fingerprint".to_owned(),
     };
+    plan.execution.credentials = ExecutionCredentials::IsolatedRoot;
     plan.source_lock_digest = plan.provenance.recipe.explicit_inputs_sha256.clone();
     plan.layout = BuilderLayout {
         hostname: "boulder".to_owned(),
@@ -435,6 +464,16 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         AnalyzerKind::CompressMan,
         AnalyzerKind::IncludeAny,
     ];
+    let analyzer_tool = |name: &str| FrozenAnalyzerTool {
+        program: format!("/usr/bin/{name}"),
+        requirement: RelationPlan {
+            kind: RelationKind::Binary,
+            name: name.to_owned(),
+        },
+    };
+    plan.analysis.tools.pkg_config = Some(analyzer_tool("pkg-config"));
+    plan.analysis.tools.python = Some(analyzer_tool("python3"));
+    plan.analysis.tools.strip = Some(analyzer_tool("llvm-strip"));
     plan.outputs = vec![OutputPlan {
         name: "out".to_owned(),
         package_name: "example".to_owned(),

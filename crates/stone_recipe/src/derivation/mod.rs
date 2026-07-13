@@ -34,7 +34,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 8;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 9;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
@@ -429,7 +429,7 @@ impl DerivationPlan {
         for (index, input) in self.manifest_build_inputs.iter().enumerate() {
             input.validate(&format!("manifest_build_inputs[{index}]"))?;
         }
-        self.analysis.validate()?;
+        self.analysis.validate(&self.build_lock)?;
 
         let mut output_names = BTreeSet::new();
         let mut output_package_names = BTreeSet::new();
@@ -1006,6 +1006,7 @@ pub struct ExecutionPolicy {
     /// structural builder selected in [`BuildLock::builder`].
     pub executor: LockedIdentity,
     pub root_materialization: RootMaterializationMode,
+    pub credentials: ExecutionCredentials,
     pub network: NetworkMode,
     pub filesystems: FilesystemPolicy,
     pub compiler_cache: bool,
@@ -1020,6 +1021,7 @@ impl Default for ExecutionPolicy {
                 fingerprint: String::new(),
             },
             root_materialization: RootMaterializationMode::LockedClosure,
+            credentials: ExecutionCredentials::Unspecified,
             network: NetworkMode::Disabled,
             filesystems: FilesystemPolicy::default(),
             compiler_cache: false,
@@ -1034,6 +1036,9 @@ impl ExecutionPolicy {
         require_nonempty("execution.executor.fingerprint", &self.executor.fingerprint)?;
         if matches!(self.root_materialization, RootMaterializationMode::PackageManagerState) {
             return Err(DerivationValidationError::PackageManagerRootMaterialization);
+        }
+        if matches!(self.credentials, ExecutionCredentials::Unspecified) {
+            return Err(DerivationValidationError::UnspecifiedExecutionCredentials);
         }
         if matches!(self.network, NetworkMode::Enabled) {
             return Err(DerivationValidationError::NetworkEnabled);
@@ -1050,6 +1055,10 @@ impl ExecutionPolicy {
             RootMaterializationMode::LockedClosure => 0,
             RootMaterializationMode::PackageManagerState => 1,
         });
+        encoder.variant(match self.credentials {
+            ExecutionCredentials::IsolatedRoot => 0,
+            ExecutionCredentials::Unspecified => 1,
+        });
         encoder.variant(match self.network {
             NetworkMode::Disabled => 0,
             NetworkMode::Enabled => 1,
@@ -1057,6 +1066,24 @@ impl ExecutionPolicy {
         self.filesystems.encode(encoder);
         encoder.bool(self.compiler_cache);
         encoder.u32(self.jobs);
+    }
+}
+
+/// Credentials exposed to every build and package-analysis process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionCredentials {
+    /// Namespace ID zero maps only to the invoking caller's user and group.
+    IsolatedRoot,
+    /// Fail-closed value used by incomplete manually constructed plans.
+    Unspecified,
+}
+
+impl ExecutionCredentials {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IsolatedRoot => "isolated-root",
+            Self::Unspecified => "unspecified",
+        }
     }
 }
 
@@ -1202,11 +1229,71 @@ pub enum NetworkMode {
     Enabled,
 }
 
-/// Frozen ordered handlers and switches consumed by package analysis.
+/// One external analyzer program and the capability whose exact provider is
+/// already resolved by [`BuildLock::requests`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenAnalyzerTool {
+    pub program: String,
+    pub requirement: RelationPlan,
+}
+
+impl FrozenAnalyzerTool {
+    fn validate(&self, field: &str, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
+        let prefix = match self.requirement.kind {
+            RelationKind::Binary => "/usr/bin",
+            RelationKind::SystemBinary => "/usr/sbin",
+            _ => {
+                return Err(DerivationValidationError::AnalyzerToolNotExecutable {
+                    field: format!("{field}.requirement"),
+                    value: self.requirement.canonical_name(),
+                });
+            }
+        };
+        if !is_safe_artifact_component(&self.requirement.name) {
+            return Err(DerivationValidationError::InvalidAnalyzerExecutable {
+                field: format!("{field}.requirement"),
+                value: self.requirement.name.clone(),
+            });
+        }
+        self.requirement.validate(&format!("{field}.requirement"))?;
+        let expected = format!("{prefix}/{}", self.requirement.name);
+        if self.program != expected {
+            return Err(DerivationValidationError::AnalyzerProgramMismatch {
+                field: format!("{field}.program"),
+                expected,
+                found: self.program.clone(),
+            });
+        }
+        let request = self.requirement.canonical_name();
+        if !build_lock.requests.iter().any(|locked| locked.request == request) {
+            return Err(DerivationValidationError::UnlockedAnalyzerTool {
+                field: format!("{field}.requirement"),
+                request,
+            });
+        }
+        Ok(())
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.program);
+        self.requirement.encode(encoder);
+    }
+}
+
+/// Exact analyzer programs reachable from the frozen handler/options graph.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AnalysisToolsPlan {
+    pub pkg_config: Option<FrozenAnalyzerTool>,
+    pub python: Option<FrozenAnalyzerTool>,
+    pub objcopy: Option<FrozenAnalyzerTool>,
+    pub strip: Option<FrozenAnalyzerTool>,
+}
+
+/// Frozen ordered handlers, tools, and switches consumed by package analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisPlan {
     pub handlers: Vec<AnalyzerKind>,
-    pub toolchain: AnalysisToolchain,
+    pub tools: AnalysisToolsPlan,
     pub debug: bool,
     pub strip: bool,
     pub compress_man: bool,
@@ -1217,7 +1304,7 @@ impl Default for AnalysisPlan {
     fn default() -> Self {
         Self {
             handlers: Vec::new(),
-            toolchain: AnalysisToolchain::Llvm,
+            tools: AnalysisToolsPlan::default(),
             debug: false,
             strip: true,
             compress_man: true,
@@ -1227,7 +1314,7 @@ impl Default for AnalysisPlan {
 }
 
 impl AnalysisPlan {
-    fn validate(&self) -> Result<(), DerivationValidationError> {
+    fn validate(&self, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
         if self.handlers.is_empty() {
             return Err(DerivationValidationError::Empty {
                 field: "analysis.handlers".to_owned(),
@@ -1258,6 +1345,32 @@ impl AnalysisPlan {
             });
         }
 
+        let has_elf = self.handlers.contains(&AnalyzerKind::Elf);
+        validate_analyzer_tool(
+            "analysis.tools.pkg_config",
+            self.handlers.contains(&AnalyzerKind::PkgConfig),
+            self.tools.pkg_config.as_ref(),
+            build_lock,
+        )?;
+        validate_analyzer_tool(
+            "analysis.tools.python",
+            self.handlers.contains(&AnalyzerKind::Python),
+            self.tools.python.as_ref(),
+            build_lock,
+        )?;
+        validate_analyzer_tool(
+            "analysis.tools.objcopy",
+            has_elf && self.debug,
+            self.tools.objcopy.as_ref(),
+            build_lock,
+        )?;
+        validate_analyzer_tool(
+            "analysis.tools.strip",
+            has_elf && self.strip,
+            self.tools.strip.as_ref(),
+            build_lock,
+        )?;
+
         Ok(())
     }
 
@@ -1274,10 +1387,10 @@ impl AnalysisPlan {
                 AnalyzerKind::IncludeAny => 7,
             });
         });
-        encoder.variant(match self.toolchain {
-            AnalysisToolchain::Llvm => 0,
-            AnalysisToolchain::Gnu => 1,
-        });
+        encode_optional_analyzer_tool(encoder, self.tools.pkg_config.as_ref());
+        encode_optional_analyzer_tool(encoder, self.tools.python.as_ref());
+        encode_optional_analyzer_tool(encoder, self.tools.objcopy.as_ref());
+        encode_optional_analyzer_tool(encoder, self.tools.strip.as_ref());
         encoder.bool(self.debug);
         encoder.bool(self.strip);
         encoder.bool(self.compress_man);
@@ -1285,10 +1398,32 @@ impl AnalysisPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnalysisToolchain {
-    Llvm,
-    Gnu,
+fn validate_analyzer_tool(
+    field: &str,
+    required: bool,
+    tool: Option<&FrozenAnalyzerTool>,
+    build_lock: &BuildLock,
+) -> Result<(), DerivationValidationError> {
+    match (required, tool) {
+        (true, Some(tool)) => tool.validate(field, build_lock),
+        (true, None) => Err(DerivationValidationError::MissingAnalyzerTool {
+            field: field.to_owned(),
+        }),
+        (false, Some(_)) => Err(DerivationValidationError::UnexpectedAnalyzerTool {
+            field: field.to_owned(),
+        }),
+        (false, None) => Ok(()),
+    }
+}
+
+fn encode_optional_analyzer_tool(encoder: &mut CanonicalEncoder, tool: Option<&FrozenAnalyzerTool>) {
+    match tool {
+        Some(tool) => {
+            encoder.variant(1);
+            tool.encode(encoder);
+        }
+        None => encoder.variant(0),
+    }
 }
 
 /// A typed package relation carried across the derivation freeze boundary.
@@ -1601,6 +1736,8 @@ pub enum DerivationValidationError {
     ZeroJobs,
     #[error("execution.root_materialization: package-manager state is not permitted in a frozen derivation")]
     PackageManagerRootMaterialization,
+    #[error("execution.credentials: a frozen derivation must select isolated credentials")]
+    UnspecifiedExecutionCredentials,
     #[error("execution.network: enabled networking is not permitted in a frozen derivation")]
     NetworkEnabled,
     #[error("package.architecture: unsupported Stone artifact architecture {value:?}; expected one of {supported}")]
@@ -1645,6 +1782,22 @@ pub enum DerivationValidationError {
     MissingAnalyzer { name: String },
     #[error("analysis.handlers: analyzer `{name}` must be last")]
     AnalyzerMustBeLast { name: String },
+    #[error("{field}: required analyzer tool is missing")]
+    MissingAnalyzerTool { field: String },
+    #[error("{field}: analyzer tool is unreachable from the frozen handler/options graph")]
+    UnexpectedAnalyzerTool { field: String },
+    #[error("{field}: analyzer requirement {value:?} is not an executable capability")]
+    AnalyzerToolNotExecutable { field: String, value: String },
+    #[error("{field}: analyzer executable {value:?} must be one normalized filename component")]
+    InvalidAnalyzerExecutable { field: String, value: String },
+    #[error("{field}: expected canonical analyzer program {expected:?}, found {found:?}")]
+    AnalyzerProgramMismatch {
+        field: String,
+        expected: String,
+        found: String,
+    },
+    #[error("{field}: analyzer provider request {request:?} is absent from build_lock.requests")]
+    UnlockedAnalyzerTool { field: String, request: String },
     #[error("{field}: unknown locked output `{package}:{output}`")]
     UnknownOutputReference {
         field: String,
@@ -2130,9 +2283,26 @@ mod tests {
     fn sample_plan() -> DerivationPlan {
         let provenance = sample_provenance();
         let mut build_lock = build_lock::sample_lock();
+        build_lock.requests.extend(
+            [
+                "pkg-config",
+                "python3",
+                "llvm-objcopy",
+                "llvm-strip",
+                "objcopy",
+                "strip",
+            ]
+            .into_iter()
+            .map(|name| LockedRequest {
+                request: format!("binary({name})"),
+                package_id: "hello-id".to_owned(),
+                output: "out".to_owned(),
+            }),
+        );
         build_lock.policy.name = provenance.policy.name.clone();
         build_lock.policy.fingerprint = provenance.policy.root.sha256.clone();
         build_lock.profile.fingerprint = profile_aggregate_fingerprint(&provenance.profiles);
+        build_lock.normalize();
         let mut plan = DerivationPlan::new(
             PackageIdentity {
                 name: "hello".to_owned(),
@@ -2198,12 +2368,15 @@ mod tests {
                 fingerprint: "executor-fingerprint".to_owned(),
             },
             root_materialization: RootMaterializationMode::LockedClosure,
+            credentials: ExecutionCredentials::IsolatedRoot,
             network: NetworkMode::Disabled,
             filesystems: FilesystemPolicy::default(),
             compiler_cache: false,
             jobs: 4,
         };
         plan.analysis.handlers = vec![AnalyzerKind::Elf, AnalyzerKind::Python, AnalyzerKind::IncludeAny];
+        plan.analysis.tools.python = Some(sample_analyzer_tool("python3"));
+        plan.analysis.tools.strip = Some(sample_analyzer_tool("llvm-strip"));
         plan.manifest_build_inputs = vec![RelationPlan {
             kind: RelationKind::Binary,
             name: "cmake".to_owned(),
@@ -2236,6 +2409,16 @@ mod tests {
         }];
         plan.source_date_epoch = 1_700_000_000;
         plan
+    }
+
+    fn sample_analyzer_tool(name: &str) -> FrozenAnalyzerTool {
+        FrozenAnalyzerTool {
+            program: format!("/usr/bin/{name}"),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary,
+                name: name.to_owned(),
+            },
+        }
     }
 
     #[test]
@@ -2313,6 +2496,17 @@ mod tests {
         assert!(matches!(
             plan.validate(),
             Err(DerivationValidationError::PackageManagerRootMaterialization)
+        ));
+    }
+
+    #[test]
+    fn validation_requires_explicit_isolated_credentials() {
+        let mut plan = sample_plan();
+        plan.execution.credentials = ExecutionCredentials::Unspecified;
+
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::UnspecifiedExecutionCredentials)
         ));
     }
 
@@ -2956,6 +3150,59 @@ mod tests {
     }
 
     #[test]
+    fn analyzer_tool_validation_is_exact_and_fail_closed() {
+        let mut missing = sample_plan();
+        missing.analysis.tools.python = None;
+        assert!(matches!(
+            missing.validate(),
+            Err(DerivationValidationError::MissingAnalyzerTool { field })
+                if field == "analysis.tools.python"
+        ));
+
+        let mut unexpected = sample_plan();
+        unexpected.analysis.tools.pkg_config = Some(sample_analyzer_tool("pkg-config"));
+        assert!(matches!(
+            unexpected.validate(),
+            Err(DerivationValidationError::UnexpectedAnalyzerTool { field })
+                if field == "analysis.tools.pkg_config"
+        ));
+
+        let mut non_executable = sample_plan();
+        non_executable.analysis.tools.python.as_mut().unwrap().requirement.kind = RelationKind::PackageName;
+        assert!(matches!(
+            non_executable.validate(),
+            Err(DerivationValidationError::AnalyzerToolNotExecutable { field, .. })
+                if field == "analysis.tools.python.requirement"
+        ));
+
+        let mut unsafe_name = sample_plan();
+        unsafe_name.analysis.tools.python.as_mut().unwrap().requirement.name = "../python3".to_owned();
+        assert!(matches!(
+            unsafe_name.validate(),
+            Err(DerivationValidationError::InvalidAnalyzerExecutable { field, .. })
+                if field == "analysis.tools.python.requirement"
+        ));
+
+        let mut program_mismatch = sample_plan();
+        program_mismatch.analysis.tools.python.as_mut().unwrap().program = "/usr/bin/not-python".to_owned();
+        assert!(matches!(
+            program_mismatch.validate(),
+            Err(DerivationValidationError::AnalyzerProgramMismatch { field, .. })
+                if field == "analysis.tools.python.program"
+        ));
+
+        let mut unlocked = sample_plan();
+        let python = unlocked.analysis.tools.python.as_mut().unwrap();
+        python.requirement.name = "unlocked-python".to_owned();
+        python.program = "/usr/bin/unlocked-python".to_owned();
+        assert!(matches!(
+            unlocked.validate(),
+            Err(DerivationValidationError::UnlockedAnalyzerTool { field, request })
+                if field == "analysis.tools.python.requirement" && request == "binary(unlocked-python)"
+        ));
+    }
+
+    #[test]
     fn every_required_semantic_mutation_changes_identity() {
         let original = sample_plan();
         let original_id = original.derivation_id();
@@ -3030,6 +3277,10 @@ mod tests {
                 }),
             ),
             (
+                "credentials",
+                Box::new(|plan| plan.execution.credentials = ExecutionCredentials::Unspecified),
+            ),
+            (
                 "executor",
                 Box::new(|plan| plan.execution.executor.fingerprint.push_str("-changed")),
             ),
@@ -3042,6 +3293,31 @@ mod tests {
                 Box::new(|plan| plan.package.architecture = "aarch64".to_owned()),
             ),
             ("analysis", Box::new(|plan| plan.analysis.strip = !plan.analysis.strip)),
+            (
+                "analysis-tool-program",
+                Box::new(|plan| {
+                    plan.analysis
+                        .tools
+                        .python
+                        .as_mut()
+                        .unwrap()
+                        .program
+                        .push_str("-changed");
+                }),
+            ),
+            (
+                "analysis-tool-requirement",
+                Box::new(|plan| {
+                    plan.analysis
+                        .tools
+                        .python
+                        .as_mut()
+                        .unwrap()
+                        .requirement
+                        .name
+                        .push_str("-changed");
+                }),
+            ),
             (
                 "manifest-build-input-name",
                 Box::new(|plan| plan.manifest_build_inputs[0].name.push_str("-changed")),

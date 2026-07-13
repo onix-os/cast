@@ -4,7 +4,7 @@
 // Repository-owned build policy. This file contains data only; every dynamic
 // value is an explicit member of the finite build context.
 
-let p = import! boulder.build_policy.v1
+let p = import! boulder.build_policy.v2
 
 let lit = p.text.literal
 let ctx = \value -> p.text.context value
@@ -211,6 +211,7 @@ let riscv64_architecture_flags = {
 
 let sandbox = {
     hostname = "boulder",
+    credentials = p.sandbox_credentials.isolated_root,
     filesystems = {
         tmp = p.sandbox_filesystems.tmp.empty,
         sys = p.sandbox_filesystems.sys.none,
@@ -275,6 +276,19 @@ let mold = {
     },
 }
 
+let analyzer_tools = {
+    pkg_config = p.tool.binary "pkg-config",
+    python = p.tool.binary "python3",
+    llvm = {
+        objcopy = p.tool.binary "llvm-objcopy",
+        strip = p.tool.binary "llvm-strip",
+    },
+    gnu = {
+        objcopy = p.tool.binary "objcopy",
+        strip = p.tool.binary "strip",
+    },
+}
+
 let build_root = {
     base = base_inputs,
     toolchains = {
@@ -288,6 +302,7 @@ let build_root = {
             gnu = [p.tool.package "gcc-32bit", p.tool.package "libstdc++-32bit-devel"],
         },
     },
+    analyzer_tools,
     compiler_cache,
     mold,
 }

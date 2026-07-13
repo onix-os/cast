@@ -7,8 +7,8 @@
 use std::fmt::{Arguments, Write as _};
 
 use stone_recipe::derivation::{
-    AnalysisToolchain, DerivationPlan, LockedIdentity, LockedSource, NetworkMode, OutputRelation, PathRuleKind,
-    Platform, RelationKind, RelationPlan, StepPlan,
+    DerivationPlan, LockedIdentity, LockedSource, NetworkMode, OutputRelation, PathRuleKind, Platform, RelationKind,
+    RelationPlan, StepPlan,
 };
 
 use stone_recipe::build_policy::layers::BuildPolicyOperation;
@@ -350,6 +350,7 @@ impl Explanation<'_> {
             "root_materialization",
             self.plan.execution.root_materialization.as_str(),
         );
+        formatter.string(2, "credentials", self.plan.execution.credentials.as_str());
         formatter.string(
             2,
             "network",
@@ -382,18 +383,38 @@ impl Explanation<'_> {
 
     fn analysis(&self, formatter: &mut Formatter) {
         formatter.open(1, "analysis");
-        formatter.string(
-            2,
-            "toolchain",
-            match self.plan.analysis.toolchain {
-                AnalysisToolchain::Llvm => "llvm",
-                AnalysisToolchain::Gnu => "gnu",
-            },
-        );
         formatter.field(2, "debug", self.plan.analysis.debug);
         formatter.field(2, "strip", self.plan.analysis.strip);
         formatter.field(2, "compress_man", self.plan.analysis.compress_man);
         formatter.field(2, "remove_libtool", self.plan.analysis.remove_libtool);
+        formatter.open(2, "tools");
+        for (index, (role, tool)) in [
+            ("pkg_config", self.plan.analysis.tools.pkg_config.as_ref()),
+            ("python", self.plan.analysis.tools.python.as_ref()),
+            ("objcopy", self.plan.analysis.tools.objcopy.as_ref()),
+            ("strip", self.plan.analysis.tools.strip.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(role, tool)| tool.map(|tool| (role, tool)))
+        .enumerate()
+        {
+            let request_name = tool.requirement.canonical_name();
+            let request = self
+                .plan
+                .build_lock
+                .requests
+                .iter()
+                .find(|request| request.request == request_name)
+                .expect("validated analysis tool must have an exact locked provider");
+            formatter.indexed_open(3, "tool", index);
+            formatter.string(4, "role", role);
+            formatter.string(4, "program", &tool.program);
+            formatter.string(4, "requirement", &request_name);
+            formatter.string(4, "package_id", &request.package_id);
+            formatter.string(4, "output", &request.output);
+            formatter.close(3);
+        }
+        formatter.close(2);
         formatter.close(1);
     }
 
@@ -691,11 +712,12 @@ mod tests {
     use stone_recipe::{
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
-            AnalysisPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
-            DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutionPolicy, JobPlan, LockedOutput,
-            LockedOutputRef, LockedPackage, LockedRequest, OutputPlan, PackageIdentity, PhasePlan,
-            PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
-            RepositorySnapshot, RootMaterializationMode, policy_composition_identity, profile_aggregate_fingerprint,
+            AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
+            DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutionCredentials, ExecutionPolicy,
+            FrozenAnalyzerTool, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
+            PackageIdentity, PhasePlan, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
+            ProfileFragmentProvenance, RepositorySnapshot, RootMaterializationMode, policy_composition_identity,
+            profile_aggregate_fingerprint,
         },
     };
 
@@ -807,6 +829,11 @@ mod tests {
                 },
                 LockedRequest {
                     request: "binary(alpha)".to_owned(),
+                    package_id: "alpha-id".to_owned(),
+                    output: "out".to_owned(),
+                },
+                LockedRequest {
+                    request: "binary(objcopy)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
                 },
@@ -954,6 +981,7 @@ mod tests {
             execution: ExecutionPolicy {
                 executor: identity("boulder-executor-v1"),
                 root_materialization: RootMaterializationMode::LockedClosure,
+                credentials: ExecutionCredentials::IsolatedRoot,
                 network: NetworkMode::Disabled,
                 filesystems: Default::default(),
                 compiler_cache: true,
@@ -961,7 +989,16 @@ mod tests {
             },
             analysis: AnalysisPlan {
                 handlers: vec![AnalyzerKind::Elf, AnalyzerKind::Binary, AnalyzerKind::IncludeAny],
-                toolchain: AnalysisToolchain::Gnu,
+                tools: AnalysisToolsPlan {
+                    objcopy: Some(FrozenAnalyzerTool {
+                        program: "/usr/bin/objcopy".to_owned(),
+                        requirement: RelationPlan {
+                            kind: RelationKind::Binary,
+                            name: "objcopy".to_owned(),
+                        },
+                    }),
+                    ..AnalysisToolsPlan::default()
+                },
                 debug: true,
                 strip: false,
                 compress_man: true,

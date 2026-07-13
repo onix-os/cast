@@ -113,7 +113,7 @@ Deliberately unsupported:
 - Contains every repository choice that can alter a build: platform data,
   toolchains, standard-builder command and environment templates, base build
   inputs, tuning defaults, source preparation, an explicitly ordered analyzer
-  pipeline, and fixed guest layout. It does not duplicate module-owned builder
+  pipeline, analyzer executable capabilities, and fixed guest layout. It does not duplicate module-owned builder
   capabilities or phases. Analyzer kinds are unique and `IncludeAny` is the
   required final fallback.
 - Is composed through ordered, one-way transformations with strict `add`,
@@ -135,6 +135,9 @@ Deliberately unsupported:
   proc, host `/sys`, and full host `/dev` are not policy values. Minimal
   `/dev` is exactly `null`, `zero`, and `full` and never varies with host
   device availability.
+- Owns the sandbox credential selection and the executable capabilities used
+  by analyzer handlers. Only capabilities reachable from the frozen handler,
+  debug, strip, and compiler-toolchain choices become root requests.
 
 ### `DerivationPlan`
 
@@ -155,8 +158,9 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, safe package/version/artifact filename components, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency, disabled networking, schema-v8 executor identity and locked-closure root
-  materialization, and the finite sandbox-filesystem contract. The locked
+  concurrency, disabled networking, schema-v9 executor identity, explicit
+  credentials, locked-closure root materialization, exact analyzer
+  program/provider bindings, and the finite sandbox-filesystem contract. The locked
   closure path copies only exact package IDs from `build.lock.glu`, creates the
   fixed build-root ABI links, and never reads package-manager system intent,
   composes a system snapshot, resolves providers, or discovers transaction or
@@ -251,7 +255,7 @@ implementation status above is authoritative for completed work.
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Output names, path rules, runtime relations, and conflicts | evaluated recipe | Authored intent | Explicit validated `PackageSpec.outputs`, resolved into frozen plan outputs. |
-| Package analysis chain and automatic provides/dependencies | `package/analysis` | Repository policy | Analyzer set/version/configuration in the plan. Findings are output-derived observations, not permission to select new policy. |
+| Package analysis chain and automatic provides/dependencies | `package/analysis` | Repository policy | Analyzer order and executable capabilities are selected into the plan and exact lock requests. Findings are output-derived observations, not permission to select new policy or rediscover tools. |
 | Build release number | `cli/build.rs` and `package/emit.rs` | Authored invocation intent | Explicit plan field because it changes emitted package identity/metadata. |
 | Boulder implementation and recipe fingerprint | `package.rs` and emitted metadata | Resolved dependency | Schema/implementation version plus all recipe, policy, lock, and builder fingerprints in the plan. |
 | Output directory, cleanup, progress/timing, terminal handling, process priority, and completion timestamp | CLI and `build.rs` | Executor-only state | Remain outside the plan; none may be visible to build processes or emitted package semantics. |

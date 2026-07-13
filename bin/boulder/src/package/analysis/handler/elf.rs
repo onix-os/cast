@@ -18,7 +18,6 @@ use path_clean::clean;
 
 use moss::util;
 use stone::relation::{Dependency, Kind, Provider};
-use stone_recipe::derivation::AnalysisToolchain;
 
 use super::{analyzer_command, checked_output};
 use crate::package::{
@@ -106,14 +105,14 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
-    use stone_recipe::derivation::AnalysisToolchain;
-
     use super::{elf, parse_build_id, parse_elf};
     use crate::{
         Paths, Recipe,
         package::{analysis::BucketMut, collect::PathInfo, test_derivation_plan},
     };
+    use stone::relation::Kind as RelationKind;
+    use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
+    use stone_recipe::derivation::{FrozenAnalyzerTool, RelationPlan};
 
     fn open_build_id_fixture() -> fs_err::File {
         let mut candidates = vec![PathBuf::from("/bin/sh"), PathBuf::from("/usr/bin/env")];
@@ -140,9 +139,22 @@ mod tests {
         let plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout, runtime.path(), output.path()).unwrap();
         let mut analysis = plan.analysis;
-        analysis.toolchain = AnalysisToolchain::Gnu;
         analysis.debug = debug;
         analysis.strip = strip;
+        analysis.tools.objcopy = debug.then(|| FrozenAnalyzerTool {
+            program: "/usr/bin/llvm-objcopy".to_owned(),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary.into(),
+                name: "llvm-objcopy".to_owned(),
+            },
+        });
+        analysis.tools.strip = strip.then(|| FrozenAnalyzerTool {
+            program: "/usr/bin/llvm-strip".to_owned(),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary.into(),
+                name: "llvm-strip".to_owned(),
+            },
+        });
 
         let target_path = PathBuf::from("/usr/bin/analyzer-failure-fixture");
         let mut info = PathInfo {
@@ -436,12 +448,13 @@ fn split_debug(
         return Ok(None);
     }
 
-    let use_llvm = matches!(bucket.analysis.toolchain, AnalysisToolchain::Llvm);
-    let objcopy = if use_llvm {
-        "/usr/bin/llvm-objcopy"
-    } else {
-        "/usr/bin/objcopy"
-    };
+    let objcopy = &bucket
+        .analysis
+        .tools
+        .objcopy
+        .as_ref()
+        .expect("validated analysis plan requires objcopy when ELF debug splitting is enabled")
+        .program;
 
     let debug_dir = if matches!(bit_size, Class::ELF64) {
         Path::new("usr/lib/debug/.build-id")
@@ -483,12 +496,13 @@ fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
         return Ok(());
     }
 
-    let use_llvm = matches!(bucket.analysis.toolchain, AnalysisToolchain::Llvm);
-    let strip = if use_llvm {
-        "/usr/bin/llvm-strip"
-    } else {
-        "/usr/bin/strip"
-    };
+    let strip = &bucket
+        .analysis
+        .tools
+        .strip
+        .as_ref()
+        .expect("validated analysis plan requires strip when ELF stripping is enabled")
+        .program;
     let is_executable = info
         .path
         .parent()

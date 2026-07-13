@@ -22,7 +22,7 @@ constructed only during that conversion.
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
 | Boulder package | `stone.glu` | `boulder.package.v2` and `boulder.builders.*.v1` |
-| Boulder build policy | `bin/boulder/data/policy/policy.glu` | `boulder.build_policy.layers.v1` and `boulder.build_policy.v1` |
+| Boulder build policy | `bin/boulder/data/policy/policy.glu` | `boulder.build_policy.layers.v1` and `boulder.build_policy.v2` |
 | Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
 | Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
 | Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |
@@ -191,6 +191,14 @@ the `IncludeAny` fallback must appear exactly once at the end. Analyzer patches
 use the same order-preserving array operations, so reordering analyzers is a
 semantic policy and fingerprint change.
 
+`BuildPolicySpec.build_root.analyzer_tools` names the executable capabilities
+for pkg-config, Python, and the LLVM/GNU objcopy and strip variants. Planning
+selects only tools reachable from the ordered handlers and package switches,
+adds those exact capability requests to `build.lock.glu`, and freezes each
+canonical guest program together with its typed requirement. Package analysis
+uses those frozen paths; it does not rediscover a tool from `PATH` or infer one
+from the selected compiler after the freeze boundary.
+
 `BuildPolicySpec.sandbox.filesystems` is explicit repository data. Its finite
 contract omits proc unconditionally, requires a fresh empty tmpfs for `/tmp`,
 requires `/sys` to be absent, and permits `/dev` as `none` or `minimal`. The
@@ -199,6 +207,10 @@ exposes exactly read-only binds for `null`, `zero`, and `full`; it has no
 host-dependent optional nodes and a full host `/dev` view is not representable.
 These choices are frozen into the execution policy and participate in the
 derivation identity.
+
+`BuildPolicySpec.sandbox.credentials` is likewise explicit. The default policy
+selects `isolated_root`; the planner freezes that selection into execution
+policy, and frozen container entry rejects an unspecified or mismatched value.
 
 Each successful operation records the policy and layer names, layer and entry
 positions, global operation order, operation kind, module origin, and the
@@ -253,9 +265,10 @@ valid only while updating the lock.
 The builder identity names the selected structural family for explanation and
 fingerprints the complete target-selected `BuilderSpec`, `HooksSpec`, and
 package-profile key. It is not the Boulder executable identity. Derivation
-schema v8 freezes the executor ABI and implementation fingerprint separately
+schema v9 freezes the executor ABI and implementation fingerprint separately
 inside `ExecutionPolicy`, so changing execution compatibility cannot be
-mistaken for changing authored builder structure.
+mistaken for changing authored builder structure. It also freezes the selected
+credential contract and every reachable analyzer program and provider request.
 
 The lock is an explicit resolution input, not an authenticated statement from
 a remote service. Boulder validates its graph and selected planner context,

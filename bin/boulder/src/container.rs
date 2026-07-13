@@ -3,7 +3,8 @@
 
 use container::{Container, DevPolicy, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy};
 use stone_recipe::derivation::{
-    BuilderLayout, DerivationPlan, DevFilesystem, FilesystemPolicy, NetworkMode, SysFilesystem, TmpFilesystem,
+    BuilderLayout, DerivationPlan, DevFilesystem, ExecutionCredentials, FilesystemPolicy, NetworkMode, SysFilesystem,
+    TmpFilesystem,
 };
 use thiserror::Error;
 
@@ -73,6 +74,11 @@ struct FrozenSandbox {
 }
 
 fn frozen_sandbox(paths: &Paths, plan: &DerivationPlan) -> Result<FrozenSandbox, Error> {
+    if !matches!(plan.execution.credentials, ExecutionCredentials::IsolatedRoot) {
+        return Err(Error::FrozenCredentialPolicyMismatch {
+            found: plan.execution.credentials.as_str(),
+        });
+    }
     if paths.layout() != &plan.layout {
         return Err(Error::FrozenLayoutMismatch);
     }
@@ -162,6 +168,8 @@ pub enum Error {
     Mount(#[from] std::io::Error),
     #[error("frozen derivation layout does not match runtime paths")]
     FrozenLayoutMismatch,
+    #[error("frozen execution requires credential policy `isolated-root`, found `{found}`")]
+    FrozenCredentialPolicyMismatch { found: &'static str },
 }
 
 #[cfg(test)]
@@ -312,6 +320,22 @@ mod tests {
         assert!(matches!(
             frozen_sandbox(&paths, &plan),
             Err(Error::FrozenLayoutMismatch)
+        ));
+    }
+
+    #[test]
+    fn frozen_container_rejects_non_isolated_credentials() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = package::test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        plan.execution.credentials = ExecutionCredentials::Unspecified;
+
+        assert!(matches!(
+            frozen_sandbox(&paths, &plan),
+            Err(Error::FrozenCredentialPolicyMismatch { found: "unspecified" })
         ));
     }
 }

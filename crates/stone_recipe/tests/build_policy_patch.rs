@@ -22,7 +22,7 @@ fn repository_policy() -> stone_recipe::build_policy::BuildPolicySpec {
 fn authored_patch(body: &str) -> Source {
     Source::new(
         "tests/fixtures/build-policy-patch.glu",
-        format!("let b = import! boulder.build_policy.v1\n{body}\n"),
+        format!("let b = import! boulder.build_policy.v2\n{body}\n"),
     )
 }
 

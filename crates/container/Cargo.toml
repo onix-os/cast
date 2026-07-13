@@ -14,7 +14,6 @@ fs-err.workspace = true
 nc.workspace = true
 nix.workspace = true
 snafu.workspace = true
-strum.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

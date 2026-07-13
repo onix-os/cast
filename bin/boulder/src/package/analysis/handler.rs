@@ -136,7 +136,14 @@ pub fn pkg_config(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Res
 
     bucket.providers.insert(provider);
 
-    let mut command = analyzer_command("/usr/bin/pkg-config");
+    let program = &bucket
+        .analysis
+        .tools
+        .pkg_config
+        .as_ref()
+        .expect("validated analysis plan requires pkg-config for the pkg-config handler")
+        .program;
+    let mut command = analyzer_command(program);
     command
         .args(["--print-requires", "--print-requires-private", "--silence-errors"])
         .arg(&info.path)
@@ -321,5 +328,29 @@ mod tests {
 
         assert!(error.contains("exit status: 9"), "{error}");
         assert!(error.contains("analyzer-failed"), "{error}");
+    }
+
+    #[test]
+    fn production_handlers_do_not_embed_analyzer_program_selection() {
+        let production = |source: &'static str| source.split("#[cfg(test)]").next().unwrap();
+        let sources = [
+            production(include_str!("handler.rs")),
+            production(include_str!("handler/python.rs")),
+            production(include_str!("handler/elf.rs")),
+        ];
+
+        for source in sources {
+            for forbidden in [
+                "/usr/bin/pkg-config",
+                "/usr/bin/python3",
+                "/usr/bin/llvm-objcopy",
+                "/usr/bin/llvm-strip",
+                "/usr/bin/objcopy",
+                "/usr/bin/strip",
+                "AnalysisToolchain",
+            ] {
+                assert!(!source.contains(forbidden), "production analyzer embeds {forbidden}");
+            }
+        }
     }
 }

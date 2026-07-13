@@ -7,21 +7,22 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    AnalyzerKind, ArchivePreparationPolicySpec, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec,
-    BuildPolicySpec, BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec,
-    CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
-    EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec,
-    NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec,
-    PlatformPolicySpec, RetiredTargetPolicySpec, SandboxDevPolicySpec, SandboxFilesystemPolicySpec, SandboxPolicySpec,
-    SandboxSysPolicySpec, SandboxTmpPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec,
-    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
-    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
+    AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArchivePreparationPolicySpec, ArrayPatch,
+    BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec, BuildRootPolicySpec, BuildToolSpec,
+    BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec,
+    ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec,
+    InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec,
+    PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec, RetiredTargetPolicySpec, SandboxCredentialPolicySpec,
+    SandboxDevPolicySpec, SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
+    SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec,
+    ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
+    ValuePatch,
 };
 
 /// Version of the typed repository build-policy ABI.
-pub const BUILD_POLICY_ABI_VERSION: u32 = 1;
+pub const BUILD_POLICY_ABI_VERSION: u32 = 2;
 
-/// Pure helpers imported by policy roots as `boulder.build_policy.v1`.
+/// Pure helpers imported by policy roots as `boulder.build_policy.v2`.
 pub const GLUON_BUILD_POLICY_ABI: &str = include_str!("../../gluon/build_policy.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
@@ -287,6 +288,20 @@ struct GluonEmul32InputPolicySpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonAnalyzerToolchainPolicySpec {
+    objcopy: GluonBuildToolSpec,
+    strip: GluonBuildToolSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonAnalyzerToolsPolicySpec {
+    pkg_config: GluonBuildToolSpec,
+    python: GluonBuildToolSpec,
+    llvm: GluonAnalyzerToolchainPolicySpec,
+    gnu: GluonAnalyzerToolchainPolicySpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonCompilerCachePolicySpec {
     required_tools: Vec<GluonBuildToolSpec>,
     default_path: String,
@@ -312,6 +327,7 @@ struct GluonBuildRootPolicySpec {
     base: Vec<GluonBuildToolSpec>,
     toolchains: GluonToolchainInputPolicySpec,
     emul32: GluonEmul32InputPolicySpec,
+    analyzer_tools: GluonAnalyzerToolsPolicySpec,
     compiler_cache: GluonCompilerCachePolicySpec,
     mold: GluonMoldPolicySpec,
 }
@@ -333,6 +349,11 @@ enum GluonSandboxDevPolicySpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonSandboxCredentialPolicySpec {
+    IsolatedRootCredentials,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonSandboxFilesystemPolicySpec {
     tmp: GluonSandboxTmpPolicySpec,
     sys: GluonSandboxSysPolicySpec,
@@ -342,6 +363,7 @@ struct GluonSandboxFilesystemPolicySpec {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonSandboxPolicySpec {
     hostname: String,
+    credentials: GluonSandboxCredentialPolicySpec,
     filesystems: GluonSandboxFilesystemPolicySpec,
     guest_root: String,
     artifacts_dir: String,
@@ -702,7 +724,7 @@ convert_record!(GluonRetiredTargetPolicySpec => RetiredTargetPolicySpec { name, 
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
 convert_record!(GluonSandboxFilesystemPolicySpec => SandboxFilesystemPolicySpec { tmp, sys, dev });
 convert_record!(GluonSandboxPolicySpec => SandboxPolicySpec {
-    hostname, filesystems, guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
+    hostname, credentials, filesystems, guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir,
 });
 convert_record!(GluonSourcePreparationPolicySpec => SourcePreparationPolicySpec { archive, git });
 convert_record!(GluonBuildersPolicySpec => BuildersPolicySpec { cmake, meson, cargo, autotools });
@@ -768,6 +790,26 @@ impl From<GluonEmul32InputPolicySpec> for Emul32InputPolicySpec {
     }
 }
 
+impl From<GluonAnalyzerToolchainPolicySpec> for AnalyzerToolchainPolicySpec {
+    fn from(value: GluonAnalyzerToolchainPolicySpec) -> Self {
+        Self {
+            objcopy: value.objcopy.into(),
+            strip: value.strip.into(),
+        }
+    }
+}
+
+impl From<GluonAnalyzerToolsPolicySpec> for AnalyzerToolsPolicySpec {
+    fn from(value: GluonAnalyzerToolsPolicySpec) -> Self {
+        Self {
+            pkg_config: value.pkg_config.into(),
+            python: value.python.into(),
+            llvm: value.llvm.into(),
+            gnu: value.gnu.into(),
+        }
+    }
+}
+
 impl From<GluonCompilerCachePolicySpec> for CompilerCachePolicySpec {
     fn from(value: GluonCompilerCachePolicySpec) -> Self {
         Self {
@@ -801,6 +843,7 @@ impl From<GluonBuildRootPolicySpec> for BuildRootPolicySpec {
             base: convert_tools(value.base),
             toolchains: value.toolchains.into(),
             emul32: value.emul32.into(),
+            analyzer_tools: value.analyzer_tools.into(),
             compiler_cache: value.compiler_cache.into(),
             mold: value.mold.into(),
         }
@@ -988,6 +1031,14 @@ impl From<GluonSandboxDevPolicySpec> for SandboxDevPolicySpec {
     }
 }
 
+impl From<GluonSandboxCredentialPolicySpec> for SandboxCredentialPolicySpec {
+    fn from(value: GluonSandboxCredentialPolicySpec) -> Self {
+        match value {
+            GluonSandboxCredentialPolicySpec::IsolatedRootCredentials => Self::IsolatedRoot,
+        }
+    }
+}
+
 impl From<GluonEnvironmentCondition> for EnvironmentCondition {
     fn from(value: GluonEnvironmentCondition) -> Self {
         match value {
@@ -1039,7 +1090,7 @@ pub fn evaluate_gluon_with_inputs(
     let mut import_policy = evaluator.import_policy().clone();
     import_policy.enable_array_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.build_policy.v1", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("boulder.build_policy.v2", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)?;
 
@@ -1079,7 +1130,7 @@ pub fn evaluate_patch_gluon_with_inputs(
     let mut import_policy = evaluator.import_policy().clone();
     import_policy.enable_array_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.build_policy.v1", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("boulder.build_policy.v2", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)?;
 

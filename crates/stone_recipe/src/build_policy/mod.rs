@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
+use stone::relation::{Dependency, Kind as RelationKind, ParseError};
 use thiserror::Error;
 
 pub use self::gluon::{
@@ -285,6 +286,29 @@ pub enum BuildToolSpec {
     SystemBinary(String),
 }
 
+impl BuildToolSpec {
+    /// Lower a policy-owned tool capability through the shared Stone relation
+    /// model. This is the sole provider request used by build-root planning.
+    pub fn dependency(&self) -> Result<Dependency, ParseError> {
+        let (kind, target) = match self {
+            Self::Package(target) => (RelationKind::PackageName, target),
+            Self::Binary(target) => (RelationKind::Binary, target),
+            Self::SystemBinary(target) => (RelationKind::SystemBinary, target),
+        };
+        Dependency::new(kind, target.clone())
+    }
+
+    /// Return the canonical guest program named by an executable capability.
+    /// Package-name requirements deliberately have no executable path.
+    pub fn executable_program(&self) -> Option<String> {
+        match self {
+            Self::Package(_) => None,
+            Self::Binary(target) => Some(format!("/usr/bin/{target}")),
+            Self::SystemBinary(target) => Some(format!("/usr/sbin/{target}")),
+        }
+    }
+}
+
 /// Compiler-specific packages installed into a build root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolchainInputPolicySpec {
@@ -297,6 +321,26 @@ pub struct ToolchainInputPolicySpec {
 pub struct Emul32InputPolicySpec {
     pub base: Vec<BuildToolSpec>,
     pub toolchains: ToolchainInputPolicySpec,
+}
+
+/// Analyzer programs selected for one compiler-toolchain family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyzerToolchainPolicySpec {
+    pub objcopy: BuildToolSpec,
+    pub strip: BuildToolSpec,
+}
+
+/// Every external program an analyzer handler can invoke.
+///
+/// These capabilities are separate from the ordinary compiler and base
+/// package lists so planning can request only the tools reachable from the
+/// frozen handler/options combination.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyzerToolsPolicySpec {
+    pub pkg_config: BuildToolSpec,
+    pub python: BuildToolSpec,
+    pub llvm: AnalyzerToolchainPolicySpec,
+    pub gnu: AnalyzerToolchainPolicySpec,
 }
 
 /// Fixed compiler-cache inputs and guest paths.
@@ -329,6 +373,7 @@ pub struct BuildRootPolicySpec {
     pub base: Vec<BuildToolSpec>,
     pub toolchains: ToolchainInputPolicySpec,
     pub emul32: Emul32InputPolicySpec,
+    pub analyzer_tools: AnalyzerToolsPolicySpec,
     pub compiler_cache: CompilerCachePolicySpec,
     pub mold: MoldPolicySpec,
 }
@@ -338,6 +383,7 @@ pub struct BuildRootPolicySpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicySpec {
     pub hostname: String,
+    pub credentials: SandboxCredentialPolicySpec,
     pub filesystems: SandboxFilesystemPolicySpec,
     pub guest_root: String,
     pub artifacts_dir: String,
@@ -346,6 +392,13 @@ pub struct SandboxPolicySpec {
     pub recipe_dir: String,
     pub package_dir: String,
     pub install_dir: String,
+}
+
+/// Fixed credentials visible inside a frozen sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxCredentialPolicySpec {
+    /// Namespace user/group ID zero maps only to the invoking caller.
+    IsolatedRoot,
 }
 
 /// Repository-authorized pseudo-filesystems available to a build sandbox.
@@ -697,6 +750,10 @@ pub enum BuildPolicyConversionError {
         value: String,
         expected: String,
     },
+    #[error("{field}: analyzer tool must be a binary or system-binary capability")]
+    AnalyzerToolMustBeExecutable { field: String },
+    #[error("{field}: analyzer executable `{value}` must be one normalized filename component")]
+    InvalidAnalyzerExecutable { field: String, value: String },
 }
 
 impl BuildPolicySpec {
@@ -969,6 +1026,7 @@ fn validate_build_root(
     validate_toolchain_inputs("build_root.toolchains", &build_root.toolchains)?;
     validate_tools("build_root.emul32.base", &build_root.emul32.base)?;
     validate_toolchain_inputs("build_root.emul32.toolchains", &build_root.emul32.toolchains)?;
+    validate_analyzer_tools(&build_root.analyzer_tools)?;
 
     let cache = &build_root.compiler_cache;
     validate_tools("build_root.compiler_cache.required_tools", &cache.required_tools)?;
@@ -1002,6 +1060,46 @@ fn validate_build_root(
     validate_tools("build_root.mold.required_tools", &build_root.mold.required_tools)?;
     require_text("build_root.mold.linker", &build_root.mold.linker)?;
     validate_compiler_flags("build_root.mold.flags", &build_root.mold.flags)
+}
+
+fn validate_analyzer_tools(tools: &AnalyzerToolsPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    for (field, tool) in [
+        ("build_root.analyzer_tools.pkg_config", &tools.pkg_config),
+        ("build_root.analyzer_tools.python", &tools.python),
+        ("build_root.analyzer_tools.llvm.objcopy", &tools.llvm.objcopy),
+        ("build_root.analyzer_tools.llvm.strip", &tools.llvm.strip),
+        ("build_root.analyzer_tools.gnu.objcopy", &tools.gnu.objcopy),
+        ("build_root.analyzer_tools.gnu.strip", &tools.gnu.strip),
+    ] {
+        let target = match tool {
+            BuildToolSpec::Package(_) => {
+                return Err(BuildPolicyConversionError::AnalyzerToolMustBeExecutable {
+                    field: field.to_owned(),
+                });
+            }
+            BuildToolSpec::Binary(target) | BuildToolSpec::SystemBinary(target) => target,
+        };
+        if !is_normalized_executable_name(target) {
+            return Err(BuildPolicyConversionError::InvalidAnalyzerExecutable {
+                field: field.to_owned(),
+                value: target.clone(),
+            });
+        }
+        tool.dependency()
+            .map_err(|_| BuildPolicyConversionError::InvalidAnalyzerExecutable {
+                field: field.to_owned(),
+                value: target.clone(),
+            })?;
+    }
+    Ok(())
+}
+
+fn is_normalized_executable_name(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains(['/', '\\'])
+        && !value.chars().any(char::is_control)
 }
 
 fn reject_guest_path_overlaps(paths: &[(&str, &str)]) -> Result<(), BuildPolicyConversionError> {

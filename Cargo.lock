@@ -714,7 +714,6 @@ dependencies = [
  "nc",
  "nix 0.27.1",
  "snafu",
- "strum",
  "tempfile",
 ]
 

@@ -25,7 +25,10 @@ use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, kill, sigaction};
 use nix::sys::signalfd::SigSet;
 use nix::sys::stat::{Mode, umask};
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{Pid, Uid, close, pipe2, pivot_root, read, sethostname, tcsetpgrp, write};
+use nix::unistd::{
+    Pid, close, getegid, geteuid, getgid, getgroups, getuid, pipe2, pivot_root, read, setgroups, sethostname,
+    tcsetpgrp, write,
+};
 use snafu::{ResultExt, Snafu};
 
 use self::idmap::idmap;
@@ -215,8 +218,6 @@ impl Container {
     {
         static mut STACK: [u8; 4 * 1024 * 1024] = [0u8; 4 * 1024 * 1024];
 
-        let rootless = !Uid::effective().is_root();
-
         // Pipe to synchronize parent & child. Both ends must be close-on-exec:
         // the child retains the write end while running the Rust payload so it
         // can report setup/payload errors, but spawned commands must never
@@ -224,16 +225,7 @@ impl Container {
         let mut sync = SyncPipe::new()?;
         let child_sync = sync.raw();
 
-        let mut flags =
-            CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
-
-        if rootless {
-            flags |= CloneFlags::CLONE_NEWUSER;
-        }
-
-        if !self.networking {
-            flags |= CloneFlags::CLONE_NEWNET;
-        }
+        let flags = namespace_flags(self.networking);
 
         let clone_cb = Box::new(|| match enter(&self, child_sync, &mut f) {
             Ok(_) => 0,
@@ -257,8 +249,9 @@ impl Container {
         });
         let pid = unsafe { clone(clone_cb, &mut *addr_of_mut!(STACK), flags, Some(SIGCHLD)) }.context(NixSnafu)?;
 
-        // Update uid / gid map to map current user to root in container
-        if rootless && let Err(source) = idmap(pid) {
+        // Every build receives the same one-identity credential namespace:
+        // namespace root maps to the caller and no other IDs exist.
+        if let Err(source) = idmap(pid) {
             abort_child(pid);
             return Err(Error::Idmap { source });
         }
@@ -330,6 +323,18 @@ impl Container {
     }
 }
 
+fn namespace_flags(networking: bool) -> CloneFlags {
+    let mut flags = CloneFlags::CLONE_NEWNS
+        | CloneFlags::CLONE_NEWPID
+        | CloneFlags::CLONE_NEWIPC
+        | CloneFlags::CLONE_NEWUTS
+        | CloneFlags::CLONE_NEWUSER;
+    if !networking {
+        flags |= CloneFlags::CLONE_NEWNET;
+    }
+    flags
+}
+
 /// Reenter the container
 fn enter<E>(container: &Container, sync: (i32, i32), mut f: impl FnMut() -> Result<(), E>) -> Result<(), ContainerError>
 where
@@ -348,6 +353,13 @@ where
     // Close unused read end
     close(sync.0).context(CloseReadFdSnafu)?;
 
+    // The parent deliberately leaves setgroups enabled until this point.  A
+    // rootless user namespace otherwise freezes the caller's ambient
+    // supplementary groups into every build.  Drop them before any mount,
+    // process, or package-analysis work can observe them, then prove the
+    // namespace-visible identity is the fixed root credential contract.
+    isolate_payload_credentials()?;
+
     setup(container)?;
 
     let result = f().boxed().context(RunSnafu);
@@ -357,6 +369,42 @@ where
         let _ = close(sync.1);
     }
     result
+}
+
+fn isolate_payload_credentials() -> Result<(), ContainerError> {
+    setgroups(&[]).context(ClearSupplementaryGroupsSnafu)?;
+    let supplementary_gids = getgroups()
+        .context(ReadSupplementaryGroupsSnafu)?
+        .into_iter()
+        .map(|gid| gid.as_raw())
+        .collect::<Vec<_>>();
+    validate_payload_credentials(
+        getuid().as_raw(),
+        geteuid().as_raw(),
+        getgid().as_raw(),
+        getegid().as_raw(),
+        supplementary_gids,
+    )
+}
+
+fn validate_payload_credentials(
+    real_uid: u32,
+    effective_uid: u32,
+    real_gid: u32,
+    effective_gid: u32,
+    supplementary_gids: Vec<u32>,
+) -> Result<(), ContainerError> {
+    if real_uid != 0 || effective_uid != 0 || real_gid != 0 || effective_gid != 0 || !supplementary_gids.is_empty() {
+        return UnexpectedPayloadCredentialsSnafu {
+            real_uid,
+            effective_uid,
+            real_gid,
+            effective_gid,
+            supplementary_gids,
+        }
+        .fail();
+    }
+    Ok(())
 }
 
 /// Setup the container
@@ -797,7 +845,7 @@ pub enum Error {
     Signaled { signal: Signal },
     #[snafu(display("unknown exit reason"))]
     UnknownExit,
-    #[snafu(display("error setting up rootless id map"))]
+    #[snafu(display("error setting up isolated-root credential map"))]
     Idmap { source: idmap::Error },
     // FIXME: Replace with more fine-grained variants
     #[snafu(display("nix"))]
@@ -822,6 +870,20 @@ enum ContainerError {
     InvalidContinueMsg,
     #[snafu(display("close read end of pipe"))]
     CloseReadFd { source: nix::Error },
+    #[snafu(display("clear inherited supplementary groups"))]
+    ClearSupplementaryGroups { source: nix::Error },
+    #[snafu(display("read isolated supplementary groups"))]
+    ReadSupplementaryGroups { source: nix::Error },
+    #[snafu(display(
+        "unexpected payload credentials uid {real_uid}/{effective_uid}, gid {real_gid}/{effective_gid}, supplementary {supplementary_gids:?}"
+    ))]
+    UnexpectedPayloadCredentials {
+        real_uid: u32,
+        effective_uid: u32,
+        real_gid: u32,
+        effective_gid: u32,
+        supplementary_gids: Vec<u32>,
+    },
     #[snafu(display("sethostname"))]
     SetHostname { source: nix::Error },
     #[snafu(display("pivot_root"))]
@@ -850,7 +912,8 @@ mod tests {
 
     use super::{
         Container, DevPolicy, LoopbackPolicy, MINIMAL_DEV_NODES, ProcPolicy, PseudoFilesystemPolicy,
-        PseudoMountDecision, SyncPipe, SysPolicy, TmpPolicy, prepare_bind_target, pseudo_mount_decisions,
+        PseudoMountDecision, SyncPipe, SysPolicy, TmpPolicy, namespace_flags, prepare_bind_target,
+        pseudo_mount_decisions, validate_payload_credentials,
     };
 
     #[test]
@@ -908,6 +971,38 @@ mod tests {
         let container = Container::new("/").loopback(LoopbackPolicy::KernelDefault);
 
         assert_eq!(container.loopback, LoopbackPolicy::KernelDefault);
+    }
+
+    #[test]
+    fn user_namespace_is_mandatory_for_rootful_and_rootless_callers() {
+        for networking in [false, true] {
+            let flags = namespace_flags(networking);
+            assert!(flags.contains(nix::sched::CloneFlags::CLONE_NEWUSER));
+            assert_eq!(flags.contains(nix::sched::CloneFlags::CLONE_NEWNET), !networking);
+        }
+    }
+
+    #[test]
+    fn payload_credentials_reject_every_inherited_identity() {
+        assert!(validate_payload_credentials(0, 0, 0, 0, Vec::new()).is_ok());
+        for credentials in [
+            (1000, 0, 0, 0, Vec::new()),
+            (0, 1000, 0, 0, Vec::new()),
+            (0, 0, 1000, 0, Vec::new()),
+            (0, 0, 0, 1000, Vec::new()),
+            (0, 0, 0, 0, vec![4, 24, 27]),
+        ] {
+            assert!(
+                validate_payload_credentials(
+                    credentials.0,
+                    credentials.1,
+                    credentials.2,
+                    credentials.3,
+                    credentials.4,
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

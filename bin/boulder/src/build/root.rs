@@ -6,10 +6,9 @@ use std::{io, path::PathBuf};
 
 use fs_err as fs;
 use moss::{Installation, package, repository, util};
-use stone::relation::{Dependency, Kind as RelationKind};
 use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
-    build_policy::{BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
+    build_policy::{AnalyzerKind, BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
     derivation::{BuildLock, DerivationPlan, LockedPackage, RelationPlan, RepositorySnapshot},
     package::PackageSpec,
 };
@@ -245,6 +244,10 @@ fn packages_for(
         extend_policy_tools(&mut packages, "pgo.required_tools", &policy.pgo.required_tools)?;
     }
 
+    for (field, tool) in selected_analyzer_tools(policy, package).entries() {
+        extend_policy_tools(&mut packages, field, std::slice::from_ref(tool))?;
+    }
+
     packages.extend(
         declared_inputs_for(package, profile)?
             .into_iter()
@@ -294,12 +297,54 @@ fn extend_policy_tools(packages: &mut Vec<String>, field: &'static str, tools: &
 }
 
 fn build_tool_name(tool: &BuildToolSpec) -> Result<String, stone::relation::ParseError> {
-    let (kind, target) = match tool {
-        BuildToolSpec::Package(target) => (RelationKind::PackageName, target),
-        BuildToolSpec::Binary(target) => (RelationKind::Binary, target),
-        BuildToolSpec::SystemBinary(target) => (RelationKind::SystemBinary, target),
+    tool.dependency().map(|dependency| dependency.to_name())
+}
+
+/// Exact analyzer executable capabilities reachable from one frozen handler
+/// and package-options combination.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SelectedAnalyzerTools<'a> {
+    pub pkg_config: Option<&'a BuildToolSpec>,
+    pub python: Option<&'a BuildToolSpec>,
+    pub objcopy: Option<&'a BuildToolSpec>,
+    pub strip: Option<&'a BuildToolSpec>,
+}
+
+impl<'a> SelectedAnalyzerTools<'a> {
+    fn entries(self) -> impl Iterator<Item = (&'static str, &'a BuildToolSpec)> {
+        [
+            self.pkg_config
+                .map(|tool| ("build_root.analyzer_tools.pkg_config", tool)),
+            self.python.map(|tool| ("build_root.analyzer_tools.python", tool)),
+            self.objcopy.map(|tool| ("build_root.analyzer_tools.objcopy", tool)),
+            self.strip.map(|tool| ("build_root.analyzer_tools.strip", tool)),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+pub(crate) fn selected_analyzer_tools<'a>(
+    policy: &'a BuildPolicySpec,
+    package: &PackageSpec,
+) -> SelectedAnalyzerTools<'a> {
+    let handlers = &policy.analyzers;
+    let elf_tools = match package.options.toolchain {
+        ToolchainSpec::Llvm => &policy.build_root.analyzer_tools.llvm,
+        ToolchainSpec::Gnu => &policy.build_root.analyzer_tools.gnu,
     };
-    Dependency::new(kind, target.clone()).map(|dependency| dependency.to_name())
+    let has_elf = handlers.contains(&AnalyzerKind::Elf);
+
+    SelectedAnalyzerTools {
+        pkg_config: handlers
+            .contains(&AnalyzerKind::PkgConfig)
+            .then_some(&policy.build_root.analyzer_tools.pkg_config),
+        python: handlers
+            .contains(&AnalyzerKind::Python)
+            .then_some(&policy.build_root.analyzer_tools.python),
+        objcopy: (has_elf && package.options.debug).then_some(&elf_tools.objcopy),
+        strip: (has_elf && package.options.strip).then_some(&elf_tools.strip),
+    }
 }
 
 pub(crate) fn declared_inputs(recipe: &crate::Recipe, target: &TargetPolicySpec) -> Result<Vec<RelationPlan>, Error> {
@@ -539,10 +584,14 @@ let base = b.mk_package (b.meta {
             "binary(cmake)",
             "binary(ctest)",
             "binary(ninja)",
+            "binary(objcopy)",
+            "binary(pkg-config)",
             "binary(policy-archive)",
             "binary(policy-cache)",
             "binary(policy-gnu)",
             "binary(policy-mold)",
+            "binary(python3)",
+            "binary(strip)",
             "policy-base",
             "policy-gnu32",
             "sysbinary(policy-emul-base)",
@@ -553,6 +602,62 @@ let base = b.mk_package (b.meta {
         .collect::<BTreeSet<_>>();
 
         assert_eq!(packages.into_iter().collect::<BTreeSet<_>>(), expected);
+    }
+
+    #[test]
+    fn analyzer_tools_follow_handlers_options_and_selected_toolchain_exactly() {
+        let mut policy = repository_policy();
+        policy.build_root.analyzer_tools.pkg_config = BuildToolSpec::Binary("policy-pkg-config".to_owned());
+        policy.build_root.analyzer_tools.python = BuildToolSpec::Binary("policy-python".to_owned());
+        policy.build_root.analyzer_tools.llvm.objcopy = BuildToolSpec::Binary("policy-llvm-objcopy".to_owned());
+        policy.build_root.analyzer_tools.llvm.strip = BuildToolSpec::Binary("policy-llvm-strip".to_owned());
+        policy.build_root.analyzer_tools.gnu.objcopy = BuildToolSpec::Binary("policy-gnu-objcopy".to_owned());
+        policy.build_root.analyzer_tools.gnu.strip = BuildToolSpec::Binary("policy-gnu-strip".to_owned());
+        let mut package = selected_inputs_package();
+
+        policy.analyzers = vec![AnalyzerKind::IncludeAny];
+        let selected = selected_analyzer_tools(&policy, &package);
+        assert!(selected.pkg_config.is_none());
+        assert!(selected.python.is_none());
+        assert!(selected.objcopy.is_none());
+        assert!(selected.strip.is_none());
+
+        policy.analyzers = vec![AnalyzerKind::PkgConfig, AnalyzerKind::Python, AnalyzerKind::IncludeAny];
+        let selected = selected_analyzer_tools(&policy, &package);
+        assert_eq!(
+            selected
+                .pkg_config
+                .and_then(BuildToolSpec::executable_program)
+                .as_deref(),
+            Some("/usr/bin/policy-pkg-config")
+        );
+        assert_eq!(
+            selected.python.and_then(BuildToolSpec::executable_program).as_deref(),
+            Some("/usr/bin/policy-python")
+        );
+        assert!(selected.objcopy.is_none());
+        assert!(selected.strip.is_none());
+
+        policy.analyzers = vec![AnalyzerKind::Elf, AnalyzerKind::IncludeAny];
+        package.options.toolchain = ToolchainSpec::Llvm;
+        package.options.debug = true;
+        package.options.strip = false;
+        let selected = selected_analyzer_tools(&policy, &package);
+        assert_eq!(
+            selected.objcopy.and_then(BuildToolSpec::executable_program).as_deref(),
+            Some("/usr/bin/policy-llvm-objcopy")
+        );
+        assert!(selected.strip.is_none());
+
+        package.options.toolchain = ToolchainSpec::Gnu;
+        package.options.debug = false;
+        package.options.strip = true;
+        let selected = selected_analyzer_tools(&policy, &package);
+        assert!(selected.objcopy.is_none());
+        assert_eq!(
+            selected.strip.and_then(BuildToolSpec::executable_program).as_deref(),
+            Some("/usr/bin/policy-gnu-strip")
+        );
     }
 
     #[test]

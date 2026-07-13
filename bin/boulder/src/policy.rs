@@ -444,7 +444,7 @@ mod tests {
                 .evaluation
                 .imported_modules
                 .iter()
-                .any(|module| module.logical_name == "boulder.build_policy.v1")
+                .any(|module| module.logical_name == "boulder.build_policy.v2")
         );
     }
 
@@ -495,7 +495,7 @@ l.policy "test-policy" [
         fs::write(
             root.path().join("modify.glu"),
             r#"
-let b = import! boulder.build_policy.v1
+let b = import! boulder.build_policy.v2
 b.policy_patch {
     build_subdir = b.patch.set "modified-builddir",
     .. b.defaults.policy_patch
@@ -586,7 +586,7 @@ l.policy "validated-policy" [l.layer "site" [
         fs::write(
             root.path().join("invalid.glu"),
             r#"
-let b = import! boulder.build_policy.v1
+let b = import! boulder.build_policy.v2
 b.policy_patch {
     build_subdir = b.patch.set "",
     .. b.defaults.policy_patch

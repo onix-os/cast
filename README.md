@@ -187,8 +187,11 @@ mkdir -p aosroot
 moss -D "$PWD/aosroot" list installed
 ```
 
-Full Boulder builds also depend on Linux user namespaces and configured
-`subuid`/`subgid` ranges.
+Full Boulder builds depend on Linux user namespaces. Each payload starts as
+namespace root with an empty supplementary-group list. Unprivileged callers
+also need `/usr/bin/newgidmap` and at least one delegated entry in
+`/etc/subgid`; that setup-only ID is mapped to a fixed namespace slot so the
+chosen host range cannot change build-visible credentials.
 
 ## License
 

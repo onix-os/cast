@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Embedded, pure API imported by repository build policy as
-// `boulder.build_policy.v1`.
+// `boulder.build_policy.v2`.
 
 let arrays = import! std.array.prim
 let _ = import! std.types
@@ -208,6 +208,21 @@ type Emul32InputPolicySpec = {
     toolchains : ToolchainInputPolicySpec,
 }
 
+// Analyzer subprocesses are executable capabilities rather than ambient
+// members of the build root. Package-valued tools are rejected during policy
+// validation because they do not identify one executable guest path.
+type AnalyzerToolchainPolicySpec = {
+    objcopy : BuildToolSpec,
+    strip : BuildToolSpec,
+}
+
+type AnalyzerToolsPolicySpec = {
+    pkg_config : BuildToolSpec,
+    python : BuildToolSpec,
+    llvm : AnalyzerToolchainPolicySpec,
+    gnu : AnalyzerToolchainPolicySpec,
+}
+
 type CompilerCachePolicySpec = {
     required_tools : Array BuildToolSpec,
     default_path : String,
@@ -231,6 +246,7 @@ type BuildRootPolicySpec = {
     base : Array BuildToolSpec,
     toolchains : ToolchainInputPolicySpec,
     emul32 : Emul32InputPolicySpec,
+    analyzer_tools : AnalyzerToolsPolicySpec,
     compiler_cache : CompilerCachePolicySpec,
     mold : MoldPolicySpec,
 }
@@ -245,6 +261,9 @@ type SandboxDevPolicySpec =
     | NoDev
     | MinimalDev
 
+type SandboxCredentialPolicySpec =
+    | IsolatedRootCredentials
+
 type SandboxFilesystemPolicySpec = {
     tmp : SandboxTmpPolicySpec,
     sys : SandboxSysPolicySpec,
@@ -253,6 +272,7 @@ type SandboxFilesystemPolicySpec = {
 
 type SandboxPolicySpec = {
     hostname : String,
+    credentials : SandboxCredentialPolicySpec,
     filesystems : SandboxFilesystemPolicySpec,
     guest_root : String,
     artifacts_dir : String,
@@ -575,6 +595,9 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
             none = NoDev,
             minimal = MinimalDev,
         },
+    },
+    sandbox_credentials = {
+        isolated_root = IsolatedRootCredentials,
     },
     env = {
         always = binding Always,

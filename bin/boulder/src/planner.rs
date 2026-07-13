@@ -13,13 +13,16 @@ use fs_err as fs;
 use moss::{Installation, runtime};
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
-    AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
-    DerivationProvenance, DerivationValidationError, ExecutionPolicy, FilesystemPolicy, JobPlan, LockedIdentity,
-    LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation,
-    PackageIdentity, Platform, RelationPlan, RepositorySnapshot, RootMaterializationMode, StepPlan,
-    profile_aggregate_fingerprint,
+    AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
+    DerivationProvenance, DerivationValidationError, ExecutionCredentials, ExecutionPolicy, FilesystemPolicy,
+    FrozenAnalyzerTool, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
+    LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan, RepositorySnapshot,
+    RootMaterializationMode, StepPlan, profile_aggregate_fingerprint,
 };
-use stone_recipe::package::{BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PhaseSpec, StepSpec};
+use stone_recipe::{
+    build_policy::{BuildPolicySpec, BuildToolSpec},
+    package::{BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PackageSpec, PhaseSpec, StepSpec},
+};
 use thiserror::Error;
 
 use crate::{
@@ -143,7 +146,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
     let request_fingerprint = hash_fields(
         [
-            "boulder-build-lock-request-v3",
+            "boulder-build-lock-request-v4",
             builder.recipe.fingerprint.sha256.as_str(),
             source_lock_digest.as_str(),
             target_name.as_str(),
@@ -187,6 +190,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         packager.resolved_packages(),
         &build_lock,
     )?;
+    let analysis = freeze_analysis(&target.build_policy.spec, &builder.recipe.declaration, &build_lock)?;
     let provenance = DerivationProvenance {
         recipe: builder.recipe.fingerprint.clone(),
         profiles: builder.profile_fragments.clone(),
@@ -219,6 +223,9 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.execution = ExecutionPolicy {
         executor,
         root_materialization: RootMaterializationMode::LockedClosure,
+        credentials: match target.build_policy.spec.sandbox.credentials {
+            stone_recipe::build_policy::SandboxCredentialPolicySpec::IsolatedRoot => ExecutionCredentials::IsolatedRoot,
+        },
         network: if builder.recipe.declaration.options.networking {
             NetworkMode::Enabled
         } else {
@@ -228,17 +235,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         compiler_cache: request.compiler_cache,
         jobs: request.jobs.get(),
     };
-    plan.analysis = AnalysisPlan {
-        handlers: target.build_policy.spec.analyzers.clone(),
-        toolchain: match builder.recipe.declaration.options.toolchain {
-            stone_recipe::ToolchainSpec::Llvm => AnalysisToolchain::Llvm,
-            stone_recipe::ToolchainSpec::Gnu => AnalysisToolchain::Gnu,
-        },
-        debug: builder.recipe.declaration.options.debug,
-        strip: builder.recipe.declaration.options.strip,
-        compress_man: builder.recipe.declaration.options.compressman,
-        remove_libtool: builder.recipe.declaration.options.lastrip,
-    };
+    plan.analysis = analysis;
     plan.manifest_build_inputs = build::root::declared_inputs(&builder.recipe, target_policy)?;
     plan.collection_rules = packager
         .collection_rules()
@@ -345,6 +342,60 @@ fn resolve_build_lock(
     lock.normalize();
     lock.validate()?;
     Ok(lock)
+}
+
+fn freeze_analysis(
+    policy: &BuildPolicySpec,
+    package: &PackageSpec,
+    build_lock: &BuildLock,
+) -> Result<AnalysisPlan, Error> {
+    let selected = build::root::selected_analyzer_tools(policy, package);
+
+    Ok(AnalysisPlan {
+        handlers: policy.analyzers.clone(),
+        tools: AnalysisToolsPlan {
+            pkg_config: selected
+                .pkg_config
+                .map(|tool| freeze_analyzer_tool("analysis.tools.pkg_config", tool, build_lock))
+                .transpose()?,
+            python: selected
+                .python
+                .map(|tool| freeze_analyzer_tool("analysis.tools.python", tool, build_lock))
+                .transpose()?,
+            objcopy: selected
+                .objcopy
+                .map(|tool| freeze_analyzer_tool("analysis.tools.objcopy", tool, build_lock))
+                .transpose()?,
+            strip: selected
+                .strip
+                .map(|tool| freeze_analyzer_tool("analysis.tools.strip", tool, build_lock))
+                .transpose()?,
+        },
+        debug: package.options.debug,
+        strip: package.options.strip,
+        compress_man: package.options.compressman,
+        remove_libtool: package.options.lastrip,
+    })
+}
+
+fn freeze_analyzer_tool(
+    field: &'static str,
+    tool: &BuildToolSpec,
+    build_lock: &BuildLock,
+) -> Result<FrozenAnalyzerTool, Error> {
+    let dependency = tool
+        .dependency()
+        .map_err(|source| Error::InvalidAnalyzerTool { field, source })?;
+    let requirement = RelationPlan::from(&dependency);
+    let program = tool
+        .executable_program()
+        .ok_or(Error::AnalyzerToolNotExecutable { field })?;
+    let request = requirement.canonical_name();
+    if !build_lock.requests.iter().any(|locked| locked.request == request) {
+        return Err(Error::UnlockedAnalyzerTool { field, request });
+    }
+
+    Ok(FrozenAnalyzerTool { program, requirement })
 }
 
 fn freeze_jobs(target: &build::Target) -> Result<Vec<JobPlan>, Error> {
@@ -785,6 +836,16 @@ pub enum Error {
     UnlockedRuntimeDependency { package: String, dependency: String },
     #[error("frozen execution does not support mutable package-directory input {package_dir}")]
     UnsupportedPackageDirectoryInput { package_dir: String },
+    #[error("invalid policy analyzer tool at {field}")]
+    InvalidAnalyzerTool {
+        field: &'static str,
+        #[source]
+        source: stone::relation::ParseError,
+    },
+    #[error("policy analyzer tool at {field} is not an executable capability")]
+    AnalyzerToolNotExecutable { field: &'static str },
+    #[error("policy analyzer tool at {field} has no exact provider in build.lock.glu: {request}")]
+    UnlockedAnalyzerTool { field: &'static str, request: String },
 }
 
 impl From<build::Error> for Error {
