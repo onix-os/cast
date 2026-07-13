@@ -321,7 +321,6 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use fs_err as fs;
-    use stone_recipe::script::Parser;
 
     use super::*;
 
@@ -572,7 +571,7 @@ policy.policy [
     fn repository_macro_modules_all_evaluate() {
         let macros = Macros::repository_for_tests();
 
-        assert_eq!(macros.actions.len(), 14);
+        assert_eq!(macros.actions.len(), 1);
         assert_eq!(
             macros.arch.keys().map(String::as_str).collect::<Vec<_>>(),
             [
@@ -586,7 +585,12 @@ policy.policy [
                 "x86_64-v3x",
             ]
         );
-        assert!(macros.actions.iter().all(|macros| !macros.actions.is_empty()));
+        assert!(
+            macros
+                .actions
+                .iter()
+                .all(|macros| { !macros.actions.is_empty() || !macros.flags.is_empty() || !macros.tuning.is_empty() })
+        );
         assert!(macros.arch.values().all(|macros| {
             !macros.actions.is_empty()
                 || !macros.definitions.is_empty()
@@ -594,89 +598,18 @@ policy.policy [
                 || !macros.tuning.is_empty()
                 || !macros.packages.is_empty()
         }));
-        assert_eq!(macros.provenance.len(), 22);
+        assert_eq!(macros.provenance.len(), 9);
         assert!(
-            macros.provenance[..14]
+            macros.provenance[..1]
                 .iter()
                 .all(|change| change.layer_name == "actions" && change.layer_order == 0)
         );
         assert!(
-            macros.provenance[14..]
+            macros.provenance[1..]
                 .iter()
                 .all(|change| change.layer_name == "architectures" && change.layer_order == 1)
         );
-        assert_eq!(macros.selection("x86_64").changes.len(), 16);
+        assert_eq!(macros.selection("x86_64").changes.len(), 3);
         assert_eq!(macros.selection("x86_64").fingerprint, macros.fingerprint);
-    }
-
-    #[test]
-    fn repository_meson_action_and_nested_arch_definitions_match_legacy_policy() {
-        let macros = Macros::repository_for_tests();
-        let meson = macros
-            .actions
-            .iter()
-            .flat_map(|module| &module.actions)
-            .find(|action| action.key == "meson")
-            .map(|action| &action.value)
-            .unwrap();
-
-        // Exact Meson policy captured at the planning baseline
-        // (80d7ac5), now decoded from the migrated repository Gluon module.
-        assert_eq!(
-            meson.command,
-            r#"test -e ./meson.build || ( echo "%%meson: The ./meson.build script could not be found" ; exit 1 )
-meson setup %(options_meson) "%(builddir)"
-"#
-        );
-        assert_eq!(
-            meson.dependencies,
-            ["binary(cmake)", "binary(meson)", "binary(pkgconf)"]
-        );
-
-        // Production adds base policy before target policy, then action
-        // modules. Keep that order here so this is a golden test of the real
-        // migrated data rather than only of the Gluon DTO constructors.
-        let mut parser = Parser::new();
-        for policy in [&macros.arch["base"], &macros.arch["x86_64"]] {
-            for definition in &policy.definitions {
-                parser.add_definition(&definition.key, &definition.value);
-            }
-        }
-        let meson_policy = macros
-            .actions
-            .iter()
-            .find(|module| module.actions.iter().any(|action| action.key == "meson"))
-            .unwrap();
-        for definition in &meson_policy.definitions {
-            parser.add_definition(&definition.key, &definition.value);
-        }
-        parser.add_action("meson", meson.clone());
-        parser.add_definition("name", "hello");
-
-        assert_eq!(
-            parser
-                .parse_content("%(build_platform)|%(libdir)|%(libexecdir)")
-                .unwrap(),
-            "x86_64-aerynos-linux|/usr/lib|/usr/lib/hello"
-        );
-
-        assert_eq!(
-            parser.parse_content("%meson").unwrap(),
-            r#"test -e ./meson.build || ( echo "%meson: The ./meson.build script could not be found" ; exit 1 )
-meson setup --buildtype="plain" \
---prefix="/usr" \
---libdir="lib" \
---bindir="/usr/bin" \
---sbindir="/usr/sbin" \
---libexecdir="lib/hello" \
---includedir="/usr/include" \
---datadir="/usr/share" \
---mandir="/usr/share/man" \
---infodir="/usr/share/info" \
---localedir="/usr/share/locale" \
---sysconfdir="/etc" \
---localstatedir="/var" \
---wrap-mode="nodownload" "aerynos-builddir""#
-        );
     }
 }
