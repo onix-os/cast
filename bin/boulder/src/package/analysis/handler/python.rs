@@ -4,8 +4,8 @@
 use std::process::{Command, Stdio};
 
 use fs_err as fs;
-use moss::{Dependency, Provider, dependency};
 use regex::Regex;
+use stone::relation::{Dependency, Kind, Provider};
 
 use crate::package::collect::PathInfo;
 
@@ -33,7 +33,7 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
 
     /* Insert generic provider */
     bucket.providers.insert(Provider {
-        kind: dependency::Kind::Python,
+        kind: Kind::Python,
         name: python_name.clone(),
     });
 
@@ -54,7 +54,7 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
     let deps = String::from_utf8_lossy(&output.stdout);
     for dep in deps.lines() {
         bucket.dependencies.insert(Dependency {
-            kind: dependency::Kind::Python,
+            kind: Kind::Python,
             name: pep_503_normalize(dep)?,
         });
     }

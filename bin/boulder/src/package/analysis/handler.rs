@@ -11,7 +11,7 @@ use std::{
 };
 
 use fs_err::{self as fs, File};
-use moss::{Dependency, Provider, dependency};
+use stone::relation::{Dependency, Kind, Provider};
 
 use crate::package::collect::PathInfo;
 
@@ -52,13 +52,13 @@ pub fn ignore_blocked(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result
 pub fn binary(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
     if info.target_path.starts_with("/usr/bin") {
         let provider = Provider {
-            kind: dependency::Kind::Binary,
+            kind: Kind::Binary,
             name: info.file_name().to_owned(),
         };
         bucket.providers.insert(provider);
     } else if info.target_path.starts_with("/usr/sbin") {
         let provider = Provider {
-            kind: dependency::Kind::SystemBinary,
+            kind: Kind::SystemBinary,
             name: info.file_name().to_owned(),
         };
         bucket.providers.insert(provider);
@@ -78,11 +78,7 @@ pub fn pkg_config(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Res
     let emul32 = info.has_component("lib32");
 
     let provider = Provider {
-        kind: if emul32 {
-            dependency::Kind::PkgConfig32
-        } else {
-            dependency::Kind::PkgConfig
-        },
+        kind: if emul32 { Kind::PkgConfig32 } else { Kind::PkgConfig },
         name: provider_name.to_owned(),
     };
 
@@ -115,9 +111,9 @@ pub fn pkg_config(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Res
             .unwrap_or_default();
 
         let kind = if emul32 && (local_path.exists() || emul32_path.exists()) {
-            dependency::Kind::PkgConfig32
+            Kind::PkgConfig32
         } else {
-            dependency::Kind::PkgConfig
+            Kind::PkgConfig
         };
 
         bucket.dependencies.insert(Dependency {
@@ -144,7 +140,7 @@ pub fn cmake(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response
         .expect("extension exists");
 
     bucket.providers.insert(Provider {
-        kind: dependency::Kind::CMake,
+        kind: Kind::CMake,
         name: provider_name.to_owned(),
     });
 

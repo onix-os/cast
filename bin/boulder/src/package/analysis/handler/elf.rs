@@ -17,7 +17,8 @@ use elf::{
 use fs_err::File;
 use path_clean::clean;
 
-use moss::{Dependency, Provider, dependency, util};
+use moss::util;
+use stone::relation::{Dependency, Kind, Provider};
 use stone_recipe::tuning::Toolchain;
 
 use crate::package::{
@@ -54,7 +55,7 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
     // ordinary shared libraries do not.
     if is_interpreter_candidate(elf.ehdr.e_type, info.layout.mode, has_interp) {
         bucket.providers.insert(Provider {
-            kind: dependency::Kind::Interpreter,
+            kind: Kind::Interpreter,
             name: format!("{}({machine_isa})", info.target_path.display()),
         });
     }
@@ -244,7 +245,7 @@ fn parse_dynamic_section(
                 };
 
                 bucket.dependencies.insert(Dependency {
-                    kind: dependency::Kind::SharedLibrary,
+                    kind: Kind::SharedLibrary,
                     name: format!("{picked}({machine_isa})"),
                 });
             }
@@ -277,12 +278,12 @@ fn parse_dynamic_section(
                     .to_string_lossy()
                     .to_string();
                 bucket.providers.insert(Provider {
-                    kind: dependency::Kind::SharedLibrary,
+                    kind: Kind::SharedLibrary,
                     name: format!("{rpathed}({machine_isa})"),
                 });
             } else {
                 bucket.providers.insert(Provider {
-                    kind: dependency::Kind::SharedLibrary,
+                    kind: Kind::SharedLibrary,
                     name: format!("{soname}({machine_isa})"),
                 });
             }
@@ -307,11 +308,11 @@ fn parse_dynamic_section(
 
                 for path in interp_paths {
                     bucket.providers.insert(Provider {
-                        kind: dependency::Kind::Interpreter,
+                        kind: Kind::Interpreter,
                         name: path.clone(),
                     });
                     bucket.providers.insert(Provider {
-                        kind: dependency::Kind::SharedLibrary,
+                        kind: Kind::SharedLibrary,
                         name: path,
                     });
                 }
@@ -331,7 +332,7 @@ fn parse_interp_section(elf: &mut elf::ElfStream<AnyEndian, File>, bucket: &mut 
 
     if let Some(content) = CStr::from_bytes_until_nul(data).ok().and_then(|s| s.to_str().ok()) {
         bucket.dependencies.insert(Dependency {
-            kind: dependency::Kind::Interpreter,
+            kind: Kind::Interpreter,
             name: format!("{content}({machine_isa})"),
         });
     }

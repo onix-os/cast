@@ -5,6 +5,7 @@ pub(crate) mod ext;
 mod header;
 mod payload;
 mod read;
+pub mod relation;
 mod write;
 
 pub use self::header::{

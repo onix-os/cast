@@ -3550,6 +3550,7 @@ dependencies = [
  "nom",
  "sha2",
  "snafu",
+ "stone",
  "strum",
  "thiserror 2.0.18",
  "url",

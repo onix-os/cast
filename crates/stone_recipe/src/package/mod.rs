@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
 
 use crate::{
@@ -168,8 +169,8 @@ pub struct OutputRef {
 
 /// A typed package relationship.
 ///
-/// The current recipe domain still stores Moss provider expressions as
-/// strings. [`DependencySpec::provider`] is the one transitional lowering
+/// The current recipe domain still stores relation expressions as strings.
+/// Conversion through [`stone::relation`] is the one transitional lowering
 /// point; authored v2 packages never construct those strings themselves.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DependencySpec {
@@ -186,21 +187,46 @@ pub enum DependencySpec {
 }
 
 impl DependencySpec {
-    /// Lower a typed dependency into the provider syntax consumed by Moss.
-    pub fn provider(&self) -> String {
-        match self {
-            Self::Package(package) => package.name.clone(),
-            Self::Output(output) if output.output == "out" => output.package.name.clone(),
-            Self::Output(output) => format!("{}-{}", output.package.name, output.output),
-            Self::Binary(target) => format!("binary({target})"),
-            Self::SystemBinary(target) => format!("sysbinary({target})"),
-            Self::PkgConfig(target) => format!("pkgconfig({target})"),
-            Self::PkgConfig32(target) => format!("pkgconfig32({target})"),
-            Self::Soname(target) => format!("soname({target})"),
-            Self::CMake(target) => format!("cmake({target})"),
-            Self::Python(target) => format!("python({target})"),
-            Self::Interpreter(target) => format!("interpreter({target})"),
-        }
+    /// Convert the authored typed value into the canonical shared dependency.
+    pub fn dependency(&self) -> Result<Dependency, ParseError> {
+        let (kind, target) = self.kind_and_target()?;
+        Dependency::new(kind, target)
+    }
+
+    /// Convert an output conflict into the canonical shared provider.
+    pub fn provider(&self) -> Result<Provider, ParseError> {
+        let (kind, target) = self.kind_and_target()?;
+        Provider::new(kind, target)
+    }
+
+    fn kind_and_target(&self) -> Result<(RelationKind, String), ParseError> {
+        Ok(match self {
+            Self::Package(package) => (RelationKind::PackageName, package.name.clone()),
+            Self::Output(output) => {
+                Dependency::new(RelationKind::PackageName, output.package.name.clone())?;
+                if output.output.is_empty() {
+                    return Err(ParseError::EmptyTarget {
+                        value: output.output.clone(),
+                    });
+                }
+                if output.output == "out" {
+                    (RelationKind::PackageName, output.package.name.clone())
+                } else {
+                    (
+                        RelationKind::PackageName,
+                        format!("{}-{}", output.package.name, output.output),
+                    )
+                }
+            }
+            Self::Binary(target) => (RelationKind::Binary, target.clone()),
+            Self::SystemBinary(target) => (RelationKind::SystemBinary, target.clone()),
+            Self::PkgConfig(target) => (RelationKind::PkgConfig, target.clone()),
+            Self::PkgConfig32(target) => (RelationKind::PkgConfig32, target.clone()),
+            Self::Soname(target) => (RelationKind::SharedLibrary, target.clone()),
+            Self::CMake(target) => (RelationKind::CMake, target.clone()),
+            Self::Python(target) => (RelationKind::Python, target.clone()),
+            Self::Interpreter(target) => (RelationKind::Interpreter, target.clone()),
+        })
     }
 
     fn package_and_output(&self) -> Option<(&str, &str)> {
@@ -210,28 +236,23 @@ impl DependencySpec {
             _ => None,
         }
     }
-
-    fn target(&self) -> &str {
-        match self {
-            Self::Package(package) => &package.name,
-            Self::Output(output) => &output.output,
-            Self::Binary(target)
-            | Self::SystemBinary(target)
-            | Self::PkgConfig(target)
-            | Self::PkgConfig32(target)
-            | Self::Soname(target)
-            | Self::CMake(target)
-            | Self::Python(target)
-            | Self::Interpreter(target) => target,
-        }
-    }
 }
 
 /// Failure to lower a v2 package declaration into the current recipe domain.
 #[derive(Debug, Error)]
 pub enum PackageConversionError {
-    #[error("{field}: package or relation target must not be empty")]
-    EmptyDependencyTarget { field: String },
+    #[error("{field}: invalid dependency: {source}")]
+    InvalidDependency {
+        field: String,
+        #[source]
+        source: ParseError,
+    },
+    #[error("{field}: invalid provider: {source}")]
+    InvalidProvider {
+        field: String,
+        #[source]
+        source: ParseError,
+    },
     #[error("outputs: package must declare exactly one `out` output")]
     MissingRootOutput,
     #[error("outputs[{index}].name: duplicate output name `{name}`")]
@@ -253,7 +274,8 @@ pub enum PackageConversionError {
 impl PackageConversionError {
     pub fn field(&self) -> &str {
         match self {
-            Self::EmptyDependencyTarget { field }
+            Self::InvalidDependency { field, .. }
+            | Self::InvalidProvider { field, .. }
             | Self::MissingOutputReference { field, .. }
             | Self::OutputDependencyCycle { field, .. } => field,
             Self::MissingRootOutput => "outputs",
@@ -298,11 +320,21 @@ impl TryFrom<PackageSpec> for Recipe {
             .into_iter()
             .chain(native_build_inputs)
             .chain(build_inputs)
-            .map(|dependency| dependency.provider())
+            .map(|dependency| {
+                dependency
+                    .dependency()
+                    .expect("package relations were validated")
+                    .to_name()
+            })
             .collect();
         let check_deps = check_inputs
             .into_iter()
-            .map(|dependency| dependency.provider())
+            .map(|dependency| {
+                dependency
+                    .dependency()
+                    .expect("package relations were validated")
+                    .to_name()
+            })
             .collect();
 
         let profiles = profiles
@@ -371,10 +403,15 @@ impl PackageSpec {
             return Err(PackageConversionError::MissingRootOutput);
         }
 
-        self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs)?;
-        self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs)?;
-        self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs)?;
-        self.validate_dependency_list(&self.builder.required_tools(), "builder.required_tools", &outputs)?;
+        self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs, false)?;
+        self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, false)?;
+        self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, false)?;
+        self.validate_dependency_list(
+            &self.builder.required_tools(),
+            "builder.required_tools",
+            &outputs,
+            false,
+        )?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
             let parent = format!("profiles[{index}]");
@@ -382,14 +419,26 @@ impl PackageSpec {
                 &profile.builder.required_tools(),
                 &format!("{parent}.builder.required_tools"),
                 &outputs,
+                false,
             )?;
             self.validate_dependency_list(
                 &profile.native_build_inputs,
                 &format!("{parent}.native_build_inputs"),
                 &outputs,
+                false,
             )?;
-            self.validate_dependency_list(&profile.build_inputs, &format!("{parent}.build_inputs"), &outputs)?;
-            self.validate_dependency_list(&profile.check_inputs, &format!("{parent}.check_inputs"), &outputs)?;
+            self.validate_dependency_list(
+                &profile.build_inputs,
+                &format!("{parent}.build_inputs"),
+                &outputs,
+                false,
+            )?;
+            self.validate_dependency_list(
+                &profile.check_inputs,
+                &format!("{parent}.check_inputs"),
+                &outputs,
+                false,
+            )?;
         }
 
         for (index, output) in self.outputs.iter().enumerate() {
@@ -397,8 +446,14 @@ impl PackageSpec {
                 &output.runtime_inputs,
                 &format!("outputs[{index}].runtime_inputs"),
                 &outputs,
+                false,
             )?;
-            self.validate_dependency_list(&output.conflicts, &format!("outputs[{index}].conflicts"), &outputs)?;
+            self.validate_dependency_list(
+                &output.conflicts,
+                &format!("outputs[{index}].conflicts"),
+                &outputs,
+                true,
+            )?;
         }
 
         self.validate_output_cycles(&outputs)
@@ -409,12 +464,28 @@ impl PackageSpec {
         dependencies: &[DependencySpec],
         field: &str,
         outputs: &BTreeMap<&str, usize>,
+        provider: bool,
     ) -> Result<(), PackageConversionError> {
         for (index, dependency) in dependencies.iter().enumerate() {
             let field = format!("{field}[{index}]");
-            if dependency.target().is_empty() {
-                return Err(PackageConversionError::EmptyDependencyTarget { field });
-            }
+            let parsed = if provider {
+                dependency.provider().map(|_| ())
+            } else {
+                dependency.dependency().map(|_| ())
+            };
+            parsed.map_err(|source| {
+                if provider {
+                    PackageConversionError::InvalidProvider {
+                        field: field.clone(),
+                        source,
+                    }
+                } else {
+                    PackageConversionError::InvalidDependency {
+                        field: field.clone(),
+                        source,
+                    }
+                }
+            })?;
             if let Some((package, output)) = dependency.package_and_output()
                 && package == self.meta.pname
                 && !outputs.contains_key(output)
@@ -624,12 +695,22 @@ impl ProfileSpec {
             .into_iter()
             .chain(self.native_build_inputs)
             .chain(self.build_inputs)
-            .map(|dependency| dependency.provider())
+            .map(|dependency| {
+                dependency
+                    .dependency()
+                    .expect("package relations were validated")
+                    .to_name()
+            })
             .collect();
         let check_deps = self
             .check_inputs
             .into_iter()
-            .map(|dependency| dependency.provider())
+            .map(|dependency| {
+                dependency
+                    .dependency()
+                    .expect("package relations were validated")
+                    .to_name()
+            })
             .collect();
         lowered.scripts.into_build_spec(build_deps, check_deps)
     }
@@ -644,14 +725,24 @@ impl OutputSpec {
             run_deps: self
                 .runtime_inputs
                 .into_iter()
-                .map(|dependency| dependency.provider())
+                .map(|dependency| {
+                    dependency
+                        .dependency()
+                        .expect("package relations were validated")
+                        .to_name()
+                })
                 .collect(),
             run_deps_exclude: self.runtime_exclude,
             paths: self.paths,
             conflicts: self
                 .conflicts
                 .into_iter()
-                .map(|dependency| dependency.provider())
+                .map(|dependency| {
+                    dependency
+                        .provider()
+                        .expect("package relations were validated")
+                        .to_name()
+                })
                 .collect(),
         }
     }
@@ -703,6 +794,39 @@ mod tests {
     fn typed_dependencies_lower_at_one_boundary() {
         let recipe = Recipe::try_from(package()).unwrap();
         assert_eq!(recipe.build.build_deps, ["binary(cmake)", "zlib"]);
+        assert_eq!(
+            DependencySpec::Soname("libz.so.1".to_owned())
+                .dependency()
+                .unwrap()
+                .kind,
+            RelationKind::SharedLibrary
+        );
+    }
+
+    #[test]
+    fn canonical_relation_errors_keep_the_typed_package_field() {
+        let mut dependency = package();
+        dependency.native_build_inputs = vec![DependencySpec::Binary(String::new())];
+        let error = Recipe::try_from(dependency).unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidDependency { .. }));
+        assert_eq!(error.field(), "native_build_inputs[0]");
+
+        let mut provider = package();
+        provider.outputs[0].conflicts = vec![DependencySpec::PkgConfig(String::new())];
+        let error = Recipe::try_from(provider).unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidProvider { .. }));
+        assert_eq!(error.field(), "outputs[0].conflicts[0]");
+
+        let mut output = package();
+        output.build_inputs = vec![DependencySpec::Output(OutputRef {
+            package: PackageRef {
+                name: "zlib".to_owned(),
+            },
+            output: String::new(),
+        })];
+        let error = Recipe::try_from(output).unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidDependency { .. }));
+        assert_eq!(error.field(), "build_inputs[0]");
     }
 
     #[test]

@@ -7,8 +7,10 @@ use std::{
     path::PathBuf,
 };
 
-use moss::{Dependency, Provider};
-use stone::StoneDigestWriterHasher;
+use stone::{
+    StoneDigestWriterHasher,
+    relation::{Dependency, Provider},
+};
 use tui::{ProgressBar, ProgressStyle, Styled};
 
 use crate::{Paths, Recipe};

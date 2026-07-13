@@ -9,12 +9,13 @@ use std::{
 
 use fs_err::{self as fs, File};
 use itertools::Itertools;
-use moss::{Dependency, Provider, package::Meta, util};
+use moss::{package::Meta, util};
 use regex::Regex;
 use snafu::{ResultExt, Snafu};
 use stone::{
     StoneHeaderV1FileType, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneWriteError,
     StoneWriter,
+    relation::{Dependency, ParseError, Provider},
 };
 use tui::{ProgressBar, ProgressStyle, Styled};
 
@@ -33,14 +34,14 @@ pub(crate) enum MetadataError {
         field: String,
         value: String,
         #[source]
-        source: moss::dependency::ParseError,
+        source: ParseError,
     },
     #[error("{field}: invalid provider `{value}`")]
     InvalidProvider {
         field: String,
         value: String,
         #[source]
-        source: moss::dependency::ParseError,
+        source: ParseError,
     },
 }
 

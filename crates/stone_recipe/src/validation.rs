@@ -1,23 +1,10 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
+use stone::relation::{Dependency, ParseError, Provider};
 use thiserror::Error;
 
 use crate::{Build, Package, Recipe};
-
-// Keep this list aligned with the relation kinds accepted by Moss. Bare
-// package names do not use a kind prefix and remain valid as before.
-const RELATION_KINDS: &[&str] = &[
-    "name",
-    "soname",
-    "pkgconfig",
-    "interpreter",
-    "cmake",
-    "python",
-    "binary",
-    "sysbinary",
-    "pkgconfig32",
-];
 
 /// A format-independent recipe invariant violation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -30,12 +17,22 @@ pub enum ValidationError {
     ReleaseMustBePositive { release: u64 },
     /// A dependency string could not be parsed as a package name or a typed
     /// package relation.
-    #[error("{field}: invalid dependency `{value}`; expected a package name or supported kind(target)")]
-    InvalidDependency { field: String, value: String },
+    #[error("{field}: invalid dependency `{value}`: {source}")]
+    InvalidDependency {
+        field: String,
+        value: String,
+        #[source]
+        source: ParseError,
+    },
     /// A provider string could not be parsed as a package name or a typed
     /// package relation.
-    #[error("{field}: invalid provider `{value}`; expected a package name or supported kind(target)")]
-    InvalidProvider { field: String, value: String },
+    #[error("{field}: invalid provider `{value}`: {source}")]
+    InvalidProvider {
+        field: String,
+        value: String,
+        #[source]
+        source: ParseError,
+    },
 }
 
 impl ValidationError {
@@ -95,24 +92,22 @@ pub fn validate_package(package: &Package, field: &str) -> Result<(), Validation
 
 pub(crate) fn validate_dependencies(values: &[String], field: &str) -> Result<(), ValidationError> {
     for (index, value) in values.iter().enumerate() {
-        if !valid_relation(value) {
-            return Err(ValidationError::InvalidDependency {
-                field: format!("{field}[{index}]"),
-                value: value.clone(),
-            });
-        }
+        Dependency::from_name(value).map_err(|source| ValidationError::InvalidDependency {
+            field: format!("{field}[{index}]"),
+            value: value.clone(),
+            source,
+        })?;
     }
     Ok(())
 }
 
 fn validate_providers(values: &[String], field: &str) -> Result<(), ValidationError> {
     for (index, value) in values.iter().enumerate() {
-        if !valid_relation(value) {
-            return Err(ValidationError::InvalidProvider {
-                field: format!("{field}[{index}]"),
-                value: value.clone(),
-            });
-        }
+        Provider::from_name(value).map_err(|source| ValidationError::InvalidProvider {
+            field: format!("{field}[{index}]"),
+            value: value.clone(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -138,17 +133,26 @@ enum RelationRole {
 
 fn validate_relation_templates(values: &[String], field: &str, role: RelationRole) -> Result<(), ValidationError> {
     for (index, value) in values.iter().enumerate() {
-        let valid = normalize_deferred_relation(value).is_some_and(|normalized| valid_relation(&normalized));
-        if !valid {
+        let normalized = normalize_deferred_relation(value);
+        let parsed = normalized
+            .as_deref()
+            .ok_or_else(|| ParseError::Malformed { value: value.clone() });
+        let result = parsed.and_then(|normalized| match role {
+            RelationRole::Dependency => Dependency::from_name(normalized).map(|_| ()),
+            RelationRole::Provider => Provider::from_name(normalized).map(|_| ()),
+        });
+        if let Err(source) = result {
             let field = format!("{field}[{index}]");
             return Err(match role {
                 RelationRole::Dependency => ValidationError::InvalidDependency {
                     field,
                     value: value.clone(),
+                    source,
                 },
                 RelationRole::Provider => ValidationError::InvalidProvider {
                     field,
                     value: value.clone(),
+                    source,
                 },
             });
         }
@@ -178,17 +182,6 @@ fn normalize_deferred_relation(value: &str) -> Option<String> {
 
     normalized.push_str(remaining);
     Some(normalized)
-}
-
-fn valid_relation(value: &str) -> bool {
-    if !value.contains('(') {
-        return true;
-    }
-
-    let Some((kind, target)) = value.split_once('(') else {
-        return false;
-    };
-    target.ends_with(')') && RELATION_KINDS.contains(&kind)
 }
 
 #[cfg(test)]
