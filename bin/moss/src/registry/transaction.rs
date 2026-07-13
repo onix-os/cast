@@ -148,8 +148,13 @@ impl Transaction<'_> {
                 next.push(search_id);
             }
 
-            // Connect w/ edges (rejects cyclical & duplicate edges)
-            self.packages.add_edge(check_node, dep_node);
+            // Connect dependencies without silently collapsing a package
+            // cycle into the same result as an already-present edge.
+            self.packages
+                .try_add_edge(check_node, dep_node)
+                .map_err(|cycle| Error::DependencyCycle {
+                    cycle: cycle.path.into_iter().map(|package| package.to_string()).collect(),
+                })?;
         }
 
         Ok(())
@@ -205,6 +210,61 @@ pub enum Error {
     #[error("Not yet implemented")]
     NotImplemented,
 
+    #[error("package dependency cycle: {}", cycle.join(" -> "))]
+    DependencyCycle { cycle: Vec<String> },
+
     #[error("meta db")]
     Database(#[from] crate::db::meta::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::{Dependency, Package, registry::Plugin};
+
+    fn package(name: &'static str, dependency: &'static str) -> Package {
+        Package {
+            id: package::Id::from(name),
+            meta: package::Meta {
+                name: package::Name::from(name.to_owned()),
+                version_identifier: "1".to_owned(),
+                source_release: 1,
+                build_release: 1,
+                architecture: "x86_64".to_owned(),
+                summary: String::new(),
+                description: String::new(),
+                source_id: name.to_owned(),
+                homepage: String::new(),
+                licenses: Vec::new(),
+                dependencies: BTreeSet::from([Dependency::from_name(dependency).unwrap()]),
+                providers: BTreeSet::from([Provider::from_name(name).unwrap()]),
+                conflicts: BTreeSet::new(),
+                uri: None,
+                hash: None,
+                download_size: None,
+            },
+            flags: package::Flags::new().with_available(),
+        }
+    }
+
+    #[test]
+    fn dependency_cycle_reports_the_closing_package_path() {
+        let mut registry = Registry::default();
+        registry.add_plugin(Plugin::Test(crate::registry::plugin::Test::new(
+            1,
+            vec![package("a", "b"), package("b", "c"), package("c", "a")],
+        )));
+        let mut transaction = registry.transaction(Lookup::AvailableOnly).unwrap();
+
+        let error = transaction.add(vec![package::Id::from("a")]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::DependencyCycle { ref cycle }
+                if cycle.iter().map(String::as_str).eq(["c", "a", "b", "c"])
+        ));
+        assert_eq!(error.to_string(), "package dependency cycle: c -> a -> b -> c");
+    }
 }
