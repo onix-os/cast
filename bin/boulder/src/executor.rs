@@ -66,15 +66,12 @@ impl<'a> Executor<'a> {
     }
 
     pub fn run(&self, timing: &mut Timing) -> Result<(), Error> {
+        prepare_execution_scratch(self.plan)?;
         setpgid(Pid::from_raw(0), Pid::from_raw(0))?;
         let pgid = getpgrp();
         ::container::set_term_fg(pgid)?;
 
-        clear_directory_contents(Path::new(&self.plan.layout.build_dir))?;
         let target = &self.plan.build_lock.target.name;
-        for pgo_dir in unique_pgo_dirs(&self.plan.jobs) {
-            moss::util::recreate_dir(Path::new(pgo_dir))?;
-        }
         for (job_index, job) in self.plan.jobs.iter().enumerate() {
             println!("{}", target_prefix(target, job_index));
             fs::create_dir_all(&job.build_dir)?;
@@ -146,6 +143,26 @@ impl<'a> Executor<'a> {
             }
         }
     }
+}
+
+/// Prepare mutable execution state exclusively from frozen plan paths.
+///
+/// Compiler and tool caches may be shared by phases within this execution,
+/// but no cache bytes from an earlier execution are allowed to influence it.
+fn prepare_execution_scratch(plan: &DerivationPlan) -> io::Result<()> {
+    clear_directory_contents(Path::new(&plan.layout.build_dir))?;
+
+    if plan.execution.compiler_cache {
+        for (_, destination) in plan.layout.cache_destinations() {
+            clear_directory_contents(Path::new(destination))?;
+        }
+    }
+
+    for pgo_dir in unique_pgo_dirs(&plan.jobs) {
+        moss::util::recreate_dir(Path::new(pgo_dir))?;
+    }
+
+    Ok(())
 }
 
 fn clear_directory_contents(path: &Path) -> io::Result<()> {
@@ -290,7 +307,59 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::{os::unix::fs::symlink, path::PathBuf};
+
+    use stone_recipe::derivation::BuilderLayout;
+
     use super::*;
+    use crate::package::test_derivation_plan;
+
+    fn execution_layout(root: &Path) -> BuilderLayout {
+        let path = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+        BuilderLayout {
+            hostname: "scratch-builder".to_owned(),
+            guest_root: root.to_string_lossy().into_owned(),
+            artifacts_dir: path("artifacts"),
+            build_dir: path("build"),
+            source_dir: path("sources"),
+            recipe_dir: path("recipe"),
+            install_dir: path("install"),
+            package_dir: path("recipe/package"),
+            ccache_dir: path("cache/ccache"),
+            sccache_dir: path("cache/sccache"),
+            go_cache_dir: path("cache/go-build"),
+            go_mod_cache_dir: path("cache/go-mod"),
+            cargo_cache_dir: path("cache/cargo"),
+            zig_cache_dir: path("cache/zig"),
+        }
+    }
+
+    fn poison_directory(path: &Path, symlink_target: &Path) {
+        fs::create_dir_all(path.join("stale-dir")).unwrap();
+        fs::write(path.join("stale-file"), b"stale").unwrap();
+        fs::write(path.join("stale-dir/nested"), b"stale").unwrap();
+        symlink(symlink_target, path.join("stale-link")).unwrap();
+    }
+
+    fn assert_directory_empty(path: &Path) {
+        assert!(path.is_dir(), "{} was not recreated as a directory", path.display());
+        assert!(
+            fs::read_dir(path).unwrap().next().is_none(),
+            "{} retained poisoned execution state",
+            path.display()
+        );
+    }
+
+    fn assert_poison_preserved(path: &Path) {
+        assert_eq!(fs::read(path.join("stale-file")).unwrap(), b"stale");
+        assert_eq!(fs::read(path.join("stale-dir/nested")).unwrap(), b"stale");
+        assert!(
+            fs::symlink_metadata(path.join("stale-link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 
     #[test]
     fn repeated_pgo_directories_are_recreated_once() {
@@ -336,6 +405,74 @@ mod tests {
         clear_directory_contents(root.path()).unwrap();
 
         assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn execution_scratch_clears_enabled_plan_caches_but_never_touches_disabled_caches() {
+        let temp = tempfile::tempdir().unwrap();
+        let guest_root = temp.path().join("non-default-sandbox");
+        let sentinel = temp.path().join("outside-cache-sentinel");
+        fs::write(&sentinel, b"keep").unwrap();
+
+        let mut plan = test_derivation_plan();
+        plan.layout = execution_layout(&guest_root);
+        plan.execution.compiler_cache = true;
+        plan.validate().unwrap();
+        let build_dir = PathBuf::from(&plan.layout.build_dir);
+        let cache_dirs = plan
+            .layout
+            .cache_destinations()
+            .into_iter()
+            .map(|(_, destination)| PathBuf::from(destination));
+        let cache_dirs = cache_dirs.collect::<Vec<_>>();
+
+        poison_directory(&build_dir, &sentinel);
+        for cache_dir in &cache_dirs {
+            poison_directory(cache_dir, &sentinel);
+        }
+
+        prepare_execution_scratch(&plan).unwrap();
+
+        assert_directory_empty(&build_dir);
+        for cache_dir in &cache_dirs {
+            assert_directory_empty(cache_dir);
+        }
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+
+        poison_directory(&build_dir, &sentinel);
+        for cache_dir in &cache_dirs {
+            poison_directory(cache_dir, &sentinel);
+        }
+        plan.execution.compiler_cache = false;
+        plan.validate().unwrap();
+
+        prepare_execution_scratch(&plan).unwrap();
+
+        assert_directory_empty(&build_dir);
+        for cache_dir in &cache_dirs {
+            assert_poison_preserved(cache_dir);
+        }
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+
+        let missing_guest_root = temp.path().join("disabled-missing-cache-sandbox");
+        let mut missing_plan = test_derivation_plan();
+        missing_plan.layout = execution_layout(&missing_guest_root);
+        missing_plan.execution.compiler_cache = false;
+        missing_plan.validate().unwrap();
+        let missing_build_dir = PathBuf::from(&missing_plan.layout.build_dir);
+        let missing_cache_dirs = missing_plan
+            .layout
+            .cache_destinations()
+            .into_iter()
+            .map(|(_, destination)| PathBuf::from(destination))
+            .collect::<Vec<_>>();
+        poison_directory(&missing_build_dir, &sentinel);
+        assert!(missing_cache_dirs.iter().all(|path| !path.exists()));
+
+        prepare_execution_scratch(&missing_plan).unwrap();
+
+        assert_directory_empty(&missing_build_dir);
+        assert!(missing_cache_dirs.iter().all(|path| !path.exists()));
     }
 
     #[test]
