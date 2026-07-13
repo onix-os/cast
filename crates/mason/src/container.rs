@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use container::{Container, DevPolicy, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy};
+use container::{
+    Container, DevPolicy, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy,
+    TmpPolicy,
+};
 use stone_recipe::derivation::{
     BuilderLayout, DerivationPlan, DevFilesystem, ExecutionCredentials, FilesystemPolicy, NetworkMode, SysFilesystem,
     TmpFilesystem,
@@ -30,6 +33,7 @@ where
         .networking(matches!(plan.execution.network, NetworkMode::Enabled))
         .loopback(frozen_loopback_policy())
         .pseudo_filesystems(frozen_pseudo_filesystems(plan.execution.filesystems))
+        .root_filesystem(sandbox.root_filesystem)
         .ignore_host_sigint(true)
         .work_dir(&sandbox.work_dir);
 
@@ -70,6 +74,7 @@ struct FrozenMount {
 struct FrozenSandbox {
     hostname: String,
     work_dir: std::path::PathBuf,
+    root_filesystem: RootFilesystemPolicy,
     mounts: Vec<FrozenMount>,
 }
 
@@ -85,6 +90,7 @@ fn frozen_sandbox(paths: &Paths, plan: &DerivationPlan) -> Result<FrozenSandbox,
     Ok(FrozenSandbox {
         hostname: plan.layout.hostname.clone(),
         work_dir: plan.layout.build_dir.clone().into(),
+        root_filesystem: RootFilesystemPolicy::ReadOnly,
         mounts: frozen_mounts(
             paths,
             &plan.layout,
@@ -108,6 +114,10 @@ fn frozen_mounts(
         FrozenMount {
             host: paths.build().host,
             guest: layout.build_dir.clone().into(),
+        },
+        FrozenMount {
+            host: paths.install().host,
+            guest: layout.install_dir.clone().into(),
         },
     ];
     if compiler_cache {
@@ -243,15 +253,24 @@ mod tests {
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
 
         let disabled = frozen_mounts(&paths, &plan.layout, false, "derivation-id").unwrap();
-        assert_eq!(disabled.len(), 2);
+        assert_eq!(disabled.len(), 3);
+        assert_eq!(
+            disabled.iter().map(|mount| mount.guest.as_path()).collect::<Vec<_>>(),
+            [
+                Path::new(&plan.layout.artifacts_dir),
+                Path::new(&plan.layout.build_dir),
+                Path::new(&plan.layout.install_dir),
+            ]
+        );
+        assert_eq!(disabled[2].host, paths.install().host);
         assert!(!disabled.iter().any(|mount| mount.host == paths.recipe().host));
 
         let enabled = frozen_mounts(&paths, &plan.layout, true, "derivation-id").unwrap();
-        assert_eq!(enabled.len(), 8);
+        assert_eq!(enabled.len(), 9);
         assert!(
             enabled
                 .iter()
-                .skip(2)
+                .skip(3)
                 .all(|mount| mount.host.starts_with(runtime.path().join("derivations/derivation-id")))
         );
         assert!(!enabled.iter().any(|mount| mount.host == paths.recipe().host));
@@ -282,6 +301,7 @@ mod tests {
         let sandbox = frozen_sandbox(&paths, &plan).unwrap();
         assert_eq!(sandbox.hostname, "forge-builder");
         assert_eq!(sandbox.work_dir, Path::new("/forge/work"));
+        assert_eq!(sandbox.root_filesystem, RootFilesystemPolicy::ReadOnly);
         assert_eq!(
             sandbox
                 .mounts
@@ -291,6 +311,7 @@ mod tests {
             [
                 Path::new("/forge/output"),
                 Path::new("/forge/work"),
+                Path::new("/forge/destination"),
                 Path::new("/forge/cache-cc"),
                 Path::new("/forge/cache-rust"),
                 Path::new("/forge/cache-go"),
@@ -299,7 +320,7 @@ mod tests {
                 Path::new("/forge/cache-zig"),
             ]
         );
-        assert!(sandbox.mounts.iter().skip(2).all(|mount| {
+        assert!(sandbox.mounts.iter().skip(3).all(|mount| {
             mount
                 .host
                 .starts_with(runtime.path().join("derivations").join(derivation_id.as_str()))

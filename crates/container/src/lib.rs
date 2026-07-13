@@ -17,7 +17,10 @@ use nc::{
 };
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
-use nix::libc::{AT_RECURSIVE, SIGCHLD};
+use nix::libc::{
+    AT_RECURSIVE, PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_DROP, PR_CAPBSET_READ,
+    SIGCHLD, SYS_capget, SYS_capset, prctl, syscall,
+};
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, clone};
 use nix::sys::prctl::set_pdeathsig;
@@ -99,6 +102,23 @@ pub enum LoopbackPolicy {
     HostIpIfAvailable,
 }
 
+/// Access policy for the container's root filesystem.
+///
+/// A read-only root is applied recursively after every bind has been mounted.
+/// Only mounts declared with [`Container::bind_rw`] are then made writable
+/// again. That exception applies to the exact bind mount, not to nested mounts;
+/// each writable nested mount must be declared separately. This keeps
+/// undeclared paths, including package-manager content and dependency trees,
+/// immutable to the payload. Read-only setup also removes mount-administration
+/// capability before the payload runs; pseudo-filesystems remain governed by
+/// [`PseudoFilesystemPolicy`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RootFilesystemPolicy {
+    ReadOnly,
+    #[default]
+    ReadWrite,
+}
+
 pub struct Container {
     root: PathBuf,
     work_dir: Option<PathBuf>,
@@ -108,6 +128,7 @@ pub struct Container {
     ignore_host_sigint: bool,
     pseudo_filesystems: PseudoFilesystemPolicy,
     loopback: LoopbackPolicy,
+    root_filesystem: RootFilesystemPolicy,
 }
 
 impl Container {
@@ -122,6 +143,7 @@ impl Container {
             ignore_host_sigint: false,
             pseudo_filesystems: PseudoFilesystemPolicy::default(),
             loopback: LoopbackPolicy::default(),
+            root_filesystem: RootFilesystemPolicy::default(),
         }
     }
 
@@ -207,6 +229,14 @@ impl Container {
     pub fn loopback(self, policy: LoopbackPolicy) -> Self {
         Self {
             loopback: policy,
+            ..self
+        }
+    }
+
+    /// Select whether undeclared paths in the container root are writable.
+    pub fn root_filesystem(self, policy: RootFilesystemPolicy) -> Self {
+        Self {
+            root_filesystem: policy,
             ..self
         }
     }
@@ -362,6 +392,10 @@ where
 
     setup(container)?;
 
+    if matches!(container.root_filesystem, RootFilesystemPolicy::ReadOnly) {
+        drop_mount_administration()?;
+    }
+
     let result = f().boxed().context(RunSnafu);
     if result.is_ok() {
         // Errors retain the write end so the outer clone callback can report
@@ -407,6 +441,103 @@ fn validate_payload_credentials(
     Ok(())
 }
 
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+const CAP_SYS_ADMIN: u32 = 21;
+
+#[repr(C)]
+struct CapabilityHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+struct CapabilityData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
+/// Remove the one capability that could undo the frozen mount policy.
+///
+/// Clearing the live sets is not sufficient for namespace UID zero: a later
+/// `execve` can regain capabilities from the bounding set. Drop the bounding
+/// entry first, clear the ambient set, then clear and verify every live set.
+fn drop_mount_administration() -> Result<(), ContainerError> {
+    unsafe {
+        checked_prctl(prctl(PR_CAPBSET_DROP, CAP_SYS_ADMIN, 0, 0, 0)).context(DropMountAdministrationSnafu)?;
+        checked_prctl(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0))
+            .context(DropMountAdministrationSnafu)?;
+    }
+
+    let mut capabilities = read_capabilities().context(DropMountAdministrationSnafu)?;
+    clear_capability(&mut capabilities, CAP_SYS_ADMIN);
+    write_capabilities(&capabilities).context(DropMountAdministrationSnafu)?;
+
+    let retained_live = capability_is_set(
+        &read_capabilities().context(DropMountAdministrationSnafu)?,
+        CAP_SYS_ADMIN,
+    );
+    let retained_bounding = unsafe {
+        checked_prctl_value(prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN, 0, 0, 0)).context(DropMountAdministrationSnafu)? != 0
+    };
+    let retained_ambient = unsafe {
+        checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, CAP_SYS_ADMIN, 0, 0))
+            .context(DropMountAdministrationSnafu)?
+            != 0
+    };
+    if retained_live || retained_bounding || retained_ambient {
+        return PayloadRetainsMountAdministrationSnafu.fail();
+    }
+    Ok(())
+}
+
+fn read_capabilities() -> Result<[CapabilityData; 2], Errno> {
+    let mut header = CapabilityHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let mut data = [CapabilityData::default(); 2];
+    let result = unsafe { syscall(SYS_capget, &mut header, data.as_mut_ptr()) };
+    checked_syscall(result)?;
+    Ok(data)
+}
+
+fn write_capabilities(data: &[CapabilityData; 2]) -> Result<(), Errno> {
+    let mut header = CapabilityHeader {
+        version: LINUX_CAPABILITY_VERSION_3,
+        pid: 0,
+    };
+    let result = unsafe { syscall(SYS_capset, &mut header, data.as_ptr()) };
+    checked_syscall(result)
+}
+
+fn clear_capability(data: &mut [CapabilityData; 2], capability: u32) {
+    let word = capability as usize / u32::BITS as usize;
+    let mask = !(1_u32 << (capability % u32::BITS));
+    data[word].effective &= mask;
+    data[word].permitted &= mask;
+    data[word].inheritable &= mask;
+}
+
+fn capability_is_set(data: &[CapabilityData; 2], capability: u32) -> bool {
+    let word = capability as usize / u32::BITS as usize;
+    let mask = 1_u32 << (capability % u32::BITS);
+    data[word].effective & mask != 0 || data[word].permitted & mask != 0 || data[word].inheritable & mask != 0
+}
+
+fn checked_syscall(result: nix::libc::c_long) -> Result<(), Errno> {
+    if result == -1 { Err(Errno::last()) } else { Ok(()) }
+}
+
+fn checked_prctl(result: nix::libc::c_int) -> Result<(), Errno> {
+    checked_prctl_value(result).map(|_| ())
+}
+
+fn checked_prctl_value(result: nix::libc::c_int) -> Result<nix::libc::c_int, Errno> {
+    if result == -1 { Err(Errno::last()) } else { Ok(result) }
+}
+
 /// Setup the container
 fn setup(container: &Container) -> Result<(), ContainerError> {
     if container.networking {
@@ -417,7 +548,12 @@ fn setup(container: &Container) -> Result<(), ContainerError> {
         setup_localhost()?;
     }
 
-    pivot(&container.root, &container.binds, container.pseudo_filesystems)?;
+    pivot(
+        &container.root,
+        &container.binds,
+        container.pseudo_filesystems,
+        container.root_filesystem,
+    )?;
 
     if let Some(hostname) = &container.hostname {
         sethostname(hostname).context(SetHostnameSnafu)?;
@@ -431,7 +567,12 @@ fn setup(container: &Container) -> Result<(), ContainerError> {
 }
 
 /// Pivot the process into the rootfs
-fn pivot(root: &Path, binds: &[Bind], pseudo_filesystems: PseudoFilesystemPolicy) -> Result<(), ContainerError> {
+fn pivot(
+    root: &Path,
+    binds: &[Bind],
+    pseudo_filesystems: PseudoFilesystemPolicy,
+    root_filesystem: RootFilesystemPolicy,
+) -> Result<(), ContainerError> {
     const OLD_PATH: &str = "old_root";
 
     let old_root = root.join(OLD_PATH);
@@ -447,6 +588,12 @@ fn pivot(root: &Path, binds: &[Bind], pseudo_filesystems: PseudoFilesystemPolicy
     }
 
     ensure_directory(&old_root)?;
+    for decision in root_mount_decisions(root, binds, root_filesystem) {
+        match decision {
+            RootMountDecision::ReadOnlyRecursive(target) => set_mount_access(&target, true, true)?,
+            RootMountDecision::ReadWriteExact(target) => set_mount_access(&target, false, false)?,
+        }
+    }
     pivot_root(root, &old_root).context(PivotRootSnafu)?;
 
     set_current_dir("/")?;
@@ -456,11 +603,31 @@ fn pivot(root: &Path, binds: &[Bind], pseudo_filesystems: PseudoFilesystemPolicy
     }
 
     umount2(OLD_PATH, MntFlags::MNT_DETACH).context(UnmountOldRootSnafu)?;
-    fs::remove_dir(OLD_PATH).context(FsErrSnafu)?;
+    if matches!(root_filesystem, RootFilesystemPolicy::ReadWrite) {
+        fs::remove_dir(OLD_PATH).context(FsErrSnafu)?;
+    }
 
     umask(Mode::S_IWGRP | Mode::S_IWOTH);
 
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RootMountDecision {
+    ReadOnlyRecursive(PathBuf),
+    ReadWriteExact(PathBuf),
+}
+
+fn root_mount_decisions(root: &Path, binds: &[Bind], policy: RootFilesystemPolicy) -> Vec<RootMountDecision> {
+    if matches!(policy, RootFilesystemPolicy::ReadWrite) {
+        return Vec::new();
+    }
+
+    std::iter::once(RootMountDecision::ReadOnlyRecursive(root.to_owned()))
+        .chain(binds.iter().filter(|bind| !bind.read_only).map(|bind| {
+            RootMountDecision::ReadWriteExact(root.join(bind.target.strip_prefix("/").unwrap_or(&bind.target)))
+        }))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,7 +697,7 @@ fn mount_host_tree(old_path: &str, name: &str, read_only: bool) -> Result<(), Co
         MsFlags::MS_BIND | MsFlags::MS_REC | MsFlags::MS_SLAVE,
     )?;
     if read_only {
-        set_mount_read_only(target, true)?;
+        set_mount_access(target, true, true)?;
     }
     Ok(())
 }
@@ -554,13 +721,13 @@ fn bind_minimal_device(old_path: &str, device: &str) -> Result<(), ContainerErro
     bind_mount(&source, &target, true)
 }
 
-fn set_mount_read_only(target: &Path, recursive: bool) -> Result<(), ContainerError> {
+fn set_mount_access(target: &Path, read_only: bool, recursive: bool) -> Result<(), ContainerError> {
     unsafe {
         let inner = || {
             let fd = open_tree(AT_FDCWD, target, OPEN_TREE_CLOEXEC).map_err(Errno::from_i32)?;
             let attr = mount_attr_t {
-                attr_set: MOUNT_ATTR_RDONLY as u64,
-                attr_clr: 0,
+                attr_set: if read_only { MOUNT_ATTR_RDONLY as u64 } else { 0 },
+                attr_clr: if read_only { 0 } else { MOUNT_ATTR_RDONLY as u64 },
                 program: 0,
                 userns_fd: 0,
             };
@@ -884,6 +1051,10 @@ enum ContainerError {
         effective_gid: u32,
         supplementary_gids: Vec<u32>,
     },
+    #[snafu(display("drop payload mount-administration capability"))]
+    DropMountAdministration { source: nix::Error },
+    #[snafu(display("payload retained mount-administration capability"))]
+    PayloadRetainsMountAdministration,
     #[snafu(display("sethostname"))]
     SetHostname { source: nix::Error },
     #[snafu(display("pivot_root"))]
@@ -903,17 +1074,22 @@ enum Message {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::os::unix::fs::FileTypeExt as _;
     use std::os::unix::net::UnixListener;
+    use std::path::Path;
 
     use fs_err as fs;
     use nix::errno::Errno;
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
     use super::{
-        Container, DevPolicy, LoopbackPolicy, MINIMAL_DEV_NODES, ProcPolicy, PseudoFilesystemPolicy,
-        PseudoMountDecision, SyncPipe, SysPolicy, TmpPolicy, namespace_flags, prepare_bind_target,
-        pseudo_mount_decisions, validate_payload_credentials,
+        CAP_SYS_ADMIN, CapabilityData, Container, ContainerError, DevPolicy, Error as ContainerRunError,
+        LoopbackPolicy, MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, ProcPolicy,
+        PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SyncPipe, SysPolicy,
+        TmpPolicy, capability_is_set, checked_prctl_value, clear_capability, namespace_flags, prctl,
+        prepare_bind_target, pseudo_mount_decisions, read_capabilities, root_mount_decisions, set_mount_access,
+        validate_payload_credentials,
     };
 
     #[test]
@@ -971,6 +1147,179 @@ mod tests {
         let container = Container::new("/").loopback(LoopbackPolicy::KernelDefault);
 
         assert_eq!(container.loopback, LoopbackPolicy::KernelDefault);
+    }
+
+    #[test]
+    fn read_only_root_reopens_only_explicit_read_write_binds() {
+        let default = Container::new("/root");
+        assert_eq!(default.root_filesystem, RootFilesystemPolicy::ReadWrite);
+        assert!(root_mount_decisions(&default.root, &default.binds, default.root_filesystem).is_empty());
+
+        let restricted = Container::new("/root")
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .bind_rw("/host/work", "/work")
+            .bind_ro("/host/input", "/work/input")
+            .bind_rw("/host/cache", "/work/cache");
+
+        assert_eq!(
+            root_mount_decisions(&restricted.root, &restricted.binds, restricted.root_filesystem),
+            vec![
+                RootMountDecision::ReadOnlyRecursive("/root".into()),
+                RootMountDecision::ReadWriteExact("/root/work".into()),
+                RootMountDecision::ReadWriteExact("/root/work/cache".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn mount_administration_is_removed_from_every_live_capability_set() {
+        let mut capabilities = [
+            CapabilityData {
+                effective: u32::MAX,
+                permitted: u32::MAX,
+                inheritable: u32::MAX,
+            },
+            CapabilityData {
+                effective: u32::MAX,
+                permitted: u32::MAX,
+                inheritable: u32::MAX,
+            },
+        ];
+        let unrelated_low = CAP_SYS_ADMIN - 1;
+        let unrelated_high = u32::BITS + 1;
+
+        assert!(capability_is_set(&capabilities, CAP_SYS_ADMIN));
+        clear_capability(&mut capabilities, CAP_SYS_ADMIN);
+
+        assert!(!capability_is_set(&capabilities, CAP_SYS_ADMIN));
+        assert!(capability_is_set(&capabilities, unrelated_low));
+        assert!(capability_is_set(&capabilities, unrelated_high));
+    }
+
+    #[test]
+    fn read_only_root_is_enforced_by_the_live_kernel_mount_and_capability_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let writable = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("locked")).unwrap();
+        fs::write(root.path().join("locked/input"), b"immutable").unwrap();
+
+        let result = Container::new(root.path())
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .bind_rw(writable.path(), "/work")
+            .run::<io::Error>(|| {
+                require_errno(
+                    fs::write("/locked/initial-mutation", b"rejected"),
+                    Errno::EROFS,
+                    "write undeclared root path before remount attempts",
+                )?;
+                fs::write("/work/result", b"writable bind")?;
+                require_mount_administration_absent()?;
+
+                let remount = nix::mount::mount::<str, str, str, str>(
+                    None,
+                    "/",
+                    None,
+                    nix::mount::MsFlags::MS_BIND | nix::mount::MsFlags::MS_REMOUNT,
+                    None,
+                );
+                if !matches!(remount, Err(Errno::EPERM)) {
+                    return Err(io::Error::other(format!(
+                        "root remount without CAP_SYS_ADMIN did not fail with EPERM: {remount:?}"
+                    )));
+                }
+
+                match set_mount_access(Path::new("/"), false, true) {
+                    Err(ContainerError::Mount {
+                        source: Errno::EPERM, ..
+                    }) => {}
+                    Err(error) => {
+                        return Err(io::Error::other(format!(
+                            "mount_setattr write-enable failed unexpectedly: {error}"
+                        )));
+                    }
+                    Ok(()) => {
+                        return Err(io::Error::other(
+                            "mount_setattr write-enable succeeded without CAP_SYS_ADMIN",
+                        ));
+                    }
+                }
+
+                require_errno(
+                    fs::write("/locked/post-remount-mutation", b"rejected"),
+                    Errno::EROFS,
+                    "write undeclared root path after remount attempts",
+                )
+            });
+
+        match result {
+            Ok(()) => {
+                assert_eq!(fs::read(writable.path().join("result")).unwrap(), b"writable bind");
+                assert!(!root.path().join("locked/initial-mutation").exists());
+                assert!(!root.path().join("locked/post-remount-mutation").exists());
+            }
+            Err(error) if host_denied_user_namespace_setup(&error) => {
+                eprintln!("SKIP live read-only-root kernel test: host denied user-namespace credential setup: {error}");
+            }
+            Err(error) => panic!("live read-only-root kernel test failed: {error}"),
+        }
+    }
+
+    fn require_errno<T>(result: io::Result<T>, expected: Errno, operation: &str) -> io::Result<()> {
+        match result {
+            Err(error) if error.raw_os_error() == Some(expected as i32) => Ok(()),
+            Err(error) => Err(io::Error::other(format!(
+                "{operation} failed with {error}, expected {expected}"
+            ))),
+            Ok(_) => Err(io::Error::other(format!(
+                "{operation} unexpectedly succeeded, expected {expected}"
+            ))),
+        }
+    }
+
+    fn require_mount_administration_absent() -> io::Result<()> {
+        let capabilities = read_capabilities().map_err(errno_to_io)?;
+        if capability_is_set(&capabilities, CAP_SYS_ADMIN) {
+            return Err(io::Error::other("CAP_SYS_ADMIN remains in a live capability set"));
+        }
+        let bounding =
+            unsafe { checked_prctl_value(prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN, 0, 0, 0)).map_err(errno_to_io)? };
+        let ambient = unsafe {
+            checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, CAP_SYS_ADMIN, 0, 0))
+                .map_err(errno_to_io)?
+        };
+        if bounding != 0 || ambient != 0 {
+            return Err(io::Error::other(format!(
+                "CAP_SYS_ADMIN remains recoverable: bounding={bounding}, ambient={ambient}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn errno_to_io(error: Errno) -> io::Error {
+        io::Error::from_raw_os_error(error as i32)
+    }
+
+    fn host_denied_user_namespace_setup(error: &ContainerRunError) -> bool {
+        match error {
+            ContainerRunError::Nix { source: Errno::EPERM } => true,
+            ContainerRunError::Failure { message }
+                if message.starts_with("clear inherited supplementary groups:")
+                    && message.contains("EPERM: Operation not permitted") =>
+            {
+                true
+            }
+            ContainerRunError::Idmap {
+                source: super::idmap::Error::WriteUidMap { source } | super::idmap::Error::WriteGidMap { source },
+            } => source.kind() == io::ErrorKind::PermissionDenied || source.raw_os_error() == Some(Errno::EPERM as i32),
+            _ => false,
+        }
     }
 
     #[test]

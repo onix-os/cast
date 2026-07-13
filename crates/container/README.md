@@ -46,6 +46,16 @@ the state supplied by the selected network namespace and performs no host
 filesystem probe or setup command. The parent/child synchronization pipe is
 created close-on-exec, so it is never inherited by commands run in a payload.
 
+`Container::root_filesystem` defaults to the historical writable root.
+`RootFilesystemPolicy::ReadOnly` recursively makes the root and all of its
+existing submounts read-only, then reopens only explicit `bind_rw` mounts. For
+that policy, each exception applies only to the exact bind mount: nested mounts
+remain read-only unless they are separately declared with `bind_rw`. Once setup
+is complete, the container removes `CAP_SYS_ADMIN` from every payload
+capability set, including the bounding set, so a later command cannot regain
+the capability through `execve` and remount the root writable. Separately
+selected pseudo-filesystems retain the access declared by their own policy.
+
 #### References
 
 [`clone` syscall](https://linux.die.net/man/2/clone). [Linux namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html). [Linux user namespaces](https://man7.org/linux/man-pages/man7/user_namespaces.7.html) (a particular case of namespace). [`pipe`](https://linux.die.net/man/2/pipe). [`newgidmap`](https://man7.org/linux/man-pages/man1/newgidmap.1.html). [`pivot_root`](https://linux.die.net/man/8/pivot_root).
