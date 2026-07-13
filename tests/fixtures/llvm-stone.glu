@@ -4,10 +4,29 @@
 let b = import! boulder.package.v2
 
 let scripts = b.scripts {
-    setup = b.phase [b.step.shell "%cmake -S llvm -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_ENABLE_PROJECTS=clang;lld"],
-    build = b.phase [b.step.shell "%cmake_build"],
-    install = b.phase [b.step.shell "%cmake_install"],
-    environment = b.phase [b.step.shell "export LD_LIBRARY_PATH=%(workdir)/%(builddir)/lib"],
+    setup = b.phase [
+        b.step.shell r#"cmake -G Ninja \
+    -B "$BOULDER_BUILDER_DIR" \
+    -DCMAKE_VERBOSE_MAKEFILE=ON \
+    -DCMAKE_C_FLAGS_RELEASE=-DNDEBUG \
+    -DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG \
+    -DCMAKE_Fortran_FLAGS_RELEASE=-DNDEBUG \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_DO_STRIP=OFF \
+    -DCMAKE_INSTALL_LIBDIR="${BOULDER_LIBDIR#${BOULDER_PREFIX}/}" \
+    -DCMAKE_INSTALL_LIBEXECDIR="$BOULDER_LIBEXECDIR" \
+    -DCMAKE_INSTALL_PREFIX="$BOULDER_PREFIX" \
+    -DCMAKE_LIB_SUFFIX="${BOULDER_LIBDIR#${BOULDER_PREFIX}/lib}" \
+    -S llvm \
+    -DLLVM_BUILD_LLVM_DYLIB=ON \
+    -DLLVM_ENABLE_PROJECTS=clang\;lld"#,
+    ],
+    build = b.phase [
+        b.step.shell r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" cmake --build "$BOULDER_BUILDER_DIR" --verbose --parallel "$BOULDER_JOBS""#,
+    ],
+    install = b.phase [
+        b.step.shell r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" DESTDIR="$BOULDER_INSTALL_ROOT" cmake --install "$BOULDER_BUILDER_DIR" --verbose"#,
+    ],
     .. b.defaults.scripts
 }
 

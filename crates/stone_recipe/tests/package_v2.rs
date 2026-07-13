@@ -57,7 +57,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
         [
             StepSpec::CMakeInstall,
             StepSpec::Shell {
-                script: "ln -s factory-hello %(installroot)/usr/bin/hello".to_owned()
+                script: r#"ln -s factory-hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hello""#.to_owned()
             }
         ]
     );

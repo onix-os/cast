@@ -161,8 +161,12 @@ let base = b.mk_package (b.meta {
     homepage = "https://example.com", license = ["MPL-2.0"],
 })
 let scripts = b.scripts {
-    build = b.phase [b.step.shell "zig build"],
-    install = b.phase [b.step.shell "zig build install --prefix %(installroot)/usr"],
+    build = b.phase [
+        b.step.shell "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build",
+    ],
+    install = b.phase [
+        b.step.shell "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build install --prefix \"${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}\"",
+    ],
     .. b.defaults.scripts
 }
 {
@@ -170,7 +174,6 @@ let scripts = b.scripts {
     hooks = b.hooks {
         pre_build = [b.step.shell "prepare-generated-files"],
         post_build = [b.step.shell "verify-generated-files"],
-        environment = [b.step.shell "ZIG_GLOBAL_CACHE_DIR=%(buildroot)/zig-cache; export ZIG_GLOBAL_CACHE_DIR"],
         .. b.defaults.hooks
     },
     .. base
@@ -191,7 +194,7 @@ let scripts = b.scripts {
                 script: "prepare-generated-files".to_owned()
             },
             StepSpec::Shell {
-                script: "zig build".to_owned()
+                script: r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build"#.to_owned()
             },
             StepSpec::Shell {
                 script: "verify-generated-files".to_owned()
@@ -199,9 +202,11 @@ let scripts = b.scripts {
         ]
     );
     assert_eq!(
-        phases.environment.steps,
+        phases.install.steps,
         [StepSpec::Shell {
-            script: "ZIG_GLOBAL_CACHE_DIR=%(buildroot)/zig-cache; export ZIG_GLOBAL_CACHE_DIR".to_owned()
+            script: r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#
+                .to_owned()
         }]
     );
+    assert!(phases.environment.steps.is_empty());
 }
