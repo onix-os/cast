@@ -359,6 +359,7 @@ pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan
         build_lock,
     );
     plan.boulder_version = "test-boulder".to_owned();
+    plan.boulder_fingerprint = "sha256:test-boulder-semantics".to_owned();
     plan.recipe_fingerprint = "recipe-fingerprint".to_owned();
     plan.source_lock_digest = "source-lock-digest".to_owned();
     plan.layout = BuilderLayout {

@@ -112,9 +112,14 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         stone_recipe::ToolchainSpec::Llvm => "llvm",
         stone_recipe::ToolchainSpec::Gnu => "gnu",
     };
-    let boulder_version = tools_buildinfo::get_simple_version();
+    let boulder_version = tools_buildinfo::get_version().to_owned();
+    let boulder_fingerprint = tools_buildinfo::get_semantic_fingerprint();
     let jobs = request.jobs.to_string();
-    let builder_fingerprint = builder_fingerprint(&boulder_version, &target.build_policy.fingerprint.sha256);
+    let builder_fingerprint = builder_fingerprint(
+        &boulder_version,
+        boulder_fingerprint,
+        &target.build_policy.fingerprint.sha256,
+    );
     let expected_lock = build_lock::ExpectedBuildLockContext {
         requested_providers: requested_packages.clone(),
         build_platform: platform(&target_policy.build_platform),
@@ -198,6 +203,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         build_lock,
     );
     plan.boulder_version = boulder_version;
+    plan.boulder_fingerprint = boulder_fingerprint.to_owned();
     plan.recipe_fingerprint = builder.recipe.fingerprint.sha256.clone();
     plan.source_lock_digest = source_lock_digest;
     plan.sources = freeze_sources(&builder.recipe);
@@ -230,7 +236,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         .collect();
     plan.analyzers = vec![LockedIdentity {
         name: "boulder-package-analysis".to_owned(),
-        fingerprint: tools_buildinfo::get_simple_version(),
+        fingerprint: boulder_fingerprint.to_owned(),
     }];
     plan.analysis = AnalysisPlan {
         toolchain: match builder.recipe.declaration.options.toolchain {
@@ -509,8 +515,12 @@ fn combined_profile_fingerprint(fingerprints: &[gluon_config::EvaluationFingerpr
     )
 }
 
-fn builder_fingerprint(boulder_version: &str, policy_fingerprint: &str) -> String {
-    hash_fields([EXECUTOR_ABI, boulder_version, policy_fingerprint])
+pub(crate) fn builder_fingerprint(
+    boulder_version: &str,
+    boulder_fingerprint: &str,
+    policy_fingerprint: &str,
+) -> String {
+    hash_fields([EXECUTOR_ABI, boulder_version, boulder_fingerprint, policy_fingerprint])
 }
 
 fn toolchain_fingerprint(toolchain: &str, policy_fingerprint: &str) -> String {
@@ -593,8 +603,12 @@ mod tests {
     #[test]
     fn typed_policy_changes_builder_and_toolchain_identities() {
         assert_ne!(
-            builder_fingerprint("1", "policy-a"),
-            builder_fingerprint("1", "policy-b")
+            builder_fingerprint("1", "semantic-a", "policy-a"),
+            builder_fingerprint("1", "semantic-a", "policy-b")
+        );
+        assert_ne!(
+            builder_fingerprint("1", "semantic-a", "policy-a"),
+            builder_fingerprint("1", "semantic-b", "policy-a")
         );
         assert_ne!(
             toolchain_fingerprint("llvm", "policy-a"),

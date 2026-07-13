@@ -36,11 +36,29 @@ impl<'a> Executor<'a> {
                 found: plan.build_lock.builder.name.clone(),
             });
         }
-        let current = tools_buildinfo::get_simple_version();
-        if plan.boulder_version != current {
+        let current_version = tools_buildinfo::get_version();
+        if plan.boulder_version != current_version {
             return Err(Error::IncompatibleBoulder {
-                expected: current,
+                expected: current_version.to_owned(),
                 found: plan.boulder_version.clone(),
+            });
+        }
+        let current_fingerprint = tools_buildinfo::get_semantic_fingerprint();
+        if plan.boulder_fingerprint != current_fingerprint {
+            return Err(Error::IncompatibleBoulderSemantics {
+                expected: current_fingerprint.to_owned(),
+                found: plan.boulder_fingerprint.clone(),
+            });
+        }
+        let expected_builder = crate::planner::builder_fingerprint(
+            current_version,
+            current_fingerprint,
+            &plan.build_lock.policy.fingerprint,
+        );
+        if plan.build_lock.builder.fingerprint != expected_builder {
+            return Err(Error::IncompatibleBuilderFingerprint {
+                expected: expected_builder,
+                found: plan.build_lock.builder.fingerprint.clone(),
             });
         }
         validate_build_host(&plan.build_lock.build_platform.architecture, std::env::consts::ARCH)?;
@@ -246,6 +264,10 @@ pub enum Error {
     IncompatibleExecutor { expected: &'static str, found: String },
     #[error("plan was created by Boulder {found}, but executor is {expected}")]
     IncompatibleBoulder { expected: String, found: String },
+    #[error("plan requires Boulder implementation {found}, but executor provides {expected}")]
+    IncompatibleBoulderSemantics { expected: String, found: String },
+    #[error("plan builder identity is {found}, but executor requires {expected}")]
+    IncompatibleBuilderFingerprint { expected: String, found: String },
     #[error("frozen plan requires build host `{required}`, but Boulder is running on `{actual}`")]
     IncompatibleBuildHost { required: String, actual: String },
     #[error("unsupported frozen PGO stage {0}")]

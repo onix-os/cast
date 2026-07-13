@@ -27,7 +27,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 1;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 2;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 
@@ -36,6 +36,7 @@ const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 pub struct DerivationPlan {
     pub schema_version: u32,
     pub boulder_version: String,
+    pub boulder_fingerprint: String,
     pub package: PackageIdentity,
     pub recipe_fingerprint: String,
     pub source_lock_digest: String,
@@ -60,6 +61,7 @@ impl DerivationPlan {
         Self {
             schema_version: DERIVATION_PLAN_SCHEMA_VERSION,
             boulder_version: String::new(),
+            boulder_fingerprint: String::new(),
             package,
             recipe_fingerprint: String::new(),
             source_lock_digest: String::new(),
@@ -90,6 +92,7 @@ impl DerivationPlan {
         }
 
         require_nonempty("boulder_version", &self.boulder_version)?;
+        require_nonempty("boulder_fingerprint", &self.boulder_fingerprint)?;
         self.package.validate()?;
         if !SUPPORTED_ARTIFACT_ARCHITECTURES.contains(&self.package.architecture.as_str()) {
             return Err(DerivationValidationError::UnsupportedArtifactArchitecture {
@@ -223,6 +226,7 @@ impl DerivationPlan {
         let mut encoder = CanonicalEncoder::new(DERIVATION_HASH_DOMAIN);
         encoder.u32(self.schema_version);
         encoder.string(&self.boulder_version);
+        encoder.string(&self.boulder_fingerprint);
         self.package.encode(&mut encoder);
         encoder.string(&self.recipe_fingerprint);
         encoder.string(&self.source_lock_digest);
@@ -1327,6 +1331,7 @@ mod tests {
             build_lock::sample_lock(),
         );
         plan.boulder_version = "0.26.6".to_owned();
+        plan.boulder_fingerprint = "sha256:test-boulder-semantics".to_owned();
         plan.recipe_fingerprint = "recipe-fingerprint".to_owned();
         plan.source_lock_digest = "source-lock-digest".to_owned();
         plan.sources = vec![LockedSource::Archive {
@@ -1414,6 +1419,27 @@ mod tests {
         assert_eq!(first.derivation_id(), repeated.derivation_id());
         assert_eq!(first.derivation_id().as_str().len(), 64);
         first.validate().unwrap();
+    }
+
+    #[test]
+    fn validation_requires_complete_boulder_implementation_identity() {
+        for (field, clear) in [
+            (
+                "boulder_version",
+                Box::new(|plan: &mut DerivationPlan| plan.boulder_version.clear()) as Box<dyn Fn(&mut DerivationPlan)>,
+            ),
+            (
+                "boulder_fingerprint",
+                Box::new(|plan: &mut DerivationPlan| plan.boulder_fingerprint.clear()),
+            ),
+        ] {
+            let mut plan = sample_plan();
+            clear(&mut plan);
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::Empty { field: actual }) if actual == field
+            ));
+        }
     }
 
     #[test]
@@ -1541,6 +1567,14 @@ mod tests {
         let original = sample_plan();
         let original_id = original.derivation_id();
         let mutations: Vec<(&str, Box<dyn Fn(&mut DerivationPlan)>)> = vec![
+            (
+                "boulder-version",
+                Box::new(|plan| plan.boulder_version.push_str("-changed")),
+            ),
+            (
+                "boulder-implementation",
+                Box::new(|plan| plan.boulder_fingerprint.push_str("-changed")),
+            ),
             (
                 "source",
                 Box::new(|plan| match &mut plan.sources[0] {
