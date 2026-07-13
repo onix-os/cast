@@ -12,23 +12,20 @@ use std::{
 use fs_err as fs;
 use moss::{Installation, runtime};
 use sha2::{Digest, Sha256};
-use stone_recipe::{
-    PathKind,
-    derivation::{
-        AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
-        DerivationPlan, DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput,
-        LockedOutputRef, LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation,
-        PackageIdentity, PathRuleKind, PathRulePlan, PhasePlan, Platform, RepositorySnapshot, StepPlan,
-    },
-    script,
+use stone_recipe::derivation::{
+    AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
+    DerivationPlan, DerivationValidationError, ExecutionPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef,
+    LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, PathRulePlan,
+    PhasePlan, Platform, RepositorySnapshot, StepPlan,
 };
+use stone_recipe::script;
 use thiserror::Error;
 
 use crate::{
     Env,
     build::{self, Builder},
     build_lock,
-    package::Packager,
+    package::{Packager, ResolvedOutput},
     profile,
     source_lock::{SOURCE_LOCK_FILE_NAME, SourceResolution},
 };
@@ -96,10 +93,10 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     for package in packager.resolved_packages().values() {
         requested_packages.extend(
             package
-                .run_deps
+                .runtime_inputs
                 .iter()
-                .filter(|dependency| !package_names.contains(dependency))
-                .cloned(),
+                .map(|dependency| dependency.to_name())
+                .filter(|dependency| !package_names.contains(dependency)),
         );
     }
     requested_packages.sort();
@@ -233,7 +230,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         .collection_rules()
         .map(|(package, kind, pattern)| CollectionRulePlan {
             output: output_name(&builder.recipe.declaration.meta.pname, package),
-            kind: path_rule_kind(kind),
+            kind,
             pattern: pattern.to_owned(),
         })
         .collect();
@@ -436,7 +433,7 @@ fn jobs_use_package_directory(jobs: &[JobPlan], package_dir: &str) -> bool {
 
 fn freeze_outputs(
     root_name: &str,
-    packages: &BTreeMap<String, stone_recipe::Package>,
+    packages: &BTreeMap<String, ResolvedOutput>,
     lock: &BuildLock,
 ) -> Result<Vec<OutputPlan>, Error> {
     let names = packages
@@ -447,12 +444,13 @@ fn freeze_outputs(
         .iter()
         .map(|(name, package)| {
             let runtime_inputs = package
-                .run_deps
+                .runtime_inputs
                 .iter()
                 .map(|dependency| {
-                    if let Some(output) = names.get(dependency) {
+                    let dependency = dependency.to_name();
+                    if let Some(output) = names.get(&dependency) {
                         Ok(OutputRelation::Planned { output: output.clone() })
-                    } else if let Some(request) = lock.requests.iter().find(|request| request.request == *dependency) {
+                    } else if let Some(request) = lock.requests.iter().find(|request| request.request == dependency) {
                         Ok(OutputRelation::Locked {
                             request: request.request.clone(),
                             reference: LockedOutputRef {
@@ -463,7 +461,7 @@ fn freeze_outputs(
                     } else {
                         Err(Error::UnlockedRuntimeDependency {
                             package: name.clone(),
-                            dependency: dependency.clone(),
+                            dependency,
                         })
                     }
                 })
@@ -474,34 +472,20 @@ fn freeze_outputs(
                 summary: package.summary.clone(),
                 description: package.description.clone(),
                 provides_exclude: package.provides_exclude.clone(),
-                runtime_exclude: package.run_deps_exclude.clone(),
+                runtime_exclude: package.runtime_exclude.clone(),
                 paths: package
                     .paths
                     .iter()
                     .map(|path| PathRulePlan {
-                        kind: match path.kind {
-                            PathKind::Any => PathRuleKind::Any,
-                            PathKind::Exe => PathRuleKind::Executable,
-                            PathKind::Symlink => PathRuleKind::Symlink,
-                            PathKind::Special => PathRuleKind::Special,
-                        },
-                        pattern: path.path.clone(),
+                        kind: path.kind,
+                        pattern: path.pattern.clone(),
                     })
                     .collect(),
                 runtime_inputs,
-                conflicts: package.conflicts.clone(),
+                conflicts: package.conflicts.iter().map(|provider| provider.to_name()).collect(),
             })
         })
         .collect()
-}
-
-fn path_rule_kind(kind: PathKind) -> PathRuleKind {
-    match kind {
-        PathKind::Any => PathRuleKind::Any,
-        PathKind::Exe => PathRuleKind::Executable,
-        PathKind::Symlink => PathRuleKind::Symlink,
-        PathKind::Special => PathRuleKind::Special,
-    }
 }
 
 fn output_name(root: &str, package: &str) -> String {

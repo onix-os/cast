@@ -5,15 +5,14 @@ use std::{collections::BTreeSet, io::Write};
 
 use stone::{
     StoneHeaderV1FileType, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneWriteError,
-    StoneWriter,
+    StoneWriter, relation::Dependency,
 };
+use stone_recipe::derivation::DerivationId;
 
-use crate::package::emit::{MetadataError, Package, parse_dependency};
+use crate::package::emit::Package;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Metadata(#[from] MetadataError),
     #[error("write stone manifest")]
     Stone(#[from] StoneWriteError),
 }
@@ -21,23 +20,25 @@ pub enum Error {
 pub fn write<W: Write>(
     output: &mut W,
     packages: &BTreeSet<&Package<'_>>,
-    build_deps: &BTreeSet<String>,
+    build_deps: &BTreeSet<Dependency>,
+    recipe_fingerprint: &str,
+    derivation_id: &DerivationId,
 ) -> Result<(), Error> {
     let mut writer = StoneWriter::new(output, StoneHeaderV1FileType::BuildManifest)?;
 
     // Add each package
     for package in packages {
-        let mut meta = package.meta()?;
+        let mut meta = package.meta();
         // deliberately override .stone package metadata and set build_release to zero for binary manifests
         meta.build_release = 0;
-        let mut payload = package.with_derivation_provenance(meta.to_stone_payload());
+        let mut payload =
+            Package::with_derivation_provenance(meta.to_stone_payload(), recipe_fingerprint, derivation_id);
 
         // Add build deps
-        for (index, name) in build_deps.iter().enumerate() {
-            let dep = parse_dependency(format!("manifest.build_deps[{index}]"), name)?;
+        for dependency in build_deps {
             payload.push(StonePayloadMetaRecord {
                 tag: StonePayloadMetaTag::BuildDepends,
-                primitive: StonePayloadMetaPrimitive::Dependency(dep.kind.into(), dep.name),
+                primitive: StonePayloadMetaPrimitive::Dependency(dependency.kind.into(), dependency.name.clone()),
             });
         }
 
@@ -58,40 +59,38 @@ mod tests {
     };
 
     use super::*;
-    use crate::package::analysis::Bucket;
     use crate::package::emit::{
         DERIVATION_ID_SOURCE_REF_PREFIX, RECIPE_FINGERPRINT_SOURCE_REF_PREFIX, test_derivation_id,
     };
+    use crate::package::{ResolvedOutput, analysis::Bucket};
 
     const FINGERPRINT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[test]
     fn package_and_binary_manifest_metadata_record_recipe_and_derivation_provenance() {
         let derivation_id = test_derivation_id();
-        let source = stone_recipe::Source {
+        let identity = stone_recipe::derivation::PackageIdentity {
             name: "example".to_owned(),
             version: "1.2.3".to_owned(),
-            release: 1,
+            source_release: 1,
+            build_release: 1,
             homepage: "https://example.invalid".to_owned(),
-            license: vec!["MPL-2.0".to_owned()],
+            licenses: vec!["MPL-2.0".to_owned()],
+            architecture: "x86_64".to_owned(),
         };
-        let definition = stone_recipe::Package {
+        let definition = ResolvedOutput {
             summary: Some("Example".to_owned()),
             description: Some("Example package".to_owned()),
-            provides_exclude: Vec::new(),
-            run_deps: Vec::new(),
-            run_deps_exclude: Vec::new(),
-            paths: Vec::new(),
-            conflicts: Vec::new(),
+            runtime_inputs: vec![Dependency::package_name("runtime")],
+            conflicts: vec![stone::relation::Provider::package_name("incompatible")],
+            ..ResolvedOutput::default()
         };
         let package = Package::new_with_architecture(
             "example",
-            &source,
+            &identity,
             &definition,
             Bucket::default(),
             NonZeroU64::new(1).unwrap(),
-            FINGERPRINT,
-            &derivation_id,
             crate::Architecture::X86_64,
             1,
         );
@@ -102,7 +101,7 @@ mod tests {
         let mut package_output = Cursor::new(Vec::new());
         let mut package_writer = StoneWriter::new(&mut package_output, StoneHeaderV1FileType::Binary).unwrap();
         package_writer
-            .add_payload(package.meta_payload().unwrap().as_slice())
+            .add_payload(package.meta_payload(FINGERPRINT, &derivation_id).as_slice())
             .unwrap();
         package_writer.finalize().unwrap();
         package_output.set_position(0);
@@ -112,87 +111,34 @@ mod tests {
         assert_eq!(source_refs(&package_meta.body), expected);
 
         let mut output = Cursor::new(Vec::new());
-        write(&mut output, &BTreeSet::from([&package]), &BTreeSet::new()).unwrap();
+        write(
+            &mut output,
+            &BTreeSet::from([&package]),
+            &BTreeSet::from([Dependency::package_name("build-tool")]),
+            FINGERPRINT,
+            &derivation_id,
+        )
+        .unwrap();
         output.set_position(0);
         let payloads = moss::util::stone_payloads(&mut output).unwrap();
         let manifest_meta = payloads.iter().find_map(StoneDecodedPayload::meta).unwrap();
 
         assert_eq!(source_refs(&manifest_meta.body), expected);
-    }
 
-    #[test]
-    fn invalid_metadata_relations_return_errors_instead_of_panicking() {
-        let derivation_id = test_derivation_id();
-        let source = stone_recipe::Source {
-            name: "example".to_owned(),
-            version: "1.2.3".to_owned(),
-            release: 1,
-            homepage: "https://example.invalid".to_owned(),
-            license: vec!["MPL-2.0".to_owned()],
-        };
-        let definition = stone_recipe::Package {
-            summary: None,
-            description: None,
-            provides_exclude: Vec::new(),
-            run_deps: vec!["unknown(target)".to_owned()],
-            run_deps_exclude: Vec::new(),
-            paths: Vec::new(),
-            conflicts: Vec::new(),
-        };
-        let package = Package::new_with_architecture(
-            "example",
-            &source,
-            &definition,
-            Bucket::default(),
-            NonZeroU64::new(1).unwrap(),
-            FINGERPRINT,
-            &derivation_id,
-            crate::Architecture::X86_64,
-            1,
+        let meta = package.meta();
+        assert_eq!(meta.summary, "Example");
+        assert_eq!(meta.description, "Example package");
+        assert_eq!(
+            meta.dependencies.iter().map(Dependency::to_name).collect::<Vec<_>>(),
+            ["runtime"]
         );
-
-        let error = package.meta_payload().unwrap_err();
-        assert!(matches!(
-            error,
-            MetadataError::InvalidDependency { ref field, .. }
-                if field == "packages[example].run_deps[0]"
-        ));
-
-        let mut output = Cursor::new(Vec::new());
-        let error = write(&mut output, &BTreeSet::from([&package]), &BTreeSet::new()).unwrap_err();
-        assert!(matches!(
-            error,
-            Error::Metadata(MetadataError::InvalidDependency { ref field, .. })
-                if field == "packages[example].run_deps[0]"
-        ));
-
-        let valid_definition = stone_recipe::Package {
-            run_deps: Vec::new(),
-            ..definition
-        };
-        let valid_package = Package::new_with_architecture(
-            "example",
-            &source,
-            &valid_definition,
-            Bucket::default(),
-            NonZeroU64::new(1).unwrap(),
-            FINGERPRINT,
-            &derivation_id,
-            crate::Architecture::X86_64,
-            1,
+        assert_eq!(
+            meta.conflicts
+                .iter()
+                .map(|provider| provider.to_name())
+                .collect::<Vec<_>>(),
+            ["incompatible"]
         );
-        let mut output = Cursor::new(Vec::new());
-        let error = write(
-            &mut output,
-            &BTreeSet::from([&valid_package]),
-            &BTreeSet::from(["unknown(target)".to_owned()]),
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::Metadata(MetadataError::InvalidDependency { ref field, .. })
-                if field == "manifest.build_deps[0]"
-        ));
     }
 
     fn source_refs(payload: &[StonePayloadMetaRecord]) -> BTreeSet<&str> {

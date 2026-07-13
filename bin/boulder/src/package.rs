@@ -5,13 +5,16 @@ use std::{io, num::NonZeroU64};
 
 use fs_err as fs;
 use itertools::Itertools;
-use stone::StoneDigestWriterHasher;
+use stone::{
+    StoneDigestWriterHasher,
+    relation::{Dependency, ParseError, Provider},
+};
 use thiserror::Error;
 
 use moss::util;
 use stone_recipe::{
-    Package, PathKind,
-    derivation::{AnalysisPlan, DerivationId, DerivationPlan, OutputRelation, PathRuleKind},
+    derivation::{AnalysisPlan, DerivationId, DerivationPlan, OutputRelation, PackageIdentity, PathRuleKind},
+    package::OutputSpec,
     script,
 };
 
@@ -24,20 +27,53 @@ mod collect;
 mod emit;
 
 pub struct Packager {
-    packages: BTreeMap<String, Package>,
+    packages: BTreeMap<String, ResolvedOutput>,
     collector: Collector,
+}
+
+/// One path selection rule after authored output and repository policy
+/// composition. The derivation vocabulary is retained so planning can copy it
+/// without passing through the legacy recipe path model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedPath {
+    pub(crate) pattern: String,
+    pub(crate) kind: PathRuleKind,
+}
+
+/// One emitted package after direct package-v2 outputs and repository policy
+/// templates have been resolved.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedOutput {
+    pub(crate) summary: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) provides_exclude: Vec<String>,
+    pub(crate) runtime_inputs: Vec<Dependency>,
+    pub(crate) runtime_exclude: Vec<String>,
+    pub(crate) paths: Vec<ResolvedPath>,
+    pub(crate) conflicts: Vec<Provider>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PendingOutput {
+    summary: Option<String>,
+    description: Option<String>,
+    provides_exclude: Vec<String>,
+    runtime_inputs: Vec<String>,
+    runtime_exclude: Vec<String>,
+    paths: Vec<ResolvedPath>,
+    conflicts: Vec<String>,
 }
 
 pub struct FrozenPackager<'a> {
     paths: &'a Paths,
-    source: stone_recipe::Source,
-    packages: BTreeMap<String, Package>,
+    identity: PackageIdentity,
+    packages: BTreeMap<String, ResolvedOutput>,
     collector: Collector,
     build_release: NonZeroU64,
     recipe_fingerprint: String,
     analysis: AnalysisPlan,
     architecture: crate::Architecture,
-    manifest_build_inputs: Vec<String>,
+    manifest_build_inputs: Vec<Dependency>,
     jobs: u32,
     derivation_id: DerivationId,
 }
@@ -67,21 +103,34 @@ impl<'a> FrozenPackager<'a> {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok((
                     output.package_name.clone(),
-                    Package {
+                    ResolvedOutput {
                         summary: output.summary.clone(),
                         description: output.description.clone(),
                         provides_exclude: output.provides_exclude.clone(),
-                        run_deps,
-                        run_deps_exclude: output.runtime_exclude.clone(),
+                        runtime_inputs: run_deps
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, value)| {
+                                parse_dependency(format!("outputs[{}].runtime_inputs[{index}]", output.name), &value)
+                            })
+                            .collect::<Result<_, _>>()?,
+                        runtime_exclude: output.runtime_exclude.clone(),
                         paths: output
                             .paths
                             .iter()
-                            .map(|path| stone_recipe::Path {
-                                path: path.pattern.clone(),
-                                kind: recipe_path_kind(path.kind),
+                            .map(|path| ResolvedPath {
+                                pattern: path.pattern.clone(),
+                                kind: path.kind,
                             })
                             .collect(),
-                        conflicts: output.conflicts.clone(),
+                        conflicts: output
+                            .conflicts
+                            .iter()
+                            .enumerate()
+                            .map(|(index, value)| {
+                                parse_provider(format!("outputs[{}].conflicts[{index}]", output.name), value)
+                            })
+                            .collect::<Result<_, _>>()?,
                     },
                 ))
             })
@@ -95,26 +144,27 @@ impl<'a> FrozenPackager<'a> {
             collector.add_rule(collect::Rule {
                 pattern: rule.pattern.clone(),
                 package: (*package).to_owned(),
-                kind: recipe_path_kind(rule.kind),
+                kind: rule.kind,
             });
         }
 
+        let manifest_build_inputs = plan
+            .manifest_build_inputs
+            .iter()
+            .enumerate()
+            .map(|(index, value)| parse_dependency(format!("manifest_build_inputs[{index}]"), value))
+            .collect::<Result<_, _>>()?;
+
         Ok(Self {
             paths,
-            source: stone_recipe::Source {
-                name: plan.package.name.clone(),
-                version: plan.package.version.clone(),
-                release: plan.package.source_release,
-                homepage: plan.package.homepage.clone(),
-                license: plan.package.licenses.clone(),
-            },
+            identity: plan.package.clone(),
             packages,
             collector,
             build_release: NonZeroU64::new(plan.package.build_release).expect("validated build release"),
             recipe_fingerprint: plan.recipe_fingerprint.clone(),
             analysis: plan.analysis.clone(),
             architecture: parse_frozen_architecture(&plan.package.architecture)?,
-            manifest_build_inputs: plan.manifest_build_inputs.clone(),
+            manifest_build_inputs,
             jobs: plan.execution.jobs,
             derivation_id: plan.derivation_id(),
         })
@@ -139,12 +189,10 @@ impl<'a> FrozenPackager<'a> {
                 let bucket = analysis.buckets.remove(name)?;
                 Some(emit::Package::new_with_architecture(
                     name,
-                    &self.source,
+                    &self.identity,
                     package,
                     bucket,
                     self.build_release,
-                    &self.recipe_fingerprint,
-                    &self.derivation_id,
                     self.architecture,
                     self.jobs,
                 ))
@@ -152,7 +200,7 @@ impl<'a> FrozenPackager<'a> {
             .collect::<Vec<_>>();
         emit::emit_frozen(
             self.paths,
-            &self.source,
+            &self.identity,
             &self.recipe_fingerprint,
             self.manifest_build_inputs.clone(),
             self.architecture,
@@ -162,15 +210,6 @@ impl<'a> FrozenPackager<'a> {
         .map_err(Error::Emit)?;
         timing.finish(timer);
         Ok(())
-    }
-}
-
-fn recipe_path_kind(kind: PathRuleKind) -> PathKind {
-    match kind {
-        PathRuleKind::Any => PathKind::Any,
-        PathRuleKind::Executable => PathKind::Exe,
-        PathRuleKind::Symlink => PathKind::Symlink,
-        PathRuleKind::Special => PathKind::Special,
     }
 }
 
@@ -202,11 +241,11 @@ impl Packager {
         Ok(Self { collector, packages })
     }
 
-    pub(crate) fn resolved_packages(&self) -> &BTreeMap<String, Package> {
+    pub(crate) fn resolved_packages(&self) -> &BTreeMap<String, ResolvedOutput> {
         &self.packages
     }
 
-    pub(crate) fn collection_rules(&self) -> impl Iterator<Item = (&str, PathKind, &str)> {
+    pub(crate) fn collection_rules(&self) -> impl Iterator<Item = (&str, PathRuleKind, &str)> {
         self.collector
             .rules()
             .iter()
@@ -222,11 +261,18 @@ fn resolve_packages(
     macros: &Macros,
     recipe: &Recipe,
     collector: &mut Collector,
-) -> Result<BTreeMap<String, Package>, Error> {
+) -> Result<BTreeMap<String, ResolvedOutput>, Error> {
     let mut parser = script::Parser::new();
-    parser.add_definition("name", &recipe.parsed.source.name);
-    parser.add_definition("version", &recipe.parsed.source.version);
-    parser.add_definition("release", recipe.parsed.source.release);
+    parser.add_definition("name", &recipe.declaration.meta.pname);
+    parser.add_definition("version", &recipe.declaration.meta.version);
+    parser.add_definition("release", recipe.declaration.meta.release);
+
+    let root_output = recipe
+        .declaration
+        .outputs
+        .iter()
+        .find(|output| output.name == "out")
+        .expect("validated package has one root output");
 
     let mut packages = BTreeMap::new();
 
@@ -234,49 +280,61 @@ fn resolve_packages(
     //
     // If a name collision occurs, merge the incoming and stored
     // packages
-    let mut add_package = |mut name: String, mut package: Package| {
+    let mut add_package = |mut name: String, pending: PendingOutput| {
         name = parser.parse_content(&name)?;
 
-        package.summary = package
+        let summary = pending
             .summary
             .as_ref()
-            .or(recipe.parsed.package.summary.as_ref())
+            .or(root_output.summary.as_ref())
             .map(|summary| parser.parse_content(summary))
             .transpose()?;
-        package.description = package
+        let description = pending
             .description
             .as_ref()
-            .or(recipe.parsed.package.description.as_ref())
+            .or(root_output.description.as_ref())
             .map(|description| parser.parse_content(description))
             .transpose()?;
-        package.provides_exclude = package.provides_exclude.into_iter().collect();
-        package.run_deps = package
-            .run_deps
+        let runtime_inputs = pending
+            .runtime_inputs
             .into_iter()
-            .map(|dep| parser.parse_content(&dep))
-            .collect::<Result<_, _>>()?;
-        package.run_deps_exclude = package.run_deps_exclude.into_iter().collect();
-        package.conflicts = package
+            .enumerate()
+            .map(|(index, dependency)| {
+                let value = parser.parse_content(&dependency)?;
+                parse_dependency(format!("packages[{name}].runtime_inputs[{index}]"), &value)
+            })
+            .collect::<Result<_, Error>>()?;
+        let conflicts = pending
             .conflicts
             .into_iter()
-            .map(|provider| parser.parse_content(&provider))
-            .collect::<Result<_, _>>()?;
-        package.paths = package
+            .enumerate()
+            .map(|(index, provider)| {
+                let value = parser.parse_content(&provider)?;
+                parse_provider(format!("packages[{name}].conflicts[{index}]"), &value)
+            })
+            .collect::<Result<_, Error>>()?;
+        let paths = pending
             .paths
             .into_iter()
             .map(|mut path| {
-                path.path = parser.parse_content(&path.path)?;
+                path.pattern = parser.parse_content(&path.pattern)?;
                 Ok(path)
             })
             .collect::<Result<_, Error>>()?;
-
-        stone_recipe::validation::validate_package(&package, &format!("packages[{name}]"))
-            .map_err(Error::InvalidPackageRelation)?;
+        let mut package = ResolvedOutput {
+            summary,
+            description,
+            provides_exclude: pending.provides_exclude,
+            runtime_inputs,
+            runtime_exclude: pending.runtime_exclude,
+            paths,
+            conflicts,
+        };
 
         // Add each path to collector
         for path in &package.paths {
             collector.add_rule(collect::Rule {
-                pattern: path.path.clone(),
+                pattern: path.pattern.clone(),
                 package: name.clone(),
                 kind: path.kind,
             });
@@ -289,18 +347,23 @@ fn resolve_packages(
             btree_map::Entry::Occupied(entry) => {
                 let prev = entry.remove();
 
-                package.run_deps = package.run_deps.into_iter().chain(prev.run_deps).sorted().collect();
-                package.run_deps_exclude = package
-                    .run_deps_exclude
+                package.runtime_inputs = package
+                    .runtime_inputs
                     .into_iter()
-                    .chain(prev.run_deps_exclude)
+                    .chain(prev.runtime_inputs)
+                    .sorted()
+                    .collect();
+                package.runtime_exclude = package
+                    .runtime_exclude
+                    .into_iter()
+                    .chain(prev.runtime_exclude)
                     .sorted()
                     .collect();
                 package.paths = package
                     .paths
                     .into_iter()
                     .chain(prev.paths)
-                    .sorted_by_key(|p| p.path.clone())
+                    .sorted_by_key(|path| path.pattern.clone())
                     .collect();
 
                 packages.insert(name, package);
@@ -314,22 +377,128 @@ fn resolve_packages(
     for arch in arches.into_iter() {
         if let Some(macros) = macros.arch.get(&arch) {
             for entry in macros.packages.clone().into_iter() {
-                add_package(entry.key, entry.value)?;
+                add_package(entry.key, pending_policy_output(entry.value))?;
             }
         }
     }
 
-    // Add the root recipe package
-    add_package(recipe.parsed.source.name.clone(), recipe.parsed.package.clone())?;
-
-    // Add the recipe sub-packages
-    recipe
-        .parsed
-        .sub_packages
-        .iter()
-        .try_for_each(|entry| add_package(entry.key.clone(), entry.value.clone()))?;
+    for (index, output) in recipe.declaration.outputs.iter().enumerate() {
+        add_package(
+            emitted_output_name(&recipe.declaration.meta.pname, &output.name),
+            pending_direct_output(output, index)?,
+        )?;
+    }
 
     Ok(packages)
+}
+
+fn emitted_output_name(pname: &str, output: &str) -> String {
+    if output == "out" {
+        pname.to_owned()
+    } else {
+        format!("{pname}-{output}")
+    }
+}
+
+fn pending_direct_output(output: &OutputSpec, output_index: usize) -> Result<PendingOutput, Error> {
+    Ok(PendingOutput {
+        summary: output.summary.clone(),
+        description: output.description.clone(),
+        provides_exclude: output.provides_exclude.clone(),
+        runtime_inputs: output
+            .runtime_inputs
+            .iter()
+            .enumerate()
+            .map(|(index, dependency)| {
+                dependency
+                    .dependency()
+                    .map(|dependency| dependency.to_name())
+                    .map_err(|source| Error::InvalidDependency {
+                        field: format!("outputs[{output_index}].runtime_inputs[{index}]"),
+                        value: format!("{dependency:?}"),
+                        source,
+                    })
+            })
+            .collect::<Result<_, _>>()?,
+        runtime_exclude: output.runtime_exclude.clone(),
+        paths: output.paths.iter().map(resolved_path).collect(),
+        conflicts: output
+            .conflicts
+            .iter()
+            .enumerate()
+            .map(|(index, provider)| {
+                provider
+                    .provider()
+                    .map(|provider| provider.to_name())
+                    .map_err(|source| Error::InvalidProvider {
+                        field: format!("outputs[{output_index}].conflicts[{index}]"),
+                        value: format!("{provider:?}"),
+                        source,
+                    })
+            })
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+fn pending_policy_output(package: stone_recipe::Package) -> PendingOutput {
+    PendingOutput {
+        summary: package.summary,
+        description: package.description,
+        provides_exclude: package.provides_exclude,
+        runtime_inputs: package.run_deps,
+        runtime_exclude: package.run_deps_exclude,
+        paths: package
+            .paths
+            .into_iter()
+            .map(|path| ResolvedPath {
+                pattern: path.path,
+                kind: match path.kind {
+                    stone_recipe::PathKind::Any => PathRuleKind::Any,
+                    stone_recipe::PathKind::Exe => PathRuleKind::Executable,
+                    stone_recipe::PathKind::Symlink => PathRuleKind::Symlink,
+                    stone_recipe::PathKind::Special => PathRuleKind::Special,
+                },
+            })
+            .collect(),
+        conflicts: package.conflicts,
+    }
+}
+
+fn resolved_path(path: &stone_recipe::PathSpec) -> ResolvedPath {
+    match path {
+        stone_recipe::PathSpec::Any { path } => ResolvedPath {
+            pattern: path.clone(),
+            kind: PathRuleKind::Any,
+        },
+        stone_recipe::PathSpec::Exe { path } => ResolvedPath {
+            pattern: path.clone(),
+            kind: PathRuleKind::Executable,
+        },
+        stone_recipe::PathSpec::Symlink { path } => ResolvedPath {
+            pattern: path.clone(),
+            kind: PathRuleKind::Symlink,
+        },
+        stone_recipe::PathSpec::Special { path } => ResolvedPath {
+            pattern: path.clone(),
+            kind: PathRuleKind::Special,
+        },
+    }
+}
+
+fn parse_dependency(field: String, value: &str) -> Result<Dependency, Error> {
+    Dependency::from_name(value).map_err(|source| Error::InvalidDependency {
+        field,
+        value: value.to_owned(),
+        source,
+    })
+}
+
+fn parse_provider(field: String, value: &str) -> Result<Provider, Error> {
+    Provider::from_name(value).map_err(|source| Error::InvalidProvider {
+        field,
+        value: value.to_owned(),
+        source,
+    })
 }
 
 pub fn sync_artefacts(paths: &Paths) -> io::Result<()> {
@@ -357,8 +526,20 @@ pub enum Error {
     Analysis(#[source] analysis::BoxError),
     #[error("emit packages")]
     Emit(#[from] emit::Error),
-    #[error("invalid fully expanded package relation")]
-    InvalidPackageRelation(#[source] stone_recipe::ValidationError),
+    #[error("{field}: invalid dependency `{value}`")]
+    InvalidDependency {
+        field: String,
+        value: String,
+        #[source]
+        source: ParseError,
+    },
+    #[error("{field}: invalid provider `{value}`")]
+    InvalidProvider {
+        field: String,
+        value: String,
+        #[source]
+        source: ParseError,
+    },
     #[error("invalid frozen derivation plan")]
     InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
     #[error("frozen output {0} is missing")]
@@ -420,7 +601,7 @@ mod tests {
         let root = &packages["hello"];
         assert_eq!(root.summary.as_deref(), Some("Minimal Gluon recipe example"));
         assert_eq!(
-            root.paths.iter().map(|path| path.path.as_str()).collect::<Vec<_>>(),
+            root.paths.iter().map(|path| path.pattern.as_str()).collect::<Vec<_>>(),
             ["*"]
         );
 
@@ -430,9 +611,12 @@ mod tests {
             devel.description.as_deref(),
             Some("Install this package if you intend to build software against\nthe hello package.")
         );
-        assert_eq!(devel.run_deps, ["hello"]);
         assert_eq!(
-            devel.paths.iter().map(|path| path.path.as_str()).collect::<Vec<_>>(),
+            devel.runtime_inputs.iter().map(Dependency::to_name).collect::<Vec<_>>(),
+            ["hello"]
+        );
+        assert_eq!(
+            devel.paths.iter().map(|path| path.pattern.as_str()).collect::<Vec<_>>(),
             [
                 "/usr/include",
                 "/usr/lib/*.a",
@@ -468,7 +652,7 @@ mod tests {
         let macros = Macros::repository_for_tests();
         let mut recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        recipe.parsed.source.name = "unknown(target)".to_owned();
+        recipe.declaration.meta.pname = "unknown(target)".to_owned();
         let install = tempfile::tempdir().unwrap();
         let mut collector = Collector::new(install.path());
 
@@ -476,8 +660,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            Error::InvalidPackageRelation(stone_recipe::ValidationError::InvalidDependency { ref field, .. })
-                if field == "packages[unknown(target)-devel].run_deps[0]"
+            Error::InvalidDependency { ref field, .. }
+                if field == "packages[unknown(target)-devel].runtime_inputs[0]"
         ));
     }
 
@@ -531,11 +715,18 @@ mod tests {
         let expected_id = plan.derivation_id();
 
         let packager = FrozenPackager::from_plan(&paths, &plan).unwrap();
-        assert_eq!(packager.source.name, "frozen");
-        assert_eq!(packager.source.homepage, "https://frozen.invalid");
+        assert_eq!(packager.identity.name, "frozen");
+        assert_eq!(packager.identity.homepage, "https://frozen.invalid");
         assert_eq!(packager.architecture, crate::Architecture::X86);
         assert_eq!(packager.analysis, plan.analysis);
-        assert_eq!(packager.manifest_build_inputs, ["frozen-build-input"]);
+        assert_eq!(
+            packager
+                .manifest_build_inputs
+                .iter()
+                .map(Dependency::to_name)
+                .collect::<Vec<_>>(),
+            ["frozen-build-input"]
+        );
         assert_eq!(packager.derivation_id, expected_id);
         assert_eq!(
             packager
@@ -544,10 +735,16 @@ mod tests {
                 .iter()
                 .map(|rule| (rule.package.as_str(), rule.kind, rule.pattern.as_str()))
                 .collect::<Vec<_>>(),
-            [("frozen", PathKind::Any, "*"), ("frozen", PathKind::Exe, "/usr/bin/*"),]
+            [
+                ("frozen", PathRuleKind::Any, "*"),
+                ("frozen", PathRuleKind::Executable, "/usr/bin/*"),
+            ]
         );
         let output = &packager.packages["frozen"];
         assert_eq!(output.summary.as_deref(), Some("Frozen output"));
-        assert_eq!(output.conflicts, ["conflict"]);
+        assert_eq!(
+            output.conflicts.iter().map(Provider::to_name).collect::<Vec<_>>(),
+            ["conflict"]
+        );
     }
 }

@@ -15,14 +15,14 @@ use snafu::{ResultExt, Snafu};
 use stone::{
     StoneHeaderV1FileType, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneWriteError,
     StoneWriter,
-    relation::{Dependency, ParseError, Provider},
+    relation::{Dependency, Provider},
 };
-use stone_recipe::derivation::DerivationId;
+use stone_recipe::derivation::{DerivationId, PackageIdentity};
 use tempfile::NamedTempFile;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::manifest::Manifest;
-use super::analysis;
+use super::{ResolvedOutput, analysis};
 use crate::{Architecture, Paths};
 
 mod manifest;
@@ -30,74 +30,34 @@ mod manifest;
 const RECIPE_FINGERPRINT_SOURCE_REF_PREFIX: &str = "gluon-evaluation-sha256:";
 const DERIVATION_ID_SOURCE_REF_PREFIX: &str = "derivation-sha256:";
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum MetadataError {
-    #[error("{field}: invalid dependency `{value}`")]
-    InvalidDependency {
-        field: String,
-        value: String,
-        #[source]
-        source: ParseError,
-    },
-    #[error("{field}: invalid provider `{value}`")]
-    InvalidProvider {
-        field: String,
-        value: String,
-        #[source]
-        source: ParseError,
-    },
-}
-
-fn parse_dependency(field: String, value: &str) -> Result<Dependency, MetadataError> {
-    Dependency::from_name(value).map_err(|source| MetadataError::InvalidDependency {
-        field,
-        value: value.to_owned(),
-        source,
-    })
-}
-
-fn parse_provider(field: String, value: &str) -> Result<Provider, MetadataError> {
-    Provider::from_name(value).map_err(|source| MetadataError::InvalidProvider {
-        field,
-        value: value.to_owned(),
-        source,
-    })
-}
-
 #[derive(Debug)]
 pub struct Package<'a> {
     pub name: &'a str,
     pub build_release: NonZeroU64,
     pub architecture: Architecture,
-    pub source: &'a stone_recipe::Source,
-    pub definition: &'a stone_recipe::Package,
+    pub identity: &'a PackageIdentity,
+    pub definition: &'a ResolvedOutput,
     pub analysis: analysis::Bucket,
-    recipe_fingerprint: &'a str,
-    derivation_id: DerivationId,
     jobs: u32,
 }
 
 impl<'a> Package<'a> {
     pub fn new_with_architecture(
         name: &'a str,
-        source: &'a stone_recipe::Source,
-        template: &'a stone_recipe::Package,
+        identity: &'a PackageIdentity,
+        definition: &'a ResolvedOutput,
         analysis: analysis::Bucket,
         build_release: NonZeroU64,
-        recipe_fingerprint: &'a str,
-        derivation_id: &DerivationId,
         architecture: Architecture,
         jobs: u32,
     ) -> Self {
         Self {
             name,
             architecture,
-            source,
-            definition: template,
+            identity,
+            definition,
             analysis,
             build_release,
-            recipe_fingerprint,
-            derivation_id: derivation_id.clone(),
             jobs,
         }
     }
@@ -109,96 +69,81 @@ impl<'a> Package<'a> {
     pub fn filename(&self) -> String {
         format!(
             "{}-{}-{}-{}-{}.stone",
-            self.name, self.source.version, self.source.release, self.build_release, self.architecture
+            self.name, self.identity.version, self.identity.source_release, self.build_release, self.architecture
         )
     }
 
-    pub fn meta(&self) -> Result<Meta, MetadataError> {
-        let authored_dependencies = self
-            .definition
-            .run_deps
-            .iter()
-            .enumerate()
-            .map(|(index, value)| parse_dependency(format!("packages[{}].run_deps[{index}]", self.name), value))
-            .collect::<Result<Vec<_>, _>>()?;
-        let conflicts = self
-            .definition
-            .conflicts
-            .iter()
-            .enumerate()
-            .map(|(index, value)| parse_provider(format!("packages[{}].conflicts[{index}]", self.name), value))
-            .collect::<Result<_, _>>()?;
+    pub fn dependencies(&self) -> Vec<Dependency> {
+        self.analysis
+            .dependencies()
+            .cloned()
+            .chain(self.definition.runtime_inputs.iter().cloned())
+            .filter(|dependency| {
+                self.definition.runtime_exclude.iter().all(|filter| {
+                    Regex::new(filter)
+                        .map(|regex| !regex.is_match(&dependency.to_string()))
+                        .unwrap_or(true)
+                })
+            })
+            .collect()
+    }
 
-        Ok(Meta {
+    pub fn providers(&self) -> Vec<Provider> {
+        self.analysis
+            .providers()
+            .filter(|provider| {
+                self.definition.provides_exclude.iter().all(|filter| {
+                    Regex::new(filter)
+                        .map(|regex| !regex.is_match(&provider.to_string()))
+                        .unwrap_or(true)
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn meta(&self) -> Meta {
+        Meta {
             name: self.name.to_owned().into(),
-            version_identifier: self.source.version.clone(),
-            source_release: self.source.release,
+            version_identifier: self.identity.version.clone(),
+            source_release: self.identity.source_release,
             build_release: self.build_release.get(),
             architecture: self.architecture.to_string(),
             summary: self.definition.summary.clone().unwrap_or_default(),
             description: self.definition.description.clone().unwrap_or_default(),
-            source_id: self.source.name.clone(),
-            homepage: self.source.homepage.clone(),
-            licenses: self.source.license.clone().into_iter().sorted().collect(),
-            dependencies: self
-                .analysis
-                .dependencies()
-                .cloned()
-                .chain(authored_dependencies)
-                .filter(|dep| {
-                    for exclude_filter in self.definition.run_deps_exclude.iter() {
-                        if let Ok(re) = Regex::new(exclude_filter)
-                            && re.is_match(&dep.to_string())
-                        {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect(),
-            providers: self
-                .analysis
-                .providers()
-                .filter(|provide| {
-                    for exclude_filter in self.definition.provides_exclude.iter() {
-                        if let Ok(re) = Regex::new(exclude_filter)
-                            && re.is_match(&provide.to_string())
-                        {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .cloned()
-                .collect(),
-            conflicts,
+            source_id: self.identity.name.clone(),
+            homepage: self.identity.homepage.clone(),
+            licenses: self.identity.licenses.clone().into_iter().sorted().collect(),
+            dependencies: self.dependencies().into_iter().collect(),
+            providers: self.providers().into_iter().collect(),
+            conflicts: self.definition.conflicts.iter().cloned().collect(),
             uri: None,
             hash: None,
             download_size: None,
-        })
+        }
     }
 
-    fn meta_payload(&self) -> Result<Vec<StonePayloadMetaRecord>, MetadataError> {
-        Ok(self.with_derivation_provenance(self.meta()?.to_stone_payload()))
+    fn meta_payload(&self, recipe_fingerprint: &str, derivation_id: &DerivationId) -> Vec<StonePayloadMetaRecord> {
+        Self::with_derivation_provenance(self.meta().to_stone_payload(), recipe_fingerprint, derivation_id)
     }
 
-    fn with_derivation_provenance(&self, mut payload: Vec<StonePayloadMetaRecord>) -> Vec<StonePayloadMetaRecord> {
+    fn with_derivation_provenance(
+        mut payload: Vec<StonePayloadMetaRecord>,
+        recipe_fingerprint: &str,
+        derivation_id: &DerivationId,
+    ) -> Vec<StonePayloadMetaRecord> {
         // SourceRef is an existing, optional stone metadata extension point. The
         // namespaced value is ignored by older package readers but retained in
         // package and build-manifest payloads for provenance-aware tooling.
         payload.push(StonePayloadMetaRecord {
             tag: StonePayloadMetaTag::SourceRef,
             primitive: StonePayloadMetaPrimitive::String(format!(
-                "{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{}",
-                self.recipe_fingerprint
+                "{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{recipe_fingerprint}"
             )),
         });
         payload.push(StonePayloadMetaRecord {
             tag: StonePayloadMetaTag::SourceRef,
-            primitive: StonePayloadMetaPrimitive::String(format!(
-                "{DERIVATION_ID_SOURCE_REF_PREFIX}{}",
-                self.derivation_id
-            )),
+            primitive: StonePayloadMetaPrimitive::String(format!("{DERIVATION_ID_SOURCE_REF_PREFIX}{derivation_id}")),
         });
         payload
     }
@@ -226,16 +171,16 @@ impl Ord for Package<'_> {
 
 pub fn emit_frozen(
     paths: &Paths,
-    source: &stone_recipe::Source,
+    identity: &PackageIdentity,
     recipe_fingerprint: &str,
-    build_deps: impl IntoIterator<Item = String>,
+    build_deps: impl IntoIterator<Item = Dependency>,
     architecture: Architecture,
     packages: &[Package<'_>],
     derivation_id: &DerivationId,
 ) -> Result<(), Error> {
     let mut manifest = Manifest::new(
         paths,
-        source,
+        identity,
         recipe_fingerprint,
         build_deps,
         architecture,
@@ -285,7 +230,7 @@ pub fn emit_frozen(
     println!("Packaging");
 
     for package in packages {
-        emit_package(paths, package)?;
+        emit_package(paths, package, recipe_fingerprint, derivation_id)?;
     }
 
     if emit_manifests {
@@ -298,7 +243,12 @@ pub fn emit_frozen(
     Ok(())
 }
 
-fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
+fn emit_package(
+    paths: &Paths,
+    package: &Package<'_>,
+    recipe_fingerprint: &str,
+    derivation_id: &DerivationId,
+) -> Result<(), Error> {
     let filename = package.filename();
 
     // Filter for all files -> dedupe by hash -> sort largest to smallest
@@ -339,7 +289,7 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
     // Add metadata
     {
         writer
-            .add_payload(package.meta_payload().context(MetadataSnafu)?.as_slice())
+            .add_payload(package.meta_payload(recipe_fingerprint, derivation_id).as_slice())
             .context(StoneBinaryWriterSnafu)?;
     }
 
@@ -457,8 +407,6 @@ pub enum Error {
     StoneBinaryWriter { source: StoneWriteError },
     #[snafu(display("manifest"))]
     Manifest { source: manifest::Error },
-    #[snafu(display("construct package metadata"))]
-    Metadata { source: MetadataError },
     #[snafu(display("io"))]
     Io { source: io::Error },
     #[snafu(display("Built manifest does not match verification manifest {host_path:?}"))]

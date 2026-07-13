@@ -15,8 +15,9 @@ use moss::{
 use snafu::{ResultExt, Snafu};
 use stone::{
     StoneDecodedPayload, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneReadError,
+    relation::Dependency,
 };
-use stone_recipe::derivation::DerivationId;
+use stone_recipe::derivation::{DerivationId, PackageIdentity};
 use tempfile::NamedTempFile;
 
 use crate::{Architecture, Paths};
@@ -28,11 +29,11 @@ mod json;
 
 #[derive(Debug)]
 pub struct Manifest<'a> {
-    source: &'a stone_recipe::Source,
+    identity: &'a PackageIdentity,
     recipe_fingerprint: &'a str,
     arch: Architecture,
     output_dir: PathBuf,
-    build_deps: BTreeSet<String>,
+    build_deps: BTreeSet<Dependency>,
     packages: BTreeSet<&'a Package<'a>>,
     derivation_id: DerivationId,
 }
@@ -40,16 +41,16 @@ pub struct Manifest<'a> {
 impl<'a> Manifest<'a> {
     pub fn new(
         paths: &Paths,
-        source: &'a stone_recipe::Source,
+        identity: &'a PackageIdentity,
         recipe_fingerprint: &'a str,
-        build_deps: impl IntoIterator<Item = String>,
+        build_deps: impl IntoIterator<Item = Dependency>,
         arch: Architecture,
         derivation_id: &DerivationId,
     ) -> Self {
         let output_dir = paths.artefacts().guest;
 
         Self {
-            source,
+            identity,
             recipe_fingerprint,
             output_dir,
             arch,
@@ -67,13 +68,20 @@ impl<'a> Manifest<'a> {
         let mut output =
             fs::File::create(self.output_dir.join(format!("manifest.{}.bin", self.arch))).context(IoSnafu)?;
 
-        binary::write(&mut output, &self.packages, &self.build_deps).context(BinarySnafu)
+        binary::write(
+            &mut output,
+            &self.packages,
+            &self.build_deps,
+            self.recipe_fingerprint,
+            &self.derivation_id,
+        )
+        .context(BinarySnafu)
     }
 
     pub fn write_json(&self) -> Result<(), Error> {
         json::write(
             &self.output_dir.join(format!("manifest.{}.jsonc", self.arch)),
-            self.source,
+            self.identity,
             self.recipe_fingerprint,
             &self.packages,
             &self.build_deps,
@@ -96,7 +104,14 @@ impl<'a> Manifest<'a> {
 
             let mut writer = util::Sha256Wrapper::new(&mut temp_file);
 
-            binary::write(&mut writer, &self.packages, &self.build_deps).context(BinarySnafu)?;
+            binary::write(
+                &mut writer,
+                &self.packages,
+                &self.build_deps,
+                self.recipe_fingerprint,
+                &self.derivation_id,
+            )
+            .context(BinarySnafu)?;
 
             let hash = writer.finalize();
 

@@ -9,20 +9,20 @@ use std::{
 
 use fs_err::File;
 use itertools::Itertools;
-use regex::Regex;
 use serde::Serialize;
 use snafu::ResultExt;
-use stone_recipe::derivation::DerivationId;
+use stone::relation::Dependency;
+use stone_recipe::derivation::{DerivationId, PackageIdentity};
 
 use super::{Error, IoSnafu, JsonSnafu};
 use crate::package::emit;
 
 pub fn write(
     path: &Path,
-    source: &stone_recipe::Source,
+    identity: &PackageIdentity,
     recipe_fingerprint: &str,
     packages: &BTreeSet<&emit::Package<'_>>,
-    build_deps: &BTreeSet<String>,
+    build_deps: &BTreeSet<Dependency>,
     derivation_id: &DerivationId,
 ) -> Result<(), Error> {
     let packages = packages
@@ -30,41 +30,16 @@ pub fn write(
         .map(|package| {
             let name = package.name.to_owned();
 
-            let build_depends = build_deps.iter().cloned().collect();
+            let build_depends = build_deps.iter().map(Dependency::to_name).collect();
             let mut depends = package
-                .analysis
                 .dependencies()
-                .map(ToString::to_string)
-                .chain(package.definition.run_deps.clone())
-                .filter(|dep| {
-                    for exclude_filter in package.definition.run_deps_exclude.iter() {
-                        if let Ok(re) = Regex::new(exclude_filter)
-                            && re.is_match(&dep.to_string())
-                        {
-                            return false;
-                        }
-                    }
-                    true
-                })
+                .iter()
+                .map(Dependency::to_name)
                 .collect::<Vec<_>>();
             depends.sort();
             depends.dedup();
 
-            let provides = package
-                .analysis
-                .providers()
-                .map(ToString::to_string)
-                .filter(|provide| {
-                    for exclude_filter in package.definition.provides_exclude.iter() {
-                        if let Ok(re) = Regex::new(exclude_filter)
-                            && re.is_match(provide)
-                        {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect();
+            let provides = package.providers().iter().map(|provider| provider.to_name()).collect();
 
             let files = package
                 .analysis
@@ -91,9 +66,9 @@ pub fn write(
         packages,
         derivation_id: derivation_id.as_str().to_owned(),
         recipe_fingerprint: recipe_fingerprint.to_owned(),
-        source_name: source.name.clone(),
-        source_release: source.release.to_string(),
-        source_version: source.version.clone(),
+        source_name: identity.name.clone(),
+        source_release: identity.source_release.to_string(),
+        source_version: identity.version.clone(),
     };
 
     let mut file = File::create(path).context(IoSnafu)?;
@@ -169,10 +144,11 @@ boulder.mk_package (boulder.meta {
         fs::write(&lock_path, &lock).unwrap();
 
         let first_recipe = Recipe::load(root.path()).unwrap();
+        let first_identity = identity(&first_recipe);
         let first_path = root.path().join("first.jsonc");
         write(
             &first_path,
-            &first_recipe.parsed.source,
+            &first_identity,
             &first_recipe.fingerprint.sha256,
             &BTreeSet::new(),
             &BTreeSet::new(),
@@ -183,10 +159,11 @@ boulder.mk_package (boulder.meta {
 
         fs::write(&lock_path, format!("{lock}// semantically inert provenance change\n")).unwrap();
         let changed_recipe = Recipe::load(root.path()).unwrap();
+        let changed_identity = identity(&changed_recipe);
         let changed_path = root.path().join("changed.jsonc");
         write(
             &changed_path,
-            &changed_recipe.parsed.source,
+            &changed_identity,
             &changed_recipe.fingerprint.sha256,
             &BTreeSet::new(),
             &BTreeSet::new(),
@@ -205,6 +182,18 @@ boulder.mk_package (boulder.meta {
             first_manifest["recipe-fingerprint"],
             changed_manifest["recipe-fingerprint"]
         );
+    }
+
+    fn identity(recipe: &Recipe) -> PackageIdentity {
+        PackageIdentity {
+            name: recipe.declaration.meta.pname.clone(),
+            version: recipe.declaration.meta.version.clone(),
+            source_release: u64::try_from(recipe.declaration.meta.release).unwrap(),
+            build_release: 1,
+            homepage: recipe.declaration.meta.homepage.clone(),
+            licenses: recipe.declaration.meta.license.clone(),
+            architecture: "x86_64".to_owned(),
+        }
     }
 
     fn read_jsonc(path: &Path) -> serde_json::Value {

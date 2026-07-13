@@ -14,13 +14,13 @@ use glob::Pattern;
 use nix::libc::{S_IFDIR, S_IRGRP, S_IROTH, S_IRWXU, S_IXGRP, S_IXOTH};
 use snafu::{ResultExt as _, Snafu};
 use stone::{StoneDigestWriter, StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
-use stone_recipe::PathKind;
+use stone_recipe::derivation::PathRuleKind;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Rule {
     pub pattern: String,
     pub package: String,
-    pub kind: PathKind,
+    pub kind: PathRuleKind,
 }
 
 impl Rule {
