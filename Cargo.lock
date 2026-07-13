@@ -1488,6 +1488,8 @@ dependencies = [
 name = "gitwrap"
 version = "0.26.6"
 dependencies = [
+ "fs-err",
+ "nix 0.27.1",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

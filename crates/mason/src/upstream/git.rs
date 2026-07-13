@@ -2,20 +2,43 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    ffi::{CString, OsStr},
+    ffi::{CString, OsStr, OsString},
     io,
-    os::unix::ffi::OsStrExt,
+    os::{fd::AsRawFd as _, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use forge::util;
 use fs_err as fs;
+use fs_err::os::unix::fs::OpenOptionsExt as _;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::time::{Instant, sleep};
 use tui::{ProgressBar, ProgressStyle};
 use url::Url;
 
 mod materialization;
+
+/// Production Git policy for source acquisition and materialization. These
+/// ceilings are deliberately generous for large upstreams. Process streams
+/// and individual files have hard ceilings; aggregate mirror/checkout usage is
+/// sampled during mutation and mandatorily checked after Git exits.
+const MASON_GIT_LIMITS: gitwrap::Limits = gitwrap::Limits {
+    wall_timeout: Duration::from_secs(30 * 60),
+    termination_timeout: Duration::from_secs(10),
+    stdout_bytes: 64 * 1024 * 1024,
+    stderr_bytes: 8 * 1024 * 1024,
+    progress_segment_bytes: 64 * 1024,
+    repository_bytes: 64 * 1024 * 1024 * 1024,
+    repository_entries: 4_000_000,
+    open_files: 4096,
+    address_space_bytes: 16 * 1024 * 1024 * 1024,
+    quota_poll_interval: Duration::from_secs(2),
+};
+
+const CACHE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+const CACHE_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// Upstream based on a Git repository.
 #[derive(Clone, Debug)]
@@ -42,19 +65,20 @@ impl Git {
     /// If the upstream was already stored but does not include [Self::commit],
     /// it is updated contextually. If it does not exist, the Git repository is cloned.
     pub async fn store(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<StoredGit, Error> {
+        let _cache_lock = self.acquire_cache_lock(storage_dir, CacheLockMode::Exclusive).await?;
         let repo: gitwrap::Repository;
         let mut cached = true;
-        match self.stored(storage_dir).await {
+        match self.stored_locked(storage_dir).await {
             Ok((stored, has_commit)) => {
                 repo = stored.repo;
                 if !has_commit {
                     cached = false;
-                    fetch(&repo, pb).await?;
+                    self.fetch_cached(storage_dir, &repo, pb).await?;
                 }
             }
-            Err(Error::Git(_) | Error::OriginMismatch { .. }) => {
+            Err(Error::Git(_) | Error::OriginMismatch { .. } | Error::IncompleteCache { .. }) => {
                 cached = false;
-                self.remove(storage_dir)?;
+                self.remove_locked(storage_dir)?;
                 let stored_path = self.stored_path(storage_dir);
                 if let Some(parent) = stored_path.parent() {
                     fs::create_dir_all(parent)?;
@@ -83,13 +107,14 @@ impl Git {
     /// the network. Explicit lock refreshes must instead fetch an existing
     /// mirror so branches and tags can advance before they are pinned again.
     pub async fn resolve(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<StoredGit, Error> {
-        let repo = match self.stored(storage_dir).await {
+        let _cache_lock = self.acquire_cache_lock(storage_dir, CacheLockMode::Exclusive).await?;
+        let repo = match self.stored_locked(storage_dir).await {
             Ok((stored, _)) => {
-                fetch(&stored.repo, pb).await?;
+                self.fetch_cached(storage_dir, &stored.repo, pb).await?;
                 stored.repo
             }
-            Err(Error::Git(_) | Error::OriginMismatch { .. }) => {
-                self.remove(storage_dir)?;
+            Err(Error::Git(_) | Error::OriginMismatch { .. } | Error::IncompleteCache { .. }) => {
+                self.remove_locked(storage_dir)?;
                 let stored_path = self.stored_path(storage_dir);
                 if let Some(parent) = stored_path.parent() {
                     fs::create_dir_all(parent)?;
@@ -120,8 +145,22 @@ impl Git {
     /// of the directory! Resources will be deleted even if they
     /// do not belong to a Git repository.
     pub fn remove(&self, storage_dir: &Path) -> Result<(), Error> {
+        let _cache_lock = self.try_acquire_cache_lock(storage_dir, CacheLockMode::Exclusive)?;
+        self.remove_locked(storage_dir)
+    }
+
+    fn remove_locked(&self, storage_dir: &Path) -> Result<(), Error> {
         let dir = self.stored_path(storage_dir);
-        util::remove_dir_all(&dir).map_err(Error::from)
+        let marker = self.mutation_marker_path(storage_dir);
+        // Leave the marker in place unless removal of the potentially partial
+        // mirror succeeds. A failed cleanup must remain ineligible for reuse.
+        util::remove_dir_all(&dir)?;
+        match fs::remove_file(&marker) {
+            Ok(()) => sync_parent_directory(&marker)?,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source.into()),
+        }
+        Ok(())
     }
 
     /// Returns the stored upstream if it exists.
@@ -130,8 +169,19 @@ impl Git {
     /// stored upstream and a boolean flag, indicating whether
     /// the stored Git repository contains [Self::commit].
     pub async fn stored(&self, storage_dir: &Path) -> Result<(StoredGit, bool), Error> {
+        let _cache_lock = self.acquire_cache_lock(storage_dir, CacheLockMode::Shared).await?;
+        self.stored_locked(storage_dir).await
+    }
+
+    async fn stored_locked(&self, storage_dir: &Path) -> Result<(StoredGit, bool), Error> {
         let stored_path = self.stored_path(storage_dir);
-        let repo = gitwrap::Repository::open_bare(&stored_path).await?;
+        let marker = self.mutation_marker_path(storage_dir);
+        match fs::symlink_metadata(&marker) {
+            Ok(_) => return Err(Error::IncompleteCache { cache: stored_path }),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source.into()),
+        }
+        let repo = gitwrap::Repository::open_bare_with_limits(&stored_path, MASON_GIT_LIMITS).await?;
         let origin = repo.get_remote_url("origin").await?;
         if origin != self.url.as_str() {
             return Err(Error::OriginMismatch { cache: stored_path });
@@ -157,6 +207,109 @@ impl Git {
         storage_dir.join("git").join(self.directory_name())
     }
 
+    fn mutation_marker_path(&self, storage_dir: &Path) -> PathBuf {
+        let stored = self.stored_path(storage_dir);
+        let mut name = OsString::from(".");
+        name.push(stored.file_name().expect("Git cache path has a file name"));
+        name.push(".fetch-in-progress");
+        stored.with_file_name(name)
+    }
+
+    fn cache_lock_path(&self, storage_dir: &Path) -> PathBuf {
+        let stored = self.stored_path(storage_dir);
+        let mut name = OsString::from(".");
+        name.push(stored.file_name().expect("Git cache path has a file name"));
+        name.push(".lock");
+        stored.with_file_name(name)
+    }
+
+    async fn acquire_cache_lock(&self, storage_dir: &Path, mode: CacheLockMode) -> Result<CacheLock, Error> {
+        let file = self.open_cache_lock(storage_dir)?;
+        let deadline = Instant::now() + CACHE_LOCK_WAIT_TIMEOUT;
+        loop {
+            match try_lock_cache_file(&file, mode)? {
+                true => return Ok(CacheLock { _file: file }),
+                false if Instant::now() >= deadline => {
+                    return Err(Error::CacheBusy {
+                        cache: self.stored_path(storage_dir),
+                    });
+                }
+                false => sleep(CACHE_LOCK_RETRY_INTERVAL).await,
+            }
+        }
+    }
+
+    fn try_acquire_cache_lock(&self, storage_dir: &Path, mode: CacheLockMode) -> Result<CacheLock, Error> {
+        let file = self.open_cache_lock(storage_dir)?;
+        if try_lock_cache_file(&file, mode)? {
+            Ok(CacheLock { _file: file })
+        } else {
+            Err(Error::CacheBusy {
+                cache: self.stored_path(storage_dir),
+            })
+        }
+    }
+
+    fn open_cache_lock(&self, storage_dir: &Path) -> Result<fs::File, Error> {
+        let path = self.cache_lock_path(storage_dir);
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Git cache lock has no parent directory"))?;
+        fs::create_dir_all(parent)?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(&path)?;
+        Ok(file)
+    }
+
+    fn begin_cache_mutation(&self, storage_dir: &Path) -> Result<CacheMutationMarker, Error> {
+        let path = self.mutation_marker_path(storage_dir);
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|source| {
+                if source.kind() == io::ErrorKind::AlreadyExists {
+                    Error::IncompleteCache {
+                        cache: self.stored_path(storage_dir),
+                    }
+                } else {
+                    source.into()
+                }
+            })?;
+        use std::io::Write as _;
+        file.write_all(b"incomplete Git cache mutation\n")?;
+        file.sync_all()?;
+        sync_parent_directory(&path)?;
+        Ok(CacheMutationMarker { path })
+    }
+
+    async fn fetch_cached(
+        &self,
+        storage_dir: &Path,
+        repo: &gitwrap::Repository,
+        pb: &ProgressBar,
+    ) -> Result<(), Error> {
+        let marker = self.begin_cache_mutation(storage_dir)?;
+        if let Err(source) = fetch(repo, pb).await {
+            // Fetch mutates the cache in place. If its deadline, output, or
+            // storage budget fails, discard it rather than trusting partial
+            // state on a later build. The durable marker survives if cleanup
+            // itself cannot complete.
+            self.remove_locked(storage_dir)?;
+            return Err(source.into());
+        }
+        if let Err(source) = marker.commit() {
+            self.remove_locked(storage_dir)?;
+            return Err(source.into());
+        }
+        Ok(())
+    }
+
     /// Returns the name of the directory that should contain
     /// the Git repository.
     /// The readable prefix is deliberately cosmetic. The SHA-256 suffix binds
@@ -168,7 +321,7 @@ impl Git {
         let basename = self
             .url
             .path_segments()
-            .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+            .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
             .unwrap_or("repository");
         let basename = basename.strip_suffix(".git").unwrap_or(basename);
         let mut readable = basename
@@ -196,6 +349,53 @@ impl Git {
         let digest = Sha256::digest(self.url.as_str().as_bytes());
         format!("{readable}-{digest:x}").into()
     }
+}
+
+#[derive(Clone, Copy)]
+enum CacheLockMode {
+    Shared,
+    Exclusive,
+}
+
+fn try_lock_cache_file(file: &fs::File, mode: CacheLockMode) -> io::Result<bool> {
+    let operation = match mode {
+        CacheLockMode::Shared => nix::libc::LOCK_SH | nix::libc::LOCK_NB,
+        CacheLockMode::Exclusive => nix::libc::LOCK_EX | nix::libc::LOCK_NB,
+    };
+    let result = unsafe { nix::libc::flock(file.as_raw_fd(), operation) };
+    if result == 0 {
+        Ok(true)
+    } else {
+        let source = io::Error::last_os_error();
+        let code = source.raw_os_error();
+        if code == Some(nix::libc::EAGAIN) || code == Some(nix::libc::EWOULDBLOCK) {
+            Ok(false)
+        } else {
+            Err(source)
+        }
+    }
+}
+
+struct CacheLock {
+    _file: fs::File,
+}
+
+struct CacheMutationMarker {
+    path: PathBuf,
+}
+
+impl CacheMutationMarker {
+    fn commit(self) -> io::Result<()> {
+        fs::remove_file(&self.path)?;
+        sync_parent_directory(&self.path)
+    }
+}
+
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Git cache marker has no parent directory"))?;
+    fs::File::open(parent)?.sync_all()
 }
 
 /// Information available after [Git] is stored on disk.
@@ -375,6 +575,12 @@ pub enum Error {
     /// A cache entry belongs to a different canonical source URL.
     #[error("cached Git mirror at {cache:?} does not belong to the requested source URL")]
     OriginMismatch { cache: PathBuf },
+    /// A previous in-place fetch did not reach its durable commit point.
+    #[error("cached Git mirror at {cache:?} has an incomplete fetch marker")]
+    IncompleteCache { cache: PathBuf },
+    /// Another process currently owns the cache mutation boundary.
+    #[error("cached Git mirror at {cache:?} is busy in another process")]
+    CacheBusy { cache: PathBuf },
     /// Submodules require their own explicit, locked source model.
     #[error("Git commit {commit} contains submodules, which are not supported as implicit sources")]
     UnsupportedSubmodules { commit: String },
@@ -425,7 +631,7 @@ pub enum Error {
 async fn clone(url: &Url, path: &Path, pb: &ProgressBar) -> Result<gitwrap::Repository, gitwrap::Error> {
     let cb = set_progress_bar_style(pb);
 
-    let result = gitwrap::Repository::clone_mirror_progress(path, url, cb).await;
+    let result = gitwrap::Repository::clone_mirror_progress_with_limits(path, url, MASON_GIT_LIMITS, cb).await;
     pb.finish_and_clear();
 
     result
@@ -574,6 +780,96 @@ mod tests {
             requested_url.as_str()
         );
         assert_eq!(stored.resolved_hash, requested_commit);
+    }
+
+    #[tokio::test]
+    async fn failed_cache_fetch_is_purged_before_a_later_retry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_path = temporary.path().join("source");
+        create_repository(&source_path, b"source\n");
+        let requested = source(Url::from_directory_path(&source_path).unwrap());
+        let storage = temporary.path().join("storage");
+        requested.store(&storage, &ProgressBar::new(100)).await.unwrap();
+        let cached_path = requested.stored_path(&storage);
+        assert!(cached_path.is_dir());
+
+        fs::remove_dir_all(&source_path).unwrap();
+        assert!(requested.resolve(&storage, &ProgressBar::new(100)).await.is_err());
+        assert!(
+            !cached_path.exists(),
+            "a failed in-place fetch must not leave a cache eligible for reuse"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_url_sources_serialize_on_the_shared_cache() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_path = temporary.path().join("source");
+        let commit = create_repository(&source_path, b"source\n");
+        let source_url = Url::from_directory_path(&source_path).unwrap();
+        let first = source(source_url.clone());
+        let mut second = source(source_url);
+        second.name = "second-materialization".to_owned();
+        second.original_index = 1;
+        let storage = temporary.path().join("storage");
+        let first_progress = ProgressBar::new(100);
+        let second_progress = ProgressBar::new(100);
+
+        let (first_stored, second_stored) = tokio::join!(
+            first.store(&storage, &first_progress),
+            second.store(&storage, &second_progress),
+        );
+
+        assert_eq!(first_stored.unwrap().resolved_hash, commit);
+        assert_eq!(second_stored.unwrap().resolved_hash, commit);
+        assert_eq!(first.stored_path(&storage), second.stored_path(&storage));
+    }
+
+    #[tokio::test]
+    async fn live_cache_owner_is_waited_for_and_interrupted_marker_is_repaired() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source_path = temporary.path().join("source");
+        let commit = create_repository(&source_path, b"source\n");
+        let requested = source(Url::from_directory_path(&source_path).unwrap());
+        let storage = temporary.path().join("storage");
+        requested.store(&storage, &ProgressBar::new(100)).await.unwrap();
+        let live_lock = tokio::time::timeout(
+            Duration::from_secs(2),
+            requested.acquire_cache_lock(&storage, CacheLockMode::Exclusive),
+        )
+        .await
+        .expect("the completed store must release its cache lock")
+        .unwrap();
+        let marker = requested.begin_cache_mutation(&storage).unwrap();
+        let marker_path = marker.path.clone();
+
+        let waiting_progress = ProgressBar::new(100);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), requested.store(&storage, &waiting_progress),)
+                .await
+                .is_err(),
+            "a concurrent cache caller must wait instead of poisoning its peer through CacheBusy",
+        );
+        assert!(
+            requested.stored_path(&storage).is_dir(),
+            "a concurrent caller must not delete a mirror beneath the lock owner"
+        );
+        drop(live_lock); // model the mutation owner exiting unexpectedly
+        drop(marker);
+
+        assert!(matches!(
+            requested.stored(&storage).await,
+            Err(Error::IncompleteCache { .. })
+        ));
+        assert!(requested.stored_path(&storage).is_dir());
+        assert!(marker_path.is_file());
+
+        // Acquiring the exclusive lock proves that no cooperating mutation
+        // owner is still live. Repair discards the marked mirror; it never
+        // reuses potentially partial state.
+        let repaired = requested.store(&storage, &ProgressBar::new(100)).await.unwrap();
+        assert_eq!(repaired.resolved_hash, commit);
+        assert!(!marker_path.exists());
     }
 
     #[test]
