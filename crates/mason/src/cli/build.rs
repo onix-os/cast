@@ -140,7 +140,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     // Build & package from within container
     container::exec_frozen::<Error>(paths, &plan, || {
         executor.run(&mut timing)?;
-        packager.package(&mut timing)?;
+        packager.package(&execution_lock, &mut timing)?;
 
         timing.print_table();
 
