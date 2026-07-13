@@ -26,6 +26,8 @@ use stone_recipe::{
 use thiserror::Error;
 use url::Url;
 
+use crate::generated_lock;
+
 /// Canonical file name for generated source resolution data.
 pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.glu";
 
@@ -498,11 +500,11 @@ fn gluon_string(value: &str) -> String {
 /// are unchanged.
 pub fn write_source_lock(path: &Path, lock: &SourceLock) -> io::Result<WriteOutcome> {
     let encoded = encode_source_lock(lock);
-    match fs::read(path) {
+    match generated_lock::read(path) {
         Ok(existing) if existing == encoded.as_bytes() => return Ok(WriteOutcome::Unchanged),
         Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
+        Err(error) if error.is_not_found() => {}
+        Err(error) => return Err(error.into_io_error()),
     }
 
     atomic_write_with(path, encoded.as_bytes(), |_| Ok(()))?;
@@ -800,6 +802,33 @@ type SourceLock = {
             assert_eq!(before.ino(), after.ino());
         }
         assert_eq!(fs::read_to_string(path).unwrap(), encode_source_lock(&lock));
+    }
+
+    #[test]
+    fn unchanged_comparison_rejects_a_symlink_instead_of_reading_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(SOURCE_LOCK_FILE_NAME);
+        let target = directory.path().join("target");
+        let lock = sample_lock();
+        let encoded = encode_source_lock(&lock);
+        fs::write(&target, &encoded).unwrap();
+        symlink(&target, &path).unwrap();
+
+        let error = write_source_lock(&path, &lock).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(
+            error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<generated_lock::ReadError>()),
+            Some(generated_lock::ReadError::NotRegular {
+                kind: generated_lock::FileKind::Symlink,
+                ..
+            })
+        ));
+        assert_eq!(fs::read_to_string(target).unwrap(), encoded);
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
     }
 
     #[test]

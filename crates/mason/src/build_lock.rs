@@ -16,6 +16,8 @@ use stone_recipe::derivation::{
 };
 use thiserror::Error;
 
+use crate::generated_lock;
+
 /// Relationship of generated lock data to the current explicit plan request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -33,13 +35,13 @@ pub fn path_for_recipe(recipe: &Path) -> PathBuf {
 }
 
 pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
-    let bytes = match fs::read(path) {
+    let bytes = match generated_lock::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Status::Missing),
+        Err(error) if error.is_not_found() => return Ok(Status::Missing),
         Err(source) => {
             return Err(Error::Read {
                 path: path.to_owned(),
-                source,
+                source: Box::new(source),
             });
         }
     };
@@ -192,14 +194,14 @@ fn require_selected_value(path: &Path, field: &str, expected: &str, found: &str)
 pub fn write(path: &Path, lock: &BuildLock) -> Result<WriteOutcome, Error> {
     lock.validate()?;
     let encoded = encode_build_lock(lock);
-    match fs::read(path) {
+    match generated_lock::read(path) {
         Ok(existing) if existing == encoded.as_bytes() => return Ok(WriteOutcome::Unchanged),
         Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) if error.is_not_found() => {}
         Err(source) => {
             return Err(Error::Read {
                 path: path.to_owned(),
-                source,
+                source: Box::new(source),
             });
         }
     }
@@ -284,7 +286,7 @@ pub enum Error {
     Read {
         path: PathBuf,
         #[source]
-        source: io::Error,
+        source: Box<generated_lock::ReadError>,
     },
     #[error("decode generated build lock {path:?}")]
     Decode {
@@ -428,6 +430,53 @@ mod tests {
             use std::os::unix::fs::MetadataExt;
             assert_eq!(first.ino(), fs::metadata(path).unwrap().ino());
         }
+    }
+
+    #[test]
+    fn load_and_unchanged_comparison_reject_unsafe_build_lock_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(BUILD_LOCK_FILE_NAME);
+        let limit = gluon_config::Limits::default().max_source_bytes;
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(u64::try_from(limit).unwrap() + 1)
+            .unwrap();
+
+        let error = load(&path, "request").unwrap_err();
+        let Error::Read { source, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert!(matches!(
+            *source,
+            generated_lock::ReadError::TooLarge { limit: found, .. } if found == limit
+        ));
+
+        fs::remove_file(&path).unwrap();
+        let target = root.path().join("target");
+        let expected = lock("request");
+        let encoded = encode_build_lock(&expected);
+        fs::write(&target, &encoded).unwrap();
+        symlink(&target, &path).unwrap();
+
+        for error in [
+            load(&path, "request").unwrap_err(),
+            write(&path, &expected).unwrap_err(),
+        ] {
+            let Error::Read { source, .. } = error else {
+                panic!("unexpected error: {error}");
+            };
+            assert!(matches!(
+                *source,
+                generated_lock::ReadError::NotRegular {
+                    kind: generated_lock::FileKind::Symlink,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(fs::read_to_string(target).unwrap(), encoded);
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
     }
 
     #[test]

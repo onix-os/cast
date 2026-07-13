@@ -10,7 +10,6 @@ use std::{
 };
 
 use forge::{Installation, runtime};
-use fs_err as fs;
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
@@ -31,7 +30,7 @@ use thiserror::Error;
 use crate::{
     Env,
     build::{self, Builder},
-    build_lock,
+    build_lock, generated_lock,
     package::{Packager, ResolvedOutput},
     profile,
     source_lock::{SOURCE_LOCK_FILE_NAME, SourceResolution},
@@ -107,13 +106,11 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     }
     let requested_inputs = aggregate_inputs(unresolved_inputs);
 
-    let source_lock_bytes = match fs::read(builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME)) {
+    let source_lock_bytes = match generated_lock::read(&builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME)) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && builder.recipe.declaration.sources.is_empty() => {
-            Vec::new()
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(Error::MissingSourceLock),
-        Err(source) => return Err(Error::ReadSourceLock(source)),
+        Err(error) if error.is_not_found() && builder.recipe.declaration.sources.is_empty() => Vec::new(),
+        Err(error) if error.is_not_found() => return Err(Error::MissingSourceLock),
+        Err(source) => return Err(Error::ReadSourceLock(Box::new(source))),
     };
     let source_lock_digest = sha256(&source_lock_bytes);
     let profile_fingerprint = profile_aggregate_fingerprint(&builder.profile_fragments);
@@ -909,7 +906,7 @@ pub enum Error {
     #[error("sources.lock.glu is required when a recipe declares sources")]
     MissingSourceLock,
     #[error("read sources.lock.glu")]
-    ReadSourceLock(#[source] std::io::Error),
+    ReadSourceLock(#[source] Box<generated_lock::ReadError>),
     #[error("output package `{package}` has runtime dependency `{dependency}` absent from the locked closure")]
     UnlockedRuntimeDependency { package: String, dependency: String },
     #[error("frozen execution does not support mutable package-directory input {package_dir}")]
@@ -938,6 +935,8 @@ impl From<build::Error> for Error {
 
 #[cfg(test)]
 mod tests {
+    use fs_err as fs;
+
     use super::*;
     use stone_recipe::derivation::PhasePlan;
 

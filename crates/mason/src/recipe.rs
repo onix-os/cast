@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use fs_err as fs;
@@ -13,7 +10,10 @@ use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{BuilderSpec, HooksSpec, PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
 
-use crate::source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock};
+use crate::{
+    generated_lock,
+    source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock},
+};
 
 #[derive(Debug)]
 pub struct Recipe {
@@ -161,7 +161,7 @@ fn load_gluon(
     let lock_path = path.with_file_name(SOURCE_LOCK_FILE_NAME);
     let (explicit_inputs, source_lock) = match source_lock_policy {
         SourceLockPolicy::Ignore => (Vec::new(), None),
-        SourceLockPolicy::RequireCurrent => match fs::read(&lock_path) {
+        SourceLockPolicy::RequireCurrent => match generated_lock::read(&lock_path) {
             Ok(bytes) => {
                 let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &bytes).map_err(|source| {
                     Error::DecodeSourceLock {
@@ -171,11 +171,11 @@ fn load_gluon(
                 })?;
                 (bytes, Some(lock))
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (Vec::new(), None),
+            Err(error) if error.is_not_found() => (Vec::new(), None),
             Err(source) => {
                 return Err(Error::LoadSourceLock {
                     path: lock_path,
-                    source,
+                    source: Box::new(source),
                 });
             }
         },
@@ -220,7 +220,7 @@ pub enum Error {
     LoadSourceLock {
         path: PathBuf,
         #[source]
-        source: io::Error,
+        source: Box<generated_lock::ReadError>,
     },
     #[error("decode Gluon source lock {path:?}")]
     DecodeSourceLock {
@@ -509,6 +509,46 @@ cast.mk_package (cast.meta {
         let recipe = Recipe::load(root.path()).unwrap();
 
         assert_eq!(recipe.source_lock, Some(matching_source_lock()));
+    }
+
+    #[test]
+    fn oversized_and_symlinked_source_locks_are_rejected_structurally() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
+        let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
+        let limit = gluon_config::Limits::default().max_source_bytes;
+        fs::File::create(&lock_path)
+            .unwrap()
+            .set_len(u64::try_from(limit).unwrap() + 1)
+            .unwrap();
+
+        let error = Recipe::load(root.path()).unwrap_err();
+        let Error::LoadSourceLock { source, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert!(matches!(
+            *source,
+            generated_lock::ReadError::TooLarge { limit: found, .. } if found == limit
+        ));
+
+        fs::remove_file(&lock_path).unwrap();
+        let target = root.path().join("lock-target");
+        fs::write(&target, source_lock::encode_source_lock(&matching_source_lock())).unwrap();
+        symlink(&target, &lock_path).unwrap();
+
+        let error = Recipe::load(root.path()).unwrap_err();
+        let Error::LoadSourceLock { source, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert!(matches!(
+            *source,
+            generated_lock::ReadError::NotRegular {
+                kind: generated_lock::FileKind::Symlink,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -17,6 +17,7 @@ mod container;
 mod draft;
 mod env;
 mod executor;
+mod generated_lock;
 mod package;
 mod paths;
 mod planner;
