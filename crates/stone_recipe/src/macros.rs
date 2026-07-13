@@ -61,6 +61,13 @@ pub struct PolicyModule {
     pub origin: String,
 }
 
+/// One named layer in the explicit, authored repository-policy order.
+#[derive(Debug, Clone)]
+pub struct PolicyLayer {
+    pub name: String,
+    pub entries: Vec<PolicyModule>,
+}
+
 /// Format-neutral macro/policy module value.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MacrosSpec {

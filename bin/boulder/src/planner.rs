@@ -56,7 +56,7 @@ pub struct Planned {
     pub lock_outcome: Option<build_lock::WriteOutcome>,
     pub request_fingerprint: String,
     pub requested_packages: Vec<String>,
-    pub policy_origins: Vec<String>,
+    pub policy_provenance: Vec<crate::macros::PolicyChange>,
     pub profile_fingerprints: Vec<String>,
 }
 
@@ -262,12 +262,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.outputs = outputs;
     plan.source_date_epoch = request.source_date_epoch;
     plan.validate()?;
-    let policy_origins = target
-        .policy
-        .changes
-        .iter()
-        .map(|change| change.origin.clone())
-        .collect();
+    let policy_provenance = target.policy.changes.clone();
     let profile_fingerprints = builder
         .profile_fingerprints
         .iter()
@@ -282,7 +277,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         lock_outcome,
         request_fingerprint,
         requested_packages,
-        policy_origins,
+        policy_provenance,
         profile_fingerprints,
     })
 }

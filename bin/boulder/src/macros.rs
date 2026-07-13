@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -25,6 +25,9 @@ pub struct Macros {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyChange {
+    pub layer_name: String,
+    pub layer_order: usize,
+    pub entry_order: usize,
     pub operation: PolicyOperation,
     pub kind: PolicyKind,
     pub key: String,
@@ -67,29 +70,42 @@ impl Macros {
                 source: Box::new(source),
             })?;
 
-        let mut modules = Vec::with_capacity(declared.modules.len());
+        let mut modules = Vec::new();
         let mut explicit_inputs = b"boulder-policy-modules-v1\0".to_vec();
-        for declaration in declared.modules {
-            let path = macros_dir.join(&declaration.origin);
-            let source = source_root
-                .load(&declaration.origin, evaluator.limits().max_source_bytes)
-                .map_err(|source| Error::LoadModule {
-                    path: path.clone(),
-                    source: Box::new(source),
+        let mut layer_names = BTreeSet::new();
+        for (layer_order, layer) in declared.layers.into_iter().enumerate() {
+            if layer.name.trim().is_empty() {
+                return Err(Error::EmptyLayerName { layer_order });
+            }
+            if !layer_names.insert(layer.name.clone()) {
+                return Err(Error::DuplicateLayerName { name: layer.name });
+            }
+            append_fingerprint_input(&mut explicit_inputs, layer.name.as_bytes());
+            for (entry_order, declaration) in layer.entries.into_iter().enumerate() {
+                let path = macros_dir.join(&declaration.origin);
+                let source = source_root
+                    .load(&declaration.origin, evaluator.limits().max_source_bytes)
+                    .map_err(|source| Error::LoadModule {
+                        path: path.clone(),
+                        source: Box::new(source),
+                    })?;
+                let module = stone_recipe::evaluate_macros_gluon_with(&evaluator, &source).map_err(|source| {
+                    Error::EvaluateModule {
+                        path,
+                        source: Box::new(source),
+                    }
                 })?;
-            let module = stone_recipe::evaluate_macros_gluon_with(&evaluator, &source).map_err(|source| {
-                Error::EvaluateModule {
-                    path,
-                    source: Box::new(source),
-                }
-            })?;
-            append_fingerprint_input(&mut explicit_inputs, declaration.origin.as_bytes());
-            append_fingerprint_input(&mut explicit_inputs, module.fingerprint.sha256.as_bytes());
-            modules.push(EvaluatedModule {
-                declaration,
-                macros: module.macros,
-                fingerprint: module.fingerprint,
-            });
+                append_fingerprint_input(&mut explicit_inputs, declaration.origin.as_bytes());
+                append_fingerprint_input(&mut explicit_inputs, module.fingerprint.sha256.as_bytes());
+                modules.push(EvaluatedModule {
+                    layer_name: layer.name.clone(),
+                    layer_order,
+                    entry_order,
+                    declaration,
+                    macros: module.macros,
+                    fingerprint: module.fingerprint,
+                });
+            }
         }
 
         let fingerprinted = stone_recipe::evaluate_policy_gluon_with_inputs(&evaluator, &source, &explicit_inputs)
@@ -142,6 +158,9 @@ struct ComposedModule {
 
 #[derive(Debug)]
 struct EvaluatedModule {
+    layer_name: String,
+    layer_order: usize,
+    entry_order: usize,
     declaration: stone_recipe::PolicyModule,
     macros: stone_recipe::Macros,
     fingerprint: EvaluationFingerprint,
@@ -152,6 +171,9 @@ fn compose(fingerprint: EvaluationFingerprint, modules: Vec<EvaluatedModule>) ->
     let mut provenance = Vec::with_capacity(modules.len());
 
     for (order, evaluated) in modules.into_iter().enumerate() {
+        let layer_name = evaluated.layer_name;
+        let layer_order = evaluated.layer_order;
+        let entry_order = evaluated.entry_order;
         let module = evaluated.declaration;
         let map_key = (module.kind, module.key.clone());
         match module.operation {
@@ -196,6 +218,9 @@ fn compose(fingerprint: EvaluationFingerprint, modules: Vec<EvaluatedModule>) ->
         }
 
         provenance.push(PolicyChange {
+            layer_name,
+            layer_order,
+            entry_order,
             operation: module.operation,
             kind: module.kind,
             key: module.key,
@@ -268,6 +293,10 @@ pub enum Error {
         #[source]
         source: Box<stone_recipe::MacrosEvaluationError>,
     },
+    #[error("policy layer at order {layer_order} must have a non-empty name")]
+    EmptyLayerName { layer_order: usize },
+    #[error("policy layer name `{name}` is declared more than once")]
+    DuplicateLayerName { name: String },
     #[error("policy module `{origin}` cannot add duplicate {kind:?} key `{key}`; it was introduced by `{previous}`")]
     DuplicateAdd {
         kind: PolicyKind,
@@ -323,7 +352,9 @@ boulder.macros
             r#"let policy = import! boulder.policy.v1
 {declarations}
 policy.policy [
+    policy.layer "test" [
 {entries}
+    ],
 ]
 "#
         )
@@ -364,6 +395,9 @@ policy.policy [
             ["base", "emul32/x86_64"]
         );
         assert_eq!(macros.provenance.len(), 4);
+        assert_eq!(macros.provenance[0].layer_name, "test");
+        assert_eq!(macros.provenance[0].layer_order, 0);
+        assert_eq!(macros.provenance[0].entry_order, 0);
         assert_eq!(macros.provenance[0].origin, "actions/z.glu");
         assert_ne!(
             macros.fingerprint.explicit_inputs_sha256,
@@ -489,6 +523,52 @@ policy.policy [
     }
 
     #[test]
+    fn named_layers_compose_once_in_authored_order() {
+        let root = layout();
+        fs::write(root.path().join("actions/first.glu"), action("first")).unwrap();
+        fs::write(root.path().join("actions/second.glu"), action("second")).unwrap();
+        fs::write(
+            root.path().join("policy.glu"),
+            r#"let policy = import! boulder.policy.v1
+policy.policy [
+    policy.layer "foundation" [
+        policy.add (policy.actions "build" "actions/first.glu"),
+    ],
+    policy.layer "repository-overrides" [
+        policy.modify (policy.actions "build" "actions/second.glu"),
+    ],
+]
+"#,
+        )
+        .unwrap();
+
+        let macros = Macros::load_from(root.path()).unwrap();
+
+        assert_eq!(macros.provenance[0].layer_name, "foundation");
+        assert_eq!(macros.provenance[0].layer_order, 0);
+        assert_eq!(macros.provenance[0].entry_order, 0);
+        assert_eq!(macros.provenance[1].layer_name, "repository-overrides");
+        assert_eq!(macros.provenance[1].layer_order, 1);
+        assert_eq!(macros.provenance[1].entry_order, 0);
+        assert_eq!(macros.provenance[1].origin, "actions/second.glu");
+
+        fs::write(
+            root.path().join("policy.glu"),
+            r#"let policy = import! boulder.policy.v1
+policy.policy [
+    policy.layer "same" [],
+    policy.layer "same" [],
+]
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            Macros::load_from(root.path()),
+            Err(Error::DuplicateLayerName { ref name }) if name == "same"
+        ));
+    }
+
+    #[test]
     fn repository_macro_modules_all_evaluate() {
         let macros = Macros::repository_for_tests();
 
@@ -515,6 +595,16 @@ policy.policy [
                 || !macros.packages.is_empty()
         }));
         assert_eq!(macros.provenance.len(), 22);
+        assert!(
+            macros.provenance[..14]
+                .iter()
+                .all(|change| change.layer_name == "actions" && change.layer_order == 0)
+        );
+        assert!(
+            macros.provenance[14..]
+                .iter()
+                .all(|change| change.layer_name == "architectures" && change.layer_order == 1)
+        );
         assert_eq!(macros.selection("x86_64").changes.len(), 16);
         assert_eq!(macros.selection("x86_64").fingerprint, macros.fingerprint);
     }
@@ -530,7 +620,7 @@ policy.policy [
             .map(|action| &action.value)
             .unwrap();
 
-        // Exact policy carried by actions/meson.yaml at the planning baseline
+        // Exact Meson policy captured at the planning baseline
         // (80d7ac5), now decoded from the migrated repository Gluon module.
         assert_eq!(
             meson.command,

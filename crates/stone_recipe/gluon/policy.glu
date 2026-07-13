@@ -26,6 +26,11 @@ type PolicyEntry = {
     origin: String,
 }
 
+type PolicyLayer = {
+    name: String,
+    entries: Array PolicyEntry,
+}
+
 let value = \kind key origin -> {
     kind,
     key,
@@ -41,7 +46,8 @@ let with_operation = \operation candidate -> {
 
 {
     abi_version = 1,
-    policy = \entries -> entries,
+    policy = \layers -> layers,
+    layer = \name entries -> { name, entries },
     actions = value Actions,
     architecture = value Architecture,
     add = with_operation Add,

@@ -7,7 +7,7 @@ use std::{error::Error, fmt, fmt::Write as _};
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 
-use super::{Action, ActionSpec, Macros, MacrosSpec, PolicyKind, PolicyModule, PolicyOperation};
+use super::{Action, ActionSpec, Macros, MacrosSpec, PolicyKind, PolicyLayer, PolicyModule, PolicyOperation};
 use crate::{
     Package, PackageSpec, PathKind, PathSpec, ValidationError,
     spec::KeyValueSpec,
@@ -133,7 +133,7 @@ pub struct EvaluatedMacros {
 /// Ordered policy operations and the complete provenance of their root.
 #[derive(Debug, Clone)]
 pub struct EvaluatedPolicy {
-    pub modules: Vec<PolicyModule>,
+    pub layers: Vec<PolicyLayer>,
     pub fingerprint: EvaluationFingerprint,
 }
 
@@ -278,6 +278,12 @@ struct GluonPolicyModule {
     kind: GluonPolicyKind,
     key: String,
     origin: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonPolicyLayer {
+    name: String,
+    entries: Vec<GluonPolicyModule>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -669,20 +675,27 @@ pub fn evaluate_policy_gluon_with_inputs(
     import_policy.insert_embedded_module("boulder.macros.v1", GLUON_MACROS_ABI)?;
     import_policy.insert_embedded_module("boulder.policy.v1", GLUON_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<Vec<GluonPolicyModule>>(source, explicit_inputs)?;
-    let mut modules = Vec::with_capacity(evaluation.value.len());
-
-    for module in evaluation.value {
-        modules.push(PolicyModule {
-            operation: module.operation.into(),
-            kind: module.kind.into(),
-            key: module.key,
-            origin: module.origin,
-        });
-    }
+    let evaluation = evaluator.evaluate_with_inputs::<Vec<GluonPolicyLayer>>(source, explicit_inputs)?;
+    let layers = evaluation
+        .value
+        .into_iter()
+        .map(|layer| PolicyLayer {
+            name: layer.name,
+            entries: layer
+                .entries
+                .into_iter()
+                .map(|module| PolicyModule {
+                    operation: module.operation.into(),
+                    kind: module.kind.into(),
+                    key: module.key,
+                    origin: module.origin,
+                })
+                .collect(),
+        })
+        .collect();
 
     Ok(EvaluatedPolicy {
-        modules,
+        layers,
         fingerprint: evaluation.fingerprint,
     })
 }
@@ -948,6 +961,34 @@ mod tests {
 
         assert_eq!(evaluated.macros.actions[0].value.command, "cmake -B build");
         assert_eq!(evaluated.macros.actions[0].value.dependencies, ["cmake", "ninja"]);
+    }
+
+    #[test]
+    fn policy_abi_preserves_named_layer_and_entry_order() {
+        let source = Source::new(
+            "policy.glu",
+            r#"let policy = import! boulder.policy.v1
+policy.policy [
+    policy.layer "foundation" [
+        policy.add (policy.actions "build" "actions/build.glu"),
+    ],
+    policy.layer "overrides" [
+        policy.modify (policy.actions "build" "actions/override.glu"),
+        policy.add (policy.architecture "x86_64" "arch/x86_64.glu"),
+    ],
+]
+"#,
+        );
+
+        let evaluated = evaluate_policy_gluon_with(&Evaluator::default(), &source).unwrap();
+
+        assert_eq!(evaluated.layers.len(), 2);
+        assert_eq!(evaluated.layers[0].name, "foundation");
+        assert_eq!(evaluated.layers[0].entries[0].origin, "actions/build.glu");
+        assert_eq!(evaluated.layers[1].name, "overrides");
+        assert_eq!(evaluated.layers[1].entries.len(), 2);
+        assert_eq!(evaluated.layers[1].entries[0].operation, PolicyOperation::Modify);
+        assert_eq!(evaluated.layers[1].entries[1].kind, PolicyKind::Architecture);
     }
 
     #[test]
