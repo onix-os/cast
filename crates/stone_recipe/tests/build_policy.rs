@@ -92,6 +92,93 @@ fn duplicate_targets_are_rejected_semantically() {
 }
 
 #[test]
+fn active_target_catalog_must_not_be_empty() {
+    let mut policy = repository_policy_value();
+    policy.targets.clear();
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Empty { field }) if field == "targets"
+    ));
+}
+
+#[test]
+fn target_names_accept_normalized_safe_relative_build_paths() {
+    for name in ["x86_64", "x86_64-v3x", "emul32/x86_64", "tier/.hidden"] {
+        let mut policy = repository_policy_value();
+        policy.targets.truncate(1);
+        policy.targets[0].name = name.to_owned();
+
+        policy
+            .validate()
+            .unwrap_or_else(|error| panic!("target name `{name}` was rejected: {error}"));
+    }
+}
+
+#[test]
+fn target_names_reject_unsafe_or_non_normalized_paths() {
+    for name in [
+        "",
+        "/x86_64",
+        "//x86_64",
+        "emul32//x86_64",
+        "emul32/",
+        "./x86_64",
+        "emul32/./x86_64",
+        ".",
+        "../x86_64",
+        "emul32/../x86_64",
+        "..",
+    ] {
+        let mut policy = repository_policy_value();
+        policy.targets.truncate(1);
+        policy.targets[0].name = name.to_owned();
+
+        assert!(
+            matches!(
+                policy.validate(),
+                Err(BuildPolicyConversionError::InvalidTargetName { field, value })
+                    if field == "targets[0].name" && value == name
+            ),
+            "target name `{name}` was not rejected as an invalid target path"
+        );
+    }
+}
+
+#[test]
+fn retired_target_names_obey_the_same_path_invariant() {
+    let mut policy = repository_policy_value();
+    policy.retired_targets[0].name = "retired/../active".to_owned();
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::InvalidTargetName { field, value })
+            if field == "retired_targets[0].name" && value == "retired/../active"
+    ));
+}
+
+#[test]
+fn retired_and_active_target_names_share_one_unique_namespace() {
+    let mut policy = repository_policy_value();
+    policy.retired_targets[0].name = policy.targets[0].name.clone();
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "targets" && value == "x86_64"
+    ));
+
+    let mut policy = repository_policy_value();
+    policy.retired_targets.push(policy.retired_targets[0].clone());
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "targets" && value == "x86_64-stage1"
+    ));
+}
+
+#[test]
 fn general_tuning_catalog_preserves_all_names_choices_and_defaults() {
     let policy = repository_policy_value();
     let tuning = policy.tuning;

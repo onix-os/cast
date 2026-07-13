@@ -603,6 +603,8 @@ pub enum BuildPolicyConversionError {
     ConflictingTuningFlag { field: String, value: String },
     #[error("{field}: guest path `{value}` must be absolute and normalized")]
     InvalidGuestPath { field: String, value: String },
+    #[error("{field}: target name `{value}` must be a normalized safe relative path")]
+    InvalidTargetName { field: String, value: String },
     #[error("{field}: guest path `{value}` is outside `{guest_root}`")]
     GuestPathOutsideRoot {
         field: String,
@@ -629,10 +631,15 @@ impl BuildPolicySpec {
         validate_tools_record("toolchains.llvm", &self.toolchains.llvm)?;
         validate_tools_record("toolchains.gnu", &self.toolchains.gnu)?;
 
+        if self.targets.is_empty() {
+            return Err(BuildPolicyConversionError::Empty {
+                field: "targets".to_owned(),
+            });
+        }
         let mut targets = BTreeSet::new();
         for (index, target) in self.targets.iter().enumerate() {
             let field = format!("targets[{index}]");
-            require_string(&format!("{field}.name"), &target.name)?;
+            validate_target_name(&format!("{field}.name"), &target.name)?;
             require_string(&format!("{field}.target_triple"), &target.target_triple)?;
             require_string(&format!("{field}.build_triple"), &target.build_triple)?;
             require_string(&format!("{field}.host_triple"), &target.host_triple)?;
@@ -647,7 +654,7 @@ impl BuildPolicySpec {
         }
         for (index, target) in self.retired_targets.iter().enumerate() {
             let field = format!("retired_targets[{index}]");
-            require_string(&format!("{field}.name"), &target.name)?;
+            validate_target_name(&format!("{field}.name"), &target.name)?;
             require_string(&format!("{field}.reason"), &target.reason)?;
             if !targets.insert(target.name.as_str()) {
                 return Err(BuildPolicyConversionError::Duplicate {
@@ -687,6 +694,25 @@ impl BuildPolicySpec {
         validate_pgo_stage("pgo.stage_one", &self.pgo.stage_one)?;
         validate_pgo_stage("pgo.stage_two", &self.pgo.stage_two)?;
         validate_pgo_stage("pgo.use_profile", &self.pgo.use_profile)
+    }
+}
+
+fn validate_target_name(field: &str, value: &str) -> Result<(), BuildPolicyConversionError> {
+    let path = Path::new(value);
+    let normalized = !path.is_absolute()
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)));
+    if normalized {
+        Ok(())
+    } else {
+        Err(BuildPolicyConversionError::InvalidTargetName {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
     }
 }
 

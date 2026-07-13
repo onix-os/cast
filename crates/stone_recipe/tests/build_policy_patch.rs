@@ -129,10 +129,14 @@ b.policy_patch {
     assert!(matches!(evaluated.patch.layout, ValuePatch::Keep));
     assert!(matches!(evaluated.patch.build_root, ValuePatch::Keep));
 
-    let policy = evaluated.patch.apply_validated(repository_policy()).unwrap();
+    let policy = evaluated.patch.clone().apply(repository_policy());
     assert!(policy.targets.is_empty());
     assert_eq!(policy.retired_targets[0].name, "removed-test");
     assert_eq!(policy.environment.last().unwrap().name, "PATCHED");
+    assert!(matches!(
+        evaluated.patch.apply_validated(repository_policy()),
+        Err(BuildPolicyConversionError::Empty { field }) if field == "targets"
+    ));
 }
 
 #[test]
