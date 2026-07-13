@@ -3,8 +3,8 @@
 
 use gluon_config::Source;
 use stone_recipe::build_policy::{
-    BuildPolicyConversionError, BuildToolSpec, ContextValue, TargetEmulationSpec, TextSpec, evaluate_gluon,
-    evaluate_gluon_with_inputs,
+    BuildPolicyConversionError, BuildToolSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
+    TargetEmulationSpec, TextSpec, evaluate_gluon, evaluate_gluon_with_inputs,
 };
 
 fn repository_policy() -> Source {
@@ -16,6 +16,10 @@ fn repository_policy() -> Source {
 
 fn repository_policy_value() -> stone_recipe::build_policy::BuildPolicySpec {
     evaluate_gluon(&repository_policy()).unwrap().policy
+}
+
+fn environment_binding<'a>(bindings: &'a [EnvironmentBindingSpec], name: &str) -> &'a EnvironmentBindingSpec {
+    bindings.iter().find(|binding| binding.name == name).unwrap()
 }
 
 #[test]
@@ -562,6 +566,113 @@ fn repository_targets_separate_execution_artifact_and_lock_platforms() {
     assert_eq!(policy.retired_targets.len(), 1);
     assert_eq!(policy.retired_targets[0].name, "x86_64-stage1");
     assert!(policy.retired_targets[0].reason.contains("unreachable"));
+}
+
+#[test]
+fn repository_environment_preserves_base_and_target_specific_values() {
+    let policy = repository_policy_value();
+
+    let expected_normal_pkg_config_path = TextSpec::Concat(vec![
+        TextSpec::Context(ContextValue::LibDir),
+        TextSpec::Literal("/pkgconfig:/usr/share/pkgconfig".to_owned()),
+    ]);
+    for target_name in ["x86_64", "x86_64-v3x", "x86", "aarch64", "riscv64"] {
+        let target = policy.targets.iter().find(|target| target.name == target_name).unwrap();
+        assert_eq!(
+            environment_binding(&target.environment, "PKG_CONFIG_PATH").value,
+            expected_normal_pkg_config_path
+        );
+    }
+
+    let x86_64 = policy.targets.iter().find(|target| target.name == "x86_64").unwrap();
+    assert_eq!(
+        environment_binding(&x86_64.environment, "GOAMD64").value,
+        TextSpec::Literal("v2".to_owned())
+    );
+    let x86_64_v3x = policy
+        .targets
+        .iter()
+        .find(|target| target.name == "x86_64-v3x")
+        .unwrap();
+    assert_eq!(
+        environment_binding(&x86_64_v3x.environment, "GOAMD64").value,
+        TextSpec::Literal("v3".to_owned())
+    );
+
+    let x86 = policy.targets.iter().find(|target| target.name == "x86").unwrap();
+    assert!(!x86.environment.iter().any(|binding| binding.name == "GOAMD64"));
+    let emul32 = policy
+        .targets
+        .iter()
+        .find(|target| target.name == "emul32/x86_64")
+        .unwrap();
+    assert_eq!(
+        environment_binding(&emul32.environment, "PKG_CONFIG_PATH").value,
+        TextSpec::Literal("/usr/lib32/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig".to_owned())
+    );
+    assert_eq!(
+        environment_binding(&emul32.environment, "GOAMD64").value,
+        TextSpec::Literal("v2".to_owned())
+    );
+
+    for target in [x86, emul32] {
+        for (name, context) in [
+            ("CC", ContextValue::Cc),
+            ("CXX", ContextValue::Cxx),
+            ("CPP", ContextValue::Cpp),
+        ] {
+            assert_eq!(
+                environment_binding(&target.environment, name).value,
+                TextSpec::Concat(vec![TextSpec::Context(context), TextSpec::Literal(" -m32".to_owned()),])
+            );
+        }
+    }
+
+    assert!(
+        !policy
+            .environment
+            .iter()
+            .any(|binding| binding.name == "PKG_CONFIG_PATH")
+    );
+    for (name, context) in [
+        ("CGO_CFLAGS", ContextValue::CFlags),
+        ("CGO_CXXFLAGS", ContextValue::CxxFlags),
+    ] {
+        let binding = environment_binding(&policy.environment, name);
+        assert_eq!(binding.condition, EnvironmentCondition::Always);
+        assert_eq!(binding.value, TextSpec::Context(context));
+    }
+    assert_eq!(
+        environment_binding(&policy.environment, "CGO_LDFLAGS").value,
+        TextSpec::Concat(vec![
+            TextSpec::Context(ContextValue::LdFlags),
+            TextSpec::Literal(" -Wl,--no-gc-sections".to_owned()),
+        ])
+    );
+    assert_eq!(
+        environment_binding(&policy.environment, "NINJA_STATUS").value,
+        TextSpec::Literal("[%f/%t %es (%P)] ".to_owned())
+    );
+}
+
+#[test]
+fn target_environment_bindings_are_validated_at_the_target_path() {
+    let mut policy = repository_policy_value();
+    let duplicate = policy.targets[0].environment[0].clone();
+    policy.targets[0].environment.push(duplicate);
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "targets[0].environment" && value == "PKG_CONFIG_PATH"
+    ));
+
+    let mut policy = repository_policy_value();
+    policy.targets[0].environment[0].value = TextSpec::Literal(String::new());
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Empty { field })
+            if field == "targets[0].environment[0].value"
+    ));
 }
 
 #[test]

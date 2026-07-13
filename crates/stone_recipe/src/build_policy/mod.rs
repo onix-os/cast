@@ -246,6 +246,7 @@ pub struct TargetPolicySpec {
     pub host_platform: PlatformPolicySpec,
     pub target_platform: PlatformPolicySpec,
     pub architecture_flags: ToolchainFlagsSpec,
+    pub environment: Vec<EnvironmentBindingSpec>,
 }
 
 /// A legacy target which must remain visible to policy consumers without
@@ -556,6 +557,7 @@ fn validate_target(field: &str, target: &TargetPolicySpec) -> Result<(), BuildPo
     validate_platform(&format!("{field}.host_platform"), &target.host_platform)?;
     validate_platform(&format!("{field}.target_platform"), &target.target_platform)?;
     validate_toolchain_flags(&format!("{field}.architecture_flags"), &target.architecture_flags)?;
+    validate_bindings(&format!("{field}.environment"), &target.environment)?;
 
     require_architecture(
         &format!("{field}.host_platform.architecture"),

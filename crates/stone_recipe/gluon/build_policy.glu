@@ -163,6 +163,17 @@ type TargetEmulationSpec =
     | Native
     | Emul32 { host_architecture : String }
 
+type EnvironmentCondition =
+    | Always
+    | CompilerCacheEnabled
+    | CompilerCacheDisabled
+
+type EnvironmentBindingSpec = {
+    name : String,
+    value : TextSpec,
+    condition : EnvironmentCondition,
+}
+
 type TargetPolicySpec = {
     name : String,
     target_triple : String,
@@ -175,22 +186,12 @@ type TargetPolicySpec = {
     host_platform : PlatformPolicySpec,
     target_platform : PlatformPolicySpec,
     architecture_flags : ToolchainFlagsSpec,
+    environment : Array EnvironmentBindingSpec,
 }
 
 type RetiredTargetPolicySpec = {
     name : String,
     reason : String,
-}
-
-type EnvironmentCondition =
-    | Always
-    | CompilerCacheEnabled
-    | CompilerCacheDisabled
-
-type EnvironmentBindingSpec = {
-    name : String,
-    value : TextSpec,
-    condition : EnvironmentCondition,
 }
 
 type BuildToolSpec =

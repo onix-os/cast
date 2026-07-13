@@ -117,7 +117,7 @@ let platform = \architecture -> {
 }
 
 let target =
-    \name target_triple build_triple host_triple lib_suffix artifact_architecture emulation build_architecture architecture_flags ->
+    \name target_triple build_triple host_triple lib_suffix artifact_architecture emulation build_architecture architecture_flags environment ->
     p.target {
     name,
     target_triple,
@@ -130,7 +130,42 @@ let target =
     host_platform = platform artifact_architecture,
     target_platform = platform artifact_architecture,
     architecture_flags,
+    environment,
 }
+
+let normal_pkg_config_path =
+    p.env.always "PKG_CONFIG_PATH" (cat [ctx c.libdir, lit "/pkgconfig:/usr/share/pkgconfig"])
+
+let normal_target_environment = [normal_pkg_config_path]
+
+let x86_64_environment = [
+    normal_pkg_config_path,
+    p.env.always "GOAMD64" (lit "v2"),
+]
+
+let x86_64_v3x_environment = [
+    normal_pkg_config_path,
+    p.env.always "GOAMD64" (lit "v3"),
+]
+
+let m32_cc = p.env.always "CC" (cat [ctx c.cc, lit " -m32"])
+let m32_cxx = p.env.always "CXX" (cat [ctx c.cxx, lit " -m32"])
+let m32_cpp = p.env.always "CPP" (cat [ctx c.cpp, lit " -m32"])
+
+let x86_environment = [
+    normal_pkg_config_path,
+    m32_cc,
+    m32_cxx,
+    m32_cpp,
+]
+
+let emul32_x86_64_environment = [
+    p.env.always "PKG_CONFIG_PATH" (lit "/usr/lib32/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"),
+    p.env.always "GOAMD64" (lit "v2"),
+    m32_cc,
+    m32_cxx,
+    m32_cpp,
+]
 
 let x86_64_flags = {
     c = [lit "-march=x86-64-v2", lit "-mtune=ivybridge"],
@@ -319,6 +354,7 @@ let environment = [
     p.env.always "TERM" (lit "dumb"),
     p.env.always "LANG" (lit "en_US.UTF-8"),
     p.env.always "LC_ALL" (lit "en_US.UTF-8"),
+    p.env.always "NINJA_STATUS" (lit "[%f/%t %es (%P)] "),
     p.env.with_compiler_cache "PATH" (ctx c.compiler_path),
     p.env.without_compiler_cache "PATH" (lit "/usr/bin:/bin"),
     p.env.always "BOULDER_PREFIX" (ctx c.prefix),
@@ -327,15 +363,17 @@ let environment = [
     p.env.always "BOULDER_LIBEXECDIR" (ctx c.libexecdir),
     p.env.always "BOULDER_DATADIR" (ctx c.datadir),
     p.env.always "BOULDER_VENDORDIR" (ctx c.vendordir),
-    p.env.always "PKG_CONFIG_PATH" (cat [ctx c.libdir, lit "/pkgconfig:/usr/share/pkgconfig"]),
     p.env.always "CFLAGS" (ctx c.cflags),
+    p.env.always "CGO_CFLAGS" (ctx c.cflags),
     p.env.always "CXXFLAGS" (ctx c.cxxflags),
+    p.env.always "CGO_CXXFLAGS" (ctx c.cxxflags),
     p.env.always "FFLAGS" (ctx c.fflags),
     p.env.always "DFLAGS" (ctx c.dflags),
     p.env.always "RUSTFLAGS" (ctx c.rustflags),
     p.env.always "VALAFLAGS" (ctx c.valaflags),
     p.env.always "GOFLAGS" (ctx c.goflags),
     p.env.always "LDFLAGS" (ctx c.ldflags),
+    p.env.always "CGO_LDFLAGS" (cat [ctx c.ldflags, lit " -Wl,--no-gc-sections"]),
     p.env.always "CC" (ctx c.cc),
     p.env.always "CXX" (ctx c.cxx),
     p.env.always "OBJC" (ctx c.objc),
@@ -2254,12 +2292,12 @@ p.policy {
         gnu = gnu_tools,
     },
     targets = [
-        target "x86_64" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" "x86_64" p.target_emulation.native "x86_64" (common_architecture_flags x86_64_flags),
-        target "x86_64-v3x" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" "x86_64" p.target_emulation.native "x86_64" (common_architecture_flags x86_64_v3x_flags),
-        target "x86" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" "x86" p.target_emulation.native "x86" (common_architecture_flags x86_flags),
-        target "emul32/x86_64" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" "x86" (p.target_emulation.emul32 "x86_64") "x86_64" (common_architecture_flags x86_flags),
-        target "aarch64" "aarch64-unknown-linux-gnu" "aarch64-aerynos-linux" "aarch64-aerynos-linux" "" "aarch64" p.target_emulation.native "aarch64" (llvm_architecture_flags aarch64_architecture_flags),
-        target "riscv64" "riscv64gc-unknown-linux-gnu" "riscv64-aerynos-linux" "riscv64-aerynos-linux" "" "riscv64" p.target_emulation.native "riscv64" (llvm_architecture_flags riscv64_architecture_flags),
+        target "x86_64" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" "x86_64" p.target_emulation.native "x86_64" (common_architecture_flags x86_64_flags) x86_64_environment,
+        target "x86_64-v3x" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" "x86_64" p.target_emulation.native "x86_64" (common_architecture_flags x86_64_v3x_flags) x86_64_v3x_environment,
+        target "x86" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" "x86" p.target_emulation.native "x86" (common_architecture_flags x86_flags) x86_environment,
+        target "emul32/x86_64" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" "x86" (p.target_emulation.emul32 "x86_64") "x86_64" (common_architecture_flags x86_flags) emul32_x86_64_environment,
+        target "aarch64" "aarch64-unknown-linux-gnu" "aarch64-aerynos-linux" "aarch64-aerynos-linux" "" "aarch64" p.target_emulation.native "aarch64" (llvm_architecture_flags aarch64_architecture_flags) normal_target_environment,
+        target "riscv64" "riscv64gc-unknown-linux-gnu" "riscv64-aerynos-linux" "riscv64-aerynos-linux" "" "riscv64" p.target_emulation.native "riscv64" (llvm_architecture_flags riscv64_architecture_flags) normal_target_environment,
     ],
     retired_targets = [
         p.retired_target {

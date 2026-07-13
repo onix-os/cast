@@ -236,6 +236,7 @@ struct GluonTargetPolicySpec {
     host_platform: GluonPlatformPolicySpec,
     target_platform: GluonPlatformPolicySpec,
     architecture_flags: GluonToolchainFlagsSpec,
+    environment: Vec<GluonEnvironmentBindingSpec>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -606,10 +607,24 @@ convert_record!(GluonToolchainsSpec => ToolchainsSpec { llvm, gnu });
 convert_record!(GluonPlatformPolicySpec => PlatformPolicySpec {
     architecture, vendor, operating_system, abi,
 });
-convert_record!(GluonTargetPolicySpec => TargetPolicySpec {
-    name, target_triple, build_triple, host_triple, lib_suffix, artifact_architecture, emulation,
-    build_platform, host_platform, target_platform, architecture_flags,
-});
+impl From<GluonTargetPolicySpec> for TargetPolicySpec {
+    fn from(value: GluonTargetPolicySpec) -> Self {
+        Self {
+            name: value.name,
+            target_triple: value.target_triple,
+            build_triple: value.build_triple,
+            host_triple: value.host_triple,
+            lib_suffix: value.lib_suffix,
+            artifact_architecture: value.artifact_architecture,
+            emulation: value.emulation.into(),
+            build_platform: value.build_platform.into(),
+            host_platform: value.host_platform.into(),
+            target_platform: value.target_platform.into(),
+            architecture_flags: value.architecture_flags.into(),
+            environment: value.environment.into_iter().map(Into::into).collect(),
+        }
+    }
+}
 convert_record!(GluonRetiredTargetPolicySpec => RetiredTargetPolicySpec { name, reason });
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
 convert_record!(GluonSandboxPolicySpec => SandboxPolicySpec {
