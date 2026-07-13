@@ -38,6 +38,7 @@ get-started: boulder moss licenses
 	rm -rf "$(DATA_DIR)/boulder"; \
 	install -d "$(DATA_DIR)/boulder/licenses" "$(CONFIG_DIR)/boulder"; \
 	cp -R "$(TOP_DIR)/bin/boulder/data/macros" "$(DATA_DIR)/boulder/"; \
+	cp -R "$(TOP_DIR)/bin/boulder/data/policy" "$(DATA_DIR)/boulder/"; \
 	cp "$(LICENSE_DIR)/text/"* "$(DATA_DIR)/boulder/licenses/"; \
 	cp -R "$(TOP_DIR)/bin/boulder/data/profile.d" "$(CONFIG_DIR)/boulder/"; \
 	echo; \
