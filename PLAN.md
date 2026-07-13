@@ -496,7 +496,7 @@ rejecting `N + 1`.
   and repository-entry policy to Git mirrors, fetches, and checkouts.
 - [x] Load, save, and delete Gluon configuration fragments through
   descriptor-anchored, size/count-bounded, race-resistant operations.
-- [ ] Bound build-policy collections and recursive `TextSpec` expansion before
+- [x] Bound build-policy collections and recursive `TextSpec` expansion before
   and after every policy patch.
 - [x] Bound Stone payload counts, records, declared and expanded sizes,
   malformed lengths, content streaming, and aggregate archive consumption.
