@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::collections::BTreeSet;
 use std::{io, path::PathBuf};
 
 use fs_err as fs;
@@ -9,8 +8,11 @@ use moss::{Installation, package, repository, util};
 use stone_recipe::{
     ToolchainSpec,
     build_policy::{AnalyzerKind, BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
-    derivation::{BuildLock, DerivationPlan, LockedPackage, RelationPlan, RepositorySnapshot, StepPlan},
-    package::PackageSpec,
+    derivation::{
+        AnalyzerRole, BuildLock, DerivationPlan, InputOrigin, JobExecutableRole, JobStepSection, LockedPackage,
+        PackageInputSelection, RelationPlan, RepositorySnapshot, StepPlan,
+    },
+    package::{DependencySpec, PackageSpec},
 };
 use thiserror::Error;
 
@@ -188,105 +190,245 @@ fn locked_metadata_matches(locked: &LockedPackage, package: &moss::Package) -> b
         && package.meta.architecture == locked.architecture
 }
 
-pub(crate) fn packages(builder: &Builder) -> Result<Vec<String>, Error> {
-    let mut packages = packages_for(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnresolvedInput {
+    pub request: String,
+    pub origin: InputOrigin,
+}
+
+pub(crate) fn inputs(builder: &Builder) -> Result<Vec<UnresolvedInput>, Error> {
+    let mut inputs = inputs_for(
         &builder.target.build_policy.spec,
+        &builder.target.build_policy.provenance.root.root_logical_name,
         &builder.recipe.declaration,
         builder.recipe.build_target_profile_key(&builder.target.target_policy),
         &builder.target.target_policy,
         builder.ccache,
     )?;
-    extend_job_executables(&mut packages, &builder.target.jobs);
-    Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
+    extend_job_executables(&mut inputs, &builder.target.jobs)?;
+    Ok(inputs)
 }
 
-fn packages_for(
+fn inputs_for(
     policy: &BuildPolicySpec,
+    policy_source: &str,
     package: &PackageSpec,
     profile: Option<&str>,
     target: &TargetPolicySpec,
     compiler_cache: bool,
-) -> Result<Vec<String>, Error> {
-    let mut packages = Vec::new();
-    extend_policy_tools(&mut packages, "build_root.base", &policy.build_root.base)?;
+) -> Result<Vec<UnresolvedInput>, Error> {
+    let mut inputs = Vec::new();
+    extend_policy_tools(&mut inputs, policy_source, "build_root.base", &policy.build_root.base)?;
 
-    let toolchain_tools = match package.options.toolchain {
-        ToolchainSpec::Llvm => &policy.build_root.toolchains.llvm,
-        ToolchainSpec::Gnu => &policy.build_root.toolchains.gnu,
+    let (toolchain_field, toolchain_tools) = match package.options.toolchain {
+        ToolchainSpec::Llvm => ("build_root.toolchains.llvm", &policy.build_root.toolchains.llvm),
+        ToolchainSpec::Gnu => ("build_root.toolchains.gnu", &policy.build_root.toolchains.gnu),
     };
-    extend_policy_tools(&mut packages, "build_root.toolchains", toolchain_tools)?;
+    extend_policy_tools(&mut inputs, policy_source, toolchain_field, toolchain_tools)?;
 
     if matches!(&target.emulation, TargetEmulationSpec::Emul32 { .. }) {
-        extend_policy_tools(&mut packages, "build_root.emul32.base", &policy.build_root.emul32.base)?;
-        let toolchain_tools = match package.options.toolchain {
-            ToolchainSpec::Llvm => &policy.build_root.emul32.toolchains.llvm,
-            ToolchainSpec::Gnu => &policy.build_root.emul32.toolchains.gnu,
+        extend_policy_tools(
+            &mut inputs,
+            policy_source,
+            "build_root.emul32.base",
+            &policy.build_root.emul32.base,
+        )?;
+        let (toolchain_field, toolchain_tools) = match package.options.toolchain {
+            ToolchainSpec::Llvm => (
+                "build_root.emul32.toolchains.llvm",
+                &policy.build_root.emul32.toolchains.llvm,
+            ),
+            ToolchainSpec::Gnu => (
+                "build_root.emul32.toolchains.gnu",
+                &policy.build_root.emul32.toolchains.gnu,
+            ),
         };
-        extend_policy_tools(&mut packages, "build_root.emul32.toolchains", toolchain_tools)?;
+        extend_policy_tools(&mut inputs, policy_source, toolchain_field, toolchain_tools)?;
     }
 
     if package.mold {
         extend_policy_tools(
-            &mut packages,
+            &mut inputs,
+            policy_source,
             "build_root.mold.required_tools",
             &policy.build_root.mold.required_tools,
         )?;
     }
     if compiler_cache {
         extend_policy_tools(
-            &mut packages,
+            &mut inputs,
+            policy_source,
             "build_root.compiler_cache.required_tools",
             &policy.build_root.compiler_cache.required_tools,
         )?;
     }
 
-    for (field, tool) in selected_analyzer_tools(policy, package).entries() {
-        extend_policy_tools(&mut packages, field, std::slice::from_ref(tool))?;
+    for (role, field, tool) in selected_analyzer_tools(policy, package).entries(&package.options.toolchain) {
+        let request = build_tool_name(tool).map_err(|source| Error::InvalidPolicyInput {
+            field: field.to_owned(),
+            index: 0,
+            source,
+        })?;
+        inputs.push(UnresolvedInput {
+            request: request.clone(),
+            origin: InputOrigin::Policy {
+                source: policy_source.to_owned(),
+                field: field.to_owned(),
+                index: 0,
+            },
+        });
+        inputs.push(UnresolvedInput {
+            request,
+            origin: InputOrigin::Analyzer { role },
+        });
     }
 
-    packages.extend(
-        declared_inputs_for(package, profile)?
-            .into_iter()
-            .map(|relation| relation.canonical_name()),
-    );
-    Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
+    let selection = profile.map_or(PackageInputSelection::Package, |name| PackageInputSelection::Profile {
+        name: name.to_owned(),
+    });
+    extend_declared_inputs(
+        &mut inputs,
+        package.builder_for_profile(profile).required_tools(),
+        "builder.required_tools",
+        |index| InputOrigin::BuilderTool {
+            selection: selection.clone(),
+            index,
+        },
+    )?;
+    extend_declared_inputs(
+        &mut inputs,
+        package.native_build_inputs_for_profile(profile),
+        "native_build_inputs",
+        |index| InputOrigin::NativeBuild {
+            selection: selection.clone(),
+            index,
+        },
+    )?;
+    extend_declared_inputs(
+        &mut inputs,
+        package.build_inputs_for_profile(profile),
+        "build_inputs",
+        |index| InputOrigin::Build {
+            selection: selection.clone(),
+            index,
+        },
+    )?;
+    extend_declared_inputs(
+        &mut inputs,
+        package.check_inputs_for_profile(profile),
+        "check_inputs",
+        |index| InputOrigin::Check {
+            selection: selection.clone(),
+            index,
+        },
+    )?;
+    Ok(inputs)
 }
 
-fn extend_job_executables(packages: &mut Vec<String>, jobs: &[Job]) {
-    for step in jobs
-        .iter()
-        .flat_map(|job| job.phases.values())
-        .flat_map(|phase| phase.pre.iter().chain(&phase.steps).chain(&phase.post))
-    {
-        match step {
-            StepPlan::Run { program, .. } => packages.push(program.requirement.canonical_name()),
-            StepPlan::Shell {
-                interpreter,
-                declared_programs,
-                ..
-            } => {
-                packages.push(interpreter.requirement.canonical_name());
-                packages.extend(
-                    declared_programs
-                        .iter()
-                        .map(|program| program.requirement.canonical_name()),
-                );
+fn extend_job_executables(inputs: &mut Vec<UnresolvedInput>, jobs: &[Job]) -> Result<(), Error> {
+    for (job_index, job) in jobs.iter().enumerate() {
+        let job_index = input_origin_index("jobs", job_index)?;
+        for (phase_index, phase) in job.phases.values().enumerate() {
+            let phase_index = input_origin_index("jobs[].phases", phase_index)?;
+            for (section, steps) in [
+                (JobStepSection::Pre, &phase.pre),
+                (JobStepSection::Steps, &phase.steps),
+                (JobStepSection::Post, &phase.post),
+            ] {
+                for (step_index, step) in steps.iter().enumerate() {
+                    let step_index = input_origin_index("jobs[].phases[].steps", step_index)?;
+                    let origin = |role| InputOrigin::JobExecutable {
+                        job: job_index,
+                        phase: phase_index,
+                        phase_name: phase.name.clone(),
+                        section,
+                        step: step_index,
+                        role,
+                    };
+                    match step {
+                        StepPlan::Run { program, .. } => inputs.push(UnresolvedInput {
+                            request: program.requirement.canonical_name(),
+                            origin: origin(JobExecutableRole::RunProgram),
+                        }),
+                        StepPlan::Shell {
+                            interpreter,
+                            declared_programs,
+                            ..
+                        } => {
+                            inputs.push(UnresolvedInput {
+                                request: interpreter.requirement.canonical_name(),
+                                origin: origin(JobExecutableRole::ShellInterpreter),
+                            });
+                            for (program_index, program) in declared_programs.iter().enumerate() {
+                                inputs.push(UnresolvedInput {
+                                    request: program.requirement.canonical_name(),
+                                    origin: origin(JobExecutableRole::ShellDeclaredProgram {
+                                        index: input_origin_index(
+                                            "jobs[].phases[].steps[].declared_programs",
+                                            program_index,
+                                        )?,
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+    Ok(())
 }
 
-fn extend_policy_tools(packages: &mut Vec<String>, field: &'static str, tools: &[BuildToolSpec]) -> Result<(), Error> {
-    packages.extend(
-        tools
-            .iter()
-            .enumerate()
-            .map(|(index, tool)| {
-                build_tool_name(tool).map_err(|source| Error::InvalidPolicyInput { field, index, source })
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    );
+fn extend_policy_tools(
+    inputs: &mut Vec<UnresolvedInput>,
+    source_name: &str,
+    field: &str,
+    tools: &[BuildToolSpec],
+) -> Result<(), Error> {
+    for (tool_index, tool) in tools.iter().enumerate() {
+        inputs.push(UnresolvedInput {
+            request: build_tool_name(tool).map_err(|source| Error::InvalidPolicyInput {
+                field: field.to_owned(),
+                index: tool_index,
+                source,
+            })?,
+            origin: InputOrigin::Policy {
+                source: source_name.to_owned(),
+                field: field.to_owned(),
+                index: input_origin_index(field, tool_index)?,
+            },
+        });
+    }
     Ok(())
+}
+
+fn extend_declared_inputs(
+    inputs: &mut Vec<UnresolvedInput>,
+    dependencies: &[DependencySpec],
+    field: &str,
+    mut origin: impl FnMut(u32) -> InputOrigin,
+) -> Result<(), Error> {
+    for (dependency_index, dependency) in dependencies.iter().enumerate() {
+        inputs.push(UnresolvedInput {
+            request: dependency
+                .dependency()
+                .map_err(|source| Error::InvalidDeclaredInput {
+                    field: field.to_owned(),
+                    index: dependency_index,
+                    source,
+                })?
+                .to_name(),
+            origin: origin(input_origin_index(field, dependency_index)?),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn input_origin_index(field: &str, index: usize) -> Result<u32, Error> {
+    u32::try_from(index).map_err(|_| Error::InputOriginIndexOverflow {
+        field: field.to_owned(),
+        index,
+    })
 }
 
 fn build_tool_name(tool: &BuildToolSpec) -> Result<String, stone::relation::ParseError> {
@@ -304,13 +446,27 @@ pub(crate) struct SelectedAnalyzerTools<'a> {
 }
 
 impl<'a> SelectedAnalyzerTools<'a> {
-    fn entries(self) -> impl Iterator<Item = (&'static str, &'a BuildToolSpec)> {
+    fn entries(
+        self,
+        toolchain: &ToolchainSpec,
+    ) -> impl Iterator<Item = (AnalyzerRole, &'static str, &'a BuildToolSpec)> {
+        let (objcopy_field, strip_field) = match toolchain {
+            ToolchainSpec::Llvm => (
+                "build_root.analyzer_tools.llvm.objcopy",
+                "build_root.analyzer_tools.llvm.strip",
+            ),
+            ToolchainSpec::Gnu => (
+                "build_root.analyzer_tools.gnu.objcopy",
+                "build_root.analyzer_tools.gnu.strip",
+            ),
+        };
         [
             self.pkg_config
-                .map(|tool| ("build_root.analyzer_tools.pkg_config", tool)),
-            self.python.map(|tool| ("build_root.analyzer_tools.python", tool)),
-            self.objcopy.map(|tool| ("build_root.analyzer_tools.objcopy", tool)),
-            self.strip.map(|tool| ("build_root.analyzer_tools.strip", tool)),
+                .map(|tool| (AnalyzerRole::PkgConfig, "build_root.analyzer_tools.pkg_config", tool)),
+            self.python
+                .map(|tool| (AnalyzerRole::Python, "build_root.analyzer_tools.python", tool)),
+            self.objcopy.map(|tool| (AnalyzerRole::Objcopy, objcopy_field, tool)),
+            self.strip.map(|tool| (AnalyzerRole::Strip, strip_field, tool)),
         ]
         .into_iter()
         .flatten()
@@ -345,19 +501,28 @@ pub(crate) fn declared_inputs(recipe: &crate::Recipe, target: &TargetPolicySpec)
 }
 
 fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<Vec<RelationPlan>, Error> {
-    package
-        .builder_for_profile(profile)
-        .required_tools()
-        .iter()
-        .chain(package.native_build_inputs_for_profile(profile))
-        .chain(package.build_inputs_for_profile(profile))
-        .chain(package.check_inputs_for_profile(profile))
-        .enumerate()
-        .map(|(index, dependency)| {
-            dependency
-                .dependency()
-                .map(RelationPlan::from)
-                .map_err(|source| Error::InvalidDeclaredInput { index, source })
+    let groups = [
+        (
+            "builder.required_tools",
+            package.builder_for_profile(profile).required_tools(),
+        ),
+        ("native_build_inputs", package.native_build_inputs_for_profile(profile)),
+        ("build_inputs", package.build_inputs_for_profile(profile)),
+        ("check_inputs", package.check_inputs_for_profile(profile)),
+    ];
+    groups
+        .into_iter()
+        .flat_map(|(field, dependencies)| {
+            dependencies.iter().enumerate().map(move |(index, dependency)| {
+                dependency
+                    .dependency()
+                    .map(RelationPlan::from)
+                    .map_err(|source| Error::InvalidDeclaredInput {
+                        field: field.to_owned(),
+                        index,
+                        source,
+                    })
+            })
         })
         .collect()
 }
@@ -387,19 +552,22 @@ pub enum Error {
     FrozenSandboxLayoutMismatch,
     #[error("frozen job cleanup path escapes the runtime build directory")]
     UnsafeFrozenJobPath,
-    #[error("selected package input {index} is invalid")]
+    #[error("selected package input {field}[{index}] is invalid")]
     InvalidDeclaredInput {
+        field: String,
         index: usize,
         #[source]
         source: stone::relation::ParseError,
     },
     #[error("build-policy input {field}[{index}] is invalid")]
     InvalidPolicyInput {
-        field: &'static str,
+        field: String,
         index: usize,
         #[source]
         source: stone::relation::ParseError,
     },
+    #[error("typed input origin {field}[{index}] exceeds the build-lock schema's 32-bit position range")]
+    InputOriginIndexOverflow { field: String, index: usize },
 }
 
 #[cfg(test)]
@@ -412,6 +580,18 @@ mod tests {
     use stone_recipe::derivation::{LockedOutput, LockedOutputRef};
 
     use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn input_origin_positions_fail_closed_above_the_lock_schema_range() {
+        let overflow = usize::try_from(u64::from(u32::MAX) + 1).unwrap();
+        let error = input_origin_index("inputs", overflow).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InputOriginIndexOverflow { field, index }
+                if field == "inputs" && index == overflow
+        ));
+    }
 
     fn package() -> moss::Package {
         moss::Package {
@@ -568,7 +748,11 @@ let base = b.mk_package (b.meta {
             .unwrap()
             .clone();
 
-        let packages = packages_for(&policy, &package, None, &target, true).unwrap();
+        let inputs = inputs_for(&policy, "policy.glu", &package, None, &target, true).unwrap();
+        let packages = inputs
+            .iter()
+            .map(|input| input.request.clone())
+            .collect::<BTreeSet<_>>();
         let expected = [
             "base-build",
             "base-check",
@@ -589,7 +773,74 @@ let base = b.mk_package (b.meta {
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
 
-        assert_eq!(packages.into_iter().collect::<BTreeSet<_>>(), expected);
+        assert_eq!(packages, expected);
+        for (request, origin) in [
+            (
+                "policy-base",
+                InputOrigin::Policy {
+                    source: "policy.glu".to_owned(),
+                    field: "build_root.base".to_owned(),
+                    index: 0,
+                },
+            ),
+            (
+                "binary(policy-gnu)",
+                InputOrigin::Policy {
+                    source: "policy.glu".to_owned(),
+                    field: "build_root.toolchains.gnu".to_owned(),
+                    index: 0,
+                },
+            ),
+            (
+                "binary(ninja)",
+                InputOrigin::BuilderTool {
+                    selection: PackageInputSelection::Package,
+                    index: 0,
+                },
+            ),
+            (
+                "base-native",
+                InputOrigin::NativeBuild {
+                    selection: PackageInputSelection::Package,
+                    index: 0,
+                },
+            ),
+            (
+                "base-build",
+                InputOrigin::Build {
+                    selection: PackageInputSelection::Package,
+                    index: 0,
+                },
+            ),
+            (
+                "base-check",
+                InputOrigin::Check {
+                    selection: PackageInputSelection::Package,
+                    index: 0,
+                },
+            ),
+            (
+                "binary(objcopy)",
+                InputOrigin::Policy {
+                    source: "policy.glu".to_owned(),
+                    field: "build_root.analyzer_tools.gnu.objcopy".to_owned(),
+                    index: 0,
+                },
+            ),
+            (
+                "binary(objcopy)",
+                InputOrigin::Analyzer {
+                    role: AnalyzerRole::Objcopy,
+                },
+            ),
+        ] {
+            assert!(
+                inputs
+                    .iter()
+                    .any(|input| input.request == request && input.origin == origin),
+                "missing {request:?} origin {origin:?}"
+            );
+        }
     }
 
     #[test]
@@ -687,14 +938,43 @@ let base = b.mk_package (b.meta {
         }];
 
         let mut requested = Vec::new();
-        extend_job_executables(&mut requested, &jobs);
+        extend_job_executables(&mut requested, &jobs).unwrap();
         assert_eq!(
-            requested.into_iter().collect::<BTreeSet<_>>(),
+            requested
+                .iter()
+                .map(|input| input.request.clone())
+                .collect::<BTreeSet<_>>(),
             ["binary(bash)", "binary(profdata)", "binary(remove)"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect()
         );
+        for (request, section, role) in [
+            ("binary(remove)", JobStepSection::Pre, JobExecutableRole::RunProgram),
+            (
+                "binary(bash)",
+                JobStepSection::Steps,
+                JobExecutableRole::ShellInterpreter,
+            ),
+            (
+                "binary(profdata)",
+                JobStepSection::Steps,
+                JobExecutableRole::ShellDeclaredProgram { index: 0 },
+            ),
+        ] {
+            assert!(requested.iter().any(|input| {
+                input.request == request
+                    && input.origin
+                        == InputOrigin::JobExecutable {
+                            job: 0,
+                            phase: 0,
+                            phase_name: "workload".to_owned(),
+                            section,
+                            step: 0,
+                            role: role.clone(),
+                        }
+            }));
+        }
     }
 
     #[test]

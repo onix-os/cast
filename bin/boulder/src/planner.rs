@@ -15,9 +15,10 @@ use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
     DerivationProvenance, DerivationValidationError, ExecutablePlan, ExecutionCredentials, ExecutionPolicy,
-    FilesystemPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
-    LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan, RepositorySnapshot,
-    RootMaterializationMode, StepPlan, profile_aggregate_fingerprint,
+    FilesystemPolicy, InputOrigin, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage,
+    LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan,
+    RepositorySnapshot, RequestedInput, RootMaterializationMode, StepPlan, profile_aggregate_fingerprint,
+    requested_inputs_digest,
 };
 use stone_recipe::{
     build_policy::{BuildPolicySpec, BuildToolSpec},
@@ -86,19 +87,25 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     let target_name = &target_policy.name;
 
     let packager = Packager::new(&builder.paths, &builder.recipe)?;
-    let package_names = packager.resolved_packages().keys().cloned().collect::<Vec<_>>();
-    let mut requested_packages = build::root::packages(&builder)?;
-    for package in packager.resolved_packages().values() {
-        requested_packages.extend(
-            package
-                .runtime_inputs
-                .iter()
-                .map(|dependency| dependency.to_name())
-                .filter(|dependency| !package_names.contains(dependency)),
-        );
+    let package_names = packager.resolved_packages().keys().cloned().collect::<BTreeSet<_>>();
+    let mut unresolved_inputs = build::root::inputs(&builder)?;
+    for (package_name, package) in packager.resolved_packages() {
+        let output = output_name(&builder.recipe.declaration.meta.pname, package_name);
+        for (input_index, dependency) in package.runtime_inputs.iter().enumerate() {
+            let request = dependency.to_name();
+            if package_names.contains(&request) {
+                continue;
+            }
+            unresolved_inputs.push(build::root::UnresolvedInput {
+                request,
+                origin: InputOrigin::OutputRuntime {
+                    output: output.clone(),
+                    index: build::root::input_origin_index("outputs[].runtime_inputs", input_index)?,
+                },
+            });
+        }
     }
-    requested_packages.sort();
-    requested_packages.dedup();
+    let requested_inputs = aggregate_inputs(unresolved_inputs);
 
     let source_lock_bytes = match fs::read(builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME)) {
         Ok(bytes) => bytes,
@@ -124,7 +131,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         fingerprint: executor_fingerprint(&boulder_version, boulder_fingerprint),
     };
     let expected_lock = build_lock::ExpectedBuildLockContext {
-        requested_providers: requested_packages.clone(),
+        requested_inputs: requested_inputs.clone(),
         build_platform: platform(&target_policy.build_platform),
         host_platform: platform(&target_policy.host_platform),
         target_platform: platform(&target_policy.target_platform),
@@ -146,29 +153,27 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         },
         builder: selected_builder.clone(),
     };
-    let request_fingerprint = hash_fields(
-        [
-            "boulder-build-lock-request-v5",
-            builder.recipe.fingerprint.sha256.as_str(),
-            source_lock_digest.as_str(),
-            target_name.as_str(),
-            target.build_policy.provenance.root.sha256.as_str(),
-            profile_name.as_str(),
-            profile_fingerprint.as_str(),
-            toolchain_name,
-            selected_builder.name.as_str(),
-            selected_builder.fingerprint.as_str(),
-            jobs.as_str(),
-        ]
-        .into_iter()
-        .chain(requested_packages.iter().map(String::as_str)),
-    );
+    let input_provenance_digest = requested_inputs_digest(&requested_inputs);
+    let request_fingerprint = hash_fields([
+        "boulder-build-lock-request-v6",
+        builder.recipe.fingerprint.sha256.as_str(),
+        source_lock_digest.as_str(),
+        target_name.as_str(),
+        target.build_policy.provenance.root.sha256.as_str(),
+        profile_name.as_str(),
+        profile_fingerprint.as_str(),
+        toolchain_name,
+        selected_builder.name.as_str(),
+        selected_builder.fingerprint.as_str(),
+        jobs.as_str(),
+        input_provenance_digest.as_str(),
+    ]);
 
     let lock_path = build_lock::path_for_recipe(&builder.recipe.path);
     let (build_lock, lock_outcome) = if request.update_lock {
         let lock = resolve_build_lock(
             &builder,
-            &requested_packages,
+            &requested_inputs,
             &request_fingerprint,
             &expected_lock,
             request.refresh_repositories,
@@ -262,7 +267,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
 
 fn resolve_build_lock(
     builder: &Builder,
-    requested: &[String],
+    requested: &[RequestedInput],
     request_fingerprint: &str,
     expected: &build_lock::ExpectedBuildLockContext,
     refresh: bool,
@@ -276,7 +281,7 @@ fn resolve_build_lock(
     } else {
         runtime::block_on(client.ensure_repos_initialized())?;
     }
-    let references = requested.iter().map(String::as_str).collect::<Vec<_>>();
+    let references = requested.iter().map(|input| input.request.as_str()).collect::<Vec<_>>();
     let closure = client.resolve_available_closure(&references)?;
     let mut snapshots = client
         .repository_index_snapshots()?
@@ -317,15 +322,40 @@ fn resolve_build_lock(
         .map(|package| package.repository.as_str())
         .collect::<BTreeSet<_>>();
     snapshots.retain(|snapshot| used_repositories.contains(snapshot.id.as_str()));
+    let requested_origins = requested
+        .iter()
+        .map(|input| (input.request.as_str(), &input.origins))
+        .collect::<BTreeMap<_, _>>();
     let requests = closure
         .requests
         .into_iter()
-        .map(|request| LockedRequest {
-            request: request.request,
-            package_id: request.package.to_string(),
-            output: "out".to_owned(),
+        .map(|request| {
+            let origins =
+                requested_origins
+                    .get(request.request.as_str())
+                    .ok_or_else(|| Error::UnclassifiedResolvedInput {
+                        request: request.request.clone(),
+                    })?;
+            Ok(LockedRequest {
+                request: request.request,
+                package_id: request.package.to_string(),
+                output: "out".to_owned(),
+                origins: (*origins).clone(),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, Error>>()?;
+    let resolved_requests = requests
+        .iter()
+        .map(|request| request.request.as_str())
+        .collect::<BTreeSet<_>>();
+    if let Some(missing) = requested
+        .iter()
+        .find(|input| !resolved_requests.contains(input.request.as_str()))
+    {
+        return Err(Error::MissingResolvedInput {
+            request: missing.request.clone(),
+        });
+    }
     let mut lock = BuildLock {
         schema_version: BUILD_LOCK_SCHEMA_VERSION,
         request_fingerprint: request_fingerprint.to_owned(),
@@ -834,6 +864,20 @@ fn hash_fields<'a>(fields: impl IntoIterator<Item = &'a str>) -> String {
     format!("{:x}", digest.finalize())
 }
 
+fn aggregate_inputs(inputs: Vec<build::root::UnresolvedInput>) -> Vec<RequestedInput> {
+    let mut aggregated = BTreeMap::<String, BTreeSet<InputOrigin>>::new();
+    for input in inputs {
+        aggregated.entry(input.request).or_default().insert(input.origin);
+    }
+    aggregated
+        .into_iter()
+        .map(|(request, origins)| RequestedInput {
+            request,
+            origins: origins.into_iter().collect(),
+        })
+        .collect()
+}
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -880,6 +924,10 @@ pub enum Error {
     AnalyzerToolNotExecutable { field: &'static str },
     #[error("policy analyzer tool at {field} has no exact provider in build.lock.glu: {request}")]
     UnlockedAnalyzerTool { field: &'static str, request: String },
+    #[error("Moss resolved an input request with no typed planner origin: {request}")]
+    UnclassifiedResolvedInput { request: String },
+    #[error("Moss omitted a typed input request from its exact resolution: {request}")]
+    MissingResolvedInput { request: String },
 }
 
 impl From<build::Error> for Error {
@@ -912,6 +960,40 @@ mod tests {
                 name: name.to_owned(),
             },
         }
+    }
+
+    #[test]
+    fn input_aggregation_keeps_every_distinct_reason_before_provider_deduplication() {
+        let builder = InputOrigin::BuilderTool {
+            selection: stone_recipe::derivation::PackageInputSelection::Package,
+            index: 0,
+        };
+        let check = InputOrigin::Check {
+            selection: stone_recipe::derivation::PackageInputSelection::Package,
+            index: 0,
+        };
+        let aggregated = aggregate_inputs(vec![
+            build::root::UnresolvedInput {
+                request: "binary(shared)".to_owned(),
+                origin: check.clone(),
+            },
+            build::root::UnresolvedInput {
+                request: "binary(shared)".to_owned(),
+                origin: builder.clone(),
+            },
+            build::root::UnresolvedInput {
+                request: "binary(shared)".to_owned(),
+                origin: builder.clone(),
+            },
+        ]);
+
+        assert_eq!(
+            aggregated,
+            [RequestedInput {
+                request: "binary(shared)".to_owned(),
+                origins: vec![builder, check],
+            }]
+        );
     }
 
     #[test]

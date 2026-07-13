@@ -12,7 +12,7 @@ use std::{
 use fs_err as fs;
 use stone_recipe::derivation::{
     BUILD_LOCK_FILE_NAME, BuildLock, BuildLockDecodeError, BuildLockValidationError, LockedIdentity, Platform,
-    decode_build_lock, encode_build_lock,
+    RequestedInput, decode_build_lock, encode_build_lock,
 };
 use thiserror::Error;
 
@@ -76,7 +76,7 @@ pub fn require_current(path: &Path, request_fingerprint: &str) -> Result<BuildLo
 /// another. In particular, repository policy identity is not a target name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedBuildLockContext {
-    pub requested_providers: Vec<String>,
+    pub requested_inputs: Vec<RequestedInput>,
     pub build_platform: Platform,
     pub host_platform: Platform,
     pub target_platform: Platform,
@@ -105,18 +105,23 @@ pub fn require_current_for_context(
 }
 
 fn validate_context(path: &Path, lock: &BuildLock, expected: &ExpectedBuildLockContext) -> Result<(), Error> {
-    let mut expected_requests = expected
-        .requested_providers
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    expected_requests.sort_unstable();
+    let mut expected_requests = expected.requested_inputs.clone();
+    for request in &mut expected_requests {
+        request.normalize();
+    }
+    expected_requests.sort_by(|left, right| left.request.cmp(&right.request));
     let mut found_requests = lock
         .requests
         .iter()
-        .map(|request| request.request.as_str())
+        .map(|request| RequestedInput {
+            request: request.request.clone(),
+            origins: request.origins.clone(),
+        })
         .collect::<Vec<_>>();
-    found_requests.sort_unstable();
+    for request in &mut found_requests {
+        request.normalize();
+    }
+    found_requests.sort_by(|left, right| left.request.cmp(&right.request));
     require_selected_value(
         path,
         "requests",
@@ -302,7 +307,8 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use stone_recipe::derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, LockedOutput, LockedPackage, LockedRequest, RepositorySnapshot,
+        BUILD_LOCK_SCHEMA_VERSION, InputOrigin, LockedOutput, LockedPackage, LockedRequest, PackageInputSelection,
+        RepositorySnapshot,
     };
 
     use super::*;
@@ -340,11 +346,19 @@ mod tests {
                     request: "binary(example)".to_owned(),
                     package_id: "package-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![InputOrigin::BuilderTool {
+                        selection: PackageInputSelection::Package,
+                        index: 0,
+                    }],
                 },
                 LockedRequest {
                     request: "package(example)".to_owned(),
                     package_id: "package-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![InputOrigin::Build {
+                        selection: PackageInputSelection::Package,
+                        index: 0,
+                    }],
                 },
             ],
             packages: vec![LockedPackage {
@@ -369,7 +383,14 @@ mod tests {
 
     fn expected_context(lock: &BuildLock) -> ExpectedBuildLockContext {
         ExpectedBuildLockContext {
-            requested_providers: lock.requests.iter().map(|request| request.request.clone()).collect(),
+            requested_inputs: lock
+                .requests
+                .iter()
+                .map(|request| RequestedInput {
+                    request: request.request.clone(),
+                    origins: request.origins.clone(),
+                })
+                .collect(),
             build_platform: lock.build_platform.clone(),
             host_platform: lock.host_platform.clone(),
             target_platform: lock.target_platform.clone(),
@@ -515,11 +536,33 @@ mod tests {
             request: "soname(libexample.so.1)".to_owned(),
             package_id: "package-id".to_owned(),
             output: "out".to_owned(),
+            origins: vec![InputOrigin::Policy {
+                source: "policy.glu".to_owned(),
+                field: "build_root.base".to_owned(),
+                index: 0,
+            }],
         });
         assert_eq!(extra.request_fingerprint, "request");
         write(&path, &extra).unwrap();
         let error = require_current_for_context(&path, "request", &expected).unwrap_err();
         assert!(matches!(&error, Error::SelectedContextStale { field, .. } if field == "requests"));
         assert!(error.to_string().contains("rerun with `--update-lock`"));
+    }
+
+    #[test]
+    fn current_lock_must_match_every_origin_even_when_provider_roots_do_not_change() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(BUILD_LOCK_FILE_NAME);
+        let original = lock("request");
+        let expected = expected_context(&original);
+        let mut changed = original;
+        changed.requests[0].origins = vec![InputOrigin::Check {
+            selection: PackageInputSelection::Package,
+            index: 0,
+        }];
+
+        write(&path, &changed).unwrap();
+        let error = require_current_for_context(&path, "request", &expected).unwrap_err();
+        assert!(matches!(&error, Error::SelectedContextStale { field, .. } if field == "requests"));
     }
 }

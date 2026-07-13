@@ -29,15 +29,16 @@ use crate::{
 };
 
 pub use self::build_lock::{
-    BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
-    LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, Platform, RepositorySnapshot,
-    decode_build_lock, encode_build_lock,
+    AnalyzerRole, BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError,
+    BuildLockValidationError, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedOutput,
+    LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection, Platform, RepositorySnapshot, RequestedInput,
+    decode_build_lock, encode_build_lock, requested_inputs_digest,
 };
 
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 11;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 12;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
@@ -2356,6 +2357,11 @@ mod tests {
                 request: format!("binary({name})"),
                 package_id: "hello-id".to_owned(),
                 output: "out".to_owned(),
+                origins: vec![InputOrigin::Policy {
+                    source: "policy.glu".to_owned(),
+                    field: "build_root.base".to_owned(),
+                    index: 0,
+                }],
             }),
         );
         build_lock.policy.name = provenance.policy.name.clone();
@@ -3377,6 +3383,14 @@ mod tests {
             request: "odd-tool".to_owned(),
             package_id: "hello-id".to_owned(),
             output: "out".to_owned(),
+            origins: vec![InputOrigin::JobExecutable {
+                job: 0,
+                phase: 0,
+                phase_name: "build".to_owned(),
+                section: JobStepSection::Steps,
+                step: 0,
+                role: JobExecutableRole::RunProgram,
+            }],
         });
         plan.build_lock.normalize();
         {
@@ -3434,6 +3448,15 @@ mod tests {
             (
                 "dependency",
                 Box::new(|plan| plan.build_lock.packages[0].package_id.push_str("-changed")),
+            ),
+            (
+                "input-origin",
+                Box::new(|plan| {
+                    plan.build_lock.requests[0].origins[0] = InputOrigin::Check {
+                        selection: PackageInputSelection::Package,
+                        index: 0,
+                    };
+                }),
             ),
             (
                 "target-platform",
@@ -3564,6 +3587,38 @@ mod tests {
             mutate(&mut changed);
             assert_ne!(original_id, changed.derivation_id(), "{name} mutation was not hashed");
         }
+    }
+
+    #[test]
+    fn origin_only_role_changes_invalidate_the_derivation_identity() {
+        let first = sample_plan();
+        first.validate().unwrap();
+        let mut changed = first.clone();
+        let resolution = {
+            let request = &mut changed.build_lock.requests[0];
+            let resolution = (
+                request.request.clone(),
+                request.package_id.clone(),
+                request.output.clone(),
+            );
+            request.origins = vec![InputOrigin::Check {
+                selection: PackageInputSelection::Package,
+                index: 0,
+            }];
+            resolution
+        };
+        changed.validate().unwrap();
+
+        assert_eq!(
+            (
+                &changed.build_lock.requests[0].request,
+                &changed.build_lock.requests[0].package_id,
+                &changed.build_lock.requests[0].output,
+            ),
+            (&resolution.0, &resolution.1, &resolution.2)
+        );
+        assert_ne!(first.build_lock.digest(), changed.build_lock.digest());
+        assert_ne!(first.derivation_id(), changed.derivation_id());
     }
 
     #[test]

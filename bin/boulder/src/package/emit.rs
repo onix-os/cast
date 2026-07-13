@@ -329,9 +329,10 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     use stone_recipe::build_policy::{AnalyzerKind, layers::BuildPolicyOperation};
     use stone_recipe::derivation::{
         BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, ExecutablePlan,
-        ExecutionCredentials, LockedIdentity, LockedOutput, LockedPackage, LockedRequest, OutputPlan, PackageIdentity,
-        Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
-        RelationKind, RelationPlan, RepositorySnapshot, policy_composition_identity, profile_aggregate_fingerprint,
+        ExecutionCredentials, InputOrigin, LockedIdentity, LockedOutput, LockedPackage, LockedRequest, OutputPlan,
+        PackageIdentity, Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
+        ProfileFragmentProvenance, RelationKind, RelationPlan, RepositorySnapshot, policy_composition_identity,
+        profile_aggregate_fingerprint,
     };
 
     const SOURCE_LOCK_BYTES: &[u8] = b"test source lock bytes";
@@ -389,6 +390,11 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
             request: format!("binary({name})"),
             package_id: "analyzer-tools-id".to_owned(),
             output: "out".to_owned(),
+            origins: vec![InputOrigin::Policy {
+                source: "policy.glu".to_owned(),
+                field: "build_root.base".to_owned(),
+                index: 0,
+            }],
         })
         .collect(),
         packages: vec![LockedPackage {

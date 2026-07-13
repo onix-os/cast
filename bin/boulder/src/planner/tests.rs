@@ -13,7 +13,7 @@ use moss::{
     package::{Meta, Name},
 };
 use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
-use stone_recipe::derivation::{FilesystemPolicy, NetworkMode};
+use stone_recipe::derivation::{FilesystemPolicy, InputOrigin, NetworkMode};
 use tempfile::TempDir;
 use url::Url;
 
@@ -29,6 +29,7 @@ const PROFILE: &str = "planner-hermetic";
 const ALTERNATE_PROFILE: &str = "planner-hermetic-alternate";
 const TARGET: &str = "x86_64";
 const SOURCE_DATE_EPOCH: i64 = 1_700_000_000;
+const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 
 const RECIPE: &str = r#"let b = import! boulder.package.v3
 
@@ -40,6 +41,7 @@ let scripts = b.scripts {
 let root = {
     summary = b.optional.set "Hermetic planner fixture",
     description = b.optional.set "Hermetic planner fixture",
+    runtime_inputs = [b.dep.binary "planner-runtime"],
     .. b.output "out"
 }
 
@@ -168,7 +170,12 @@ boulder.profiles [
             requested_target: TARGET.to_owned(),
         })
         .unwrap();
-        let mut requested = build::root::packages(&builder).unwrap();
+        let mut requested = build::root::inputs(&builder)
+            .unwrap()
+            .into_iter()
+            .map(|input| input.request)
+            .collect::<Vec<_>>();
+        requested.push(RUNTIME_REQUEST.to_owned());
         requested.sort();
         requested.dedup();
         requested
@@ -235,6 +242,20 @@ fn identical_explicit_inputs_produce_identical_plans_and_locks() {
         Some("1700000000")
     );
     assert!(!first.plan.build_lock.requests.is_empty());
+    let runtime_request = first
+        .plan
+        .build_lock
+        .requests
+        .iter()
+        .find(|request| request.request == RUNTIME_REQUEST)
+        .expect("the external output runtime input must be resolved");
+    assert_eq!(
+        runtime_request.origins,
+        [InputOrigin::OutputRuntime {
+            output: "out".to_owned(),
+            index: 0,
+        }]
+    );
     assert!(
         first
             .plan

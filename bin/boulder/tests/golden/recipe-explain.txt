@@ -1,14 +1,14 @@
 derivation_explain {
   schema {
-    derivation_plan = 11
-    build_lock = 3
+    derivation_plan = 12
+    build_lock = 4
   }
   identity {
     boulder_version = "0.26.6"
     boulder_fingerprint = "sha256:boulder"
     recipe = "9a77dd152cbee683b8f15a7f9747c7c3bd9bc00c1532cbf58b4c917dbdb0ad69"
     source_lock = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
-    build_lock = "acac1f6c1d00ecce0f2f091b2d2c66b037c60890f774e678c6f9919649ae38ad"
+    build_lock = "33202c792a8f5b4e7f4b5ee82d5484f2b7ede7f771b340a29acf29bf4ab5547b"
     request = "locked-request-fingerprint"
   }
   recipe_provenance {
@@ -244,33 +244,130 @@ derivation_explain {
   lock_requests {
     request 0 {
       provider = "binary(alpha)"
-      package_id = "alpha-id"
-      output = "out"
+      resolution {
+        package_id = "alpha-id"
+        output = "out"
+      }
+      origins {
+        origin 0 {
+          kind = "build"
+          selection = "package"
+          index = 0
+        }
+        origin 1 {
+          kind = "output_runtime"
+          output = "out"
+          index = 0
+        }
+        origin 2 {
+          kind = "job_executable"
+          job = 0
+          phase = 0
+          phase_name = "build"
+          section = "steps"
+          step = 0
+          role = "shell_declared_program"
+          program_index = 0
+        }
+      }
     }
     request 1 {
       provider = "binary(bash)"
-      package_id = "alpha-id"
-      output = "out"
+      resolution {
+        package_id = "alpha-id"
+        output = "out"
+      }
+      origins {
+        origin 0 {
+          kind = "check"
+          selection = "package"
+          index = 0
+        }
+        origin 1 {
+          kind = "job_executable"
+          job = 0
+          phase = 0
+          phase_name = "build"
+          section = "steps"
+          step = 0
+          role = "shell_interpreter"
+        }
+      }
     }
     request 2 {
       provider = "binary(finish)"
-      package_id = "alpha-id"
-      output = "out"
+      resolution {
+        package_id = "alpha-id"
+        output = "out"
+      }
+      origins {
+        origin 0 {
+          kind = "native_build"
+          selection = "package"
+          index = 0
+        }
+        origin 1 {
+          kind = "job_executable"
+          job = 0
+          phase = 0
+          phase_name = "build"
+          section = "post"
+          step = 0
+          role = "run_program"
+        }
+      }
     }
     request 3 {
       provider = "binary(objcopy)"
-      package_id = "alpha-id"
-      output = "out"
+      resolution {
+        package_id = "alpha-id"
+        output = "out"
+      }
+      origins {
+        origin 0 {
+          kind = "policy"
+          source = "policy.glu"
+          field = "build_root.analyzer_tools.llvm.objcopy"
+          index = 0
+        }
+        origin 1 {
+          kind = "analyzer"
+          role = "objcopy"
+        }
+      }
     }
     request 4 {
       provider = "binary(prepare)"
-      package_id = "alpha-id"
-      output = "out"
+      resolution {
+        package_id = "alpha-id"
+        output = "out"
+      }
+      origins {
+        origin 0 {
+          kind = "job_executable"
+          job = 0
+          phase = 0
+          phase_name = "build"
+          section = "pre"
+          step = 0
+          role = "run_program"
+        }
+      }
     }
     request 5 {
       provider = "pkg(zeta)"
-      package_id = "zeta-id"
-      output = "devel"
+      resolution {
+        package_id = "zeta-id"
+        output = "devel"
+      }
+      origins {
+        origin 0 {
+          kind = "builder_tool"
+          selection = "profile"
+          profile = "x86_64"
+          index = 0
+        }
+      }
     }
   }
   locked_packages {
@@ -520,6 +617,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "e0afb1aa7666ee4683e4d27c13efab7f9469dc6c3702ceaf5a68ef7546ee2d66"
+    derivation_id = "905f2ab53968daa11f05c9b57a1da057a402ddbf640229051dad5f45d024c26d"
   }
 }

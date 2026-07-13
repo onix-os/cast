@@ -7,8 +7,9 @@
 use std::fmt::{Arguments, Write as _};
 
 use stone_recipe::derivation::{
-    BuildLock, DerivationPlan, ExecutablePlan, LockedIdentity, LockedSource, NetworkMode, OutputRelation, PathRuleKind,
-    Platform, RelationKind, RelationPlan, StepPlan,
+    AnalyzerRole, BuildLock, DerivationPlan, ExecutablePlan, InputOrigin, JobExecutableRole, JobStepSection,
+    LockedIdentity, LockedSource, NetworkMode, OutputRelation, PackageInputSelection, PathRuleKind, Platform,
+    RelationKind, RelationPlan, StepPlan,
 };
 
 use stone_recipe::build_policy::layers::BuildPolicyOperation;
@@ -249,8 +250,19 @@ impl Explanation<'_> {
         for (index, request) in requests.into_iter().enumerate() {
             formatter.indexed_open(2, "request", index);
             formatter.string(3, "provider", &request.request);
-            formatter.string(3, "package_id", &request.package_id);
-            formatter.string(3, "output", &request.output);
+            formatter.open(3, "resolution");
+            formatter.string(4, "package_id", &request.package_id);
+            formatter.string(4, "output", &request.output);
+            formatter.close(3);
+            formatter.open(3, "origins");
+            let mut origins = request.origins.iter().collect::<Vec<_>>();
+            origins.sort();
+            for (origin_index, origin) in origins.into_iter().enumerate() {
+                formatter.indexed_open(4, "origin", origin_index);
+                format_input_origin(formatter, 5, origin);
+                formatter.close(4);
+            }
+            formatter.close(3);
             formatter.close(2);
         }
         formatter.close(1);
@@ -510,6 +522,96 @@ impl Explanation<'_> {
     }
 }
 
+fn format_input_origin(formatter: &mut Formatter, indent: usize, origin: &InputOrigin) {
+    match origin {
+        InputOrigin::BuilderTool { selection, index } => {
+            formatter.string(indent, "kind", "builder_tool");
+            format_package_selection(formatter, indent, selection);
+            formatter.field(indent, "index", index);
+        }
+        InputOrigin::NativeBuild { selection, index } => {
+            formatter.string(indent, "kind", "native_build");
+            format_package_selection(formatter, indent, selection);
+            formatter.field(indent, "index", index);
+        }
+        InputOrigin::Build { selection, index } => {
+            formatter.string(indent, "kind", "build");
+            format_package_selection(formatter, indent, selection);
+            formatter.field(indent, "index", index);
+        }
+        InputOrigin::Check { selection, index } => {
+            formatter.string(indent, "kind", "check");
+            format_package_selection(formatter, indent, selection);
+            formatter.field(indent, "index", index);
+        }
+        InputOrigin::OutputRuntime { output, index } => {
+            formatter.string(indent, "kind", "output_runtime");
+            formatter.string(indent, "output", output);
+            formatter.field(indent, "index", index);
+        }
+        InputOrigin::Policy { source, field, index } => {
+            formatter.string(indent, "kind", "policy");
+            formatter.string(indent, "source", source);
+            formatter.string(indent, "field", field);
+            formatter.field(indent, "index", index);
+        }
+        InputOrigin::JobExecutable {
+            job,
+            phase,
+            phase_name,
+            section,
+            step,
+            role,
+        } => {
+            formatter.string(indent, "kind", "job_executable");
+            formatter.field(indent, "job", job);
+            formatter.field(indent, "phase", phase);
+            formatter.string(indent, "phase_name", phase_name);
+            formatter.string(indent, "section", job_step_section(*section));
+            formatter.field(indent, "step", step);
+            match role {
+                JobExecutableRole::RunProgram => formatter.string(indent, "role", "run_program"),
+                JobExecutableRole::ShellInterpreter => formatter.string(indent, "role", "shell_interpreter"),
+                JobExecutableRole::ShellDeclaredProgram { index } => {
+                    formatter.string(indent, "role", "shell_declared_program");
+                    formatter.field(indent, "program_index", index);
+                }
+            }
+        }
+        InputOrigin::Analyzer { role } => {
+            formatter.string(indent, "kind", "analyzer");
+            formatter.string(indent, "role", analyzer_role(*role));
+        }
+    }
+}
+
+fn format_package_selection(formatter: &mut Formatter, indent: usize, selection: &PackageInputSelection) {
+    match selection {
+        PackageInputSelection::Package => formatter.string(indent, "selection", "package"),
+        PackageInputSelection::Profile { name } => {
+            formatter.string(indent, "selection", "profile");
+            formatter.string(indent, "profile", name);
+        }
+    }
+}
+
+fn job_step_section(section: JobStepSection) -> &'static str {
+    match section {
+        JobStepSection::Pre => "pre",
+        JobStepSection::Steps => "steps",
+        JobStepSection::Post => "post",
+    }
+}
+
+fn analyzer_role(role: AnalyzerRole) -> &'static str {
+    match role {
+        AnalyzerRole::PkgConfig => "pkg_config",
+        AnalyzerRole::Python => "python",
+        AnalyzerRole::Objcopy => "objcopy",
+        AnalyzerRole::Strip => "strip",
+    }
+}
+
 fn format_platform(formatter: &mut Formatter, indent: usize, name: &str, platform: &Platform) {
     formatter.open(indent, name);
     formatter.string(indent + 1, "architecture", &platform.architecture);
@@ -745,10 +847,10 @@ mod tests {
         derivation::{
             AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
             DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutablePlan, ExecutionCredentials,
-            ExecutionPolicy, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
-            PackageIdentity, PhasePlan, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
-            ProfileFragmentProvenance, RepositorySnapshot, RootMaterializationMode, policy_composition_identity,
-            profile_aggregate_fingerprint,
+            ExecutionPolicy, InputOrigin, JobExecutableRole, JobPlan, JobStepSection, LockedOutput, LockedOutputRef,
+            LockedPackage, LockedRequest, OutputPlan, PackageIdentity, PackageInputSelection, PhasePlan,
+            PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
+            RepositorySnapshot, RootMaterializationMode, policy_composition_identity, profile_aggregate_fingerprint,
         },
     };
 
@@ -857,31 +959,101 @@ mod tests {
                     request: "pkg(zeta)".to_owned(),
                     package_id: "zeta-id".to_owned(),
                     output: "devel".to_owned(),
+                    origins: vec![InputOrigin::BuilderTool {
+                        selection: PackageInputSelection::Profile {
+                            name: "x86_64".to_owned(),
+                        },
+                        index: 0,
+                    }],
                 },
                 LockedRequest {
                     request: "binary(alpha)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![
+                        InputOrigin::Build {
+                            selection: PackageInputSelection::Package,
+                            index: 0,
+                        },
+                        InputOrigin::OutputRuntime {
+                            output: "out".to_owned(),
+                            index: 0,
+                        },
+                        InputOrigin::JobExecutable {
+                            job: 0,
+                            phase: 0,
+                            phase_name: "build".to_owned(),
+                            section: JobStepSection::Steps,
+                            step: 0,
+                            role: JobExecutableRole::ShellDeclaredProgram { index: 0 },
+                        },
+                    ],
                 },
                 LockedRequest {
                     request: "binary(objcopy)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![
+                        InputOrigin::Policy {
+                            source: "policy.glu".to_owned(),
+                            field: "build_root.analyzer_tools.llvm.objcopy".to_owned(),
+                            index: 0,
+                        },
+                        InputOrigin::Analyzer {
+                            role: AnalyzerRole::Objcopy,
+                        },
+                    ],
                 },
                 LockedRequest {
                     request: "binary(prepare)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![InputOrigin::JobExecutable {
+                        job: 0,
+                        phase: 0,
+                        phase_name: "build".to_owned(),
+                        section: JobStepSection::Pre,
+                        step: 0,
+                        role: JobExecutableRole::RunProgram,
+                    }],
                 },
                 LockedRequest {
                     request: "binary(bash)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![
+                        InputOrigin::Check {
+                            selection: PackageInputSelection::Package,
+                            index: 0,
+                        },
+                        InputOrigin::JobExecutable {
+                            job: 0,
+                            phase: 0,
+                            phase_name: "build".to_owned(),
+                            section: JobStepSection::Steps,
+                            step: 0,
+                            role: JobExecutableRole::ShellInterpreter,
+                        },
+                    ],
                 },
                 LockedRequest {
                     request: "binary(finish)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
+                    origins: vec![
+                        InputOrigin::NativeBuild {
+                            selection: PackageInputSelection::Package,
+                            index: 0,
+                        },
+                        InputOrigin::JobExecutable {
+                            job: 0,
+                            phase: 0,
+                            phase_name: "build".to_owned(),
+                            section: JobStepSection::Post,
+                            step: 0,
+                            role: JobExecutableRole::RunProgram,
+                        },
+                    ],
                 },
             ],
             packages: vec![
