@@ -16,8 +16,12 @@ use std::{
 
 use fs_err as fs;
 use nix::{
-    sys::signal::Signal,
-    unistd::{Pid, getpgrp, setpgid},
+    errno::Errno,
+    sys::{
+        signal::{Signal, kill},
+        wait::{WaitStatus, waitpid},
+    },
+    unistd::{Pid, getpgrp, getpid, setpgid},
 };
 use stone_recipe::derivation::{DerivationPlan, JobPlan, StepPlan};
 use thiserror::Error;
@@ -68,6 +72,7 @@ impl<'a> Executor<'a> {
     }
 
     pub fn run(&self, timing: &mut Timing) -> Result<(), Error> {
+        require_pid_namespace_init(getpid())?;
         prepare_execution_scratch(self.plan)?;
         setpgid(Pid::from_raw(0), Pid::from_raw(0))?;
         let pgid = getpgrp();
@@ -120,7 +125,7 @@ impl<'a> Executor<'a> {
             ),
         };
         let environment = merged_environment(&self.plan.environment, step_environment);
-        let status = logged(program, |command| {
+        let status = logged(program, DescendantContainment::PidNamespace, |command| {
             command
                 .args(args)
                 .env_clear()
@@ -206,6 +211,7 @@ fn validate_build_host(required: &str, actual: &str) -> Result<(), Error> {
 
 fn logged(
     command: &str,
+    containment: DescendantContainment,
     configure: impl FnOnce(&mut process::Command) -> &mut process::Command,
 ) -> io::Result<process::ExitStatus> {
     let mut command = process::Command::new(command);
@@ -215,6 +221,9 @@ fn logged(
     // descriptors inherited by Boulder from its own launcher.
     unsafe {
         command.pre_exec(|| {
+            if nix::libc::setpgid(0, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
             const CLOSE_RANGE_CLOEXEC: nix::libc::c_uint = 1 << 2;
             let result = nix::libc::syscall(
                 nix::libc::SYS_close_range,
@@ -234,13 +243,84 @@ fn logged(
         .stdout(process::Stdio::piped())
         .stderr(process::Stdio::piped())
         .spawn()?;
+    let child_pid = Pid::from_raw(child.id() as i32);
     let stdout = log(child.stdout.take().expect("piped stdout"));
     let stderr = log(child.stderr.take().expect("piped stderr"));
-    ::container::forward_sigint(Pid::from_raw(child.id() as i32))?;
+    ::container::forward_sigint(child_pid)?;
     let result = child.wait()?;
+    terminate_step_descendants(containment, child_pid)?;
     let _ = stdout.join();
     let _ = stderr.join();
     Ok(result)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescendantContainment {
+    /// Production execution runs as PID 1 in a dedicated namespace. Signaling
+    /// every other visible process catches daemonization, `setsid`, and
+    /// double-fork escapes before the next step or packaging can begin.
+    PidNamespace,
+    /// Direct unit tests do not own their PID namespace. A private process
+    /// group provides a safe behavioral test boundary there.
+    #[cfg(test)]
+    ProcessGroup,
+}
+
+fn require_pid_namespace_init(pid: Pid) -> Result<(), Error> {
+    if pid.as_raw() == 1 {
+        Ok(())
+    } else {
+        Err(Error::PidNamespaceInitRequired(pid.as_raw()))
+    }
+}
+
+fn terminate_step_descendants(containment: DescendantContainment, child_pid: Pid) -> io::Result<()> {
+    match containment {
+        DescendantContainment::PidNamespace => {
+            if getpid().as_raw() != 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "refusing namespace-wide descendant cleanup outside PID 1",
+                ));
+            }
+
+            match kill(descendant_signal_target(containment, child_pid), Signal::SIGKILL) {
+                Ok(()) | Err(Errno::ESRCH) => {}
+                Err(error) => return Err(error.into()),
+            }
+            loop {
+                match waitpid(Pid::from_raw(-1), None) {
+                    Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => {}
+                    Ok(
+                        WaitStatus::Stopped(..)
+                        | WaitStatus::PtraceEvent(..)
+                        | WaitStatus::PtraceSyscall(..)
+                        | WaitStatus::Continued(..)
+                        | WaitStatus::StillAlive,
+                    ) => {}
+                    Err(Errno::EINTR) => {}
+                    Err(Errno::ECHILD) => break,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+        #[cfg(test)]
+        DescendantContainment::ProcessGroup => {
+            match kill(descendant_signal_target(containment, child_pid), Signal::SIGKILL) {
+                Ok(()) | Err(Errno::ESRCH) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn descendant_signal_target(containment: DescendantContainment, _child_pid: Pid) -> Pid {
+    match containment {
+        DescendantContainment::PidNamespace => Pid::from_raw(-1),
+        #[cfg(test)]
+        DescendantContainment::ProcessGroup => Pid::from_raw(-_child_pid.as_raw()),
+    }
 }
 
 fn log<R>(pipe: R) -> thread::JoinHandle<()>
@@ -309,6 +389,8 @@ pub enum Error {
     IncompatibleExecutorFingerprint { expected: String, found: String },
     #[error("frozen plan requires build host `{required}`, but Boulder is running on `{actual}`")]
     IncompatibleBuildHost { required: String, actual: String },
+    #[error("frozen executor must run as PID 1 in its dedicated PID namespace, got PID {0}")]
+    PidNamespaceInitRequired(i32),
     #[error("unsupported frozen PGO stage {0}")]
     UnsupportedPgoStage(String),
     #[error("unsupported frozen phase {0}")]
@@ -332,6 +414,7 @@ mod tests {
     use std::{
         os::{fd::AsRawFd, unix::fs::symlink},
         path::PathBuf,
+        time::{Duration, Instant},
     };
 
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -445,9 +528,57 @@ mod tests {
         fcntl(inherited_fd, FcntlArg::F_SETFD(FdFlag::empty())).unwrap();
         let script = format!("test ! -e /proc/self/fd/{inherited_fd} && ! read value");
 
-        let status = logged("/bin/sh", |command| command.args(["-c", &script])).unwrap();
+        let status = logged("/bin/sh", DescendantContainment::ProcessGroup, |command| {
+            command.args(["-c", &script])
+        })
+        .unwrap();
 
         assert!(status.success());
+    }
+
+    #[test]
+    fn background_process_holding_log_pipes_cannot_stall_a_completed_step() {
+        let started = Instant::now();
+        let status = logged("/bin/sh", DescendantContainment::ProcessGroup, |command| {
+            command.args(["-c", "sleep 30 &"])
+        })
+        .unwrap();
+
+        assert!(status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn background_process_cannot_write_after_its_step_completes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let marker = temporary.path().join("late-write");
+        let status = logged("/bin/sh", DescendantContainment::ProcessGroup, |command| {
+            command
+                .env("MARKER", &marker)
+                .args(["-c", "(sleep 1; printf late > \"$MARKER\") >/dev/null 2>&1 &"])
+        })
+        .unwrap();
+
+        assert!(status.success());
+        thread::sleep(Duration::from_millis(1_200));
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn production_containment_targets_the_complete_pid_namespace() {
+        let child = Pid::from_raw(42);
+        assert_eq!(
+            descendant_signal_target(DescendantContainment::PidNamespace, child),
+            Pid::from_raw(-1)
+        );
+        assert_eq!(
+            descendant_signal_target(DescendantContainment::ProcessGroup, child),
+            Pid::from_raw(-42)
+        );
+        assert!(matches!(
+            require_pid_namespace_init(Pid::from_raw(2)),
+            Err(Error::PidNamespaceInitRequired(2))
+        ));
     }
 
     #[test]
