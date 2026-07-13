@@ -310,6 +310,20 @@ boulder recipe update ./stone.glu
 A recipe which declares sources needs a current source lock before its
 derivation can be planned.
 
+### Frozen builds are offline
+
+Every byte fetched from outside the build root must be declared in `sources`
+and admitted through `sources.lock.glu` before execution. The package-v2
+`options.networking` field remains in the typed ABI as a possible future
+fixed-output request, but setting it to `b.boolean.true` is currently a package
+validation error. No valid frozen `PackageSpec` can enable in-build network
+access.
+
+Generated Cargo drafts therefore keep networking disabled. A draft is only a
+starting point: any Cargo registry, Git, or vendor content required by the
+build must be represented by locked sources rather than downloaded by a build
+step.
+
 ## Build closure and derivation planning
 
 `build.lock.glu` is also generated beside `stone.glu`. Schema v2 records the
@@ -384,6 +398,13 @@ owned by the plan.
 Mutable local files under the recipe `pkg/` directory are deliberately not
 exposed to build steps. A future local-source ABI must hash their bytes and
 destination into the derivation before those inputs can be supported safely.
+
+`boulder chroot ./stone.glu` is an explicitly impure interactive development
+exception. It opens an existing build root without frozen planning or
+execution and is outside the reproducibility guarantees above. It never
+invokes, validates, or syncs package emission; files manually created by the
+shell are not frozen build artifacts. Use it for investigation only, not as a
+build path.
 
 The legacy macro policy and `%action`/`%(definition)` parser have been removed.
 Module-owned builder graphs and explicit literal `Shell` steps both freeze

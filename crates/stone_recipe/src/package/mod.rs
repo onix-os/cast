@@ -294,6 +294,10 @@ pub enum PackageConversionError {
     VersionMustStartWithDigit { version: String },
     #[error("meta.release: release must be greater than zero (found `{release}`)")]
     ReleaseMustBePositive { release: i64 },
+    #[error(
+        "options.networking: frozen builds must declare fetched content as locked sources; network access during execution is unsupported"
+    )]
+    FrozenBuildNetworkingUnsupported,
     #[error("{field}: invalid URL `{value}`")]
     InvalidUrl {
         field: String,
@@ -347,6 +351,7 @@ impl PackageConversionError {
         match self {
             Self::VersionMustStartWithDigit { .. } => "meta.version",
             Self::ReleaseMustBePositive { .. } => "meta.release",
+            Self::FrozenBuildNetworkingUnsupported => "options.networking",
             Self::InvalidUrl { field, .. }
             | Self::IntegerOutOfRange { field, .. }
             | Self::InvalidDependency { field, .. }
@@ -378,6 +383,9 @@ impl PackageSpec {
             return Err(PackageConversionError::ReleaseMustBePositive {
                 release: self.meta.release,
             });
+        }
+        if self.options.networking {
+            return Err(PackageConversionError::FrozenBuildNetworkingUnsupported);
         }
 
         for (index, source) in self.sources.iter().enumerate() {
@@ -979,6 +987,21 @@ mod tests {
         let error = invalid.validate().unwrap_err();
         assert!(matches!(error, PackageConversionError::IntegerOutOfRange { .. }));
         assert_eq!(error.field(), "sources[0].strip_dirs");
+    }
+
+    #[test]
+    fn frozen_packages_require_network_content_to_be_locked_sources() {
+        let mut invalid = package();
+        invalid.options.networking = true;
+
+        let error = invalid.validate().unwrap_err();
+
+        assert!(matches!(
+            error,
+            PackageConversionError::FrozenBuildNetworkingUnsupported
+        ));
+        assert_eq!(error.field(), "options.networking");
+        assert!(error.to_string().contains("locked sources"));
     }
 
     #[test]

@@ -235,6 +235,33 @@ b.mk_package (b.meta {
 }
 
 #[test]
+fn evaluator_rejects_networked_frozen_packages_with_locked_source_guidance() {
+    let source = authored(
+        r#"
+let base = b.mk_package (b.meta {
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+})
+{
+    options = {
+        networking = b.boolean.true,
+        .. b.defaults.options
+    },
+    .. base
+}
+"#,
+    );
+
+    let error = evaluate_gluon(&source).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PackageEvaluationError::Conversion(PackageConversionError::FrozenBuildNetworkingUnsupported)
+    ));
+    assert!(error.to_string().contains("locked sources"));
+}
+
+#[test]
 fn package_fingerprint_is_deterministic_and_binds_explicit_inputs() {
     let source = authored(
         r#"

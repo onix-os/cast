@@ -173,11 +173,6 @@ fn encode_package_v2(
         }
     }
     output.push_str("    ],\n    outputs = [root],\n");
-    if build_system.options().networking {
-        output.push_str("    options = {\n");
-        output.push_str("        networking = b.boolean.true,\n");
-        output.push_str("        .. b.defaults.options\n    },\n");
-    }
     output.push_str("    .. base\n}\n");
     output
 }
@@ -310,6 +305,7 @@ mod test {
         assert_eq!(evaluated.package.meta.pname, "example");
         assert_eq!(evaluated.package.meta.version, "1.2.3");
         assert_eq!(evaluated.package.sources.len(), 1);
-        assert!(evaluated.package.options.networking);
+        assert!(!source.contains("networking ="));
+        assert!(!evaluated.package.options.networking);
     }
 }

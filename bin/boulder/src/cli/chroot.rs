@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
+//! Impure interactive development access to an existing build root.
+//!
+//! This command deliberately stays outside frozen planning and execution. It
+//! never invokes, validates, or syncs package emission; files written by the
+//! shell are not frozen build artifacts.
+
 use std::{io, path::PathBuf, process};
 
 use crate::{BuildPolicy, Env, Paths, Recipe, container, policy, recipe};
@@ -9,7 +15,10 @@ use stone_recipe::derivation::BuilderLayout;
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
-#[command(about = "Chroot into the build environment")]
+#[command(
+    about = "Open an impure interactive development shell",
+    long_about = "Open an impure interactive development shell in an existing build root. This command is outside frozen-build reproducibility guarantees. It never invokes, validates, or syncs package emission; files created by the shell are not frozen build artifacts."
+)]
 pub struct Command {
     #[arg(
         default_value = "./stone.glu",
@@ -68,6 +77,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory as _;
+
     use super::*;
 
     #[test]
@@ -75,5 +86,19 @@ mod tests {
         let command = Command::try_parse_from(["chroot"]).unwrap();
 
         assert_eq!(command.recipe, PathBuf::from("./stone.glu"));
+    }
+
+    #[test]
+    fn help_marks_chroot_as_an_impure_non_frozen_development_command() {
+        let command = Command::command();
+
+        assert_eq!(
+            command.get_about().map(ToString::to_string).as_deref(),
+            Some("Open an impure interactive development shell")
+        );
+        let long_about = command.get_long_about().unwrap().to_string();
+        assert!(long_about.contains("outside frozen-build reproducibility guarantees"));
+        assert!(long_about.contains("never invokes, validates, or syncs package emission"));
+        assert!(long_about.contains("not frozen build artifacts"));
     }
 }
