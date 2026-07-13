@@ -3,7 +3,10 @@
 
 //! Installation-specific code for several core moss operations
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use thiserror::Error;
 use tracing::{Instrument, debug, info, info_span, instrument};
@@ -27,9 +30,6 @@ use crate::{
 /// Upon completion the `/usr` tree is "hot swapped" with the staging tree through `renameat2` call.
 #[instrument(skip(client), fields(ephemeral = client.is_ephemeral()))]
 pub fn install(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> Result<Timing, Error> {
-    let mut timing = Timing::default();
-    let mut instant = Instant::now();
-
     // Resolve input packages
     let input = resolve_input(pkgs, client)?;
     debug!(resolved_packages = input.len(), "Resolved input packages");
@@ -41,6 +41,44 @@ pub fn install(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) ->
 
     // Resolve transaction to metadata
     let resolved = client.resolve_packages(tx.finalize())?;
+
+    install_resolved(client, input, resolved, yes, simulate)
+}
+
+/// Install an already-resolved package closure without looking up providers or
+/// traversing package dependencies again.
+///
+/// The caller owns closure resolution. Every supplied ID is treated as an
+/// exact selection and must still exist in the active repository registry.
+pub fn install_exact(
+    client: &mut Client,
+    packages: &[package::Id],
+    yes: bool,
+    simulate: bool,
+) -> Result<Timing, Error> {
+    let input = packages
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let resolved = input
+        .iter()
+        .map(|id| client.resolve_package(id).map_err(Error::from))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    install_resolved(client, input, resolved, yes, simulate)
+}
+
+fn install_resolved(
+    client: &mut Client,
+    input: Vec<package::Id>,
+    resolved: Vec<Package>,
+    yes: bool,
+    simulate: bool,
+) -> Result<Timing, Error> {
+    let mut timing = Timing::default();
+    let mut instant = Instant::now();
 
     // Get installed packages to check against
     let installed = client.registry.list_installed().collect::<Vec<_>>();

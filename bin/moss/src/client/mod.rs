@@ -192,6 +192,20 @@ impl Client {
         install(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
     }
 
+    /// Install an exact, pre-resolved package closure.
+    ///
+    /// Unlike [`Self::install`], this does not resolve provider requests or
+    /// traverse dependency metadata. The supplied package IDs are the complete
+    /// closure selected by an external planner.
+    pub fn install_exact(
+        &mut self,
+        packages: &[package::Id],
+        yes: bool,
+        simulate: bool,
+    ) -> Result<install::Timing, Error> {
+        install::install_exact(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
+    }
+
     /// Perform package removals
     pub fn remove(&mut self, packages: &[&str], yes: bool, simulate: bool) -> Result<remove::Timing, Error> {
         remove(self, packages, yes, simulate).map_err(|error| Error::Remove(Box::new(error)))
