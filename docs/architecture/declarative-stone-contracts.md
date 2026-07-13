@@ -67,8 +67,6 @@ Implemented:
 
 Still transitional:
 
-- `PackageSpec` lowers into internal Rust `Recipe`/`RecipeSpec` values during
-  planning;
 - explicit `Shell` steps and `%(definition)` layout/environment expansion use
   `stone_recipe::script`; standard builder steps themselves are structural;
 - mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
@@ -85,8 +83,8 @@ Still transitional:
   restricted Gluon VM. Rust never stores or invokes a Gluon closure.
 - Contains authored requests and symbolic references, never resolved package
   IDs, repository snapshots, host paths, fetched content, or current time.
-- Uses typed dependency and output references. Provider strings are a
-  transitional lowering detail and are not part of the final v2 contract.
+- Uses typed dependency and output references through the shared Stone
+  relation model. Authored packages do not carry provider strings.
 - Separates native build, target build, check, and output-specific runtime
   relations.
 - Declares sources, builder selection, hooks, network requirements, package

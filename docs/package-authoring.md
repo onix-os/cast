@@ -361,9 +361,9 @@ directory are deliberately rejected before freeze. A future local-source ABI
 must hash their bytes and destination into the derivation before those inputs
 can be supported safely.
 
-The remaining migration is pre-freeze simplification: remove the internal
-`RecipeSpec` lowering and remaining macro-definition parser after typed policy,
-layout, tuning, and environment values cover their semantics.
+The remaining pre-freeze migration is the macro-definition parser. Typed
+policy, layout, tuning, and environment values must cover its semantics before
+the compatibility parser can be deleted.
 
 See [`examples/gluon/package_v2.glu`](examples/gluon/package_v2.glu) and
 [`examples/gluon/package_v2_stone.glu`](examples/gluon/package_v2_stone.glu)

@@ -83,15 +83,12 @@ manifest verification, artifact emission, and plan-owned cleanup. It records
 the plan's derivation ID rather than synthesizing an identity from runtime
 state.
 
-The remaining problem is the pre-freeze transitional model. Planning still
-uses the internal `Recipe` domain and macro definitions to construct resolved
-steps and environment before freezing them into the plan.
+Planning and packaging now consume `PackageSpec` and `DerivationPlan`
+directly. The former internal `Recipe`/`RecipeSpec` domain, its conversions,
+and its duplicated build and output values have been deleted.
 
 ### Current blockers
 
-- `PackageSpec` still lowers into the internal `Recipe`/`RecipeSpec` domain for
-  pre-freeze planning. That Rust representation is not a public Gluon ABI, but
-  it remains a transitional second model.
 - `bin/boulder/src/build/job/phase.rs` resolves standard builders from typed
   `StepSpec` values, but `Shell` steps and builder environment definitions
   still pass through `stone_recipe::script`. `%action` is allowed only through
@@ -100,9 +97,9 @@ steps and environment before freezing them into the plan.
 - Mutable local `%(pkgdir)` inputs are rejected before freeze. Supporting them
   requires a local-source ABI which hashes their content and destination into
   the derivation rather than exposing an untracked recipe-directory mount.
-- The explicit repository policy root now declares named layers in authored
-  order. `recipe explain` prints their layer and entry provenance, and the
-  evaluated root fingerprint binds that order into derivation identity.
+- Repository output policy still uses a dedicated deferred template DTO until
+  it becomes a pure typed policy factory; it no longer reuses the package or
+  recipe domain.
 
 ## Target semantics
 
@@ -411,7 +408,7 @@ recursive package universe inside Gluon.
 - [x] Remove filesystem-discovered macro composition.
 - [x] Remove the public `boulder.recipe.v1` ABI, its standalone encoders and
   evaluator, and migrate all tracked recipes and fixtures to package v2.
-- [ ] Remove the internal `Recipe`/`RecipeSpec` lowering once the executor and
+- [x] Remove the internal `Recipe`/`RecipeSpec` lowering once the executor and
   packaging path consume `PackageSpec` and `DerivationPlan` directly.
 - [ ] Remove obsolete defaults and duplicated Rust/Gluon wire definitions.
 - [x] Audit the repository for YAML/KDL loaders, fallbacks, compatibility

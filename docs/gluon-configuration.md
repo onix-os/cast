@@ -138,9 +138,9 @@ the transitional script parser before plan freeze. The executor receives only
 the resulting frozen `StepPlan` and environment values.
 
 The former `boulder.recipe.v1` embedded module, evaluator, and standalone
-encoders have been removed. `boulder.package.v2` is the only recipe ABI. An
-internal Rust `Recipe`/`RecipeSpec` lowering remains temporarily while
-pre-freeze planning is moved directly to `PackageSpec` and typed policy.
+encoders have been removed. `boulder.package.v2` is the only recipe ABI, and
+Boulder plans and packages its concrete `PackageSpec` directly without a
+second internal recipe model.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
