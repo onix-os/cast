@@ -23,6 +23,14 @@ write_fixture() {
     printf '%s\0' "$@" > "${fixture}"
 }
 
+write_tracked_file() {
+    local path=$1
+    local contents=$2
+
+    mkdir -p -- "${work_dir}/$(dirname -- "${path}")"
+    printf '%s\n' "${contents}" > "${work_dir}/${path}"
+}
+
 pass_case() {
     local name=$1
     shift
@@ -30,7 +38,9 @@ pass_case() {
     local output="${fixture}.out"
 
     write_fixture "${fixture}" "$@"
-    if ! "${checker}" --tracked-paths0 "${fixture}" > "${output}" 2>&1; then
+    if ! "${checker}" \
+        --repo-root "${work_dir}" \
+        --tracked-paths0 "${fixture}" > "${output}" 2>&1; then
         echo "FAIL: ${name} should pass" >&2
         cat "${output}" >&2
         exit 1
@@ -45,7 +55,9 @@ fail_case() {
     local output="${fixture}.out"
 
     write_fixture "${fixture}" "$@"
-    if "${checker}" --tracked-paths0 "${fixture}" > "${output}" 2>&1; then
+    if "${checker}" \
+        --repo-root "${work_dir}" \
+        --tracked-paths0 "${fixture}" > "${output}" 2>&1; then
         echo "FAIL: ${name} should fail" >&2
         cat "${output}" >&2
         exit 1
@@ -55,6 +67,25 @@ fail_case() {
         cat "${output}" >&2
         exit 1
     fi
+}
+
+pass_content_case() {
+    local name=$1
+    local path=$2
+    local contents=$3
+
+    write_tracked_file "${path}" "${contents}"
+    pass_case "${name}" "${allowed[@]}" "${path}"
+}
+
+fail_content_case() {
+    local name=$1
+    local expected=$2
+    local path=$3
+    local contents=$4
+
+    write_tracked_file "${path}" "${contents}"
+    fail_case "${name}" "${expected}" "${allowed[@]}" "${path}"
 }
 
 pass_case \
@@ -100,5 +131,90 @@ fail_case \
     '.github/workflows/release.yaml' \
     '.github/dependabot.yml' \
     '.github/workflows/ci.yaml'
+
+fail_content_case \
+    'direct YAML dependency in a Cargo manifest' \
+    'Forbidden YAML/KDL Cargo dependency references' \
+    'Cargo.toml' \
+    'serde_yaml = "0.9"'
+
+fail_content_case \
+    'KDL dependency in a member Cargo manifest' \
+    'crates/example/Cargo.toml:2: kdl.workspace = true' \
+    'crates/example/Cargo.toml' \
+    $'[dependencies]\nkdl.workspace = true'
+
+fail_content_case \
+    'transitive YAML dependency in Cargo.lock' \
+    'Cargo.lock:2: name = "unsafe-libyaml"' \
+    'Cargo.lock' \
+    $'[[package]]\nname = "unsafe-libyaml"\nversion = "0.2.11"'
+
+fail_content_case \
+    'removed YAML workspace path dependency' \
+    'crates/yaml' \
+    'crates/example/Cargo.toml' \
+    'legacy = { path = "../../crates/yaml" }'
+
+fail_content_case \
+    'KDL namespace in owned runtime source' \
+    'crates/example/src/lib.rs:1: kdl::KdlDocument::parse(source)' \
+    'crates/example/src/lib.rs' \
+    'kdl::KdlDocument::parse(source)'
+
+fail_content_case \
+    'YAML loader symbol in owned runtime source' \
+    'bin/example/src/main.rs:1: fn load_yaml_configuration() {}' \
+    'bin/example/src/main.rs' \
+    'fn load_yaml_configuration() {}'
+
+fail_content_case \
+    'legacy recipe fallback path in owned runtime source' \
+    'stone.yaml' \
+    'bin/example/src/main.rs' \
+    'let fallback = root.join("stone.yaml");'
+
+pass_content_case \
+    'unrelated symlink identifier is not a YML reference' \
+    'crates/example/src/lib.rs' \
+    'pub fn symlink_target() {}'
+
+pass_content_case \
+    'exact no-fallback negative-test strings' \
+    'crates/config/src/gluon.rs' \
+    $'#[cfg(test)]\nmod tests {\nfn load_gluon_never_falls_back_to_yaml_or_kdl() {\nwrite(temporary.path().join("dummy.yaml"), "not: valid: yaml");\nwrite(temporary.path().join("dummy.kdl"), "not valid kdl {");\nwrite(path.with_extension("yaml"), "legacy: true");\nassert!(path.with_extension("kdl").exists());\n}\n}'
+
+fail_content_case \
+    'negative-test line is allowed only inside the test module' \
+    'Forbidden YAML/KDL owned-runtime references' \
+    'crates/config/src/gluon.rs' \
+    'write(temporary.path().join("dummy.yaml"), "not: valid: yaml");'
+
+fail_content_case \
+    'negative-test source path is not a blanket exception' \
+    'serde_yaml::from_str' \
+    'crates/config/src/gluon.rs' \
+    'let legacy = serde_yaml::from_str(source)?;'
+
+pass_content_case \
+    'exact package-search YAML strings are data, not loaders' \
+    'bin/moss/src/cli/search.rs' \
+    $'#[cfg(test)]\nmod tests {\n"libyaml",\n"YAML 1.1 library",\n&[provider(pkgconfig, "yaml-0.1")],\nfn test_provider_soname_finds_libyaml() {\n}\n}'
+
+pass_content_case \
+    'upstream Ruby index name is not owned configuration' \
+    'bin/boulder/src/draft/build/ruby.rs' \
+    '"checksums.yaml.gz" if file.depth() == 0 => state.increment_confidence(50),'
+
+pass_content_case \
+    'completed historical migration document is an audit exception' \
+    'docs/plans/gluon-migration.md' \
+    'The former loader called serde_yaml::from_slice and parsed control.kdl.'
+
+fail_content_case \
+    'new compatibility documentation requires explicit review' \
+    'Unreviewed YAML/KDL documentation references' \
+    'docs/compatibility.md' \
+    'Recipes may fall back to stone.yaml through serde_yaml.'
 
 echo "Configuration format gate self-tests passed (${case_number} cases)."
