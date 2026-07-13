@@ -3,7 +3,7 @@
 use std::{
     io::{self, Write},
     num::NonZeroU64,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -185,7 +185,10 @@ pub fn emit_frozen(
     architecture: Architecture,
     packages: &[Package<'_>],
     derivation_id: &DerivationId,
+    sealed: &collect::SealedTree,
 ) -> Result<(), Error> {
+    verify_unique_layout_targets(packages)?;
+    sealed.verify().map_err(|source| Error::VerifiedInventory { source })?;
     let mut manifest = Manifest::new(
         paths,
         identity,
@@ -211,9 +214,82 @@ pub fn emit_frozen(
     for package in packages {
         verify_paths(&package.analysis.paths)?;
     }
+    sealed.verify().map_err(|source| Error::VerifiedInventory { source })?;
 
     println!();
 
+    Ok(())
+}
+
+fn verify_unique_layout_targets(packages: &[Package<'_>]) -> Result<(), Error> {
+    let total = packages.iter().try_fold(0usize, |total, package| {
+        total
+            .checked_add(package.analysis.paths.len())
+            .ok_or(Error::SizeOverflow {
+                resource: "package layout targets",
+            })
+    })?;
+    let mut targets = Vec::new();
+    try_reserve(&mut targets, total, "package layout targets")?;
+    for package in packages {
+        for info in &package.analysis.paths {
+            info.check_deadline().map_err(|source| Error::VerifiedInput {
+                path: info.path.clone(),
+                source,
+            })?;
+            targets.push((
+                info.layout.file.target().trim_start_matches('/'),
+                package.name,
+                &info.path,
+                matches!(info.layout.file, stone::StonePayloadLayoutFile::Directory(_)),
+            ));
+        }
+    }
+    targets.sort_unstable_by(|left, right| {
+        left.0
+            .cmp(right.0)
+            .then_with(|| left.1.cmp(right.1))
+            .then_with(|| left.2.cmp(right.2))
+    });
+    for pair in targets.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            return Err(Error::DuplicateLayoutTarget {
+                target: format!("/{}", pair[0].0),
+                first_package: pair[0].1.to_owned(),
+                first_path: pair[0].2.to_owned(),
+                second_package: pair[1].1.to_owned(),
+                second_path: pair[1].2.to_owned(),
+            });
+        }
+    }
+
+    // Exact duplicates are rejected above, including duplicate directories.
+    // A directory may be the ancestor of another layout target, but every
+    // other inode kind would require the installer to materialize the same
+    // target as both a terminal and a directory. Normalized `/usr` aliases can
+    // otherwise make this conflict arise from distinct source paths.
+    for descendant in &targets {
+        let mut ancestor = descendant.0;
+        while let Some(separator) = ancestor.rfind('/') {
+            ancestor = &ancestor[..separator];
+            if ancestor.is_empty() {
+                break;
+            }
+            if let Ok(index) = targets.binary_search_by(|candidate| candidate.0.cmp(ancestor)) {
+                let candidate = &targets[index];
+                if !candidate.3 {
+                    return Err(Error::AncestorLayoutTarget {
+                        ancestor: format!("/{}", candidate.0),
+                        ancestor_package: candidate.1.to_owned(),
+                        ancestor_path: candidate.2.to_owned(),
+                        descendant: format!("/{}", descendant.0),
+                        descendant_package: descendant.1.to_owned(),
+                        descendant_path: descendant.2.to_owned(),
+                    });
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -320,13 +396,7 @@ fn emit_package(
                 writer.add_content(&mut progress)
             };
             let verify_result = file.finish();
-            if let Err(source) = verify_result {
-                return Err(Error::VerifiedInput {
-                    path: info.path.clone(),
-                    source,
-                });
-            }
-            write_result.context(StoneBinaryWriterSnafu)?;
+            finish_content_write(&info.path, write_result, verify_result)?;
         }
 
         // Finalize & flush
@@ -344,6 +414,20 @@ fn emit_package(
     pb.finish_and_clear();
 
     Ok(())
+}
+
+fn finish_content_write(
+    path: &Path,
+    write_result: Result<(), StoneWriteError>,
+    verify_result: Result<(), collect::Error>,
+) -> Result<(), Error> {
+    // Always finish descriptor verification, but do not replace a primary
+    // Stone writer failure with the expected short-read consequence.
+    write_result.context(StoneBinaryWriterSnafu)?;
+    verify_result.map_err(|source| Error::VerifiedInput {
+        path: path.to_owned(),
+        source,
+    })
 }
 
 fn verify_paths(paths: &[collect::PathInfo]) -> Result<(), Error> {
@@ -384,6 +468,137 @@ mod verification_tests {
         std::fs::write(&path, b"payload").unwrap();
 
         assert!(matches!(verify_paths(&[info]), Err(Error::VerifiedInput { .. })));
+    }
+
+    #[test]
+    fn duplicate_normalized_layout_targets_are_rejected_before_emission() {
+        let root = tempfile::tempdir().unwrap();
+        let usr = root.path().join("usr/bin/tool");
+        let root_bin = root.path().join("bin/tool");
+        std::fs::create_dir_all(usr.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root_bin.parent().unwrap()).unwrap();
+        std::fs::write(&usr, b"usr").unwrap();
+        std::fs::write(&root_bin, b"root").unwrap();
+        let mut collector = collect::Collector::new(root.path());
+        collector
+            .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
+            .unwrap();
+        let mut hasher = stone::StoneDigestWriterHasher::new();
+        let usr = collector.path(&usr, &mut hasher).unwrap();
+        let root_bin = collector.path(&root_bin, &mut hasher).unwrap();
+        let plan = test_derivation_plan();
+        let definition = ResolvedOutput::default();
+        let package = |name, path| {
+            let mut bucket = analysis::Bucket::default();
+            bucket.paths.push(path);
+            Package::new_with_architecture(
+                name,
+                &plan.package,
+                &definition,
+                bucket,
+                NonZeroU64::new(1).unwrap(),
+                Architecture::X86_64,
+                1,
+            )
+        };
+        let packages = [package("first", usr), package("second", root_bin)];
+        assert!(matches!(
+            verify_unique_layout_targets(&packages),
+            Err(Error::DuplicateLayoutTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn non_directory_normalized_ancestor_is_rejected_before_emission() {
+        let root = tempfile::tempdir().unwrap();
+        let normalized_ancestor = root.path().join("usr/bin");
+        let descendant = root.path().join("bin/tool");
+        std::fs::create_dir_all(normalized_ancestor.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(descendant.parent().unwrap()).unwrap();
+        std::fs::write(&normalized_ancestor, b"not a directory").unwrap();
+        std::fs::write(&descendant, b"payload").unwrap();
+        let mut collector = collect::Collector::new(root.path());
+        collector
+            .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
+            .unwrap();
+        let mut hasher = stone::StoneDigestWriterHasher::new();
+        let ancestor = collector.path(&normalized_ancestor, &mut hasher).unwrap();
+        let descendant = collector.path(&descendant, &mut hasher).unwrap();
+        let plan = test_derivation_plan();
+        let definition = ResolvedOutput::default();
+        let package = |name, path| {
+            let mut bucket = analysis::Bucket::default();
+            bucket.paths.push(path);
+            Package::new_with_architecture(
+                name,
+                &plan.package,
+                &definition,
+                bucket,
+                NonZeroU64::new(1).unwrap(),
+                Architecture::X86_64,
+                1,
+            )
+        };
+        let packages = [package("ancestor", ancestor), package("descendant", descendant)];
+
+        assert!(matches!(
+            verify_unique_layout_targets(&packages),
+            Err(Error::AncestorLayoutTarget {
+                ref ancestor,
+                ref descendant,
+                ..
+            }) if ancestor == "/bin" && descendant == "/bin/tool"
+        ));
+    }
+
+    #[test]
+    fn directory_normalized_ancestor_may_own_descendants() {
+        let root = tempfile::tempdir().unwrap();
+        let normalized_ancestor = root.path().join("usr/bin");
+        let descendant = root.path().join("bin/tool");
+        std::fs::create_dir_all(&normalized_ancestor).unwrap();
+        std::fs::create_dir_all(descendant.parent().unwrap()).unwrap();
+        std::fs::write(&descendant, b"payload").unwrap();
+        let mut collector = collect::Collector::new(root.path());
+        collector
+            .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
+            .unwrap();
+        let mut hasher = stone::StoneDigestWriterHasher::new();
+        let ancestor = collector.path(&normalized_ancestor, &mut hasher).unwrap();
+        let descendant = collector.path(&descendant, &mut hasher).unwrap();
+        let plan = test_derivation_plan();
+        let definition = ResolvedOutput::default();
+        let package = |name, path| {
+            let mut bucket = analysis::Bucket::default();
+            bucket.paths.push(path);
+            Package::new_with_architecture(
+                name,
+                &plan.package,
+                &definition,
+                bucket,
+                NonZeroU64::new(1).unwrap(),
+                Architecture::X86_64,
+                1,
+            )
+        };
+        let packages = [package("ancestor", ancestor), package("descendant", descendant)];
+
+        verify_unique_layout_targets(&packages).unwrap();
+    }
+
+    #[test]
+    fn content_emission_preserves_the_primary_writer_error() {
+        let path = Path::new("/verified/input");
+        let write_result = Err(StoneWriteError::Io(io::Error::other("primary writer failure")));
+        let verify_result = Err(collect::Error::TreeChanged {
+            path: path.to_owned(),
+            detail: "consequential short read",
+        });
+
+        assert!(matches!(
+            finish_content_write(path, write_result, verify_result),
+            Err(Error::StoneBinaryWriter { .. })
+        ));
     }
 }
 
@@ -583,6 +798,8 @@ pub enum Error {
     Io { source: io::Error },
     #[snafu(display("verified package input {}: {source}", path.display()))]
     VerifiedInput { path: PathBuf, source: collect::Error },
+    #[snafu(display("verified package inventory: {source}"))]
+    VerifiedInventory { source: collect::Error },
     #[snafu(display("failed to reserve {requested} units for {resource}: {detail}"))]
     Allocation {
         resource: &'static str,
@@ -591,4 +808,29 @@ pub enum Error {
     },
     #[snafu(display("size overflow while totaling {resource}"))]
     SizeOverflow { resource: &'static str },
+    #[snafu(display(
+        "duplicate package layout target {target}: {first_package} ({}) and {second_package} ({})",
+        first_path.display(),
+        second_path.display()
+    ))]
+    DuplicateLayoutTarget {
+        target: String,
+        first_package: String,
+        first_path: PathBuf,
+        second_package: String,
+        second_path: PathBuf,
+    },
+    #[snafu(display(
+        "non-directory package layout target {ancestor} from {ancestor_package} ({}) is an ancestor of {descendant} from {descendant_package} ({})",
+        ancestor_path.display(),
+        descendant_path.display()
+    ))]
+    AncestorLayoutTarget {
+        ancestor: String,
+        ancestor_package: String,
+        ancestor_path: PathBuf,
+        descendant: String,
+        descendant_package: String,
+        descendant_path: PathBuf,
+    },
 }

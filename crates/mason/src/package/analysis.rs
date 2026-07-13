@@ -17,7 +17,7 @@ use tui::{ProgressBar, ProgressStyle, Styled};
 
 use crate::Paths;
 
-use super::collect::{Collector, PathInfo};
+use super::collect::{Collector, Error as CollectError, PathInfo, SealedTree};
 
 mod handler;
 
@@ -49,10 +49,22 @@ impl<'a> Chain<'a> {
         }
     }
 
-    pub fn process(&mut self, paths: impl IntoIterator<Item = PathInfo>) -> Result<(), BoxError> {
+    pub fn process(&mut self, paths: impl IntoIterator<Item = PathInfo>) -> Result<SealedTree, BoxError> {
+        let result = self.process_inner(paths);
+        if result.is_err() {
+            self.collector.poison_inventory();
+        }
+        result
+    }
+
+    fn process_inner(&mut self, paths: impl IntoIterator<Item = PathInfo>) -> Result<SealedTree, BoxError> {
         println!("│Analyzing artefacts (» = Include, × = Ignore, ^ = Replace)");
 
-        let mut queue = paths.into_iter().collect::<VecDeque<_>>();
+        let mut queue = VecDeque::new();
+        for path in paths {
+            queue.try_reserve(1)?;
+            queue.push_back(path);
+        }
 
         let pb = ProgressBar::new(queue.len() as u64)
             .with_message("Analyzing")
@@ -64,9 +76,11 @@ impl<'a> Chain<'a> {
         pb.tick();
 
         'paths: while let Some(mut path) = queue.pop_front() {
+            path.check_deadline()?;
             pb.set_message(format!("Analyzing {}", path.target_path.display()));
 
             'handlers: for entry in &self.handlers {
+                path.check_deadline()?;
                 let response = {
                     let bucket = self.buckets.entry(path.package.clone()).or_default();
                     // Only give handlers ability to update certain bucket
@@ -82,16 +96,60 @@ impl<'a> Chain<'a> {
 
                     entry.handler.handle(&mut bucket_mut, &mut path)?
                 };
+                path.check_deadline()?;
 
-                response.generated_paths.into_iter().try_for_each(|path| {
-                    let info = self.collector.path(&path, self.hasher)?;
+                let Response {
+                    decision,
+                    mut generated_paths,
+                } = response;
 
-                    queue.push_back(info);
+                // Every fallible allocation whose result is needed after a
+                // generated batch is admitted must happen before admission.
+                // The outer process wrapper poisons the inventory for any
+                // remaining post-admission failure.
+                if matches!(&decision, Decision::IncludeFile) {
+                    self.buckets
+                        .entry(path.package.clone())
+                        .or_default()
+                        .paths
+                        .try_reserve(1)?;
+                }
+                let mut replacement = None;
+                let mut generated_replacement = false;
+                if let Decision::ReplaceFile { newpath } = &decision {
+                    match self.collector.path(newpath, self.hasher) {
+                        Ok(info) => {
+                            self.buckets
+                                .entry(info.package.clone())
+                                .or_default()
+                                .paths
+                                .try_reserve(1)?;
+                            replacement = Some(info);
+                        }
+                        Err(CollectError::UnwitnessedPath { .. }) => {
+                            generated_paths.try_reserve(1)?;
+                            generated_paths.push(newpath.clone());
+                            generated_replacement = true;
+                        }
+                        Err(error) => return Err(Box::new(error)),
+                    }
+                }
+                queue.try_reserve(generated_paths.len())?;
+                let mut generated = self.collector.paths(&generated_paths, self.hasher)?;
+                if generated_replacement {
+                    replacement = generated.pop();
+                    let info = replacement.as_ref().ok_or_else(|| {
+                        Box::new(std::io::Error::other("generated replacement was not authenticated")) as BoxError
+                    })?;
+                    self.buckets
+                        .entry(info.package.clone())
+                        .or_default()
+                        .paths
+                        .try_reserve(1)?;
+                }
+                queue.extend(generated);
 
-                    Ok(()) as Result<(), BoxError>
-                })?;
-
-                match response.decision {
+                match decision {
                     Decision::NextHandler => continue 'handlers,
                     Decision::IgnoreFile { reason } => {
                         pb.suspend(|| {
@@ -108,11 +166,14 @@ impl<'a> Chain<'a> {
                     Decision::IncludeFile => {
                         pb.suspend(|| println!("│A{} {}", "│ »".green(), path.target_path.display()));
                         pb.inc(1);
-                        self.buckets.entry(path.package.clone()).or_default().paths.push(path);
+                        let paths = &mut self.buckets.entry(path.package.clone()).or_default().paths;
+                        paths.push(path);
                         continue 'paths;
                     }
-                    Decision::ReplaceFile { newpath } => {
-                        let newpathinfo = self.collector.path(&newpath, self.hasher)?;
+                    Decision::ReplaceFile { .. } => {
+                        let newpathinfo = replacement.ok_or_else(|| {
+                            Box::new(std::io::Error::other("generated replacement was not authenticated")) as BoxError
+                        })?;
                         pb.println(format!(
                             "│A{} {} » {}",
                             "│ ^".dark_magenta(),
@@ -120,11 +181,8 @@ impl<'a> Chain<'a> {
                             newpathinfo.target_path.display()
                         ));
                         pb.inc(1);
-                        self.buckets
-                            .entry(newpathinfo.package.clone())
-                            .or_default()
-                            .paths
-                            .push(newpathinfo);
+                        let paths = &mut self.buckets.entry(newpathinfo.package.clone()).or_default().paths;
+                        paths.push(newpathinfo);
                         continue 'paths;
                     }
                 }
@@ -134,7 +192,7 @@ impl<'a> Chain<'a> {
         pb.finish_and_clear();
         println!();
 
-        Ok(())
+        self.collector.seal().map_err(Into::into)
     }
 }
 
@@ -247,6 +305,27 @@ mod tests {
         }
     }
 
+    struct GenerateThenFail {
+        original: PathBuf,
+        generated: PathBuf,
+    }
+
+    impl Handler for GenerateThenFail {
+        fn handle(&self, _bucket: &mut BucketMut<'_>, path: &mut PathInfo) -> Result<Response, BoxError> {
+            if path.path == self.original {
+                fs::write(&self.generated, b"generated")?;
+                return Ok(Response {
+                    decision: Decision::IncludeFile,
+                    generated_paths: vec![self.generated.clone()],
+                });
+            }
+
+            Err(Box::new(std::io::Error::other(
+                "deterministic failure after generated admission",
+            )))
+        }
+    }
+
     #[test]
     fn replacement_is_routed_to_the_output_selected_for_the_new_path() {
         let recipe =
@@ -284,6 +363,38 @@ mod tests {
             chain.buckets["replacement-output"].paths[0].target_path,
             Path::new("/replacement")
         );
+    }
+
+    #[test]
+    fn any_failure_after_generated_admission_poisons_the_inventory() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+
+        let install = tempfile::tempdir().unwrap();
+        let original_path = install.path().join("original");
+        let generated = install.path().join("generated");
+        fs::write(&original_path, b"original").unwrap();
+        let mut collector = Collector::new(install.path());
+        collector.add_rule("*", "out", PathRuleKind::Any).unwrap();
+
+        let mut hasher = StoneDigestWriterHasher::new();
+        let original = collector.path(&original_path, &mut hasher).unwrap();
+        let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        chain.handlers = vec![HandlerEntry {
+            kind: AnalyzerKind::IncludeAny,
+            handler: Box::new(GenerateThenFail {
+                original: original_path,
+                generated,
+            }),
+        }];
+
+        assert!(chain.process([original]).is_err());
+        drop(chain);
+        assert!(matches!(collector.seal(), Err(CollectError::InventoryPoisoned)));
     }
 
     #[test]

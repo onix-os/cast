@@ -146,7 +146,7 @@ impl<'a> FrozenPackager<'a> {
             .enumerate_paths(None, &mut hasher)
             .map_err(Error::CollectPaths)?;
         let mut analysis = analysis::Chain::new(self.paths, &self.analysis, &self.collector, &mut hasher);
-        analysis.process(paths).map_err(Error::Analysis)?;
+        let sealed = analysis.process(paths).map_err(Error::Analysis)?;
         timing.finish(timer);
 
         let timer = timing.begin(timing::Kind::Emit);
@@ -177,6 +177,7 @@ impl<'a> FrozenPackager<'a> {
             self.architecture,
             &packages,
             &self.derivation_id,
+            &sealed,
         )
         .map_err(Error::Emit)?;
         timing.finish(timer);

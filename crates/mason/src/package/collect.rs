@@ -122,6 +122,7 @@ pub struct Collector {
     root: PathBuf,
     limits: CollectionLimits,
     anchor: OnceLock<Arc<RootAnchor>>,
+    witness: OnceLock<Arc<WitnessGraph>>,
     deadline: OnceLock<Arc<Deadline>>,
     usage: Arc<Mutex<CollectionUsage>>,
     total_rule_pattern_bytes: u64,
@@ -152,6 +153,7 @@ impl Collector {
             root: root.into(),
             limits,
             anchor: OnceLock::new(),
+            witness: OnceLock::new(),
             deadline: OnceLock::new(),
             usage: Arc::new(Mutex::new(CollectionUsage::default())),
             total_rule_pattern_bytes: 0,
@@ -261,6 +263,37 @@ impl Collector {
         Ok(anchor)
     }
 
+    fn witness(&self) -> Result<Arc<WitnessGraph>, Error> {
+        let anchor = self.anchor()?;
+        let deadline = self.deadline();
+        let candidate = Arc::new(WitnessGraph::new(
+            anchor,
+            self.limits,
+            Arc::clone(&self.usage),
+            deadline,
+        ));
+        let _ = self.witness.set(candidate);
+        let witness = Arc::clone(self.witness.get().expect("witness graph was just initialized"));
+        witness.ensure_initial_snapshot()?;
+        Ok(witness)
+    }
+
+    pub(crate) fn check_deadline(&self, path: &Path) -> Result<(), Error> {
+        self.deadline().check(path)
+    }
+
+    pub(crate) fn seal(&self) -> Result<SealedTree, Error> {
+        let witness = self.witness()?;
+        witness.seal()?;
+        Ok(SealedTree { witness })
+    }
+
+    pub(crate) fn poison_inventory(&self) {
+        if let Some(witness) = self.witness.get() {
+            witness.poison();
+        }
+    }
+
     fn matching_package(
         &self,
         context: &CollectionContext,
@@ -281,25 +314,91 @@ impl Collector {
 
     /// Produce a verified [`PathInfo`] for a path beneath this collector's root.
     pub fn path(&self, path: &Path, hasher: &mut StoneDigestWriterHasher) -> Result<PathInfo, Error> {
-        let deadline = self.deadline();
-        deadline.check(path)?;
-        let anchor = self.anchor()?;
+        let witness = self.witness()?;
         let relative = relative_to_root(&self.root, path)?;
-        let depth = relative.components().count();
-        let context = CollectionContext::new(self.limits, Arc::clone(&self.usage), Arc::clone(&deadline));
-        context.admit_entry(&relative, depth, path)?;
+        witness.require_path(&relative)?;
+        self.witnessed_path_info(&witness, path, relative, hasher)
+    }
 
-        let (parent_relative, name) = split_parent_name(&relative, path)?;
-        let parent_file = anchor.open_directory(&parent_relative)?;
-        let parent_snapshot = FileSnapshot::from_metadata(&metadata(&parent_file, "stat package parent", path)?);
+    /// Authenticate a complete analyzer-generated batch before producing any
+    /// path information. Missing ancestors are admitted only when they lead to
+    /// one of the exact declared leaves; undeclared siblings fail the batch.
+    pub fn paths(&self, paths: &[PathBuf], hasher: &mut StoneDigestWriterHasher) -> Result<Vec<PathInfo>, Error> {
+        let witness = self.witness()?;
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut normalized = Vec::new();
+        reserve(&mut normalized, paths.len(), "generated package paths")?;
+        enforce_u64_limit(
+            "generated package declarations",
+            self.limits.max_entries,
+            paths.len() as u64,
+            &self.root,
+        )?;
+        let declaration_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+        let declaration_context = CollectionContext::new(self.limits, declaration_usage, self.deadline());
+        for path in paths {
+            self.check_deadline(path)?;
+            let relative = relative_to_root(&self.root, path)?;
+            declaration_context.admit_entry(&relative, relative.components().count(), path)?;
+            normalized.push(relative);
+        }
+        let mut order = Vec::new();
+        reserve(&mut order, normalized.len(), "generated package path order")?;
+        order.extend(0..normalized.len());
+        order.sort_unstable_by(|left, right| normalized[*left].cmp(&normalized[*right]));
+        self.check_deadline(&self.root)?;
+        for pair in order.windows(2) {
+            self.check_deadline(&self.root.join(&normalized[pair[0]]))?;
+            if normalized[pair[0]] == normalized[pair[1]] {
+                return Err(Error::DuplicateAdmission {
+                    path: self.root.join(&normalized[pair[0]]),
+                });
+            }
+        }
+
+        let mut output = Vec::new();
+        reserve(&mut output, normalized.len(), "generated path information")?;
+        witness.admit_paths(&normalized)?;
+        for (display_path, relative) in paths.iter().zip(normalized) {
+            match self.witnessed_path_info(&witness, display_path, relative, hasher) {
+                Ok(info) => output.push(info),
+                Err(error) => {
+                    witness.poison();
+                    return Err(error);
+                }
+            }
+        }
+        Ok(output)
+    }
+
+    fn witnessed_path_info(
+        &self,
+        witness: &Arc<WitnessGraph>,
+        display_path: &Path,
+        relative: PathBuf,
+        hasher: &mut StoneDigestWriterHasher,
+    ) -> Result<PathInfo, Error> {
+        let context = CollectionContext::detached(self.limits, self.deadline());
+        let depth = relative.components().count();
+        context.check_depth(depth, display_path)?;
+        let (parent_relative, name) = split_parent_name(&relative, display_path)?;
+        let parent_id = witness.directory_id(&parent_relative)?;
+        let parent_file = witness.anchor.open_directory(&parent_relative)?;
+        let parent_snapshot =
+            FileSnapshot::from_metadata(&metadata(&parent_file, "stat witnessed package parent", display_path)?);
+        witness.require_directory(parent_id, parent_snapshot, display_path)?;
         let parent = Arc::new(DirectoryHandle {
             file: parent_file,
             relative: parent_relative,
-            display_path: path.parent().unwrap_or(&self.root).to_owned(),
+            display_path: display_path.parent().unwrap_or(&self.root).to_owned(),
             snapshot: parent_snapshot,
-            anchor,
+            anchor: Arc::clone(&witness.anchor),
+            witness: Arc::clone(witness),
+            witness_id: parent_id,
         });
-
         self.visit_path(&context, parent, name, relative, depth, hasher)
     }
 
@@ -310,10 +409,12 @@ impl Collector {
         subdir: Option<(PathBuf, Metadata)>,
         hasher: &mut StoneDigestWriterHasher,
     ) -> Result<Vec<PathInfo>, Error> {
+        let witness = self.witness()?;
         let deadline = self.deadline();
         deadline.check(&self.root)?;
-        let anchor = self.anchor()?;
-        let context = CollectionContext::new(self.limits, Arc::clone(&self.usage), Arc::clone(&deadline));
+        let anchor = Arc::clone(&witness.anchor);
+        let traversal_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+        let context = CollectionContext::new(self.limits, traversal_usage, Arc::clone(&deadline));
         let (relative, display_path, include_directory, supplied_metadata) = match subdir {
             Some((path, metadata)) => (relative_to_root(&self.root, &path)?, path, true, Some(metadata)),
             None => (PathBuf::new(), self.root.clone(), false, None),
@@ -335,12 +436,15 @@ impl Collector {
                 "supplied directory identity or metadata no longer matches",
             ));
         }
+        let witness_id = witness.directory_id(&relative)?;
         let directory = Arc::new(DirectoryHandle {
             file,
             relative,
             display_path,
             snapshot: FileSnapshot::from_metadata(&directory_metadata),
             anchor,
+            witness: Arc::clone(&witness),
+            witness_id,
         });
 
         let mut output = Vec::new();
@@ -409,6 +513,8 @@ impl Collector {
                         require_snapshot(&display_path, entry_snapshot, &opened)?;
                         verify_directory_collection(&parent)?;
                         self.fire_hook(TestPoint::AfterDirectoryOpen, &display_path);
+                        let witness_id =
+                            witness.child_directory_id(parent.witness_id, &name, entry_snapshot, &display_path)?;
                         reserve(&mut tasks, 1, "traversal tasks")?;
                         tasks.push(Task::Scan {
                             directory: Arc::new(DirectoryHandle {
@@ -417,6 +523,8 @@ impl Collector {
                                 display_path,
                                 snapshot: entry_snapshot,
                                 anchor: Arc::clone(&parent.anchor),
+                                witness: Arc::clone(&parent.witness),
+                                witness_id,
                             }),
                             include_directory: true,
                             depth,
@@ -455,7 +563,6 @@ impl Collector {
                 }
             }
         }
-
         Ok(output)
     }
 
@@ -501,7 +608,6 @@ impl Collector {
                     entry_snapshot,
                     VerifiedKind::Directory,
                     self.limits,
-                    Arc::clone(&self.usage),
                     Arc::clone(&context.deadline),
                 ),
             ))
@@ -577,7 +683,6 @@ impl Collector {
                 entry_snapshot,
                 kind,
                 self.limits,
-                Arc::clone(&self.usage),
                 Arc::clone(&context.deadline),
             ),
         ))
@@ -608,12 +713,15 @@ impl Collector {
             "stat collected directory parent",
             &directory.display_path,
         )?);
+        let parent_id = directory.witness.directory_id(&parent_relative)?;
         let parent = Arc::new(DirectoryHandle {
             file: parent_file,
             relative: parent_relative,
             display_path: directory.display_path.parent().unwrap_or(&self.root).to_owned(),
             snapshot: parent_snapshot,
             anchor: Arc::clone(&directory.anchor),
+            witness: Arc::clone(&directory.witness),
+            witness_id: parent_id,
         });
 
         Ok(PathInfo::verified(
@@ -628,7 +736,6 @@ impl Collector {
                 directory.snapshot,
                 VerifiedKind::Directory,
                 self.limits,
-                Arc::clone(&self.usage),
                 Arc::clone(&context.deadline),
             ),
         ))
@@ -756,12 +863,40 @@ impl Task {
 }
 
 #[derive(Debug)]
+enum InventoryTask {
+    Scan {
+        directory: Arc<DirectoryHandle>,
+        depth: usize,
+    },
+    Visit {
+        parent: Arc<DirectoryHandle>,
+        name: OsString,
+        relative: PathBuf,
+        depth: usize,
+    },
+    Finalize {
+        directory: Arc<DirectoryHandle>,
+    },
+}
+
+impl InventoryTask {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Scan { directory, .. } | Self::Finalize { directory } => &directory.display_path,
+            Self::Visit { parent, .. } => &parent.display_path,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DirectoryHandle {
     file: File,
     relative: PathBuf,
     display_path: PathBuf,
     snapshot: FileSnapshot,
     anchor: Arc<RootAnchor>,
+    witness: Arc<WitnessGraph>,
+    witness_id: DirectoryId,
 }
 
 #[derive(Debug)]
@@ -870,6 +1005,1183 @@ impl FileSnapshot {
     }
 }
 
+type DirectoryId = usize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WitnessPhase {
+    Fresh,
+    InitialSnapshot,
+    AdmissionsOpen,
+    Sealed,
+    Poisoned,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WitnessEntryKind {
+    Regular { hash: u128 },
+    Symlink { target: String },
+    Special,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EntryWitness {
+    snapshot: FileSnapshot,
+    kind: WitnessEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WitnessChildKind {
+    Directory(DirectoryId),
+    Entry(EntryWitness),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WitnessChild {
+    name: OsString,
+    kind: WitnessChildKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DirectoryWitness {
+    parent: Option<DirectoryId>,
+    name: OsString,
+    snapshot: FileSnapshot,
+    children: Vec<WitnessChild>,
+}
+
+#[derive(Debug)]
+struct WitnessState {
+    phase: WitnessPhase,
+    directories: Vec<DirectoryWitness>,
+}
+
+impl Default for WitnessState {
+    fn default() -> Self {
+        Self {
+            phase: WitnessPhase::Fresh,
+            directories: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WitnessGraph {
+    anchor: Arc<RootAnchor>,
+    limits: CollectionLimits,
+    usage: Arc<Mutex<CollectionUsage>>,
+    deadline: Arc<Deadline>,
+    state: Mutex<WitnessState>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SealedTree {
+    witness: Arc<WitnessGraph>,
+}
+
+impl SealedTree {
+    pub(crate) fn verify(&self) -> Result<(), Error> {
+        self.witness.verify_sealed()
+    }
+}
+
+#[derive(Debug, Default)]
+struct AdmissionDelta {
+    entries: u64,
+    name_bytes: u64,
+    path_bytes: u64,
+    symlink_target_bytes: u64,
+    regular_bytes: u64,
+}
+
+#[derive(Debug)]
+struct DirectoryAdmission {
+    id: DirectoryId,
+    snapshot: FileSnapshot,
+    additions: Vec<WitnessChild>,
+}
+
+#[derive(Debug)]
+struct AdmissionDraft {
+    existing: Vec<DirectoryAdmission>,
+    new_directories: Vec<DirectoryWitness>,
+    delta: AdmissionDelta,
+    scan_usage: CollectionUsage,
+}
+
+#[derive(Debug)]
+struct AdmissionTask {
+    directory: Arc<DirectoryHandle>,
+    declaration: usize,
+    existing: Option<DirectoryId>,
+}
+
+#[derive(Debug)]
+struct InventoryDraft {
+    directories: Vec<DirectoryWitness>,
+    usage: CollectionUsage,
+}
+
+#[derive(Debug)]
+struct DeclaredNode {
+    terminal: bool,
+    children: Vec<(OsString, usize)>,
+    inventory: DeclaredInventory,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DeclaredInventory {
+    ExistingDirectory(DirectoryId),
+    ExistingEntry,
+    Missing,
+}
+
+#[derive(Debug)]
+struct DeclaredTrie {
+    nodes: Vec<DeclaredNode>,
+}
+
+impl DeclaredTrie {
+    fn new(
+        paths: &[PathBuf],
+        directories: &[DirectoryWitness],
+        remaining_entries: u64,
+        max_edges: u64,
+        deadline: &Deadline,
+        root: &Path,
+    ) -> Result<Self, Error> {
+        let mut nodes = Vec::new();
+        reserve(&mut nodes, 1, "generated path declaration trie")?;
+        nodes.push(DeclaredNode {
+            terminal: false,
+            children: Vec::new(),
+            inventory: DeclaredInventory::ExistingDirectory(0),
+        });
+        let mut edges = 0u64;
+        let mut projected_entries = max_edges
+            .checked_sub(remaining_entries)
+            .ok_or(Error::ArithmeticOverflow {
+                resource: "remaining generated package entries",
+                path: root.to_owned(),
+            })?;
+        for path in paths {
+            deadline.check(&root.join(path))?;
+            let mut node = 0;
+            for component in path.components() {
+                deadline.check(&root.join(path))?;
+                let Component::Normal(name) = component else {
+                    return Err(Error::InvalidPath {
+                        path: path.clone(),
+                        detail: "generated path declaration is not normalized",
+                    });
+                };
+                let position = nodes[node]
+                    .children
+                    .binary_search_by(|(candidate, _)| candidate.as_os_str().cmp(name));
+                node = match position {
+                    Ok(position) => nodes[node].children[position].1,
+                    Err(position) => {
+                        let inventory = match nodes[node].inventory {
+                            DeclaredInventory::ExistingDirectory(directory) => {
+                                match find_child(directories, directory, name) {
+                                    Some(WitnessChild {
+                                        kind: WitnessChildKind::Directory(directory),
+                                        ..
+                                    }) => DeclaredInventory::ExistingDirectory(*directory),
+                                    Some(WitnessChild {
+                                        kind: WitnessChildKind::Entry(_),
+                                        ..
+                                    }) => DeclaredInventory::ExistingEntry,
+                                    None => {
+                                        projected_entries = checked_add_limit(
+                                            "total entries",
+                                            projected_entries,
+                                            1,
+                                            max_edges,
+                                            &root.join(path),
+                                        )?;
+                                        DeclaredInventory::Missing
+                                    }
+                                }
+                            }
+                            DeclaredInventory::Missing => {
+                                projected_entries = checked_add_limit(
+                                    "total entries",
+                                    projected_entries,
+                                    1,
+                                    max_edges,
+                                    &root.join(path),
+                                )?;
+                                DeclaredInventory::Missing
+                            }
+                            DeclaredInventory::ExistingEntry => {
+                                return Err(changed(
+                                    &root.join(path),
+                                    "generated path traverses a witnessed non-directory",
+                                ));
+                            }
+                        };
+                        edges = checked_add_limit(
+                            "generated path declaration trie edges",
+                            edges,
+                            1,
+                            max_edges,
+                            &root.join(path),
+                        )?;
+                        let child = nodes.len();
+                        reserve(&mut nodes, 1, "generated path declaration trie")?;
+                        nodes.push(DeclaredNode {
+                            terminal: false,
+                            children: Vec::new(),
+                            inventory,
+                        });
+                        nodes[node]
+                            .children
+                            .try_reserve(1)
+                            .map_err(|source| Error::Allocation {
+                                resource: "generated path declaration edges",
+                                requested: 1,
+                                detail: source.to_string(),
+                            })?;
+                        nodes[node].children.insert(position, (name.to_owned(), child));
+                        child
+                    }
+                };
+            }
+            nodes[node].terminal = true;
+        }
+        deadline.check(root)?;
+        Ok(Self { nodes })
+    }
+
+    fn child(&self, node: usize, name: &OsStr) -> Option<usize> {
+        self.nodes[node]
+            .children
+            .binary_search_by(|(candidate, _)| candidate.as_os_str().cmp(name))
+            .ok()
+            .map(|position| self.nodes[node].children[position].1)
+    }
+}
+
+impl WitnessGraph {
+    fn new(
+        anchor: Arc<RootAnchor>,
+        limits: CollectionLimits,
+        usage: Arc<Mutex<CollectionUsage>>,
+        deadline: Arc<Deadline>,
+    ) -> Self {
+        Self {
+            anchor,
+            limits,
+            usage,
+            deadline,
+            state: Mutex::new(WitnessState::default()),
+        }
+    }
+
+    fn ensure_initial_snapshot(self: &Arc<Self>) -> Result<(), Error> {
+        {
+            let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+            match state.phase {
+                WitnessPhase::AdmissionsOpen | WitnessPhase::Sealed => return Ok(()),
+                WitnessPhase::Fresh => state.phase = WitnessPhase::InitialSnapshot,
+                WitnessPhase::InitialSnapshot => {
+                    return Err(Error::InvalidInventoryPhase {
+                        operation: "start initial package inventory",
+                        phase: "initial-snapshot",
+                    });
+                }
+                WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            }
+        }
+
+        let snapshot = self.snapshot_inventory();
+        let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match snapshot {
+            Ok(draft) => {
+                *self.usage.lock().map_err(|_| Error::StatePoisoned)? = draft.usage;
+                state.directories = draft.directories;
+                state.phase = WitnessPhase::AdmissionsOpen;
+                Ok(())
+            }
+            Err(error) => {
+                state.phase = WitnessPhase::Poisoned;
+                Err(error)
+            }
+        }
+    }
+
+    fn seal(self: &Arc<Self>) -> Result<(), Error> {
+        let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::AdmissionsOpen => {}
+            WitnessPhase::Sealed => {
+                drop(state);
+                return self.verify_sealed();
+            }
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "seal package inventory",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let result = self
+            .snapshot_inventory()
+            .and_then(|actual| self.compare_complete_draft(&state, &actual));
+        match result {
+            Ok(()) => {
+                state.phase = WitnessPhase::Sealed;
+                Ok(())
+            }
+            Err(error) => {
+                state.phase = WitnessPhase::Poisoned;
+                Err(error)
+            }
+        }
+    }
+
+    fn verify_sealed(self: &Arc<Self>) -> Result<(), Error> {
+        let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::Sealed => {}
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "verify sealed package inventory",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let result = self
+            .snapshot_inventory()
+            .and_then(|actual| self.compare_complete_draft(&state, &actual));
+        if result.is_err() {
+            state.phase = WitnessPhase::Poisoned;
+        }
+        result
+    }
+
+    fn poison(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.phase = WitnessPhase::Poisoned;
+        }
+    }
+
+    fn compare_complete_draft(&self, state: &WitnessState, actual: &InventoryDraft) -> Result<(), Error> {
+        compare_exact_inventory(
+            &state.directories,
+            &actual.directories,
+            &self.anchor.path,
+            &self.deadline,
+        )?;
+        let expected_usage = self.usage.lock().map_err(|_| Error::StatePoisoned)?;
+        if *expected_usage != actual.usage {
+            return Err(changed(
+                &self.anchor.path,
+                "complete witnessed package resource usage changed",
+            ));
+        }
+        Ok(())
+    }
+
+    fn directory_id(&self, relative: &Path) -> Result<DirectoryId, Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "resolve witnessed directory")?;
+        lookup_directory(&state.directories, relative).ok_or_else(|| Error::UnwitnessedPath {
+            path: self.anchor.path.join(relative),
+        })
+    }
+
+    fn require_path(&self, relative: &Path) -> Result<(), Error> {
+        let (parent, name) = split_parent_name(relative, &self.anchor.path.join(relative))?;
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "resolve witnessed package path")?;
+        let parent = lookup_directory(&state.directories, &parent).ok_or_else(|| Error::UnwitnessedPath {
+            path: self.anchor.path.join(relative),
+        })?;
+        find_child(&state.directories, parent, &name)
+            .map(|_| ())
+            .ok_or_else(|| Error::UnwitnessedPath {
+                path: self.anchor.path.join(relative),
+            })
+    }
+
+    fn contains_regular(&self, relative: &Path) -> Result<bool, Error> {
+        let (parent, name) = split_parent_name(relative, &self.anchor.path.join(relative))?;
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::AdmissionsOpen => {}
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "query package inventory",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let Some(parent) = lookup_directory(&state.directories, &parent) else {
+            return Ok(false);
+        };
+        Ok(find_child(&state.directories, parent, &name).is_some_and(|child| {
+            matches!(
+                &child.kind,
+                WitnessChildKind::Entry(EntryWitness {
+                    kind: WitnessEntryKind::Regular { .. },
+                    ..
+                })
+            )
+        }))
+    }
+
+    fn child_directory_id(
+        &self,
+        parent: DirectoryId,
+        name: &OsStr,
+        snapshot: FileSnapshot,
+        path: &Path,
+    ) -> Result<DirectoryId, Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "resolve witnessed child directory")?;
+        let child = find_child(&state.directories, parent, name)
+            .ok_or_else(|| Error::UnwitnessedPath { path: path.to_owned() })?;
+        let id = match child.kind.clone() {
+            WitnessChildKind::Directory(id) => id,
+            WitnessChildKind::Entry(_) => {
+                return Err(changed(path, "witnessed entry changed type to a directory"));
+            }
+        };
+        if state.directories[id].snapshot != snapshot {
+            return Err(changed(path, "witnessed directory identity or metadata changed"));
+        }
+        Ok(id)
+    }
+
+    fn require_directory(&self, id: DirectoryId, snapshot: FileSnapshot, path: &Path) -> Result<(), Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "verify witnessed directory")?;
+        let expected = state
+            .directories
+            .get(id)
+            .ok_or_else(|| Error::UnwitnessedPath { path: path.to_owned() })?;
+        if expected.snapshot == snapshot {
+            Ok(())
+        } else {
+            Err(changed(path, "witnessed directory identity or metadata changed"))
+        }
+    }
+
+    fn directory_identity(&self, id: DirectoryId) -> Result<NodeIdentity, Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "read witnessed directory identity")?;
+        state
+            .directories
+            .get(id)
+            .map(|directory| directory.snapshot.node)
+            .ok_or_else(|| Error::UnwitnessedPath {
+                path: self.anchor.path.clone(),
+            })
+    }
+
+    fn entry_path(&self, parent: DirectoryId, name: &OsStr) -> Result<PathBuf, Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "resolve witnessed entry path")?;
+        let mut relative = directory_relative(&state.directories, parent, &self.anchor.path)?;
+        relative.push(name);
+        Ok(self.anchor.path.join(relative))
+    }
+
+    fn open_directory(&self, id: DirectoryId, display_path: &Path) -> Result<File, Error> {
+        let (relative, identity) = {
+            let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+            require_usable_phase(&state, "open witnessed directory")?;
+            let directory = state.directories.get(id).ok_or_else(|| Error::UnwitnessedPath {
+                path: display_path.to_owned(),
+            })?;
+            (
+                directory_relative(&state.directories, id, &self.anchor.path)?,
+                directory.snapshot.node,
+            )
+        };
+        let file = self.anchor.open_directory(&relative)?;
+        let actual = NodeIdentity::from_metadata(&metadata(&file, "stat witnessed directory", display_path)?);
+        if actual != identity {
+            return Err(changed(display_path, "witnessed directory was replaced"));
+        }
+        Ok(file)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn restate_regular(
+        self: &Arc<Self>,
+        parent: DirectoryId,
+        name: &OsStr,
+        old_snapshot: FileSnapshot,
+        new_snapshot: FileSnapshot,
+        hash: u128,
+        path: &Path,
+    ) -> Result<(), Error> {
+        self.deadline.check(path)?;
+        let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::AdmissionsOpen => {}
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "restate analyzed regular file",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let expected = find_child(&state.directories, parent, name)
+            .ok_or_else(|| Error::UnwitnessedPath { path: path.to_owned() })?;
+        let WitnessChildKind::Entry(expected) = &expected.kind else {
+            return Err(changed(path, "analyzed path was witnessed as a directory"));
+        };
+        if expected.snapshot != old_snapshot || !matches!(expected.kind, WitnessEntryKind::Regular { .. }) {
+            return Err(changed(path, "analyzed path has a stale regular-file witness"));
+        }
+        if old_snapshot.node != new_snapshot.node || old_snapshot.links != 1 || new_snapshot.links != 1 {
+            return Err(changed(
+                path,
+                "analyzed regular file transition was not an in-place single-link mutation",
+            ));
+        }
+
+        let parent_relative = directory_relative(&state.directories, parent, &self.anchor.path)?;
+        let parent_snapshot = state.directories[parent].snapshot;
+        let parent_file = self.anchor.open_directory(&parent_relative)?;
+        require_snapshot(
+            path,
+            parent_snapshot,
+            &metadata(&parent_file, "stat restated package parent", path)?,
+        )?;
+        let parent_handle = DirectoryHandle {
+            file: parent_file,
+            relative: parent_relative,
+            display_path: path.parent().unwrap_or(&self.anchor.path).to_owned(),
+            snapshot: parent_snapshot,
+            anchor: Arc::clone(&self.anchor),
+            witness: Arc::clone(self),
+            witness_id: parent,
+        };
+        let rescan_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+        let rescan = CollectionContext::new(self.limits, rescan_usage, Arc::clone(&self.deadline));
+        let names = read_directory_names(&parent_handle, &rescan)?;
+        let expected_names = &state.directories[parent].children;
+        if names.len() != expected_names.len()
+            || names
+                .iter()
+                .zip(expected_names)
+                .any(|(actual, expected)| actual != &expected.name)
+        {
+            return Err(changed(path, "analyzed file parent membership changed"));
+        }
+
+        let mut usage = self.usage.lock().map_err(|_| Error::StatePoisoned)?;
+        let mut updated_usage = usage.clone();
+        updated_usage.regular_bytes = updated_usage
+            .regular_bytes
+            .checked_sub(old_snapshot.size)
+            .and_then(|bytes| bytes.checked_add(new_snapshot.size))
+            .ok_or(Error::ArithmeticOverflow {
+                resource: "total regular file bytes",
+                path: path.to_owned(),
+            })?;
+        enforce_u64_limit(
+            "total regular file bytes",
+            self.limits.max_total_regular_bytes,
+            updated_usage.regular_bytes,
+            path,
+        )?;
+        let position = state.directories[parent]
+            .children
+            .binary_search_by(|child| child.name.as_os_str().cmp(name))
+            .map_err(|_| Error::UnwitnessedPath { path: path.to_owned() })?;
+        state.directories[parent].children[position].kind = WitnessChildKind::Entry(EntryWitness {
+            snapshot: new_snapshot,
+            kind: WitnessEntryKind::Regular { hash },
+        });
+        *usage = updated_usage;
+        Ok(())
+    }
+}
+
+impl WitnessPhase {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::InitialSnapshot => "initial-snapshot",
+            Self::AdmissionsOpen => "admissions-open",
+            Self::Sealed => "sealed",
+            Self::Poisoned => "poisoned",
+        }
+    }
+}
+
+impl WitnessGraph {
+    fn snapshot_inventory(self: &Arc<Self>) -> Result<InventoryDraft, Error> {
+        self.deadline.check(&self.anchor.path)?;
+        self.anchor.verify_path_node()?;
+        let draft_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+        let context = CollectionContext::new(self.limits, Arc::clone(&draft_usage), Arc::clone(&self.deadline));
+        let root_file = self.anchor.open_directory(Path::new(""))?;
+        let root_metadata = metadata(&root_file, "stat package inventory root", &self.anchor.path)?;
+        let root_snapshot = FileSnapshot::from_metadata(&root_metadata);
+        let mut directories = Vec::new();
+        reserve(&mut directories, 1, "package inventory directories")?;
+        directories.push(DirectoryWitness {
+            parent: None,
+            name: OsString::new(),
+            snapshot: root_snapshot,
+            children: Vec::new(),
+        });
+        let root = Arc::new(DirectoryHandle {
+            file: root_file,
+            relative: PathBuf::new(),
+            display_path: self.anchor.path.clone(),
+            snapshot: root_snapshot,
+            anchor: Arc::clone(&self.anchor),
+            witness: Arc::clone(self),
+            witness_id: 0,
+        });
+        let mut tasks = Vec::new();
+        reserve(&mut tasks, 1, "package inventory traversal tasks")?;
+        tasks.push(InventoryTask::Scan {
+            directory: root,
+            depth: 0,
+        });
+        let mut hasher = StoneDigestWriterHasher::new();
+
+        while let Some(task) = tasks.pop() {
+            context.check_time(task.path())?;
+            match task {
+                InventoryTask::Scan { directory, depth } => {
+                    let names = read_directory_names(&directory, &context)?;
+                    let child_depth = depth.checked_add(1).ok_or(Error::ArithmeticOverflow {
+                        resource: "path depth",
+                        path: directory.display_path.clone(),
+                    })?;
+                    let task_count = names.len().checked_add(1).ok_or(Error::ArithmeticOverflow {
+                        resource: "package inventory traversal tasks",
+                        path: directory.display_path.clone(),
+                    })?;
+                    reserve(&mut tasks, task_count, "package inventory traversal tasks")?;
+                    tasks.push(InventoryTask::Finalize {
+                        directory: Arc::clone(&directory),
+                    });
+                    for name in names.into_iter().rev() {
+                        let relative = join_relative(&directory.relative, &name);
+                        tasks.push(InventoryTask::Visit {
+                            parent: Arc::clone(&directory),
+                            name,
+                            relative,
+                            depth: child_depth,
+                        });
+                    }
+                }
+                InventoryTask::Visit {
+                    parent,
+                    name,
+                    relative,
+                    depth,
+                } => {
+                    let display_path = self.anchor.path.join(&relative);
+                    if name.to_str().is_none() {
+                        return Err(Error::NonUtf8Path { path: display_path });
+                    }
+                    context.check_depth(depth, &display_path)?;
+                    let handle = open_entry_handle(&parent.file, &name, &display_path)?;
+                    let entry_metadata = metadata(&handle, "stat package inventory entry", &display_path)?;
+                    let entry_snapshot = FileSnapshot::from_metadata(&entry_metadata);
+                    if entry_metadata.file_type().is_dir() {
+                        let file = open_entry(
+                            &parent.file,
+                            &name,
+                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+                            &display_path,
+                        )?;
+                        require_snapshot(
+                            &display_path,
+                            entry_snapshot,
+                            &metadata(&file, "stat opened inventory directory", &display_path)?,
+                        )?;
+                        verify_directory_collection(&parent)?;
+                        let id = directories.len();
+                        reserve(&mut directories, 1, "package inventory directories")?;
+                        directories.push(DirectoryWitness {
+                            parent: Some(parent.witness_id),
+                            name: name.clone(),
+                            snapshot: entry_snapshot,
+                            children: Vec::new(),
+                        });
+                        let children = &mut directories[parent.witness_id].children;
+                        reserve(children, 1, "package inventory children")?;
+                        children.push(WitnessChild {
+                            name: name.clone(),
+                            kind: WitnessChildKind::Directory(id),
+                        });
+                        reserve(&mut tasks, 1, "package inventory traversal tasks")?;
+                        tasks.push(InventoryTask::Scan {
+                            directory: Arc::new(DirectoryHandle {
+                                file,
+                                relative,
+                                display_path,
+                                snapshot: entry_snapshot,
+                                anchor: Arc::clone(&self.anchor),
+                                witness: Arc::clone(self),
+                                witness_id: id,
+                            }),
+                            depth,
+                        });
+                    } else {
+                        let file_type = entry_metadata.file_type();
+                        let kind = if file_type.is_symlink() {
+                            let target = read_symlink_handle(&handle, &display_path, &context)?;
+                            verify_entry_collection(&parent, &name, entry_snapshot, &display_path)?;
+                            WitnessEntryKind::Symlink { target }
+                        } else if file_type.is_file() {
+                            context.admit_regular(entry_snapshot.size, &display_path)?;
+                            let hash = hash_inventory_regular(
+                                &context,
+                                &parent,
+                                &name,
+                                entry_snapshot,
+                                &display_path,
+                                &mut hasher,
+                            )?;
+                            WitnessEntryKind::Regular { hash }
+                        } else if is_supported_special(&file_type) {
+                            verify_entry_collection(&parent, &name, entry_snapshot, &display_path)?;
+                            WitnessEntryKind::Special
+                        } else {
+                            return Err(Error::UnsupportedFileType {
+                                path: display_path,
+                                kind: "unknown special inode",
+                            });
+                        };
+                        let children = &mut directories[parent.witness_id].children;
+                        reserve(children, 1, "package inventory children")?;
+                        children.push(WitnessChild {
+                            name,
+                            kind: WitnessChildKind::Entry(EntryWitness {
+                                snapshot: entry_snapshot,
+                                kind,
+                            }),
+                        });
+                    }
+                }
+                InventoryTask::Finalize { directory } => {
+                    verify_directory_collection(&directory)?;
+                    let rescan_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+                    let rescan = CollectionContext::new(self.limits, rescan_usage, Arc::clone(&self.deadline));
+                    let actual_names = read_directory_names(&directory, &rescan)?;
+                    let children = &directories[directory.witness_id].children;
+                    if actual_names.len() != children.len()
+                        || actual_names
+                            .iter()
+                            .zip(children)
+                            .any(|(actual, expected)| actual != &expected.name)
+                    {
+                        return Err(changed(
+                            &directory.display_path,
+                            "directory membership changed while inventory was captured",
+                        ));
+                    }
+                }
+            }
+        }
+        self.anchor.verify_path_node()?;
+        let usage = draft_usage.lock().map_err(|_| Error::StatePoisoned)?.clone();
+        Ok(InventoryDraft { directories, usage })
+    }
+
+    fn admit_paths(self: &Arc<Self>, paths: &[PathBuf]) -> Result<(), Error> {
+        let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::AdmissionsOpen => {}
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "admit generated package paths",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let usage_before = match self.usage.lock() {
+            Ok(usage) => usage.clone(),
+            Err(_) => {
+                state.phase = WitnessPhase::Poisoned;
+                return Err(Error::StatePoisoned);
+            }
+        };
+        let remaining_entries = match self.limits.max_entries.checked_sub(usage_before.entries) {
+            Some(remaining) => remaining,
+            None => {
+                state.phase = WitnessPhase::Poisoned;
+                return Err(Error::ArithmeticOverflow {
+                    resource: "remaining generated package entries",
+                    path: self.anchor.path.clone(),
+                });
+            }
+        };
+        let trie = match DeclaredTrie::new(
+            paths,
+            &state.directories,
+            remaining_entries,
+            self.limits.max_entries,
+            &self.deadline,
+            &self.anchor.path,
+        ) {
+            Ok(trie) => trie,
+            Err(error) => {
+                state.phase = WitnessPhase::Poisoned;
+                return Err(error);
+            }
+        };
+        let draft = match self.build_admission(&state, &trie) {
+            Ok(draft) => draft,
+            Err(error) => {
+                state.phase = WitnessPhase::Poisoned;
+                return Err(error);
+            }
+        };
+        let mut usage = self.usage.lock().map_err(|_| Error::StatePoisoned)?;
+        if *usage != usage_before {
+            state.phase = WitnessPhase::Poisoned;
+            return Err(changed(
+                &self.anchor.path,
+                "package collection usage changed during generated admission",
+            ));
+        }
+        if let Err(error) = validate_usage(&draft.scan_usage, self.limits, &self.anchor.path) {
+            state.phase = WitnessPhase::Poisoned;
+            return Err(error);
+        }
+        let updated_usage = match usage_after_admission(&usage, &draft.delta, self.limits, &self.anchor.path) {
+            Ok(usage) => usage,
+            Err(error) => {
+                state.phase = WitnessPhase::Poisoned;
+                return Err(error);
+            }
+        };
+        if let Err(error) = reserve_admission_commit(&mut state.directories, &draft) {
+            state.phase = WitnessPhase::Poisoned;
+            return Err(error);
+        }
+        commit_admission(&mut state.directories, draft);
+        *usage = updated_usage;
+        Ok(())
+    }
+
+    fn build_admission(self: &Arc<Self>, state: &WitnessState, trie: &DeclaredTrie) -> Result<AdmissionDraft, Error> {
+        self.deadline.check(&self.anchor.path)?;
+        let scan_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+        let context = CollectionContext::new(self.limits, Arc::clone(&scan_usage), Arc::clone(&self.deadline));
+        let root_file = self.anchor.open_directory(Path::new(""))?;
+        let root_metadata = metadata(&root_file, "stat package admission root", &self.anchor.path)?;
+        let root_snapshot = FileSnapshot::from_metadata(&root_metadata);
+        if !stable_directory_snapshot(state.directories[0].snapshot, root_snapshot) {
+            return Err(changed(&self.anchor.path, "package root changed before admission"));
+        }
+        let root = Arc::new(DirectoryHandle {
+            file: root_file,
+            relative: PathBuf::new(),
+            display_path: self.anchor.path.clone(),
+            snapshot: root_snapshot,
+            anchor: Arc::clone(&self.anchor),
+            witness: Arc::clone(self),
+            witness_id: 0,
+        });
+        let mut draft = AdmissionDraft {
+            existing: Vec::new(),
+            new_directories: Vec::new(),
+            delta: AdmissionDelta::default(),
+            scan_usage: CollectionUsage::default(),
+        };
+        let mut tasks = Vec::new();
+        reserve(&mut tasks, 1, "package admission traversal tasks")?;
+        tasks.push(AdmissionTask {
+            directory: root,
+            declaration: 0,
+            existing: Some(0),
+        });
+        let mut hasher = StoneDigestWriterHasher::new();
+        let base_directory_count = state.directories.len();
+
+        while let Some(task) = tasks.pop() {
+            context.check_time(&task.directory.display_path)?;
+            let expected_children = task
+                .existing
+                .map(|id| state.directories[id].children.as_slice())
+                .unwrap_or_default();
+            let names = read_directory_names(&task.directory, &context)?;
+            let update_index = if let Some(id) = task.existing {
+                reserve(&mut draft.existing, 1, "package admission directory updates")?;
+                draft.existing.push(DirectoryAdmission {
+                    id,
+                    snapshot: task.directory.snapshot,
+                    additions: Vec::new(),
+                });
+                Some(draft.existing.len() - 1)
+            } else {
+                None
+            };
+            let mut expected_index = 0;
+
+            for name in &names {
+                context.check_time(&task.directory.display_path)?;
+                while let Some(expected) = expected_children.get(expected_index)
+                    && expected.name < *name
+                {
+                    return Err(changed(
+                        &task.directory.display_path.join(&expected.name),
+                        "witnessed package entry disappeared during admission",
+                    ));
+                }
+                let expected = expected_children
+                    .get(expected_index)
+                    .filter(|expected| expected.name == *name);
+                if expected.is_some() {
+                    expected_index += 1;
+                }
+                let declaration = trie.child(task.declaration, name);
+                if let Some(declaration) = declaration
+                    && trie.nodes[declaration].terminal
+                    && expected.is_some()
+                {
+                    return Err(Error::ExistingAdmission {
+                        path: task.directory.display_path.join(name),
+                    });
+                }
+                let relative = join_relative(&task.directory.relative, name);
+                let display_path = self.anchor.path.join(&relative);
+                let handle = open_entry_handle(&task.directory.file, name, &display_path)?;
+                let entry_metadata = metadata(&handle, "stat package admission entry", &display_path)?;
+                let entry_snapshot = FileSnapshot::from_metadata(&entry_metadata);
+
+                match expected {
+                    Some(expected) => match &expected.kind {
+                        WitnessChildKind::Directory(expected_id) => {
+                            if !entry_metadata.file_type().is_dir() {
+                                return Err(changed(
+                                    &display_path,
+                                    "witnessed directory changed type during admission",
+                                ));
+                            }
+                            let declared_descendants = declaration
+                                .map(|id| !trie.nodes[id].children.is_empty())
+                                .unwrap_or(false);
+                            if declared_descendants {
+                                if !stable_directory_snapshot(state.directories[*expected_id].snapshot, entry_snapshot)
+                                {
+                                    return Err(changed(
+                                        &display_path,
+                                        "witnessed directory identity or permissions changed during admission",
+                                    ));
+                                }
+                                let file = open_entry(
+                                    &task.directory.file,
+                                    name,
+                                    libc::O_RDONLY
+                                        | libc::O_DIRECTORY
+                                        | libc::O_CLOEXEC
+                                        | libc::O_NOFOLLOW
+                                        | libc::O_NONBLOCK,
+                                    &display_path,
+                                )?;
+                                require_snapshot(
+                                    &display_path,
+                                    entry_snapshot,
+                                    &metadata(&file, "stat admitted child directory", &display_path)?,
+                                )?;
+                                reserve(&mut tasks, 1, "package admission traversal tasks")?;
+                                tasks.push(AdmissionTask {
+                                    directory: Arc::new(DirectoryHandle {
+                                        file,
+                                        relative,
+                                        display_path,
+                                        snapshot: entry_snapshot,
+                                        anchor: Arc::clone(&self.anchor),
+                                        witness: Arc::clone(self),
+                                        witness_id: *expected_id,
+                                    }),
+                                    declaration: declaration.expect("declared descendants have a trie node"),
+                                    existing: Some(*expected_id),
+                                });
+                            } else if state.directories[*expected_id].snapshot != entry_snapshot {
+                                return Err(changed(
+                                    &display_path,
+                                    "unrelated witnessed directory changed during admission",
+                                ));
+                            }
+                        }
+                        WitnessChildKind::Entry(expected_entry) => {
+                            if declaration.is_some_and(|id| !trie.nodes[id].children.is_empty()) {
+                                return Err(changed(
+                                    &display_path,
+                                    "generated path traverses a witnessed non-directory",
+                                ));
+                            }
+                            let actual = capture_entry_witness(
+                                &context,
+                                &task.directory,
+                                name,
+                                &handle,
+                                &entry_metadata,
+                                entry_snapshot,
+                                &display_path,
+                                &mut hasher,
+                            )?;
+                            if &actual != expected_entry {
+                                return Err(changed(&display_path, "witnessed sibling changed during admission"));
+                            }
+                        }
+                    },
+                    None => {
+                        let declaration = declaration.ok_or_else(|| {
+                            changed(
+                                &display_path,
+                                "an undeclared sibling appeared during generated admission",
+                            )
+                        })?;
+                        let child = if entry_metadata.file_type().is_dir() {
+                            let id = base_directory_count.checked_add(draft.new_directories.len()).ok_or(
+                                Error::ArithmeticOverflow {
+                                    resource: "package inventory directories",
+                                    path: display_path.clone(),
+                                },
+                            )?;
+                            let file = open_entry(
+                                &task.directory.file,
+                                name,
+                                libc::O_RDONLY
+                                    | libc::O_DIRECTORY
+                                    | libc::O_CLOEXEC
+                                    | libc::O_NOFOLLOW
+                                    | libc::O_NONBLOCK,
+                                &display_path,
+                            )?;
+                            require_snapshot(
+                                &display_path,
+                                entry_snapshot,
+                                &metadata(&file, "stat generated package directory", &display_path)?,
+                            )?;
+                            reserve(&mut draft.new_directories, 1, "generated package directories")?;
+                            draft.new_directories.push(DirectoryWitness {
+                                parent: Some(task.directory.witness_id),
+                                name: name.clone(),
+                                snapshot: entry_snapshot,
+                                children: Vec::new(),
+                            });
+                            reserve(&mut tasks, 1, "package admission traversal tasks")?;
+                            tasks.push(AdmissionTask {
+                                directory: Arc::new(DirectoryHandle {
+                                    file,
+                                    relative: relative.clone(),
+                                    display_path: display_path.clone(),
+                                    snapshot: entry_snapshot,
+                                    anchor: Arc::clone(&self.anchor),
+                                    witness: Arc::clone(self),
+                                    witness_id: id,
+                                }),
+                                declaration,
+                                existing: None,
+                            });
+                            WitnessChild {
+                                name: name.clone(),
+                                kind: WitnessChildKind::Directory(id),
+                            }
+                        } else {
+                            if !trie.nodes[declaration].terminal || !trie.nodes[declaration].children.is_empty() {
+                                return Err(changed(
+                                    &display_path,
+                                    "generated non-directory does not match an exact declared leaf",
+                                ));
+                            }
+                            WitnessChild {
+                                name: name.clone(),
+                                kind: WitnessChildKind::Entry(capture_entry_witness(
+                                    &context,
+                                    &task.directory,
+                                    name,
+                                    &handle,
+                                    &entry_metadata,
+                                    entry_snapshot,
+                                    &display_path,
+                                    &mut hasher,
+                                )?),
+                            }
+                        };
+                        add_admission_delta_for_relative(&relative, &child, &display_path, &mut draft.delta)?;
+                        if let Some(update_index) = update_index {
+                            reserve(
+                                &mut draft.existing[update_index].additions,
+                                1,
+                                "generated package child edges",
+                            )?;
+                            draft.existing[update_index].additions.push(child);
+                        } else {
+                            let local_id = task
+                                .directory
+                                .witness_id
+                                .checked_sub(base_directory_count)
+                                .ok_or_else(|| changed(&display_path, "invalid generated directory identity"))?;
+                            let children = &mut draft.new_directories[local_id].children;
+                            reserve(children, 1, "generated package child edges")?;
+                            children.push(child);
+                        }
+                    }
+                }
+            }
+            if let Some(missing) = expected_children.get(expected_index) {
+                return Err(changed(
+                    &task.directory.display_path.join(&missing.name),
+                    "witnessed package entry disappeared during admission",
+                ));
+            }
+            for (declared, _) in &trie.nodes[task.declaration].children {
+                if names.binary_search(declared).is_err() {
+                    return Err(changed(
+                        &task.directory.display_path.join(declared),
+                        "declared generated package path was not created",
+                    ));
+                }
+            }
+
+            let rescan_usage = Arc::new(Mutex::new(CollectionUsage::default()));
+            let rescan = CollectionContext::new(self.limits, rescan_usage, Arc::clone(&self.deadline));
+            let rescanned = read_directory_names(&task.directory, &rescan)?;
+            if rescanned != names {
+                return Err(changed(
+                    &task.directory.display_path,
+                    "directory membership changed during generated admission",
+                ));
+            }
+            if let Some(update_index) = update_index {
+                let update = &mut draft.existing[update_index];
+                let expected_snapshot = state.directories[update.id].snapshot;
+                if update.additions.is_empty() {
+                    if task.directory.snapshot != expected_snapshot {
+                        return Err(changed(
+                            &task.directory.display_path,
+                            "unmodified parent metadata changed during generated admission",
+                        ));
+                    }
+                    update.snapshot = expected_snapshot;
+                } else if !stable_directory_snapshot(expected_snapshot, task.directory.snapshot) {
+                    return Err(changed(
+                        &task.directory.display_path,
+                        "generated parent identity or permissions changed",
+                    ));
+                }
+            }
+        }
+        draft.scan_usage = scan_usage.lock().map_err(|_| Error::StatePoisoned)?.clone();
+        Ok(draft)
+    }
+}
+
 #[derive(Debug, Clone)]
 enum VerifiedKind {
     Regular { hash: u128 },
@@ -881,13 +2193,12 @@ enum VerifiedKind {
 #[derive(Debug, Clone)]
 pub(crate) struct VerifiedPath {
     anchor: Arc<RootAnchor>,
-    parent_relative: PathBuf,
-    parent_identity: NodeIdentity,
+    witness: Arc<WitnessGraph>,
+    parent_id: DirectoryId,
     name: OsString,
     snapshot: FileSnapshot,
     kind: VerifiedKind,
     limits: CollectionLimits,
-    usage: Arc<Mutex<CollectionUsage>>,
     deadline: Arc<Deadline>,
 }
 
@@ -898,33 +2209,31 @@ impl VerifiedPath {
         snapshot: FileSnapshot,
         kind: VerifiedKind,
         limits: CollectionLimits,
-        usage: Arc<Mutex<CollectionUsage>>,
         deadline: Arc<Deadline>,
     ) -> Self {
         Self {
             anchor: Arc::clone(&parent.anchor),
-            parent_relative: parent.relative.clone(),
-            parent_identity: parent.snapshot.node,
+            witness: Arc::clone(&parent.witness),
+            parent_id: parent.witness_id,
             name,
             snapshot,
             kind,
             limits,
-            usage,
             deadline,
         }
     }
 
-    fn display_path(&self) -> PathBuf {
-        self.anchor.path.join(&self.parent_relative).join(&self.name)
+    fn display_path(&self) -> Result<PathBuf, Error> {
+        self.witness.entry_path(self.parent_id, &self.name)
     }
 
     fn open_parent(&self, operation: &'static str) -> Result<File, Error> {
-        let path = self.display_path();
+        let path = self.display_path()?;
         self.deadline.check(&path)?;
         self.anchor.verify_path_node()?;
-        let parent = self.anchor.open_directory(&self.parent_relative)?;
+        let parent = self.witness.open_directory(self.parent_id, &path)?;
         let parent_metadata = metadata(&parent, operation, &path)?;
-        if NodeIdentity::from_metadata(&parent_metadata) != self.parent_identity {
+        if NodeIdentity::from_metadata(&parent_metadata) != self.witness.directory_identity(self.parent_id)? {
             return Err(changed(&path, "package entry parent was replaced"));
         }
         self.deadline.check(&path)?;
@@ -932,7 +2241,7 @@ impl VerifiedPath {
     }
 
     fn verify(&self) -> Result<(), Error> {
-        let path = self.display_path();
+        let path = self.display_path()?;
         let parent = self.open_parent("verify package entry parent")?;
         let handle = open_entry_handle(&parent, &self.name, &path)?;
         let current = metadata(&handle, "verify collected package entry", &path)?;
@@ -964,7 +2273,7 @@ impl VerifiedPath {
     }
 
     fn open_regular(&self) -> Result<VerifiedFileReader, Error> {
-        let path = self.display_path();
+        let path = self.display_path()?;
         let expected_hash = match self.kind {
             VerifiedKind::Regular { hash } => hash,
             _ => return Err(Error::UnverifiedContent { path }),
@@ -972,7 +2281,8 @@ impl VerifiedPath {
         self.verify()?;
         let parent = self.open_parent("open verified package parent")?;
         let parent_metadata = metadata(&parent, "open verified package parent", &path)?;
-        if NodeIdentity::from_metadata(&parent_metadata) != self.parent_identity {
+        let parent_identity = self.witness.directory_identity(self.parent_id)?;
+        if NodeIdentity::from_metadata(&parent_metadata) != parent_identity {
             return Err(changed(&path, "package file parent was replaced before emission"));
         }
         let file = open_entry(
@@ -990,8 +2300,9 @@ impl VerifiedPath {
             file,
             parent,
             anchor: Arc::clone(&self.anchor),
-            parent_relative: self.parent_relative.clone(),
-            parent_identity: self.parent_identity,
+            witness: Arc::clone(&self.witness),
+            parent_id: self.parent_id,
+            parent_identity,
             name: self.name.clone(),
             path,
             expected: self.snapshot,
@@ -1009,7 +2320,7 @@ impl VerifiedPath {
         size: &mut u64,
         hasher: &mut StoneDigestWriterHasher,
     ) -> Result<(), Error> {
-        let path = self.display_path();
+        let path = self.display_path()?;
         if !matches!(self.kind, VerifiedKind::Regular { .. }) {
             return Err(Error::UnverifiedContent { path });
         }
@@ -1020,6 +2331,20 @@ impl VerifiedPath {
             return Err(changed(&path, "analyzed package path is no longer a regular file"));
         }
         let new_snapshot = FileSnapshot::from_metadata(&current_metadata);
+        if new_snapshot.node != self.snapshot.node {
+            self.witness.poison();
+            return Err(changed(
+                &path,
+                "analyzed regular file was replaced without an authenticated transition",
+            ));
+        }
+        if self.snapshot.links != 1 || new_snapshot.links != 1 {
+            self.witness.poison();
+            return Err(changed(
+                &path,
+                "in-place analyzer mutation of multiply-linked files is not supported",
+            ));
+        }
         enforce_u64_limit(
             "regular file bytes",
             self.limits.max_file_bytes,
@@ -1076,16 +2401,26 @@ impl VerifiedPath {
             &metadata(&reopened, "verify analyzed package path", &path)?,
         )?;
 
-        replace_accounted_regular(&self.usage, self.snapshot.size, new_snapshot.size, self.limits, &path)?;
         let hash = hasher.digest128();
         let target = match &layout.file {
             StonePayloadLayoutFile::Regular(_, target) => target.clone(),
             _ => return Err(Error::UnverifiedContent { path }),
         };
-        layout.uid = current_metadata.uid();
-        layout.gid = current_metadata.gid();
-        layout.mode = current_metadata.mode();
-        layout.file = StonePayloadLayoutFile::Regular(hash, target);
+        let new_layout = StonePayloadLayoutRecord {
+            uid: current_metadata.uid(),
+            gid: current_metadata.gid(),
+            mode: current_metadata.mode(),
+            tag: layout.tag,
+            file: StonePayloadLayoutFile::Regular(hash, target),
+        };
+        if let Err(error) =
+            self.witness
+                .restate_regular(self.parent_id, &self.name, self.snapshot, new_snapshot, hash, &path)
+        {
+            self.witness.poison();
+            return Err(error);
+        }
+        *layout = new_layout;
         *size = new_snapshot.size;
         self.snapshot = new_snapshot;
         self.kind = VerifiedKind::Regular { hash };
@@ -1123,12 +2458,50 @@ impl PathInfo {
     }
 
     pub fn restat(&mut self, hasher: &mut StoneDigestWriterHasher) -> Result<(), Error> {
+        let verified = self.verified.as_mut().ok_or_else(|| Error::UnverifiedContent {
+            path: self.path.clone(),
+        })?;
+        let result = verified.restat_regular(&mut self.layout, &mut self.size, hasher);
+        if result.is_err() {
+            verified.witness.poison();
+        }
+        result
+    }
+
+    pub(crate) fn check_deadline(&self) -> Result<(), Error> {
         self.verified
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| Error::UnverifiedContent {
                 path: self.path.clone(),
             })?
-            .restat_regular(&mut self.layout, &mut self.size, hasher)
+            .deadline
+            .check(&self.path)
+    }
+
+    pub(crate) fn remaining_time(&self) -> Result<Duration, Error> {
+        self.verified
+            .as_ref()
+            .ok_or_else(|| Error::UnverifiedContent {
+                path: self.path.clone(),
+            })?
+            .deadline
+            .remaining(&self.path)
+    }
+
+    pub(crate) fn inventory_contains_regular_target(&self, target: &Path) -> Result<bool, Error> {
+        let verified = self.verified.as_ref().ok_or_else(|| Error::UnverifiedContent {
+            path: self.path.clone(),
+        })?;
+        verified.deadline.check(target)?;
+        let relative = target.strip_prefix("/").unwrap_or(target);
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Ok(false);
+        }
+        verified.witness.contains_regular(relative)
     }
 
     pub(crate) fn verify_unchanged(&self) -> Result<(), Error> {
@@ -1179,7 +2552,8 @@ pub(crate) struct VerifiedFileReader {
     file: File,
     parent: File,
     anchor: Arc<RootAnchor>,
-    parent_relative: PathBuf,
+    witness: Arc<WitnessGraph>,
+    parent_id: DirectoryId,
     parent_identity: NodeIdentity,
     name: OsString,
     path: PathBuf,
@@ -1220,7 +2594,7 @@ impl VerifiedFileReader {
             return Err(changed(&self.path, "package file parent changed during emission"));
         }
         self.anchor.verify_path_node()?;
-        let parent = self.anchor.open_directory(&self.parent_relative)?;
+        let parent = self.witness.open_directory(self.parent_id, &self.path)?;
         if NodeIdentity::from_metadata(&metadata(&parent, "reopen emitted package parent", &self.path)?)
             != self.parent_identity
         {
@@ -1326,7 +2700,7 @@ fn layout_from_metadata(
     })
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct CollectionUsage {
     entries: u64,
     name_bytes: u64,
@@ -1448,32 +2822,110 @@ impl Deadline {
             Ok(())
         }
     }
+
+    fn remaining(&self, path: &Path) -> Result<Duration, Error> {
+        let elapsed = self.started.elapsed();
+        if elapsed >= self.limit {
+            Err(Error::DurationExceeded {
+                path: path.to_owned(),
+                limit: self.limit,
+            })
+        } else {
+            Ok(self.limit - elapsed)
+        }
+    }
 }
 
-fn replace_accounted_regular(
-    usage: &Mutex<CollectionUsage>,
-    old: u64,
-    new: u64,
-    limits: CollectionLimits,
-    path: &Path,
-) -> Result<(), Error> {
-    let mut usage = usage.lock().map_err(|_| Error::StatePoisoned)?;
-    let without_old = usage.regular_bytes.checked_sub(old).ok_or(Error::ArithmeticOverflow {
-        resource: "total regular file bytes",
-        path: path.to_owned(),
-    })?;
-    let updated = without_old.checked_add(new).ok_or(Error::ArithmeticOverflow {
-        resource: "total regular file bytes",
-        path: path.to_owned(),
-    })?;
-    enforce_u64_limit(
-        "total regular file bytes",
-        limits.max_total_regular_bytes,
-        updated,
-        path,
+fn hash_inventory_regular(
+    context: &CollectionContext,
+    parent: &DirectoryHandle,
+    name: &OsStr,
+    expected: FileSnapshot,
+    display_path: &Path,
+    hasher: &mut StoneDigestWriterHasher,
+) -> Result<u128, Error> {
+    let mut file = open_entry(
+        &parent.file,
+        name,
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
+        display_path,
     )?;
-    usage.regular_bytes = updated;
-    Ok(())
+    let opened = metadata(&file, "stat inventory package file", display_path)?;
+    if !opened.file_type().is_file() {
+        return Err(changed(
+            display_path,
+            "inventory entry stopped being a regular file before hashing",
+        ));
+    }
+    require_snapshot(display_path, expected, &opened)?;
+    hasher.reset();
+    let mut buffer = [0u8; HASH_BUFFER_BYTES];
+    let mut bytes = 0u64;
+    loop {
+        context.check_time(display_path)?;
+        let read = file.read(&mut buffer).map_err(|source| Error::Io {
+            operation: "hash inventory package file",
+            path: display_path.to_owned(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        bytes = bytes.checked_add(read as u64).ok_or(Error::ArithmeticOverflow {
+            resource: "regular file bytes",
+            path: display_path.to_owned(),
+        })?;
+        if bytes > expected.size {
+            return Err(changed(display_path, "inventory regular file grew while hashing"));
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if bytes != expected.size {
+        return Err(changed(
+            display_path,
+            "inventory regular file changed size while hashing",
+        ));
+    }
+    require_snapshot(
+        display_path,
+        expected,
+        &metadata(&file, "restat inventory package file", display_path)?,
+    )?;
+    verify_entry_collection(parent, name, expected, display_path)?;
+    Ok(hasher.digest128())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_entry_witness(
+    context: &CollectionContext,
+    parent: &DirectoryHandle,
+    name: &OsStr,
+    handle: &File,
+    entry_metadata: &Metadata,
+    snapshot: FileSnapshot,
+    path: &Path,
+    hasher: &mut StoneDigestWriterHasher,
+) -> Result<EntryWitness, Error> {
+    let file_type = entry_metadata.file_type();
+    let kind = if file_type.is_symlink() {
+        let target = read_symlink_handle(handle, path, context)?;
+        verify_entry_collection(parent, name, snapshot, path)?;
+        WitnessEntryKind::Symlink { target }
+    } else if file_type.is_file() {
+        context.admit_regular(snapshot.size, path)?;
+        WitnessEntryKind::Regular {
+            hash: hash_inventory_regular(context, parent, name, snapshot, path, hasher)?,
+        }
+    } else if is_supported_special(&file_type) {
+        verify_entry_collection(parent, name, snapshot, path)?;
+        WitnessEntryKind::Special
+    } else {
+        return Err(Error::UnsupportedFileType {
+            path: path.to_owned(),
+            kind: "unknown special inode",
+        });
+    };
+    Ok(EntryWitness { snapshot, kind })
 }
 
 fn read_directory_names(directory: &DirectoryHandle, context: &CollectionContext) -> Result<Vec<OsString>, Error> {
@@ -1809,6 +3261,271 @@ fn join_relative(parent: &Path, name: &OsStr) -> PathBuf {
     relative
 }
 
+fn require_usable_phase(state: &WitnessState, operation: &'static str) -> Result<(), Error> {
+    match state.phase {
+        WitnessPhase::AdmissionsOpen | WitnessPhase::Sealed => Ok(()),
+        WitnessPhase::Poisoned => Err(Error::InventoryPoisoned),
+        phase => Err(Error::InvalidInventoryPhase {
+            operation,
+            phase: phase.name(),
+        }),
+    }
+}
+
+fn find_child<'a>(directories: &'a [DirectoryWitness], parent: DirectoryId, name: &OsStr) -> Option<&'a WitnessChild> {
+    let children = &directories.get(parent)?.children;
+    children
+        .binary_search_by(|child| child.name.as_os_str().cmp(name))
+        .ok()
+        .map(|position| &children[position])
+}
+
+fn lookup_directory(directories: &[DirectoryWitness], relative: &Path) -> Option<DirectoryId> {
+    let mut id = 0;
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        let child = find_child(directories, id, name)?;
+        let WitnessChildKind::Directory(child_id) = &child.kind else {
+            return None;
+        };
+        id = *child_id;
+    }
+    Some(id)
+}
+
+fn directory_relative(
+    directories: &[DirectoryWitness],
+    mut id: DirectoryId,
+    display_root: &Path,
+) -> Result<PathBuf, Error> {
+    let mut lineage = Vec::new();
+    loop {
+        let directory = directories.get(id).ok_or_else(|| Error::UnwitnessedPath {
+            path: display_root.to_owned(),
+        })?;
+        let Some(parent) = directory.parent else {
+            break;
+        };
+        reserve(&mut lineage, 1, "witnessed directory lineage")?;
+        lineage.push(directory.name.as_os_str());
+        id = parent;
+    }
+    let mut relative = PathBuf::new();
+    for name in lineage.into_iter().rev() {
+        relative.push(name);
+    }
+    Ok(relative)
+}
+
+fn compare_exact_inventory(
+    expected: &[DirectoryWitness],
+    actual: &[DirectoryWitness],
+    root: &Path,
+    deadline: &Deadline,
+) -> Result<(), Error> {
+    if expected.is_empty() || actual.is_empty() {
+        return Err(changed(root, "complete witnessed package inventory root changed"));
+    }
+    let mut tasks = Vec::new();
+    reserve(&mut tasks, 1, "package inventory comparison tasks")?;
+    tasks.push((0usize, 0usize));
+    while let Some((expected_id, actual_id)) = tasks.pop() {
+        deadline.check(root)?;
+        let expected_directory = expected
+            .get(expected_id)
+            .ok_or_else(|| changed(root, "invalid witnessed directory edge"))?;
+        let actual_directory = actual
+            .get(actual_id)
+            .ok_or_else(|| changed(root, "invalid scanned directory edge"))?;
+        if expected_directory.snapshot != actual_directory.snapshot
+            || expected_directory.children.len() != actual_directory.children.len()
+        {
+            return Err(changed(root, "complete witnessed package directory changed"));
+        }
+        for (expected_child, actual_child) in expected_directory.children.iter().zip(&actual_directory.children) {
+            deadline.check(root)?;
+            if expected_child.name != actual_child.name {
+                return Err(changed(root, "complete witnessed package membership changed"));
+            }
+            match (&expected_child.kind, &actual_child.kind) {
+                (WitnessChildKind::Directory(expected), WitnessChildKind::Directory(actual)) => {
+                    reserve(&mut tasks, 1, "package inventory comparison tasks")?;
+                    tasks.push((*expected, *actual));
+                }
+                (WitnessChildKind::Entry(expected), WitnessChildKind::Entry(actual)) if expected == actual => {}
+                _ => return Err(changed(root, "complete witnessed package entry changed")),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn stable_directory_snapshot(expected: FileSnapshot, actual: FileSnapshot) -> bool {
+    expected.node == actual.node
+        && expected.mode == actual.mode
+        && expected.uid == actual.uid
+        && expected.gid == actual.gid
+}
+
+fn add_admission_delta_for_relative(
+    relative: &Path,
+    child: &WitnessChild,
+    display_path: &Path,
+    delta: &mut AdmissionDelta,
+) -> Result<(), Error> {
+    delta.entries = delta.entries.checked_add(1).ok_or(Error::ArithmeticOverflow {
+        resource: "generated package entries",
+        path: display_path.to_owned(),
+    })?;
+    delta.name_bytes =
+        delta
+            .name_bytes
+            .checked_add(child.name.as_bytes().len() as u64)
+            .ok_or(Error::ArithmeticOverflow {
+                resource: "generated package entry name bytes",
+                path: display_path.to_owned(),
+            })?;
+    delta.path_bytes = delta
+        .path_bytes
+        .checked_add(relative.as_os_str().as_bytes().len() as u64)
+        .ok_or(Error::ArithmeticOverflow {
+            resource: "generated package entry path bytes",
+            path: display_path.to_owned(),
+        })?;
+    if let WitnessChildKind::Entry(entry) = &child.kind {
+        match &entry.kind {
+            WitnessEntryKind::Regular { .. } => {
+                delta.regular_bytes =
+                    delta
+                        .regular_bytes
+                        .checked_add(entry.snapshot.size)
+                        .ok_or(Error::ArithmeticOverflow {
+                            resource: "generated package regular bytes",
+                            path: display_path.to_owned(),
+                        })?;
+            }
+            WitnessEntryKind::Symlink { target } => {
+                delta.symlink_target_bytes =
+                    delta
+                        .symlink_target_bytes
+                        .checked_add(target.len() as u64)
+                        .ok_or(Error::ArithmeticOverflow {
+                            resource: "generated package symlink target bytes",
+                            path: display_path.to_owned(),
+                        })?;
+            }
+            WitnessEntryKind::Special => {}
+        }
+    }
+    Ok(())
+}
+
+fn usage_after_admission(
+    usage: &CollectionUsage,
+    delta: &AdmissionDelta,
+    limits: CollectionLimits,
+    path: &Path,
+) -> Result<CollectionUsage, Error> {
+    let mut updated = usage.clone();
+    updated.entries = checked_add_limit(
+        "total entries",
+        updated.entries,
+        delta.entries,
+        limits.max_entries,
+        path,
+    )?;
+    updated.name_bytes = checked_add_limit(
+        "total entry name bytes",
+        updated.name_bytes,
+        delta.name_bytes,
+        limits.max_total_name_bytes,
+        path,
+    )?;
+    updated.path_bytes = checked_add_limit(
+        "total entry path bytes",
+        updated.path_bytes,
+        delta.path_bytes,
+        limits.max_total_path_bytes,
+        path,
+    )?;
+    updated.symlink_target_bytes = checked_add_limit(
+        "total symlink target bytes",
+        updated.symlink_target_bytes,
+        delta.symlink_target_bytes,
+        limits.max_total_symlink_target_bytes,
+        path,
+    )?;
+    updated.regular_bytes = checked_add_limit(
+        "total regular file bytes",
+        updated.regular_bytes,
+        delta.regular_bytes,
+        limits.max_total_regular_bytes,
+        path,
+    )?;
+    Ok(updated)
+}
+
+fn validate_usage(usage: &CollectionUsage, limits: CollectionLimits, path: &Path) -> Result<(), Error> {
+    enforce_u64_limit("total entries", limits.max_entries, usage.entries, path)?;
+    enforce_u64_limit(
+        "total entry name bytes",
+        limits.max_total_name_bytes,
+        usage.name_bytes,
+        path,
+    )?;
+    enforce_u64_limit(
+        "total entry path bytes",
+        limits.max_total_path_bytes,
+        usage.path_bytes,
+        path,
+    )?;
+    enforce_u64_limit(
+        "total symlink target bytes",
+        limits.max_total_symlink_target_bytes,
+        usage.symlink_target_bytes,
+        path,
+    )?;
+    enforce_u64_limit(
+        "total regular file bytes",
+        limits.max_total_regular_bytes,
+        usage.regular_bytes,
+        path,
+    )
+}
+
+fn reserve_admission_commit(directories: &mut Vec<DirectoryWitness>, draft: &AdmissionDraft) -> Result<(), Error> {
+    reserve(
+        directories,
+        draft.new_directories.len(),
+        "generated package directories",
+    )?;
+    for update in &draft.existing {
+        reserve(
+            &mut directories[update.id].children,
+            update.additions.len(),
+            "generated package child edges",
+        )?;
+    }
+    Ok(())
+}
+
+fn commit_admission(directories: &mut Vec<DirectoryWitness>, draft: AdmissionDraft) {
+    for update in draft.existing {
+        let directory = &mut directories[update.id];
+        directory.snapshot = update.snapshot;
+        for child in update.additions {
+            let position = directory
+                .children
+                .binary_search_by(|candidate| candidate.name.cmp(&child.name))
+                .expect_err("generated child was proven absent before commit");
+            directory.children.insert(position, child);
+        }
+    }
+    directories.extend(draft.new_directories);
+}
+
 fn copy_os_string(bytes: &[u8], path: &Path) -> Result<OsString, Error> {
     let mut owned = Vec::new();
     owned
@@ -1945,6 +3662,19 @@ pub enum Error {
     OutsideRoot { root: PathBuf, path: PathBuf },
     #[error("invalid package path {path}: {detail}", path = path.display())]
     InvalidPath { path: PathBuf, detail: &'static str },
+    #[error("generated package path {path} was declared more than once", path = path.display())]
+    DuplicateAdmission { path: PathBuf },
+    #[error("generated package path {path} was already present in the initial inventory", path = path.display())]
+    ExistingAdmission { path: PathBuf },
+    #[error("cannot {operation} while package inventory is {phase}")]
+    InvalidInventoryPhase {
+        operation: &'static str,
+        phase: &'static str,
+    },
+    #[error("package inventory is poisoned by an incomplete or failed transition")]
+    InventoryPoisoned,
+    #[error("package path {path} is not present in the authenticated inventory", path = path.display())]
+    UnwitnessedPath { path: PathBuf },
     #[error("unsupported package entry {path}: {kind}", path = path.display())]
     UnsupportedFileType { path: PathBuf, kind: &'static str },
     #[error("{resource} {actual} exceeds limit {limit} at {path}", path = path.display())]
@@ -2577,5 +4307,307 @@ mod tests {
         fs::write(&path, b"payload").unwrap();
 
         assert!(matches!(info.open_verified(), Err(Error::TreeChanged { .. })));
+    }
+
+    #[test]
+    fn complete_inventory_witnesses_ignored_entries_and_an_empty_root() {
+        let root = tempfile::tempdir().unwrap();
+        let included = write_file(root.path(), "included", 0o644);
+        let ignored = write_file(root.path(), "ignored", 0o644);
+        let collector = all_collector(root.path());
+        let paths = collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        assert_eq!(paths.len(), 2);
+        drop(paths.into_iter().find(|path| path.path == ignored));
+        fs::write(&ignored, b"changed").unwrap();
+        assert!(matches!(collector.seal(), Err(Error::TreeChanged { .. })));
+        assert!(included.exists());
+
+        let root = tempfile::tempdir().unwrap();
+        let collector = all_collector(root.path());
+        assert!(
+            collector
+                .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+                .unwrap()
+                .is_empty()
+        );
+        fs::write(root.path().join("late"), b"late").unwrap();
+        assert!(matches!(collector.seal(), Err(Error::TreeChanged { .. })));
+    }
+
+    #[test]
+    fn generated_admission_is_exact_batched_and_allows_only_declared_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let collector = all_collector(root.path());
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let first = write_file(root.path(), "new/a", 0o644);
+        let second = write_file(root.path(), "new/b", 0o644);
+        let paths = collector
+            .paths(&[first.clone(), second.clone()], &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        assert_eq!(paths.len(), 2);
+        collector.seal().unwrap().verify().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let collector = all_collector(root.path());
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let declared = write_file(root.path(), "nested/generated/leaf", 0o644);
+        write_file(root.path(), "nested/generated/extra", 0o644);
+        assert!(matches!(
+            collector.paths(&[declared], &mut StoneDigestWriterHasher::new()),
+            Err(Error::TreeChanged { .. })
+        ));
+        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
+    }
+
+    #[test]
+    fn generated_admission_rejects_existing_terminals_and_duplicate_declarations() {
+        let root = tempfile::tempdir().unwrap();
+        let existing = write_file(root.path(), "existing", 0o644);
+        let collector = all_collector(root.path());
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        assert!(matches!(
+            collector.paths(&[existing], &mut StoneDigestWriterHasher::new()),
+            Err(Error::ExistingAdmission { .. })
+        ));
+
+        let root = tempfile::tempdir().unwrap();
+        let collector = all_collector(root.path());
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let generated = write_file(root.path(), "generated", 0o644);
+        assert!(matches!(
+            collector.paths(&[generated.clone(), generated], &mut StoneDigestWriterHasher::new()),
+            Err(Error::DuplicateAdmission { .. })
+        ));
+
+        let root = tempfile::tempdir().unwrap();
+        let mut collector = Collector::new(root.path());
+        add_rule(&mut collector, "/initial", "out", PathRuleKind::Any);
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let generated = write_file(root.path(), "generated", 0o644);
+        assert!(matches!(
+            collector.paths(&[generated], &mut StoneDigestWriterHasher::new()),
+            Err(Error::NoMatchingRule { .. })
+        ));
+        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
+    }
+
+    #[test]
+    fn every_complete_rescan_enforces_exact_aggregate_limits() {
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(), "one", 0o644);
+        write_file(root.path(), "two", 0o644);
+        let mut limits = CollectionLimits::default();
+        limits.max_entries = 2;
+        let collector = collector_with_limits(root.path(), limits);
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        collector.seal().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        write_file(root.path(), "one", 0o644);
+        let mut limits = CollectionLimits::default();
+        limits.max_entries = 1;
+        let collector = collector_with_limits(root.path(), limits);
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let generated = write_file(root.path(), "two", 0o644);
+        assert!(matches!(
+            collector.paths(&[generated], &mut StoneDigestWriterHasher::new()),
+            Err(Error::LimitExceeded {
+                resource: "total entries",
+                limit: 1,
+                actual: 2,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn declaration_trie_accepts_exact_remaining_entries_and_rejects_n_plus_one_before_admission() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a/b")).unwrap();
+        let mut limits = CollectionLimits::default();
+        limits.max_entries = 3;
+        let collector = collector_with_limits(root.path(), limits);
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let generated = write_file(root.path(), "a/b/c", 0o644);
+        collector
+            .paths(&[generated], &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        collector.seal().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a/b")).unwrap();
+        let collector = collector_with_limits(root.path(), limits);
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let generated = write_file(root.path(), "a/b/c/d", 0o644);
+        assert!(matches!(
+            collector.paths(&[generated], &mut StoneDigestWriterHasher::new()),
+            Err(Error::LimitExceeded {
+                resource: "total entries",
+                limit: 3,
+                actual: 4,
+                ..
+            })
+        ));
+        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
+    }
+
+    #[test]
+    fn strict_restat_accepts_same_inode_and_rejects_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_file(root.path(), "file", 0o644);
+        let collector = all_collector(root.path());
+        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+        let inode = fs::metadata(&path).unwrap().ino();
+        fs::write(&path, b"mutated in place").unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        info.restat(&mut StoneDigestWriterHasher::new()).unwrap();
+        collector.seal().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let path = write_file(root.path(), "file", 0o644);
+        let collector = all_collector(root.path());
+        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+        fs::rename(&path, root.path().join("old")).unwrap();
+        fs::write(&path, b"replacement").unwrap();
+        assert!(matches!(
+            info.restat(&mut StoneDigestWriterHasher::new()),
+            Err(Error::TreeChanged { .. })
+        ));
+        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
+    }
+
+    #[test]
+    fn restat_accepts_the_exact_file_limit_and_every_failure_poisons() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_file(root.path(), "file", 0o644);
+        let mut limits = CollectionLimits::default();
+        limits.max_file_bytes = 8;
+        limits.max_total_regular_bytes = 8;
+        let collector = collector_with_limits(root.path(), limits);
+        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+        fs::write(&path, b"12345678").unwrap();
+        info.restat(&mut StoneDigestWriterHasher::new()).unwrap();
+        collector.seal().unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let path = write_file(root.path(), "file", 0o644);
+        limits.max_file_bytes = 7;
+        limits.max_total_regular_bytes = 7;
+        let collector = collector_with_limits(root.path(), limits);
+        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+        fs::write(&path, b"12345678").unwrap();
+        assert!(matches!(
+            info.restat(&mut StoneDigestWriterHasher::new()),
+            Err(Error::LimitExceeded {
+                resource: "regular file bytes",
+                limit: 7,
+                actual: 8,
+                ..
+            })
+        ));
+        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
+    }
+
+    #[test]
+    fn sealed_inventory_rejects_late_add_delete_metadata_and_replacement() {
+        for action in 0..4 {
+            let root = tempfile::tempdir().unwrap();
+            let path = write_file(root.path(), "file", 0o644);
+            let collector = all_collector(root.path());
+            collector
+                .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+                .unwrap();
+            let sealed = collector.seal().unwrap();
+            match action {
+                0 => fs::write(root.path().join("added"), b"added").unwrap(),
+                1 => fs::remove_file(&path).unwrap(),
+                2 => fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap(),
+                3 => {
+                    fs::rename(&path, root.path().join("old")).unwrap();
+                    fs::write(&path, b"payload").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(matches!(sealed.verify(), Err(Error::TreeChanged { .. })));
+        }
+    }
+
+    #[test]
+    fn sealed_phase_rejects_admission_and_restat_transitions() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_file(root.path(), "file", 0o644);
+        let collector = all_collector(root.path());
+        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+        collector.seal().unwrap();
+        let generated = write_file(root.path(), "generated", 0o644);
+        assert!(matches!(
+            collector.paths(&[generated], &mut StoneDigestWriterHasher::new()),
+            Err(Error::InvalidInventoryPhase { phase: "sealed", .. })
+        ));
+
+        fs::write(&path, b"same inode mutation").unwrap();
+        assert!(matches!(
+            info.restat(&mut StoneDigestWriterHasher::new()),
+            Err(Error::InvalidInventoryPhase { phase: "sealed", .. })
+        ));
+    }
+
+    #[test]
+    fn regular_target_lookup_is_inventory_only_and_phase_checked() {
+        let root = tempfile::tempdir().unwrap();
+        let regular = write_file(root.path(), "usr/lib/pkgconfig/lib.pc", 0o644);
+        symlink("lib.pc", root.path().join("usr/lib/pkgconfig/link.pc")).unwrap();
+        let collector = all_collector(root.path());
+        let paths = collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+        let info = paths
+            .iter()
+            .find(|info| info.target_path == Path::new("/usr/lib/pkgconfig/lib.pc"))
+            .unwrap();
+        assert!(
+            info.inventory_contains_regular_target(Path::new("/usr/lib/pkgconfig/lib.pc"))
+                .unwrap()
+        );
+        assert!(
+            !info
+                .inventory_contains_regular_target(Path::new("/usr/lib/pkgconfig/link.pc"))
+                .unwrap()
+        );
+        assert!(
+            !info
+                .inventory_contains_regular_target(Path::new("/usr/lib/pkgconfig/missing.pc"))
+                .unwrap()
+        );
+        fs::remove_file(regular).unwrap();
+        assert!(
+            info.inventory_contains_regular_target(Path::new("/usr/lib/pkgconfig/lib.pc"))
+                .unwrap()
+        );
+        assert!(matches!(collector.seal(), Err(Error::TreeChanged { .. })));
+        assert!(matches!(
+            info.inventory_contains_regular_target(Path::new("/usr/lib/pkgconfig/lib.pc")),
+            Err(Error::InventoryPoisoned)
+        ));
     }
 }
