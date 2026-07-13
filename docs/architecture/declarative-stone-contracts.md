@@ -20,7 +20,7 @@ the restricted Gluon evaluator and Boulder.
 | Contract | Target module | Owner and responsibility |
 | --- | --- | --- |
 | `PackageSpec` | `stone_recipe::package` | Authored intent returned by a pure Gluon package factory. Validation may inspect only this value and explicit function arguments. |
-| `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. An explicit manifest composes validated values and total patches through ordered, fingerprinted operations. |
+| `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, source preparation, and sandbox layout. An explicit manifest composes validated values and total patches through ordered, fingerprinted operations. |
 | `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
 
 The target contract gives `bin/boulder` orchestration only:
@@ -101,8 +101,8 @@ Still transitional:
 - Is reached through one explicit Gluon policy root. Directory enumeration is
   not composition.
 - Contains every repository choice that can alter a build: platform data,
-  toolchains, standard builders, base build inputs, tuning defaults, package
-  templates, analyzer policy, and fixed guest layout.
+  toolchains, standard builders, base build inputs, tuning defaults, source
+  preparation, analyzer policy, and fixed guest layout.
 - Is composed through ordered, one-way transformations with strict `add`,
   `replace`, and `modify` operations. `add` requires absent state; `replace`
   and `modify` require existing state, and each intermediate policy is
@@ -171,10 +171,10 @@ implementation status above is authoritative for completed work.
 | --- | --- | --- | --- |
 | Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicit `data/policy/policy.glu` manifest with ordered typed operations and complete evaluation fingerprints. Its foundation `add` names `default.glu`; the macro tree is deleted. |
 | Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Selected builder and platform policy, resolved into plan phases, tools, and environment. |
-| Architecture package templates | `package.rs::resolve_packages` | Repository policy | Typed output templates in `PolicySpec`, with explicit composition operations. |
+| Architecture package templates | former `package.rs::resolve_packages` behavior | Repository policy | Removed. `PackageSpec.outputs` is the sole typed output declaration and the selected target supplies only artifact architecture and build policy. |
 | Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
 | Root package and subpackage precedence | `package.rs::resolve_packages` | Authored intent | Explicit named outputs in `PackageSpec`; no collision-based merge in the executor. |
-| Template collision merge and list sorting | `package.rs::resolve_packages` | Repository policy | Typed policy patch semantics; the fully merged outputs appear in the plan. |
+| Template collision merge and list sorting | former `package.rs::resolve_packages` behavior | Repository policy | Removed. Named `PackageSpec.outputs` are validated directly and copied deterministically into the plan without a policy-template merge. |
 | `%name`, `%version`, and `%release` expansion in package fields | `package.rs::resolve_packages` | Authored intent | Structural fields or typed interpolation resolved before plan freeze. |
 | `%action` expansion and action-provided dependencies | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Structured builders declare steps and required tools. Implemented; explicit `Shell` is literal and performs no macro expansion. |
 | `%(definition)` expansion | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Replaced by typed builder arguments, paths, and environment values frozen in the plan. |
@@ -225,7 +225,7 @@ implementation status above is authoritative for completed work.
 
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
-| Output names, path rules, runtime relations, and conflicts | recipe plus architecture templates | Authored intent plus repository policy | Explicit, fully merged plan outputs. |
+| Output names, path rules, runtime relations, and conflicts | evaluated recipe | Authored intent | Explicit validated `PackageSpec.outputs`, resolved into frozen plan outputs. |
 | Package analysis chain and automatic provides/dependencies | `package/analysis` | Repository policy | Analyzer set/version/configuration in the plan. Findings are output-derived observations, not permission to select new policy. |
 | Build release number | `cli/build.rs` and `package/emit.rs` | Authored invocation intent | Explicit plan field because it changes emitted package identity/metadata. |
 | Boulder implementation and recipe fingerprint | `package.rs` and emitted metadata | Resolved dependency | Schema/implementation version plus all recipe, policy, lock, and builder fingerprints in the plan. |
@@ -259,7 +259,7 @@ temporary host paths, logging, progress presentation, and cleanup. It may not:
 - add root packages based on undeclared syntax, file extensions, or toolchain
   branches;
 - infer a platform, timestamp, phase, PGO stage, tuning group, or compiler;
-- merge package templates, root packages, or subpackages;
+- merge hidden package templates, root packages, or subpackages;
 - expose the host CPU count or host paths to build steps;
 - resolve another provider because the selected package is unavailable.
 

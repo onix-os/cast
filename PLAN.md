@@ -100,14 +100,13 @@ before the next entry. Manifest order, operation kind, module origin, and each
 module's complete evaluation fingerprint participate in policy identity and
 are reported by `boulder recipe explain`.
 
-### Current blockers
+### Deliberate limitation
 
 - Mutable local recipe-directory inputs are rejected before freeze. Supporting
   them requires a local-source ABI which hashes their content and destination
   into the derivation rather than exposing an untracked recipe-directory mount.
-- Repository output policy still uses a dedicated deferred template DTO until
-  it becomes a pure typed policy factory; it no longer reuses the package or
-  recipe domain.
+  Rejecting this untracked input preserves the completed frozen-plan boundary;
+  a future local-source ABI can extend it without adding a compatibility path.
 
 ## Target semantics
 
@@ -176,7 +175,8 @@ visible.
 1. **`PackageSpec`** records authored package intent: metadata, sources,
    symbolic inputs, builder selection, hooks, outputs, and package rules.
 2. **`PolicySpec`** records explicit repository policy: platforms, toolchains,
-   builders, tuning, environment, and package templates.
+   builders, tuning, environment, analyzers, source preparation, and sandbox
+   layout.
 3. **`DerivationPlan`** is the fully resolved, target-specific, canonical data
    consumed by the executor.
 
@@ -304,7 +304,7 @@ of the three specification layers.
 
 - [x] Create one Gluon policy root that explicitly declares the base policy,
   source preparation, targets, toolchains, builders, tuning, environment,
-  analyzers, and output templates; bind its imported modules into the root
+  analyzers, and sandbox layout; bind its imported modules into the root
   fingerprint.
 - [x] Delete directory-enumerated macro loading and evaluate the typed
   `BuildPolicySpec` root instead.
