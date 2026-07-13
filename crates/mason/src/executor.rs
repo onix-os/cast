@@ -8,15 +8,24 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io,
+    io::{self, Write},
+    os::fd::AsRawFd,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
-    process, thread,
+    process,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 use fs_err as fs;
 use nix::{
     errno::Errno,
+    fcntl::{FcntlArg, OFlag, fcntl},
     sched::{CpuSet, sched_getaffinity, sched_setaffinity},
     sys::{
         signal::{Signal, kill},
@@ -37,6 +46,17 @@ use crate::{
 pub struct Executor<'a> {
     plan: &'a DerivationPlan,
 }
+
+/// Frozen package declarations do not control these limits. They are a final,
+/// deliberately generous operational ceiling around every already-frozen
+/// build step, so a wedged or noisy tool cannot retain the executor forever.
+const STEP_WALL_TIME_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+const STEP_STDOUT_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
+const STEP_STDERR_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
+const STEP_TOTAL_OUTPUT_BYTE_LIMIT: u64 = 96 * 1024 * 1024;
+const STEP_OPEN_FILE_LIMIT: nix::libc::rlim_t = 4_096;
+const LOG_READ_BUFFER_BYTES: usize = 16 * 1024;
+const STEP_MONITOR_INTERVAL: Duration = Duration::from_millis(10);
 
 impl<'a> Executor<'a> {
     pub fn new(plan: &'a DerivationPlan) -> Result<Self, Error> {
@@ -303,7 +323,55 @@ fn logged(
     command: &str,
     containment: DescendantContainment,
     configure: impl FnOnce(&mut process::Command) -> &mut process::Command,
-) -> io::Result<process::ExitStatus> {
+) -> Result<process::ExitStatus, StepExecutionError> {
+    logged_with_limits(
+        command,
+        containment,
+        StepExecutionLimits::production(),
+        LogMode::Stream,
+        configure,
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StepExecutionLimits {
+    wall_time: Duration,
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+    total_output_bytes: u64,
+}
+
+impl StepExecutionLimits {
+    const fn production() -> Self {
+        Self {
+            wall_time: STEP_WALL_TIME_LIMIT,
+            stdout_bytes: STEP_STDOUT_BYTE_LIMIT,
+            stderr_bytes: STEP_STDERR_BYTE_LIMIT,
+            total_output_bytes: STEP_TOTAL_OUTPUT_BYTE_LIMIT,
+        }
+    }
+
+    fn stream_limit(self, stream: OutputStream) -> u64 {
+        match stream {
+            OutputStream::Stdout => self.stdout_bytes,
+            OutputStream::Stderr => self.stderr_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogMode {
+    Stream,
+    Discard,
+}
+
+fn logged_with_limits(
+    command: &str,
+    containment: DescendantContainment,
+    limits: StepExecutionLimits,
+    log_mode: LogMode,
+    configure: impl FnOnce(&mut process::Command) -> &mut process::Command,
+) -> Result<process::ExitStatus, StepExecutionError> {
     let mut command = process::Command::new(command);
     configure(&mut command);
     // Frozen steps receive only their configured stdio. Mark every other
@@ -314,6 +382,7 @@ fn logged(
             if nix::libc::setpgid(0, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
+            set_child_resource_limits()?;
             const CLOSE_RANGE_CLOEXEC: nix::libc::c_uint = 1 << 2;
             let result = nix::libc::syscall(
                 nix::libc::SYS_close_range,
@@ -332,16 +401,221 @@ fn logged(
         .stdin(process::Stdio::null())
         .stdout(process::Stdio::piped())
         .stderr(process::Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .map_err(|source| StepExecutionError::Spawn { source })?;
     let child_pid = Pid::from_raw(child.id() as i32);
-    let stdout = log(child.stdout.take().expect("piped stdout"));
-    let stderr = log(child.stderr.take().expect("piped stderr"));
-    ::container::forward_sigint(child_pid)?;
-    let result = child.wait()?;
-    terminate_step_descendants(containment, child_pid)?;
-    let _ = stdout.join();
-    let _ = stderr.join();
-    Ok(result)
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let mut setup_failure = set_nonblocking(stdout.as_raw_fd())
+        .and_then(|()| set_nonblocking(stderr.as_raw_fd()))
+        .err()
+        .map(|source| StepExecutionError::PipeSetup { source });
+
+    let output_budget = Arc::new(Mutex::new(OutputBudget::default()));
+    let log_mux = Arc::new(Mutex::new(LogMux::new(log_mode)));
+    let stop_readers = Arc::new(AtomicBool::new(false));
+    let (alert_sender, alert_receiver) = mpsc::channel();
+
+    let stdout_reader = spawn_log_reader(
+        stdout,
+        OutputStream::Stdout,
+        limits,
+        Arc::clone(&output_budget),
+        Arc::clone(&log_mux),
+        Arc::clone(&stop_readers),
+        alert_sender.clone(),
+    );
+    let stderr_reader = spawn_log_reader(
+        stderr,
+        OutputStream::Stderr,
+        limits,
+        output_budget,
+        log_mux,
+        Arc::clone(&stop_readers),
+        alert_sender,
+    );
+
+    let mut stdout_reader = match stdout_reader {
+        Ok(reader) => Some(reader),
+        Err(source) => {
+            setup_failure.get_or_insert(StepExecutionError::ReaderThreadSpawn {
+                stream: OutputStream::Stdout,
+                source,
+            });
+            None
+        }
+    };
+    let mut stderr_reader = match stderr_reader {
+        Ok(reader) => Some(reader),
+        Err(source) => {
+            setup_failure.get_or_insert(StepExecutionError::ReaderThreadSpawn {
+                stream: OutputStream::Stderr,
+                source,
+            });
+            None
+        }
+    };
+
+    let started = Instant::now();
+    let terminal = if let Some(failure) = setup_failure {
+        StepTerminal::Failure(failure)
+    } else if let Err(source) = ::container::forward_sigint(child_pid) {
+        StepTerminal::Failure(StepExecutionError::SignalForward { source })
+    } else {
+        monitor_step(&mut child, started, limits.wall_time, &alert_receiver)
+    };
+
+    // Readers are deliberately stopped only after the complete containment
+    // boundary has been killed and the direct child has been reaped. This
+    // ordering prevents a daemonized pipe holder from blocking the joins and
+    // prevents descendants from surviving into the next frozen step.
+    let child_was_reaped = matches!(terminal, StepTerminal::Exited(_));
+    let cleanup_failure = cleanup_step(&mut child, containment, child_pid, child_was_reaped);
+    stop_readers.store(true, Ordering::Release);
+
+    let stdout_result = join_log_reader(&mut stdout_reader, OutputStream::Stdout);
+    let stderr_result = join_log_reader(&mut stderr_reader, OutputStream::Stderr);
+    let reader_failure = stdout_result.err().or_else(|| stderr_result.err());
+
+    let result = match terminal {
+        StepTerminal::Exited(status) => reader_failure.map_or(Ok(status), Err),
+        StepTerminal::ReaderAlert => Err(reader_failure.unwrap_or(StepExecutionError::ReaderAlertLost)),
+        StepTerminal::Failure(failure) => Err(failure),
+    };
+
+    match (result, cleanup_failure) {
+        (result, None) => result,
+        (Ok(_), Some(cleanup)) => Err(StepExecutionError::Cleanup {
+            operation: cleanup.operation,
+            source: cleanup.source,
+        }),
+        (Err(failure), Some(cleanup)) => Err(StepExecutionError::CleanupAfterFailure {
+            failure: Box::new(failure),
+            operation: cleanup.operation,
+            source: cleanup.source,
+        }),
+    }
+}
+
+/// Apply only child-local limits whose semantics do not depend on the host UID
+/// or on a guessed build memory/file-size requirement.
+fn set_child_resource_limits() -> io::Result<()> {
+    let core = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_CORE, &core) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut inherited_nofile = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_NOFILE, &mut inherited_nofile) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let nofile_max = inherited_nofile.rlim_max.min(STEP_OPEN_FILE_LIMIT);
+    let nofile = nix::libc::rlimit {
+        rlim_cur: inherited_nofile.rlim_cur.min(nofile_max),
+        rlim_max: nofile_max,
+    };
+    if unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &nofile) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
+    let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(io_error_from_errno)?;
+    let flags = OFlag::from_bits_truncate(flags);
+    fcntl(fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))
+        .map(|_| ())
+        .map_err(io_error_from_errno)
+}
+
+fn io_error_from_errno(error: Errno) -> io::Error {
+    io::Error::from_raw_os_error(error as i32)
+}
+
+#[derive(Debug)]
+enum StepTerminal {
+    Exited(process::ExitStatus),
+    ReaderAlert,
+    Failure(StepExecutionError),
+}
+
+fn monitor_step(
+    child: &mut process::Child,
+    started: Instant,
+    wall_time: Duration,
+    alerts: &mpsc::Receiver<()>,
+) -> StepTerminal {
+    loop {
+        if alerts.try_recv().is_ok() {
+            return StepTerminal::ReaderAlert;
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => return StepTerminal::Exited(status),
+            Ok(None) => {}
+            Err(source) => return StepTerminal::Failure(StepExecutionError::Wait { source }),
+        }
+
+        if started.elapsed() >= wall_time {
+            return StepTerminal::Failure(StepExecutionError::Timeout { limit: wall_time });
+        }
+
+        thread::sleep(STEP_MONITOR_INTERVAL.min(wall_time.saturating_sub(started.elapsed())));
+    }
+}
+
+#[derive(Debug)]
+struct CleanupFailure {
+    operation: &'static str,
+    source: io::Error,
+}
+
+fn cleanup_step(
+    child: &mut process::Child,
+    containment: DescendantContainment,
+    child_pid: Pid,
+    child_was_reaped: bool,
+) -> Option<CleanupFailure> {
+    let mut failure = terminate_step_descendants(containment, child_pid)
+        .err()
+        .map(|source| CleanupFailure {
+            operation: "terminate containment boundary",
+            source,
+        });
+
+    if !child_was_reaped {
+        // Namespace-wide cleanup normally reaps the direct child itself. A
+        // direct kill is also attempted so a boundary-cleanup error cannot
+        // leave child.wait() blocking forever.
+        match kill(child_pid, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => {}
+            Err(error) => {
+                failure.get_or_insert(CleanupFailure {
+                    operation: "kill direct child",
+                    source: error.into(),
+                });
+            }
+        }
+
+        if let Err(source) = child.wait()
+            && !(containment == DescendantContainment::PidNamespace
+                && source.raw_os_error() == Some(Errno::ECHILD as i32))
+        {
+            failure.get_or_insert(CleanupFailure {
+                operation: "reap direct child",
+                source,
+            });
+        }
+    }
+
+    failure
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -413,16 +687,231 @@ fn descendant_signal_target(containment: DescendantContainment, _child_pid: Pid)
     }
 }
 
-fn log<R>(pipe: R) -> thread::JoinHandle<()>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl std::fmt::Display for OutputStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+struct OutputBudget {
+    total: u64,
+}
+
+#[derive(Debug)]
+struct OutputAdmission {
+    accepted: usize,
+    violation: Option<StepExecutionError>,
+}
+
+impl OutputBudget {
+    fn admit(
+        &mut self,
+        stream: OutputStream,
+        stream_bytes: &mut u64,
+        bytes: usize,
+        limits: StepExecutionLimits,
+    ) -> OutputAdmission {
+        let bytes = u64::try_from(bytes).expect("log read buffer length fits in u64");
+        let stream_limit = limits.stream_limit(stream);
+        let stream_remaining = stream_limit.saturating_sub(*stream_bytes);
+        let total_remaining = limits.total_output_bytes.saturating_sub(self.total);
+        let accepted = bytes.min(stream_remaining).min(total_remaining);
+        *stream_bytes += accepted;
+        self.total += accepted;
+
+        let violation = if accepted == bytes {
+            None
+        } else if stream_remaining <= total_remaining {
+            Some(StepExecutionError::OutputLimit {
+                stream,
+                limit: stream_limit,
+                observed: stream_limit.saturating_add(1),
+            })
+        } else {
+            Some(StepExecutionError::TotalOutputLimit {
+                limit: limits.total_output_bytes,
+                observed: limits.total_output_bytes.saturating_add(1),
+            })
+        };
+
+        OutputAdmission {
+            accepted: usize::try_from(accepted).expect("accepted bytes came from a usize-sized read"),
+            violation,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LogMux {
+    mode: LogMode,
+    current: Option<OutputStream>,
+    at_line_start: bool,
+}
+
+impl LogMux {
+    const fn new(mode: LogMode) -> Self {
+        Self {
+            mode,
+            current: None,
+            at_line_start: true,
+        }
+    }
+
+    fn emit(&mut self, stream: OutputStream, mut bytes: &[u8]) -> io::Result<()> {
+        if self.mode == LogMode::Discard || bytes.is_empty() {
+            return Ok(());
+        }
+
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        if self.current != Some(stream) && !self.at_line_start {
+            output.write_all(b"\n")?;
+            self.at_line_start = true;
+        }
+        self.current = Some(stream);
+
+        while !bytes.is_empty() {
+            if self.at_line_start {
+                write!(output, "{} ", "│".dim())?;
+                self.at_line_start = false;
+            }
+
+            let segment_len = bytes
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(bytes.len(), |newline| newline + 1);
+            let (segment, remaining) = bytes.split_at(segment_len);
+            output.write_all(segment)?;
+            if segment.last() == Some(&b'\n') {
+                self.at_line_start = true;
+            }
+            bytes = remaining;
+        }
+        output.flush()
+    }
+
+    fn finish(&mut self, stream: OutputStream) -> io::Result<()> {
+        if self.mode == LogMode::Discard || self.current != Some(stream) || self.at_line_start {
+            return Ok(());
+        }
+
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        output.write_all(b"\n")?;
+        output.flush()?;
+        self.at_line_start = true;
+        Ok(())
+    }
+}
+
+type LogReader = thread::JoinHandle<Result<(), StepExecutionError>>;
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_log_reader<R>(
+    pipe: R,
+    stream: OutputStream,
+    limits: StepExecutionLimits,
+    output_budget: Arc<Mutex<OutputBudget>>,
+    log_mux: Arc<Mutex<LogMux>>,
+    stop: Arc<AtomicBool>,
+    alert: mpsc::Sender<()>,
+) -> io::Result<LogReader>
 where
     R: io::Read + Send + 'static,
 {
-    use std::io::BufRead;
-    thread::spawn(move || {
-        for line in io::BufReader::new(pipe).lines().map_while(Result::ok) {
-            println!("{} {line}", "│".dim());
+    thread::Builder::new()
+        .name(format!("mason-step-{stream}"))
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drain_log(pipe, stream, limits, &output_budget, &log_mux, &stop)
+            }));
+            match result {
+                Ok(result) => {
+                    if result.is_err() {
+                        let _ = alert.send(());
+                    }
+                    result
+                }
+                Err(payload) => {
+                    let _ = alert.send(());
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        })
+}
+
+fn drain_log<R>(
+    mut pipe: R,
+    stream: OutputStream,
+    limits: StepExecutionLimits,
+    output_budget: &Mutex<OutputBudget>,
+    log_mux: &Mutex<LogMux>,
+    stop: &AtomicBool,
+) -> Result<(), StepExecutionError>
+where
+    R: io::Read,
+{
+    let mut buffer = [0_u8; LOG_READ_BUFFER_BYTES];
+    let mut stream_bytes = 0_u64;
+
+    loop {
+        let read = match pipe.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                thread::sleep(STEP_MONITOR_INTERVAL);
+                continue;
+            }
+            Err(source) => return Err(StepExecutionError::OutputRead { stream, source }),
+        };
+
+        let admission = output_budget
+            .lock()
+            .map_err(|_| StepExecutionError::OutputBudgetPoisoned)?
+            .admit(stream, &mut stream_bytes, read, limits);
+
+        if admission.accepted > 0 {
+            log_mux
+                .lock()
+                .map_err(|_| StepExecutionError::LogMuxPoisoned)?
+                .emit(stream, &buffer[..admission.accepted])
+                .map_err(|source| StepExecutionError::OutputWrite { stream, source })?;
         }
-    })
+
+        if let Some(violation) = admission.violation {
+            return Err(violation);
+        }
+    }
+
+    log_mux
+        .lock()
+        .map_err(|_| StepExecutionError::LogMuxPoisoned)?
+        .finish(stream)
+        .map_err(|source| StepExecutionError::OutputWrite { stream, source })
+}
+
+fn join_log_reader(reader: &mut Option<LogReader>, stream: OutputStream) -> Result<(), StepExecutionError> {
+    let Some(reader) = reader.take() else {
+        return Ok(());
+    };
+    match reader.join() {
+        Ok(result) => result,
+        Err(_) => Err(StepExecutionError::ReaderThreadPanicked { stream }),
+    }
 }
 
 fn target_prefix(target: &str, index: usize) -> String {
@@ -466,6 +955,81 @@ fn parse_phase(phase: &str) -> Result<Phase, Error> {
 }
 
 #[derive(Debug, Error)]
+pub enum StepExecutionError {
+    #[error("could not spawn frozen build step: {source}")]
+    Spawn {
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not configure frozen build-step output pipes: {source}")]
+    PipeSetup {
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not start frozen build-step {stream} reader: {source}")]
+    ReaderThreadSpawn {
+        stream: OutputStream,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not install frozen build-step SIGINT forwarding: {source}")]
+    SignalForward {
+        #[source]
+        source: nix::Error,
+    },
+    #[error("frozen build step exceeded its operational wall limit of {limit:?}")]
+    Timeout { limit: Duration },
+    #[error("could not wait for frozen build step: {source}")]
+    Wait {
+        #[source]
+        source: io::Error,
+    },
+    #[error("frozen build-step {stream} produced {observed} bytes, exceeding its {limit}-byte ceiling")]
+    OutputLimit {
+        stream: OutputStream,
+        limit: u64,
+        observed: u64,
+    },
+    #[error(
+        "frozen build-step stdout and stderr produced {observed} bytes, exceeding their combined {limit}-byte ceiling"
+    )]
+    TotalOutputLimit { limit: u64, observed: u64 },
+    #[error("could not read frozen build-step {stream}: {source}")]
+    OutputRead {
+        stream: OutputStream,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not stream frozen build-step {stream}: {source}")]
+    OutputWrite {
+        stream: OutputStream,
+        #[source]
+        source: io::Error,
+    },
+    #[error("frozen build-step output budget lock was poisoned")]
+    OutputBudgetPoisoned,
+    #[error("frozen build-step log multiplexer lock was poisoned")]
+    LogMuxPoisoned,
+    #[error("frozen build-step output reader reported a failure without preserving it")]
+    ReaderAlertLost,
+    #[error("frozen build-step {stream} reader panicked")]
+    ReaderThreadPanicked { stream: OutputStream },
+    #[error("frozen build-step cleanup `{operation}` failed: {source}")]
+    Cleanup {
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error("{failure}; frozen build-step cleanup `{operation}` also failed: {source}")]
+    CleanupAfterFailure {
+        failure: Box<StepExecutionError>,
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
+}
+
+#[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
     InvalidPlan(#[from] stone_recipe::derivation::DerivationValidationError),
@@ -495,6 +1059,8 @@ pub enum Error {
     UnsupportedPgoStage(String),
     #[error("unsupported frozen phase {0}")]
     UnsupportedPhase(String),
+    #[error(transparent)]
+    StepExecution(#[from] StepExecutionError),
     #[error("build step failed with status code {0}")]
     Code(i32),
     #[error("build step stopped by signal {}", .0.as_str())]
@@ -618,6 +1184,28 @@ mod tests {
         assert!(status.success(), "child did not inherit the single-CPU affinity");
     }
 
+    fn test_step_limits(stdout_bytes: u64, stderr_bytes: u64, total_output_bytes: u64) -> StepExecutionLimits {
+        StepExecutionLimits {
+            wall_time: Duration::from_secs(5),
+            stdout_bytes,
+            stderr_bytes,
+            total_output_bytes,
+        }
+    }
+
+    fn logged_quiet(
+        limits: StepExecutionLimits,
+        configure: impl FnOnce(&mut Command) -> &mut Command,
+    ) -> Result<process::ExitStatus, StepExecutionError> {
+        logged_with_limits(
+            "/bin/sh",
+            DescendantContainment::ProcessGroup,
+            limits,
+            LogMode::Discard,
+            configure,
+        )
+    }
+
     #[test]
     fn repeated_pgo_directories_are_recreated_once() {
         let job = JobPlan {
@@ -737,6 +1325,188 @@ mod tests {
         .unwrap();
 
         assert!(status.success());
+    }
+
+    #[test]
+    fn frozen_children_disable_core_dumps_and_cap_open_descriptors() {
+        let status = logged_quiet(test_step_limits(4_096, 4_096, 8_192), |command| {
+            command.args([
+                "-c",
+                concat!(
+                    "test \"$(ulimit -c)\" = 0 && test \"$(ulimit -Hc)\" = 0 && ",
+                    "test \"$(ulimit -n)\" -le 4096 && test \"$(ulimit -Hn)\" -le 4096",
+                ),
+            ])
+        })
+        .unwrap();
+
+        assert!(status.success());
+    }
+
+    #[test]
+    fn ordinary_success_exit_code_and_signal_status_are_preserved() {
+        let limits = test_step_limits(4_096, 4_096, 8_192);
+        let success = logged_quiet(limits, |command| {
+            command.args(["-c", "printf 'ordinary output\\n'; printf 'ordinary error\\n' >&2"])
+        })
+        .unwrap();
+        assert!(success.success());
+
+        let failure = logged_quiet(limits, |command| command.args(["-c", "exit 23"])).unwrap();
+        assert_eq!(failure.code(), Some(23));
+
+        let signaled = logged_quiet(limits, |command| command.args(["-c", "kill -TERM $$"])).unwrap();
+        assert_eq!(signaled.signal(), Some(Signal::SIGTERM as i32));
+    }
+
+    #[test]
+    fn per_stream_output_ceiling_accepts_exact_n_and_rejects_n_plus_one() {
+        const LIMIT: u64 = 4_096;
+        for (stream, redirect) in [(OutputStream::Stdout, ""), (OutputStream::Stderr, " >&2")] {
+            let limits = test_step_limits(LIMIT, LIMIT, LIMIT * 2);
+            let exact = format!("/usr/bin/head -c {LIMIT} /dev/zero{redirect}");
+            assert!(
+                logged_quiet(limits, |command| command.args(["-c", &exact]))
+                    .unwrap()
+                    .success()
+            );
+
+            let over = format!("/usr/bin/head -c {} /dev/zero{redirect}", LIMIT + 1);
+            assert!(matches!(
+                logged_quiet(limits, |command| command.args(["-c", &over])),
+                Err(StepExecutionError::OutputLimit {
+                    stream: found,
+                    limit: LIMIT,
+                    observed,
+                }) if found == stream && observed == LIMIT + 1
+            ));
+        }
+    }
+
+    #[test]
+    fn combined_output_ceiling_accepts_exact_n_and_rejects_n_plus_one() {
+        const HALF: u64 = 2_048;
+        const TOTAL: u64 = HALF * 2;
+        let limits = test_step_limits(TOTAL, TOTAL, TOTAL);
+        let exact = format!("/usr/bin/head -c {HALF} /dev/zero; /usr/bin/head -c {HALF} /dev/zero >&2");
+        assert!(
+            logged_quiet(limits, |command| command.args(["-c", &exact]))
+                .unwrap()
+                .success()
+        );
+
+        let over = format!(
+            "/usr/bin/head -c {HALF} /dev/zero; /usr/bin/head -c {} /dev/zero >&2",
+            HALF + 1
+        );
+        assert!(matches!(
+            logged_quiet(limits, |command| command.args(["-c", &over])),
+            Err(StepExecutionError::TotalOutputLimit {
+                limit: TOTAL,
+                observed,
+            }) if observed == TOTAL + 1
+        ));
+    }
+
+    #[test]
+    fn unbroken_line_flood_is_bounded_without_allocating_a_line() {
+        const LIMIT: u64 = 8_192;
+        let started = Instant::now();
+        let result = logged_quiet(test_step_limits(LIMIT, LIMIT, LIMIT * 2), |command| {
+            command.args(["-c", "while :; do printf 0123456789abcdef; done"])
+        });
+
+        assert!(matches!(
+            result,
+            Err(StepExecutionError::OutputLimit {
+                stream: OutputStream::Stdout,
+                limit: LIMIT,
+                observed,
+            }) if observed == LIMIT + 1
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn log_read_failures_keep_the_stream_and_original_io_error() {
+        struct BrokenReader;
+
+        impl io::Read for BrokenReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::Other, "injected read failure"))
+            }
+        }
+
+        let budget = Mutex::new(OutputBudget::default());
+        let logs = Mutex::new(LogMux::new(LogMode::Discard));
+        let stop = AtomicBool::new(false);
+        let result = drain_log(
+            BrokenReader,
+            OutputStream::Stderr,
+            test_step_limits(10, 10, 20),
+            &budget,
+            &logs,
+            &stop,
+        );
+
+        assert!(matches!(
+            result,
+            Err(StepExecutionError::OutputRead {
+                stream: OutputStream::Stderr,
+                source,
+            }) if source.kind() == io::ErrorKind::Other && source.to_string() == "injected read failure"
+        ));
+    }
+
+    #[test]
+    fn timeout_kills_stalled_child_and_its_delayed_background_work() {
+        let temporary = tempfile::tempdir().unwrap();
+        let marker = temporary.path().join("late-write");
+        let mut limits = test_step_limits(4_096, 4_096, 8_192);
+        limits.wall_time = Duration::from_millis(100);
+
+        let started = Instant::now();
+        let result = logged_quiet(limits, |command| {
+            command.env("MARKER", &marker).args([
+                "-c",
+                "(/usr/bin/sleep 1; printf late > \"$MARKER\") & /usr/bin/sleep 30",
+            ])
+        });
+        assert!(matches!(
+            result,
+            Err(StepExecutionError::Timeout { limit }) if limit == Duration::from_millis(100)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        thread::sleep(Duration::from_millis(1_200));
+        assert!(
+            !marker.exists(),
+            "timed-out background work escaped containment cleanup"
+        );
+    }
+
+    #[test]
+    fn containment_cleanup_failure_is_structured_and_does_not_target_the_host_namespace() {
+        assert_ne!(
+            getpid().as_raw(),
+            1,
+            "unit tests must not own a production PID namespace"
+        );
+        let result = logged_with_limits(
+            "/bin/true",
+            DescendantContainment::PidNamespace,
+            test_step_limits(32, 32, 64),
+            LogMode::Discard,
+            |command| command,
+        );
+
+        assert!(matches!(
+            result,
+            Err(StepExecutionError::Cleanup {
+                operation: "terminate containment boundary",
+                source,
+            }) if source.kind() == io::ErrorKind::PermissionDenied
+        ));
     }
 
     #[test]
