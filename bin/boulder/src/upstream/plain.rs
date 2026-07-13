@@ -152,19 +152,56 @@ pub struct StoredPlain {
 }
 
 impl StoredPlain {
-    /// Shares the Git repository in preparation of a build.
+    /// Shares the source archive in preparation of a build.
     ///
-    /// This function tries to be as efficient as possible in terms
-    /// of actual bytes copied: a hard link is created if possible.
+    /// The build-visible file must have an inode independent from the shared
+    /// cache. Build scripts are allowed to modify their source directory; a
+    /// hard link here would silently mutate the verified cache entry too.
     pub fn share(&self, dest_dir: &Path) -> Result<(), Error> {
         let target = dest_dir.join(self.name.clone());
 
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        util::hardlink_or_copy(&self.path, &target)?;
+        fs::copy(&self.path, &target)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::MetadataExt;
+
+    use super::*;
+
+    #[test]
+    fn shared_archive_is_independent_from_the_verified_cache_inode() {
+        let directory = tempfile::tempdir().unwrap();
+        let cached = directory.path().join("cache/source.tar.zst");
+        let shared = directory.path().join("build/sources");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::write(&cached, b"verified archive").unwrap();
+        let source = StoredPlain {
+            name: "source.tar.zst".to_owned(),
+            path: cached.clone(),
+            was_cached: true,
+        };
+
+        source.share(&shared).unwrap();
+        let build_visible = shared.join("source.tar.zst");
+        assert_eq!(fs::read(&build_visible).unwrap(), b"verified archive");
+
+        let cached_metadata = fs::metadata(&cached).unwrap();
+        let shared_metadata = fs::metadata(&build_visible).unwrap();
+        assert_ne!(
+            (cached_metadata.dev(), cached_metadata.ino()),
+            (shared_metadata.dev(), shared_metadata.ino())
+        );
+
+        fs::write(&build_visible, b"mutated by build").unwrap();
+        assert_eq!(fs::read(&cached).unwrap(), b"verified archive");
+        assert_eq!(fs::read(&build_visible).unwrap(), b"mutated by build");
     }
 }
 

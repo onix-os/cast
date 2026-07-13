@@ -48,6 +48,13 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
         .arg("-c")
         .arg(find_deps_script)
         .arg(dist_path)
+        .env_clear()
+        .envs([
+            ("LC_ALL", "C"),
+            ("PYTHONDONTWRITEBYTECODE", "1"),
+            ("PYTHONHASHSEED", "0"),
+            ("PYTHONNOUSERSITE", "1"),
+        ])
         .stdout(Stdio::piped())
         .output()?;
 

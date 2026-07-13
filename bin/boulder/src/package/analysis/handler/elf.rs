@@ -389,6 +389,8 @@ fn split_debug(
         .arg("--only-keep-debug")
         .arg(&info.path)
         .arg(&debug_info_path)
+        .env_clear()
+        .env("LC_ALL", "C")
         .output()?;
 
     if !output.status.success() {
@@ -399,6 +401,8 @@ fn split_debug(
         .arg("--add-gnu-debuglink")
         .arg(&debug_info_path)
         .arg(&info.path)
+        .env_clear()
+        .env("LC_ALL", "C")
         .output()?;
 
     if !output.status.success() {
@@ -426,6 +430,7 @@ fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
         .unwrap_or_default();
 
     let mut command = Command::new(strip);
+    command.env_clear().env("LC_ALL", "C");
 
     if is_executable {
         command.arg(&info.path);

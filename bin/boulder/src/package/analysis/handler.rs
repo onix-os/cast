@@ -87,6 +87,7 @@ pub fn pkg_config(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Res
     let output = Command::new("/usr/bin/pkg-config")
         .args(["--print-requires", "--print-requires-private", "--silence-errors"])
         .arg(&info.path)
+        .env_clear()
         .envs([
             ("LC_ALL", "C"),
             (
