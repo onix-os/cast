@@ -6,13 +6,16 @@ use std::{io, path::PathBuf};
 
 use fs_err as fs;
 use moss::{Installation, package, repository, util};
+use stone::relation::{Dependency, Kind as RelationKind};
 use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
+    build_policy::{BuildPolicySpec, BuildToolSpec, BuildersPolicySpec, StandardBuilderPolicySpec},
     derivation::{BuildLock, DerivationPlan, LockedPackage, RepositorySnapshot},
+    package::{BuilderSpec, DependencySpec, PackageSpec},
 };
 use thiserror::Error;
 
-use crate::build::Builder;
+use crate::build::{Builder, pgo};
 use crate::{Timing, container, timing};
 
 pub fn populate_frozen(
@@ -161,88 +164,147 @@ fn locked_metadata_matches(locked: &LockedPackage, package: &moss::Package) -> b
 }
 
 pub(crate) fn packages(builder: &Builder) -> Result<Vec<String>, Error> {
-    let mut packages = BASE_PACKAGES
-        .iter()
-        .map(|package| (*package).to_owned())
-        .collect::<Vec<_>>();
+    packages_for(
+        &builder.target.build_policy.spec,
+        &builder.recipe.declaration,
+        builder.recipe.build_target_profile_key(builder.target.build_target),
+        builder.target.build_target,
+        builder.ccache,
+        pgo::stages(&builder.recipe, builder.target.build_target).is_some(),
+    )
+}
 
-    match builder.recipe.declaration.options.toolchain {
-        ToolchainSpec::Llvm => packages.extend(LLVM_PACKAGES.iter().map(|package| (*package).to_owned())),
-        ToolchainSpec::Gnu => packages.extend(GNU_PACKAGES.iter().map(|package| (*package).to_owned())),
+fn packages_for(
+    policy: &BuildPolicySpec,
+    package: &PackageSpec,
+    profile: Option<&str>,
+    target: crate::architecture::BuildTarget,
+    compiler_cache: bool,
+    pgo_enabled: bool,
+) -> Result<Vec<String>, Error> {
+    let mut packages = Vec::new();
+    extend_policy_tools(&mut packages, "build_root.base", &policy.build_root.base)?;
+
+    let toolchain_tools = match package.options.toolchain {
+        ToolchainSpec::Llvm => &policy.build_root.toolchains.llvm,
+        ToolchainSpec::Gnu => &policy.build_root.toolchains.gnu,
+    };
+    extend_policy_tools(&mut packages, "build_root.toolchains", toolchain_tools)?;
+
+    if target.emul32() {
+        extend_policy_tools(&mut packages, "build_root.emul32.base", &policy.build_root.emul32.base)?;
+        let toolchain_tools = match package.options.toolchain {
+            ToolchainSpec::Llvm => &policy.build_root.emul32.toolchains.llvm,
+            ToolchainSpec::Gnu => &policy.build_root.emul32.toolchains.gnu,
+        };
+        extend_policy_tools(&mut packages, "build_root.emul32.toolchains", toolchain_tools)?;
     }
 
-    if builder.target.build_target.emul32() {
-        packages.extend(BASE32_PACKAGES.iter().map(|package| (*package).to_owned()));
-
-        match builder.recipe.declaration.options.toolchain {
-            ToolchainSpec::Llvm => packages.extend(LLVM32_PACKAGES.iter().map(|package| (*package).to_owned())),
-            ToolchainSpec::Gnu => packages.extend(GNU32_PACKAGES.iter().map(|package| (*package).to_owned())),
-        }
+    if package.mold {
+        extend_policy_tools(
+            &mut packages,
+            "build_root.mold.required_tools",
+            &policy.build_root.mold.required_tools,
+        )?;
+    }
+    if compiler_cache {
+        extend_policy_tools(
+            &mut packages,
+            "build_root.compiler_cache.required_tools",
+            &policy.build_root.compiler_cache.required_tools,
+        )?;
     }
 
-    if builder.recipe.declaration.mold {
-        packages.extend(MOLD_PACKAGES.iter().map(|package| (*package).to_owned()));
+    if let Some((field, builder)) = standard_builder_policy(&policy.builders, package.builder_for_profile(profile)) {
+        extend_policy_tools(&mut packages, field, &builder.required_tools)?;
+    }
+    if pgo_enabled && matches!(package.options.toolchain, ToolchainSpec::Llvm) {
+        extend_policy_tools(&mut packages, "pgo.required_tools", &policy.pgo.required_tools)?;
     }
 
-    if builder.ccache {
-        packages.extend(CCACHE_PACKAGES.iter().map(|package| (*package).to_owned()));
+    packages.extend(declared_inputs_for(package, profile)?);
+    extend_source_tools(&mut packages, policy, &package.sources)?;
+
+    Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
+}
+
+fn standard_builder_policy<'a>(
+    builders: &'a BuildersPolicySpec,
+    builder: &BuilderSpec,
+) -> Option<(&'static str, &'a StandardBuilderPolicySpec)> {
+    match builder {
+        BuilderSpec::CMake { .. } => Some(("builders.cmake.required_tools", &builders.cmake)),
+        BuilderSpec::Meson { .. } => Some(("builders.meson.required_tools", &builders.meson)),
+        BuilderSpec::Cargo { .. } => Some(("builders.cargo.required_tools", &builders.cargo)),
+        BuilderSpec::Autotools { .. } => Some(("builders.autotools.required_tools", &builders.autotools)),
+        BuilderSpec::Custom { .. } => None,
     }
+}
 
-    packages.extend(declared_inputs(&builder.recipe, builder.target.build_target)?);
-
-    for source in &builder.recipe.declaration.sources {
-        if let UpstreamSpec::Archive { url, rename, .. } = source {
-            let path = url::Url::parse(url)
-                .expect("validated package source URL")
-                .path()
-                .to_owned();
-
-            for path in std::iter::once(path.as_str()).chain(rename.as_deref()) {
-                if let Some((_, ext)) = path.rsplit_once('.') {
-                    match ext {
-                        "xz" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "zst" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "bz2" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "gz" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "lz" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "tgz" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "7z" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "zip" => {
-                            packages.push("binary(bsdtar-static)".to_owned());
-                        }
-                        "rpm" => {
-                            packages.extend(["binary(rpm2cpio)".to_owned(), "cpio".to_owned()]);
-                        }
-                        "deb" => {
-                            packages.push("binary(ar)".to_owned());
-                        }
-                        _ => {}
+fn extend_source_tools(
+    packages: &mut Vec<String>,
+    policy: &BuildPolicySpec,
+    sources: &[UpstreamSpec],
+) -> Result<(), Error> {
+    for source in sources {
+        match source {
+            UpstreamSpec::Archive {
+                url,
+                rename,
+                unpack: true,
+                ..
+            } => {
+                extend_policy_tools(
+                    packages,
+                    "sources.archive.required_tools",
+                    &policy.sources.archive.required_tools,
+                )?;
+                let url = url::Url::parse(url).expect("validated package source URL");
+                let archive_name = rename.as_deref().unwrap_or_else(|| url.path());
+                let Some((_, extension)) = archive_name.rsplit_once('.') else {
+                    continue;
+                };
+                for rule in &policy.sources.archive.tool_rules {
+                    if rule.extensions.iter().any(|candidate| candidate == extension) {
+                        extend_policy_tools(
+                            packages,
+                            "sources.archive.tool_rules.required_tools",
+                            &rule.required_tools,
+                        )?;
                     }
                 }
             }
+            UpstreamSpec::Archive { unpack: false, .. } => {}
+            UpstreamSpec::Git { .. } => extend_policy_tools(
+                packages,
+                "sources.git.required_tools",
+                &policy.sources.git.required_tools,
+            )?,
         }
     }
+    Ok(())
+}
 
-    Ok(packages
-        .into_iter()
-        // Remove dupes
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect())
+fn extend_policy_tools(packages: &mut Vec<String>, field: &'static str, tools: &[BuildToolSpec]) -> Result<(), Error> {
+    packages.extend(
+        tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| {
+                build_tool_name(tool).map_err(|source| Error::InvalidPolicyInput { field, index, source })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    Ok(())
+}
+
+fn build_tool_name(tool: &BuildToolSpec) -> Result<String, stone::relation::ParseError> {
+    let (kind, target) = match tool {
+        BuildToolSpec::Package(target) => (RelationKind::PackageName, target),
+        BuildToolSpec::Binary(target) => (RelationKind::Binary, target),
+        BuildToolSpec::SystemBinary(target) => (RelationKind::SystemBinary, target),
+    };
+    Dependency::new(kind, target.clone()).map(|dependency| dependency.to_name())
 }
 
 pub(crate) fn declared_inputs(
@@ -252,13 +314,16 @@ pub(crate) fn declared_inputs(
     declared_inputs_for(&recipe.declaration, recipe.build_target_profile_key(target))
 }
 
-fn declared_inputs_for(
-    package: &stone_recipe::package::PackageSpec,
-    profile: Option<&str>,
-) -> Result<Vec<String>, Error> {
-    package
-        .builder_for_profile(profile)
-        .required_tools()
+fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<Vec<String>, Error> {
+    let builder_tools: &[DependencySpec] = match package.builder_for_profile(profile) {
+        BuilderSpec::Custom { required_tools, .. } => required_tools,
+        BuilderSpec::CMake { .. }
+        | BuilderSpec::Meson { .. }
+        | BuilderSpec::Cargo { .. }
+        | BuilderSpec::Autotools { .. } => &[],
+    };
+
+    builder_tools
         .iter()
         .chain(package.native_build_inputs_for_profile(profile))
         .chain(package.build_inputs_for_profile(profile))
@@ -272,44 +337,6 @@ fn declared_inputs_for(
         })
         .collect()
 }
-
-const BASE_PACKAGES: &[&str] = &[
-    "bash",
-    "boulder",
-    "coreutils",
-    "dash",
-    "diffutils",
-    "findutils",
-    "gawk",
-    "glibc-devel",
-    "grep",
-    "layout",
-    "libarchive",
-    "linux-headers",
-    "os-info",
-    "pkgconf",
-    "sed",
-    "util-linux",
-    // Needed for chroot
-    "binary(git)",
-    "binary(hx)",
-    "binary(less)",
-    "binary(nano)",
-    "binary(ps)",
-    "binary(rg)",
-    "binary(vim)",
-];
-const BASE32_PACKAGES: &[&str] = &["glibc-32bit-devel"];
-
-const GNU_PACKAGES: &[&str] = &["binary(ld.bfd)", "binary(gcc)", "binary(g++)"];
-const GNU32_PACKAGES: &[&str] = &["gcc-32bit", "libstdc++-32bit-devel"];
-
-const LLVM_PACKAGES: &[&str] = &["clang"];
-const LLVM32_PACKAGES: &[&str] = &["clang-32bit"];
-
-const MOLD_PACKAGES: &[&str] = &["binary(mold)"];
-
-const CCACHE_PACKAGES: &[&str] = &["binary(ccache)", "binary(sccache)"];
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -334,6 +361,13 @@ pub enum Error {
     UnsafeFrozenJobPath,
     #[error("selected package input {index} is invalid")]
     InvalidDeclaredInput {
+        index: usize,
+        #[source]
+        source: stone::relation::ParseError,
+    },
+    #[error("build-policy input {field}[{index}] is invalid")]
+    InvalidPolicyInput {
+        field: &'static str,
         index: usize,
         #[source]
         source: stone::relation::ParseError,
@@ -390,7 +424,7 @@ mod tests {
         }
     }
 
-    fn selected_inputs_package() -> stone_recipe::package::PackageSpec {
+    fn selected_inputs_package() -> PackageSpec {
         let source = Source::new(
             "stone.glu",
             r#"let b = import! boulder.package.v2
@@ -425,6 +459,131 @@ let unrelated = b.profile_with {
 "#,
         );
         stone_recipe::package::evaluate_gluon(&source).unwrap().package
+    }
+
+    fn repository_policy() -> BuildPolicySpec {
+        crate::BuildPolicy::repository_for_tests().spec
+    }
+
+    #[test]
+    fn policy_tools_use_canonical_relation_names() {
+        assert_eq!(
+            [
+                BuildToolSpec::Package("package-tool".to_owned()),
+                BuildToolSpec::Binary("binary-tool".to_owned()),
+                BuildToolSpec::SystemBinary("system-tool".to_owned()),
+            ]
+            .iter()
+            .map(build_tool_name)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap(),
+            ["package-tool", "binary(binary-tool)", "sysbinary(system-tool)"]
+        );
+    }
+
+    #[test]
+    fn selected_root_features_come_only_from_typed_policy() {
+        let mut policy = repository_policy();
+        policy.build_root.base = vec![BuildToolSpec::Package("policy-base".to_owned())];
+        policy.build_root.toolchains.llvm = vec![BuildToolSpec::Binary("wrong-llvm".to_owned())];
+        policy.build_root.toolchains.gnu = vec![BuildToolSpec::Binary("policy-gnu".to_owned())];
+        policy.build_root.emul32.base = vec![BuildToolSpec::SystemBinary("policy-emul-base".to_owned())];
+        policy.build_root.emul32.toolchains.llvm = vec![BuildToolSpec::Package("wrong-llvm32".to_owned())];
+        policy.build_root.emul32.toolchains.gnu = vec![BuildToolSpec::Package("policy-gnu32".to_owned())];
+        policy.build_root.mold.required_tools = vec![BuildToolSpec::Binary("policy-mold".to_owned())];
+        policy.build_root.compiler_cache.required_tools = vec![BuildToolSpec::Binary("policy-cache".to_owned())];
+        policy.builders.cmake.required_tools = vec![BuildToolSpec::SystemBinary("policy-cmake".to_owned())];
+        policy.sources.archive.required_tools = vec![BuildToolSpec::Binary("policy-archive".to_owned())];
+        policy.sources.archive.tool_rules = vec![
+            stone_recipe::build_policy::ArchiveToolRuleSpec {
+                extensions: vec!["rpm".to_owned()],
+                required_tools: vec![BuildToolSpec::Package("policy-rpm".to_owned())],
+            },
+            stone_recipe::build_policy::ArchiveToolRuleSpec {
+                extensions: vec!["zip".to_owned()],
+                required_tools: vec![BuildToolSpec::Package("wrong-skipped-archive".to_owned())],
+            },
+        ];
+        policy.sources.git.required_tools = vec![BuildToolSpec::SystemBinary("policy-git".to_owned())];
+
+        let mut package = selected_inputs_package();
+        package.options.toolchain = ToolchainSpec::Gnu;
+        package.builder = BuilderSpec::CMake {
+            flags: Vec::new(),
+            run_tests: false,
+        };
+        package.mold = true;
+        package.sources = vec![
+            UpstreamSpec::Archive {
+                url: "https://example.invalid/skipped.zip".to_owned(),
+                hash: "skipped".to_owned(),
+                rename: None,
+                strip_dirs: None,
+                unpack: false,
+                unpack_dir: None,
+            },
+            UpstreamSpec::Archive {
+                url: "https://example.invalid/download".to_owned(),
+                hash: "archive".to_owned(),
+                rename: Some("renamed.rpm".to_owned()),
+                strip_dirs: None,
+                unpack: true,
+                unpack_dir: None,
+            },
+            UpstreamSpec::Git {
+                url: "https://example.invalid/source.git".to_owned(),
+                git_ref: "main".to_owned(),
+                clone_dir: None,
+            },
+        ];
+
+        let packages = packages_for(
+            &policy,
+            &package,
+            None,
+            crate::architecture::BuildTarget::Emul32(crate::Architecture::X86_64),
+            true,
+            false,
+        )
+        .unwrap();
+        let expected = [
+            "base-build",
+            "base-check",
+            "base-native",
+            "binary(policy-archive)",
+            "binary(policy-cache)",
+            "binary(policy-gnu)",
+            "binary(policy-mold)",
+            "policy-base",
+            "policy-gnu32",
+            "policy-rpm",
+            "sysbinary(policy-cmake)",
+            "sysbinary(policy-emul-base)",
+            "sysbinary(policy-git)",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+
+        assert_eq!(packages.into_iter().collect::<BTreeSet<_>>(), expected);
+    }
+
+    #[test]
+    fn pgo_policy_tools_follow_the_llvm_finish_command() {
+        let mut policy = repository_policy();
+        policy.pgo.required_tools = vec![BuildToolSpec::SystemBinary("policy-profdata".to_owned())];
+        let mut package = selected_inputs_package();
+        let target = crate::architecture::BuildTarget::Native(crate::Architecture::X86_64);
+
+        package.options.toolchain = ToolchainSpec::Llvm;
+        let llvm = packages_for(&policy, &package, None, target, false, true).unwrap();
+        let llvm_without_pgo = packages_for(&policy, &package, None, target, false, false).unwrap();
+        package.options.toolchain = ToolchainSpec::Gnu;
+        let gnu = packages_for(&policy, &package, None, target, false, true).unwrap();
+
+        assert!(llvm.contains(&"sysbinary(policy-profdata)".to_owned()));
+        assert!(!llvm_without_pgo.contains(&"sysbinary(policy-profdata)".to_owned()));
+        assert!(!gnu.contains(&"sysbinary(policy-profdata)".to_owned()));
     }
 
     #[test]

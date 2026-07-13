@@ -38,7 +38,7 @@ pub struct Builder {
 
 pub struct Target {
     pub build_target: BuildTarget,
-    pub policy: macros::PolicySelection,
+    pub build_policy: BuildPolicy,
     pub jobs: Vec<Job>,
 }
 
@@ -109,7 +109,7 @@ impl Builder {
             .collect::<Result<Vec<_>, _>>()?;
         let target = Target {
             build_target,
-            policy: macros.selection(build_target),
+            build_policy,
             jobs: target_jobs,
         };
 
