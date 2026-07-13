@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use stone::relation::{Dependency, Kind as StoneRelationKind, Provider};
 use thiserror::Error;
 
-use crate::build_policy::{CompilerCachePolicySpec, SUPPORTED_ARTIFACT_ARCHITECTURES, SandboxPolicySpec};
+use crate::build_policy::{AnalyzerKind, CompilerCachePolicySpec, SUPPORTED_ARTIFACT_ARCHITECTURES, SandboxPolicySpec};
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
@@ -27,7 +27,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 3;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 4;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 
@@ -46,8 +46,6 @@ pub struct DerivationPlan {
     pub environment: BTreeMap<String, String>,
     pub layout: BuilderLayout,
     pub execution: ExecutionPolicy,
-    pub tuning: Vec<String>,
-    pub analyzers: Vec<LockedIdentity>,
     pub analysis: AnalysisPlan,
     pub manifest_build_inputs: Vec<RelationPlan>,
     pub collection_rules: Vec<CollectionRulePlan>,
@@ -71,8 +69,6 @@ impl DerivationPlan {
             environment: BTreeMap::new(),
             layout: BuilderLayout::default(),
             execution: ExecutionPolicy::default(),
-            tuning: Vec::new(),
-            analyzers: Vec::new(),
             analysis: AnalysisPlan::default(),
             manifest_build_inputs: Vec::new(),
             collection_rules: Vec::new(),
@@ -140,21 +136,10 @@ impl DerivationPlan {
         for (index, job) in self.jobs.iter().enumerate() {
             job.validate(index, Path::new(&self.layout.build_dir))?;
         }
-        for (index, flag) in self.tuning.iter().enumerate() {
-            require_nonempty(&format!("tuning[{index}]"), flag)?;
-        }
         for (index, input) in self.manifest_build_inputs.iter().enumerate() {
             input.validate(&format!("manifest_build_inputs[{index}]"))?;
         }
-        let mut analyzer_names = BTreeSet::new();
-        for (index, analyzer) in self.analyzers.iter().enumerate() {
-            analyzer.validate(&format!("analyzers[{index}]"))?;
-            if !analyzer_names.insert(analyzer.name.as_str()) {
-                return Err(DerivationValidationError::DuplicateAnalyzer {
-                    name: analyzer.name.clone(),
-                });
-            }
-        }
+        self.analysis.validate()?;
 
         let mut output_names = BTreeSet::new();
         let mut output_package_names = BTreeSet::new();
@@ -170,6 +155,19 @@ impl DerivationPlan {
                     package: output.package_name.clone(),
                 });
             }
+        }
+        let (root_index, root) = self
+            .outputs
+            .iter()
+            .enumerate()
+            .find(|(_, output)| output.name == "out")
+            .ok_or(DerivationValidationError::MissingRootOutput)?;
+        if root.package_name != self.package.name {
+            return Err(DerivationValidationError::RootOutputPackageMismatch {
+                index: root_index,
+                expected: self.package.name.clone(),
+                found: root.package_name.clone(),
+            });
         }
         for (index, rule) in self.collection_rules.iter().enumerate() {
             rule.validate(index)?;
@@ -219,9 +217,9 @@ impl DerivationPlan {
     /// Encode the plan into the stable binary representation used for its
     /// identity.
     ///
-    /// Declaration order is retained for phases, steps, hooks, arguments,
-    /// PGO stages, and tuning flags. Semantically unordered collections such
-    /// as locked sources, analyzers, and outputs are sorted by stable keys.
+    /// Declaration order is retained for phases, steps, hooks, arguments, PGO
+    /// stages, analyzer handlers, and collection rules. Semantically unordered
+    /// collections such as locked sources and outputs are sorted by stable keys.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut encoder = CanonicalEncoder::new(DERIVATION_HASH_DOMAIN);
         encoder.u32(self.schema_version);
@@ -240,15 +238,7 @@ impl DerivationPlan {
         encoder.map(&self.environment);
         self.layout.encode(&mut encoder);
         self.execution.encode(&mut encoder);
-        encoder.strings(&self.tuning);
 
-        let mut analyzers = self.analyzers.iter().collect::<Vec<_>>();
-        analyzers.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.fingerprint.cmp(&right.fingerprint))
-        });
-        encoder.sequence(&analyzers, |encoder, analyzer| analyzer.encode(encoder));
         self.analysis.encode(&mut encoder);
         let mut manifest_build_inputs = self.manifest_build_inputs.clone();
         manifest_build_inputs.sort();
@@ -746,9 +736,10 @@ pub enum NetworkMode {
     Enabled,
 }
 
-/// Frozen switches consumed by package analysis.
+/// Frozen ordered handlers and switches consumed by package analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisPlan {
+    pub handlers: Vec<AnalyzerKind>,
     pub toolchain: AnalysisToolchain,
     pub debug: bool,
     pub strip: bool,
@@ -759,6 +750,7 @@ pub struct AnalysisPlan {
 impl Default for AnalysisPlan {
     fn default() -> Self {
         Self {
+            handlers: Vec::new(),
             toolchain: AnalysisToolchain::Llvm,
             debug: false,
             strip: true,
@@ -769,7 +761,53 @@ impl Default for AnalysisPlan {
 }
 
 impl AnalysisPlan {
+    fn validate(&self) -> Result<(), DerivationValidationError> {
+        if self.handlers.is_empty() {
+            return Err(DerivationValidationError::Empty {
+                field: "analysis.handlers".to_owned(),
+            });
+        }
+
+        let mut handlers = BTreeSet::new();
+        for handler in &self.handlers {
+            if !handlers.insert(*handler) {
+                return Err(DerivationValidationError::DuplicateAnalyzer {
+                    name: handler.as_str().to_owned(),
+                });
+            }
+        }
+
+        let Some(include_any) = self
+            .handlers
+            .iter()
+            .position(|handler| *handler == AnalyzerKind::IncludeAny)
+        else {
+            return Err(DerivationValidationError::MissingAnalyzer {
+                name: AnalyzerKind::IncludeAny.as_str().to_owned(),
+            });
+        };
+        if include_any + 1 != self.handlers.len() {
+            return Err(DerivationValidationError::AnalyzerMustBeLast {
+                name: AnalyzerKind::IncludeAny.as_str().to_owned(),
+            });
+        }
+
+        Ok(())
+    }
+
     fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.sequence(&self.handlers, |encoder, handler| {
+            encoder.variant(match handler {
+                AnalyzerKind::IgnoreBlocked => 0,
+                AnalyzerKind::Binary => 1,
+                AnalyzerKind::Elf => 2,
+                AnalyzerKind::PkgConfig => 3,
+                AnalyzerKind::Python => 4,
+                AnalyzerKind::CMake => 5,
+                AnalyzerKind::CompressMan => 6,
+                AnalyzerKind::IncludeAny => 7,
+            });
+        });
         encoder.variant(match self.toolchain {
             AnalysisToolchain::Llvm => 0,
             AnalysisToolchain::Gnu => 1,
@@ -921,6 +959,7 @@ impl From<RelationKind> for StoneRelationKind {
 pub struct OutputPlan {
     pub name: String,
     pub package_name: String,
+    pub include_in_manifest: bool,
     pub summary: Option<String>,
     pub description: Option<String>,
     pub provides_exclude: Vec<String>,
@@ -948,6 +987,7 @@ impl OutputPlan {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.string(&self.name);
         encoder.string(&self.package_name);
+        encoder.bool(self.include_in_manifest);
         encode_optional_string(encoder, self.summary.as_deref());
         encode_optional_string(encoder, self.description.as_deref());
         let mut provides_exclude = self.provides_exclude.clone();
@@ -1067,8 +1107,20 @@ pub enum DerivationValidationError {
     DuplicateOutput { name: String },
     #[error("outputs: duplicate emitted package name {package}")]
     DuplicateOutputPackage { package: String },
-    #[error("analyzers: duplicate analyzer name `{name}`")]
+    #[error("outputs: frozen plan must declare logical root output `out`")]
+    MissingRootOutput,
+    #[error("outputs[{index}].package_name: root output must emit package {expected:?}, found {found:?}")]
+    RootOutputPackageMismatch {
+        index: usize,
+        expected: String,
+        found: String,
+    },
+    #[error("analysis.handlers: duplicate analyzer `{name}`")]
     DuplicateAnalyzer { name: String },
+    #[error("analysis.handlers: required analyzer `{name}` is missing")]
+    MissingAnalyzer { name: String },
+    #[error("analysis.handlers: analyzer `{name}` must be last")]
+    AnalyzerMustBeLast { name: String },
     #[error("{field}: unknown locked output `{package}:{output}`")]
     UnknownOutputReference {
         field: String,
@@ -1520,11 +1572,7 @@ mod tests {
             compiler_cache: false,
             jobs: 4,
         };
-        plan.tuning = vec!["-O2".to_owned(), "-pipe".to_owned()];
-        plan.analyzers = vec![LockedIdentity {
-            name: "elf".to_owned(),
-            fingerprint: "elf-analyzer-v1".to_owned(),
-        }];
+        plan.analysis.handlers = vec![AnalyzerKind::Elf, AnalyzerKind::Python, AnalyzerKind::IncludeAny];
         plan.manifest_build_inputs = vec![RelationPlan {
             kind: RelationKind::Binary,
             name: "cmake".to_owned(),
@@ -1544,6 +1592,7 @@ mod tests {
         plan.outputs = vec![OutputPlan {
             name: "out".to_owned(),
             package_name: "hello".to_owned(),
+            include_in_manifest: true,
             summary: Some("Hello".to_owned()),
             description: None,
             provides_exclude: Vec::new(),
@@ -1667,6 +1716,44 @@ mod tests {
     }
 
     #[test]
+    fn validation_requires_the_explicit_root_output_but_allows_empty_splits() {
+        let mut missing = sample_plan();
+        missing.outputs[0].name = "dev".to_owned();
+        for rule in &mut missing.collection_rules {
+            rule.output = "dev".to_owned();
+        }
+        assert!(matches!(
+            missing.validate(),
+            Err(DerivationValidationError::MissingRootOutput)
+        ));
+
+        let mut mismatched = sample_plan();
+        mismatched.outputs[0].package_name = "other".to_owned();
+        assert!(matches!(
+            mismatched.validate(),
+            Err(DerivationValidationError::RootOutputPackageMismatch {
+                index: 0,
+                expected,
+                found,
+            }) if expected == "hello" && found == "other"
+        ));
+
+        let mut empty_split = sample_plan();
+        empty_split.outputs.push(OutputPlan {
+            name: "empty".to_owned(),
+            package_name: "hello-empty".to_owned(),
+            include_in_manifest: true,
+            summary: None,
+            description: None,
+            provides_exclude: Vec::new(),
+            runtime_exclude: Vec::new(),
+            runtime_inputs: Vec::new(),
+            conflicts: Vec::new(),
+        });
+        empty_split.validate().unwrap();
+    }
+
+    #[test]
     fn validation_rejects_invalid_typed_relation_targets_with_exact_fields() {
         let mut manifest = sample_plan();
         manifest.manifest_build_inputs[0].name.clear();
@@ -1686,15 +1773,12 @@ mod tests {
     }
 
     #[test]
-    fn unordered_analyzers_and_outputs_do_not_change_identity() {
+    fn analyzer_handler_order_is_semantic_while_output_order_is_not() {
         let mut first = sample_plan();
-        first.analyzers.push(LockedIdentity {
-            name: "python".to_owned(),
-            fingerprint: "python-analyzer-v1".to_owned(),
-        });
         first.outputs.push(OutputPlan {
             name: "dev".to_owned(),
             package_name: "hello-devel".to_owned(),
+            include_in_manifest: true,
             summary: None,
             description: None,
             provides_exclude: Vec::new(),
@@ -1702,12 +1786,48 @@ mod tests {
             runtime_inputs: Vec::new(),
             conflicts: Vec::new(),
         });
-        let mut reordered = first.clone();
-        reordered.analyzers.reverse();
-        reordered.outputs.reverse();
+        let mut outputs_reordered = first.clone();
+        outputs_reordered.outputs.reverse();
 
-        assert_eq!(first.canonical_bytes(), reordered.canonical_bytes());
-        assert_eq!(first.derivation_id(), reordered.derivation_id());
+        assert_eq!(first.canonical_bytes(), outputs_reordered.canonical_bytes());
+        assert_eq!(first.derivation_id(), outputs_reordered.derivation_id());
+
+        let mut handlers_reordered = first.clone();
+        handlers_reordered.analysis.handlers.swap(0, 1);
+
+        assert_ne!(first.canonical_bytes(), handlers_reordered.canonical_bytes());
+        assert_ne!(first.derivation_id(), handlers_reordered.derivation_id());
+    }
+
+    #[test]
+    fn analysis_handler_validation_repeats_policy_invariants() {
+        let mut empty = sample_plan();
+        empty.analysis.handlers.clear();
+        assert!(matches!(
+            empty.validate(),
+            Err(DerivationValidationError::Empty { field }) if field == "analysis.handlers"
+        ));
+
+        let mut duplicate = sample_plan();
+        duplicate.analysis.handlers.insert(1, AnalyzerKind::Elf);
+        assert!(matches!(
+            duplicate.validate(),
+            Err(DerivationValidationError::DuplicateAnalyzer { name }) if name == "Elf"
+        ));
+
+        let mut missing = sample_plan();
+        missing.analysis.handlers.pop();
+        assert!(matches!(
+            missing.validate(),
+            Err(DerivationValidationError::MissingAnalyzer { name }) if name == "IncludeAny"
+        ));
+
+        let mut misplaced = sample_plan();
+        misplaced.analysis.handlers.swap(0, 2);
+        assert!(matches!(
+            misplaced.validate(),
+            Err(DerivationValidationError::AnalyzerMustBeLast { name }) if name == "IncludeAny"
+        ));
     }
 
     #[test]
@@ -1800,8 +1920,16 @@ mod tests {
                 Box::new(|plan| plan.collection_rules.reverse()),
             ),
             (
+                "collection-rule-kind",
+                Box::new(|plan| plan.collection_rules[0].kind = PathRuleKind::Special),
+            ),
+            (
                 "output",
                 Box::new(|plan| plan.outputs[0].conflicts[0].name.push_str("-changed")),
+            ),
+            (
+                "output-manifest-membership",
+                Box::new(|plan| plan.outputs[0].include_in_manifest = false),
             ),
             ("timestamp", Box::new(|plan| plan.source_date_epoch += 1)),
         ];
@@ -2234,6 +2362,7 @@ mod tests {
         plan.outputs.push(OutputPlan {
             name: "dev".to_owned(),
             package_name: "hello-devel".to_owned(),
+            include_in_manifest: true,
             summary: None,
             description: None,
             provides_exclude: Vec::new(),

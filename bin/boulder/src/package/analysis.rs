@@ -73,22 +73,24 @@ impl<'a> Chain<'a> {
         pb.tick();
 
         'paths: while let Some(mut path) = queue.pop_front() {
-            let bucket = self.buckets.entry(path.package.clone()).or_default();
-
             pb.set_message(format!("Analyzing {}", path.target_path.display()));
 
             'handlers: for handler in &self.handlers {
-                // Only give handlers ability to update
-                // certain bucket fields
-                let mut bucket_mut = BucketMut {
-                    providers: &mut bucket.providers,
-                    dependencies: &mut bucket.dependencies,
-                    hasher: self.hasher,
-                    analysis: self.analysis,
-                    paths: self.paths,
-                };
+                let response = {
+                    let bucket = self.buckets.entry(path.package.clone()).or_default();
+                    // Only give handlers ability to update certain bucket
+                    // fields. End this borrow before routing generated or
+                    // replacement paths through the collector again.
+                    let mut bucket_mut = BucketMut {
+                        providers: &mut bucket.providers,
+                        dependencies: &mut bucket.dependencies,
+                        hasher: self.hasher,
+                        analysis: self.analysis,
+                        paths: self.paths,
+                    };
 
-                let response = handler.handle(&mut bucket_mut, &mut path)?;
+                    handler.handle(&mut bucket_mut, &mut path)?
+                };
 
                 response.generated_paths.into_iter().try_for_each(|path| {
                     let info = self.collector.path(&path, self.hasher)?;
@@ -115,7 +117,7 @@ impl<'a> Chain<'a> {
                     Decision::IncludeFile => {
                         pb.suspend(|| println!("│A{} {}", "│ »".green(), path.target_path.display()));
                         pb.inc(1);
-                        bucket.paths.push(path);
+                        self.buckets.entry(path.package.clone()).or_default().paths.push(path);
                         continue 'paths;
                     }
                     Decision::ReplaceFile { newpath } => {
@@ -127,7 +129,11 @@ impl<'a> Chain<'a> {
                             newpathinfo.target_path.display()
                         ));
                         pb.inc(1);
-                        bucket.paths.push(newpathinfo);
+                        self.buckets
+                            .entry(newpathinfo.package.clone())
+                            .or_default()
+                            .paths
+                            .push(newpathinfo);
                         continue 'paths;
                     }
                 }
@@ -200,5 +206,69 @@ where
 {
     fn handle(&self, bucket: &mut BucketMut<'_>, path: &mut PathInfo) -> Result<Response, BoxError> {
         (self)(bucket, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use fs_err as fs;
+    use stone_recipe::derivation::PathRuleKind;
+
+    use super::*;
+    use crate::{Recipe, package::test_derivation_plan};
+
+    struct ReplaceWith(PathBuf);
+
+    impl Handler for ReplaceWith {
+        fn handle(&self, _bucket: &mut BucketMut<'_>, _path: &mut PathInfo) -> Result<Response, BoxError> {
+            Ok(Decision::ReplaceFile {
+                newpath: self.0.clone(),
+            }
+            .into())
+        }
+    }
+
+    #[test]
+    fn replacement_is_routed_to_the_output_selected_for_the_new_path() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+
+        let install = tempfile::tempdir().unwrap();
+        let original = install.path().join("original");
+        let replacement = install.path().join("replacement");
+        fs::write(&original, b"original").unwrap();
+        fs::write(&replacement, b"replacement").unwrap();
+        let mut collector = Collector::new(install.path());
+        collector.add_rule(super::super::collect::Rule {
+            pattern: "*".to_owned(),
+            package: "root-output".to_owned(),
+            kind: PathRuleKind::Any,
+        });
+        collector.add_rule(super::super::collect::Rule {
+            pattern: "/replacement".to_owned(),
+            package: "replacement-output".to_owned(),
+            kind: PathRuleKind::Any,
+        });
+
+        let mut hasher = StoneDigestWriterHasher::new();
+        let original = collector.path(&original, &mut hasher).unwrap();
+        assert_eq!(original.package, "root-output");
+        let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        chain.handlers = vec![Box::new(ReplaceWith(replacement))];
+
+        chain.process([original]).unwrap();
+
+        assert!(chain.buckets["root-output"].paths.is_empty());
+        assert_eq!(chain.buckets["replacement-output"].paths.len(), 1);
+        assert_eq!(
+            chain.buckets["replacement-output"].paths[0].target_path,
+            Path::new("/replacement")
+        );
     }
 }

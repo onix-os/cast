@@ -463,6 +463,7 @@ struct GluonPgoPolicySpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
 enum GluonAnalyzerKind {
     AnalyzerIgnoreBlocked,
     AnalyzerBinary,

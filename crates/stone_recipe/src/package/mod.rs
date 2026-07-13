@@ -194,6 +194,9 @@ pub struct ProfileSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputSpec {
     pub name: String,
+    /// Whether this output participates in build manifests. The Stone itself
+    /// is emitted regardless, including when the output is empty.
+    pub include_in_manifest: bool,
     pub summary: Option<String>,
     pub description: Option<String>,
     pub provides_exclude: Vec<String>,
@@ -779,6 +782,7 @@ mod tests {
             check_inputs: Vec::new(),
             outputs: vec![OutputSpec {
                 name: "out".to_owned(),
+                include_in_manifest: true,
                 summary: None,
                 description: None,
                 provides_exclude: Vec::new(),

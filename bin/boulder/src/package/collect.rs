@@ -24,22 +24,30 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn matches(&self, path: &str) -> bool {
-        if self.pattern == path {
-            return true;
-        }
-
-        // Escape the directory in case it contains characters that have special
-        // meaning in glob patterns (e.g., `[` or `]`).
-        let escaped_path = Pattern::escape(path);
-        Pattern::new(&self.pattern)
+    pub fn matches(&self, path: &str, metadata: &Metadata) -> bool {
+        let pattern_matches = self.pattern == path
+            || Pattern::new(&self.pattern)
                 .expect("collection glob was validated before frozen execution")
-                .matches(&escaped_path)
+                .matches(path)
             // If the supplied pattern is for a directory we want to match anything that's inside said directory,
             // Do this by creating a recursive glob pattern by appending `**` if the pattern already ends in a `/` or `/**` if not
             || Pattern::new(format!("{}/**", self.pattern.strip_suffix("/").unwrap_or(&self.pattern)).as_str())
                 .expect("derived collection glob must remain valid")
-                .matches(&escaped_path)
+                .matches(path);
+
+        pattern_matches
+            && match self.kind {
+                PathRuleKind::Any => true,
+                PathRuleKind::Executable => metadata.is_file() && metadata.mode() & 0o111 != 0,
+                PathRuleKind::Symlink => metadata.file_type().is_symlink(),
+                PathRuleKind::Special => {
+                    let file_type = metadata.file_type();
+                    file_type.is_char_device()
+                        || file_type.is_block_device()
+                        || file_type.is_fifo()
+                        || file_type.is_socket()
+                }
+            }
     }
 }
 
@@ -67,17 +75,17 @@ impl Collector {
         &self.rules
     }
 
-    fn matching_package(&self, path: &str) -> Option<&str> {
+    fn matching_package(&self, path: &str, metadata: &Metadata) -> Option<&str> {
         // Rev = check highest priority rules first
         self.rules
             .iter()
             .rev()
-            .find_map(|rule| rule.matches(path).then_some(rule.package.as_str()))
+            .find_map(|rule| rule.matches(path, metadata).then_some(rule.package.as_str()))
     }
 
     /// Produce a [`PathInfo`] from the provided [`Path`]
     pub fn path(&self, path: &Path, hasher: &mut StoneDigestWriterHasher) -> Result<PathInfo, Error> {
-        let metadata = fs::metadata(path).context(IoSnafu)?;
+        let metadata = fs::symlink_metadata(path).context(IoSnafu)?;
         self.path_with_metadata(path.to_path_buf(), &metadata, hasher)
     }
 
@@ -90,7 +98,7 @@ impl Collector {
         let target_path = Path::new("/").join(path.strip_prefix(&self.root).expect("path is ancestor of root"));
 
         let package = self
-            .matching_package(target_path.to_str().unwrap_or_default())
+            .matching_package(target_path.to_str().unwrap_or_default(), metadata)
             .ok_or(Error::NoMatchingRule)?;
 
         PathInfo::new(path, target_path, metadata, hasher, package.to_owned())
@@ -113,9 +121,8 @@ impl Collector {
         entries.sort_by_key(|entry| entry.file_name());
 
         for entry in entries {
-            let metadata = entry.metadata().context(IoSnafu)?;
-
             let host_path = entry.path();
+            let metadata = fs::symlink_metadata(&host_path).context(IoSnafu)?;
 
             if metadata.is_dir() {
                 paths.extend(self.enumerate_paths(Some((host_path, metadata)), hasher)?);
@@ -171,7 +178,7 @@ impl PathInfo {
     }
 
     pub fn restat(&mut self, hasher: &mut StoneDigestWriterHasher) -> Result<(), Error> {
-        let metadata = fs::metadata(&self.path).context(IoSnafu)?;
+        let metadata = fs::symlink_metadata(&self.path).context(IoSnafu)?;
         self.layout = layout_from_metadata(&self.path, &self.target_path, &metadata, hasher)?;
         self.size = metadata.size();
         Ok(())
@@ -260,4 +267,132 @@ pub enum Error {
     NoMatchingRule,
     #[snafu(display("io"))]
     Io { source: io::Error },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs::Permissions,
+        os::unix::{
+            fs::{PermissionsExt, symlink},
+            net::UnixListener,
+        },
+        path::Path,
+    };
+
+    use super::*;
+
+    fn add_rule(collector: &mut Collector, pattern: &str, package: &str, kind: PathRuleKind) {
+        collector.add_rule(Rule {
+            pattern: pattern.to_owned(),
+            package: package.to_owned(),
+            kind,
+        });
+    }
+
+    fn write_file(root: &Path, relative: &str, mode: u32) -> PathBuf {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"payload").unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(mode)).unwrap();
+        path
+    }
+
+    #[test]
+    fn raw_glob_candidates_and_reverse_rule_precedence_select_the_output() {
+        let root = tempfile::tempdir().unwrap();
+        let path = write_file(root.path(), "usr/share/[literal]", 0o644);
+        let mut collector = Collector::new(root.path());
+        add_rule(&mut collector, "*", "fallback", PathRuleKind::Any);
+        add_rule(
+            &mut collector,
+            &Pattern::escape("/usr/share/[literal]"),
+            "lower-priority",
+            PathRuleKind::Any,
+        );
+        add_rule(
+            &mut collector,
+            &Pattern::escape("/usr/share/[literal]"),
+            "highest-priority",
+            PathRuleKind::Any,
+        );
+
+        let info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+
+        assert_eq!(info.target_path, Path::new("/usr/share/[literal]"));
+        assert_eq!(info.package, "highest-priority");
+    }
+
+    #[test]
+    fn executable_rules_require_a_regular_file_with_an_execute_bit() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = write_file(root.path(), "usr/bin/tool", 0o751);
+        let regular = write_file(root.path(), "usr/bin/data", 0o644);
+        let mut collector = Collector::new(root.path());
+        add_rule(&mut collector, "*", "out", PathRuleKind::Any);
+        add_rule(&mut collector, "/usr/bin/*", "executables", PathRuleKind::Executable);
+        let mut hasher = StoneDigestWriterHasher::new();
+
+        assert_eq!(collector.path(&executable, &mut hasher).unwrap().package, "executables");
+        assert_eq!(collector.path(&regular, &mut hasher).unwrap().package, "out");
+    }
+
+    #[test]
+    fn symlink_rules_use_lstat_and_enumeration_does_not_follow_linked_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        write_file(external.path(), "nested/file", 0o644);
+        let linked_dir = root.path().join("linked-dir");
+        symlink(external.path().join("nested"), &linked_dir).unwrap();
+        let broken = root.path().join("broken");
+        symlink(root.path().join("missing"), &broken).unwrap();
+
+        let mut collector = Collector::new(root.path());
+        add_rule(&mut collector, "*", "out", PathRuleKind::Any);
+        add_rule(&mut collector, "/*", "links", PathRuleKind::Symlink);
+        let paths = collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
+
+        assert_eq!(
+            paths.iter().map(|path| path.target_path.as_path()).collect::<Vec<_>>(),
+            [Path::new("/broken"), Path::new("/linked-dir")]
+        );
+        assert!(paths.iter().all(|path| path.package == "links"));
+        assert!(
+            paths
+                .iter()
+                .all(|path| matches!(path.layout.file, StonePayloadLayoutFile::Symlink(..)))
+        );
+        assert!(paths.iter().all(|path| !path.target_path.ends_with("file")));
+    }
+
+    #[test]
+    fn special_rules_match_unix_domain_sockets() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("run/service.sock");
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let mut collector = Collector::new(root.path());
+        add_rule(&mut collector, "*", "out", PathRuleKind::Any);
+        add_rule(&mut collector, "/run/*", "special", PathRuleKind::Special);
+
+        let info = collector.path(&socket, &mut StoneDigestWriterHasher::new()).unwrap();
+
+        assert_eq!(info.package, "special");
+        assert!(matches!(info.layout.file, StonePayloadLayoutFile::Socket(..)));
+    }
+
+    #[test]
+    fn collection_has_no_implicit_fallback_output() {
+        let root = tempfile::tempdir().unwrap();
+        let regular = write_file(root.path(), "usr/bin/data", 0o644);
+        let mut collector = Collector::new(root.path());
+        add_rule(&mut collector, "/usr/bin/*", "executables", PathRuleKind::Executable);
+
+        assert!(matches!(
+            collector.path(&regular, &mut StoneDigestWriterHasher::new()),
+            Err(Error::NoMatchingRule)
+        ));
+    }
 }

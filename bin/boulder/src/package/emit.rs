@@ -67,10 +67,6 @@ impl<'a> Package<'a> {
         }
     }
 
-    pub fn is_dbginfo(&self) -> bool {
-        self.name.ends_with("-dbginfo")
-    }
-
     pub fn filename(&self) -> String {
         format!(
             "{}-{}-{}-{}-{}.stone",
@@ -195,7 +191,7 @@ pub fn emit_frozen(
         derivation_id,
     );
     for package in packages {
-        if !package.is_dbginfo() {
+        if package.definition.include_in_manifest {
             manifest.add_package(package);
         }
     }
@@ -317,8 +313,9 @@ pub(crate) fn test_derivation_id() -> DerivationId {
 
 #[cfg(test)]
 pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
+    use stone_recipe::build_policy::AnalyzerKind;
     use stone_recipe::derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, LockedIdentity, PackageIdentity, Platform,
+        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, LockedIdentity, OutputPlan, PackageIdentity, Platform,
     };
 
     let platform = Platform {
@@ -379,6 +376,27 @@ pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan
         zig_cache_dir: "/mason/zigcache".to_owned(),
     };
     plan.source_date_epoch = 1_700_000_000;
+    plan.analysis.handlers = vec![
+        AnalyzerKind::IgnoreBlocked,
+        AnalyzerKind::Binary,
+        AnalyzerKind::Elf,
+        AnalyzerKind::PkgConfig,
+        AnalyzerKind::Python,
+        AnalyzerKind::CMake,
+        AnalyzerKind::CompressMan,
+        AnalyzerKind::IncludeAny,
+    ];
+    plan.outputs = vec![OutputPlan {
+        name: "out".to_owned(),
+        package_name: "example".to_owned(),
+        include_in_manifest: true,
+        summary: None,
+        description: None,
+        provides_exclude: Vec::new(),
+        runtime_exclude: Vec::new(),
+        runtime_inputs: Vec::new(),
+        conflicts: Vec::new(),
+    }];
     plan.validate().unwrap();
     plan
 }

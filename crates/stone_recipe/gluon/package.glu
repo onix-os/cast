@@ -115,6 +115,7 @@ type PathSpec =
 
 type OutputSpec = {
     name: String,
+    include_in_manifest: Boolean,
     summary: Optional String,
     description: Optional String,
     provides_exclude: Array String,
@@ -275,6 +276,7 @@ let default_options: OptionsSpec = {
 
 let output: String -> OutputSpec = \name -> {
     name,
+    include_in_manifest = True,
     summary = Unset,
     description = Unset,
     provides_exclude = [],
@@ -343,6 +345,7 @@ let default_output_set = \pname -> {
         .. output "devel"
     },
     dbginfo = output_with {
+        include_in_manifest = False,
         summary = Set (strings.append "Debugging symbols for " pname),
         description = Set (strings.append
             (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
@@ -389,6 +392,7 @@ let default_output_set = \pname -> {
         .. output "32bit-devel"
     },
     bit32_dbginfo = output_with {
+        include_in_manifest = False,
         summary = Set (strings.append "Debugging symbols for " (strings.append pname "-32bit")),
         description = Set (strings.append
             (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
@@ -427,6 +431,7 @@ let choose_optional = \authored default ->
 // accumulated through Boulder's package-template merge remain cumulative.
 let overlay_output = \authored default -> {
     name = authored.name,
+    include_in_manifest = authored.include_in_manifest,
     summary = choose_optional authored.summary default.summary,
     description = choose_optional authored.description default.description,
     provides_exclude = authored.provides_exclude,

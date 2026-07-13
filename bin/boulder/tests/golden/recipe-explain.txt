@@ -15,7 +15,6 @@
   environment {
   layout {
   execution {
-  tuning {
   analyzers {
   analysis {
   manifest_build_inputs {

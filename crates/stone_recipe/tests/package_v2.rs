@@ -84,6 +84,26 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
         ]
     );
     assert_eq!(
+        evaluated
+            .package
+            .outputs
+            .iter()
+            .map(|output| (output.name.as_str(), output.include_in_manifest))
+            .collect::<Vec<_>>(),
+        [
+            ("out", true),
+            ("docs", true),
+            ("devel", true),
+            ("dbginfo", false),
+            ("libs", true),
+            ("32bit", true),
+            ("32bit-devel", true),
+            ("32bit-dbginfo", false),
+            ("demos", true),
+            ("dev", true),
+        ]
+    );
+    assert_eq!(
         dependency_names(&evaluated.package.outputs[0].runtime_inputs),
         ["pkgconfig(libressl)"]
     );
@@ -100,6 +120,26 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
             .iter()
             .any(|module| module.logical_name == "boulder.package.v2")
     );
+}
+
+#[test]
+fn manifest_membership_is_explicit_not_inferred_from_package_name() {
+    let source = authored(
+        r#"
+let root = b.output "out"
+{
+    outputs = [root],
+    .. b.mk_package (b.meta {
+        pname = "symbols-dbginfo", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    })
+}
+"#,
+    );
+
+    let evaluated = evaluate_gluon(&source).unwrap();
+    assert_eq!(evaluated.package.outputs.len(), 1);
+    assert!(evaluated.package.outputs[0].include_in_manifest);
 }
 
 #[test]

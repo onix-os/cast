@@ -209,6 +209,7 @@ enum GluonPathSpec {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonOutputSpec {
     name: String,
+    include_in_manifest: GluonBool,
     summary: GluonOptional<String>,
     description: GluonOptional<String>,
     provides_exclude: Vec<String>,
@@ -466,6 +467,7 @@ impl From<GluonOutputSpec> for OutputSpec {
     fn from(spec: GluonOutputSpec) -> Self {
         Self {
             name: spec.name,
+            include_in_manifest: spec.include_in_manifest.into(),
             summary: spec.summary.into(),
             description: spec.description.into(),
             provides_exclude: spec.provides_exclude,

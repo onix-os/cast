@@ -32,23 +32,15 @@ pub struct Packager {
     collector: Collector,
 }
 
-/// One path selection rule after pure package-factory composition. The
-/// derivation vocabulary is retained so planning can copy it directly.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedPath {
-    pub(crate) pattern: String,
-    pub(crate) kind: PathRuleKind,
-}
-
 /// One emitted package resolved from a direct package-v2 output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedOutput {
+    pub(crate) include_in_manifest: bool,
     pub(crate) summary: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) provides_exclude: Vec<String>,
     pub(crate) runtime_inputs: Vec<Dependency>,
     pub(crate) runtime_exclude: Vec<String>,
-    pub(crate) paths: Vec<ResolvedPath>,
     pub(crate) conflicts: Vec<Provider>,
 }
 
@@ -95,12 +87,12 @@ impl<'a> FrozenPackager<'a> {
                 Ok((
                     output.package_name.clone(),
                     ResolvedOutput {
+                        include_in_manifest: output.include_in_manifest,
                         summary: output.summary.clone(),
                         description: output.description.clone(),
                         provides_exclude: output.provides_exclude.clone(),
                         runtime_inputs: run_deps,
                         runtime_exclude: output.runtime_exclude.clone(),
-                        paths: Vec::new(),
                         conflicts: output.conflicts.iter().map(|relation| relation.to_provider()).collect(),
                     },
                 ))
@@ -155,9 +147,9 @@ impl<'a> FrozenPackager<'a> {
         let packages = self
             .packages
             .iter()
-            .filter_map(|(name, package)| {
-                let bucket = analysis.buckets.remove(name)?;
-                Some(emit::Package::new_with_architecture(
+            .map(|(name, package)| {
+                let bucket = analysis.buckets.remove(name).unwrap_or_default();
+                emit::Package::new_with_architecture(
                     name,
                     &self.identity,
                     package,
@@ -165,9 +157,12 @@ impl<'a> FrozenPackager<'a> {
                     self.build_release,
                     self.architecture,
                     self.jobs,
-                ))
+                )
             })
             .collect::<Vec<_>>();
+        if let Some(name) = analysis.buckets.keys().next() {
+            return Err(Error::UnexpectedAnalyzedOutput(name.clone()));
+        }
         emit::emit_frozen(
             self.paths,
             &self.identity,
@@ -226,11 +221,12 @@ fn resolve_packages(recipe: &Recipe, collector: &mut Collector) -> Result<BTreeM
     for (index, output) in recipe.declaration.outputs.iter().enumerate() {
         let name = emitted_output_name(&recipe.declaration.meta.pname, &output.name);
         let package = resolved_output(output, root_output, index)?;
-        for path in &package.paths {
+        for path in &output.paths {
+            let (kind, pattern) = collection_rule(path);
             collector.add_rule(collect::Rule {
-                pattern: path.pattern.clone(),
+                pattern: pattern.to_owned(),
                 package: name.clone(),
-                kind: path.kind,
+                kind,
             });
         }
         packages.insert(name, package);
@@ -249,6 +245,7 @@ fn emitted_output_name(pname: &str, output: &str) -> String {
 
 fn resolved_output(output: &OutputSpec, root: &OutputSpec, output_index: usize) -> Result<ResolvedOutput, Error> {
     Ok(ResolvedOutput {
+        include_in_manifest: output.include_in_manifest,
         summary: output.summary.clone().or_else(|| root.summary.clone()),
         description: output.description.clone().or_else(|| root.description.clone()),
         provides_exclude: output.provides_exclude.clone(),
@@ -265,7 +262,6 @@ fn resolved_output(output: &OutputSpec, root: &OutputSpec, output_index: usize) 
             })
             .collect::<Result<_, _>>()?,
         runtime_exclude: output.runtime_exclude.clone(),
-        paths: output.paths.iter().map(resolved_path).collect(),
         conflicts: output
             .conflicts
             .iter()
@@ -281,24 +277,12 @@ fn resolved_output(output: &OutputSpec, root: &OutputSpec, output_index: usize) 
     })
 }
 
-fn resolved_path(path: &stone_recipe::PathSpec) -> ResolvedPath {
+fn collection_rule(path: &stone_recipe::PathSpec) -> (PathRuleKind, &str) {
     match path {
-        stone_recipe::PathSpec::Any { path } => ResolvedPath {
-            pattern: path.clone(),
-            kind: PathRuleKind::Any,
-        },
-        stone_recipe::PathSpec::Exe { path } => ResolvedPath {
-            pattern: path.clone(),
-            kind: PathRuleKind::Executable,
-        },
-        stone_recipe::PathSpec::Symlink { path } => ResolvedPath {
-            pattern: path.clone(),
-            kind: PathRuleKind::Symlink,
-        },
-        stone_recipe::PathSpec::Special { path } => ResolvedPath {
-            pattern: path.clone(),
-            kind: PathRuleKind::Special,
-        },
+        stone_recipe::PathSpec::Any { path } => (PathRuleKind::Any, path),
+        stone_recipe::PathSpec::Exe { path } => (PathRuleKind::Executable, path),
+        stone_recipe::PathSpec::Symlink { path } => (PathRuleKind::Symlink, path),
+        stone_recipe::PathSpec::Special { path } => (PathRuleKind::Special, path),
     }
 }
 
@@ -343,6 +327,8 @@ pub enum Error {
     InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
     #[error("frozen output {0} is missing")]
     MissingFrozenOutput(String),
+    #[error("analysis produced undeclared output {0}")]
+    UnexpectedAnalyzedOutput(String),
     #[error("frozen derivation layout does not match runtime paths")]
     FrozenLayoutMismatch,
 }
@@ -352,6 +338,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use stone_recipe::build_policy::AnalyzerKind;
     use stone_recipe::derivation::{
         AnalysisToolchain, CollectionRulePlan, OutputPlan, PathRuleKind, RelationKind, RelationPlan,
     };
@@ -393,10 +380,17 @@ mod tests {
 
         let root = &packages["hello"];
         assert_eq!(root.summary.as_deref(), Some("Minimal Gluon recipe example"));
+        assert!(root.include_in_manifest);
         assert_eq!(
-            root.paths.iter().map(|path| path.pattern.as_str()).collect::<Vec<_>>(),
-            ["*"]
+            rules
+                .iter()
+                .filter(|rule| rule.package == "hello")
+                .map(|rule| (rule.kind, rule.pattern.as_str()))
+                .collect::<Vec<_>>(),
+            [(PathRuleKind::Any, "*")]
         );
+        assert!(!packages["hello-dbginfo"].include_in_manifest);
+        assert!(!packages["hello-32bit-dbginfo"].include_in_manifest);
 
         let devel = &packages["hello-devel"];
         assert_eq!(devel.summary.as_deref(), Some("Development files for hello"));
@@ -409,7 +403,11 @@ mod tests {
             ["hello"]
         );
         assert_eq!(
-            devel.paths.iter().map(|path| path.pattern.as_str()).collect::<Vec<_>>(),
+            rules
+                .iter()
+                .filter(|rule| rule.package == "hello-devel")
+                .map(|rule| rule.pattern.as_str())
+                .collect::<Vec<_>>(),
             [
                 "/usr/include",
                 "/usr/lib/*.a",
@@ -454,6 +452,16 @@ mod tests {
         plan.build_lock.target_platform.architecture = "x86".to_owned();
         plan.package.licenses = vec!["MIT".to_owned()];
         plan.analysis = AnalysisPlan {
+            handlers: vec![
+                AnalyzerKind::IgnoreBlocked,
+                AnalyzerKind::Binary,
+                AnalyzerKind::Elf,
+                AnalyzerKind::PkgConfig,
+                AnalyzerKind::Python,
+                AnalyzerKind::CMake,
+                AnalyzerKind::CompressMan,
+                AnalyzerKind::IncludeAny,
+            ],
             toolchain: AnalysisToolchain::Gnu,
             debug: true,
             strip: false,
@@ -467,6 +475,7 @@ mod tests {
         plan.outputs = vec![OutputPlan {
             name: "out".to_owned(),
             package_name: "frozen".to_owned(),
+            include_in_manifest: true,
             summary: Some("Frozen output".to_owned()),
             description: Some("Only plan data".to_owned()),
             provides_exclude: vec!["excluded-provider".to_owned()],

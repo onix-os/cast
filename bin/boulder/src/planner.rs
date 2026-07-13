@@ -222,18 +222,8 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         compiler_cache: request.compiler_cache,
         jobs: request.jobs.get(),
     };
-    plan.tuning = builder
-        .recipe
-        .declaration
-        .tuning
-        .iter()
-        .map(|entry| format!("{}={:?}", entry.key, entry.value))
-        .collect();
-    plan.analyzers = vec![LockedIdentity {
-        name: "boulder-package-analysis".to_owned(),
-        fingerprint: boulder_fingerprint.to_owned(),
-    }];
     plan.analysis = AnalysisPlan {
+        handlers: target.build_policy.spec.analyzers.clone(),
         toolchain: match builder.recipe.declaration.options.toolchain {
             stone_recipe::ToolchainSpec::Llvm => AnalysisToolchain::Llvm,
             stone_recipe::ToolchainSpec::Gnu => AnalysisToolchain::Gnu,
@@ -443,6 +433,7 @@ fn freeze_outputs(
             Ok(OutputPlan {
                 name: names[name].clone(),
                 package_name: name.clone(),
+                include_in_manifest: package.include_in_manifest,
                 summary: package.summary.clone(),
                 description: package.description.clone(),
                 provides_exclude: package.provides_exclude.clone(),
@@ -635,3 +626,7 @@ mod tests {
         assert!(jobs_use_package_directory(&[job], package_dir));
     }
 }
+
+#[cfg(test)]
+#[path = "planner/tests.rs"]
+mod hermetic_tests;

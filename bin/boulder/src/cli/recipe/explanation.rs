@@ -63,7 +63,6 @@ impl Explanation<'_> {
         self.environment(&mut formatter);
         self.layout(&mut formatter);
         self.execution(&mut formatter);
-        self.tuning(&mut formatter);
         self.analyzers(&mut formatter);
         self.analysis(&mut formatter);
         self.manifest_build_inputs(&mut formatter);
@@ -371,28 +370,13 @@ impl Explanation<'_> {
         formatter.close(1);
     }
 
-    fn tuning(&self, formatter: &mut Formatter) {
-        formatter.open(1, "tuning");
-        for (order, value) in self.plan.tuning.iter().enumerate() {
-            formatter.indexed_open(2, "entry", order);
-            formatter.field(3, "order", order);
-            formatter.string(3, "value", value);
-            formatter.close(2);
-        }
-        formatter.close(1);
-    }
-
     fn analyzers(&self, formatter: &mut Formatter) {
-        let mut analyzers = self.plan.analyzers.iter().collect::<Vec<_>>();
-        analyzers.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.fingerprint.cmp(&right.fingerprint))
-        });
-
         formatter.open(1, "analyzers");
-        for (index, analyzer) in analyzers.into_iter().enumerate() {
-            format_locked_identity(formatter, 2, &format!("analyzer {index}"), analyzer);
+        for (order, handler) in self.plan.analysis.handlers.iter().enumerate() {
+            formatter.indexed_open(2, "analyzer", order);
+            formatter.field(3, "order", order);
+            formatter.string(3, "kind", handler.as_str());
+            formatter.close(2);
         }
         formatter.close(1);
     }
@@ -451,6 +435,7 @@ impl Explanation<'_> {
             formatter.indexed_open(2, "output", index);
             formatter.string(3, "name", &output.name);
             formatter.string(3, "package_name", &output.package_name);
+            formatter.field(3, "include_in_manifest", output.include_in_manifest);
             formatter.optional_string(3, "summary", output.summary.as_deref());
             formatter.optional_string(3, "description", output.description.as_deref());
 
@@ -698,7 +683,7 @@ mod tests {
 
     use gluon_config::{EvaluationFingerprint, ModuleFingerprint};
     use stone_recipe::{
-        build_policy::layers::BuildPolicyOperation,
+        build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
             AnalysisPlan, BuildLock, BuilderLayout, CollectionRulePlan, DERIVATION_PLAN_SCHEMA_VERSION,
             ExecutionPolicy, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
@@ -927,9 +912,8 @@ mod tests {
                 compiler_cache: true,
                 jobs: 8,
             },
-            tuning: vec!["lto=thin".to_owned(), "optimize=speed".to_owned()],
-            analyzers: vec![identity("z-analyzer"), identity("a-analyzer")],
             analysis: AnalysisPlan {
+                handlers: vec![AnalyzerKind::Elf, AnalyzerKind::Binary, AnalyzerKind::IncludeAny],
                 toolchain: AnalysisToolchain::Gnu,
                 debug: true,
                 strip: false,
@@ -948,32 +932,34 @@ mod tests {
             ],
             collection_rules: vec![
                 CollectionRulePlan {
-                    output: "demo".to_owned(),
+                    output: "out".to_owned(),
                     kind: PathRuleKind::Executable,
                     pattern: "usr/bin/*".to_owned(),
                 },
                 CollectionRulePlan {
-                    output: "demo-devel".to_owned(),
+                    output: "dev".to_owned(),
                     kind: PathRuleKind::Any,
                     pattern: "usr/include/**".to_owned(),
                 },
             ],
             outputs: vec![
                 OutputPlan {
-                    name: "demo-devel".to_owned(),
+                    name: "dev".to_owned(),
                     package_name: "demo-devel".to_owned(),
+                    include_in_manifest: true,
                     summary: None,
                     description: Some("Development files".to_owned()),
                     provides_exclude: Vec::new(),
                     runtime_exclude: Vec::new(),
                     runtime_inputs: vec![OutputRelation::Planned {
-                        output: "demo".to_owned(),
+                        output: "out".to_owned(),
                     }],
                     conflicts: Vec::new(),
                 },
                 OutputPlan {
-                    name: "demo".to_owned(),
+                    name: "out".to_owned(),
                     package_name: "demo".to_owned(),
+                    include_in_manifest: true,
                     summary: Some("Demo summary".to_owned()),
                     description: None,
                     provides_exclude: vec!["z-pattern".to_owned(), "a-pattern".to_owned()],
@@ -1066,7 +1052,7 @@ mod tests {
         let fixture = fixture();
         let rendered = fixture.render();
         for expected in [
-            "derivation_plan = 3",
+            "derivation_plan = 4",
             "boulder_version = \"0.26.6\"",
             "boulder_fingerprint = \"sha256:boulder\"",
             "build_lock = \"",
@@ -1091,8 +1077,7 @@ mod tests {
             "\"A_GLOBAL\" = \"a\"",
             "source_dir = \"/sandbox/sources\"",
             "network = \"enabled\"",
-            "value = \"lto=thin\"",
-            "name = \"a-analyzer\"",
+            "kind = \"Elf\"",
             "toolchain = \"gnu\"",
             "name = \"zlib-devel\"",
             "pattern = \"usr/bin/*\"",
@@ -1126,7 +1111,6 @@ mod tests {
         for change in &mut second.policy_changes {
             change.fingerprint.imported_modules.reverse();
         }
-        second.plan.analyzers.reverse();
         second.plan.manifest_build_inputs.reverse();
         second.plan.outputs.reverse();
         for output in &mut second.plan.outputs {
@@ -1138,13 +1122,14 @@ mod tests {
 
         assert_eq!(first.render(), second.render());
 
-        second.plan.tuning.reverse();
+        second.plan.analysis.handlers.swap(0, 1);
         assert_ne!(
             first.render(),
             second.render(),
-            "authored tuning order must remain visible"
+            "analyzer handler precedence must remain visible"
         );
-        second.plan.tuning.reverse();
+        second.plan.analysis.handlers.swap(0, 1);
+
         second.plan.collection_rules.reverse();
         assert_ne!(
             first.render(),
