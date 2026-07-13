@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "modern-editor",
+    version = "2.0.0",
+    release = 1,
+    homepage = "https://example.invalid/modern-editor",
+    license = ["MIT"],
+})
+
+let root = b.output_with {
+    summary = b.optional.set "Modern terminal editor",
+    provides_exclude = ["legacy-helper"],
+    runtime_exclude = ["private-plugin"],
+    paths = [
+        b.path.exe "/usr/bin/modern-editor",
+        b.path.symlink "/usr/bin/editor",
+    ],
+    conflicts = [
+        b.dep.package "legacy-editor",
+        b.dep.binary "old-editor",
+    ],
+    .. b.output "out"
+}
+
+{
+    builder = meson.default,
+    outputs = b.outputs.with_root base.meta.pname root,
+    sources = [
+        b.source.archive
+            "https://example.invalid/modern-editor-2.0.0.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

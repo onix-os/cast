@@ -1,0 +1,31 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let cargo = import! cast.builders.cargo.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cargo-hello",
+    version = "0.9.3",
+    release = 1,
+    homepage = "https://example.invalid/cargo-hello",
+    license = ["Apache-2.0", "MIT"],
+})
+
+{
+    // The structural Cargo builder deliberately has no CargoFetch step. Source
+    // acquisition and locking happen before the isolated build begins.
+    builder = cargo.builder {
+        features = ["pcre2", "unicode"],
+        binaries = ["cargo-hello"],
+        run_tests = b.boolean.true,
+    },
+    build_inputs = [b.dep.pkgconfig "libpcre2-8"],
+    sources = [
+        b.source.archive
+            "https://example.invalid/cargo-hello-0.9.3.tar.gz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    architectures = ["native"],
+    .. base
+}

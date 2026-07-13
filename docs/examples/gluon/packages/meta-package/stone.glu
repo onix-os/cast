@@ -1,0 +1,32 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+let base = b.mk_package (b.meta {
+    pname = "developer-workstation",
+    version = "1",
+    release = 1,
+    homepage = "https://example.invalid/developer-workstation",
+    license = ["CC0-1.0"],
+})
+
+// A source-less package can declaratively compose a userspace. It has no
+// imperative setup phase and its root output exists only to carry relations.
+{
+    outputs = [
+        b.output_with {
+            summary = b.optional.set "Declarative developer workstation",
+            description = b.optional.set "Compiler, debugger, editor, and version-control tools.",
+            runtime_inputs = [
+                b.dep.package "clang",
+                b.dep.package "gdb",
+                b.dep.package "git",
+                b.dep.package "helix",
+            ],
+            .. b.output "out"
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

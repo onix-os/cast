@@ -1,0 +1,27 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+\deps ->
+    let base = b.mk_package (b.meta {
+        pname = "override-client",
+        version = "8.2.0",
+        release = 1,
+        homepage = "https://example.invalid/override-client",
+        license = ["MPL-2.0"],
+    })
+    {
+        builder = cmake.builder {
+            flags = ["-DUSE_SYSTEM_LIBRARIES=ON"],
+            .. cmake.defaults
+        },
+        build_inputs = [deps.compression, deps.tls],
+        sources = [
+            b.source.archive
+                "https://example.invalid/override-client-8.2.0.tar.xz"
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ],
+        .. base
+    }

@@ -1,0 +1,40 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "tuned-compressor",
+    version = "3.7.2",
+    release = 1,
+    homepage = "https://example.invalid/tuned-compressor",
+    license = ["Zlib"],
+})
+
+{
+    builder = cmake.default,
+    options = b.options {
+        toolchain = b.toolchain.gnu,
+        cspgo = b.boolean.false,
+        samplepgo = b.boolean.false,
+        debug = b.boolean.false,
+        strip = b.boolean.true,
+        networking = b.boolean.false,
+        compressman = b.boolean.true,
+        lastrip = b.boolean.true,
+    },
+    tuning = [
+        b.named "harden" b.tuning.enable,
+        b.named "lto" (b.tuning.config "thin"),
+        b.named "nosemantic" b.tuning.disable,
+        b.named "optimize" (b.tuning.config "speed"),
+    ],
+    mold = b.boolean.true,
+    sources = [
+        b.source.archive
+            "https://example.invalid/tuned-compressor-3.7.2.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

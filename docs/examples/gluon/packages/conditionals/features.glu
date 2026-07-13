@@ -1,0 +1,10 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+{
+    documentation = b.boolean.true,
+    tests = b.boolean.true,
+    tls = b.boolean.false,
+}

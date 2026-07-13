@@ -1,0 +1,28 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let autotools = import! cast.builders.autotools.v2
+
+let base = b.mk_package (b.meta {
+    pname = "autotools-hello",
+    version = "2.4.1",
+    release = 1,
+    homepage = "https://example.invalid/autotools-hello",
+    license = ["GPL-3.0-or-later"],
+})
+
+{
+    builder = autotools.builder {
+        flags = ["--disable-static", "--enable-shared"],
+        run_tests = b.boolean.true,
+    },
+    native_build_inputs = [b.dep.binary "pkgconf"],
+    sources = [
+        b.source.archive
+            "https://example.invalid/autotools-hello-2.4.1.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    architectures = ["x86_64", "aarch64"],
+    .. base
+}

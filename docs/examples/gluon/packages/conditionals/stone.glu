@@ -1,0 +1,7 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let make_package = import! "./package.glu"
+let features = import! "./features.glu"
+
+make_package features

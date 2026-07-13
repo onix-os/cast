@@ -1,0 +1,14 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+// `mk_package` supplies explicit, versioned defaults. A useful recipe does not
+// need a template inheritance stack or a second data format.
+b.mk_package (b.meta {
+    pname = "minimal-hello",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/minimal-hello",
+    license = ["MPL-2.0"],
+})

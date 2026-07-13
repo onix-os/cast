@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let pname = "split-demo"
+
+let root = b.output_with {
+    summary = b.optional.set "Command-line tools",
+    paths = [
+        b.path.exe "/usr/bin/split-demo",
+        b.path.any "/usr/share/man/man1",
+    ],
+    .. b.output "out"
+}
+
+let libraries = b.output_with {
+    summary = b.optional.set "Runtime libraries",
+    paths = [b.path.any "/usr/lib/libsplit-demo.so.*"],
+    .. b.output "libs"
+}
+
+let development = b.output_with {
+    summary = b.optional.set "Headers and link-time files",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+    paths = [
+        b.path.any "/usr/include/split-demo",
+        b.path.any "/usr/lib/libsplit-demo.so",
+        b.path.any "/usr/lib/pkgconfig/split-demo.pc",
+    ],
+    .. b.output "devel"
+}
+
+let documentation = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Reference documentation",
+    paths = [b.path.any "/usr/share/doc/split-demo"],
+    .. b.output "docs"
+}
+
+let base = b.mk_package (b.meta {
+    pname,
+    version = "4.0.2",
+    release = 1,
+    homepage = "https://example.invalid/split-demo",
+    license = ["LGPL-2.1-or-later"],
+})
+
+{
+    builder = cmake.default,
+    outputs = [root, libraries, development, documentation],
+    sources = [
+        b.source.archive
+            "https://example.invalid/split-demo-4.0.2.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}
