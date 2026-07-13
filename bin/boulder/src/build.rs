@@ -216,12 +216,10 @@ impl Builder {
                     for command in &script.commands {
                         match command {
                             script::Command::Break(breakpoint) => {
-                                let line_num = breakpoint_line(breakpoint, &self.recipe, job.target, *phase)
-                                    .map(|line_num| format!(" at line {line_num}"))
-                                    .unwrap_or_default();
+                                let line_num = breakpoint_script_line(breakpoint);
 
                                 println!(
-                                    "\n{}{line_num} {}",
+                                    "\n{} in {phase} script at line {line_num} {}",
                                     "Breakpoint".bold(),
                                     if breakpoint.exit {
                                         "(exit)".dim()
@@ -394,67 +392,14 @@ pub fn format_profile(script: &Script) -> String {
     format!("{env}\n{action_functions}\n{definition_vars}")
 }
 
-fn breakpoint_line(
-    breakpoint: &Breakpoint,
-    recipe: &Recipe,
-    build_target: BuildTarget,
-    phase: job::Phase,
-) -> Option<usize> {
-    let profile = recipe.build_target_profile_key(build_target);
-
-    let has_key = |line: &str, key: &str| {
-        line.split_once(':')
-            .is_some_and(|(leading, _)| leading.trim().ends_with(key))
-    };
-
-    let mut lines = recipe
-        .source
-        .lines()
-        .enumerate()
-        // If no profile, we care about root keys (no leading whitespace),
-        // otherwise it will be indented
-        .filter(|(_, line)| {
-            let indented = line.trim().chars().next() != line.chars().next();
-
-            if profile.is_none() { !indented } else { indented }
-        })
-        // Skip lines occurring before profile, otherwise it's the
-        // root profile
-        .skip_while(|(_, line)| {
-            if let Some(profile) = &profile {
-                !has_key(line, profile)
-            } else {
-                false
-            }
-        });
-
-    let phase = match phase {
-        // Internal phase, no breakpoint will occur
-        job::Phase::Prepare => return None,
-        job::Phase::Setup => "setup",
-        job::Phase::Build => "build",
-        job::Phase::Install => "install",
-        job::Phase::Check => "check",
-        job::Phase::Workload => "workload",
-    };
-
-    lines.find_map(|(mut line_num, line)| {
-        if has_key(line, phase) {
-            // 0 based to 1 based
-            line_num += 1;
-
-            let (_, rest) = line.split_once(':').expect("line contains :");
-
-            // If block, string starts on next line
-            if rest.trim().starts_with('|') || rest.trim().starts_with('>') {
-                line_num += 1;
-            }
-
-            Some(line_num + breakpoint.line_num)
-        } else {
-            None
-        }
-    })
+/// Return the one-based line of the breakpoint in the evaluated phase script.
+///
+/// A Gluon phase may be constructed by functions or imported from another
+/// module, so searching the root recipe text cannot recover an authoritative
+/// authored source line. The script parser, however, always knows the stable
+/// phase-local line at which it encountered the breakpoint.
+fn breakpoint_script_line(breakpoint: &Breakpoint) -> usize {
+    breakpoint.line_num + 1
 }
 
 #[derive(Debug, Error)]
@@ -491,4 +436,38 @@ pub enum Error {
     MossClient(#[from] moss::client::Error),
     #[error("moss installation")]
     MossInstallation(#[from] moss::installation::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use stone_recipe::script::{Command, Parser};
+
+    use super::*;
+
+    #[test]
+    fn breakpoint_line_is_one_based_within_the_evaluated_phase() {
+        let script = Parser::new()
+            .parse("echo preparing\n\n%break_continue\necho continuing")
+            .unwrap();
+        let breakpoint = script
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                Command::Break(breakpoint) => Some(breakpoint),
+                Command::Content(_) => None,
+            })
+            .unwrap();
+
+        assert_eq!(breakpoint_script_line(breakpoint), 3);
+    }
+
+    #[test]
+    fn breakpoint_on_first_phase_line_is_line_one() {
+        let breakpoint = Breakpoint {
+            line_num: 0,
+            exit: true,
+        };
+
+        assert_eq!(breakpoint_script_line(&breakpoint), 1);
+    }
 }

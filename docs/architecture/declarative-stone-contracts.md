@@ -1,0 +1,223 @@
+<!--
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+-->
+
+# Declarative Stone contracts
+
+This document freezes the ownership boundary and invariants for the three
+specification layers introduced by the declarative Stone plan. It also records
+every value that Boulder currently supplies or derives after a Gluon recipe has
+been evaluated. The inventory is the Phase 1 migration checklist: later work
+must move each semantic value to its assigned layer rather than silently
+recreating it in the executor.
+
+## Ownership
+
+The declarative data contracts belong in `crates/stone_recipe`, not in the
+`boulder` binary. The crate is the format-neutral boundary already shared by
+the restricted Gluon evaluator and Boulder.
+
+| Contract | Target module | Owner and responsibility |
+| --- | --- | --- |
+| `PackageSpec` | `stone_recipe::package` | Authored intent returned by a pure Gluon package factory. Validation may inspect only this value and explicit function arguments. |
+| `PolicySpec` | `stone_recipe::policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. Policy composition is pure, ordered, and fingerprinted. |
+| `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
+
+`bin/boulder` owns orchestration only:
+
+1. evaluate a package factory and an explicitly selected policy root;
+2. resolve sources and package providers through I/O-backed services;
+3. freeze and validate one `DerivationPlan`;
+4. execute that plan and emit its declared outputs.
+
+Boulder must not own a second private representation that can express more
+semantic information than `DerivationPlan`. Runtime structs may borrow or
+index plan data, but they must not add dependencies, phases, environment,
+policy, or outputs.
+
+## Layer invariants
+
+### `PackageSpec`
+
+- Is the concrete result of calling `PackageInputs -> PackageSpec` inside the
+  restricted Gluon VM. Rust never stores or invokes a Gluon closure.
+- Contains authored requests and symbolic references, never resolved package
+  IDs, repository snapshots, host paths, fetched content, or current time.
+- Uses typed dependency and output references. Provider strings are a
+  transitional lowering detail and are not part of the final v2 contract.
+- Separates native build, target build, check, and output-specific runtime
+  relations.
+- Declares sources, builder selection, hooks, network requirements, package
+  outputs, and path rules explicitly.
+- Has deterministic defaults in the ABI. Defaults do not depend on the host,
+  process environment, directory contents, or evaluation order.
+- Is validated before any source or dependency resolution begins.
+
+### `PolicySpec`
+
+- Is reached through one explicit Gluon policy root. Directory enumeration is
+  not composition.
+- Contains every repository choice that can alter a build: platform data,
+  toolchains, standard builders, base build inputs, tuning defaults, package
+  templates, analyzer policy, and fixed guest layout.
+- Is composed through ordered, one-way transformations with strict `add`,
+  `replace`, and `modify` operations. An unqualified duplicate addition is an
+  error.
+- Retains provenance and fingerprints for the root and every imported module.
+- Does not read the machine architecture, CPU count, environment, user home,
+  filesystem, network, or clock while being evaluated.
+- May provide defaults, but applying those defaults is part of plan
+  resolution and is visible in plan provenance.
+
+### `DerivationPlan`
+
+- Is concrete and target-specific. No unresolved dependency provider, source
+  request, policy lookup, macro invocation, or output-template merge remains.
+- Contains the selected package, source lock, exact package/output closure,
+  repository snapshot, build/host/target platforms, policy, profile,
+  toolchain, builder, phases, hooks, environment, network mode, PGO stages,
+  tuning, outputs, source timestamp, and implementation/schema versions.
+- Records the fingerprint and provenance of every authored or policy module
+  that contributed semantic data.
+- Has one stable canonical encoding. Maps are key ordered, sequences preserve
+  declared semantic order, optional values have one encoding, and paths and
+  identifiers have one normalized representation.
+- Defines `derivation_id = hash(canonical_encode(plan))`. No executor option
+  that changes an output may remain outside this identity.
+- Is deeply validated before execution. In particular, referenced outputs
+  exist, output names are unique, the dependency graph is acyclic, phases use
+  declared tools, and all platform roles are supported.
+- Is immutable after freezing. Execution can report observations such as
+  output file hashes and analyzer findings, but cannot change the requested
+  build semantics.
+
+## Classification rules
+
+Every post-evaluation value belongs to exactly one of these classes:
+
+- **Authored intent** moves into `PackageSpec`.
+- **Repository policy** moves into `PolicySpec`.
+- **Resolved dependency** is produced by resolution and frozen in
+  `DerivationPlan`.
+- **Executor-only state** may remain outside the plan only when changing it is
+  proven not to change build or package semantics.
+- **Forbidden ambient state** currently changes semantics without being an
+  explicit input. It must be removed or converted into an explicit plan input.
+
+The filesystem location used to load an explicit value is not itself semantic;
+the selected identity, content, fingerprint, and ordering are semantic.
+
+## Current post-evaluation input inventory
+
+### Policy and package construction
+
+| Current value or behavior | Current location | Class | Required destination |
+| --- | --- | --- | --- |
+| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | `bin/boulder/src/macros.rs` | Repository policy | One explicitly imported `PolicySpec` root; retain its complete fingerprint and module provenance. |
+| Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Selected builder and platform policy, resolved into plan phases, tools, and environment. |
+| Architecture package templates | `package.rs::resolve_packages` | Repository policy | Typed output templates in `PolicySpec`, with explicit composition operations. |
+| Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
+| Root package and subpackage precedence | `package.rs::resolve_packages` | Authored intent | Explicit named outputs in `PackageSpec`; no collision-based merge in the executor. |
+| Template collision merge and list sorting | `package.rs::resolve_packages` | Repository policy | Typed policy patch semantics; the fully merged outputs appear in the plan. |
+| `%name`, `%version`, and `%release` expansion in package fields | `package.rs::resolve_packages` | Authored intent | Structural fields or typed interpolation resolved before plan freeze. |
+| `%action` expansion and action-provided dependencies | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Structured builders declare steps and required tools; plan contains expanded steps and inputs. |
+| `%(definition)` expansion | `stone_recipe::script` and `build/job/phase.rs` | Repository policy | Typed builder arguments, paths, and environment values in the plan. |
+
+### Platforms, toolchains, and build environment
+
+| Current value or behavior | Current location | Class | Required destination |
+| --- | --- | --- | --- |
+| Host architecture used to choose build targets | `recipe.rs::build_targets` and `architecture.rs` | Forbidden ambient state | Explicit build/host/target platform input, validated against `PolicySpec` and frozen in the plan. |
+| Host architecture written to package metadata | `package/emit.rs` | Forbidden ambient state | The plan's resolved target/output architecture. |
+| Base root packages | `build/root.rs::BASE_PACKAGES` | Repository policy | Standard environment inputs in `PolicySpec`, resolved to exact package IDs. |
+| GNU/LLVM, emul32, Mold, and compiler-cache root packages | `build/root.rs::packages` | Repository policy | Toolchain/builder policy selected by explicit package or invocation inputs, then frozen in the closure. |
+| Compiler executable names and linker selection | `build/job/phase.rs` | Repository policy | Selected `ToolchainSpec`/builder environment in `PolicySpec`; concrete values in the plan. |
+| Guest paths such as `/mason`, build roots, install roots, and cache paths | `paths.rs`, `build.rs`, and `build/job/phase.rs` | Repository policy | A fixed builder-layout policy; all paths visible to scripts are concrete plan values. |
+| Root/target environment fallback and `%scriptBase` prefix | `build/job/phase.rs` | Authored intent plus repository policy | Authored environment patch plus builder base environment, resolved with explicit precedence into the plan. |
+| CPU-derived `%(jobs)` | `build/job/phase.rs` | Forbidden ambient state | Explicit concurrency input if it can alter outputs; otherwise an executor hint that is unavailable to build scripts. |
+| Compiler-cache enablement and cache-related definitions | CLI, `build.rs`, and `build/job/phase.rs` | Authored invocation intent | Explicit plan option when visible to the build; cache storage locations remain executor-only. |
+| Container networking | `cli/build.rs` and `container.rs` | Authored intent | Package network requirement resolved against policy and recorded in the plan. |
+| Container hostname, mounts, PATH, HOME, and TERM | `container.rs` and `build.rs` | Repository policy | Semantic process environment and mounts are builder policy/plan data; interactive breakpoint TERM is executor-only. |
+| PGO stage sequence and LLVM merge actions | `build/pgo.rs` and `build/job/phase.rs` | Repository policy | Builder-generated structured stages in the plan. |
+| Default tuning groups, stage tuning, flag deduplication, and Mold flags | `build/job/phase.rs::add_tuning` | Repository policy | Ordered tuning policy and concrete compiler/linker flags in the plan. |
+
+### Sources and time
+
+| Current value or behavior | Current location | Class | Required destination |
+| --- | --- | --- | --- |
+| Authored upstream requests | evaluated recipe | Authored intent | Typed source requests in `PackageSpec`. |
+| `sources.lock.glu` content | `recipe.rs` and `source_lock.rs` | Resolved dependency | Locked source identities and lock digest in `DerivationPlan`. |
+| Fetched archive/git content | `upstream.rs` | Resolved dependency | Verify against the source lock; storage/cache paths are executor-only. |
+| Generated unpack/copy prepare script and work directory | `build/job.rs` and `build/job/phase.rs` | Repository policy | Structured source-preparation steps from the builder policy, concretized in the plan. |
+| Archive-extension unpacker dependencies | `build/root.rs::packages` | Repository policy | Source-preparation policy declares the tools; exact providers are in the closure. |
+| `SOURCE_DATE_EPOCH` process environment | `recipe.rs::resolve_build_time` | Forbidden ambient state | An explicit timestamp input to plan creation. Evaluation never reads the process environment. |
+| Git commit timestamp discovery | `recipe.rs::resolve_build_time` | Forbidden ambient state | Resolution may propose a timestamp, but the selected value and provenance must be explicit and locked. |
+| `Utc::now()` fallback | `recipe.rs::resolve_build_time` | Forbidden ambient state | Remove without replacement; a plan cannot be frozen until a reproducible timestamp is selected. |
+
+### Dependency and repository resolution
+
+| Current value or behavior | Current location | Class | Required destination |
+| --- | --- | --- | --- |
+| Recipe build/check dependency strings | evaluated recipe and `build/root.rs` | Authored intent | Typed native/build/check inputs in `PackageSpec`. |
+| Dependencies inferred from expanded actions | `Builder::extra_deps` | Repository policy | Builder requirements in `PolicySpec`, resolved before plan freeze. |
+| Profile selection and repository list from user/system configuration | `build.rs` and `profile.rs` | Repository policy | Explicit selected profile identity and fingerprint in the plan; repository contents are resolution inputs. |
+| Current repository indexes and provider choices | Moss population | Resolved dependency | Exact repository snapshot plus selected package/output IDs in the plan and `build.lock.glu`. |
+| `--update` repository refresh | `cli/build.rs` and `build/root.rs` | Executor-only operation | It may change resolution, but the flag is not identity; the resulting repository snapshot and closure are. |
+| Automatic repository initialization | `build/root.rs` | Executor-only operation | Must not change a frozen plan. Resolution occurs before freezing, never during root population. |
+
+### Outputs and invocation controls
+
+| Current value or behavior | Current location | Class | Required destination |
+| --- | --- | --- | --- |
+| Output names, path rules, runtime relations, and conflicts | recipe plus architecture templates | Authored intent plus repository policy | Explicit, fully merged plan outputs. |
+| Package analysis chain and automatic provides/dependencies | `package/analysis` | Repository policy | Analyzer set/version/configuration in the plan. Findings are output-derived observations, not permission to select new policy. |
+| Build release number | `cli/build.rs` and `package/emit.rs` | Authored invocation intent | Explicit plan field because it changes emitted package identity/metadata. |
+| Boulder implementation and recipe fingerprint | `package.rs` and emitted metadata | Resolved dependency | Schema/implementation version plus all recipe, policy, lock, and builder fingerprints in the plan. |
+| Output directory, cleanup, progress/timing, terminal handling, process priority, and completion timestamp | CLI and `build.rs` | Executor-only state | Remain outside the plan; none may be visible to build processes or emitted package semantics. |
+| Compiler/source caches and Moss storage directories | `env.rs`, `paths.rs`, and `container.rs` | Executor-only state | Cache contents must be validated by semantic keys; their host locations never enter the plan. |
+| Manifest verification path | CLI and `paths.rs` | Executor-only validation | Expected manifest identity/content is a verification request, not a derivation input. |
+| Compression worker count | `package/emit.rs` | Executor-only only if proven byte-stable | If it can alter artifact bytes or metadata, make encoding policy explicit in the plan. |
+
+## Freeze boundary
+
+The only permitted transitions are:
+
+```text
+PackageSpec + PolicySpec + source/dependency resolution
+    -> validate
+    -> canonical DerivationPlan
+    -> execute
+    -> output observations
+```
+
+After the plan is frozen, the executor may choose scheduling, cache placement,
+temporary host paths, logging, progress presentation, and cleanup. It may not:
+
+- inspect an unrecorded profile, repository, policy directory, or environment
+  variable;
+- add root packages based on macros, file extensions, or toolchain branches;
+- infer a platform, timestamp, phase, PGO stage, tuning group, or compiler;
+- merge package templates, root packages, or subpackages;
+- expose the host CPU count or host paths to build steps;
+- resolve another provider because the selected package is unavailable.
+
+If execution discovers that a required semantic value is missing, it fails and
+the plan must be resolved again.
+
+## Breakpoint locations
+
+An evaluated phase string may be defined by a function, record update, or
+imported module. Consequently, scanning the root `stone.glu` text cannot
+recover an authoritative authored source line. Boulder reports the stable,
+one-based line within the evaluated phase script instead. Future structured
+steps may carry Gluon provenance directly, but the executor must never guess a
+source location from configuration syntax.
+
+## Phase 1 exit audit
+
+Phase 1 is complete only when tests also prove that repeated evaluation with
+identical explicit source, imports, ABI modules, and lock bytes produces equal
+values and fingerprints. This document assigns every currently identified
+post-evaluation input to a destination, but it does not itself prove that the
+future resolver or executor enforces the boundary.
