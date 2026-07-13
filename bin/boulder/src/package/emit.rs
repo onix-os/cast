@@ -17,6 +17,7 @@ use stone::{
     StoneWriter,
     relation::{Dependency, ParseError, Provider},
 };
+use stone_recipe::derivation::DerivationId;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::manifest::Manifest;
@@ -26,6 +27,7 @@ use crate::{Architecture, Paths, Recipe, architecture};
 mod manifest;
 
 const RECIPE_FINGERPRINT_SOURCE_REF_PREFIX: &str = "gluon-evaluation-sha256:";
+const DERIVATION_ID_SOURCE_REF_PREFIX: &str = "derivation-sha256:";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MetadataError {
@@ -70,6 +72,7 @@ pub struct Package<'a> {
     pub definition: &'a stone_recipe::Package,
     pub analysis: analysis::Bucket,
     recipe_fingerprint: &'a str,
+    derivation_id: DerivationId,
 }
 
 impl<'a> Package<'a> {
@@ -80,6 +83,7 @@ impl<'a> Package<'a> {
         analysis: analysis::Bucket,
         build_release: NonZeroU64,
         recipe_fingerprint: &'a str,
+        derivation_id: &DerivationId,
     ) -> Self {
         Self {
             name,
@@ -89,6 +93,7 @@ impl<'a> Package<'a> {
             analysis,
             build_release,
             recipe_fingerprint,
+            derivation_id: derivation_id.clone(),
         }
     }
 
@@ -169,10 +174,10 @@ impl<'a> Package<'a> {
     }
 
     fn meta_payload(&self) -> Result<Vec<StonePayloadMetaRecord>, MetadataError> {
-        Ok(self.with_recipe_provenance(self.meta()?.to_stone_payload()))
+        Ok(self.with_derivation_provenance(self.meta()?.to_stone_payload()))
     }
 
-    fn with_recipe_provenance(&self, mut payload: Vec<StonePayloadMetaRecord>) -> Vec<StonePayloadMetaRecord> {
+    fn with_derivation_provenance(&self, mut payload: Vec<StonePayloadMetaRecord>) -> Vec<StonePayloadMetaRecord> {
         // SourceRef is an existing, optional stone metadata extension point. The
         // namespaced value is ignored by older package readers but retained in
         // package and build-manifest payloads for provenance-aware tooling.
@@ -181,6 +186,13 @@ impl<'a> Package<'a> {
             primitive: StonePayloadMetaPrimitive::String(format!(
                 "{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{}",
                 self.recipe_fingerprint
+            )),
+        });
+        payload.push(StonePayloadMetaRecord {
+            tag: StonePayloadMetaTag::SourceRef,
+            primitive: StonePayloadMetaPrimitive::String(format!(
+                "{DERIVATION_ID_SOURCE_REF_PREFIX}{}",
+                self.derivation_id
             )),
         });
         payload
@@ -207,8 +219,13 @@ impl Ord for Package<'_> {
     }
 }
 
-pub fn emit(paths: &Paths, recipe: &Recipe, packages: &[Package<'_>]) -> Result<(), Error> {
-    let mut manifest = Manifest::new(paths, recipe, architecture::host());
+pub fn emit(
+    paths: &Paths,
+    recipe: &Recipe,
+    packages: &[Package<'_>],
+    derivation_id: &DerivationId,
+) -> Result<(), Error> {
+    let mut manifest = Manifest::new(paths, recipe, architecture::host(), derivation_id);
     let mut emit_manifests = true;
 
     for package in packages {
@@ -363,6 +380,60 @@ fn emit_package(paths: &Paths, package: &Package<'_>) -> Result<(), Error> {
     pb.finish_and_clear();
 
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn test_derivation_id() -> DerivationId {
+    use stone_recipe::derivation::{
+        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, LockedIdentity, PackageIdentity, Platform,
+    };
+
+    let platform = Platform {
+        architecture: "x86_64".to_owned(),
+        vendor: "unknown".to_owned(),
+        operating_system: "linux".to_owned(),
+        abi: "gnu".to_owned(),
+    };
+    let identity = |name: &str| LockedIdentity {
+        name: name.to_owned(),
+        fingerprint: format!("{name}-fingerprint"),
+    };
+    let build_lock = BuildLock {
+        schema_version: BUILD_LOCK_SCHEMA_VERSION,
+        request_fingerprint: "request-fingerprint".to_owned(),
+        base_state: "base-state".to_owned(),
+        repositories: Vec::new(),
+        requests: Vec::new(),
+        packages: Vec::new(),
+        build_platform: platform.clone(),
+        host_platform: platform.clone(),
+        target_platform: platform,
+        policy: identity("policy"),
+        profile: identity("profile"),
+        toolchain: identity("toolchain"),
+        builder: identity("builder"),
+    };
+    let mut plan = stone_recipe::derivation::DerivationPlan::new(
+        PackageIdentity {
+            name: "example".to_owned(),
+            version: "1.2.3".to_owned(),
+            source_release: 1,
+            build_release: 1,
+        },
+        build_lock,
+    );
+    plan.boulder_version = "test-boulder".to_owned();
+    plan.recipe_fingerprint = "recipe-fingerprint".to_owned();
+    plan.source_lock_digest = "source-lock-digest".to_owned();
+    plan.layout = BuilderLayout {
+        build_dir: "/mason/build".to_owned(),
+        source_dir: "/mason/sources".to_owned(),
+        install_dir: "/mason/install".to_owned(),
+        package_dir: "/mason/package".to_owned(),
+    };
+    plan.source_date_epoch = 1_700_000_000;
+    plan.validate().unwrap();
+    plan.derivation_id()
 }
 
 #[derive(Debug, Snafu)]

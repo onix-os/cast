@@ -11,6 +11,7 @@ use crate::{Env, Timing, container, package, profile, timing};
 use chrono::Local;
 use clap::Parser;
 use moss::signal::inhibit;
+use stone_recipe::derivation::DerivationId;
 use thiserror::Error;
 use thread_priority::{NormalThreadSchedulePolicy, ThreadPriority, ThreadSchedulePolicy, thread_native_id};
 use tui::Styled;
@@ -101,6 +102,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     }
 
     let builder = Builder::new(&recipe_path, verify_against.clone(), env, profile, ccache, output)?;
+    let derivation_id = frozen_derivation_id(&builder)?;
     let pkg_name = format!(
         "{}-{}-{}",
         builder.recipe.parsed.source.name, builder.recipe.parsed.source.version, builder.recipe.parsed.source.release
@@ -151,7 +153,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
             &builder.targets,
             build_release,
         )?;
-        packager.package(&mut timing)?;
+        packager.package(&mut timing, derivation_id)?;
 
         timing.print_table();
 
@@ -173,6 +175,13 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     );
 
     Ok(())
+}
+
+/// Package emission is forbidden until this legacy build path is replaced by
+/// frozen-plan execution. The plan executor will supply its validated identity
+/// here instead of synthesizing one from partial build state.
+fn frozen_derivation_id(_builder: &Builder) -> Result<&DerivationId, Error> {
+    Err(Error::FrozenPlanRequired)
 }
 
 fn verify_versions_match(builder: &Builder) -> Result<(), Error> {
@@ -238,6 +247,10 @@ pub enum Error {
     VerifyBinaryManifestRequired(PathBuf),
     #[error("version parse")]
     Upstreams(#[from] version_parse::VersionError),
+    #[error(
+        "package emission requires a frozen derivation plan; run `boulder recipe plan` before executor integration"
+    )]
+    FrozenPlanRequired,
 }
 
 impl From<build::Error> for Error {

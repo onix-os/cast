@@ -30,7 +30,7 @@ pub fn write<W: Write>(
         let mut meta = package.meta()?;
         // deliberately override .stone package metadata and set build_release to zero for binary manifests
         meta.build_release = 0;
-        let mut payload = package.with_recipe_provenance(meta.to_stone_payload());
+        let mut payload = package.with_derivation_provenance(meta.to_stone_payload());
 
         // Add build deps
         for (index, name) in build_deps.iter().enumerate() {
@@ -53,16 +53,21 @@ pub fn write<W: Write>(
 mod tests {
     use std::{collections::BTreeSet, io::Cursor, num::NonZeroU64};
 
-    use stone::{StoneDecodedPayload, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag};
+    use stone::{
+        StoneDecodedPayload, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneWriter,
+    };
 
     use super::*;
     use crate::package::analysis::Bucket;
-    use crate::package::emit::RECIPE_FINGERPRINT_SOURCE_REF_PREFIX;
+    use crate::package::emit::{
+        DERIVATION_ID_SOURCE_REF_PREFIX, RECIPE_FINGERPRINT_SOURCE_REF_PREFIX, test_derivation_id,
+    };
 
     const FINGERPRINT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[test]
-    fn package_and_binary_manifest_metadata_record_recipe_provenance() {
+    fn package_and_binary_manifest_metadata_record_recipe_and_derivation_provenance() {
+        let derivation_id = test_derivation_id();
         let source = stone_recipe::Source {
             name: "example".to_owned(),
             version: "1.2.3".to_owned(),
@@ -86,10 +91,23 @@ mod tests {
             Bucket::default(),
             NonZeroU64::new(1).unwrap(),
             FINGERPRINT,
+            &derivation_id,
         );
-        let expected = format!("{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{FINGERPRINT}");
+        let recipe_ref = format!("{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{FINGERPRINT}");
+        let derivation_ref = format!("{DERIVATION_ID_SOURCE_REF_PREFIX}{derivation_id}");
+        let expected = BTreeSet::from([recipe_ref.as_str(), derivation_ref.as_str()]);
 
-        assert_eq!(source_ref(&package.meta_payload().unwrap()), Some(expected.as_str()));
+        let mut package_output = Cursor::new(Vec::new());
+        let mut package_writer = StoneWriter::new(&mut package_output, StoneHeaderV1FileType::Binary).unwrap();
+        package_writer
+            .add_payload(package.meta_payload().unwrap().as_slice())
+            .unwrap();
+        package_writer.finalize().unwrap();
+        package_output.set_position(0);
+        let package_payloads = moss::util::stone_payloads(&mut package_output).unwrap();
+        let package_meta = package_payloads.iter().find_map(StoneDecodedPayload::meta).unwrap();
+
+        assert_eq!(source_refs(&package_meta.body), expected);
 
         let mut output = Cursor::new(Vec::new());
         write(&mut output, &BTreeSet::from([&package]), &BTreeSet::new()).unwrap();
@@ -97,11 +115,12 @@ mod tests {
         let payloads = moss::util::stone_payloads(&mut output).unwrap();
         let manifest_meta = payloads.iter().find_map(StoneDecodedPayload::meta).unwrap();
 
-        assert_eq!(source_ref(&manifest_meta.body), Some(expected.as_str()));
+        assert_eq!(source_refs(&manifest_meta.body), expected);
     }
 
     #[test]
     fn invalid_metadata_relations_return_errors_instead_of_panicking() {
+        let derivation_id = test_derivation_id();
         let source = stone_recipe::Source {
             name: "example".to_owned(),
             version: "1.2.3".to_owned(),
@@ -125,6 +144,7 @@ mod tests {
             Bucket::default(),
             NonZeroU64::new(1).unwrap(),
             FINGERPRINT,
+            &derivation_id,
         );
 
         let error = package.meta_payload().unwrap_err();
@@ -153,6 +173,7 @@ mod tests {
             Bucket::default(),
             NonZeroU64::new(1).unwrap(),
             FINGERPRINT,
+            &derivation_id,
         );
         let mut output = Cursor::new(Vec::new());
         let error = write(
@@ -168,12 +189,13 @@ mod tests {
         ));
     }
 
-    fn source_ref(payload: &[StonePayloadMetaRecord]) -> Option<&str> {
+    fn source_refs(payload: &[StonePayloadMetaRecord]) -> BTreeSet<&str> {
         payload
             .iter()
-            .find_map(|record| match (&record.tag, &record.primitive) {
+            .filter_map(|record| match (&record.tag, &record.primitive) {
                 (StonePayloadMetaTag::SourceRef, StonePayloadMetaPrimitive::String(value)) => Some(value.as_str()),
                 _ => None,
             })
+            .collect()
     }
 }

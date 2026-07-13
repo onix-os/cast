@@ -12,6 +12,7 @@ use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
 use snafu::ResultExt;
+use stone_recipe::derivation::DerivationId;
 
 use super::{Error, IoSnafu, JsonSnafu};
 use crate::{Recipe, package::emit};
@@ -21,6 +22,7 @@ pub fn write(
     recipe: &Recipe,
     packages: &BTreeSet<&emit::Package<'_>>,
     build_deps: &BTreeSet<String>,
+    derivation_id: &DerivationId,
 ) -> Result<(), Error> {
     let packages = packages
         .iter()
@@ -86,6 +88,7 @@ pub fn write(
     let content = Content {
         manifest_version: "0.2".to_owned(),
         packages,
+        derivation_id: derivation_id.as_str().to_owned(),
         recipe_fingerprint: recipe.fingerprint.sha256.clone(),
         source_name: recipe.parsed.source.name.clone(),
         source_release: recipe.parsed.source.release.to_string(),
@@ -114,6 +117,7 @@ pub fn write(
 struct Content {
     manifest_version: String,
     packages: BTreeMap<String, Package>,
+    derivation_id: String,
     recipe_fingerprint: String,
     source_name: String,
     source_release: String,
@@ -155,6 +159,7 @@ boulder.mk_package (boulder.meta {
 
     #[test]
     fn emitted_fingerprint_changes_with_source_lock_bytes() {
+        let derivation_id = emit::test_derivation_id();
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), RECIPE_SOURCE).unwrap();
         let lock = encode_source_lock(&SourceLock::default());
@@ -163,16 +168,31 @@ boulder.mk_package (boulder.meta {
 
         let first_recipe = Recipe::load(root.path()).unwrap();
         let first_path = root.path().join("first.jsonc");
-        write(&first_path, &first_recipe, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        write(
+            &first_path,
+            &first_recipe,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &derivation_id,
+        )
+        .unwrap();
         let first_manifest = read_jsonc(&first_path);
 
         fs::write(&lock_path, format!("{lock}// semantically inert provenance change\n")).unwrap();
         let changed_recipe = Recipe::load(root.path()).unwrap();
         let changed_path = root.path().join("changed.jsonc");
-        write(&changed_path, &changed_recipe, &BTreeSet::new(), &BTreeSet::new()).unwrap();
+        write(
+            &changed_path,
+            &changed_recipe,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &derivation_id,
+        )
+        .unwrap();
         let changed_manifest = read_jsonc(&changed_path);
 
         assert_eq!(first_manifest["recipe-fingerprint"], first_recipe.fingerprint.sha256);
+        assert_eq!(first_manifest["derivation-id"], derivation_id.as_str());
         assert_eq!(
             changed_manifest["recipe-fingerprint"],
             changed_recipe.fingerprint.sha256

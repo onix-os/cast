@@ -9,7 +9,7 @@ use stone::StoneDigestWriterHasher;
 use thiserror::Error;
 
 use moss::util;
-use stone_recipe::{Package, script};
+use stone_recipe::{Package, derivation::DerivationId, script};
 
 use crate::{Macros, Paths, Recipe, Timing, build, container, timing};
 
@@ -58,7 +58,7 @@ impl<'a> Packager<'a> {
         })
     }
 
-    pub fn package(&self, timing: &mut Timing) -> Result<(), Error> {
+    pub fn package(&self, timing: &mut Timing, derivation_id: &DerivationId) -> Result<(), Error> {
         // Hasher used for calculating file digests
         let mut hasher = StoneDigestWriterHasher::new();
 
@@ -98,12 +98,13 @@ impl<'a> Packager<'a> {
                     bucket,
                     self.build_release,
                     &self.recipe.fingerprint.sha256,
+                    derivation_id,
                 ))
             })
             .collect::<Vec<_>>();
 
         // Emit package stones and manifest files to artefact directory
-        emit(self.paths, self.recipe, &packages).map_err(Error::Emit)?;
+        emit(self.paths, self.recipe, &packages, derivation_id).map_err(Error::Emit)?;
 
         timing.finish(timer);
 

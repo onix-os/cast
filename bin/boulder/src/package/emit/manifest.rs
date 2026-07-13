@@ -16,6 +16,7 @@ use snafu::{ResultExt, Snafu};
 use stone::{
     StoneDecodedPayload, StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag, StoneReadError,
 };
+use stone_recipe::derivation::DerivationId;
 use tempfile::NamedTempFile;
 
 use crate::{Architecture, Paths, Recipe};
@@ -32,10 +33,11 @@ pub struct Manifest<'a> {
     output_dir: PathBuf,
     build_deps: BTreeSet<String>,
     packages: BTreeSet<&'a Package<'a>>,
+    derivation_id: DerivationId,
 }
 
 impl<'a> Manifest<'a> {
-    pub fn new(paths: &Paths, recipe: &'a Recipe, arch: Architecture) -> Self {
+    pub fn new(paths: &Paths, recipe: &'a Recipe, arch: Architecture, derivation_id: &DerivationId) -> Self {
         let output_dir = paths.artefacts().guest;
 
         let build_deps = recipe
@@ -53,6 +55,7 @@ impl<'a> Manifest<'a> {
             arch,
             build_deps,
             packages: BTreeSet::new(),
+            derivation_id: derivation_id.clone(),
         }
     }
 
@@ -73,6 +76,7 @@ impl<'a> Manifest<'a> {
             self.recipe,
             &self.packages,
             &self.build_deps,
+            &self.derivation_id,
         )
     }
 
