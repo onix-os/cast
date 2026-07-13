@@ -136,14 +136,21 @@ impl BuildPolicy {
     }
 
     pub fn target(&self, name: &str) -> Result<&TargetPolicySpec, Error> {
-        self.spec
-            .targets
-            .iter()
-            .find(|target| target.name == name)
-            .ok_or_else(|| Error::UnknownTarget {
+        if let Some(target) = self.spec.targets.iter().find(|target| target.name == name) {
+            return Ok(target);
+        }
+
+        if let Some(target) = self.spec.retired_targets.iter().find(|target| target.name == name) {
+            return Err(Error::RetiredTarget {
                 requested: name.to_owned(),
-                available: self.spec.targets.iter().map(|target| target.name.clone()).collect(),
-            })
+                reason: target.reason.clone(),
+            });
+        }
+
+        Err(Error::UnknownTarget {
+            requested: name.to_owned(),
+            available: self.spec.targets.iter().map(|target| target.name.clone()).collect(),
+        })
     }
 
     pub fn sources(&self) -> Vec<PolicySource> {
@@ -432,6 +439,8 @@ pub enum Error {
     MissingPolicy { policy: String },
     #[error("policy manifest `{policy}` changed while finalizing its composed identity")]
     ManifestChanged { policy: String },
+    #[error("build-policy target `{requested}` is retired: {reason}")]
+    RetiredTarget { requested: String, reason: String },
     #[error("unknown build-policy target `{requested}`; available targets: {}", available.join(", "))]
     UnknownTarget { requested: String, available: Vec<String> },
 }
@@ -478,7 +487,23 @@ mod tests {
         let policy = BuildPolicy::repository_for_tests();
         assert!(matches!(
             policy.target("host-default"),
-            Err(Error::UnknownTarget { requested, .. }) if requested == "host-default"
+            Err(Error::UnknownTarget {
+                requested,
+                available,
+            }) if requested == "host-default"
+                && available.contains(&"x86_64".to_owned())
+                && !available.contains(&"x86_64-stage1".to_owned())
+        ));
+    }
+
+    #[test]
+    fn reports_repository_retired_targets_with_the_authored_reason() {
+        let policy = BuildPolicy::repository_for_tests();
+        assert!(matches!(
+            policy.target("x86_64-stage1"),
+            Err(Error::RetiredTarget { requested, reason })
+                if requested == "x86_64-stage1"
+                    && reason == "legacy bootstrap target was unreachable and its bootstrap_root had no consumer"
         ));
     }
 
