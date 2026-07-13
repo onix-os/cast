@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-pub use self::gluon::{
-    EvaluatedRecipe, GLUON_RECIPE_ABI, RECIPE_ABI_VERSION, RecipeEvaluationError, encode_gluon as encode_recipe_gluon,
-    encode_gluon_spec as encode_recipe_gluon_spec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
-};
 pub use self::macros::{
     ActionSpec, EvaluatedMacros, EvaluatedPolicy, GLUON_MACROS_ABI, GLUON_POLICY_ABI, MACROS_ABI_VERSION, Macros,
     MacrosConversionError, MacrosEvaluationError, MacrosSpec, POLICY_ABI_VERSION, PolicyEvaluationError, PolicyKind,
@@ -22,7 +18,6 @@ pub use self::upstream::Upstream;
 pub use self::validation::ValidationError;
 
 pub mod derivation;
-pub mod gluon;
 pub mod macros;
 pub mod package;
 pub mod script;
@@ -150,7 +145,7 @@ mod test {
         ];
 
         for (logical_name, input) in inputs {
-            let evaluated = evaluate_gluon(&GluonSource::new(logical_name, input)).unwrap();
+            let evaluated = package::evaluate_gluon(&GluonSource::new(logical_name, input)).unwrap();
             evaluated.recipe.validate().unwrap();
         }
     }

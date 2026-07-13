@@ -415,11 +415,11 @@ boulder.mk_package (boulder.meta {
     }
 
     #[test]
-    fn legacy_v1_recipe_is_not_an_implicit_fallback() {
+    fn legacy_recipe_shape_is_not_an_implicit_fallback() {
         let root = tempfile::tempdir().unwrap();
         fs::write(
             root.path().join("stone.glu"),
-            format!("let boulder = import! boulder.recipe.v1\nboulder.recipe (boulder.source {SOURCE_SPEC})"),
+            format!("let source = {SOURCE_SPEC}\n{{ source }}"),
         )
         .unwrap();
 

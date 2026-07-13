@@ -70,9 +70,9 @@ Nix-like build description and reproducibility boundary.
   `sources.lock.glu`.
 - [x] YAML and KDL configuration paths have been removed from OS Tools.
 
-The remaining problem is architectural: `boulder.recipe.v1` produces one
-closed `RecipeSpec`, while Boulder later adds build policy, dependencies,
-macros, tuning, package templates, and environment in Rust. A recipe is
+The remaining problem is architectural: the package declaration still lowers
+to a closed `RecipeSpec`, while Boulder later adds build policy, dependencies,
+macros, tuning, package templates, and environment in Rust. A package is
 therefore functional at its boundary but is not yet a complete declaration of
 the build that will run.
 
@@ -395,7 +395,7 @@ recursive package universe inside Gluon.
   steps are possible.
 - [ ] Remove `%action` and `%(definition)` parsing after golden parity tests.
 - [ ] Remove filesystem-discovered macro composition.
-- [ ] Remove `boulder.recipe.v1`, its standalone encoders, and conversion-only
+- [x] Remove the transitional recipe ABI, its standalone encoders, and conversion-only
   compatibility code after all tracked recipes and fixtures use v2.
 - [ ] Remove obsolete defaults and duplicated Rust/Gluon wire definitions.
 - [ ] Audit the repository for YAML/KDL loaders, fallbacks, compatibility
@@ -448,5 +448,5 @@ The final architecture must demonstrate:
 This plan is complete when a Stone package is authored as a reusable pure
 Gluon function, all policy and package relationships are typed and explicit, a
 canonical target-specific `DerivationPlan` fully describes the build before it
-runs, Boulder executes only that plan, and no YAML, KDL, v1 recipe, or legacy
+runs, Boulder executes only that plan, and no YAML, KDL, legacy recipe, or
 macro compatibility path remains.

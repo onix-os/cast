@@ -214,7 +214,7 @@ boulder recipe eval ./stone.glu
 ```
 
 Boulder build, check, update, and evaluation all use `boulder.package.v2`.
-There is no automatic `boulder.recipe.v1` fallback or dual-source precedence.
+There is no automatic legacy-recipe fallback or dual-source precedence.
 
 Create a skeletal recipe from one or more source archives:
 
