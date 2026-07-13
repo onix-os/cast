@@ -427,7 +427,9 @@ mod tests {
 
     use fs_err as fs;
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    const SECOND_COMMIT: &str = "89abcdef0123456789abcdef0123456789abcdef";
     const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const SECOND_MATERIALIZATION_SHA256: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
 
     fn gluon_git_recipe(url: &str) -> String {
@@ -442,6 +444,26 @@ let base = boulder.mk_package (boulder.meta {{
 }})
 {{
     sources = [boulder.source.git "{url}" "main"],
+    .. base
+}}"#
+        )
+    }
+
+    fn gluon_two_git_recipe(first_url: &str, second_url: &str) -> String {
+        format!(
+            r#"let boulder = import! boulder.package.v3
+let base = boulder.mk_package (boulder.meta {{
+    pname = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+}})
+{{
+    sources = [
+        boulder.source.git "{first_url}" "main",
+        boulder.source.git "{second_url}" "stable",
+    ],
     .. base
 }}"#
         )
@@ -596,6 +618,57 @@ let base = boulder.mk_package (boulder.meta {{
             use std::os::unix::fs::MetadataExt;
             assert_eq!(before.ino(), after.ino());
         }
+    }
+
+    #[test]
+    fn resolved_git_materializations_follow_authored_indices_not_completion_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let recipe_path = directory.path().join("stone.glu");
+        let first_url = "https://example.invalid/first.git";
+        let second_url = "https://example.invalid/second.git";
+        fs::write(&recipe_path, gluon_two_git_recipe(first_url, second_url)).unwrap();
+        let recipe = Recipe::load_authored(&recipe_path).unwrap();
+
+        let stored = vec![
+            Stored::Git(StoredGit {
+                name: "second.git".to_owned(),
+                repo: gitwrap::null_repository(),
+                was_cached: false,
+                resolved_hash: SECOND_COMMIT.to_owned(),
+                original_index: 1,
+                materialization_sha256: Some(SECOND_MATERIALIZATION_SHA256.to_owned()),
+            }),
+            Stored::Git(StoredGit {
+                name: "first.git".to_owned(),
+                repo: gitwrap::null_repository(),
+                was_cached: false,
+                resolved_hash: FULL_COMMIT.to_owned(),
+                original_index: 0,
+                materialization_sha256: Some(MATERIALIZATION_SHA256.to_owned()),
+            }),
+        ];
+
+        write_resolved_source_lock(&recipe, &stored).unwrap();
+        let lock = source_lock::decode_source_lock(
+            SOURCE_LOCK_FILE_NAME,
+            &fs::read(directory.path().join(SOURCE_LOCK_FILE_NAME)).unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &lock.sources[0],
+            SourceResolution::Git(source)
+                if source.url == first_url
+                    && source.commit == FULL_COMMIT
+                    && source.materialization_sha256 == MATERIALIZATION_SHA256
+        ));
+        assert!(matches!(
+            &lock.sources[1],
+            SourceResolution::Git(source)
+                if source.url == second_url
+                    && source.commit == SECOND_COMMIT
+                    && source.materialization_sha256 == SECOND_MATERIALIZATION_SHA256
+        ));
     }
 
     #[test]

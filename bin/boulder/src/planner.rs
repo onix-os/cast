@@ -915,6 +915,65 @@ mod tests {
     }
 
     #[test]
+    fn authored_git_clone_dir_and_digest_reach_the_frozen_plan() {
+        const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+        const DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        const URL: &str = "https://example.invalid/source.git";
+
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("stone.glu"),
+            format!(
+                r#"let b = import! boulder.package.v3
+let base = b.mk_package (b.meta {{
+    pname = "example",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid",
+    license = ["MPL-2.0"],
+}})
+{{
+    sources = [b.source.git_with {{
+        url = "{URL}",
+        git_ref = "main",
+        clone_dir = b.optional.set "chosen-source",
+    }}],
+    .. base
+}}"#
+            ),
+        )
+        .unwrap();
+        let lock =
+            crate::source_lock::SourceLock::new(vec![SourceResolution::Git(crate::source_lock::GitResolution {
+                order: 0,
+                url: URL.to_owned(),
+                requested_ref: "main".to_owned(),
+                commit: COMMIT.to_owned(),
+                materialization_sha256: DIGEST.to_owned(),
+            })]);
+        fs::write(
+            root.path().join(SOURCE_LOCK_FILE_NAME),
+            crate::source_lock::encode_source_lock(&lock),
+        )
+        .unwrap();
+
+        let recipe = crate::recipe::Recipe::load(root.path()).unwrap();
+        let sources = freeze_sources(&recipe);
+
+        assert!(matches!(
+            &sources[..],
+            [LockedSource::Git {
+                commit,
+                materialization_sha256,
+                directory,
+                ..
+            }] if commit == COMMIT
+                && materialization_sha256 == DIGEST
+                && directory == "chosen-source"
+        ));
+    }
+
+    #[test]
     fn boulder_implementation_changes_executor_identity() {
         assert_ne!(
             executor_fingerprint("1", "semantic-a"),

@@ -248,6 +248,10 @@ async fn reject_gitlinks(repo: &gitwrap::Repository, commit: &str) -> Result<(),
 
 fn remove_git_administration(root: &Path) -> Result<(), Error> {
     let entries = walkdir::WalkDir::new(root)
+        // The export directory itself may legitimately be named `.git` by an
+        // authored clone_dir. Only administration entries *inside* the export
+        // are removable.
+        .min_depth(1)
         .contents_first(true)
         .follow_links(false)
         .into_iter()
@@ -345,7 +349,7 @@ mod tests {
     #[test]
     fn exported_git_tree_removes_only_git_administration_state() {
         let temporary = tempfile::tempdir().unwrap();
-        let root = temporary.path().join("checkout");
+        let root = temporary.path().join(".git");
         fs::create_dir_all(root.join(".git/objects")).unwrap();
         fs::create_dir_all(root.join("nested")).unwrap();
         fs::write(root.join("nested/.git"), b"gitdir: ../.git/modules/nested\n").unwrap();
@@ -355,6 +359,7 @@ mod tests {
 
         remove_git_administration(&root).unwrap();
 
+        assert!(root.is_dir());
         assert!(!root.join(".git").exists());
         assert!(!root.join("nested/.git").exists());
         assert!(
