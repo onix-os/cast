@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2025 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::process::{Command, Stdio};
-
 use fs_err as fs;
 use regex::Regex;
 use stone::relation::{Dependency, Kind, Provider};
@@ -11,7 +9,7 @@ use crate::package::collect::PathInfo;
 
 use mailparse::{MailHeaderMap, parse_mail};
 
-use super::{BoxError, BucketMut, Decision, Response};
+use super::{BoxError, BucketMut, Decision, Response, analyzer_command, checked_output};
 
 pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
     let file_path = info.path.clone().into_os_string().into_string().unwrap_or_default();
@@ -44,19 +42,14 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
         .unwrap_or_else(|| panic!("Failed to get parent path for {}", info.file_name()));
     let find_deps_script = include_str!("../scripts/get-py-deps.py");
 
-    let output = Command::new("/usr/bin/python3")
-        .arg("-c")
-        .arg(find_deps_script)
-        .arg(dist_path)
-        .env_clear()
-        .envs([
-            ("LC_ALL", "C"),
-            ("PYTHONDONTWRITEBYTECODE", "1"),
-            ("PYTHONHASHSEED", "0"),
-            ("PYTHONNOUSERSITE", "1"),
-        ])
-        .stdout(Stdio::piped())
-        .output()?;
+    let mut command = analyzer_command("/usr/bin/python3");
+    command.arg("-c").arg(find_deps_script).arg(dist_path).envs([
+        ("LC_ALL", "C"),
+        ("PYTHONDONTWRITEBYTECODE", "1"),
+        ("PYTHONHASHSEED", "0"),
+        ("PYTHONNOUSERSITE", "1"),
+    ]);
+    let output = checked_output(command)?;
 
     let deps = String::from_utf8_lossy(&output.stdout);
     for dep in deps.lines() {

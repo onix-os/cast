@@ -4,7 +4,6 @@
 use std::{
     ffi::CStr,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use elf::{
@@ -21,6 +20,7 @@ use moss::util;
 use stone::relation::{Dependency, Kind, Provider};
 use stone_recipe::derivation::AnalysisToolchain;
 
+use super::{analyzer_command, checked_output};
 use crate::package::{
     analysis::{BoxError, BucketMut, Decision, Response},
     collect::PathInfo,
@@ -384,29 +384,21 @@ fn split_debug(
 
     util::ensure_dir_exists(&debug_info_dir)?;
 
-    let output = Command::new(objcopy)
+    let mut command = analyzer_command(objcopy);
+    command
         .arg("--only-keep-debug")
         .arg(&info.path)
         .arg(&debug_info_path)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .output()?;
+        .env("LC_ALL", "C");
+    checked_output(command)?;
 
-    if !output.status.success() {
-        return Err(String::from_utf8(output.stderr).unwrap_or_default().into());
-    }
-
-    let output = Command::new(objcopy)
+    let mut command = analyzer_command(objcopy);
+    command
         .arg("--add-gnu-debuglink")
         .arg(&debug_info_path)
         .arg(&info.path)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .output()?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8(output.stderr).unwrap_or_default().into());
-    }
+        .env("LC_ALL", "C");
+    checked_output(command)?;
 
     Ok(Some(debug_info_path))
 }
@@ -428,8 +420,8 @@ fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
         .map(|parent| parent.ends_with("bin") || parent.ends_with("sbin"))
         .unwrap_or_default();
 
-    let mut command = Command::new(strip);
-    command.env_clear().env("LC_ALL", "C");
+    let mut command = analyzer_command(strip);
+    command.env("LC_ALL", "C");
 
     if is_executable {
         command.arg(&info.path);
@@ -437,11 +429,7 @@ fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
         command.args(["-g", "--strip-unneeded"]).arg(&info.path);
     }
 
-    let output = command.output()?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8(output.stderr).unwrap_or_default().into());
-    }
+    checked_output(command)?;
 
     Ok(())
 }
