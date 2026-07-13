@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use container::Container;
-use stone_recipe::derivation::{BuilderLayout, DerivationPlan, NetworkMode};
+use container::{Container, DevPolicy, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy};
+use stone_recipe::derivation::{
+    BuilderLayout, DerivationPlan, DevFilesystem, FilesystemPolicy, NetworkMode, SysFilesystem, TmpFilesystem,
+};
 use thiserror::Error;
 
 use crate::Paths;
@@ -25,6 +27,8 @@ where
     let mut container = Container::new(rootfs)
         .hostname(&sandbox.hostname)
         .networking(matches!(plan.execution.network, NetworkMode::Enabled))
+        .loopback(frozen_loopback_policy())
+        .pseudo_filesystems(frozen_pseudo_filesystems(plan.execution.filesystems))
         .ignore_host_sigint(true)
         .work_dir(&sandbox.work_dir);
 
@@ -33,6 +37,26 @@ where
     }
     container.run::<E>(f)?;
     Ok(())
+}
+
+fn frozen_loopback_policy() -> LoopbackPolicy {
+    LoopbackPolicy::KernelDefault
+}
+
+fn frozen_pseudo_filesystems(filesystems: FilesystemPolicy) -> PseudoFilesystemPolicy {
+    PseudoFilesystemPolicy {
+        proc: ProcPolicy::None,
+        tmp: match filesystems.tmp {
+            TmpFilesystem::Empty => TmpPolicy::Empty,
+        },
+        sys: match filesystems.sys {
+            SysFilesystem::None => SysPolicy::None,
+        },
+        dev: match filesystems.dev {
+            DevFilesystem::None => DevPolicy::None,
+            DevFilesystem::Minimal => DevPolicy::Minimal,
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +168,8 @@ pub enum Error {
 mod tests {
     use std::path::Path;
 
+    use stone_recipe::derivation::ProcFilesystem;
+
     use super::*;
     use crate::{BuildPolicy, Recipe, package};
 
@@ -168,6 +194,35 @@ mod tests {
         }
         policy.spec.validate().unwrap();
         BuilderLayout::from_policy(&policy.spec.sandbox, &policy.spec.build_root.compiler_cache)
+    }
+
+    #[test]
+    fn frozen_filesystems_override_legacy_container_mounts() {
+        let frozen = FilesystemPolicy {
+            proc: ProcFilesystem::None,
+            tmp: TmpFilesystem::Empty,
+            sys: SysFilesystem::None,
+            dev: DevFilesystem::None,
+        };
+
+        let mapped = frozen_pseudo_filesystems(frozen);
+        assert_eq!(mapped.proc, ProcPolicy::None);
+        assert_eq!(mapped.tmp, TmpPolicy::Empty);
+        assert_eq!(mapped.sys, SysPolicy::None);
+        assert_eq!(mapped.dev, DevPolicy::None);
+        assert_ne!(mapped, PseudoFilesystemPolicy::default());
+        assert_eq!(frozen_loopback_policy(), LoopbackPolicy::KernelDefault);
+    }
+
+    #[test]
+    fn frozen_minimal_dev_is_exact_and_sys_is_absent() {
+        let mapped = frozen_pseudo_filesystems(FilesystemPolicy::default());
+
+        assert_eq!(mapped.proc, ProcPolicy::None);
+        assert_eq!(mapped.tmp, TmpPolicy::Empty);
+        assert_eq!(mapped.sys, SysPolicy::None);
+        assert_eq!(mapped.dev, DevPolicy::Minimal);
+        assert_eq!(::container::MINIMAL_DEV_NODES, ["null", "zero", "full"]);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::addr_of_mut;
@@ -15,6 +16,7 @@ use nc::{
     SYS_MOUNT_SETATTR, mount_attr_t, move_mount, open_tree,
 };
 use nix::errno::Errno;
+use nix::fcntl::OFlag;
 use nix::libc::{AT_RECURSIVE, SIGCHLD};
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, clone};
@@ -23,7 +25,7 @@ use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, kill, sigaction};
 use nix::sys::signalfd::SigSet;
 use nix::sys::stat::{Mode, umask};
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{Pid, Uid, close, pipe, pivot_root, read, sethostname, tcsetpgrp, write};
+use nix::unistd::{Pid, Uid, close, pipe2, pivot_root, read, sethostname, tcsetpgrp, write};
 use snafu::{ResultExt, Snafu};
 
 use self::idmap::idmap;
@@ -73,10 +75,25 @@ pub enum DevPolicy {
     HostReadOnly,
     #[default]
     HostReadWrite,
-    /// Mount a fresh tmpfs containing read-only host binds for `/dev/null`,
-    /// `/dev/zero`, `/dev/full`, `/dev/random`, and `/dev/urandom`, plus
-    /// `/dev/tty` when that host node exists. No other host device is exposed.
+    /// Mount a fresh tmpfs containing read-only host binds for exactly
+    /// `/dev/null`, `/dev/zero`, and `/dev/full`.
     Minimal,
+}
+
+/// Exact device-node names exposed by [`DevPolicy::Minimal`]. No optional
+/// nodes are added based on host state.
+pub const MINIMAL_DEV_NODES: &[&str] = &["null", "zero", "full"];
+
+/// Policy for changing the loopback interface before entering the root tree.
+///
+/// The default preserves the historical best-effort `/usr/sbin/ip` behavior.
+/// Deterministic callers can leave the interface in its kernel-provided state
+/// without consulting the host filesystem or executing a host utility.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LoopbackPolicy {
+    KernelDefault,
+    #[default]
+    HostIpIfAvailable,
 }
 
 pub struct Container {
@@ -87,6 +104,7 @@ pub struct Container {
     hostname: Option<String>,
     ignore_host_sigint: bool,
     pseudo_filesystems: PseudoFilesystemPolicy,
+    loopback: LoopbackPolicy,
 }
 
 impl Container {
@@ -100,6 +118,7 @@ impl Container {
             hostname: None,
             ignore_host_sigint: false,
             pseudo_filesystems: PseudoFilesystemPolicy::default(),
+            loopback: LoopbackPolicy::default(),
         }
     }
 
@@ -180,6 +199,15 @@ impl Container {
         }
     }
 
+    /// Select whether container setup may invoke the optional host
+    /// `/usr/sbin/ip` utility to raise the loopback interface.
+    pub fn loopback(self, policy: LoopbackPolicy) -> Self {
+        Self {
+            loopback: policy,
+            ..self
+        }
+    }
+
     /// Run `f` as a container process payload
     pub fn run<E>(self, mut f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
     where
@@ -189,8 +217,12 @@ impl Container {
 
         let rootless = !Uid::effective().is_root();
 
-        // Pipe to synchronize parent & child
-        let sync = pipe().context(NixSnafu)?;
+        // Pipe to synchronize parent & child. Both ends must be close-on-exec:
+        // the child retains the write end while running the Rust payload so it
+        // can report setup/payload errors, but spawned commands must never
+        // inherit that control descriptor.
+        let mut sync = SyncPipe::new()?;
+        let child_sync = sync.raw();
 
         let mut flags =
             CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS;
@@ -203,7 +235,7 @@ impl Container {
             flags |= CloneFlags::CLONE_NEWNET;
         }
 
-        let clone_cb = Box::new(|| match enter(&self, sync, &mut f) {
+        let clone_cb = Box::new(|| match enter(&self, child_sync, &mut f) {
             Ok(_) => 0,
             // Write error back to parent process
             Err(error) => {
@@ -211,14 +243,14 @@ impl Container {
                 let mut pos = 0;
 
                 while pos < error.len() {
-                    let Ok(len) = write(sync.1, &error.as_bytes()[pos..]) else {
+                    let Ok(len) = write(child_sync.1, &error.as_bytes()[pos..]) else {
                         break;
                     };
 
                     pos += len;
                 }
 
-                let _ = close(sync.1);
+                let _ = close(child_sync.1);
 
                 1
             }
@@ -226,33 +258,50 @@ impl Container {
         let pid = unsafe { clone(clone_cb, &mut *addr_of_mut!(STACK), flags, Some(SIGCHLD)) }.context(NixSnafu)?;
 
         // Update uid / gid map to map current user to root in container
-        if rootless {
-            idmap(pid).context(IdmapSnafu)?;
+        if rootless && let Err(source) = idmap(pid) {
+            abort_child(pid);
+            return Err(Error::Idmap { source });
         }
 
         // Allow child to continue
-        write(sync.1, &[Message::Continue as u8]).context(NixSnafu)?;
+        match write(sync.write_fd(), &[Message::Continue as u8]) {
+            Ok(1) => {}
+            Ok(_) => {
+                abort_child(pid);
+                return Err(Error::Nix { source: Errno::EIO });
+            }
+            Err(source) => {
+                abort_child(pid);
+                return Err(Error::Nix { source });
+            }
+        }
         // Write no longer needed
-        close(sync.1).context(NixSnafu)?;
+        // Do not abandon a running child if close reports an error. Linux has
+        // already released the descriptor even when `close` returns EINTR, so
+        // retain the error and supervise the child to completion first.
+        let close_write_error = sync.close_write().err();
 
-        if self.ignore_host_sigint {
-            ignore_sigint().context(NixSnafu)?;
+        if self.ignore_host_sigint
+            && let Err(source) = ignore_sigint()
+        {
+            abort_child(pid);
+            return Err(Error::Nix { source });
         }
 
-        let status = waitpid(pid, None).context(NixSnafu)?;
+        let status = wait_for_child(pid).context(NixSnafu)?;
 
         if self.ignore_host_sigint {
             default_sigint().context(NixSnafu)?;
         }
 
-        match status {
+        let result = match status {
             WaitStatus::Exited(_, 0) => Ok(()),
             WaitStatus::Exited(..) => {
                 let mut error = String::new();
                 let mut buffer = [0u8; 1024];
 
                 loop {
-                    let len = read(sync.0, &mut buffer).context(NixSnafu)?;
+                    let len = read(sync.read_fd(), &mut buffer).context(NixSnafu)?;
 
                     if len == 0 {
                         break;
@@ -268,7 +317,15 @@ impl Container {
             | WaitStatus::PtraceEvent(..)
             | WaitStatus::PtraceSyscall(_)
             | WaitStatus::Continued(_)
-            | WaitStatus::StillAlive => Err(Error::UnknownExit),
+            | WaitStatus::StillAlive => {
+                abort_child(pid);
+                Err(Error::UnknownExit)
+            }
+        };
+
+        match (result, close_write_error) {
+            (Ok(()), Some(source)) => Err(Error::Nix { source }),
+            (result, _) => result,
         }
     }
 }
@@ -283,15 +340,23 @@ where
 
     // Wait for continue message
     let mut message = [0u8; 1];
-    read(sync.0, &mut message).context(ReadContinueMsgSnafu)?;
-    assert_eq!(message[0], Message::Continue as u8);
+    let len = read(sync.0, &mut message).context(ReadContinueMsgSnafu)?;
+    if len != 1 || message[0] != Message::Continue as u8 {
+        return InvalidContinueMsgSnafu.fail();
+    }
 
     // Close unused read end
     close(sync.0).context(CloseReadFdSnafu)?;
 
     setup(container)?;
 
-    f().boxed().context(RunSnafu)
+    let result = f().boxed().context(RunSnafu);
+    if result.is_ok() {
+        // Errors retain the write end so the outer clone callback can report
+        // them. A successful Rust payload has nothing left to report.
+        let _ = close(sync.1);
+    }
+    result
 }
 
 /// Setup the container
@@ -300,7 +365,9 @@ fn setup(container: &Container) -> Result<(), ContainerError> {
         setup_networking(&container.root)?;
     }
 
-    setup_localhost()?;
+    if matches!(container.loopback, LoopbackPolicy::HostIpIfAvailable) {
+        setup_localhost()?;
+    }
 
     pivot(&container.root, &container.binds, container.pseudo_filesystems)?;
 
@@ -421,21 +488,14 @@ fn mount_host_tree(old_path: &str, name: &str, read_only: bool) -> Result<(), Co
 }
 
 fn mount_minimal_dev(old_path: &str) -> Result<(), ContainerError> {
-    const REQUIRED_DEVICES: &[&str] = &["null", "zero", "full", "random", "urandom"];
-
     add_mount(
         Some(Path::new("tmpfs")),
         Path::new("dev"),
         Some("tmpfs"),
         MsFlags::empty(),
     )?;
-    for device in REQUIRED_DEVICES {
+    for device in MINIMAL_DEV_NODES {
         bind_minimal_device(old_path, device)?;
-    }
-
-    let tty = Path::new("/").join(old_path).join("dev/tty");
-    if tty.exists() {
-        bind_mount(&tty, Path::new("dev/tty"), true)?;
     }
     Ok(())
 }
@@ -608,6 +668,20 @@ fn default_sigint() -> Result<(), nix::Error> {
     Ok(())
 }
 
+fn wait_for_child(pid: Pid) -> Result<WaitStatus, nix::Error> {
+    loop {
+        match waitpid(pid, None) {
+            Err(Errno::EINTR) => {}
+            result => return result,
+        }
+    }
+}
+
+fn abort_child(pid: Pid) {
+    let _ = kill(pid, Signal::SIGKILL);
+    let _ = wait_for_child(pid);
+}
+
 pub fn set_term_fg(pgid: Pid) -> Result<(), nix::Error> {
     // Ignore SIGTTOU and get previous handler
     let prev_handler = unsafe {
@@ -663,6 +737,52 @@ fn sources(error: &dyn std::error::Error) -> Vec<String> {
     sources
 }
 
+/// Parent-owned synchronization descriptors. The child receives raw copies
+/// after `clone`; this guard closes every parent copy on both ordinary and
+/// early-return paths.
+struct SyncPipe {
+    read: Option<RawFd>,
+    write: Option<RawFd>,
+}
+
+impl SyncPipe {
+    fn new() -> Result<Self, Error> {
+        let (read, write) = pipe2(OFlag::O_CLOEXEC).context(NixSnafu)?;
+        Ok(Self {
+            read: Some(read),
+            write: Some(write),
+        })
+    }
+
+    fn raw(&self) -> (RawFd, RawFd) {
+        (self.read_fd(), self.write_fd())
+    }
+
+    fn read_fd(&self) -> RawFd {
+        self.read.expect("sync pipe read end must remain open")
+    }
+
+    fn write_fd(&self) -> RawFd {
+        self.write.expect("sync pipe write end must remain open")
+    }
+
+    fn close_write(&mut self) -> Result<(), nix::Error> {
+        let fd = self.write.take().expect("sync pipe write end must remain open");
+        close(fd)
+    }
+}
+
+impl Drop for SyncPipe {
+    fn drop(&mut self) {
+        if let Some(fd) = self.read.take() {
+            let _ = close(fd);
+        }
+        if let Some(fd) = self.write.take() {
+            let _ = close(fd);
+        }
+    }
+}
+
 struct Bind {
     source: PathBuf,
     target: PathBuf,
@@ -698,6 +818,8 @@ enum ContainerError {
     SetPDeathSig { source: nix::Error },
     #[snafu(display("wait for continue message"))]
     ReadContinueMsg { source: nix::Error },
+    #[snafu(display("invalid continue message"))]
+    InvalidContinueMsg,
     #[snafu(display("close read end of pipe"))]
     CloseReadFd { source: nix::Error },
     #[snafu(display("sethostname"))]
@@ -723,10 +845,12 @@ mod tests {
     use std::os::unix::net::UnixListener;
 
     use fs_err as fs;
+    use nix::errno::Errno;
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
     use super::{
-        Container, DevPolicy, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, SysPolicy, TmpPolicy,
-        prepare_bind_target, pseudo_mount_decisions,
+        Container, DevPolicy, LoopbackPolicy, MINIMAL_DEV_NODES, ProcPolicy, PseudoFilesystemPolicy,
+        PseudoMountDecision, SyncPipe, SysPolicy, TmpPolicy, prepare_bind_target, pseudo_mount_decisions,
     };
 
     #[test]
@@ -734,6 +858,7 @@ mod tests {
         let container = Container::new("/");
 
         assert_eq!(container.pseudo_filesystems, PseudoFilesystemPolicy::default());
+        assert_eq!(container.loopback, LoopbackPolicy::HostIpIfAvailable);
         assert_eq!(
             pseudo_mount_decisions(PseudoFilesystemPolicy::default()),
             vec![
@@ -776,6 +901,35 @@ mod tests {
                 PseudoMountDecision::MinimalDev,
             ]
         );
+    }
+
+    #[test]
+    fn deterministic_loopback_policy_is_explicit() {
+        let container = Container::new("/").loopback(LoopbackPolicy::KernelDefault);
+
+        assert_eq!(container.loopback, LoopbackPolicy::KernelDefault);
+    }
+
+    #[test]
+    fn minimal_dev_has_an_exact_non_entropy_device_set() {
+        assert_eq!(MINIMAL_DEV_NODES, ["null", "zero", "full"]);
+    }
+
+    #[test]
+    fn synchronization_pipe_is_close_on_exec() {
+        let mut sync = SyncPipe::new().unwrap();
+        let read_fd = sync.read_fd();
+        let write_fd = sync.write_fd();
+
+        for fd in [read_fd, write_fd] {
+            let flags = FdFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFD).unwrap());
+            assert!(flags.contains(FdFlag::FD_CLOEXEC));
+        }
+
+        sync.close_write().unwrap();
+        assert_eq!(fcntl(write_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+        drop(sync);
+        assert_eq!(fcntl(read_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
     }
 
     #[test]

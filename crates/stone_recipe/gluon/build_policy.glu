@@ -235,10 +235,6 @@ type BuildRootPolicySpec = {
     mold : MoldPolicySpec,
 }
 
-type SandboxProcPolicySpec =
-    | NoProc
-    | ReadOnlyProc
-
 type SandboxTmpPolicySpec =
     | EmptyTmp
 
@@ -250,7 +246,6 @@ type SandboxDevPolicySpec =
     | MinimalDev
 
 type SandboxFilesystemPolicySpec = {
-    proc : SandboxProcPolicySpec,
     tmp : SandboxTmpPolicySpec,
     sys : SandboxSysPolicySpec,
     dev : SandboxDevPolicySpec,
@@ -570,10 +565,6 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
         true = True,
     },
     sandbox_filesystems = {
-        proc = {
-            none = NoProc,
-            read_only = ReadOnlyProc,
-        },
         tmp = {
             empty = EmptyTmp,
         },

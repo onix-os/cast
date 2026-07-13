@@ -140,22 +140,30 @@ impl Builder {
         &self.repos
     }
 
-    pub fn into_runtime(self) -> Runtime {
-        Runtime {
+    pub fn into_runtime(mut self, plan: &DerivationPlan) -> Result<Runtime, Error> {
+        self.paths.bind_to_plan(plan)?;
+        Ok(Runtime {
             paths: self.paths,
             moss_dir: self.env.moss_dir,
             repositories: self.repos,
-        }
+        })
     }
 }
 
 impl Runtime {
+    pub fn acquire_execution_lock(&self, plan: &DerivationPlan) -> Result<crate::paths::ExecutionLock, Error> {
+        self.paths.require_plan(plan)?;
+        Ok(self.paths.acquire_execution_lock(plan)?)
+    }
+
     pub fn setup(
         &self,
         plan: &DerivationPlan,
+        execution_lock: &crate::paths::ExecutionLock,
         timing: &mut Timing,
         initialize_timer: timing::Timer,
     ) -> Result<Vec<upstream::Stored>, Error> {
+        self.paths.require_execution_lock(execution_lock, plan)?;
         util::recreate_dir(&self.paths.artefacts().host).map_err(Error::RecreateArtefactsDir)?;
         root::recreate_frozen(&self.paths, plan)?;
         root::populate_frozen(
@@ -171,23 +179,20 @@ impl Runtime {
             &plan.sources,
             &self.paths.upstreams().host,
             &self.paths.guest_host_path(&self.paths.upstreams()),
+            plan.source_date_epoch,
         )?;
         timing.finish(timer);
         Ok(stored)
     }
 
-    pub fn cleanup(&self, plan: &DerivationPlan) -> Result<(), Error> {
+    pub fn cleanup(&self, plan: &DerivationPlan, execution_lock: &crate::paths::ExecutionLock) -> Result<(), Error> {
+        self.paths.require_execution_lock(execution_lock, plan)?;
         root::remove_frozen(&self.paths, plan)?;
         for path in [self.paths.artefacts().host, self.paths.build().host] {
             if path.exists() {
                 fs::remove_dir_all(path)?;
             }
         }
-        upstream::remove_locked(&self.paths.upstreams().host, &plan.sources)?;
-        moss::Client::builder("boulder", moss::Installation::open(&self.moss_dir, None)?)
-            .repositories(self.repositories.clone())
-            .build()?
-            .prune_cache()?;
         Ok(())
     }
 }

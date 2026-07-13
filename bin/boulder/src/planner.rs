@@ -213,6 +213,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.environment = BTreeMap::from([
         ("HOME".to_owned(), target.jobs[0].build_dir.display().to_string()),
         ("PATH".to_owned(), "/usr/bin:/usr/sbin".to_owned()),
+        ("SOURCE_DATE_EPOCH".to_owned(), request.source_date_epoch.to_string()),
     ]);
     plan.layout = builder.paths.layout().clone();
     plan.execution = ExecutionPolicy {
@@ -248,7 +249,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.outputs = outputs;
     plan.source_date_epoch = request.source_date_epoch;
     plan.validate()?;
-    let runtime = builder.into_runtime();
+    let runtime = builder.into_runtime(&plan)?;
 
     Ok(Planned {
         plan,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{io, path::Path, time::Duration};
+use std::{fs::Permissions, io, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
 use crate::{
     recipe::Recipe,
@@ -96,19 +96,6 @@ impl Upstream {
             Upstream::Git(git) => Stored::Git(git.resolve(storage_dir, pb).await?),
         })
     }
-
-    /// Unconditionally removes this Upstream's resources within the storage directory.
-    /// If the resources do not exist, this function returns successfully
-    /// (it is idempotent).
-    ///
-    /// Careful: this function does not validate the content!
-    /// It will be removed even if it does not belong to this Upstream.
-    fn remove(&self, storage_dir: &Path) -> Result<(), Error> {
-        match self {
-            Upstream::Plain(plain) => plain.remove(storage_dir).map_err(Error::from),
-            Upstream::Git(git) => git.remove(storage_dir).map_err(Error::from),
-        }
-    }
 }
 
 /// Information available after [Upstream] is stored on disk.
@@ -129,12 +116,14 @@ impl Stored {
 
     /// Shares the upstream in preparation of a build.
     ///
-    /// This function tries to be as efficient as possible in terms
-    /// of actual bytes written/copied, by linking files from the storage directory.
-    async fn share(&self, dest_dir: &Path) -> Result<(), Error> {
+    /// Build-visible source files always receive independent inodes so a build
+    /// cannot mutate the verified persistent cache.
+    async fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
         match self {
-            Stored::Plain(plain) => plain.share(dest_dir)?,
-            Stored::Git(git) => git.share(&dest_dir.join(&git.name)).await?,
+            Stored::Plain(plain) => plain.share(dest_dir, source_date_epoch)?,
+            Stored::Git(git) => {
+                git.share(&dest_dir.join(&git.name), source_date_epoch).await?;
+            }
         }
         Ok(())
     }
@@ -203,9 +192,14 @@ pub(crate) fn refresh_source_lock(recipe: &Recipe, storage_dir: &Path) -> Result
 /// Fetch and share only the exact source identities frozen into a derivation.
 ///
 /// This path does not load or rewrite authored recipe/source-lock state.
-pub fn sync_locked(sources: &[LockedSource], storage_dir: &Path, share_dir: &Path) -> Result<Vec<Stored>, Error> {
+pub fn sync_locked(
+    sources: &[LockedSource],
+    storage_dir: &Path,
+    share_dir: &Path,
+    source_date_epoch: i64,
+) -> Result<Vec<Stored>, Error> {
     let upstreams = locked_upstreams(sources)?;
-    sync_upstreams(&upstreams, storage_dir, share_dir)
+    sync_upstreams(&upstreams, storage_dir, share_dir, source_date_epoch)
 }
 
 fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
@@ -234,7 +228,12 @@ fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
         .collect()
 }
 
-fn sync_upstreams(upstreams: &[Upstream], storage_dir: &Path, share_dir: &Path) -> Result<Vec<Stored>, Error> {
+fn sync_upstreams(
+    upstreams: &[Upstream],
+    storage_dir: &Path,
+    share_dir: &Path,
+    source_date_epoch: i64,
+) -> Result<Vec<Stored>, Error> {
     println!();
     println!("Sharing {} upstream(s) with the build container:", upstreams.len());
 
@@ -270,7 +269,7 @@ fn sync_upstreams(upstreams: &[Upstream], storage_dir: &Path, share_dir: &Path) 
                         .tick_chars("--=≡■≡=--"),
                 );
 
-                stored.share(share_dir).await?;
+                stored.share(share_dir, source_date_epoch).await?;
 
                 let cached_tag = stored
                     .was_cached()
@@ -289,9 +288,18 @@ fn sync_upstreams(upstreams: &[Upstream], storage_dir: &Path, share_dir: &Path) 
     )?;
 
     mp.clear()?;
+    normalize_share_root(share_dir, source_date_epoch)?;
     println!();
 
     Ok(stored)
+}
+
+fn normalize_share_root(share_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
+    fs_err::create_dir_all(share_dir)?;
+    fs_err::set_permissions(share_dir, Permissions::from_mode(0o755))?;
+    let timestamp = filetime::FileTime::from_unix_time(source_date_epoch, 0);
+    filetime::set_file_times(share_dir, timestamp, timestamp)?;
+    Ok(())
 }
 
 pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<WriteOutcome, Error> {
@@ -334,18 +342,6 @@ pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> 
     let outcome =
         source_lock::write_source_lock(&path, &lock).map_err(|source| Error::WriteSourceLock { path, source })?;
     Ok(outcome)
-}
-
-/// Helper that removes a list of [Upstream]s from the storage directory.
-pub fn remove(storage_dir: &Path, upstreams: &[Upstream]) -> Result<(), Error> {
-    for upstream in upstreams {
-        upstream.remove(storage_dir)?;
-    }
-    Ok(())
-}
-
-pub fn remove_locked(storage_dir: &Path, sources: &[LockedSource]) -> Result<(), Error> {
-    remove(storage_dir, &locked_upstreams(sources)?)
 }
 
 /// Possible errors returned by functions in this module.
@@ -483,6 +479,19 @@ let base = boulder.mk_package (boulder.meta {{
     }
 
     #[test]
+    fn source_root_mode_and_timestamp_are_reproducible() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("sources");
+        normalize_share_root(&root, 1_700_000_000).unwrap();
+
+        let metadata = fs::metadata(root).unwrap();
+        assert_eq!(metadata.mode() & 0o7777, 0o755);
+        assert_eq!(metadata.mtime(), 1_700_000_000);
+    }
+
+    #[test]
     fn missing_lock_is_generated_without_mutating_source_and_then_consumed() {
         let directory = tempfile::tempdir().unwrap();
         let recipe_path = directory.path().join("stone.glu");
@@ -567,5 +576,35 @@ let base = boulder.mk_package (boulder.meta {{
         ));
         assert_ne!(first_commit, second_commit);
         assert_eq!(fs::read_to_string(recipe_path).unwrap(), authored);
+    }
+
+    #[test]
+    fn source_lock_refresh_rejects_implicit_git_submodules() {
+        let directory = tempfile::tempdir().unwrap();
+        let origin = directory.path().join("origin");
+        fs::create_dir(&origin).unwrap();
+        git(&origin, &["init", "--initial-branch=main"]);
+        git(&origin, &["config", "user.name", "Boulder Test"]);
+        git(&origin, &["config", "user.email", "boulder@example.invalid"]);
+        let dependency_commit = commit(&origin, "source\n", "source");
+        let cache_info = format!("160000,{dependency_commit},vendor/dependency");
+        git(&origin, &["update-index", "--add", "--cacheinfo", &cache_info]);
+        git(&origin, &["commit", "-m", "implicit submodule"]);
+        let commit = git(&origin, &["rev-parse", "HEAD"]);
+
+        let recipe_path = directory.path().join("stone.glu");
+        let lock_path = directory.path().join(SOURCE_LOCK_FILE_NAME);
+        let storage = directory.path().join("cache/upstreams");
+        let url = url::Url::from_file_path(&origin).unwrap().to_string();
+        fs::write(&recipe_path, gluon_git_recipe(&url)).unwrap();
+        let recipe = Recipe::load_authored(&recipe_path).unwrap();
+
+        let error = refresh_source_lock(&recipe, &storage).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::Git(git::Error::UnsupportedSubmodules { commit: rejected }) if rejected == commit
+        ));
+        assert!(!lock_path.exists());
     }
 }

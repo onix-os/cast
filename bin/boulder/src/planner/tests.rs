@@ -224,6 +224,10 @@ fn identical_explicit_inputs_produce_identical_plans_and_locks() {
     assert_eq!(first.lock_outcome, Some(WriteOutcome::Written));
     assert_eq!(first.plan.execution.network, NetworkMode::Disabled);
     assert_eq!(first.plan.execution.filesystems, FilesystemPolicy::default());
+    assert_eq!(
+        first.plan.environment.get("SOURCE_DATE_EPOCH").map(String::as_str),
+        Some("1700000000")
+    );
     assert!(!first.plan.build_lock.requests.is_empty());
     assert!(
         first

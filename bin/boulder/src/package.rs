@@ -1,16 +1,21 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 use std::collections::BTreeMap;
-use std::{io, num::NonZeroU64};
+use std::ffi::{CString, OsString};
+use std::io::{self, BufReader, Read};
+use std::num::NonZeroU64;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use fs_err as fs;
+use fs_err::os::unix::fs::OpenOptionsExt;
 use stone::{
     StoneDigestWriterHasher,
     relation::{Dependency, ParseError, Provider},
 };
 use thiserror::Error;
 
-use moss::util;
 use stone_recipe::{
     derivation::{AnalysisPlan, DerivationId, DerivationPlan, OutputRelation, PackageIdentity, PathRuleKind},
     package::OutputSpec,
@@ -286,19 +291,366 @@ fn collection_rule(path: &stone_recipe::PathSpec) -> (PathRuleKind, &str) {
     }
 }
 
-pub fn sync_artefacts(paths: &Paths) -> io::Result<()> {
-    for path in util::enumerate_files(&paths.artefacts().host, |_| true)? {
-        let filename = path.file_name().and_then(|p| p.to_str()).unwrap_or_default();
+/// Result of publishing one complete frozen derivation bundle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publication {
+    /// A new bundle became visible with one atomic rename.
+    Published,
+    /// The exact byte-identical bundle was already present.
+    Reused,
+}
 
-        let target = paths.output_dir().join(filename);
+/// Publish all emitted artefacts as one immutable, derivation-owned bundle.
+///
+/// The final path is `<output>/<derivation-id>/`. A new bundle is assembled in
+/// a sibling temporary directory and installed with Linux `RENAME_NOREPLACE`,
+/// so no observer can see a partial final bundle and an existing bundle is
+/// never replaced. Re-publishing the same derivation succeeds only when the
+/// complete direct regular-file set and every file's bytes match.
+pub fn publish_artefacts(paths: &Paths, plan: &DerivationPlan) -> Result<Publication, PublishError> {
+    paths.require_plan(plan).map_err(PublishError::InvalidFrozenPaths)?;
+    let derivation_id = plan.derivation_id();
+    let staged_root = paths.artefacts().host;
+    let staged = regular_bundle_files(&staged_root, "staged")?;
+    let final_root = paths.output_dir().join(derivation_id.as_str());
 
-        if target.exists() {
-            fs::remove_file(&target)?;
+    if final_root_exists(&final_root)? {
+        verify_existing_bundle(&staged, &final_root)?;
+        return Ok(Publication::Reused);
+    }
+
+    let temporary = tempfile::Builder::new()
+        .prefix(&format!(".{derivation_id}.tmp-"))
+        .tempdir_in(paths.output_dir())
+        .map_err(|source| PublishError::CreateTemporary {
+            output: paths.output_dir().clone(),
+            source,
+        })?;
+
+    for (name, source) in &staged {
+        copy_regular_file(source, &temporary.path().join(name))?;
+    }
+    sync_directory(temporary.path(), "temporary")?;
+
+    match rename_noreplace(temporary.path(), &final_root) {
+        Ok(()) => {
+            // The TempDir's former path no longer exists, so dropping it cannot
+            // remove the atomically published directory.
+            drop(temporary);
+            sync_directory(paths.output_dir(), "output")?;
+            Ok(Publication::Published)
         }
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+            // Another publisher won the race. Its result is reusable only when
+            // it is exactly the bundle this derivation would have published.
+            verify_existing_bundle(&staged, &final_root)?;
+            Ok(Publication::Reused)
+        }
+        Err(source) => Err(PublishError::Install {
+            temporary: temporary.path().to_owned(),
+            final_path: final_root,
+            source,
+        }),
+    }
+}
 
-        util::hardlink_or_copy(&path, &target)?;
+fn final_root_exists(path: &Path) -> Result<bool, PublishError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
+        Ok(_) => Err(PublishError::UnexpectedRoot {
+            role: "published",
+            path: path.to_owned(),
+        }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(PublishError::Inspect {
+            role: "published",
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
+fn regular_bundle_files(root: &Path, role: &'static str) -> Result<BTreeMap<OsString, PathBuf>, PublishError> {
+    let metadata = fs::symlink_metadata(root).map_err(|source| PublishError::Inspect {
+        role,
+        path: root.to_owned(),
+        source,
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(PublishError::UnexpectedRoot {
+            role,
+            path: root.to_owned(),
+        });
+    }
+
+    let entries = fs::read_dir(root).map_err(|source| PublishError::Inspect {
+        role,
+        path: root.to_owned(),
+        source,
+    })?;
+    let mut files = BTreeMap::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| PublishError::Inspect {
+            role,
+            path: root.to_owned(),
+            source,
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|source| PublishError::Inspect {
+            role,
+            path: path.clone(),
+            source,
+        })?;
+        if !file_type.is_file() {
+            return Err(PublishError::UnexpectedEntry { role, path });
+        }
+        files.insert(entry.file_name(), path);
+    }
+    Ok(files)
+}
+
+fn verify_existing_bundle(staged: &BTreeMap<OsString, PathBuf>, final_root: &Path) -> Result<(), PublishError> {
+    let published = regular_bundle_files(final_root, "published")?;
+    let staged_names = staged.keys().cloned().collect::<Vec<_>>();
+    let published_names = published.keys().cloned().collect::<Vec<_>>();
+    if staged_names != published_names {
+        return Err(PublishError::FileSetMismatch {
+            path: final_root.to_owned(),
+            staged: staged_names,
+            published: published_names,
+        });
+    }
+
+    for (name, staged_path) in staged {
+        let published_path = &published[name];
+        if !regular_files_equal(staged_path, published_path)? {
+            return Err(PublishError::ContentMismatch {
+                staged: staged_path.clone(),
+                published: published_path.clone(),
+            });
+        }
     }
     Ok(())
+}
+
+fn open_regular_file(path: &Path, role: &'static str) -> Result<fs::File, PublishError> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|source| PublishError::Inspect {
+            role,
+            path: path.to_owned(),
+            source,
+        })?;
+    if !file
+        .metadata()
+        .map_err(|source| PublishError::Inspect {
+            role,
+            path: path.to_owned(),
+            source,
+        })?
+        .file_type()
+        .is_file()
+    {
+        return Err(PublishError::UnexpectedEntry {
+            role,
+            path: path.to_owned(),
+        });
+    }
+    Ok(file)
+}
+
+fn copy_regular_file(source: &Path, target: &Path) -> Result<(), PublishError> {
+    let mut input = open_regular_file(source, "staged")?;
+    let mode = input
+        .metadata()
+        .map_err(|source_error| PublishError::Inspect {
+            role: "staged",
+            path: source.to_owned(),
+            source: source_error,
+        })?
+        .permissions()
+        .mode()
+        & 0o7777;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open(target)
+        .map_err(|source_error| PublishError::Copy {
+            staged: source.to_owned(),
+            temporary: target.to_owned(),
+            source: source_error,
+        })?;
+    io::copy(&mut input, &mut output).map_err(|source_error| PublishError::Copy {
+        staged: source.to_owned(),
+        temporary: target.to_owned(),
+        source: source_error,
+    })?;
+    output
+        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .and_then(|()| output.sync_all())
+        .map_err(|source_error| PublishError::Copy {
+            staged: source.to_owned(),
+            temporary: target.to_owned(),
+            source: source_error,
+        })
+}
+
+fn regular_files_equal(staged: &Path, published: &Path) -> Result<bool, PublishError> {
+    let staged_file = open_regular_file(staged, "staged")?;
+    let published_file = open_regular_file(published, "published")?;
+    let staged_len = staged_file
+        .metadata()
+        .map_err(|source| PublishError::Inspect {
+            role: "staged",
+            path: staged.to_owned(),
+            source,
+        })?
+        .len();
+    let published_len = published_file
+        .metadata()
+        .map_err(|source| PublishError::Inspect {
+            role: "published",
+            path: published.to_owned(),
+            source,
+        })?
+        .len();
+    if staged_len != published_len {
+        return Ok(false);
+    }
+
+    let mut staged_reader = BufReader::new(staged_file);
+    let mut published_reader = BufReader::new(published_file);
+    let mut staged_buffer = [0_u8; 64 * 1024];
+    let mut published_buffer = [0_u8; 64 * 1024];
+    let mut remaining = staged_len;
+    while remaining > 0 {
+        let chunk = remaining.min(staged_buffer.len() as u64) as usize;
+        staged_reader
+            .read_exact(&mut staged_buffer[..chunk])
+            .map_err(|source| PublishError::Read {
+                path: staged.to_owned(),
+                source,
+            })?;
+        published_reader
+            .read_exact(&mut published_buffer[..chunk])
+            .map_err(|source| PublishError::Read {
+                path: published.to_owned(),
+                source,
+            })?;
+        if staged_buffer[..chunk] != published_buffer[..chunk] {
+            return Ok(false);
+        }
+        remaining -= chunk as u64;
+    }
+
+    // Detect a file that grew after its metadata was sampled.
+    let mut byte = [0_u8; 1];
+    Ok(staged_reader.read(&mut byte).map_err(|source| PublishError::Read {
+        path: staged.to_owned(),
+        source,
+    })? == 0
+        && published_reader.read(&mut byte).map_err(|source| PublishError::Read {
+            path: published.to_owned(),
+            source,
+        })? == 0)
+}
+
+fn sync_directory(path: &Path, role: &'static str) -> Result<(), PublishError> {
+    fs::File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| PublishError::SyncDirectory {
+            role,
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn rename_noreplace(source: &Path, target: &Path) -> io::Result<()> {
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "temporary bundle path contains NUL"))?;
+    let target = CString::new(target.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "final bundle path contains NUL"))?;
+    // nix 0.27 exposes renameat2 only for glibc targets. Boulder also builds
+    // for musl, so invoke the Linux syscall directly with RENAME_NOREPLACE.
+    let result = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_renameat2,
+            nix::libc::AT_FDCWD,
+            source.as_ptr(),
+            nix::libc::AT_FDCWD,
+            target.as_ptr(),
+            1_u32, // RENAME_NOREPLACE
+        )
+    };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum PublishError {
+    #[error("inspect {role} artefact path {path:?}")]
+    Inspect {
+        role: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("frozen artefact paths are not bound to the published derivation")]
+    InvalidFrozenPaths(#[source] io::Error),
+    #[error("{role} artefact root {path:?} must be a real directory")]
+    UnexpectedRoot { role: &'static str, path: PathBuf },
+    #[error("{role} artefact entry {path:?} must be a direct regular file")]
+    UnexpectedEntry { role: &'static str, path: PathBuf },
+    #[error("create sibling temporary bundle in {output:?}")]
+    CreateTemporary {
+        output: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("copy staged artefact {staged:?} to temporary bundle entry {temporary:?}")]
+    Copy {
+        staged: PathBuf,
+        temporary: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "published derivation bundle {path:?} has a different file set (staged {staged:?}, published {published:?})"
+    )]
+    FileSetMismatch {
+        path: PathBuf,
+        staged: Vec<OsString>,
+        published: Vec<OsString>,
+    },
+    #[error("published artefact {published:?} does not match staged bytes from {staged:?}")]
+    ContentMismatch { staged: PathBuf, published: PathBuf },
+    #[error("read artefact file {path:?}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("sync {role} bundle directory {path:?}")]
+    SyncDirectory {
+        role: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("atomically install temporary derivation bundle {temporary:?} at {final_path:?}")]
+    Install {
+        temporary: PathBuf,
+        final_path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -335,6 +687,7 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
     use std::path::Path;
 
     use super::*;
@@ -551,5 +904,138 @@ mod tests {
             FrozenPackager::from_plan(&paths, &plan),
             Err(Error::FrozenLayoutMismatch)
         ));
+    }
+
+    fn publication_fixture() -> (tempfile::TempDir, DerivationPlan, Paths) {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("output");
+        fs::create_dir(&output).unwrap();
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let plan = test_derivation_plan();
+        let mut paths = Paths::new(&recipe, plan.layout.clone(), root.path(), output).unwrap();
+        paths.bind_to_plan(&plan).unwrap();
+        (root, plan, paths)
+    }
+
+    fn output_entries(paths: &Paths) -> Vec<OsString> {
+        let mut entries = fs::read_dir(paths.output_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries
+    }
+
+    #[test]
+    fn publishes_and_reuses_one_complete_derivation_bundle() {
+        let (_root, plan, paths) = publication_fixture();
+        let staged = paths.artefacts().host;
+        let package = staged.join("hello.stone");
+        let manifest = staged.join("manifest.x86_64.bin");
+        fs::write(&package, b"stone bytes").unwrap();
+        fs::set_permissions(&package, std::fs::Permissions::from_mode(0o640)).unwrap();
+        fs::write(&manifest, b"manifest bytes").unwrap();
+
+        assert_eq!(publish_artefacts(&paths, &plan).unwrap(), Publication::Published);
+
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        assert_eq!(fs::read(bundle.join("hello.stone")).unwrap(), b"stone bytes");
+        assert_eq!(fs::read(bundle.join("manifest.x86_64.bin")).unwrap(), b"manifest bytes");
+        assert_eq!(
+            fs::metadata(bundle.join("hello.stone")).unwrap().permissions().mode() & 0o7777,
+            0o640
+        );
+        assert_ne!(
+            fs::metadata(&package).unwrap().ino(),
+            fs::metadata(bundle.join("hello.stone")).unwrap().ino(),
+            "published files must not retain mutable staging inodes"
+        );
+        assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
+        assert!(!paths.output_dir().join("hello.stone").exists());
+
+        assert_eq!(publish_artefacts(&paths, &plan).unwrap(), Publication::Reused);
+        assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
+    }
+
+    #[test]
+    fn mismatched_existing_bundle_is_never_modified() {
+        let (_root, plan, paths) = publication_fixture();
+        let staged = paths.artefacts().host;
+        fs::write(staged.join("hello.stone"), b"original").unwrap();
+        publish_artefacts(&paths, &plan).unwrap();
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+
+        fs::write(staged.join("hello.stone"), b"different").unwrap();
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(error, PublishError::ContentMismatch { .. }));
+        assert_eq!(fs::read(bundle.join("hello.stone")).unwrap(), b"original");
+
+        fs::write(staged.join("extra.stone"), b"extra").unwrap();
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(error, PublishError::FileSetMismatch { .. }));
+        assert!(!bundle.join("extra.stone").exists());
+        assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
+    }
+
+    #[test]
+    fn rejects_non_regular_or_nested_staged_entries_without_a_final_bundle() {
+        let (_root, plan, paths) = publication_fixture();
+        let staged = paths.artefacts().host;
+        fs::create_dir(staged.join("nested")).unwrap();
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(error, PublishError::UnexpectedEntry { .. }));
+        assert!(output_entries(&paths).is_empty());
+
+        fs::remove_dir(staged.join("nested")).unwrap();
+        fs::write(staged.join("target"), b"bytes").unwrap();
+        symlink("target", staged.join("link.stone")).unwrap();
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(error, PublishError::UnexpectedEntry { .. }));
+        assert!(output_entries(&paths).is_empty());
+
+        fs::remove_file(staged.join("link.stone")).unwrap();
+        nix::unistd::mkfifo(
+            &staged.join("fifo.stone"),
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(error, PublishError::UnexpectedEntry { .. }));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn rejects_unexpected_entries_in_an_existing_final_bundle() {
+        let (_root, plan, paths) = publication_fixture();
+        fs::write(paths.artefacts().host.join("hello.stone"), b"bytes").unwrap();
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        fs::create_dir(&bundle).unwrap();
+        symlink("missing", bundle.join("hello.stone")).unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(error, PublishError::UnexpectedEntry { .. }));
+        assert!(
+            fs::symlink_metadata(bundle.join("hello.stone"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn rename_noreplace_does_not_replace_even_an_empty_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let target = root.path().join("target");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(source.join("complete"), b"bundle").unwrap();
+
+        let error = rename_noreplace(&source, &target).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert!(source.join("complete").is_file());
+        assert!(target.is_dir());
+        assert!(fs::read_dir(target).unwrap().next().is_none());
     }
 }

@@ -92,7 +92,7 @@ Deliberately unsupported:
   relation model. Authored packages do not carry provider strings.
 - Separates native build, target build, check, and output-specific runtime
   relations.
-- Declares sources, a structural builder contract, hooks, network requirements,
+- Declares sources, a structural builder contract, hooks, a typed network request,
   package outputs, and path rules explicitly. Standard builder modules return
   their symbolic tool capabilities, environment marker, ordered phase graph,
   and supported hook surface as ordinary package data.
@@ -102,6 +102,9 @@ Deliberately unsupported:
   state. They do not depend on the host, process environment, directory
   contents, or evaluation order.
 - Is validated before any source or dependency resolution begins.
+- Retains the typed network request for a possible future fixed-output ABI, but
+  currently rejects `options.networking = true`; frozen builds admit external
+  content only through locked sources.
 
 ### `PolicySpec`
 
@@ -127,6 +130,11 @@ Deliberately unsupported:
   filesystem, network, or clock while being evaluated.
 - May provide defaults, but applying those defaults is part of plan
   resolution and is visible in plan provenance.
+- Owns a finite sandbox-filesystem contract. Frozen builds always omit proc,
+  use an empty `/tmp`, omit `/sys`, and may select absent or minimal `/dev`;
+  proc, host `/sys`, and full host `/dev` are not policy values. Minimal
+  `/dev` is exactly `null`, `zero`, and `full` and never varies with host
+  device availability.
 
 ### `DerivationPlan`
 
@@ -134,8 +142,9 @@ Deliberately unsupported:
   request, policy lookup, macro invocation, or output-template merge remains.
 - Contains the selected package, source lock, exact package/output closure,
   repository snapshot, build/host/target platforms, policy, profile,
-  toolchain, builder, phases, hooks, environment, network mode, PGO stages,
-  tuning, outputs, source timestamp, and implementation/schema versions.
+  toolchain, builder, phases, hooks, environment, network mode, explicit
+  pseudo-filesystems, PGO stages, tuning, outputs, source timestamp, and
+  implementation/schema versions.
 - Records the fingerprint and provenance of every authored or policy module
   that contributed semantic data.
 - Has one stable canonical encoding. Maps are key ordered, sequences preserve
@@ -146,7 +155,8 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency. An arbitrary explicit `Shell` escape cannot be statically proven
+  concurrency, disabled networking, and the schema-v6 sandbox-filesystem
+  contract. An arbitrary explicit `Shell` escape cannot be statically proven
   to use only declared tools, so every structural builder contract carries an
   explicit `required_tools` list; standard modules populate it automatically.
 - Is immutable after freezing. Execution can report observations such as
@@ -202,8 +212,9 @@ implementation status above is authoritative for completed work.
 | Root/target environment fallback and `%scriptBase` prefix | `build/job/phase.rs` | Authored intent plus repository policy | Authored environment patch plus builder base environment, resolved with explicit precedence into the plan. |
 | CPU-derived `%(jobs)` | `build/job/phase.rs` | Forbidden ambient state | Explicit concurrency input if it can alter outputs; otherwise an executor hint that is unavailable to build scripts. |
 | Compiler-cache enablement and cache-related definitions | CLI, `build.rs`, and `build/job/phase.rs` | Authored invocation intent | Explicit plan option when visible to the build; cache storage locations remain executor-only. |
-| Container networking | `cli/build.rs` and `container.rs` | Authored intent | Package network requirement resolved against policy and recorded in the plan. |
-| Container hostname, mounts, PATH, HOME, and TERM | `container.rs` and `build.rs` | Repository policy | Semantic process environment and mounts are builder policy/plan data; interactive breakpoint TERM is executor-only. |
+| Container networking during frozen builds | `PackageSpec.options.networking` and `container.rs` | Forbidden ambient input | Package validation rejects enabled networking. Fetched content must be declared as typed sources and locked before execution; the field is retained only for a possible future fixed-output ABI. |
+| Interactive `boulder chroot` shell | `cli/chroot.rs` | Explicit impure development exception | Outside frozen planning and execution guarantees. It can inspect an existing build root but never invokes, validates, or syncs package emission; files created there are not frozen artifacts. |
+| Container hostname, mounts, PATH, HOME, and TERM | `container.rs` and `build.rs` | Repository policy | Semantic process environment and mounts are builder policy/plan data; frozen new-network namespaces retain the kernel-default loopback state and never invoke the optional host `ip` utility. Interactive breakpoint TERM is executor-only. |
 | PGO stage sequence and LLVM merge actions | `build/pgo.rs` and `build/job/phase.rs` | Repository policy | Builder-generated structured stages in the plan. |
 | Default tuning groups, stage tuning, flag deduplication, and Mold flags | `build/job/phase.rs::add_tuning` | Repository policy | Ordered tuning policy and concrete compiler/linker flags in the plan. |
 
@@ -240,7 +251,8 @@ implementation status above is authoritative for completed work.
 | Build release number | `cli/build.rs` and `package/emit.rs` | Authored invocation intent | Explicit plan field because it changes emitted package identity/metadata. |
 | Boulder implementation and recipe fingerprint | `package.rs` and emitted metadata | Resolved dependency | Schema/implementation version plus all recipe, policy, lock, and builder fingerprints in the plan. |
 | Output directory, cleanup, progress/timing, terminal handling, process priority, and completion timestamp | CLI and `build.rs` | Executor-only state | Remain outside the plan; none may be visible to build processes or emitted package semantics. |
-| Compiler/source caches and Moss storage directories | `env.rs`, `paths.rs`, and `container.rs` | Executor-only state | Cache contents must be validated by semantic keys; their host locations never enter the plan. |
+| Compiler/tool caches | `paths.rs`, `container.rs`, and `executor.rs` | Executor-only state | Enabled cache mounts are namespaced by derivation identity, but `Executor::run` clears all six frozen layout destinations before any build step. Cache contents can be reused only by phases within that execution. Disabled plans neither mount nor touch them, and host locations never enter the plan. |
+| Verified source and Moss storage | `env.rs`, `upstream.rs`, and Moss | Executor-only state | Persistent content is admitted only through verified source locks or repository identities; storage locations never enter the plan. |
 | Manifest verification path | CLI and `paths.rs` | Executor-only validation | Expected manifest identity/content is a verification request, not a derivation input. |
 | Compression worker count | `package/emit.rs` | Executor-only only if proven byte-stable | If it can alter artifact bytes or metadata, make encoding policy explicit in the plan. |
 

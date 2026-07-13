@@ -35,9 +35,16 @@ an empty tmpfs at `/tmp`, and writable recursive host views of `/sys` and
 
 Callers can disable individual mounts, make proc or the host trees read-only,
 or choose `DevPolicy::Minimal`. Minimal device policy creates a fresh tmpfs at
-`/dev` and exposes only read-only binds of `null`, `zero`, `full`, `random`,
-and `urandom`, plus `tty` when the host provides it. It never exposes the full
+`/dev` and exposes exactly the read-only `null`, `zero`, and `full` nodes. It
+does not conditionally add devices from host state and never exposes the full
 host `/dev` tree.
+
+`Container::loopback` separately controls loopback setup. Its compatibility
+default invokes `/usr/sbin/ip` when that host utility exists. Deterministic
+callers select `LoopbackPolicy::KernelDefault`, which leaves the interface in
+the state supplied by the selected network namespace and performs no host
+filesystem probe or setup command. The parent/child synchronization pipe is
+created close-on-exec, so it is never inherited by commands run in a payload.
 
 #### References
 

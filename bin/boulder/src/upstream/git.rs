@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
+    ffi::OsStr,
+    fs::Permissions,
     io,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -54,9 +57,11 @@ impl Git {
                 repo = clone(&self.url, &stored_path, pb).await?;
             }
             Err(Error::Io(e)) => return Err(Error::from(e)),
+            Err(error @ Error::UnsupportedSubmodules { .. }) => return Err(error),
         }
 
         let resolved_hash = repo.peel_commit(&self.commit).await?;
+        reject_gitlinks(&repo, &resolved_hash).await?;
 
         Ok(StoredGit {
             name: self.name().to_owned(),
@@ -87,8 +92,10 @@ impl Git {
                 clone(&self.url, &stored_path, pb).await?
             }
             Err(Error::Io(error)) => return Err(Error::Io(error)),
+            Err(error @ Error::UnsupportedSubmodules { .. }) => return Err(error),
         };
         let resolved_hash = repo.peel_commit(&self.commit).await?;
+        reject_gitlinks(&repo, &resolved_hash).await?;
 
         Ok(StoredGit {
             name: self.name().to_owned(),
@@ -172,7 +179,8 @@ pub struct StoredGit {
 
 impl StoredGit {
     /// Shares the Git repository in preparation of a build.
-    pub async fn share(&self, dest_dir: &Path) -> Result<(), Error> {
+    pub async fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
+        reject_gitlinks(&self.repo, &self.resolved_hash).await?;
         if let Some(parent) = dest_dir.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -188,8 +196,73 @@ impl StoredGit {
         // Finally checkout the desired commit
         cloned.checkout(&self.resolved_hash).await?;
 
+        // Git administration data contains checkout-time and host-specific
+        // state and is not part of the locked commit tree.
+        remove_git_administration(dest_dir)?;
+        normalize_exported_tree(dest_dir, source_date_epoch)?;
+
         Ok(())
     }
+}
+
+async fn reject_gitlinks(repo: &gitwrap::Repository, commit: &str) -> Result<(), Error> {
+    if repo.contains_gitlinks(commit).await? {
+        Err(Error::UnsupportedSubmodules {
+            commit: commit.to_owned(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn remove_git_administration(root: &Path) -> Result<(), Error> {
+    let entries = walkdir::WalkDir::new(root)
+        .contents_first(true)
+        .follow_links(false)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(walk_error)?;
+    for entry in entries {
+        if entry.file_name() != OsStr::new(".git") {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path())?;
+        if metadata.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_exported_tree(root: &Path, source_date_epoch: i64) -> Result<(), Error> {
+    let timestamp = filetime::FileTime::from_unix_time(source_date_epoch, 0);
+    for entry in walkdir::WalkDir::new(root).contents_first(true).follow_links(false) {
+        let entry = entry.map_err(walk_error)?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() {
+            filetime::set_symlink_file_times(path, timestamp, timestamp)?;
+            continue;
+        }
+
+        let mode = if metadata.is_dir() {
+            0o755
+        } else if metadata.mode() & 0o111 == 0 {
+            0o644
+        } else {
+            0o755
+        };
+        fs::set_permissions(path, Permissions::from_mode(mode))?;
+        filetime::set_file_times(path, timestamp, timestamp)?;
+    }
+    Ok(())
+}
+
+fn walk_error(error: walkdir::Error) -> io::Error {
+    let message = error.to_string();
+    error.into_io_error().unwrap_or_else(|| io::Error::other(message))
 }
 
 /// Possible errors returned by functions in this module.
@@ -198,6 +271,9 @@ pub enum Error {
     /// An error occurred while handling a Git repository.
     #[error("{0}")]
     Git(#[from] gitwrap::Error),
+    /// Submodules require their own explicit, locked source model.
+    #[error("Git commit {commit} contains submodules, which are not supported as implicit sources")]
+    UnsupportedSubmodules { commit: String },
     /// A generic I/O error occurred.
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -232,5 +308,46 @@ fn set_progress_bar_style(pb: &ProgressBar) -> impl Fn(gitwrap::FetchProgress) {
     |prog| {
         pb.set_position(prog.percent as u64);
         pb.set_prefix(prog.speed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::{MetadataExt, symlink};
+
+    use super::*;
+
+    #[test]
+    fn exported_git_tree_has_fixed_modes_and_timestamps_without_admin_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("checkout");
+        fs::create_dir_all(root.join(".git/objects")).unwrap();
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested/.git"), b"gitdir: ../.git/modules/nested\n").unwrap();
+        fs::write(root.join("regular"), b"regular").unwrap();
+        fs::write(root.join("executable"), b"executable").unwrap();
+        fs::set_permissions(root.join("regular"), Permissions::from_mode(0o666)).unwrap();
+        fs::set_permissions(root.join("executable"), Permissions::from_mode(0o711)).unwrap();
+        symlink("regular", root.join("link")).unwrap();
+        fs::write(root.join(".git-marker"), b"ordinary committed name").unwrap();
+
+        remove_git_administration(&root).unwrap();
+        normalize_exported_tree(&root, 1_700_000_000).unwrap();
+
+        assert_eq!(fs::metadata(root.join("regular")).unwrap().mode() & 0o7777, 0o644);
+        assert_eq!(fs::metadata(root.join("executable")).unwrap().mode() & 0o7777, 0o755);
+        assert_eq!(fs::metadata(root.join("nested")).unwrap().mode() & 0o7777, 0o755);
+        for path in [root.clone(), root.join("regular"), root.join("executable")] {
+            assert_eq!(fs::metadata(path).unwrap().mtime(), 1_700_000_000);
+        }
+        assert!(!root.join(".git").exists());
+        assert!(!root.join("nested/.git").exists());
+        assert!(
+            fs::symlink_metadata(root.join("link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(root.join(".git-marker").is_file());
     }
 }

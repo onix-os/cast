@@ -350,20 +350,14 @@ pub struct SandboxPolicySpec {
 
 /// Repository-authorized pseudo-filesystems available to a build sandbox.
 ///
-/// The finite modes deliberately cannot express a writable proc, any `/sys`
-/// mount, or a full host `/dev` view.
+/// Proc is unconditionally absent from frozen builds and is therefore not an
+/// authored policy value. The finite modes also cannot express any `/sys`
+/// mount or a full host `/dev` view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SandboxFilesystemPolicySpec {
-    pub proc: SandboxProcPolicySpec,
     pub tmp: SandboxTmpPolicySpec,
     pub sys: SandboxSysPolicySpec,
     pub dev: SandboxDevPolicySpec,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SandboxProcPolicySpec {
-    None,
-    ReadOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

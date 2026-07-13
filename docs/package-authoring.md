@@ -310,6 +310,13 @@ boulder recipe update ./stone.glu
 A recipe which declares sources needs a current source lock before its
 derivation can be planned.
 
+Git submodules are not implicit sources. A locked Git commit containing a
+Gitlink is rejected; declare each required checkout as its own typed source so
+its URL, identity, and destination are visible in the plan. Accepted Git trees
+are exported without administration data, and source modes and timestamps are
+normalized to the plan's `source_date_epoch`. Archive copies likewise receive
+an independent cache inode, fixed mode, and the frozen timestamp.
+
 ### Frozen builds are offline
 
 Every byte fetched from outside the build root must be declared in `sources`
@@ -372,7 +379,8 @@ boulder recipe explain ./stone.glu \
 The source timestamp and job count are explicit because build scripts can
 observe them. The derivation ID is SHA-256 over the canonical
 `DerivationPlan`, including locked sources and dependencies, selected policy,
-jobs and phases, environment, execution policy, outputs, and timestamp.
+jobs and phases, environment, execution policy, pseudo-filesystems, outputs,
+and timestamp.
 
 ## Frozen execution
 
@@ -394,6 +402,13 @@ the plan-defined container, runs `Executor` over frozen jobs and steps, and
 packages through plan-owned analysis, collection, outputs, and derivation ID.
 Binary manifest verification is host-only, and cleanup removes only paths
 owned by the plan.
+
+Frozen builds never inherit the generic container's compatibility mounts.
+Proc and `/sys` are always absent, `/tmp` is empty, and repository policy may
+select minimal or absent `/dev`. The default minimal `/dev` contains exactly
+`null`, `zero`, and `full`; it has no host-dependent optional nodes. Frozen
+networking is rejected, and its new network namespace retains the kernel's
+default loopback state without running a host `ip` utility.
 
 Mutable local files under the recipe `pkg/` directory are deliberately not
 exposed to build steps. A future local-source ABI must hash their bytes and

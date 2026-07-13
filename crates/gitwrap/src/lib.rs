@@ -12,6 +12,7 @@
 //! neither libgit2 nor gitoxide had all operations available in this
 //! module implemented.
 
+use std::env;
 use std::ffi::OsStr;
 use std::path::{self, Path, PathBuf};
 use std::process::Stdio;
@@ -60,7 +61,8 @@ impl Repository {
         run_git(&[
             OsStr::new("clone"),
             OsStr::new("--mirror"),
-            OsStr::new("--recurse-submodules"),
+            OsStr::new("--no-hardlinks"),
+            OsStr::new("--no-recurse-submodules"),
             OsStr::new(&url.as_str()),
             path.as_os_str(),
         ])
@@ -81,7 +83,8 @@ impl Repository {
             &[
                 OsStr::new("clone"),
                 OsStr::new("--mirror"),
-                OsStr::new("--recurse-submodules"),
+                OsStr::new("--no-hardlinks"),
+                OsStr::new("--no-recurse-submodules"),
                 OsStr::new("--progress"),
                 OsStr::new(&url.as_str()),
                 path.as_os_str(),
@@ -152,7 +155,9 @@ impl Repository {
             OsStr::new("-C"),
             self.path.as_os_str(),
             OsStr::new("checkout"),
-            OsStr::new("--recurse-submodules"),
+            OsStr::new("--detach"),
+            OsStr::new("--force"),
+            OsStr::new("--no-recurse-submodules"),
             OsStr::new(rev),
         ])
         .await?;
@@ -171,7 +176,7 @@ impl Repository {
                 OsStr::new("-C"),
                 self.path.as_os_str(),
                 OsStr::new("fetch"),
-                OsStr::new("--recurse-submodules"),
+                OsStr::new("--no-recurse-submodules"),
                 OsStr::new("--progress"),
             ],
             callback,
@@ -188,13 +193,32 @@ impl Repository {
         // Clone it to `path`
         run_git(&[
             OsStr::new("clone"),
-            OsStr::new("--recurse-submodules"),
+            OsStr::new("--no-hardlinks"),
+            OsStr::new("--no-recurse-submodules"),
             self.path.as_os_str(),
             path.as_os_str(),
         ])
         .await?;
 
         Ok(Self { path: path.to_owned() })
+    }
+
+    /// Whether `rev` contains Gitlink entries whose contents would require
+    /// an additional, independently fetched submodule source graph.
+    pub async fn contains_gitlinks(&self, rev: &str) -> Result<bool, Error> {
+        let output = run_git(&[
+            OsStr::new("-C"),
+            self.path.as_os_str(),
+            OsStr::new("ls-tree"),
+            OsStr::new("-r"),
+            OsStr::new("--full-tree"),
+            OsStr::new(rev),
+        ])
+        .await?;
+        Ok(output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .any(|line| line.starts_with(b"160000 ")))
     }
 
     pub fn path(&self) -> &Path {
@@ -217,7 +241,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = process::Command::new("git")
+    let output = git_command()
         .args(args)
         .stdin(Stdio::null())
         .output()
@@ -263,7 +287,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut child = process::Command::new("git")
+    let mut child = git_command()
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -272,6 +296,42 @@ where
         .map_err(InnerError::from)?;
     let stderr = child.stderr.take().unwrap();
     Ok((child, stderr))
+}
+
+/// Construct Git with a deliberately small, stable process environment.
+///
+/// Source transport may change whether a fetch succeeds, but it must not
+/// activate user/system configuration, credential helpers, hooks, filters, or
+/// locale-dependent checkout behavior that can change locked source bytes.
+fn git_command() -> process::Command {
+    let path = env::var_os("PATH");
+    let mut command = process::Command::new("git");
+    command.env_clear();
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    command
+        .env("HOME", "/nonexistent")
+        .env("XDG_CONFIG_HOME", "/nonexistent")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .args([
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.symlinks=true",
+        ]);
+    command
 }
 
 struct ProgressParser<R: io::AsyncRead> {
@@ -324,5 +384,53 @@ impl<R: io::AsyncRead + Unpin> ProgressParser<R> {
             percent: percent.strip_suffix('%')?.parse().ok()?,
             speed: format!("{speed} {unit_per_sec}"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, process::Command};
+
+    use super::*;
+
+    fn fixture_git(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[tokio::test]
+    async fn gitlinks_are_detected_without_materializing_submodules() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository_path = temporary.path().join("repository");
+        std::fs::create_dir(&repository_path).unwrap();
+        fixture_git(&repository_path, &["init", "--initial-branch=main"]);
+        fixture_git(&repository_path, &["config", "user.name", "Gitwrap Test"]);
+        fixture_git(&repository_path, &["config", "user.email", "gitwrap@example.invalid"]);
+        std::fs::write(repository_path.join("source.txt"), b"locked source\n").unwrap();
+        fixture_git(&repository_path, &["add", "source.txt"]);
+        fixture_git(&repository_path, &["commit", "-m", "source"]);
+
+        let repository = Repository {
+            path: repository_path.clone(),
+        };
+        let source_commit = fixture_git(&repository_path, &["rev-parse", "HEAD"]);
+        assert!(!repository.contains_gitlinks(&source_commit).await.unwrap());
+
+        let cache_info = format!("160000,{source_commit},vendor/dependency");
+        fixture_git(&repository_path, &["update-index", "--add", "--cacheinfo", &cache_info]);
+        fixture_git(&repository_path, &["commit", "-m", "gitlink"]);
+        let gitlink_commit = fixture_git(&repository_path, &["rev-parse", "HEAD"]);
+
+        assert!(repository.contains_gitlinks(&gitlink_commit).await.unwrap());
     }
 }

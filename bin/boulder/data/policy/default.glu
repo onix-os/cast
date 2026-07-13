@@ -212,7 +212,6 @@ let riscv64_architecture_flags = {
 let sandbox = {
     hostname = "boulder",
     filesystems = {
-        proc = p.sandbox_filesystems.proc.read_only,
         tmp = p.sandbox_filesystems.tmp.empty,
         sys = p.sandbox_filesystems.sys.none,
         dev = p.sandbox_filesystems.dev.minimal,

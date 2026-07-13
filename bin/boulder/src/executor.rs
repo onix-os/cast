@@ -6,7 +6,13 @@
 //! This module deliberately has no access to recipes, policy macros,
 //! profiles, or Moss provider resolution. Those belong to planning.
 
-use std::{collections::BTreeMap, io, os::unix::process::ExitStatusExt, path::Path, process, thread};
+use std::{
+    collections::BTreeMap,
+    io,
+    os::unix::process::{CommandExt, ExitStatusExt},
+    path::Path,
+    process, thread,
+};
 
 use fs_err as fs;
 use nix::{
@@ -208,7 +214,27 @@ fn logged(
 ) -> io::Result<process::ExitStatus> {
     let mut command = process::Command::new(command);
     configure(&mut command);
+    // Frozen steps receive only their configured stdio. Mark every other
+    // descriptor close-on-exec in the post-fork child; this also covers
+    // descriptors inherited by Boulder from its own launcher.
+    unsafe {
+        command.pre_exec(|| {
+            const CLOSE_RANGE_CLOEXEC: nix::libc::c_uint = 1 << 2;
+            let result = nix::libc::syscall(
+                nix::libc::SYS_close_range,
+                3 as nix::libc::c_uint,
+                nix::libc::c_uint::MAX,
+                CLOSE_RANGE_CLOEXEC,
+            );
+            if result == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
     let mut child = command
+        .stdin(process::Stdio::null())
         .stdout(process::Stdio::piped())
         .stderr(process::Stdio::piped())
         .spawn()?;
@@ -307,7 +333,12 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::{os::unix::fs::symlink, path::PathBuf};
+    use std::{
+        os::{fd::AsRawFd, unix::fs::symlink},
+        path::PathBuf,
+    };
+
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
     use stone_recipe::derivation::BuilderLayout;
 
@@ -393,6 +424,18 @@ mod tests {
                 ("STEP".to_owned(), "present".to_owned()),
             ])
         );
+    }
+
+    #[test]
+    fn frozen_commands_get_eof_on_stdin_and_no_inherited_extra_descriptors() {
+        let inherited = tempfile::tempfile().unwrap();
+        let inherited_fd = inherited.as_raw_fd();
+        fcntl(inherited_fd, FcntlArg::F_SETFD(FdFlag::empty())).unwrap();
+        let script = format!("test ! -e /proc/self/fd/{inherited_fd} && ! read value");
+
+        let status = logged("/bin/sh", |command| command.args(["-c", &script])).unwrap();
+
+        assert!(status.success());
     }
 
     #[test]

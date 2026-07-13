@@ -20,7 +20,7 @@ use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
 
 use crate::build_policy::{
     AnalyzerKind, CompilerCachePolicySpec, SUPPORTED_ARTIFACT_ARCHITECTURES, SandboxDevPolicySpec,
-    SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxProcPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
+    SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
     layers::BuildPolicyOperation,
 };
 
@@ -1037,8 +1037,8 @@ impl ExecutionPolicy {
 
 /// Complete pseudo-filesystem selection frozen into an execution plan.
 ///
-/// Unlike the generic container API, this type cannot express writable proc,
-/// any `/sys` mount, or a full host `/dev` view.
+/// Unlike the generic container API, this type makes proc unconditionally
+/// absent and cannot express any `/sys` mount or a full host `/dev` view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FilesystemPolicy {
     pub proc: ProcFilesystem,
@@ -1050,7 +1050,7 @@ pub struct FilesystemPolicy {
 impl Default for FilesystemPolicy {
     fn default() -> Self {
         Self {
-            proc: ProcFilesystem::ReadOnly,
+            proc: ProcFilesystem::None,
             tmp: TmpFilesystem::Empty,
             sys: SysFilesystem::None,
             dev: DevFilesystem::Minimal,
@@ -1061,10 +1061,7 @@ impl Default for FilesystemPolicy {
 impl From<&SandboxFilesystemPolicySpec> for FilesystemPolicy {
     fn from(policy: &SandboxFilesystemPolicySpec) -> Self {
         Self {
-            proc: match policy.proc {
-                SandboxProcPolicySpec::None => ProcFilesystem::None,
-                SandboxProcPolicySpec::ReadOnly => ProcFilesystem::ReadOnly,
-            },
+            proc: ProcFilesystem::None,
             tmp: match policy.tmp {
                 SandboxTmpPolicySpec::Empty => TmpFilesystem::Empty,
             },
@@ -1083,7 +1080,6 @@ impl FilesystemPolicy {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.variant(match self.proc {
             ProcFilesystem::None => 0,
-            ProcFilesystem::ReadOnly => 1,
         });
         encoder.variant(match self.tmp {
             TmpFilesystem::Empty => 0,
@@ -1101,14 +1097,12 @@ impl FilesystemPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcFilesystem {
     None,
-    ReadOnly,
 }
 
 impl ProcFilesystem {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
-            Self::ReadOnly => "read-only",
         }
     }
 }
@@ -2175,24 +2169,20 @@ mod tests {
     #[test]
     fn frozen_filesystem_policy_is_explicit_restricted_and_ordered() {
         let policy = FilesystemPolicy::default();
-        assert_eq!(policy.proc, ProcFilesystem::ReadOnly);
+        assert_eq!(policy.proc, ProcFilesystem::None);
         assert_eq!(policy.tmp, TmpFilesystem::Empty);
         assert_eq!(policy.sys, SysFilesystem::None);
         assert_eq!(policy.dev, DevFilesystem::Minimal);
 
         let mut encoder = CanonicalEncoder::new(&[]);
         policy.encode(&mut encoder);
-        assert_eq!(encoder.finish(), [1, 0, 0, 1]);
+        assert_eq!(encoder.finish(), [0, 0, 0, 1]);
     }
 
     #[test]
     fn every_allowed_filesystem_policy_change_changes_derivation_identity() {
         let original = sample_plan();
         let original_id = original.derivation_id();
-
-        let mut without_proc = original.clone();
-        without_proc.execution.filesystems.proc = ProcFilesystem::None;
-        assert_ne!(original_id, without_proc.derivation_id());
 
         let mut without_dev = original;
         without_dev.execution.filesystems.dev = DevFilesystem::None;

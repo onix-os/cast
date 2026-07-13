@@ -148,7 +148,10 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     println!("boulder {}", tools_buildinfo::get_simple_version());
     println!("└─ building {pkg_name}-{}\n", plan.package.build_release);
     println!("└─ derivation {derivation_id}\n");
-    runtime.setup(&plan, &mut timing, timer)?;
+    // This process-level flock is intentionally held across every destructive
+    // operation on the derivation workspace, including optional cleanup.
+    let execution_lock = runtime.acquire_execution_lock(&plan)?;
+    runtime.setup(&plan, &execution_lock, &mut timing, timer)?;
 
     let paths = &runtime.paths;
 
@@ -194,12 +197,12 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         verify_frozen_manifest(paths, &plan, expected)?;
     }
 
-    // Copy artefacts to host recipe dir
-    package::sync_artefacts(paths).map_err(Error::SyncArtefacts)?;
+    // Publish the complete derivation bundle without replacing an existing one.
+    package::publish_artefacts(paths, &plan).map_err(Error::PublishArtefacts)?;
 
     if cleanup {
         runtime
-            .cleanup(&plan)
+            .cleanup(&plan, &execution_lock)
             .map_err(|error| Error::Cleanup(Box::new(error)))?;
     }
 
@@ -241,8 +244,8 @@ pub enum Error {
     Build(#[source] Box<build::Error>),
     #[error("package artifacts")]
     Package(#[from] package::Error),
-    #[error("sync artefacts")]
-    SyncArtefacts(#[source] io::Error),
+    #[error("publish frozen derivation artefact bundle")]
+    PublishArtefacts(#[source] package::PublishError),
     #[error("container")]
     Container(#[from] container::Error),
     #[error("setting thread priority")]

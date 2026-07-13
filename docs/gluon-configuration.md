@@ -191,6 +191,15 @@ the `IncludeAny` fallback must appear exactly once at the end. Analyzer patches
 use the same order-preserving array operations, so reordering analyzers is a
 semantic policy and fingerprint change.
 
+`BuildPolicySpec.sandbox.filesystems` is explicit repository data. Its finite
+contract omits proc unconditionally, requires a fresh empty tmpfs for `/tmp`,
+requires `/sys` to be absent, and permits `/dev` as `none` or `minimal`. The
+default selects empty `/tmp`, no `/sys`, and minimal `/dev`. Minimal `/dev`
+exposes exactly read-only binds for `null`, `zero`, and `full`; it has no
+host-dependent optional nodes and a full host `/dev` view is not representable.
+These choices are frozen into the execution policy and participate in the
+derivation identity.
+
 Each successful operation records the policy and layer names, layer and entry
 positions, global operation order, operation kind, module origin, and the
 module's complete evaluation fingerprint. The final policy fingerprint binds
@@ -291,7 +300,8 @@ to compare equal. An undeclared neighboring file contributes nothing.
 Boulder freezes a canonical target-specific `DerivationPlan` and hashes it as
 the derivation ID. The canonical data includes the recipe/source identities,
 build lock, ordered jobs/phases/steps, environment, builder layout, execution
-policy, tuning, analyzers, outputs, and explicit source timestamp. Mutation
+policy (including every pseudo-filesystem selection), tuning, analyzers,
+outputs, and explicit source timestamp. Mutation
 tests cover each semantic category. Package and binary-manifest `SourceRef`
 metadata carry both `recipe-sha256:` and `derivation-sha256:` values, and the
 JSONC build manifest has `recipe-fingerprint` and `derivation-id` fields. The

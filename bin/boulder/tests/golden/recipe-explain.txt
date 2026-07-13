@@ -346,7 +346,7 @@ derivation_explain {
   execution {
     network = "disabled"
     filesystems {
-      proc = "read-only"
+      proc = "none"
       tmp = "empty"
       sys = "none"
       dev = "minimal"
@@ -448,6 +448,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "55f24d327980ca3c0d18678fae314c4b3d70a2bb4f5408cbdccae0b73dd5c008"
+    derivation_id = "ff3331d59c2944441e4ba750c6e4d32feb94946813bb533d068bb2260abd1a0d"
   }
 }

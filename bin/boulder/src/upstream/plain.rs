@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::ops::Deref;
+use std::{fs::Permissions, ops::Deref, os::unix::fs::PermissionsExt};
 use std::{
     io,
     path::{Path, PathBuf},
@@ -76,24 +76,6 @@ impl Plain {
         })
     }
 
-    /// Unconditionally removes the source archive, and the parent
-    /// directories if they are empty, within the storage directory.
-    /// If the source archive does not exist, this function returns
-    /// successfully (it is idempotent).
-    ///
-    /// Careful: this function does not validate the archive!
-    /// It will be removed even if it does not belong to this Upstream.
-    pub fn remove(&self, storage_dir: &Path) -> Result<(), Error> {
-        let dir = self.stored_path(storage_dir);
-
-        fs::remove_file(&dir)?;
-        if let Some(parent) = dir.parent() {
-            Ok(util::remove_empty_dirs(parent, storage_dir)?)
-        } else {
-            Ok(())
-        }
-    }
-
     /// Returns an already-stored source archive.
     /// An error is instead returned if the source archive is
     /// not found in the storage directory, or its hash doesn't match
@@ -157,13 +139,16 @@ impl StoredPlain {
     /// The build-visible file must have an inode independent from the shared
     /// cache. Build scripts are allowed to modify their source directory; a
     /// hard link here would silently mutate the verified cache entry too.
-    pub fn share(&self, dest_dir: &Path) -> Result<(), Error> {
+    pub fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
         let target = dest_dir.join(self.name.clone());
 
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::copy(&self.path, &target)?;
+        fs::set_permissions(&target, Permissions::from_mode(0o644))?;
+        let timestamp = filetime::FileTime::from_unix_time(source_date_epoch, 0);
+        filetime::set_file_times(&target, timestamp, timestamp)?;
 
         Ok(())
     }
@@ -188,7 +173,7 @@ mod tests {
             was_cached: true,
         };
 
-        source.share(&shared).unwrap();
+        source.share(&shared, 1_700_000_000).unwrap();
         let build_visible = shared.join("source.tar.zst");
         assert_eq!(fs::read(&build_visible).unwrap(), b"verified archive");
 
@@ -198,6 +183,8 @@ mod tests {
             (cached_metadata.dev(), cached_metadata.ino()),
             (shared_metadata.dev(), shared_metadata.ino())
         );
+        assert_eq!(shared_metadata.mode() & 0o7777, 0o644);
+        assert_eq!(shared_metadata.mtime(), 1_700_000_000);
 
         fs::write(&build_visible, b"mutated by build").unwrap();
         assert_eq!(fs::read(&cached).unwrap(), b"verified archive");

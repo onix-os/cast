@@ -4,8 +4,8 @@
 use gluon_config::Source;
 use stone_recipe::build_policy::{
     AnalyzerKind, BuildPolicyConversionError, BuildToolSpec, ContextValue, EnvironmentBindingSpec,
-    EnvironmentCondition, SandboxDevPolicySpec, SandboxProcPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
-    TargetEmulationSpec, TextSpec, evaluate_gluon, evaluate_gluon_with_inputs,
+    EnvironmentCondition, SandboxDevPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec,
+    TextSpec, evaluate_gluon, evaluate_gluon_with_inputs,
 };
 
 fn repository_policy() -> Source {
@@ -56,7 +56,6 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(policy.pgo.copy_program, TextSpec::Literal("cp".to_owned()));
     assert_eq!(policy.pgo.remove_program, TextSpec::Literal("rm".to_owned()));
-    assert_eq!(policy.sandbox.filesystems.proc, SandboxProcPolicySpec::ReadOnly);
     assert_eq!(policy.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
     assert_eq!(policy.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
     assert_eq!(policy.sandbox.filesystems.dev, SandboxDevPolicySpec::Minimal);
@@ -80,25 +79,31 @@ fn evaluates_repository_build_policy_as_typed_data() {
 }
 
 #[test]
-fn restricted_filesystem_alternatives_are_valid_and_change_policy_identity() {
+fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
     let original = evaluate_gluon(&repository_policy()).unwrap();
-    let alternative_source = include_str!("../../../bin/boulder/data/policy/default.glu")
-        .replace(
-            "proc = p.sandbox_filesystems.proc.read_only",
-            "proc = p.sandbox_filesystems.proc.none",
-        )
-        .replace(
-            "dev = p.sandbox_filesystems.dev.minimal",
-            "dev = p.sandbox_filesystems.dev.none",
-        );
+    let alternative_source = include_str!("../../../bin/boulder/data/policy/default.glu").replace(
+        "dev = p.sandbox_filesystems.dev.minimal",
+        "dev = p.sandbox_filesystems.dev.none",
+    );
     let alternative = evaluate_gluon(&Source::new("bin/boulder/data/policy/default.glu", alternative_source)).unwrap();
 
-    assert_eq!(alternative.policy.sandbox.filesystems.proc, SandboxProcPolicySpec::None);
     assert_eq!(alternative.policy.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
     assert_eq!(alternative.policy.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
     assert_eq!(alternative.policy.sandbox.filesystems.dev, SandboxDevPolicySpec::None);
     alternative.policy.validate().unwrap();
     assert_ne!(original.fingerprint.sha256, alternative.fingerprint.sha256);
+}
+
+#[test]
+fn legacy_read_only_proc_selector_is_not_available() {
+    let legacy_source = include_str!("../../../bin/boulder/data/policy/default.glu").replace(
+        "tmp = p.sandbox_filesystems.tmp.empty",
+        "proc = p.sandbox_filesystems.proc.read_only,\n        tmp = p.sandbox_filesystems.tmp.empty",
+    );
+
+    let error = evaluate_gluon(&Source::new("bin/boulder/data/policy/default.glu", legacy_source)).unwrap_err();
+
+    assert!(error.to_string().contains("proc"));
 }
 
 #[test]
