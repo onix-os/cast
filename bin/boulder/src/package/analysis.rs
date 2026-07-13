@@ -11,6 +11,7 @@ use stone::{
     StoneDigestWriterHasher,
     relation::{Dependency, Provider},
 };
+use stone_recipe::build_policy::AnalyzerKind;
 use stone_recipe::derivation::AnalysisPlan;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
@@ -23,7 +24,7 @@ mod handler;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub struct Chain<'a> {
-    handlers: Vec<Box<dyn Handler>>,
+    handlers: Vec<HandlerEntry>,
     analysis: &'a AnalysisPlan,
     paths: &'a Paths,
     collector: &'a Collector,
@@ -39,17 +40,7 @@ impl<'a> Chain<'a> {
         hasher: &'a mut StoneDigestWriterHasher,
     ) -> Self {
         Self {
-            handlers: vec![
-                Box::new(handler::ignore_blocked),
-                Box::new(handler::binary),
-                Box::new(handler::elf),
-                Box::new(handler::pkg_config),
-                Box::new(handler::python),
-                Box::new(handler::cmake),
-                Box::new(handler::compressman),
-                // Catch-all if not excluded
-                Box::new(handler::include_any),
-            ],
+            handlers: analysis.handlers.iter().copied().map(HandlerEntry::new).collect(),
             paths,
             analysis,
             collector,
@@ -75,7 +66,7 @@ impl<'a> Chain<'a> {
         'paths: while let Some(mut path) = queue.pop_front() {
             pb.set_message(format!("Analyzing {}", path.target_path.display()));
 
-            'handlers: for handler in &self.handlers {
+            'handlers: for entry in &self.handlers {
                 let response = {
                     let bucket = self.buckets.entry(path.package.clone()).or_default();
                     // Only give handlers ability to update certain bucket
@@ -89,7 +80,7 @@ impl<'a> Chain<'a> {
                         paths: self.paths,
                     };
 
-                    handler.handle(&mut bucket_mut, &mut path)?
+                    entry.handler.handle(&mut bucket_mut, &mut path)?
                 };
 
                 response.generated_paths.into_iter().try_for_each(|path| {
@@ -144,6 +135,32 @@ impl<'a> Chain<'a> {
         println!();
 
         Ok(())
+    }
+}
+
+struct HandlerEntry {
+    #[cfg(test)]
+    kind: AnalyzerKind,
+    handler: Box<dyn Handler>,
+}
+
+impl HandlerEntry {
+    fn new(kind: AnalyzerKind) -> Self {
+        let handler: Box<dyn Handler> = match kind {
+            AnalyzerKind::IgnoreBlocked => Box::new(handler::ignore_blocked),
+            AnalyzerKind::Binary => Box::new(handler::binary),
+            AnalyzerKind::Elf => Box::new(handler::elf),
+            AnalyzerKind::PkgConfig => Box::new(handler::pkg_config),
+            AnalyzerKind::Python => Box::new(handler::python),
+            AnalyzerKind::CMake => Box::new(handler::cmake),
+            AnalyzerKind::CompressMan => Box::new(handler::compressman),
+            AnalyzerKind::IncludeAny => Box::new(handler::include_any),
+        };
+        Self {
+            #[cfg(test)]
+            kind,
+            handler,
+        }
     }
 }
 
@@ -260,7 +277,10 @@ mod tests {
         let original = collector.path(&original, &mut hasher).unwrap();
         assert_eq!(original.package, "root-output");
         let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
-        chain.handlers = vec![Box::new(ReplaceWith(replacement))];
+        chain.handlers = vec![HandlerEntry {
+            kind: AnalyzerKind::IncludeAny,
+            handler: Box::new(ReplaceWith(replacement)),
+        }];
 
         chain.process([original]).unwrap();
 
@@ -270,5 +290,59 @@ mod tests {
             chain.buckets["replacement-output"].paths[0].target_path,
             Path::new("/replacement")
         );
+    }
+
+    #[test]
+    fn chain_uses_only_the_declared_handlers_in_exact_order() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let install = tempfile::tempdir().unwrap();
+        let collector = Collector::new(install.path());
+        let mut hasher = StoneDigestWriterHasher::new();
+
+        let all = vec![
+            AnalyzerKind::IgnoreBlocked,
+            AnalyzerKind::Binary,
+            AnalyzerKind::Elf,
+            AnalyzerKind::PkgConfig,
+            AnalyzerKind::Python,
+            AnalyzerKind::CMake,
+            AnalyzerKind::CompressMan,
+            AnalyzerKind::IncludeAny,
+        ];
+        plan.analysis.handlers = all.clone();
+        let chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        assert_eq!(chain.handlers.iter().map(|entry| entry.kind).collect::<Vec<_>>(), all);
+        assert_eq!(chain.handlers.len(), plan.analysis.handlers.len());
+        drop(chain);
+
+        let first = vec![
+            AnalyzerKind::IgnoreBlocked,
+            AnalyzerKind::CMake,
+            AnalyzerKind::IncludeAny,
+        ];
+        plan.analysis.handlers = first.clone();
+        let chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        assert_eq!(chain.handlers.iter().map(|entry| entry.kind).collect::<Vec<_>>(), first);
+        assert_eq!(chain.handlers.len(), plan.analysis.handlers.len());
+        drop(chain);
+
+        let second = vec![
+            AnalyzerKind::CMake,
+            AnalyzerKind::IgnoreBlocked,
+            AnalyzerKind::IncludeAny,
+        ];
+        plan.analysis.handlers = second.clone();
+        let chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        assert_eq!(
+            chain.handlers.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
+            second
+        );
+        assert_eq!(chain.handlers.len(), plan.analysis.handlers.len());
+        assert_ne!(first, second);
     }
 }
