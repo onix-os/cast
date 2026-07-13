@@ -357,7 +357,6 @@ struct GluonSourcePreparationPolicySpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonStandardBuilderPolicySpec {
-    required_tools: Vec<GluonBuildToolSpec>,
     environment: Vec<GluonEnvironmentBindingSpec>,
     setup: GluonBuilderCommandSpec,
     build: GluonBuilderCommandSpec,
@@ -790,7 +789,6 @@ impl From<GluonGitPreparationPolicySpec> for GitPreparationPolicySpec {
 impl From<GluonStandardBuilderPolicySpec> for StandardBuilderPolicySpec {
     fn from(value: GluonStandardBuilderPolicySpec) -> Self {
         Self {
-            required_tools: value.required_tools.into_iter().map(Into::into).collect(),
             environment: value.environment.into_iter().map(Into::into).collect(),
             setup: value.setup.into(),
             build: value.build.into(),

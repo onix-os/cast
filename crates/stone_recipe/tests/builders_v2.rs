@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use gluon_config::Source;
-use stone_recipe::package::{DependencySpec, StepSpec, evaluate_gluon};
+use stone_recipe::package::{BuilderEnvironmentSpec, DependencySpec, StepSpec, SupportedHooksSpec, evaluate_gluon};
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
     dependencies
@@ -31,7 +31,7 @@ let base = b.mk_package (b.meta {{
 }
 
 #[test]
-fn meson_builder_keeps_policy_tools_out_of_package_defaults() {
+fn meson_builder_returns_tools_environment_phases_and_hooks() {
     let source = package(
         "boulder.builders.meson.v1",
         r#"builder.builder {
@@ -41,7 +41,12 @@ fn meson_builder_keeps_policy_tools_out_of_package_defaults() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert!(evaluated.package.builder.authored_required_tools().is_empty());
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(cmake)", "binary(meson)", "binary(ninja)", "binary(pkgconf)"]
+    );
+    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Meson]);
+    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -62,7 +67,7 @@ fn meson_builder_keeps_policy_tools_out_of_package_defaults() {
 }
 
 #[test]
-fn cmake_builder_declares_structural_steps() {
+fn cmake_builder_returns_tools_environment_phases_and_hooks() {
     let source = package(
         "boulder.builders.cmake.v1",
         r#"builder.builder {
@@ -72,7 +77,12 @@ fn cmake_builder_declares_structural_steps() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert!(evaluated.package.builder.authored_required_tools().is_empty());
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
+    );
+    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
+    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -97,7 +107,12 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert!(evaluated.package.builder.authored_required_tools().is_empty());
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(cargo)"]
+    );
+    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Cargo]);
+    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.build.steps,
@@ -112,7 +127,6 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
         }]
     );
     assert!(matches!(phases.check.steps.as_slice(), [StepSpec::CargoTest { .. }]));
-    assert_eq!(phases.environment.steps, [StepSpec::CargoEnvironment]);
 }
 
 #[test]
@@ -126,7 +140,15 @@ fn autotools_builder_declares_structural_phase_contract() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert!(evaluated.package.builder.authored_required_tools().is_empty());
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(autoconf)", "binary(automake)", "binary(make)"]
+    );
+    assert_eq!(
+        evaluated.package.builder.environment,
+        [BuilderEnvironmentSpec::Autotools]
+    );
+    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -171,9 +193,11 @@ let scripts = b.scripts {
     let evaluated = evaluate_gluon(&source).unwrap();
 
     assert_eq!(
-        dependency_names(evaluated.package.builder.authored_required_tools()),
+        dependency_names(evaluated.package.builder.required_tools()),
         ["binary(zig)"]
     );
+    assert!(evaluated.package.builder.environment.is_empty());
+    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.build.steps,
@@ -196,5 +220,4 @@ let scripts = b.scripts {
                 .to_owned()
         }]
     );
-    assert!(phases.environment.steps.is_empty());
 }

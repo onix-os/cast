@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
-use stone_recipe::package::{PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
+use stone_recipe::package::{BuilderSpec, PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
 
 use crate::source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock};
@@ -118,6 +118,12 @@ impl Recipe {
     pub fn build_target_profile(&self, target: &TargetPolicySpec) -> Option<&ProfileSpec> {
         let key = self.build_target_profile_key(target)?;
         self.declaration.profiles.iter().find(|profile| profile.name == key)
+    }
+
+    /// Select the structural package-v2 builder for one target.
+    pub fn build_target_builder(&self, target: &TargetPolicySpec) -> &BuilderSpec {
+        self.declaration
+            .builder_for_profile(self.build_target_profile_key(target))
     }
 
     /// Select the structural package-v2 phases for one target.

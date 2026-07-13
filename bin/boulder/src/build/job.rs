@@ -39,12 +39,20 @@ impl Job {
         let build_dir = paths.build().guest.join(&target.name);
         let work_dir = work_dir(&build_dir, &recipe.declaration.sources);
 
+        let plan_context = phase::PlanContext {
+            target,
+            pgo_stage,
+            recipe,
+            paths,
+            policy,
+            compiler_cache: ccache,
+            jobs,
+        };
+
         let phases = phase::list(pgo_stage)
             .into_iter()
             .filter_map(|phase| {
-                let result = phase
-                    .plan(target, pgo_stage, recipe, paths, policy, ccache, jobs)
-                    .transpose()?;
+                let result = phase.plan(&plan_context).transpose()?;
                 Some(result.map(|plan| (phase, plan)))
             })
             .collect::<Result<_, _>>()?;
@@ -107,8 +115,6 @@ pub enum Error {
     Context(#[from] crate::build::context::ContextError),
     #[error("build policy")]
     BuildPolicy(#[from] crate::policy::Error),
-    #[error("an environment phase may only contain CargoEnvironment markers")]
-    UnsupportedEnvironmentStep,
     #[error("PGO path {path:?} must be normalized and remain beneath {pgo_dir:?}")]
     UnsafePgoPath { path: String, pgo_dir: String },
     #[error("io")]

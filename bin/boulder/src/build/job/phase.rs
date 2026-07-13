@@ -11,7 +11,7 @@ use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
     build_policy::{CompilerFlagsSpec, ContextValue, TargetPolicySpec, TextSpec},
     derivation::{PhasePlan, StepPlan},
-    package::{PhaseSpec, StepSpec},
+    package::{BuilderEnvironmentSpec, PhaseSpec, StepSpec},
 };
 use tui::Styled;
 
@@ -39,6 +39,16 @@ pub enum Phase {
     Install,
     Check,
     Workload,
+}
+
+pub(super) struct PlanContext<'a> {
+    pub target: &'a TargetPolicySpec,
+    pub pgo_stage: Option<pgo::Stage>,
+    pub recipe: &'a Recipe,
+    pub paths: &'a Paths,
+    pub policy: &'a BuildPolicy,
+    pub compiler_cache: bool,
+    pub jobs: NonZeroUsize,
 }
 
 impl Phase {
@@ -72,16 +82,16 @@ impl Phase {
         .to_string()
     }
 
-    pub fn plan(
-        &self,
-        target: &TargetPolicySpec,
-        pgo_stage: Option<pgo::Stage>,
-        recipe: &Recipe,
-        paths: &Paths,
-        policy: &BuildPolicy,
-        ccache: bool,
-        num_jobs: NonZeroUsize,
-    ) -> Result<Option<PhasePlan>, Error> {
+    pub(super) fn plan(&self, request: &PlanContext<'_>) -> Result<Option<PhasePlan>, Error> {
+        let PlanContext {
+            target,
+            pgo_stage,
+            recipe,
+            paths,
+            policy,
+            compiler_cache,
+            jobs,
+        } = *request;
         let typed_phases = recipe.build_target_phases(target);
         let typed_phase = match self {
             Phase::Prepare => PhaseSpec::default(),
@@ -117,23 +127,23 @@ impl Phase {
                 build_root: build_dir.display().to_string(),
                 work_dir: work_dir.display().to_string(),
                 pgo_dir: format!("{}-pgo", build_dir.display()),
-                jobs: u32::try_from(num_jobs.get()).expect("supported jobs fit u32"),
+                jobs: u32::try_from(jobs.get()).expect("supported jobs fit u32"),
                 source_date_epoch: recipe.build_time.timestamp(),
                 pgo_stage: pgo_context_stage(pgo_stage),
                 toolchain: recipe.declaration.options.toolchain,
-                compiler_cache_enabled: ccache,
+                compiler_cache_enabled: compiler_cache,
                 mold_enabled: recipe.declaration.mold,
                 flags,
             },
         )?;
-        validate_environment_steps(&typed_phases.environment)?;
-        if typed_phases
-            .environment
-            .steps
-            .iter()
-            .any(|step| matches!(step, StepSpec::CargoEnvironment))
-        {
-            context.extend_environment(&policy.spec.builders.cargo.environment)?;
+        for environment in &recipe.build_target_builder(target).environment {
+            let bindings = match environment {
+                BuilderEnvironmentSpec::CMake => &policy.spec.builders.cmake.environment,
+                BuilderEnvironmentSpec::Meson => &policy.spec.builders.meson.environment,
+                BuilderEnvironmentSpec::Cargo => &policy.spec.builders.cargo.environment,
+                BuilderEnvironmentSpec::Autotools => &policy.spec.builders.autotools.environment,
+            };
+            context.extend_environment(bindings)?;
         }
         let working_dir = if matches!(self, Phase::Prepare) {
             build_dir.display().to_string()
@@ -163,18 +173,6 @@ impl Phase {
     }
 }
 
-fn validate_environment_steps(phase: &PhaseSpec) -> Result<(), Error> {
-    if phase
-        .steps
-        .iter()
-        .all(|step| matches!(step, StepSpec::CargoEnvironment))
-    {
-        Ok(())
-    } else {
-        Err(Error::UnsupportedEnvironmentStep)
-    }
-}
-
 fn compile_steps(phase: &PhaseSpec, context: &BuildContext, working_dir: &str) -> Result<Vec<StepPlan>, Error> {
     let mut steps = Vec::with_capacity(phase.steps.len());
     for step in &phase.steps {
@@ -182,7 +180,6 @@ fn compile_steps(phase: &PhaseSpec, context: &BuildContext, working_dir: &str) -
             StepSpec::Shell { script } => {
                 steps.push(literal_shell(script.clone(), &context.environment, working_dir));
             }
-            StepSpec::CargoEnvironment => {}
             _ => {
                 if let Some(step) = context.resolve_standard_step(step)? {
                     steps.push(step);
@@ -415,8 +412,9 @@ mod direct_tests {
     use chrono::DateTime;
     use std::path::Path;
     use stone_recipe::{
+        build_policy::{EnvironmentBindingSpec, EnvironmentCondition},
         derivation::StepPlan,
-        package::{BuilderSpec, PhaseSpec, ScriptsSpec, StepSpec},
+        package::{BuilderEnvironmentSpec, BuilderSpec, PhaseSpec, PhasesSpec, StepSpec, SupportedHooksSpec},
     };
 
     use super::*;
@@ -470,22 +468,29 @@ mod direct_tests {
     #[test]
     fn standard_steps_freeze_as_run_with_exact_context() {
         let (mut recipe, policy, root) = fixture();
-        recipe.declaration.builder = BuilderSpec::CMake {
-            flags: vec!["-DBUILD_TESTS=OFF".to_owned()],
-            run_tests: false,
+        recipe.declaration.builder = BuilderSpec {
+            required_tools: Vec::new(),
+            environment: vec![BuilderEnvironmentSpec::CMake],
+            phases: PhasesSpec {
+                setup: PhaseSpec::new([StepSpec::CMakeConfigure {
+                    flags: vec!["-DBUILD_TESTS=OFF".to_owned()],
+                }]),
+                ..PhasesSpec::default()
+            },
+            supported_hooks: SupportedHooksSpec::all(),
         };
         let paths = test_paths(&recipe, &policy, root.path());
         let target = policy.target("x86_64").unwrap();
         let plan = Phase::Setup
-            .plan(
+            .plan(&PlanContext {
                 target,
-                None,
-                &recipe,
-                &paths,
-                &policy,
-                false,
-                NonZeroUsize::new(3).unwrap(),
-            )
+                pgo_stage: None,
+                recipe: &recipe,
+                paths: &paths,
+                policy: &policy,
+                compiler_cache: false,
+                jobs: NonZeroUsize::new(3).unwrap(),
+            })
             .unwrap()
             .unwrap();
         let StepPlan::Run {
@@ -509,33 +514,86 @@ mod direct_tests {
     fn authored_shell_percent_text_is_literal() {
         let (mut recipe, policy, root) = fixture();
         let literal = "%cargo_fetch $BOULDER_INSTALL_ROOT %(jobs)";
-        recipe.declaration.builder = BuilderSpec::Custom {
-            scripts: ScriptsSpec {
+        recipe.declaration.builder = BuilderSpec {
+            required_tools: Vec::new(),
+            environment: Vec::new(),
+            phases: PhasesSpec {
                 build: PhaseSpec::new([StepSpec::Shell {
                     script: literal.to_owned(),
                 }]),
-                ..ScriptsSpec::default()
+                ..PhasesSpec::default()
             },
-            required_tools: Vec::new(),
+            supported_hooks: SupportedHooksSpec::all(),
         };
         let paths = test_paths(&recipe, &policy, root.path());
         let target = policy.target("x86_64").unwrap();
         let plan = Phase::Build
-            .plan(
+            .plan(&PlanContext {
                 target,
-                None,
-                &recipe,
-                &paths,
-                &policy,
-                false,
-                NonZeroUsize::new(2).unwrap(),
-            )
+                pgo_stage: None,
+                recipe: &recipe,
+                paths: &paths,
+                policy: &policy,
+                compiler_cache: false,
+                jobs: NonZeroUsize::new(2).unwrap(),
+            })
             .unwrap()
             .unwrap();
         let StepPlan::Shell { script, .. } = &plan.steps[0] else {
             panic!("explicit shell must stay shell")
         };
         assert_eq!(script, literal);
+    }
+
+    #[test]
+    fn selected_builder_environment_markers_apply_in_declared_order() {
+        let (mut recipe, mut policy, root) = fixture();
+        let binding = |name: &str, value: &str| EnvironmentBindingSpec {
+            name: name.to_owned(),
+            value: TextSpec::Literal(value.to_owned()),
+            condition: EnvironmentCondition::Always,
+        };
+        policy.spec.builders.cmake.environment = vec![
+            binding("BUILDER_ENVIRONMENT_ORDER", "cmake"),
+            binding("CMAKE_MARKER", "present"),
+        ];
+        policy.spec.builders.cargo.environment = vec![
+            binding("BUILDER_ENVIRONMENT_ORDER", "cargo"),
+            binding("CARGO_MARKER", "present"),
+        ];
+        recipe.declaration.builder = BuilderSpec {
+            required_tools: Vec::new(),
+            environment: vec![BuilderEnvironmentSpec::CMake, BuilderEnvironmentSpec::Cargo],
+            phases: PhasesSpec {
+                build: PhaseSpec::new([StepSpec::Shell {
+                    script: "true".to_owned(),
+                }]),
+                ..PhasesSpec::default()
+            },
+            supported_hooks: SupportedHooksSpec::all(),
+        };
+
+        let paths = test_paths(&recipe, &policy, root.path());
+        let target = policy.target("x86_64").unwrap();
+        let plan = Phase::Build
+            .plan(&PlanContext {
+                target,
+                pgo_stage: None,
+                recipe: &recipe,
+                paths: &paths,
+                policy: &policy,
+                compiler_cache: false,
+                jobs: NonZeroUsize::new(2).unwrap(),
+            })
+            .unwrap()
+            .unwrap();
+        let StepPlan::Shell { environment, .. } = &plan.steps[0] else {
+            panic!("explicit shell must stay shell")
+        };
+
+        assert_eq!(environment["BUILDER_ENVIRONMENT_ORDER"], "cargo");
+        assert_eq!(environment["CMAKE_MARKER"], "present");
+        assert_eq!(environment["CARGO_MARKER"], "present");
     }
 
     #[test]

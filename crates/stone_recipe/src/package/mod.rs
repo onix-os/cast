@@ -67,7 +67,6 @@ pub enum StepSpec {
     MesonBuild,
     MesonInstall,
     MesonTest,
-    CargoEnvironment,
     CargoFetch,
     CargoBuild { features: Vec<String> },
     CargoInstall { binaries: Vec<String> },
@@ -104,18 +103,6 @@ pub struct PhasesSpec {
     pub install: PhaseSpec,
     pub check: PhaseSpec,
     pub workload: PhaseSpec,
-    pub environment: PhaseSpec,
-}
-
-/// Explicit custom phase definitions.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ScriptsSpec {
-    pub setup: PhaseSpec,
-    pub build: PhaseSpec,
-    pub install: PhaseSpec,
-    pub check: PhaseSpec,
-    pub workload: PhaseSpec,
-    pub environment: PhaseSpec,
 }
 
 /// Commands inserted around builder-owned phase bodies.
@@ -131,44 +118,59 @@ pub struct HooksSpec {
     pub post_install: Vec<StepSpec>,
     pub pre_workload: Vec<StepSpec>,
     pub post_workload: Vec<StepSpec>,
-    pub environment: Vec<StepSpec>,
 }
 
-/// A structural build-system selection.
+/// One repository-owned environment layer selected by a pure builder module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BuilderEnvironmentSpec {
+    CMake,
+    Meson,
+    Cargo,
+    Autotools,
+}
+
+/// Hook phases accepted by one structural builder contract.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SupportedHooksSpec {
+    pub setup: bool,
+    pub build: bool,
+    pub check: bool,
+    pub install: bool,
+    pub workload: bool,
+}
+
+impl SupportedHooksSpec {
+    pub const fn all() -> Self {
+        Self {
+            setup: true,
+            build: true,
+            check: true,
+            install: true,
+            workload: true,
+        }
+    }
+}
+
+/// A completely structural build contract returned by a pure Gluon module.
 ///
-/// Standard variants select repository-owned typed builder policy, which owns
-/// their commands, environment, and tools. [`Self::Custom`] is the explicit
-/// shell escape hatch and therefore carries its package-authored tools here.
+/// The module owns phase membership, symbolic tool capabilities, environment
+/// selection, and the supported hook surface. Repository policy remains the
+/// sole owner of the typed commands and bindings selected by these markers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BuilderSpec {
-    CMake {
-        flags: Vec<String>,
-        run_tests: bool,
-    },
-    Meson {
-        flags: Vec<String>,
-        run_tests: bool,
-    },
-    Cargo {
-        features: Vec<String>,
-        binaries: Vec<String>,
-        run_tests: bool,
-    },
-    Autotools {
-        flags: Vec<String>,
-        run_tests: bool,
-    },
-    Custom {
-        scripts: ScriptsSpec,
-        required_tools: Vec<DependencySpec>,
-    },
+pub struct BuilderSpec {
+    pub required_tools: Vec<DependencySpec>,
+    pub environment: Vec<BuilderEnvironmentSpec>,
+    pub phases: PhasesSpec,
+    pub supported_hooks: SupportedHooksSpec,
 }
 
 impl Default for BuilderSpec {
     fn default() -> Self {
-        Self::Custom {
-            scripts: ScriptsSpec::default(),
+        Self {
             required_tools: Vec::new(),
+            environment: Vec::new(),
+            phases: PhasesSpec::default(),
+            supported_hooks: SupportedHooksSpec::all(),
         }
     }
 }
@@ -328,6 +330,13 @@ pub enum PackageConversionError {
     },
     #[error("{field}: package output dependency cycle: {cycle}")]
     OutputDependencyCycle { field: String, cycle: String },
+    #[error("{field}: duplicate builder environment marker `{environment:?}`")]
+    DuplicateBuilderEnvironment {
+        field: String,
+        environment: BuilderEnvironmentSpec,
+    },
+    #[error("{field}: hook is not supported by the selected builder")]
+    UnsupportedBuilderHook { field: String },
 }
 
 impl PackageConversionError {
@@ -340,7 +349,9 @@ impl PackageConversionError {
             | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
             | Self::MissingOutputReference { field, .. }
-            | Self::OutputDependencyCycle { field, .. } => field,
+            | Self::OutputDependencyCycle { field, .. }
+            | Self::DuplicateBuilderEnvironment { field, .. }
+            | Self::UnsupportedBuilderHook { field } => field,
             Self::MissingRootOutput => "outputs",
             Self::DuplicateOutput { .. } | Self::InvalidOutputName { .. } => "outputs",
         }
@@ -385,6 +396,16 @@ impl PackageSpec {
             }
         }
 
+        Self::validate_builder_contract(&self.builder, &self.hooks, "builder", "hooks")?;
+        for (index, profile) in self.profiles.iter().enumerate() {
+            Self::validate_builder_contract(
+                &profile.builder,
+                &profile.hooks,
+                &format!("profiles[{index}].builder"),
+                &format!("profiles[{index}].hooks"),
+            )?;
+        }
+
         self.validate_relations()
     }
 
@@ -417,9 +438,9 @@ impl PackageSpec {
             .phases(self.hooks_for_profile(profile))
     }
 
-    /// Select target-native build inputs for one optional profile. Standard
-    /// builder tools live in repository policy; custom tools remain available
-    /// through [`BuilderSpec::authored_required_tools`].
+    /// Select target-native build inputs for one optional profile. Builder
+    /// capability requirements remain available on the selected
+    /// [`BuilderSpec`] and are resolved alongside these package inputs.
     pub fn native_build_inputs_for_profile(&self, profile: Option<&str>) -> &[DependencySpec] {
         self.selected_profile(profile)
             .map_or(&self.native_build_inputs, |profile| &profile.native_build_inputs)
@@ -439,6 +460,72 @@ impl PackageSpec {
 
     fn selected_profile(&self, profile: Option<&str>) -> Option<&ProfileSpec> {
         profile.and_then(|name| self.profile(name))
+    }
+
+    fn validate_builder_contract(
+        builder: &BuilderSpec,
+        hooks: &HooksSpec,
+        builder_field: &str,
+        hooks_field: &str,
+    ) -> Result<(), PackageConversionError> {
+        let mut environments = BTreeSet::new();
+        for (index, environment) in builder.environment.iter().copied().enumerate() {
+            if !environments.insert(environment) {
+                return Err(PackageConversionError::DuplicateBuilderEnvironment {
+                    field: format!("{builder_field}.environment[{index}]"),
+                    environment,
+                });
+            }
+        }
+
+        for (field, supported, populated) in [
+            ("pre_setup", builder.supported_hooks.setup, !hooks.pre_setup.is_empty()),
+            (
+                "post_setup",
+                builder.supported_hooks.setup,
+                !hooks.post_setup.is_empty(),
+            ),
+            ("pre_build", builder.supported_hooks.build, !hooks.pre_build.is_empty()),
+            (
+                "post_build",
+                builder.supported_hooks.build,
+                !hooks.post_build.is_empty(),
+            ),
+            ("pre_check", builder.supported_hooks.check, !hooks.pre_check.is_empty()),
+            (
+                "post_check",
+                builder.supported_hooks.check,
+                !hooks.post_check.is_empty(),
+            ),
+            (
+                "pre_install",
+                builder.supported_hooks.install,
+                !hooks.pre_install.is_empty(),
+            ),
+            (
+                "post_install",
+                builder.supported_hooks.install,
+                !hooks.post_install.is_empty(),
+            ),
+            (
+                "pre_workload",
+                builder.supported_hooks.workload,
+                !hooks.pre_workload.is_empty(),
+            ),
+            (
+                "post_workload",
+                builder.supported_hooks.workload,
+                !hooks.post_workload.is_empty(),
+            ),
+        ] {
+            if populated && !supported {
+                return Err(PackageConversionError::UnsupportedBuilderHook {
+                    field: format!("{hooks_field}.{field}"),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     fn validate_relations(&self) -> Result<(), PackageConversionError> {
@@ -464,17 +551,12 @@ impl PackageSpec {
         self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, false)?;
-        self.validate_dependency_list(
-            self.builder.authored_required_tools(),
-            "builder.required_tools",
-            &outputs,
-            false,
-        )?;
+        self.validate_dependency_list(&self.builder.required_tools, "builder.required_tools", &outputs, false)?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
             let parent = format!("profiles[{index}]");
             self.validate_dependency_list(
-                profile.builder.authored_required_tools(),
+                &profile.builder.required_tools,
                 &format!("{parent}.builder.required_tools"),
                 &outputs,
                 false,
@@ -629,56 +711,12 @@ fn valid_output_name(name: &str) -> bool {
 }
 
 impl BuilderSpec {
-    /// Package-authored tools for the explicit custom-builder escape hatch.
-    ///
-    /// Standard builder tools are repository policy and deliberately have no
-    /// duplicate Rust defaults in the package domain.
-    pub fn authored_required_tools(&self) -> &[DependencySpec] {
-        match self {
-            Self::Custom { required_tools, .. } => required_tools,
-            Self::CMake { .. } | Self::Meson { .. } | Self::Cargo { .. } | Self::Autotools { .. } => &[],
-        }
+    pub fn required_tools(&self) -> &[DependencySpec] {
+        &self.required_tools
     }
 
     pub fn phases(&self, hooks: &HooksSpec) -> PhasesSpec {
-        let phases = match self.clone() {
-            Self::CMake { flags, run_tests } => PhasesSpec {
-                setup: PhaseSpec::new([StepSpec::CMakeConfigure { flags }]),
-                build: PhaseSpec::new([StepSpec::CMakeBuild]),
-                install: PhaseSpec::new([StepSpec::CMakeInstall]),
-                check: PhaseSpec::new(run_tests.then_some(StepSpec::CMakeTest)),
-                ..PhasesSpec::default()
-            },
-            Self::Meson { flags, run_tests } => PhasesSpec {
-                setup: PhaseSpec::new([StepSpec::MesonSetup { flags }]),
-                build: PhaseSpec::new([StepSpec::MesonBuild]),
-                install: PhaseSpec::new([StepSpec::MesonInstall]),
-                check: PhaseSpec::new(run_tests.then_some(StepSpec::MesonTest)),
-                ..PhasesSpec::default()
-            },
-            Self::Cargo {
-                features,
-                binaries,
-                run_tests,
-            } => PhasesSpec {
-                build: PhaseSpec::new([StepSpec::CargoBuild {
-                    features: features.clone(),
-                }]),
-                install: PhaseSpec::new([StepSpec::CargoInstall { binaries }]),
-                check: PhaseSpec::new(run_tests.then_some(StepSpec::CargoTest { features })),
-                environment: PhaseSpec::new([StepSpec::CargoEnvironment]),
-                ..PhasesSpec::default()
-            },
-            Self::Autotools { flags, run_tests } => PhasesSpec {
-                setup: PhaseSpec::new([StepSpec::AutotoolsConfigure { flags }]),
-                build: PhaseSpec::new([StepSpec::AutotoolsBuild]),
-                install: PhaseSpec::new([StepSpec::AutotoolsInstall]),
-                check: PhaseSpec::new(run_tests.then_some(StepSpec::AutotoolsTest)),
-                ..PhasesSpec::default()
-            },
-            Self::Custom { scripts, .. } => scripts.into(),
-        };
-        hooks.clone().apply(phases)
+        hooks.clone().apply(self.phases.clone())
     }
 }
 
@@ -690,26 +728,12 @@ impl HooksSpec {
             check: phase_with_hooks(self.pre_check, phases.check, self.post_check),
             install: phase_with_hooks(self.pre_install, phases.install, self.post_install),
             workload: phase_with_hooks(self.pre_workload, phases.workload, self.post_workload),
-            environment: phase_with_hooks(Vec::new(), phases.environment, self.environment),
         }
     }
 }
 
 fn phase_with_hooks(pre: Vec<StepSpec>, body: PhaseSpec, post: Vec<StepSpec>) -> PhaseSpec {
     PhaseSpec::new(pre.into_iter().chain(body.steps).chain(post))
-}
-
-impl From<ScriptsSpec> for PhasesSpec {
-    fn from(scripts: ScriptsSpec) -> Self {
-        Self {
-            setup: scripts.setup,
-            build: scripts.build,
-            install: scripts.install,
-            check: scripts.check,
-            workload: scripts.workload,
-            environment: scripts.environment,
-        }
-    }
 }
 
 impl ProfileSpec {
@@ -724,6 +748,19 @@ mod tests {
 
     fn dependency(name: &str) -> DependencySpec {
         DependencySpec::Package(PackageRef { name: name.to_owned() })
+    }
+
+    fn structural_builder(
+        environment: BuilderEnvironmentSpec,
+        required_tools: Vec<DependencySpec>,
+        phases: PhasesSpec,
+    ) -> BuilderSpec {
+        BuilderSpec {
+            required_tools,
+            environment: vec![environment],
+            phases,
+            supported_hooks: SupportedHooksSpec::all(),
+        }
     }
 
     fn package() -> PackageSpec {
@@ -807,20 +844,39 @@ mod tests {
     #[test]
     fn base_and_selected_profile_semantics_stay_structural() {
         let mut package = package();
-        package.builder = BuilderSpec::CMake {
-            flags: vec!["-DBASE=ON".to_owned()],
-            run_tests: false,
-        };
+        package.builder = structural_builder(
+            BuilderEnvironmentSpec::CMake,
+            vec![DependencySpec::Binary("cmake".to_owned())],
+            PhasesSpec {
+                setup: PhaseSpec::new([StepSpec::CMakeConfigure {
+                    flags: vec!["-DBASE=ON".to_owned()],
+                }]),
+                build: PhaseSpec::new([StepSpec::CMakeBuild]),
+                install: PhaseSpec::new([StepSpec::CMakeInstall]),
+                ..PhasesSpec::default()
+            },
+        );
         package.native_build_inputs = vec![dependency("base-native")];
         package.build_inputs = vec![dependency("base-build")];
         package.check_inputs = vec![dependency("base-check")];
         package.profiles.push(ProfileSpec {
             name: "emul32/x86_64".to_owned(),
-            builder: BuilderSpec::Cargo {
-                features: vec!["profile".to_owned()],
-                binaries: vec!["example".to_owned()],
-                run_tests: true,
-            },
+            builder: structural_builder(
+                BuilderEnvironmentSpec::Cargo,
+                vec![DependencySpec::Binary("cargo".to_owned())],
+                PhasesSpec {
+                    build: PhaseSpec::new([StepSpec::CargoBuild {
+                        features: vec!["profile".to_owned()],
+                    }]),
+                    install: PhaseSpec::new([StepSpec::CargoInstall {
+                        binaries: vec!["example".to_owned()],
+                    }]),
+                    check: PhaseSpec::new([StepSpec::CargoTest {
+                        features: vec!["profile".to_owned()],
+                    }]),
+                    ..PhasesSpec::default()
+                },
+            ),
             hooks: HooksSpec {
                 pre_build: vec![StepSpec::Shell {
                     script: "prepare-profile".to_owned(),
@@ -832,17 +888,21 @@ mod tests {
             check_inputs: vec![dependency("profile-check")],
         });
 
-        assert!(matches!(package.builder_for_profile(None), BuilderSpec::CMake { .. }));
-        assert!(package.builder_for_profile(None).authored_required_tools().is_empty());
-        assert!(matches!(
-            package.builder_for_profile(Some("emul32/x86_64")),
-            BuilderSpec::Cargo { .. }
-        ));
-        assert!(
-            package
-                .builder_for_profile(Some("emul32/x86_64"))
-                .authored_required_tools()
-                .is_empty()
+        assert_eq!(
+            package.builder_for_profile(None).environment,
+            [BuilderEnvironmentSpec::CMake]
+        );
+        assert_eq!(
+            package.builder_for_profile(None).required_tools(),
+            [DependencySpec::Binary("cmake".to_owned())]
+        );
+        assert_eq!(
+            package.builder_for_profile(Some("emul32/x86_64")).environment,
+            [BuilderEnvironmentSpec::Cargo]
+        );
+        assert_eq!(
+            package.builder_for_profile(Some("emul32/x86_64")).required_tools(),
+            [DependencySpec::Binary("cargo".to_owned())]
         );
         assert_eq!(
             package.phases_for_profile(Some("emul32/x86_64")).build.steps,
@@ -867,10 +927,10 @@ mod tests {
             package.check_inputs_for_profile(Some("emul32/x86_64")),
             [dependency("profile-check")]
         );
-        assert!(matches!(
-            package.builder_for_profile(Some("missing")),
-            BuilderSpec::CMake { .. }
-        ));
+        assert_eq!(
+            package.builder_for_profile(Some("missing")).environment,
+            [BuilderEnvironmentSpec::CMake]
+        );
     }
 
     #[test]
@@ -932,9 +992,9 @@ mod tests {
         let mut spec = package();
         spec.profiles.push(ProfileSpec {
             name: "native".to_owned(),
-            builder: BuilderSpec::Custom {
-                scripts: ScriptsSpec::default(),
+            builder: BuilderSpec {
                 required_tools: vec![invalid.clone()],
+                ..BuilderSpec::default()
             },
             hooks: HooksSpec::default(),
             native_build_inputs: Vec::new(),
@@ -945,6 +1005,27 @@ mod tests {
             spec.validate().unwrap_err().field(),
             "profiles[0].builder.required_tools[0]"
         );
+    }
+
+    #[test]
+    fn builder_contract_rejects_duplicate_environments_and_unsupported_hooks() {
+        let mut duplicate = package();
+        duplicate.builder.environment = vec![BuilderEnvironmentSpec::Cargo, BuilderEnvironmentSpec::Cargo];
+        let error = duplicate.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::DuplicateBuilderEnvironment { .. }
+        ));
+        assert_eq!(error.field(), "builder.environment[1]");
+
+        let mut unsupported = package();
+        unsupported.builder.supported_hooks.build = false;
+        unsupported.hooks.pre_build = vec![StepSpec::Shell {
+            script: "prepare".to_owned(),
+        }];
+        let error = unsupported.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::UnsupportedBuilderHook { .. }));
+        assert_eq!(error.field(), "hooks.pre_build");
     }
 
     #[test]

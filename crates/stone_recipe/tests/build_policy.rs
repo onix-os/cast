@@ -32,14 +32,6 @@ fn evaluates_repository_build_policy_as_typed_data() {
     assert_eq!(policy.targets[0].target_triple, "x86_64-unknown-linux-gnu");
     assert_eq!(policy.targets[2].lib_suffix, "32");
     assert_eq!(
-        policy.builders.cmake.required_tools,
-        [
-            BuildToolSpec::Binary("cmake".to_owned()),
-            BuildToolSpec::Binary("ninja".to_owned()),
-            BuildToolSpec::Binary("ctest".to_owned()),
-        ]
-    );
-    assert_eq!(
         policy.builders.cmake.setup.program,
         TextSpec::Literal("cmake".to_owned())
     );

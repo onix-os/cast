@@ -92,8 +92,10 @@ Deliberately unsupported:
   relation model. Authored packages do not carry provider strings.
 - Separates native build, target build, check, and output-specific runtime
   relations.
-- Declares sources, builder selection, hooks, network requirements, package
-  outputs, and path rules explicitly.
+- Declares sources, a structural builder contract, hooks, network requirements,
+  package outputs, and path rules explicitly. Standard builder modules return
+  their symbolic tool capabilities, environment marker, ordered phase graph,
+  and supported hook surface as ordinary package data.
 - Has deterministic defaults in the versioned package ABI, including the
   initial output set. Those defaults are evaluated into the concrete
   `PackageSpec`, can be replaced by the factory, and are not policy-layer
@@ -106,8 +108,9 @@ Deliberately unsupported:
 - Is reached through one explicit Gluon policy root. Directory enumeration is
   not composition.
 - Contains every repository choice that can alter a build: platform data,
-  toolchains, standard builders, base build inputs, tuning defaults, source
-  preparation, analyzer policy, and fixed guest layout.
+  toolchains, standard-builder command and environment templates, base build
+  inputs, tuning defaults, source preparation, analyzer policy, and fixed guest
+  layout. It does not duplicate module-owned builder capabilities or phases.
 - Is composed through ordered, one-way transformations with strict `add`,
   `replace`, and `modify` operations. `add` requires absent state; `replace`
   and `modify` require existing state, and each intermediate policy is
@@ -142,8 +145,8 @@ Deliberately unsupported:
   identities, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
   concurrency. An arbitrary explicit `Shell` escape cannot be statically proven
-  to use only declared tools; custom builders therefore retain an explicit
-  `required_tools` contract.
+  to use only declared tools, so every structural builder contract carries an
+  explicit `required_tools` list; standard modules populate it automatically.
 - Is immutable after freezing. Execution can report observations such as
   output file hashes and analyzer findings, but cannot change the requested
   build semantics.
@@ -175,13 +178,13 @@ implementation status above is authoritative for completed work.
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
 | Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicit `data/policy/policy.glu` manifest with ordered typed operations and complete evaluation fingerprints. Its foundation `add` names `default.glu`; the macro tree is deleted. |
-| Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Selected builder and platform policy, resolved into plan phases, tools, and environment. |
+| Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Typed command and environment templates selected by module-owned steps and environment markers; the module-owned phase graph and capabilities are frozen with the resolved values. |
 | Architecture package templates | former `package.rs::resolve_packages` behavior | Repository policy | Removed. `PackageSpec.outputs` is the sole typed output declaration and the selected target supplies only artifact architecture and build policy. |
 | Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
 | Root package and subpackage precedence | `package.rs::resolve_packages` | Authored intent | Explicit named outputs in `PackageSpec`; no collision-based merge in the executor. |
 | Template collision merge and list sorting | former `package.rs::resolve_packages` behavior | Repository policy | Removed. Named `PackageSpec.outputs` are validated directly and copied deterministically into the plan without a policy-template merge. |
 | `%name`, `%version`, and `%release` expansion in package fields | `package.rs::resolve_packages` | Authored intent | Structural fields or typed interpolation resolved before plan freeze. |
-| `%action` expansion and action-provided dependencies | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Structured builders declare steps and required tools. Implemented; explicit `Shell` is literal and performs no macro expansion. |
+| `%action` expansion and action-provided dependencies | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Pure builder modules return typed steps and symbolic required capabilities; policy supplies typed command templates only. Explicit `Shell` is literal and performs no macro expansion. |
 | `%(definition)` expansion | former `stone_recipe::script` and `build/job/phase.rs` behavior | Repository policy | Replaced by typed builder arguments, paths, and environment values frozen in the plan. |
 
 ### Platforms, toolchains, and build environment
@@ -191,7 +194,7 @@ implementation status above is authoritative for completed work.
 | Host architecture used to choose build targets | `recipe.rs::build_targets` and `architecture.rs` | Forbidden ambient state | Explicit build/host/target platform input, validated against `PolicySpec` and frozen in the plan. |
 | Host architecture written to package metadata | `package/emit.rs` | Forbidden ambient state | The plan's resolved target/output architecture. |
 | Base root packages | `build/root.rs::BASE_PACKAGES` | Repository policy | Standard environment inputs in `PolicySpec`, resolved to exact package IDs. |
-| GNU/LLVM, emul32, Mold, and compiler-cache root packages | `build/root.rs::packages` | Repository policy | Toolchain/builder policy selected by explicit package or invocation inputs, then frozen in the closure. |
+| GNU/LLVM, emul32, Mold, and compiler-cache root packages | `build/root.rs::packages` | Repository policy | Toolchain and feature policy selected by explicit package or invocation inputs, then frozen in the closure. Standard-builder capabilities come from the evaluated builder module instead. |
 | Compiler executable names and linker selection | `build/job/phase.rs` | Repository policy | Selected `ToolchainSpec`/builder environment in `PolicySpec`; concrete values in the plan. |
 | Guest paths such as `/mason`, build roots, install roots, and cache paths | `paths.rs`, `build.rs`, and `build/job/phase.rs` | Repository policy | A fixed builder-layout policy; all paths visible to scripts are concrete plan values. |
 | Root/target environment fallback and `%scriptBase` prefix | `build/job/phase.rs` | Authored intent plus repository policy | Authored environment patch plus builder base environment, resolved with explicit precedence into the plan. |
@@ -273,10 +276,11 @@ the plan must be resolved again.
 
 ## Breakpoint locations
 
-Standard builders now use typed steps. An explicit `Shell` script may still be
-defined by a function, record update, or imported module, so scanning the root
-`stone.glu` text cannot recover an authoritative authored source line. Boulder
-reports the stable, one-based line within that evaluated shell script instead.
+Standard builder modules now return their typed phase graph directly; Rust does
+not synthesize the sequence. An explicit `Shell` script may still be defined by
+a function, record update, or imported module, so scanning the root `stone.glu`
+text cannot recover an authoritative authored source line. Boulder reports the
+stable, one-based line within that evaluated shell script instead.
 Interactive breakpoints are rejected when freezing a derivation plan; future
 structured steps may carry Gluon provenance directly, but the executor must
 never guess a source location from configuration syntax.

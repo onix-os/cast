@@ -197,42 +197,40 @@ impl BuildContext {
         command: &BuilderCommandSpec,
         overlay: &TextContextOverlay,
     ) -> Result<StepPlan, ContextError> {
-        self.resolve_command_with_environment(command, &[], overlay)
+        self.resolve_command_with_environment(command, overlay)
     }
 
     /// Lower one standard package-v2 builder step from policy command data.
     ///
     /// Package-authored flags, Cargo features and installed binaries remain
-    /// structural argv entries. `Shell` and `CargoEnvironment` are markers and
-    /// therefore do not produce an executable step here.
+    /// structural argv entries. Package-authored `Shell` steps are lowered by
+    /// the phase planner and therefore do not produce an executable step here.
     pub fn resolve_standard_step(&self, step: &StepSpec) -> Result<Option<StepPlan>, ContextError> {
-        let (builder, command) = match step {
-            StepSpec::Shell { .. } | StepSpec::CargoEnvironment => return Ok(None),
-            StepSpec::CMakeConfigure { .. } => (&self.policy.builders.cmake, &self.policy.builders.cmake.setup),
-            StepSpec::CMakeBuild => (&self.policy.builders.cmake, &self.policy.builders.cmake.build),
-            StepSpec::CMakeInstall => (&self.policy.builders.cmake, &self.policy.builders.cmake.install),
-            StepSpec::CMakeTest => (&self.policy.builders.cmake, &self.policy.builders.cmake.check),
-            StepSpec::MesonSetup { .. } => (&self.policy.builders.meson, &self.policy.builders.meson.setup),
-            StepSpec::MesonBuild => (&self.policy.builders.meson, &self.policy.builders.meson.build),
-            StepSpec::MesonInstall => (&self.policy.builders.meson, &self.policy.builders.meson.install),
-            StepSpec::MesonTest => (&self.policy.builders.meson, &self.policy.builders.meson.check),
-            StepSpec::CargoFetch => (&self.policy.builders.cargo, &self.policy.builders.cargo.setup),
-            StepSpec::CargoBuild { .. } => (&self.policy.builders.cargo, &self.policy.builders.cargo.build),
-            StepSpec::CargoInstall { .. } => (&self.policy.builders.cargo, &self.policy.builders.cargo.install),
-            StepSpec::CargoTest { .. } => (&self.policy.builders.cargo, &self.policy.builders.cargo.check),
-            StepSpec::AutotoolsConfigure { .. } => {
-                (&self.policy.builders.autotools, &self.policy.builders.autotools.setup)
-            }
-            StepSpec::AutotoolsBuild => (&self.policy.builders.autotools, &self.policy.builders.autotools.build),
-            StepSpec::AutotoolsInstall => (&self.policy.builders.autotools, &self.policy.builders.autotools.install),
-            StepSpec::AutotoolsTest => (&self.policy.builders.autotools, &self.policy.builders.autotools.check),
+        let command = match step {
+            StepSpec::Shell { .. } => return Ok(None),
+            StepSpec::CMakeConfigure { .. } => &self.policy.builders.cmake.setup,
+            StepSpec::CMakeBuild => &self.policy.builders.cmake.build,
+            StepSpec::CMakeInstall => &self.policy.builders.cmake.install,
+            StepSpec::CMakeTest => &self.policy.builders.cmake.check,
+            StepSpec::MesonSetup { .. } => &self.policy.builders.meson.setup,
+            StepSpec::MesonBuild => &self.policy.builders.meson.build,
+            StepSpec::MesonInstall => &self.policy.builders.meson.install,
+            StepSpec::MesonTest => &self.policy.builders.meson.check,
+            StepSpec::CargoFetch => &self.policy.builders.cargo.setup,
+            StepSpec::CargoBuild { .. } => &self.policy.builders.cargo.build,
+            StepSpec::CargoInstall { .. } => &self.policy.builders.cargo.install,
+            StepSpec::CargoTest { .. } => &self.policy.builders.cargo.check,
+            StepSpec::AutotoolsConfigure { .. } => &self.policy.builders.autotools.setup,
+            StepSpec::AutotoolsBuild => &self.policy.builders.autotools.build,
+            StepSpec::AutotoolsInstall => &self.policy.builders.autotools.install,
+            StepSpec::AutotoolsTest => &self.policy.builders.autotools.check,
         };
         let Run {
             program,
             mut args,
             environment,
             working_dir,
-        } = self.resolve_command_with_environment(command, &builder.environment, &TextContextOverlay::default())?
+        } = self.resolve_command_with_environment(command, &TextContextOverlay::default())?
         else {
             unreachable!("typed command lowering only produces Run steps")
         };
@@ -263,7 +261,6 @@ impl BuildContext {
                 );
             }
             StepSpec::Shell { .. }
-            | StepSpec::CargoEnvironment
             | StepSpec::CMakeBuild
             | StepSpec::CMakeInstall
             | StepSpec::CMakeTest
@@ -287,12 +284,11 @@ impl BuildContext {
     fn resolve_command_with_environment(
         &self,
         command: &BuilderCommandSpec,
-        builder_environment: &[EnvironmentBindingSpec],
         overlay: &TextContextOverlay,
     ) -> Result<StepPlan, ContextError> {
         let resolver = TextResolver::new(&self.policy, &self.target, &self.inputs, overlay.clone());
         let mut environment = self.environment.clone();
-        environment.extend(resolver.resolve_environment(builder_environment, &command.environment)?);
+        environment.extend(resolver.resolve_environment(&command.environment, &[])?);
 
         Ok(Run {
             program: resolver.resolve(&command.program)?,
@@ -698,7 +694,7 @@ mod tests {
 
     #[test]
     fn standard_builder_commands_come_from_policy_and_keep_package_arguments() {
-        let context = fixture_context("x86_64", false, false);
+        let mut context = fixture_context("x86_64", false, false);
         let Run {
             program,
             args,
@@ -729,6 +725,13 @@ mod tests {
         };
         assert_eq!(&args[args.len() - 2..], ["-Ddocs=false", "aerynos-builddir"]);
 
+        let Run { environment, .. } = context.resolve_standard_step(&StepSpec::CargoFetch).unwrap().unwrap() else {
+            panic!("expected run")
+        };
+        assert!(!environment.contains_key("CARGO_BUILD_DEP_INFO_BASEDIR"));
+
+        let cargo_environment = context.policy.builders.cargo.environment.clone();
+        context.extend_environment(&cargo_environment).unwrap();
         let Run { args, environment, .. } = context
             .resolve_standard_step(&StepSpec::CargoTest {
                 features: vec!["cli".to_owned(), "tls".to_owned()],

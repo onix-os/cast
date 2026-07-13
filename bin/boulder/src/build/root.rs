@@ -9,12 +9,9 @@ use moss::{Installation, package, repository, util};
 use stone::relation::{Dependency, Kind as RelationKind};
 use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
-    build_policy::{
-        BuildPolicySpec, BuildToolSpec, BuildersPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec,
-        TargetPolicySpec,
-    },
+    build_policy::{BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
     derivation::{BuildLock, DerivationPlan, LockedPackage, RelationPlan, RepositorySnapshot},
-    package::{BuilderSpec, DependencySpec, PackageSpec},
+    package::PackageSpec,
 };
 use thiserror::Error;
 
@@ -231,9 +228,6 @@ fn packages_for(
         )?;
     }
 
-    if let Some((field, builder)) = standard_builder_policy(&policy.builders, package.builder_for_profile(profile)) {
-        extend_policy_tools(&mut packages, field, &builder.required_tools)?;
-    }
     if pgo_enabled && matches!(package.options.toolchain, ToolchainSpec::Llvm) {
         extend_policy_tools(&mut packages, "pgo.required_tools", &policy.pgo.required_tools)?;
     }
@@ -246,19 +240,6 @@ fn packages_for(
     extend_source_tools(&mut packages, policy, &package.sources)?;
 
     Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
-}
-
-fn standard_builder_policy<'a>(
-    builders: &'a BuildersPolicySpec,
-    builder: &BuilderSpec,
-) -> Option<(&'static str, &'a StandardBuilderPolicySpec)> {
-    match builder {
-        BuilderSpec::CMake { .. } => Some(("builders.cmake.required_tools", &builders.cmake)),
-        BuilderSpec::Meson { .. } => Some(("builders.meson.required_tools", &builders.meson)),
-        BuilderSpec::Cargo { .. } => Some(("builders.cargo.required_tools", &builders.cargo)),
-        BuilderSpec::Autotools { .. } => Some(("builders.autotools.required_tools", &builders.autotools)),
-        BuilderSpec::Custom { .. } => None,
-    }
 }
 
 fn extend_source_tools(
@@ -313,15 +294,9 @@ pub(crate) fn declared_inputs(recipe: &crate::Recipe, target: &TargetPolicySpec)
 }
 
 fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<Vec<RelationPlan>, Error> {
-    let builder_tools: &[DependencySpec] = match package.builder_for_profile(profile) {
-        BuilderSpec::Custom { required_tools, .. } => required_tools,
-        BuilderSpec::CMake { .. }
-        | BuilderSpec::Meson { .. }
-        | BuilderSpec::Cargo { .. }
-        | BuilderSpec::Autotools { .. } => &[],
-    };
-
-    builder_tools
+    package
+        .builder_for_profile(profile)
+        .required_tools()
         .iter()
         .chain(package.native_build_inputs_for_profile(profile))
         .chain(package.build_inputs_for_profile(profile))
@@ -456,6 +431,21 @@ let unrelated = b.profile_with {
         stone_recipe::package::evaluate_gluon(&source).unwrap().package
     }
 
+    fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
+        let source = Source::new(
+            "stone.glu",
+            r#"let b = import! boulder.package.v2
+let cmake = import! boulder.builders.cmake.v1
+let base = b.mk_package (b.meta {
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.invalid", license = ["MPL-2.0"],
+})
+{ builder = cmake.default, .. base }
+"#,
+        );
+        stone_recipe::package::evaluate_gluon(&source).unwrap().package.builder
+    }
+
     fn repository_policy() -> BuildPolicySpec {
         crate::BuildPolicy::repository_for_tests().spec
     }
@@ -477,7 +467,7 @@ let unrelated = b.profile_with {
     }
 
     #[test]
-    fn selected_root_features_come_only_from_typed_policy() {
+    fn selected_root_features_combine_typed_policy_and_builder_tools() {
         let mut policy = repository_policy();
         policy.build_root.base = vec![BuildToolSpec::Package("policy-base".to_owned())];
         policy.build_root.toolchains.llvm = vec![BuildToolSpec::Binary("wrong-llvm".to_owned())];
@@ -487,16 +477,12 @@ let unrelated = b.profile_with {
         policy.build_root.emul32.toolchains.gnu = vec![BuildToolSpec::Package("policy-gnu32".to_owned())];
         policy.build_root.mold.required_tools = vec![BuildToolSpec::Binary("policy-mold".to_owned())];
         policy.build_root.compiler_cache.required_tools = vec![BuildToolSpec::Binary("policy-cache".to_owned())];
-        policy.builders.cmake.required_tools = vec![BuildToolSpec::SystemBinary("policy-cmake".to_owned())];
         policy.sources.archive.required_tools = vec![BuildToolSpec::Binary("policy-archive".to_owned())];
         policy.sources.git.required_tools = vec![BuildToolSpec::SystemBinary("policy-git".to_owned())];
 
         let mut package = selected_inputs_package();
         package.options.toolchain = ToolchainSpec::Gnu;
-        package.builder = BuilderSpec::CMake {
-            flags: Vec::new(),
-            run_tests: false,
-        };
+        package.builder = cmake_package_builder();
         package.mold = true;
         package.sources = vec![
             UpstreamSpec::Archive {
@@ -533,13 +519,15 @@ let unrelated = b.profile_with {
             "base-build",
             "base-check",
             "base-native",
+            "binary(cmake)",
+            "binary(ctest)",
+            "binary(ninja)",
             "binary(policy-archive)",
             "binary(policy-cache)",
             "binary(policy-gnu)",
             "binary(policy-mold)",
             "policy-base",
             "policy-gnu32",
-            "sysbinary(policy-cmake)",
             "sysbinary(policy-emul-base)",
             "sysbinary(policy-git)",
         ]

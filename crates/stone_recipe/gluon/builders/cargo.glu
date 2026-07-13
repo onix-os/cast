@@ -9,9 +9,21 @@ let defaults = {
     run_tests = b.boolean.true,
 }
 
+let builder = \config -> b.builder.structured {
+    required_tools = [b.dep.binary "cargo"],
+    environment = [b.environment.cargo],
+    phases = b.scripts {
+        build = b.phase [b.step.cargo_build config.features],
+        install = b.phase [b.step.cargo_install config.binaries],
+        check = b.phase (b.boolean.when config.run_tests [b.step.cargo_test config.features]),
+        .. b.defaults.scripts
+    },
+    supported_hooks = b.hook_support.all,
+}
+
 {
     abi_version = 1,
     defaults,
-    builder = \config -> b.builder.cargo config,
-    default = b.builder.cargo defaults,
+    builder,
+    default = builder defaults,
 }

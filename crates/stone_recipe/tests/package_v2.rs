@@ -5,8 +5,8 @@ use std::path::Path;
 
 use gluon_config::{DiagnosticCategory, Evaluator, Source, SourceRoot};
 use stone_recipe::package::{
-    DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError, PackageEvaluationError, StepSpec, evaluate_gluon,
-    evaluate_gluon_with, evaluate_gluon_with_inputs,
+    BuilderEnvironmentSpec, DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError, PackageEvaluationError,
+    StepSpec, SupportedHooksSpec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -38,7 +38,12 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
         evaluated.package.build_inputs[0],
         DependencySpec::Package(ref package) if package.name == "zlib"
     ));
-    assert!(evaluated.package.builder.authored_required_tools().is_empty());
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
+    );
+    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
+    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     assert_eq!(dependency_names(&evaluated.package.build_inputs), ["zlib"]);
     let phases = evaluated.package.phases();
     assert_eq!(

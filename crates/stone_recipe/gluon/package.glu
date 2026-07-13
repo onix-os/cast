@@ -25,7 +25,22 @@ type MetaSpec = {
 
 type StepSpec =
     | Shell { script: String }
+    | CMakeConfigure { flags: Array String }
+    | CMakeBuild
+    | CMakeInstall
+    | CMakeTest
+    | MesonSetup { flags: Array String }
+    | MesonBuild
+    | MesonInstall
+    | MesonTest
     | CargoFetch
+    | CargoBuild { features: Array String }
+    | CargoInstall { binaries: Array String }
+    | CargoTest { features: Array String }
+    | AutotoolsConfigure { flags: Array String }
+    | AutotoolsBuild
+    | AutotoolsInstall
+    | AutotoolsTest
 
 type PhaseSpec = {
     steps: Array StepSpec,
@@ -37,7 +52,6 @@ type ScriptsSpec = {
     install: PhaseSpec,
     check: PhaseSpec,
     workload: PhaseSpec,
-    environment: PhaseSpec,
 }
 
 type HooksSpec = {
@@ -51,7 +65,6 @@ type HooksSpec = {
     post_install: Array StepSpec,
     pre_workload: Array StepSpec,
     post_workload: Array StepSpec,
-    environment: Array StepSpec,
 }
 
 type PackageRef = { name: String }
@@ -73,28 +86,26 @@ type DependencySpec =
     | Python { target: String }
     | Interpreter { target: String }
 
-type BuilderSpec =
-    | CMakeSystem {
-        flags: Array String,
-        run_tests: Boolean,
-    }
-    | MesonSystem {
-        flags: Array String,
-        run_tests: Boolean,
-    }
-    | CargoProject {
-        features: Array String,
-        binaries: Array String,
-        run_tests: Boolean,
-    }
-    | AutotoolsProject {
-        flags: Array String,
-        run_tests: Boolean,
-    }
-    | Custom {
-        scripts: ScriptsSpec,
-        required_tools: Array DependencySpec,
-    }
+type BuilderEnvironmentSpec =
+    | CMakeEnvironment
+    | MesonEnvironment
+    | CargoEnvironment
+    | AutotoolsEnvironment
+
+type SupportedHooksSpec = {
+    setup: Boolean,
+    build: Boolean,
+    check: Boolean,
+    install: Boolean,
+    workload: Boolean,
+}
+
+type BuilderSpec = {
+    required_tools: Array DependencySpec,
+    environment: Array BuilderEnvironmentSpec,
+    phases: ScriptsSpec,
+    supported_hooks: SupportedHooksSpec,
+}
 
 type PathSpec =
     | Any { path: String }
@@ -216,7 +227,6 @@ let empty_scripts: ScriptsSpec = {
     install = empty_phase,
     check = empty_phase,
     workload = empty_phase,
-    environment = empty_phase,
 }
 
 let empty_hooks: HooksSpec = {
@@ -230,13 +240,27 @@ let empty_hooks: HooksSpec = {
     post_install = [],
     pre_workload = [],
     post_workload = [],
-    environment = [],
 }
 
-let empty_custom_builder: BuilderSpec = Custom {
-    scripts = empty_scripts,
-    required_tools = [],
+let all_hooks_supported: SupportedHooksSpec = {
+    setup = True,
+    build = True,
+    check = True,
+    install = True,
+    workload = True,
 }
+
+let empty_custom_builder: BuilderSpec = {
+    required_tools = [],
+    environment = [],
+    phases = empty_scripts,
+    supported_hooks = all_hooks_supported,
+}
+
+let when = \condition values ->
+    match condition with
+    | False -> []
+    | True -> values
 
 let default_options: OptionsSpec = {
     toolchain = LlvmToolchain,
@@ -525,7 +549,22 @@ let git = \url git_ref -> GitSource {
     phase = \steps -> { steps },
     step = {
         shell = \script -> Shell { script },
+        cmake_configure = \flags -> CMakeConfigure { flags },
+        cmake_build = CMakeBuild,
+        cmake_install = CMakeInstall,
+        cmake_test = CMakeTest,
+        meson_setup = \flags -> MesonSetup { flags },
+        meson_build = MesonBuild,
+        meson_install = MesonInstall,
+        meson_test = MesonTest,
         cargo_fetch = CargoFetch,
+        cargo_build = \features -> CargoBuild { features },
+        cargo_install = \binaries -> CargoInstall { binaries },
+        cargo_test = \features -> CargoTest { features },
+        autotools_configure = \flags -> AutotoolsConfigure { flags },
+        autotools_build = AutotoolsBuild,
+        autotools_install = AutotoolsInstall,
+        autotools_test = AutotoolsTest,
     },
     hooks = \value -> value,
     output,
@@ -555,6 +594,7 @@ let git = \url git_ref -> GitSource {
     boolean = {
         false = False,
         true = True,
+        when,
     },
     patch = {
         keep = KeepValue,
@@ -581,12 +621,28 @@ let git = \url git_ref -> GitSource {
         interpreter = \target -> Interpreter { target },
     },
     builder = {
-        cmake = \value -> CMakeSystem value,
-        meson = \value -> MesonSystem value,
-        cargo = \value -> CargoProject value,
-        autotools = \value -> AutotoolsProject value,
-        custom = \scripts required_tools -> Custom { scripts, required_tools },
-        shell = \scripts required_tools -> Custom { scripts, required_tools },
+        structured = \value -> value,
+        custom = \phases required_tools -> {
+            required_tools,
+            environment = [],
+            phases,
+            supported_hooks = all_hooks_supported,
+        },
+        shell = \phases required_tools -> {
+            required_tools,
+            environment = [],
+            phases,
+            supported_hooks = all_hooks_supported,
+        },
+    },
+    environment = {
+        cmake = CMakeEnvironment,
+        meson = MesonEnvironment,
+        cargo = CargoEnvironment,
+        autotools = AutotoolsEnvironment,
+    },
+    hook_support = {
+        all = all_hooks_supported,
     },
     source = {
         archive,

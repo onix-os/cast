@@ -271,7 +271,6 @@ type SourcePreparationPolicySpec = {
 }
 
 type StandardBuilderPolicySpec = {
-    required_tools : Array BuildToolSpec,
     environment : Array EnvironmentBindingSpec,
     setup : BuilderCommandSpec,
     build : BuilderCommandSpec,

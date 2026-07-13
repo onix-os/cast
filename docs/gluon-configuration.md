@@ -131,13 +131,15 @@ let meta = boulder.meta {
 Package factories are ordinary functions from an explicit dependency record to
 a concrete package value. `boulder.override_attrs` applies a total typed patch;
 patch records distinguish keeping an array from replacing it with `[]`.
-Standard CMake, Meson, Cargo, and Autotools modules declare their required
-tools and phase bodies as structural `StepSpec` values. They do not author or
-lower through `%action` strings. `b.step.shell` is the explicit escape hatch;
-its content is literal and cannot invoke `%action` or `%(definition)` syntax.
-Shell steps use the frozen `BOULDER_*` build-context variables documented in
-the package-authoring guide. The executor receives only the resulting frozen
-`StepPlan` and environment values.
+Standard CMake, Meson, Cargo, and Autotools modules return complete structural
+builder records: symbolic required capabilities, an environment marker,
+ordered `StepSpec` phases, and supported hooks. Repository policy separately
+owns the typed command templates and environment bindings selected by those
+values. Rust performs typed lowering only; it neither synthesizes a standard
+phase graph nor supplies a second builder-tool list. Builders do not lower
+through `%action` strings. `b.step.shell` remains the literal escape hatch and
+cannot invoke `%action` or `%(definition)` syntax. The executor receives only
+the resulting frozen `StepPlan` and environment values.
 
 The former `boulder.recipe.v1`, `boulder.macros.v1`, and `boulder.policy.v1`
 embedded modules, evaluators, and standalone encoders have been removed.

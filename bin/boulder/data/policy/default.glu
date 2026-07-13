@@ -387,7 +387,6 @@ let environment = [
 ]
 
 let cmake = p.builder {
-    required_tools = [p.tool.binary "cmake", p.tool.binary "ninja", p.tool.binary "ctest"],
     environment = [],
     setup = command "cmake" [
         lit "-G", lit "Ninja",
@@ -414,9 +413,6 @@ let cmake = p.builder {
 }
 
 let meson = p.builder {
-    required_tools = [
-        p.tool.binary "cmake", p.tool.binary "meson", p.tool.binary "ninja", p.tool.binary "pkgconf",
-    ],
     environment = [],
     setup = command "meson" [
         lit "setup",
@@ -458,7 +454,6 @@ let cargo_environment = [
 ]
 
 let cargo = p.builder {
-    required_tools = [p.tool.binary "cargo"],
     environment = cargo_environment,
     setup = command "cargo" [lit "fetch", lit "-v", lit "--locked"] [],
     build = command "cargo" [
@@ -475,7 +470,6 @@ let cargo = p.builder {
 }
 
 let autotools = p.builder {
-    required_tools = [p.tool.binary "autoconf", p.tool.binary "automake", p.tool.binary "make"],
     environment = config_shell,
     setup = command "/usr/bin/dash" [
         lit "./configure",

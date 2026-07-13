@@ -7,8 +7,8 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef,
-    PackageSpec, PhaseSpec, ProfileSpec, ScriptsSpec, StepSpec,
+    BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
+    PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, StepSpec, SupportedHooksSpec,
 };
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
@@ -105,7 +105,6 @@ struct GluonScriptsSpec {
     install: GluonPhaseSpec,
     check: GluonPhaseSpec,
     workload: GluonPhaseSpec,
-    environment: GluonPhaseSpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -116,7 +115,22 @@ struct GluonPhaseSpec {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 enum GluonStepSpec {
     Shell { script: String },
+    CMakeConfigure { flags: Vec<String> },
+    CMakeBuild,
+    CMakeInstall,
+    CMakeTest,
+    MesonSetup { flags: Vec<String> },
+    MesonBuild,
+    MesonInstall,
+    MesonTest,
     CargoFetch,
+    CargoBuild { features: Vec<String> },
+    CargoInstall { binaries: Vec<String> },
+    CargoTest { features: Vec<String> },
+    AutotoolsConfigure { flags: Vec<String> },
+    AutotoolsBuild,
+    AutotoolsInstall,
+    AutotoolsTest,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -131,7 +145,6 @@ struct GluonHooksSpec {
     post_install: Vec<GluonStepSpec>,
     pre_workload: Vec<GluonStepSpec>,
     post_workload: Vec<GluonStepSpec>,
-    environment: Vec<GluonStepSpec>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -160,28 +173,29 @@ enum GluonDependencySpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-enum GluonBuilderSpec {
-    CMakeSystem {
-        flags: Vec<String>,
-        run_tests: GluonBool,
-    },
-    MesonSystem {
-        flags: Vec<String>,
-        run_tests: GluonBool,
-    },
-    CargoProject {
-        features: Vec<String>,
-        binaries: Vec<String>,
-        run_tests: GluonBool,
-    },
-    AutotoolsProject {
-        flags: Vec<String>,
-        run_tests: GluonBool,
-    },
-    Custom {
-        scripts: GluonScriptsSpec,
-        required_tools: Vec<GluonDependencySpec>,
-    },
+#[allow(clippy::enum_variant_names)] // Gluon constructors share one namespace with dependency variants.
+enum GluonBuilderEnvironmentSpec {
+    CMakeEnvironment,
+    MesonEnvironment,
+    CargoEnvironment,
+    AutotoolsEnvironment,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonSupportedHooksSpec {
+    setup: GluonBool,
+    build: GluonBool,
+    check: GluonBool,
+    install: GluonBool,
+    workload: GluonBool,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuilderSpec {
+    required_tools: Vec<GluonDependencySpec>,
+    environment: Vec<GluonBuilderEnvironmentSpec>,
+    phases: GluonScriptsSpec,
+    supported_hooks: GluonSupportedHooksSpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -310,7 +324,7 @@ impl From<GluonMetaSpec> for MetaSpec {
     }
 }
 
-impl From<GluonScriptsSpec> for ScriptsSpec {
+impl From<GluonScriptsSpec> for PhasesSpec {
     fn from(spec: GluonScriptsSpec) -> Self {
         Self {
             setup: spec.setup.into(),
@@ -318,7 +332,6 @@ impl From<GluonScriptsSpec> for ScriptsSpec {
             install: spec.install.into(),
             check: spec.check.into(),
             workload: spec.workload.into(),
-            environment: spec.environment.into(),
         }
     }
 }
@@ -335,7 +348,22 @@ impl From<GluonStepSpec> for StepSpec {
     fn from(spec: GluonStepSpec) -> Self {
         match spec {
             GluonStepSpec::Shell { script } => Self::Shell { script },
+            GluonStepSpec::CMakeConfigure { flags } => Self::CMakeConfigure { flags },
+            GluonStepSpec::CMakeBuild => Self::CMakeBuild,
+            GluonStepSpec::CMakeInstall => Self::CMakeInstall,
+            GluonStepSpec::CMakeTest => Self::CMakeTest,
+            GluonStepSpec::MesonSetup { flags } => Self::MesonSetup { flags },
+            GluonStepSpec::MesonBuild => Self::MesonBuild,
+            GluonStepSpec::MesonInstall => Self::MesonInstall,
+            GluonStepSpec::MesonTest => Self::MesonTest,
             GluonStepSpec::CargoFetch => Self::CargoFetch,
+            GluonStepSpec::CargoBuild { features } => Self::CargoBuild { features },
+            GluonStepSpec::CargoInstall { binaries } => Self::CargoInstall { binaries },
+            GluonStepSpec::CargoTest { features } => Self::CargoTest { features },
+            GluonStepSpec::AutotoolsConfigure { flags } => Self::AutotoolsConfigure { flags },
+            GluonStepSpec::AutotoolsBuild => Self::AutotoolsBuild,
+            GluonStepSpec::AutotoolsInstall => Self::AutotoolsInstall,
+            GluonStepSpec::AutotoolsTest => Self::AutotoolsTest,
         }
     }
 }
@@ -353,7 +381,6 @@ impl From<GluonHooksSpec> for HooksSpec {
             post_install: spec.post_install.into_iter().map(Into::into).collect(),
             pre_workload: spec.pre_workload.into_iter().map(Into::into).collect(),
             post_workload: spec.post_workload.into_iter().map(Into::into).collect(),
-            environment: spec.environment.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -390,37 +417,36 @@ impl From<GluonDependencySpec> for DependencySpec {
     }
 }
 
+impl From<GluonBuilderEnvironmentSpec> for BuilderEnvironmentSpec {
+    fn from(spec: GluonBuilderEnvironmentSpec) -> Self {
+        match spec {
+            GluonBuilderEnvironmentSpec::CMakeEnvironment => Self::CMake,
+            GluonBuilderEnvironmentSpec::MesonEnvironment => Self::Meson,
+            GluonBuilderEnvironmentSpec::CargoEnvironment => Self::Cargo,
+            GluonBuilderEnvironmentSpec::AutotoolsEnvironment => Self::Autotools,
+        }
+    }
+}
+
+impl From<GluonSupportedHooksSpec> for SupportedHooksSpec {
+    fn from(spec: GluonSupportedHooksSpec) -> Self {
+        Self {
+            setup: spec.setup.into(),
+            build: spec.build.into(),
+            check: spec.check.into(),
+            install: spec.install.into(),
+            workload: spec.workload.into(),
+        }
+    }
+}
+
 impl From<GluonBuilderSpec> for BuilderSpec {
     fn from(spec: GluonBuilderSpec) -> Self {
-        match spec {
-            GluonBuilderSpec::CMakeSystem { flags, run_tests } => Self::CMake {
-                flags,
-                run_tests: run_tests.into(),
-            },
-            GluonBuilderSpec::MesonSystem { flags, run_tests } => Self::Meson {
-                flags,
-                run_tests: run_tests.into(),
-            },
-            GluonBuilderSpec::CargoProject {
-                features,
-                binaries,
-                run_tests,
-            } => Self::Cargo {
-                features,
-                binaries,
-                run_tests: run_tests.into(),
-            },
-            GluonBuilderSpec::AutotoolsProject { flags, run_tests } => Self::Autotools {
-                flags,
-                run_tests: run_tests.into(),
-            },
-            GluonBuilderSpec::Custom {
-                scripts,
-                required_tools,
-            } => Self::Custom {
-                scripts: scripts.into(),
-                required_tools: required_tools.into_iter().map(Into::into).collect(),
-            },
+        Self {
+            required_tools: spec.required_tools.into_iter().map(Into::into).collect(),
+            environment: spec.environment.into_iter().map(Into::into).collect(),
+            phases: spec.phases.into(),
+            supported_hooks: spec.supported_hooks.into(),
         }
     }
 }

@@ -380,10 +380,9 @@ pub struct SourcePreparationPolicySpec {
     pub git: GitPreparationPolicySpec,
 }
 
-/// Default commands and tools for one standard builder.
+/// Default commands and environment for one standard builder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StandardBuilderPolicySpec {
-    pub required_tools: Vec<BuildToolSpec>,
     pub environment: Vec<EnvironmentBindingSpec>,
     pub setup: BuilderCommandSpec,
     pub build: BuilderCommandSpec,
@@ -1171,7 +1170,6 @@ fn validate_tools_record(field: &str, tools: &CompilerToolsSpec) -> Result<(), B
 }
 
 fn validate_builder(field: &str, builder: &StandardBuilderPolicySpec) -> Result<(), BuildPolicyConversionError> {
-    validate_tools(&format!("{field}.required_tools"), &builder.required_tools)?;
     validate_bindings(&format!("{field}.environment"), &builder.environment)?;
     for (name, command) in [
         ("setup", &builder.setup),
