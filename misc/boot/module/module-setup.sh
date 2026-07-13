@@ -7,7 +7,7 @@ installkernel() {
 }
 
 check() {
-    if [[ -x $systemdutildir/systemd ]] && [[ -x /usr/lib/moss/moss-fstx.sh ]]; then
+    if [[ -x $systemdutildir/systemd ]] && [[ -x /usr/lib/cast/cast-fstx.sh ]]; then
        return 255
     fi
 
@@ -19,10 +19,10 @@ depends() {
 }
 
 install() {
-    dracut_install /usr/lib/moss/moss-fstx.sh
-    dracut_install /usr/bin/moss
+    dracut_install /usr/lib/cast/cast-fstx.sh
+    dracut_install /usr/bin/cast
 
-    inst_simple "${systemdsystemunitdir}/moss-fstx.service"
+    inst_simple "${systemdsystemunitdir}/cast-fstx.service"
     # Enable systemd type unit(s)
-    $SYSTEMCTL -q --root "$initdir" enable moss-fstx.service
+    $SYSTEMCTL -q --root "$initdir" enable cast-fstx.service
 }

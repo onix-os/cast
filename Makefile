@@ -14,36 +14,31 @@ LICENSE_DIR ?= $(TOP_DIR)/target/license-list-data
 EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 
-.DEFAULT_GOAL := moss
+.DEFAULT_GOAL := cast
 
-.PHONY: build boulder moss get-started licenses fix lint test check fmt clean \
-	config-formats config-formats-test migrate migrate-redo libstone help
+.PHONY: build cast get-started licenses fix lint test check fmt clean \
+	binary-layout config-formats config-formats-test migrate migrate-redo libstone help
 
 build:
 	@$(CARGO) build --workspace
 
-boulder:
-	@$(CARGO) build --profile $(MODE) -p boulder
+cast:
+	@$(CARGO) build --profile $(MODE) -p cast
 
-moss:
-	@$(CARGO) build --profile $(MODE) -p moss
-
-get-started: boulder moss licenses
+get-started: cast licenses
 	@set -eu; \
 	echo; \
-	echo "Installing boulder and moss to $(BIN_DIR)..."; \
+	echo "Installing cast to $(BIN_DIR)..."; \
 	install -d "$(BIN_DIR)"; \
-	install -m 755 "$(TOP_DIR)/target/$(MODE)/boulder" "$(BIN_DIR)/boulder"; \
-	install -m 755 "$(TOP_DIR)/target/$(MODE)/moss" "$(BIN_DIR)/moss"; \
-	rm -rf "$(DATA_DIR)/boulder"; \
-	install -d "$(DATA_DIR)/boulder/licenses" "$(CONFIG_DIR)/boulder"; \
-	cp -R "$(TOP_DIR)/bin/boulder/data/policy" "$(DATA_DIR)/boulder/"; \
-	cp "$(LICENSE_DIR)/text/"* "$(DATA_DIR)/boulder/licenses/"; \
-	cp -R "$(TOP_DIR)/bin/boulder/data/profile.d" "$(CONFIG_DIR)/boulder/"; \
+	install -m 755 "$(TOP_DIR)/target/$(MODE)/cast" "$(BIN_DIR)/cast"; \
+	rm -rf "$(DATA_DIR)/cast"; \
+	install -d "$(DATA_DIR)/cast/licenses" "$(CONFIG_DIR)/cast"; \
+	cp -R "$(TOP_DIR)/crates/mason/data/policy" "$(DATA_DIR)/cast/"; \
+	cp "$(LICENSE_DIR)/text/"* "$(DATA_DIR)/cast/licenses/"; \
+	cp -R "$(TOP_DIR)/crates/mason/data/profile.d" "$(CONFIG_DIR)/cast/"; \
 	echo; \
 	echo "Installed files:"; \
-	ls -hlF "$(BIN_DIR)/boulder" "$(BIN_DIR)/moss" \
-		"$(DATA_DIR)/boulder" "$(CONFIG_DIR)/boulder"; \
+	ls -hlF "$(BIN_DIR)/cast" "$(DATA_DIR)/cast" "$(CONFIG_DIR)/cast"; \
 	echo; \
 	case ":$$PATH:" in \
 		*:"$(BIN_DIR)":*) echo "$(BIN_DIR) is already in PATH." ;; \
@@ -63,7 +58,7 @@ fix:
 	@echo "Fixing typos..."
 	@typos -w --exclude target/license-list-data/
 
-lint: config-formats
+lint: binary-layout config-formats
 	@echo "Running clippy..."
 	@$(CARGO) clippy --workspace -- --no-deps
 	@echo "Running cargo fmt..."
@@ -76,6 +71,9 @@ config-formats:
 
 config-formats-test:
 	@"$(TOP_DIR)/misc/scripts/test-check-config-formats.sh"
+
+binary-layout:
+	@"$(TOP_DIR)/misc/scripts/check-binary-layout.sh"
 
 test: lint config-formats-test
 	@echo "Running tests in all packages..."
@@ -94,8 +92,8 @@ migrate:
 	@set -eu; \
 	for db in meta layout state; do \
 		diesel \
-			--config-file "$(TOP_DIR)/bin/moss/src/db/$$db/diesel.toml" \
-			--database-url "sqlite://$(TOP_DIR)/bin/moss/src/db/$$db/test.db" \
+			--config-file "$(TOP_DIR)/crates/forge/src/db/$$db/diesel.toml" \
+			--database-url "sqlite://$(TOP_DIR)/crates/forge/src/db/$$db/test.db" \
 			migration run; \
 	done
 
@@ -103,8 +101,8 @@ migrate-redo:
 	@set -eu; \
 	for db in meta layout state; do \
 		diesel \
-			--config-file "$(TOP_DIR)/bin/moss/src/db/$$db/diesel.toml" \
-			--database-url "sqlite://$(TOP_DIR)/bin/moss/src/db/$$db/test.db" \
+			--config-file "$(TOP_DIR)/crates/forge/src/db/$$db/diesel.toml" \
+			--database-url "sqlite://$(TOP_DIR)/crates/forge/src/db/$$db/test.db" \
 			migration redo; \
 	done
 
@@ -130,17 +128,17 @@ help:
 	@echo
 	@echo "Available targets:"
 	@echo "  build         Build the complete workspace"
-	@echo "  boulder       Build Boulder with MODE=$(MODE)"
-	@echo "  moss          Build Moss with MODE=$(MODE) (default)"
-	@echo "  get-started   Build and install Boulder, Moss, and their data"
+	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
+	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"
+	@echo "  binary-layout  Require Cast to be the sole executable target"
 	@echo "  config-formats  Reject YAML/KDL outside external-service interfaces"
 	@echo "  config-formats-test  Test the configuration-format gate"
-	@echo "  migrate       Apply all Moss database migrations"
-	@echo "  migrate-redo  Reapply all Moss database migrations"
+	@echo "  migrate       Apply all Forge database migrations"
+	@echo "  migrate-redo  Reapply all Forge database migrations"
 	@echo "  libstone      Build and run the C libstone example"
 	@echo "  clean         Remove Cargo build artifacts"
 	@echo

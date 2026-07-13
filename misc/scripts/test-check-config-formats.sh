@@ -91,7 +91,7 @@ fail_content_case() {
 pass_case \
     'exact allowlist plus unrelated tracked paths' \
     "${allowed[@]}" \
-    'bin/boulder/data/policy/default.glu' \
+    'crates/mason/data/policy/default.glu' \
     'docs/name.glu' \
     'source/libyaml-helper.rs' \
     'source/looks-yamlish'
@@ -223,12 +223,12 @@ fail_content_case \
 
 pass_content_case \
     'exact package-search YAML strings are data, not loaders' \
-    'bin/moss/src/cli/search.rs' \
+    'crates/forge/src/cli/search.rs' \
     $'#[cfg(test)]\nmod tests {\n"libyaml",\n"YAML 1.1 library",\n&[provider(pkgconfig, "yaml-0.1")],\nfn test_provider_soname_finds_libyaml() {\n}\n}'
 
 pass_content_case \
     'upstream Ruby index name is not owned configuration' \
-    'bin/boulder/src/draft/build/ruby.rs' \
+    'crates/mason/src/draft/build/ruby.rs' \
     '"checksums.yaml.gz" if file.depth() == 0 => state.increment_confidence(50),'
 
 pass_content_case \

@@ -1,5 +1,5 @@
 {
-  description = "OS Tools development shell";
+  description = "Cast development shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?rev=4c1018dae018162ec878d42fec712642d214fdfa";
@@ -33,6 +33,7 @@
             })
             pkgs.git
             pkgs.gnumake
+            pkgs.jq
             pkgs.pkg-config
             pkgs.typos
             pkgs.valgrind
