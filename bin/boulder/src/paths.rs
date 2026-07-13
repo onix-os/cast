@@ -137,6 +137,14 @@ impl Paths {
         }
     }
 
+    /// Cache mapping isolated by frozen derivation identity.
+    pub fn derivation_cache(&self, derivation_id: &str, name: &str) -> Mapping {
+        Mapping {
+            host: self.host_root.join("derivations").join(derivation_id).join(name),
+            guest: self.guest_root.join(name),
+        }
+    }
+
     pub fn upstreams(&self) -> Mapping {
         Mapping {
             host: self.host_root.join("upstreams"),
