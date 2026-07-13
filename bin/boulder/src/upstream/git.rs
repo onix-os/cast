@@ -19,13 +19,15 @@ pub struct Git {
     pub url: Url,
     /// Revision to fetch, pinned to the full commit when a source lock exists.
     pub commit: String,
+    /// Exact directory name used when sharing this source with the build.
+    pub name: String,
     pub original_index: usize,
 }
 
 impl Git {
     /// Returns the name of the upstream. It is implied from the URL.
     pub fn name(&self) -> &str {
-        util::uri_file_name(&self.url)
+        &self.name
     }
 
     /// Stores the upstream into the storage directory.

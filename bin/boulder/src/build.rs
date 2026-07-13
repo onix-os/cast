@@ -18,6 +18,7 @@ use nix::{
 };
 use stone_recipe::{
     Script,
+    derivation::DerivationPlan,
     script::{self, Breakpoint},
 };
 use thiserror::Error;
@@ -185,6 +186,30 @@ impl Builder {
 
         timing.finish(timer);
 
+        Ok(stored)
+    }
+
+    /// Prepare runtime state from an already-frozen derivation.
+    ///
+    /// Repository refresh and provider resolution are intentionally absent:
+    /// they must finish before the plan crosses the freeze boundary.
+    pub fn setup_locked(
+        &self,
+        plan: &DerivationPlan,
+        timing: &mut Timing,
+        initialize_timer: timing::Timer,
+    ) -> Result<Vec<upstream::Stored>, Error> {
+        util::recreate_dir(&self.paths.artefacts().host).map_err(Error::RecreateArtefactsDir)?;
+        root::recreate(self)?;
+        root::populate_locked(self, &plan.build_lock, timing, initialize_timer)?;
+
+        let timer = timing.begin(timing::Kind::Fetch);
+        let stored = upstream::sync_locked(
+            &plan.sources,
+            &self.paths.upstreams().host,
+            &self.paths.guest_host_path(&self.paths.upstreams()),
+        )?;
+        timing.finish(timer);
         Ok(stored)
     }
 

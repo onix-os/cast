@@ -11,7 +11,7 @@ use crate::{
 };
 use futures_util::{StreamExt, TryStreamExt, stream};
 use moss::runtime;
-use stone_recipe::upstream;
+use stone_recipe::{derivation::LockedSource, upstream};
 use thiserror::Error;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 
@@ -51,9 +51,11 @@ impl Upstream {
             })),
             upstream::Props::Git { git_ref, .. } => {
                 let commit = locked_commit.unwrap_or(&git_ref).to_owned();
+                let name = moss::util::uri_file_name(&upstream.url).to_owned();
                 Ok(Self::Git(Git {
                     url: upstream.url,
                     commit,
+                    name,
                     original_index,
                 }))
             }
@@ -200,6 +202,46 @@ pub fn sync(
     storage_dir: &Path,
     share_dir: &Path,
 ) -> Result<Vec<Stored>, Error> {
+    let stored = sync_upstreams(upstreams, storage_dir, share_dir)?;
+    require_current_source_lock(recipe, &stored)?;
+    Ok(stored)
+}
+
+/// Fetch and share only the exact source identities frozen into a derivation.
+///
+/// This path does not load or rewrite authored recipe/source-lock state.
+pub fn sync_locked(sources: &[LockedSource], storage_dir: &Path, share_dir: &Path) -> Result<Vec<Stored>, Error> {
+    let upstreams = locked_upstreams(sources)?;
+    sync_upstreams(&upstreams, storage_dir, share_dir)
+}
+
+fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            Ok(match source {
+                LockedSource::Archive {
+                    url, sha256, filename, ..
+                } => Upstream::Plain(Plain {
+                    url: url.parse().map_err(|source| Error::LockedSourceUrl { index, source })?,
+                    hash: sha256.parse().map_err(plain::Error::from)?,
+                    rename: Some(filename.clone()),
+                }),
+                LockedSource::Git {
+                    url, commit, directory, ..
+                } => Upstream::Git(Git {
+                    url: url.parse().map_err(|source| Error::LockedSourceUrl { index, source })?,
+                    commit: commit.clone(),
+                    name: directory.clone(),
+                    original_index: index,
+                }),
+            })
+        })
+        .collect()
+}
+
+fn sync_upstreams(upstreams: &[Upstream], storage_dir: &Path, share_dir: &Path) -> Result<Vec<Stored>, Error> {
     println!();
     println!("Sharing {} upstream(s) with the build container:", upstreams.len());
 
@@ -255,8 +297,6 @@ pub fn sync(
 
     mp.clear()?;
     println!();
-
-    require_current_source_lock(recipe, &stored)?;
 
     Ok(stored)
 }
@@ -343,6 +383,12 @@ pub enum Error {
     },
     #[error("Gluon source lock {path:?} was created or updated; rerun the build to bind it into provenance")]
     SourceLockChanged { path: std::path::PathBuf },
+    #[error("locked source {index} has an invalid URL")]
+    LockedSourceUrl {
+        index: usize,
+        #[source]
+        source: url::ParseError,
+    },
     #[error("io")]
     // A generic I/O error occurred.
     Io(#[from] io::Error),
@@ -415,6 +461,33 @@ let base = boulder.mk_package (boulder.meta {{
                 original_index: 1,
             }),
         ]
+    }
+
+    #[test]
+    fn locked_sources_preserve_exact_materialization_names() {
+        let sources = vec![
+            LockedSource::Archive {
+                order: 0,
+                url: "https://example.invalid/source.tar.zst".to_owned(),
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                filename: "renamed.tar.zst".to_owned(),
+            },
+            LockedSource::Git {
+                order: 1,
+                url: "https://example.invalid/source.git".to_owned(),
+                requested_ref: "main".to_owned(),
+                commit: FULL_COMMIT.to_owned(),
+                directory: "frozen-source.git".to_owned(),
+            },
+        ];
+
+        let upstreams = locked_upstreams(&sources).unwrap();
+        assert_eq!(upstreams[0].name(), "renamed.tar.zst");
+        assert_eq!(upstreams[1].name(), "frozen-source.git");
+        let Upstream::Git(git) = &upstreams[1] else {
+            panic!("expected locked Git source")
+        };
+        assert_eq!(git.commit, FULL_COMMIT);
     }
 
     #[test]
