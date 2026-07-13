@@ -4,7 +4,7 @@
 //! Resolve and freeze a target-specific Boulder derivation plan.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
 };
@@ -116,6 +116,32 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     let boulder_version = tools_buildinfo::get_simple_version();
     let jobs = request.jobs.to_string();
     let builder_fingerprint = builder_fingerprint(&boulder_version, &target.build_policy.fingerprint.sha256);
+    let expected_lock = build_lock::ExpectedBuildLockContext {
+        requested_providers: requested_packages.clone(),
+        build_platform: platform(&target_policy.build_platform),
+        host_platform: platform(&target_policy.host_platform),
+        target_platform: platform(&target_policy.target_platform),
+        policy: LockedIdentity {
+            name: target.build_policy.name.clone(),
+            fingerprint: target.build_policy.fingerprint.sha256.clone(),
+        },
+        target: LockedIdentity {
+            name: target_name.clone(),
+            fingerprint: target_fingerprint(target_name, &target.build_policy.fingerprint.sha256),
+        },
+        profile: LockedIdentity {
+            name: builder.profile.to_string(),
+            fingerprint: profile_fingerprint.clone(),
+        },
+        toolchain: LockedIdentity {
+            name: toolchain_name.to_owned(),
+            fingerprint: toolchain_fingerprint(toolchain_name, &target.build_policy.fingerprint.sha256),
+        },
+        builder: LockedIdentity {
+            name: EXECUTOR_ABI.to_owned(),
+            fingerprint: builder_fingerprint.clone(),
+        },
+    };
     let request_fingerprint = hash_fields(
         [
             "boulder-build-lock-request-v2",
@@ -136,18 +162,18 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     let (build_lock, lock_outcome) = if request.update_lock {
         let lock = resolve_build_lock(
             &builder,
-            target,
             &requested_packages,
             &request_fingerprint,
-            &profile_fingerprint,
-            toolchain_name,
-            &builder_fingerprint,
+            &expected_lock,
             request.refresh_repositories,
         )?;
         let outcome = build_lock::write(&lock_path, &lock)?;
         (lock, Some(outcome))
     } else {
-        (build_lock::require_current(&lock_path, &request_fingerprint)?, None)
+        (
+            build_lock::require_current_for_context(&lock_path, &request_fingerprint, &expected_lock)?,
+            None,
+        )
     };
 
     let jobs = freeze_jobs(target)?;
@@ -253,12 +279,9 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
 
 fn resolve_build_lock(
     builder: &Builder,
-    target: &build::Target,
     requested: &[String],
     request_fingerprint: &str,
-    profile_fingerprint: &str,
-    toolchain_name: &str,
-    builder_fingerprint: &str,
+    expected: &build_lock::ExpectedBuildLockContext,
     refresh: bool,
 ) -> Result<BuildLock, Error> {
     let installation = Installation::open(&builder.env.moss_dir, None)?;
@@ -272,7 +295,7 @@ fn resolve_build_lock(
     }
     let references = requested.iter().map(String::as_str).collect::<Vec<_>>();
     let closure = client.resolve_available_closure(&references)?;
-    let snapshots = client
+    let mut snapshots = client
         .repository_index_snapshots()?
         .into_iter()
         .map(|snapshot| RepositorySnapshot {
@@ -295,10 +318,7 @@ fn resolve_build_lock(
             ),
             architecture: resolved.package.meta.architecture.clone(),
             repository: resolved.repository.to_string(),
-            outputs: vec![LockedOutput {
-                name: "out".to_owned(),
-                id: resolved.package.id.to_string(),
-            }],
+            outputs: vec![LockedOutput { name: "out".to_owned() }],
             dependencies: resolved
                 .dependencies
                 .iter()
@@ -309,6 +329,11 @@ fn resolve_build_lock(
                 .collect(),
         })
         .collect::<Vec<_>>();
+    let used_repositories = packages
+        .iter()
+        .map(|package| package.repository.as_str())
+        .collect::<BTreeSet<_>>();
+    snapshots.retain(|snapshot| used_repositories.contains(snapshot.id.as_str()));
     let requests = closure
         .requests
         .into_iter()
@@ -318,36 +343,20 @@ fn resolve_build_lock(
             output: "out".to_owned(),
         })
         .collect::<Vec<_>>();
-    let target_policy = &target.target_policy;
-    let target_platform = platform(&target_policy.target_platform);
-    let build_platform = platform(&target_policy.build_platform);
-    let host_platform = platform(&target_policy.host_platform);
     let mut lock = BuildLock {
         schema_version: BUILD_LOCK_SCHEMA_VERSION,
         request_fingerprint: request_fingerprint.to_owned(),
-        base_state: hash_fields(packages.iter().map(|package| package.package_id.as_str())),
         repositories: snapshots,
         requests,
         packages,
-        build_platform,
-        host_platform,
-        target_platform,
-        policy: LockedIdentity {
-            name: target_policy.name.clone(),
-            fingerprint: target.build_policy.fingerprint.sha256.clone(),
-        },
-        profile: LockedIdentity {
-            name: builder.profile.to_string(),
-            fingerprint: profile_fingerprint.to_owned(),
-        },
-        toolchain: LockedIdentity {
-            name: toolchain_name.to_owned(),
-            fingerprint: toolchain_fingerprint(toolchain_name, &target.build_policy.fingerprint.sha256),
-        },
-        builder: LockedIdentity {
-            name: EXECUTOR_ABI.to_owned(),
-            fingerprint: builder_fingerprint.to_owned(),
-        },
+        build_platform: expected.build_platform.clone(),
+        host_platform: expected.host_platform.clone(),
+        target_platform: expected.target_platform.clone(),
+        policy: expected.policy.clone(),
+        target: expected.target.clone(),
+        profile: expected.profile.clone(),
+        toolchain: expected.toolchain.clone(),
+        builder: expected.builder.clone(),
     };
     lock.normalize();
     lock.validate()?;
@@ -515,6 +524,12 @@ fn builder_fingerprint(boulder_version: &str, policy_fingerprint: &str) -> Strin
 
 fn toolchain_fingerprint(toolchain: &str, policy_fingerprint: &str) -> String {
     hash_fields([toolchain, policy_fingerprint])
+}
+
+fn target_fingerprint(target: &str, policy_fingerprint: &str) -> String {
+    // The composed policy fingerprint binds the complete target value; the
+    // exact target name selects one member of that validated catalog.
+    hash_fields(["boulder-target-selection-v1", policy_fingerprint, target])
 }
 
 fn platform(policy: &stone_recipe::build_policy::PlatformPolicySpec) -> Platform {

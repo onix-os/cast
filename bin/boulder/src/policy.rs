@@ -22,6 +22,8 @@ const COMPOSITION_IDENTITY_DOMAIN: &str = "boulder-build-policy-composition-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicy {
+    /// Authored repository-policy identity from the root layer manifest.
+    pub name: String,
     pub spec: BuildPolicySpec,
     pub fingerprint: EvaluationFingerprint,
     pub origin: String,
@@ -127,6 +129,7 @@ impl BuildPolicy {
         }
 
         Ok(Self {
+            name: manifest.name,
             spec,
             fingerprint: finalized_root.fingerprint,
             origin: root_source.logical_name().to_owned(),
@@ -465,6 +468,7 @@ mod tests {
     fn loads_the_explicit_repository_policy_layers() {
         let policy = BuildPolicy::repository_for_tests();
 
+        assert_eq!(policy.name, "aerynos");
         assert_eq!(policy.origin, "policy.glu");
         assert_eq!(policy.spec.vendor_id, "aerynos-linux");
         assert_eq!(

@@ -61,7 +61,7 @@ impl<'a> Executor<'a> {
         ::container::set_term_fg(pgid)?;
 
         clear_directory_contents(Path::new(&self.plan.layout.build_dir))?;
-        let target = &self.plan.build_lock.policy.name;
+        let target = &self.plan.build_lock.target.name;
         for pgo_dir in unique_pgo_dirs(&self.plan.jobs) {
             moss::util::recreate_dir(Path::new(pgo_dir))?;
         }

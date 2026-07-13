@@ -114,9 +114,15 @@ fn safe_child(root: &std::path::Path, path: &std::path::Path) -> bool {
 }
 
 fn require_locked_repositories(client: &moss::Client, build_lock: &BuildLock) -> Result<(), Error> {
+    let locked_ids = build_lock
+        .repositories
+        .iter()
+        .map(|repository| repository.id.clone())
+        .collect::<BTreeSet<_>>();
     let mut current = client
         .repository_index_snapshots()?
         .into_iter()
+        .filter(|snapshot| locked_ids.contains(&snapshot.id.to_string()))
         .map(|snapshot| RepositorySnapshot {
             id: snapshot.id.to_string(),
             index_uri: snapshot.index_uri.to_string(),
@@ -397,10 +403,7 @@ mod tests {
             version: "1.2.3-4-5".to_owned(),
             architecture: "x86_64".to_owned(),
             repository: "repo".to_owned(),
-            outputs: vec![LockedOutput {
-                name: "out".to_owned(),
-                id: "locked-id".to_owned(),
-            }],
+            outputs: vec![LockedOutput { name: "out".to_owned() }],
             dependencies: Vec::<LockedOutputRef>::new(),
         }
     }

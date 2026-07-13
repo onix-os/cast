@@ -231,7 +231,7 @@ fn plan(env: Env, command: PlanCommand) -> Result<(), Error> {
     }
     println!("derivation_id = {:?}", planned.plan.derivation_id().as_str());
     println!("request_fingerprint = {:?}", planned.request_fingerprint);
-    println!("target = {:?}", planned.plan.build_lock.policy.name);
+    println!("target = {:?}", planned.plan.build_lock.target.name);
     println!("source_date_epoch = {}", planned.plan.source_date_epoch);
     println!("packages = {}", planned.plan.build_lock.packages.len());
     println!("jobs = {}", planned.plan.jobs.len());
