@@ -7,10 +7,7 @@
 //! concrete [`PackageSpec`]. This module deliberately contains values only:
 //! Rust never receives or retains a Gluon closure or a second recipe model.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::LazyLock,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
@@ -139,9 +136,9 @@ pub struct HooksSpec {
 
 /// A structural build-system selection.
 ///
-/// Standard builders declare every tool needed to lower and execute their
-/// phases. [`Self::Custom`] is the explicit shell escape hatch; it cannot hide
-/// its tool dependencies in an untyped macro side channel.
+/// Standard variants select repository-owned typed builder policy, which owns
+/// their commands, environment, and tools. [`Self::Custom`] is the explicit
+/// shell escape hatch and therefore carries its package-authored tools here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuilderSpec {
     CMake {
@@ -420,9 +417,9 @@ impl PackageSpec {
             .phases(self.hooks_for_profile(profile))
     }
 
-    /// Select target-native build inputs for one optional profile.
-    /// Builder-required tools remain available separately through
-    /// [`BuilderSpec::required_tools`].
+    /// Select target-native build inputs for one optional profile. Standard
+    /// builder tools live in repository policy; custom tools remain available
+    /// through [`BuilderSpec::authored_required_tools`].
     pub fn native_build_inputs_for_profile(&self, profile: Option<&str>) -> &[DependencySpec] {
         self.selected_profile(profile)
             .map_or(&self.native_build_inputs, |profile| &profile.native_build_inputs)
@@ -467,12 +464,17 @@ impl PackageSpec {
         self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, false)?;
-        self.validate_dependency_list(self.builder.required_tools(), "builder.required_tools", &outputs, false)?;
+        self.validate_dependency_list(
+            self.builder.authored_required_tools(),
+            "builder.required_tools",
+            &outputs,
+            false,
+        )?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
             let parent = format!("profiles[{index}]");
             self.validate_dependency_list(
-                profile.builder.required_tools(),
+                profile.builder.authored_required_tools(),
                 &format!("{parent}.builder.required_tools"),
                 &outputs,
                 false,
@@ -626,30 +628,15 @@ fn valid_output_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_'))
 }
 
-fn binary(name: &str) -> DependencySpec {
-    DependencySpec::Binary(name.to_owned())
-}
-
-static CMAKE_TOOLS: LazyLock<Vec<DependencySpec>> = LazyLock::new(|| vec![binary("cmake"), binary("ninja")]);
-static CMAKE_TOOLS_WITH_TESTS: LazyLock<Vec<DependencySpec>> =
-    LazyLock::new(|| vec![binary("cmake"), binary("ninja"), binary("ctest")]);
-static MESON_TOOLS: LazyLock<Vec<DependencySpec>> =
-    LazyLock::new(|| vec![binary("cmake"), binary("meson"), binary("ninja"), binary("pkgconf")]);
-static CARGO_TOOLS: LazyLock<Vec<DependencySpec>> = LazyLock::new(|| vec![binary("cargo")]);
-static AUTOTOOLS_TOOLS: LazyLock<Vec<DependencySpec>> =
-    LazyLock::new(|| vec![binary("autoconf"), binary("automake"), binary("make")]);
-
 impl BuilderSpec {
-    /// Canonical tools required by this builder. These are separate from the
-    /// package's declared native, build, and check inputs.
-    pub fn required_tools(&self) -> &[DependencySpec] {
+    /// Package-authored tools for the explicit custom-builder escape hatch.
+    ///
+    /// Standard builder tools are repository policy and deliberately have no
+    /// duplicate Rust defaults in the package domain.
+    pub fn authored_required_tools(&self) -> &[DependencySpec] {
         match self {
-            Self::CMake { run_tests: true, .. } => CMAKE_TOOLS_WITH_TESTS.as_slice(),
-            Self::CMake { run_tests: false, .. } => CMAKE_TOOLS.as_slice(),
-            Self::Meson { .. } => MESON_TOOLS.as_slice(),
-            Self::Cargo { .. } => CARGO_TOOLS.as_slice(),
-            Self::Autotools { .. } => AUTOTOOLS_TOOLS.as_slice(),
             Self::Custom { required_tools, .. } => required_tools,
+            Self::CMake { .. } | Self::Meson { .. } | Self::Cargo { .. } | Self::Autotools { .. } => &[],
         }
     }
 
@@ -846,20 +833,16 @@ mod tests {
         });
 
         assert!(matches!(package.builder_for_profile(None), BuilderSpec::CMake { .. }));
-        assert_eq!(
-            package.builder_for_profile(None).required_tools(),
-            [
-                DependencySpec::Binary("cmake".to_owned()),
-                DependencySpec::Binary("ninja".to_owned())
-            ]
-        );
+        assert!(package.builder_for_profile(None).authored_required_tools().is_empty());
         assert!(matches!(
             package.builder_for_profile(Some("emul32/x86_64")),
             BuilderSpec::Cargo { .. }
         ));
-        assert_eq!(
-            package.builder_for_profile(Some("emul32/x86_64")).required_tools(),
-            [DependencySpec::Binary("cargo".to_owned())]
+        assert!(
+            package
+                .builder_for_profile(Some("emul32/x86_64"))
+                .authored_required_tools()
+                .is_empty()
         );
         assert_eq!(
             package.phases_for_profile(Some("emul32/x86_64")).build.steps,

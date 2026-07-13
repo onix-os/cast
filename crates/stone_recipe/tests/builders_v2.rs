@@ -31,7 +31,7 @@ let base = b.mk_package (b.meta {{
 }
 
 #[test]
-fn meson_builder_declares_tools_flags_and_disabled_checks() {
+fn meson_builder_keeps_policy_tools_out_of_package_defaults() {
     let source = package(
         "boulder.builders.meson.v1",
         r#"builder.builder {
@@ -41,10 +41,7 @@ fn meson_builder_declares_tools_flags_and_disabled_checks() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cmake)", "binary(meson)", "binary(ninja)", "binary(pkgconf)",]
-    );
+    assert!(evaluated.package.builder.authored_required_tools().is_empty());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -75,10 +72,7 @@ fn cmake_builder_declares_structural_steps() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
-    );
+    assert!(evaluated.package.builder.authored_required_tools().is_empty());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -103,10 +97,7 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cargo)"]
-    );
+    assert!(evaluated.package.builder.authored_required_tools().is_empty());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.build.steps,
@@ -135,10 +126,7 @@ fn autotools_builder_declares_structural_phase_contract() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(autoconf)", "binary(automake)", "binary(make)"]
-    );
+    assert!(evaluated.package.builder.authored_required_tools().is_empty());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -183,7 +171,7 @@ let scripts = b.scripts {
     let evaluated = evaluate_gluon(&source).unwrap();
 
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.package.builder.authored_required_tools()),
         ["binary(zig)"]
     );
     let phases = evaluated.package.phases();
