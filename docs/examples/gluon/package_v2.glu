@@ -1,0 +1,38 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! boulder.package.v2
+
+// Package factories are ordinary pure Gluon functions. The root module calls
+// the function, so Rust receives a concrete PackageSpec rather than a closure.
+\deps ->
+    let base = b.mk_package (b.meta {
+        pname = "factory-hello",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/factory-hello",
+        license = ["MPL-2.0"],
+    })
+    let root = {
+        summary = b.optional.set "Package produced by a Gluon factory",
+        runtime_inputs = [deps.tls],
+        paths = [b.path.exe "/usr/bin/factory-hello"],
+        .. b.output "out"
+    }
+    {
+        scripts = {
+            setup = b.optional.set "%cmake",
+            build = b.optional.set "%cmake_build",
+            install = b.optional.set "%cmake_install",
+            .. b.defaults.scripts
+        },
+        native_build_inputs = [deps.cmake],
+        build_inputs = [deps.zlib],
+        outputs = [root],
+        sources = [
+            b.source.archive
+                "https://example.invalid/factory-hello-1.0.0.tar.xz"
+                "0123456789abcdef",
+        ],
+        .. base
+    }

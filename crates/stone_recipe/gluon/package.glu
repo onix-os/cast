@@ -1,0 +1,351 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Embedded, pure module imported by package factories as `boulder.package.v2`.
+
+let _ = import! std.types
+let arrays = import! std.array.prim
+
+type Optional a =
+    | Unset
+    | Set a
+
+type Boolean =
+    | False
+    | True
+
+type MetaSpec = {
+    pname: String,
+    version: String,
+    release: Int,
+    homepage: String,
+    license: Array String,
+}
+
+type ScriptsSpec = {
+    setup: Optional String,
+    build: Optional String,
+    install: Optional String,
+    check: Optional String,
+    workload: Optional String,
+    environment: Optional String,
+}
+
+type PackageRef = { name: String }
+
+type OutputRef = {
+    package: PackageRef,
+    output: String,
+}
+
+type DependencySpec =
+    | Package { value: PackageRef }
+    | Output { value: OutputRef }
+    | Binary { target: String }
+    | SystemBinary { target: String }
+    | PkgConfig { target: String }
+    | PkgConfig32 { target: String }
+    | Soname { target: String }
+    | CMake { target: String }
+    | Python { target: String }
+    | Interpreter { target: String }
+
+type PathSpec =
+    | Any { path: String }
+    | Exe { path: String }
+    | Symlink { path: String }
+    | Special { path: String }
+
+type OutputSpec = {
+    name: String,
+    summary: Optional String,
+    description: Optional String,
+    provides_exclude: Array String,
+    runtime_inputs: Array DependencySpec,
+    runtime_exclude: Array String,
+    paths: Array PathSpec,
+    conflicts: Array DependencySpec,
+}
+
+type ToolchainSpec =
+    | LlvmToolchain
+    | GnuToolchain
+
+type OptionsSpec = {
+    toolchain: ToolchainSpec,
+    cspgo: Boolean,
+    samplepgo: Boolean,
+    debug: Boolean,
+    strip: Boolean,
+    networking: Boolean,
+    compressman: Boolean,
+    lastrip: Boolean,
+}
+
+type ProfileSpec = {
+    name: String,
+    scripts: ScriptsSpec,
+    native_build_inputs: Array DependencySpec,
+    build_inputs: Array DependencySpec,
+    check_inputs: Array DependencySpec,
+}
+
+type UpstreamSpec =
+    | ArchiveSource {
+        url: String,
+        hash: String,
+        rename: Optional String,
+        strip_dirs: Optional Int,
+        unpack: Boolean,
+        unpack_dir: Optional String,
+    }
+    | GitSource {
+        url: String,
+        git_ref: String,
+        clone_dir: Optional String,
+    }
+
+type TuningSpec =
+    | Enable
+    | Disable
+    | Config { value: String }
+
+type KeyValueSpec a = {
+    key: String,
+    value: a,
+}
+
+type PackageSpec = {
+    meta: MetaSpec,
+    scripts: ScriptsSpec,
+    native_build_inputs: Array DependencySpec,
+    build_inputs: Array DependencySpec,
+    check_inputs: Array DependencySpec,
+    outputs: Array OutputSpec,
+    options: OptionsSpec,
+    profiles: Array ProfileSpec,
+    sources: Array UpstreamSpec,
+    architectures: Array String,
+    tuning: Array (KeyValueSpec TuningSpec),
+    emul32: Boolean,
+    mold: Boolean,
+}
+
+// Scalar/record changes and arrays intentionally use different variants so
+// keeping a field is distinct from replacing an array with `[]`.
+type ValuePatch a =
+    | KeepValue
+    | SetValue a
+
+type ArrayPatch a =
+    | KeepArray
+    | ReplaceArray (Array a)
+    | PrependArray (Array a)
+    | AppendArray (Array a)
+
+type PackagePatch = {
+    meta: ValuePatch MetaSpec,
+    scripts: ValuePatch ScriptsSpec,
+    native_build_inputs: ArrayPatch DependencySpec,
+    build_inputs: ArrayPatch DependencySpec,
+    check_inputs: ArrayPatch DependencySpec,
+    outputs: ArrayPatch OutputSpec,
+    options: ValuePatch OptionsSpec,
+    profiles: ArrayPatch ProfileSpec,
+    sources: ArrayPatch UpstreamSpec,
+    architectures: ArrayPatch String,
+    tuning: ArrayPatch (KeyValueSpec TuningSpec),
+    emul32: ValuePatch Boolean,
+    mold: ValuePatch Boolean,
+}
+
+let empty_scripts: ScriptsSpec = {
+    setup = Unset,
+    build = Unset,
+    install = Unset,
+    check = Unset,
+    workload = Unset,
+    environment = Unset,
+}
+
+let default_options: OptionsSpec = {
+    toolchain = LlvmToolchain,
+    cspgo = False,
+    samplepgo = False,
+    debug = True,
+    strip = True,
+    networking = False,
+    compressman = False,
+    lastrip = True,
+}
+
+let output = \name -> {
+    name,
+    summary = Unset,
+    description = Unset,
+    provides_exclude = [],
+    runtime_inputs = [],
+    runtime_exclude = [],
+    paths = [],
+    conflicts = [],
+}
+
+let profile = \name -> {
+    name,
+    scripts = empty_scripts,
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+}
+
+let mk_package: MetaSpec -> PackageSpec = \meta -> {
+    meta,
+    scripts = empty_scripts,
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = [output "out"],
+    options = default_options,
+    profiles = [],
+    sources = [],
+    architectures = [],
+    tuning = [],
+    emul32 = False,
+    mold = False,
+}
+
+let apply_value = \patch current ->
+    match patch with
+    | KeepValue -> current
+    | SetValue value -> value
+
+let apply_array = \patch current ->
+    match patch with
+    | KeepArray -> current
+    | ReplaceArray values -> values
+    | PrependArray values -> arrays.append values current
+    | AppendArray values -> arrays.append current values
+
+let apply_package_patch: PackagePatch -> PackageSpec -> PackageSpec = \patch current -> {
+    meta = apply_value patch.meta current.meta,
+    scripts = apply_value patch.scripts current.scripts,
+    native_build_inputs = apply_array patch.native_build_inputs current.native_build_inputs,
+    build_inputs = apply_array patch.build_inputs current.build_inputs,
+    check_inputs = apply_array patch.check_inputs current.check_inputs,
+    outputs = apply_array patch.outputs current.outputs,
+    options = apply_value patch.options current.options,
+    profiles = apply_array patch.profiles current.profiles,
+    sources = apply_array patch.sources current.sources,
+    architectures = apply_array patch.architectures current.architectures,
+    tuning = apply_array patch.tuning current.tuning,
+    emul32 = apply_value patch.emul32 current.emul32,
+    mold = apply_value patch.mold current.mold,
+}
+
+let empty_package_patch: PackagePatch = {
+    meta = KeepValue,
+    scripts = KeepValue,
+    native_build_inputs = KeepArray,
+    build_inputs = KeepArray,
+    check_inputs = KeepArray,
+    outputs = KeepArray,
+    options = KeepValue,
+    profiles = KeepArray,
+    sources = KeepArray,
+    architectures = KeepArray,
+    tuning = KeepArray,
+    emul32 = KeepValue,
+    mold = KeepValue,
+}
+
+let package_ref = \name -> { name }
+let output_ref = \package output -> { package, output }
+let named = \key value -> { key, value }
+
+let archive = \url hash -> ArchiveSource {
+    url,
+    hash,
+    rename = Unset,
+    strip_dirs = Unset,
+    unpack = True,
+    unpack_dir = Unset,
+}
+
+let git = \url git_ref -> GitSource {
+    url,
+    git_ref,
+    clone_dir = Unset,
+}
+
+{
+    abi_version = 2,
+    mk_package,
+    meta = \value -> value,
+    scripts = \value -> value,
+    output,
+    output_with = \value -> value,
+    profile,
+    profile_with = \value -> value,
+    options = \value -> value,
+    package_patch = \value -> value,
+    override_attrs = apply_package_patch,
+    defaults = {
+        scripts = empty_scripts,
+        options = default_options,
+        package_patch = empty_package_patch,
+    },
+    optional = {
+        unset = Unset,
+        set = \value -> Set value,
+    },
+    boolean = {
+        false = False,
+        true = True,
+    },
+    patch = {
+        keep = KeepValue,
+        set = \value -> SetValue value,
+        array = {
+            keep = KeepArray,
+            replace = \values -> ReplaceArray values,
+            prepend = \values -> PrependArray values,
+            append = \values -> AppendArray values,
+        },
+    },
+    package_ref,
+    output_ref,
+    dep = {
+        package = \name -> Package { value = package_ref name },
+        output = \package output -> Output { value = output_ref package output },
+        binary = \target -> Binary { target },
+        system_binary = \target -> SystemBinary { target },
+        pkgconfig = \target -> PkgConfig { target },
+        pkgconfig32 = \target -> PkgConfig32 { target },
+        soname = \target -> Soname { target },
+        cmake = \target -> CMake { target },
+        python = \target -> Python { target },
+        interpreter = \target -> Interpreter { target },
+    },
+    source = {
+        archive,
+        archive_with = \value -> ArchiveSource value,
+        git,
+        git_with = \value -> GitSource value,
+    },
+    path = {
+        any = \path -> Any { path },
+        exe = \path -> Exe { path },
+        symlink = \path -> Symlink { path },
+        special = \path -> Special { path },
+    },
+    tuning = {
+        enable = Enable,
+        disable = Disable,
+        config = \value -> Config { value },
+    },
+    toolchain = {
+        llvm = LlvmToolchain,
+        gnu = GnuToolchain,
+    },
+    named,
+}

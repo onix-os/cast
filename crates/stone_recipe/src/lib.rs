@@ -22,6 +22,7 @@ pub use self::validation::ValidationError;
 
 pub mod gluon;
 pub mod macros;
+pub mod package;
 pub mod script;
 pub mod spec;
 pub mod tuning;
