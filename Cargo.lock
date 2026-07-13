@@ -1619,6 +1619,7 @@ dependencies = [
  "fs-err",
  "gluon",
  "gluon_codegen",
+ "libc",
  "sha2",
  "tempfile",
 ]

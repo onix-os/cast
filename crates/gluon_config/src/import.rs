@@ -239,11 +239,19 @@ impl ImportGraph<'_> {
         }
         let source = self.policy.embedded_modules.get(module);
         self.checkpoint()?;
-        let source = source
-            .ok_or_else(|| self.denied(parent, module, "module is not explicitly embedded"))?
-            .clone();
-        self.checkpoint()?;
+        let source = source.ok_or_else(|| self.denied(parent, module, "module is not explicitly embedded"))?;
         let identity = format!("embedded:{module}");
+        if self.identities.contains(&identity) {
+            return self.checkpoint();
+        }
+
+        // Embedded ABI text is caller-owned and may be much larger than the
+        // configured evaluator budget. Reject it while it is still borrowed;
+        // cloning first would briefly admit unbounded memory even though
+        // register_import eventually returned a size diagnostic.
+        self.check_new_import_limits(module, source.len())?;
+        let source = source.clone();
+        self.checkpoint()?;
         self.register_alias(parent, module, &identity, &source)?;
         self.register_import(
             identity,
@@ -353,6 +361,44 @@ impl ImportGraph<'_> {
             class,
             source,
         });
+        self.checkpoint()
+    }
+
+    fn check_new_import_limits(&self, source_name: &str, source_bytes: usize) -> Result<(), Diagnostic> {
+        if self.identities.len() >= self.limits.max_imports {
+            return Err(Diagnostic::limit(
+                LimitKind::ImportCount,
+                Some(source_name.to_owned()),
+                format!("import graph exceeds the {}-module limit", self.limits.max_imports),
+            ));
+        }
+        if source_bytes > self.limits.max_imported_file_bytes {
+            return Err(Diagnostic::limit(
+                LimitKind::ImportedFileSize,
+                Some(source_name.to_owned()),
+                format!(
+                    "imported module exceeds the {}-byte limit",
+                    self.limits.max_imported_file_bytes
+                ),
+            ));
+        }
+        let total_bytes = self.total_bytes.checked_add(source_bytes).ok_or_else(|| {
+            Diagnostic::limit(
+                LimitKind::ImportGraphSize,
+                Some(source_name.to_owned()),
+                "import graph byte count overflowed",
+            )
+        })?;
+        if total_bytes > self.limits.max_import_graph_bytes {
+            return Err(Diagnostic::limit(
+                LimitKind::ImportGraphSize,
+                Some(source_name.to_owned()),
+                format!(
+                    "source and import graph exceeds the {}-byte limit",
+                    self.limits.max_import_graph_bytes
+                ),
+            ));
+        }
         self.checkpoint()
     }
 

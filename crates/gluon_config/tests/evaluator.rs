@@ -289,6 +289,34 @@ fn evaluates_an_explicit_embedded_module() {
 }
 
 #[test]
+fn embedded_module_size_is_bounded_before_evaluation() {
+    let limits = Limits {
+        max_imported_file_bytes: 2,
+        ..Limits::default()
+    };
+    let source = Source::new("root.glu", "import! cast.answer");
+
+    let exact = ImportPolicy::new().with_embedded_module("cast.answer", "42").unwrap();
+    assert_eq!(
+        Evaluator::new(limits)
+            .with_import_policy(exact)
+            .evaluate::<i64>(&source)
+            .unwrap()
+            .value,
+        42
+    );
+
+    let oversized = ImportPolicy::new().with_embedded_module("cast.answer", "420").unwrap();
+    let error = Evaluator::new(limits)
+        .with_import_policy(oversized)
+        .evaluate::<i64>(&source)
+        .unwrap_err();
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportedFileSize));
+    assert_eq!(error.source_name.as_deref(), Some("cast.answer"));
+}
+
+#[test]
 fn duplicate_embedded_module_is_rejected_without_replacing_the_first() {
     let mut policy = ImportPolicy::new();
     policy.insert_embedded_module("cast.value", "41").unwrap();
@@ -329,7 +357,7 @@ fn parent_traversal_and_absolute_imports_are_rejected() {
 
 #[cfg(unix)]
 #[test]
-fn symlink_escape_is_rejected() {
+fn symlink_escape_is_rejected_without_following_the_target() {
     use std::os::unix::fs::symlink;
 
     let directory = tempfile::tempdir().unwrap();
@@ -343,7 +371,8 @@ fn symlink_escape_is_rejected() {
         .unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Import);
-    assert!(error.message.contains("escapes"));
+    assert_eq!(error.source_name.as_deref(), Some("escape.glu"));
+    assert!(error.message.contains("cannot be loaded"));
 }
 
 #[test]
@@ -484,23 +513,20 @@ fn import_aliases_share_a_stable_logical_identity() {
 
 #[cfg(unix)]
 #[test]
-fn symlink_aliases_share_the_canonical_logical_identity() {
+fn symlink_imports_are_rejected_instead_of_becoming_aliases() {
     use std::os::unix::fs::symlink;
 
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("answer.glu"), "42").unwrap();
     symlink("answer.glu", directory.path().join("alias.glu")).unwrap();
     let evaluator = rooted_evaluator(directory.path());
-    let source = Source::new(
-        "root.glu",
-        "let direct = import! \"answer.glu\"\nlet alias = import! \"alias.glu\"\nalias",
-    );
+    let source = Source::new("root.glu", "import! \"alias.glu\"");
 
-    let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
+    let error = evaluator.evaluate::<i64>(&source).unwrap_err();
 
-    assert_eq!(evaluation.value, 42);
-    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
-    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert_eq!(error.source_name.as_deref(), Some("alias.glu"));
+    assert!(error.message.contains("cannot be loaded"));
 }
 
 fn rooted_evaluator(path: &Path) -> Evaluator {
