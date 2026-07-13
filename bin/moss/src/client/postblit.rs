@@ -8,8 +8,10 @@
 //! Trigger intent is loaded from `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu`
 //! and do not yet support local triggers
 use std::{
+    io,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process,
+    process::{self, Stdio},
 };
 
 use crate::Installation;
@@ -59,8 +61,8 @@ impl GluonCodec for TransactionTriggerCodec {
     }
 
     fn encode(&self, _config: &Self::Config) -> Result<String, GluonCodecError> {
-        Err(GluonCodecError::conversion(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
+        Err(GluonCodecError::conversion(io::Error::new(
+            io::ErrorKind::Unsupported,
             "packaged transaction triggers are read-only",
         )))
     }
@@ -80,8 +82,8 @@ impl GluonCodec for SystemTriggerCodec {
     }
 
     fn encode(&self, _config: &Self::Config) -> Result<String, GluonCodecError> {
-        Err(GluonCodecError::conversion(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
+        Err(GluonCodecError::conversion(io::Error::new(
+            io::ErrorKind::Unsupported,
             "packaged system triggers are read-only",
         )))
     }
@@ -243,7 +245,7 @@ impl TriggerRunner<'_> {
 fn execute_trigger_directly(trigger: &CompiledHandler) -> Result<(), Error> {
     match trigger.handler() {
         Handler::Run { run, args } => {
-            let cmd = process::Command::new(run).args(args).current_dir("/").output()?;
+            let cmd = trigger_command(run, args).spawn()?.wait_with_output()?;
 
             if let Some(code) = cmd.status.code() {
                 if code != 0 {
@@ -274,6 +276,59 @@ fn execute_trigger_directly(trigger: &CompiledHandler) -> Result<(), Error> {
     Ok(())
 }
 
+/// Build the deliberately small, target-root-owned process context shared by
+/// transaction and system triggers.
+///
+/// Trigger commands may resolve helper programs only from the target root's
+/// standard system paths. Locale, timezone, home, temporary paths and the file
+/// creation mask are fixed; no environment or open descriptor from the process
+/// that launched Moss is a trigger input.
+///
+/// The contract is `PATH=/usr/sbin:/usr/bin:/sbin:/bin`, `HOME=/`,
+/// `TMPDIR=/tmp`, `LANG=C`, `LC_ALL=C`, `TZ=UTC`, working directory `/`, umask
+/// `0022`, null standard input, and captured standard output/error.
+fn trigger_command(run: &str, args: &[String]) -> process::Command {
+    const TRIGGER_PATH: &str = "/usr/sbin:/usr/bin:/sbin:/bin";
+
+    let mut command = process::Command::new(run);
+    command
+        .args(args)
+        .current_dir("/")
+        .env_clear()
+        .env("HOME", "/")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("PATH", TRIGGER_PATH)
+        .env("TMPDIR", "/tmp")
+        .env("TZ", "UTC")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Container control descriptors are already close-on-exec, but system
+    // triggers can run directly against `/`. Cover both paths, including file
+    // descriptors inherited by Moss from its launcher.
+    unsafe {
+        command.pre_exec(|| {
+            const CLOSE_RANGE_CLOEXEC: nix::libc::c_uint = 1 << 2;
+            nix::libc::umask(0o022);
+            let result = nix::libc::syscall(
+                nix::libc::SYS_close_range,
+                3 as nix::libc::c_uint,
+                nix::libc::c_uint::MAX,
+                CLOSE_RANGE_CLOEXEC,
+            );
+            if result == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    command
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("load Gluon trigger configuration")]
@@ -286,11 +341,15 @@ pub enum Error {
     Triggers(#[from] triggers::Error),
 
     #[error("io")]
-    IO(#[from] std::io::Error),
+    IO(#[from] io::Error),
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::BTreeMap, os::fd::AsRawFd};
+
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+
     use super::*;
 
     #[test]
@@ -327,5 +386,53 @@ let base = moss.trigger "depmod" "Update kernel module dependencies"
             .match_path("/usr/lib/modules/6.12.1/kernel")
             .expect("kernel path must match");
         assert_eq!(matched.variables.get("version").map(String::as_str), Some("6.12.1"));
+    }
+
+    #[test]
+    fn trigger_commands_have_only_the_fixed_target_environment() {
+        let mut command = trigger_command("/usr/bin/env", &[]);
+        let output = command.spawn().unwrap().wait_with_output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let environment = stdout
+            .lines()
+            .map(|line| line.split_once('=').unwrap())
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(command.get_current_dir(), Some(Path::new("/")));
+        assert!(output.status.success());
+        assert_eq!(
+            environment,
+            BTreeMap::from([
+                ("HOME", "/"),
+                ("LANG", "C"),
+                ("LC_ALL", "C"),
+                ("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
+                ("TMPDIR", "/tmp"),
+                ("TZ", "UTC"),
+            ])
+        );
+    }
+
+    #[test]
+    fn trigger_commands_get_eof_on_stdin_and_no_inherited_extra_descriptors() {
+        let inherited = tempfile::tempfile().unwrap();
+        let inherited_fd = inherited.as_raw_fd();
+        fcntl(inherited_fd, FcntlArg::F_SETFD(FdFlag::empty())).unwrap();
+        let script = format!(
+            "test \"$(pwd)\" = / && test \"$(umask)\" = 0022 && \
+             test ! -e /proc/self/fd/{inherited_fd} && ! read value"
+        );
+
+        let output = trigger_command("/bin/sh", &["-c".to_owned(), script])
+            .spawn()
+            .unwrap()
+            .wait_with_output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "trigger probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
