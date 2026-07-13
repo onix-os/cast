@@ -19,6 +19,7 @@ pub use self::gluon::{
 };
 
 mod gluon;
+pub mod layers;
 
 /// A value supplied explicitly by the planner when policy is resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
