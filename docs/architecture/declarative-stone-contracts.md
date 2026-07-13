@@ -67,8 +67,10 @@ Implemented:
 
 Still transitional:
 
-- explicit `Shell` steps and `%(definition)` layout/environment expansion use
-  `stone_recipe::script`; standard builder steps themselves are structural;
+- explicit `Shell` steps are literal and standard builders freeze directly as
+  structural `StepPlan` values, but planning still uses `stone_recipe::script`
+  internally to resolve repository layout, toolchain, tuning, and output-policy
+  definitions before those values enter the plan;
 - mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
   hash their content and destination into the derivation;
 - the explicit repository policy root declares named layers in authored order;

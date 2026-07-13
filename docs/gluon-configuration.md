@@ -133,9 +133,10 @@ patch records distinguish keeping an array from replacing it with `[]`.
 Standard CMake, Meson, Cargo, and Autotools modules declare their required
 tools and phase bodies as structural `StepSpec` values. They do not author or
 lower through `%action` strings. `b.step.shell` is the explicit escape hatch;
-Shell content and the remaining `%(definition)` environment/layout syntax use
-the transitional script parser before plan freeze. The executor receives only
-the resulting frozen `StepPlan` and environment values.
+its content is literal and cannot invoke `%action` or `%(definition)` syntax.
+Shell steps use the frozen `BOULDER_*` build-context variables documented in
+the package-authoring guide. The executor receives only the resulting frozen
+`StepPlan` and environment values.
 
 The former `boulder.recipe.v1` embedded module, evaluator, and standalone
 encoders have been removed. `boulder.package.v2` is the only recipe ABI, and
