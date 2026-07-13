@@ -29,6 +29,8 @@ pub mod manager;
 
 pub const DEFAULT_CHANNEL: &str = "main";
 pub const DEFAULT_ARCH: &str = "x86_64";
+// This upstream wire-protocol filename is fixed by existing repository servers.
+const ROOT_INDEX_WIRE_FILENAME: &str = "moss-root-index.json";
 const MIB: u64 = 1024 * 1024;
 pub(crate) const REPOSITORY_INDEX_DOWNLOAD_LIMITS: request::DownloadLimits =
     request::DownloadLimits::new(16 * MIB, Duration::from_secs(120));
@@ -249,7 +251,7 @@ impl RootIndexSource {
 
         path.push_str(self.channel.as_ref());
         path.push('/');
-        path.push_str("cast-root-index.json");
+        path.push_str(ROOT_INDEX_WIRE_FILENAME);
 
         uri.set_path(&path);
 
@@ -347,4 +349,43 @@ fn default_channel() -> format::Identifier {
 
 fn default_arch() -> String {
     DEFAULT_ARCH.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root_source(base_uri: &str, channel: &str, arch: &str) -> RootIndexSource {
+        RootIndexSource {
+            base_uri: base_uri.parse().unwrap(),
+            channel: channel.try_into().unwrap(),
+            version: "stream/unstable".try_into().unwrap(),
+            arch: arch.to_owned(),
+        }
+    }
+
+    #[test]
+    fn root_index_uri_uses_the_exact_official_wire_filename() {
+        let source = root_source("https://cdn.aerynos.dev", "main", "x86_64");
+
+        assert_eq!(
+            source.uri().as_str(),
+            "https://cdn.aerynos.dev/main/moss-root-index.json"
+        );
+    }
+
+    #[test]
+    fn root_and_history_uris_preserve_the_exact_base_channel_and_architecture() {
+        let source = root_source("https://mirror.example.test/repositories/", "testing", "aarch64");
+        let history = format::Identifier::new("1783706384").unwrap();
+
+        assert_eq!(
+            source.uri().as_str(),
+            "https://mirror.example.test/repositories/testing/moss-root-index.json"
+        );
+        assert_eq!(
+            source.history_index_uri(&history).as_str(),
+            "https://mirror.example.test/repositories/testing/history/1783706384/aarch64/stone.index"
+        );
+    }
 }

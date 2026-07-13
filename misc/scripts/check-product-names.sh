@@ -37,6 +37,10 @@ unexpected=$(
             misc/scripts/check-binary-layout.sh:*)
                 # The binary-layout gate rejects the retired package names.
                 ;;
+            crates/forge/src/repository/mod.rs:*'"moss-root-index.json"'* | \
+                crates/forge/src/repository/mod.rs:*'/moss-root-index.json"'*)
+                # External repository wire protocol: this exact legacy filename is server-owned, not product branding.
+                ;;
             misc/scripts/check-product-names.sh:*)
                 # This gate necessarily names what it rejects.
                 ;;
