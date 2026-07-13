@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use stone_recipe::ToolchainSpec;
+use stone_recipe::{ToolchainSpec, build_policy::TargetPolicySpec};
 
-use crate::architecture::BuildTarget;
 use crate::recipe::Recipe;
 
-pub fn stages(recipe: &Recipe, target: BuildTarget) -> Option<Vec<Stage>> {
+pub fn stages(recipe: &Recipe, target: &TargetPolicySpec) -> Option<Vec<Stage>> {
     let phases = recipe.build_target_phases(target);
 
     (!phases.workload.is_empty()).then(|| {
@@ -40,8 +39,9 @@ mod tests {
 
     #[test]
     fn selected_profile_workload_preserves_llvm_pgo_stages() {
-        let target = BuildTarget::Native(crate::architecture::host());
-        let target_name = target.to_string();
+        let policy = crate::BuildPolicy::repository_for_tests();
+        let target = policy.target("x86_64").unwrap();
+        let target_name = &target.name;
         let root = tempfile::tempdir().unwrap();
         fs::write(
             root.path().join("stone.glu"),

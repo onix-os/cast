@@ -9,14 +9,13 @@ use std::{
 
 use fs_err as fs;
 use moss::{repository, util};
+use stone_recipe::build_policy::TargetPolicySpec;
 use stone_recipe::derivation::DerivationPlan;
 use thiserror::Error;
 use tui::Styled;
 
 use self::job::Job;
-use crate::{
-    BuildPolicy, Env, Paths, Recipe, Timing, architecture::BuildTarget, policy, profile, recipe, timing, upstream,
-};
+use crate::{BuildPolicy, Env, Paths, Recipe, Timing, policy, profile, recipe, timing, upstream};
 
 pub mod context;
 pub mod job;
@@ -36,7 +35,7 @@ pub struct Builder {
 }
 
 pub struct Target {
-    pub build_target: BuildTarget,
+    pub target_policy: TargetPolicySpec,
     pub build_policy: BuildPolicy,
     pub jobs: Vec<Job>,
 }
@@ -73,35 +72,37 @@ impl Builder {
 
         let paths = Paths::new(&recipe, verify_against_manifest, &env.cache_dir, "/mason", output_dir)?;
 
-        let build_targets = recipe.build_targets();
-
-        if build_targets.is_empty() {
-            return Err(Error::NoBuildTargets);
-        }
-
-        let build_target = build_targets
-            .iter()
-            .copied()
-            .find(|target| target.to_string() == requested_target)
-            .ok_or_else(|| Error::UnknownTarget {
+        let target_policy = build_policy.target(requested_target)?.clone();
+        if !recipe.supports_target(&target_policy) {
+            let supported = build_policy
+                .spec
+                .targets
+                .iter()
+                .filter(|target| recipe.supports_target(target))
+                .map(|target| target.name.clone())
+                .collect();
+            return Err(Error::UnsupportedRecipeTarget {
                 requested: requested_target.to_owned(),
-                available: build_targets.into_iter().map(|target| target.to_string()).collect(),
-            })?;
-        let stages = pgo::stages(&recipe, build_target)
+                supported,
+            });
+        }
+        let stages = pgo::stages(&recipe, &target_policy)
             .map(|stages| stages.into_iter().map(Some).collect::<Vec<_>>())
             .unwrap_or_else(|| vec![None]);
         let target_jobs = stages
             .into_iter()
-            .map(|stage| Job::new(build_target, stage, &recipe, &paths, &build_policy, ccache, jobs))
+            .map(|stage| Job::new(&target_policy, stage, &recipe, &paths, &build_policy, ccache, jobs))
             .collect::<Result<Vec<_>, _>>()?;
         let target = Target {
-            build_target,
+            target_policy,
             build_policy,
             jobs: target_jobs,
         };
 
         let profiles = profile::Manager::new(&env)?;
-        let repos = profiles.repositories(&profile)?.clone();
+        let repos = profiles
+            .repositories_for_architecture(&profile, &target.target_policy.build_platform.architecture)?
+            .clone();
         let profile_fingerprints = profiles.fingerprints.clone();
 
         Ok(Self {
@@ -172,10 +173,10 @@ impl Runtime {
     }
 }
 
-pub fn build_target_prefix(target: BuildTarget, i: usize) -> String {
+pub fn build_target_prefix(target: &str, i: usize) -> String {
     let newline = if i > 0 { "\n".into() } else { String::default() };
 
-    format!("{newline}{}", target.to_string().dim())
+    format!("{newline}{}", target.dim())
 }
 
 pub fn pgo_stage_prefix(stage: pgo::Stage, i: usize) -> String {
@@ -197,10 +198,8 @@ pub fn phase_prefix(phase: job::Phase, is_pgo: bool, i: usize) -> String {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("no supported build targets for recipe")]
-    NoBuildTargets,
-    #[error("unknown build target `{requested}`; available targets: {}", available.join(", "))]
-    UnknownTarget { requested: String, available: Vec<String> },
+    #[error("recipe does not support build target `{requested}`; supported targets: {}", supported.join(", "))]
+    UnsupportedRecipeTarget { requested: String, supported: Vec<String> },
     #[error("invalid SOURCE_DATE_EPOCH {0}")]
     InvalidSourceDateEpoch(i64),
     #[error("build policy")]

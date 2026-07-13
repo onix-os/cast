@@ -480,6 +480,7 @@ mod tests {
         plan.package.name = "frozen".to_owned();
         plan.package.homepage = "https://frozen.invalid".to_owned();
         plan.package.architecture = "x86".to_owned();
+        plan.build_lock.target_platform.architecture = "x86".to_owned();
         plan.package.licenses = vec!["MIT".to_owned()];
         plan.analysis = AnalysisPlan {
             toolchain: AnalysisToolchain::Gnu,

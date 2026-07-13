@@ -34,7 +34,26 @@ type ProfileSpec = {
     repositories: Array RepositorySpec,
 }
 
-let direct = \id uri -> {
+type DirectIndexOptions = {
+    id: String,
+    description: Optional String,
+    uri: String,
+    priority: Optional Int,
+    enabled: Optional Boolean,
+}
+
+type RootIndexOptions = {
+    id: String,
+    description: Optional String,
+    base_uri: String,
+    channel: Optional String,
+    version: String,
+    arch: Optional String,
+    priority: Optional Int,
+    enabled: Optional Boolean,
+}
+
+let direct: String -> String -> RepositorySpec = \id uri -> {
     id,
     description = None,
     source = DirectIndex { uri },
@@ -42,7 +61,7 @@ let direct = \id uri -> {
     enabled = None,
 }
 
-let direct_with = \value -> {
+let direct_with: DirectIndexOptions -> RepositorySpec = \value -> {
     id = value.id,
     description = value.description,
     source = DirectIndex { uri = value.uri },
@@ -50,7 +69,7 @@ let direct_with = \value -> {
     enabled = value.enabled,
 }
 
-let root_index = \id base_uri version -> {
+let root_index: String -> String -> String -> RepositorySpec = \id base_uri version -> {
     id,
     description = None,
     source = RootIndex {
@@ -63,7 +82,7 @@ let root_index = \id base_uri version -> {
     enabled = None,
 }
 
-let root_index_with = \value -> {
+let root_index_with: RootIndexOptions -> RepositorySpec = \value -> {
     id = value.id,
     description = value.description,
     source = RootIndex {
@@ -76,7 +95,7 @@ let root_index_with = \value -> {
     enabled = value.enabled,
 }
 
-let profile = \id repositories -> { id, repositories }
+let profile: String -> Array RepositorySpec -> ProfileSpec = \id repositories -> { id, repositories }
 let profiles: Array ProfileSpec -> Array ProfileSpec = \values -> values
 
 {

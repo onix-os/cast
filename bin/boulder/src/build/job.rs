@@ -9,12 +9,12 @@ use std::{
 };
 
 use moss::util;
-use stone_recipe::{UpstreamSpec, derivation::PhasePlan};
+use stone_recipe::{UpstreamSpec, build_policy::TargetPolicySpec, derivation::PhasePlan};
 use thiserror::Error;
 
 pub use self::phase::Phase;
 use crate::build::pgo;
-use crate::{BuildPolicy, Paths, Recipe, architecture::BuildTarget};
+use crate::{BuildPolicy, Paths, Recipe};
 
 mod phase;
 
@@ -28,7 +28,7 @@ pub struct Job {
 
 impl Job {
     pub fn new(
-        target: BuildTarget,
+        target: &TargetPolicySpec,
         pgo_stage: Option<pgo::Stage>,
         recipe: &Recipe,
         paths: &Paths,
@@ -36,7 +36,7 @@ impl Job {
         ccache: bool,
         jobs: NonZeroUsize,
     ) -> Result<Self, Error> {
-        let build_dir = paths.build().guest.join(target.to_string());
+        let build_dir = paths.build().guest.join(&target.name);
         let work_dir = work_dir(&build_dir, &recipe.declaration.sources);
 
         let phases = phase::list(pgo_stage)

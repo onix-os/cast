@@ -91,6 +91,12 @@ impl DerivationPlan {
         require_nonempty("recipe_fingerprint", &self.recipe_fingerprint)?;
         require_nonempty("source_lock_digest", &self.source_lock_digest)?;
         self.build_lock.validate()?;
+        if self.package.architecture != self.build_lock.target_platform.architecture {
+            return Err(DerivationValidationError::ArtifactTargetArchitectureMismatch {
+                artifact: self.package.architecture.clone(),
+                target: self.build_lock.target_platform.architecture.clone(),
+            });
+        }
         self.layout.validate()?;
         if self.execution.jobs == 0 {
             return Err(DerivationValidationError::ZeroJobs);
@@ -790,6 +796,10 @@ pub enum DerivationValidationError {
     ZeroSourceRelease,
     #[error("execution.jobs: value must be greater than zero")]
     ZeroJobs,
+    #[error(
+        "package.architecture: artifact architecture {artifact} does not match build_lock.target_platform.architecture {target}"
+    )]
+    ArtifactTargetArchitectureMismatch { artifact: String, target: String },
     #[error("sources: duplicate source order {order}")]
     DuplicateSourceOrder { order: u32 },
     #[error("sources[{index}].order: expected canonical order {index}, found {order}")]
@@ -1280,6 +1290,20 @@ mod tests {
             plan.validate(),
             Err(DerivationValidationError::DuplicateOutputPackage { package })
                 if package == "hello"
+        ));
+    }
+
+    #[test]
+    fn validation_binds_artifact_architecture_to_the_frozen_target_platform() {
+        let mut plan = sample_plan();
+        plan.package.architecture = "x86".to_owned();
+
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::ArtifactTargetArchitectureMismatch {
+                artifact,
+                target,
+            }) if artifact == "x86" && target == "x86_64"
         ));
     }
 

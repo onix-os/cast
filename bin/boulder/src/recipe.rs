@@ -9,13 +9,11 @@ use std::{
 use chrono::{DateTime, Utc};
 use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
+use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
 
-use crate::{
-    architecture::{self, BuildTarget},
-    source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock},
-};
+use crate::source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock};
 
 #[derive(Debug)]
 pub struct Recipe {
@@ -77,48 +75,36 @@ impl Recipe {
         })
     }
 
-    pub fn build_targets(&self) -> Vec<BuildTarget> {
-        let host = architecture::host();
-        let host_string = host.to_string();
-
-        let mut targets = vec![];
+    /// Whether this recipe opts into one exact repository build target.
+    ///
+    /// An empty architecture list means every native policy target, plus
+    /// explicitly enabled compatibility targets. Once a recipe declares an
+    /// architecture list, only an exact target name or the typed `native` and
+    /// `emul32` classes match. Target-name prefixes and host architecture are
+    /// deliberately not inferred here.
+    pub fn supports_target(&self, target: &TargetPolicySpec) -> bool {
         if self.declaration.architectures.is_empty() {
-            if self.declaration.emul32 {
-                targets.push(BuildTarget::Emul32(host));
-            }
-
-            targets.push(BuildTarget::Native(host));
+            matches!(&target.emulation, TargetEmulationSpec::Native) || self.declaration.emul32
         } else {
-            let emul32 = BuildTarget::Emul32(host);
-            let emul32_string = emul32.to_string();
-
-            if self.declaration.architectures.contains(&emul32_string)
-                || self.declaration.architectures.contains(&"emul32".into())
-            {
-                targets.push(emul32);
-            }
-
-            if self.declaration.architectures.contains(&host_string)
-                || self.declaration.architectures.contains(&"native".into())
-            {
-                targets.push(BuildTarget::Native(host));
-            }
+            self.declaration.architectures.iter().any(|declared| {
+                declared == &target.name
+                    || matches!(
+                        (declared.as_str(), &target.emulation),
+                        ("native", TargetEmulationSpec::Native) | ("emul32", TargetEmulationSpec::Emul32 { .. })
+                    )
+            })
         }
-
-        targets
     }
 
-    pub fn build_target_profile_key(&self, target: BuildTarget) -> Option<&str> {
-        let target_string = target.to_string();
-
+    pub fn build_target_profile_key(&self, target: &TargetPolicySpec) -> Option<&str> {
         if let Some(profile) = self
             .declaration
             .profiles
             .iter()
-            .find(|profile| profile.name == target_string)
+            .find(|profile| profile.name == target.name)
         {
             Some(&profile.name)
-        } else if target.emul32() {
+        } else if matches!(&target.emulation, TargetEmulationSpec::Emul32 { .. }) {
             self.declaration
                 .profiles
                 .iter()
@@ -129,13 +115,13 @@ impl Recipe {
         }
     }
 
-    pub fn build_target_profile(&self, target: BuildTarget) -> Option<&ProfileSpec> {
+    pub fn build_target_profile(&self, target: &TargetPolicySpec) -> Option<&ProfileSpec> {
         let key = self.build_target_profile_key(target)?;
         self.declaration.profiles.iter().find(|profile| profile.name == key)
     }
 
     /// Select the structural package-v2 phases for one target.
-    pub fn build_target_phases(&self, target: BuildTarget) -> PhasesSpec {
+    pub fn build_target_phases(&self, target: &TargetPolicySpec) -> PhasesSpec {
         self.declaration
             .phases_for_profile(self.build_target_profile_key(target))
     }
@@ -242,6 +228,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use stone_recipe::package::{BuilderSpec, HooksSpec, ProfileSpec};
+
     use super::*;
 
     const SOURCE_SPEC: &str = r#"{
@@ -260,6 +248,27 @@ mod tests {
 
     fn gluon_recipe(source: &str) -> String {
         format!("let boulder = import! boulder.package.v2\nboulder.mk_package (boulder.meta {source})")
+    }
+
+    fn minimal_recipe() -> Recipe {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        Recipe::load(root.path()).unwrap()
+    }
+
+    fn target(name: &str) -> TargetPolicySpec {
+        crate::BuildPolicy::repository_for_tests().target(name).unwrap().clone()
+    }
+
+    fn profile(name: &str) -> ProfileSpec {
+        ProfileSpec {
+            name: name.to_owned(),
+            builder: BuilderSpec::default(),
+            hooks: HooksSpec::default(),
+            native_build_inputs: Vec::new(),
+            build_inputs: Vec::new(),
+            check_inputs: Vec::new(),
+        }
     }
 
     fn gluon_recipe_with_upstreams() -> String {
@@ -289,6 +298,60 @@ let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
             composed.declaration.outputs[0].summary.as_deref(),
             Some("Recipe composed with an imported policy")
         );
+    }
+
+    #[test]
+    fn empty_architecture_list_supports_all_native_policy_targets_and_gates_emul32() {
+        let mut recipe = minimal_recipe();
+        let x86_64 = target("x86_64");
+        let x86_64_v3x = target("x86_64-v3x");
+        let emul32 = target("emul32/x86_64");
+
+        assert!(recipe.supports_target(&x86_64));
+        assert!(recipe.supports_target(&x86_64_v3x));
+        assert!(!recipe.supports_target(&emul32));
+
+        recipe.declaration.emul32 = true;
+        assert!(recipe.supports_target(&emul32));
+    }
+
+    #[test]
+    fn declared_architectures_match_exact_policy_names_or_typed_classes_only() {
+        let mut recipe = minimal_recipe();
+        let x86_64 = target("x86_64");
+        let x86_64_v3x = target("x86_64-v3x");
+        let emul32 = target("emul32/x86_64");
+
+        recipe.declaration.architectures = vec!["x86_64".to_owned()];
+        assert!(recipe.supports_target(&x86_64));
+        assert!(!recipe.supports_target(&x86_64_v3x));
+        assert!(!recipe.supports_target(&emul32));
+
+        recipe.declaration.architectures = vec!["native".to_owned()];
+        assert!(recipe.supports_target(&x86_64));
+        assert!(recipe.supports_target(&x86_64_v3x));
+        assert!(!recipe.supports_target(&emul32));
+
+        recipe.declaration.architectures = vec!["emul32".to_owned()];
+        assert!(!recipe.supports_target(&x86_64));
+        assert!(recipe.supports_target(&emul32));
+
+        recipe.declaration.architectures = vec!["emul32/x86_64".to_owned()];
+        assert!(recipe.supports_target(&emul32));
+    }
+
+    #[test]
+    fn target_profiles_prefer_exact_policy_name_then_typed_emul32_fallback() {
+        let mut recipe = minimal_recipe();
+        let target = target("emul32/x86_64");
+        recipe.declaration.profiles = vec![profile("emul32"), profile("emul32/x86_64")];
+
+        assert_eq!(recipe.build_target_profile_key(&target), Some("emul32/x86_64"));
+        assert_eq!(recipe.build_target_profile(&target).unwrap().name, "emul32/x86_64");
+
+        recipe.declaration.profiles.pop();
+        assert_eq!(recipe.build_target_profile_key(&target), Some("emul32"));
+        assert_eq!(recipe.build_target_profile(&target).unwrap().name, "emul32");
     }
 
     fn matching_source_lock() -> SourceLock {

@@ -19,7 +19,7 @@ use crate::build::{
     context::{BuildContext, PgoContextStage, TextContextOverlay, TypedContextInputs},
     pgo,
 };
-use crate::{BuildPolicy, Paths, Recipe, architecture::BuildTarget};
+use crate::{BuildPolicy, Paths, Recipe};
 
 use super::{Error, work_dir};
 
@@ -74,7 +74,7 @@ impl Phase {
 
     pub fn plan(
         &self,
-        target: BuildTarget,
+        target: &TargetPolicySpec,
         pgo_stage: Option<pgo::Stage>,
         recipe: &Recipe,
         paths: &Paths,
@@ -97,18 +97,17 @@ impl Phase {
             return Ok(None);
         }
 
-        let build_target = target.to_string();
-        let build_dir = paths.build().guest.join(&build_target);
+        let build_target = &target.name;
+        let build_dir = paths.build().guest.join(build_target);
         let work_dir = if matches!(self, Phase::Prepare) {
             build_dir.clone()
         } else {
             work_dir(&build_dir, &recipe.declaration.sources)
         };
-        let target_policy = policy.target(&build_target)?;
-        let flags = select_flags(target_policy, pgo_stage, recipe, policy)?;
+        let flags = select_flags(target, pgo_stage, recipe, policy)?;
         let mut context = BuildContext::resolve(
             &policy.spec,
-            target_policy,
+            target,
             TypedContextInputs {
                 package_name: recipe.declaration.meta.pname.clone(),
                 package_version: recipe.declaration.meta.version.clone(),
@@ -421,7 +420,7 @@ mod direct_tests {
     };
 
     use super::*;
-    use crate::{Architecture, BuildPolicy, Paths, Recipe};
+    use crate::{BuildPolicy, Paths, Recipe};
 
     fn fixture() -> (Recipe, BuildPolicy, tempfile::TempDir) {
         let recipe_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu");
@@ -467,9 +466,10 @@ mod direct_tests {
             run_tests: false,
         };
         let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let target = policy.target("x86_64").unwrap();
         let plan = Phase::Setup
             .plan(
-                BuildTarget::Native(Architecture::X86_64),
+                target,
                 None,
                 &recipe,
                 &paths,
@@ -510,9 +510,10 @@ mod direct_tests {
             required_tools: Vec::new(),
         };
         let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let target = policy.target("x86_64").unwrap();
         let plan = Phase::Build
             .plan(
-                BuildTarget::Native(Architecture::X86_64),
+                target,
                 None,
                 &recipe,
                 &paths,

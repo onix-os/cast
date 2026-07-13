@@ -80,8 +80,8 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         &request.target,
     )?;
     let target = &builder.target;
-    let target_name = target.build_target.to_string();
-    let target_policy = target.build_policy.target(&target_name)?;
+    let target_policy = &target.target_policy;
+    let target_name = &target_policy.name;
 
     let packager = Packager::new(&builder.paths, &builder.recipe)?;
     let package_names = packager.resolved_packages().keys().cloned().collect::<Vec<_>>();
@@ -216,7 +216,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         compress_man: builder.recipe.declaration.options.compressman,
         remove_libtool: builder.recipe.declaration.options.lastrip,
     };
-    plan.manifest_build_inputs = build::root::declared_inputs(&builder.recipe, target.build_target)?;
+    plan.manifest_build_inputs = build::root::declared_inputs(&builder.recipe, target_policy)?;
     plan.collection_rules = packager
         .collection_rules()
         .map(|(package, kind, pattern)| CollectionRulePlan {
@@ -315,8 +315,7 @@ fn resolve_build_lock(
             output: "out".to_owned(),
         })
         .collect::<Vec<_>>();
-    let target_name = target.build_target.to_string();
-    let target_policy = target.build_policy.target(&target_name)?;
+    let target_policy = &target.target_policy;
     let target_platform = platform(&target_policy.target_platform);
     let build_platform = platform(&target_policy.build_platform);
     let host_platform = platform(&target_policy.host_platform);

@@ -9,7 +9,10 @@ use moss::{Installation, package, repository, util};
 use stone::relation::{Dependency, Kind as RelationKind};
 use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
-    build_policy::{BuildPolicySpec, BuildToolSpec, BuildersPolicySpec, StandardBuilderPolicySpec},
+    build_policy::{
+        BuildPolicySpec, BuildToolSpec, BuildersPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec,
+        TargetPolicySpec,
+    },
     derivation::{BuildLock, DerivationPlan, LockedPackage, RepositorySnapshot},
     package::{BuilderSpec, DependencySpec, PackageSpec},
 };
@@ -167,10 +170,10 @@ pub(crate) fn packages(builder: &Builder) -> Result<Vec<String>, Error> {
     packages_for(
         &builder.target.build_policy.spec,
         &builder.recipe.declaration,
-        builder.recipe.build_target_profile_key(builder.target.build_target),
-        builder.target.build_target,
+        builder.recipe.build_target_profile_key(&builder.target.target_policy),
+        &builder.target.target_policy,
         builder.ccache,
-        pgo::stages(&builder.recipe, builder.target.build_target).is_some(),
+        pgo::stages(&builder.recipe, &builder.target.target_policy).is_some(),
     )
 }
 
@@ -178,7 +181,7 @@ fn packages_for(
     policy: &BuildPolicySpec,
     package: &PackageSpec,
     profile: Option<&str>,
-    target: crate::architecture::BuildTarget,
+    target: &TargetPolicySpec,
     compiler_cache: bool,
     pgo_enabled: bool,
 ) -> Result<Vec<String>, Error> {
@@ -191,7 +194,7 @@ fn packages_for(
     };
     extend_policy_tools(&mut packages, "build_root.toolchains", toolchain_tools)?;
 
-    if target.emul32() {
+    if matches!(&target.emulation, TargetEmulationSpec::Emul32 { .. }) {
         extend_policy_tools(&mut packages, "build_root.emul32.base", &policy.build_root.emul32.base)?;
         let toolchain_tools = match package.options.toolchain {
             ToolchainSpec::Llvm => &policy.build_root.emul32.toolchains.llvm,
@@ -288,10 +291,7 @@ fn build_tool_name(tool: &BuildToolSpec) -> Result<String, stone::relation::Pars
     Dependency::new(kind, target.clone()).map(|dependency| dependency.to_name())
 }
 
-pub(crate) fn declared_inputs(
-    recipe: &crate::Recipe,
-    target: crate::architecture::BuildTarget,
-) -> Result<Vec<String>, Error> {
+pub(crate) fn declared_inputs(recipe: &crate::Recipe, target: &TargetPolicySpec) -> Result<Vec<String>, Error> {
     declared_inputs_for(&recipe.declaration, recipe.build_target_profile_key(target))
 }
 
@@ -507,16 +507,14 @@ let unrelated = b.profile_with {
                 clone_dir: None,
             },
         ];
+        let target = policy
+            .targets
+            .iter()
+            .find(|target| target.name == "emul32/x86_64")
+            .unwrap()
+            .clone();
 
-        let packages = packages_for(
-            &policy,
-            &package,
-            None,
-            crate::architecture::BuildTarget::Emul32(crate::Architecture::X86_64),
-            true,
-            false,
-        )
-        .unwrap();
+        let packages = packages_for(&policy, &package, None, &target, true, false).unwrap();
         let expected = [
             "base-build",
             "base-check",
@@ -543,13 +541,18 @@ let unrelated = b.profile_with {
         let mut policy = repository_policy();
         policy.pgo.required_tools = vec![BuildToolSpec::SystemBinary("policy-profdata".to_owned())];
         let mut package = selected_inputs_package();
-        let target = crate::architecture::BuildTarget::Native(crate::Architecture::X86_64);
+        let target = policy
+            .targets
+            .iter()
+            .find(|target| target.name == "x86_64")
+            .unwrap()
+            .clone();
 
         package.options.toolchain = ToolchainSpec::Llvm;
-        let llvm = packages_for(&policy, &package, None, target, false, true).unwrap();
-        let llvm_without_pgo = packages_for(&policy, &package, None, target, false, false).unwrap();
+        let llvm = packages_for(&policy, &package, None, &target, false, true).unwrap();
+        let llvm_without_pgo = packages_for(&policy, &package, None, &target, false, false).unwrap();
         package.options.toolchain = ToolchainSpec::Gnu;
-        let gnu = packages_for(&policy, &package, None, target, false, true).unwrap();
+        let gnu = packages_for(&policy, &package, None, &target, false, true).unwrap();
 
         assert!(llvm.contains(&"sysbinary(policy-profdata)".to_owned()));
         assert!(!llvm_without_pgo.contains(&"sysbinary(policy-profdata)".to_owned()));

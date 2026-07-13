@@ -24,8 +24,7 @@ use thiserror::Error;
 use tui::Styled;
 
 use crate::{
-    Architecture, Timing,
-    architecture::BuildTarget,
+    Timing,
     build::{job::Phase, pgo::Stage},
     timing,
 };
@@ -50,8 +49,9 @@ impl<'a> Executor<'a> {
                 found: plan.boulder_version.clone(),
             });
         }
+        validate_build_host(&plan.build_lock.build_platform.architecture, std::env::consts::ARCH)?;
         validate_jobs(plan)?;
-        validate_execution_symbols(&plan.build_lock.target_platform.architecture, &plan.jobs)?;
+        validate_execution_symbols(&plan.jobs)?;
         Ok(Self { plan })
     }
 
@@ -61,8 +61,7 @@ impl<'a> Executor<'a> {
         ::container::set_term_fg(pgid)?;
 
         clear_directory_contents(Path::new(&self.plan.layout.build_dir))?;
-        let target = &self.plan.build_lock.target_platform.architecture;
-        let timing_target = parse_target(target)?;
+        let target = &self.plan.build_lock.policy.name;
         for pgo_dir in unique_pgo_dirs(&self.plan.jobs) {
             moss::util::recreate_dir(Path::new(pgo_dir))?;
         }
@@ -77,7 +76,7 @@ impl<'a> Executor<'a> {
             for (phase_index, phase) in job.phases.iter().enumerate() {
                 println!("{}", phase_prefix(&phase.name, job.pgo_stage.is_some(), phase_index));
                 let timer = timing.begin(timing::Kind::Build(timing::Build {
-                    target: timing_target,
+                    target: target.clone(),
                     pgo_stage: job.pgo_stage.as_deref().map(parse_pgo_stage).transpose()?,
                     phase: parse_phase(&phase.name)?,
                 }));
@@ -170,10 +169,20 @@ fn validate_jobs(plan: &DerivationPlan) -> Result<(), Error> {
     validate_job_paths(layout_root, &plan.jobs)
 }
 
+fn validate_build_host(required: &str, actual: &str) -> Result<(), Error> {
+    if required == actual {
+        Ok(())
+    } else {
+        Err(Error::IncompatibleBuildHost {
+            required: required.to_owned(),
+            actual: actual.to_owned(),
+        })
+    }
+}
+
 /// Reject executor vocabulary this Boulder cannot run before runtime setup
 /// mutates the build root, fetches sources, or installs the locked closure.
-fn validate_execution_symbols(target: &str, jobs: &[JobPlan]) -> Result<(), Error> {
-    parse_target(target)?;
+fn validate_execution_symbols(jobs: &[JobPlan]) -> Result<(), Error> {
     for job in jobs {
         if let Some(stage) = &job.pgo_stage {
             parse_pgo_stage(stage)?;
@@ -286,25 +295,6 @@ fn phase_prefix(phase: &str, is_pgo: bool, index: usize) -> String {
     format!("{newline}{pipes}{}", phase.dim())
 }
 
-fn parse_target(target: &str) -> Result<BuildTarget, Error> {
-    let (emul32, architecture) = target
-        .strip_prefix("emul32/")
-        .map(|architecture| (true, architecture))
-        .unwrap_or((false, target));
-    let architecture = match architecture {
-        "x86_64" => Architecture::X86_64,
-        "x86" => Architecture::X86,
-        "aarch64" => Architecture::Aarch64,
-        "riscv64" => Architecture::Riscv64,
-        _ => return Err(Error::UnsupportedTarget(target.to_owned())),
-    };
-    Ok(if emul32 {
-        BuildTarget::Emul32(architecture)
-    } else {
-        BuildTarget::Native(architecture)
-    })
-}
-
 fn parse_pgo_stage(stage: &str) -> Result<Stage, Error> {
     match stage {
         "one" => Ok(Stage::One),
@@ -344,8 +334,8 @@ pub enum Error {
     },
     #[error("plan job {job} has an invalid or missing frozen PGO directory")]
     InvalidPgoDirectory { job: usize },
-    #[error("unsupported frozen target {0}")]
-    UnsupportedTarget(String),
+    #[error("frozen plan requires build host `{required}`, but Boulder is running on `{actual}`")]
+    IncompatibleBuildHost { required: String, actual: String },
     #[error("unsupported frozen PGO stage {0}")]
     UnsupportedPgoStage(String),
     #[error("unsupported frozen phase {0}")]
@@ -478,11 +468,21 @@ mod tests {
             }],
         }];
 
-        validate_execution_symbols("x86_64", &jobs).unwrap();
+        validate_execution_symbols(&jobs).unwrap();
         jobs[0].phases[0].name = "ambient-phase".to_owned();
         assert!(matches!(
-            validate_execution_symbols("x86_64", &jobs),
+            validate_execution_symbols(&jobs),
             Err(Error::UnsupportedPhase(phase)) if phase == "ambient-phase"
+        ));
+    }
+
+    #[test]
+    fn frozen_build_platform_is_checked_only_at_executor_preflight() {
+        validate_build_host("x86_64", "x86_64").unwrap();
+        assert!(matches!(
+            validate_build_host("aarch64", "x86_64"),
+            Err(Error::IncompatibleBuildHost { required, actual })
+                if required == "aarch64" && actual == "x86_64"
         ));
     }
 }

@@ -612,6 +612,32 @@ impl<'a> Manager<'a> {
             .ok_or_else(|| Error::MissingProfile(profile.clone()))
     }
 
+    /// Return the selected repositories only when every active root index was
+    /// authored for the build platform that will execute the frozen plan.
+    ///
+    /// Direct indexes are already concrete index locations and therefore have
+    /// no separate architecture declaration to validate here. Disabled root
+    /// indexes cannot participate in resolution and are ignored.
+    pub fn repositories_for_architecture(&self, profile: &Id, architecture: &str) -> Result<&repository::Map, Error> {
+        let repositories = self.repositories(profile)?;
+        for (id, repository) in repositories.iter() {
+            if !repository.active {
+                continue;
+            }
+            if let repository::Source::RootIndex(source) = &repository.source
+                && source.arch != architecture
+            {
+                return Err(Error::RepositoryArchitectureMismatch {
+                    profile: profile.clone(),
+                    repository: id.clone(),
+                    configured: source.arch.clone(),
+                    requested: architecture.to_owned(),
+                });
+            }
+        }
+        Ok(repositories)
+    }
+
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
         let map = Map::with([(id.clone(), profile.clone())]);
         self.env.config.save_gluon(id.clone(), &map, &ProfileCodec)?;
@@ -625,6 +651,15 @@ impl<'a> Manager<'a> {
 pub enum Error {
     #[error("cannot find the provided profile: {0}")]
     MissingProfile(Id),
+    #[error(
+        "profile {profile} repository {repository} targets architecture {configured}, not selected build architecture {requested}"
+    )]
+    RepositoryArchitectureMismatch {
+        profile: Id,
+        repository: repository::Id,
+        configured: String,
+        requested: String,
+    },
     #[error("load profiles")]
     LoadProfiles(#[source] Box<config::LoadGluonError>),
     #[error("save profile")]
@@ -731,6 +766,59 @@ mod tests {
         assert_eq!(root.channel.as_ref(), repository::DEFAULT_CHANNEL);
         assert_eq!(root.arch, repository::DEFAULT_ARCH);
         assert_eq!(root.version.to_string(), "stream/volatile");
+    }
+
+    #[test]
+    fn active_root_indexes_must_match_the_selected_build_architecture() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("profile.d/authored.glu");
+        write(
+            &path,
+            &authored(
+                r#"boulder.profiles [
+    boulder.profile "test" [
+        boulder.repository.direct "local" "file:///var/cache/local.index",
+        boulder.repository.root_index_with {
+            id = "volatile",
+            description = boulder.optional.some "volatile",
+            base_uri = "https://packages.example.test",
+            channel = boulder.optional.some "main",
+            version = "stream/volatile",
+            arch = boulder.optional.some "x86_64",
+            priority = boulder.optional.some 0,
+            enabled = boulder.optional.some boulder.boolean.true,
+        },
+        boulder.repository.root_index_with {
+            id = "disabled-aarch64",
+            description = boulder.optional.some "disabled",
+            base_uri = "https://packages.example.test",
+            channel = boulder.optional.some "main",
+            version = "stream/volatile",
+            arch = boulder.optional.some "aarch64",
+            priority = boulder.optional.some 0,
+            enabled = boulder.optional.some boulder.boolean.false,
+        },
+    ],
+]"#,
+            ),
+        );
+
+        let env = environment(temporary.path());
+        let manager = Manager::new(&env).unwrap();
+        let profile = Id::new("test");
+        assert!(manager.repositories_for_architecture(&profile, "x86_64").is_ok());
+        assert!(matches!(
+            manager.repositories_for_architecture(&profile, "aarch64"),
+            Err(Error::RepositoryArchitectureMismatch {
+                profile: error_profile,
+                repository: repository_id,
+                configured,
+                requested,
+            }) if error_profile == profile
+                && repository_id == repository::Id::new("volatile")
+                && configured == "x86_64"
+                && requested == "aarch64"
+        ));
     }
 
     #[test]

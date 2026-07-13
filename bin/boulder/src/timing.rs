@@ -9,7 +9,7 @@ use std::{
 
 use tui::Styled;
 
-use crate::{architecture::BuildTarget, build};
+use crate::build;
 
 const PROGRESS_WIDTH: usize = 6;
 const ELAPSED_WIDTH: usize = 13;
@@ -19,7 +19,7 @@ pub struct Timing {
     initialize: Duration,
     populate: BTreeMap<Populate, Duration>,
     fetch: Duration,
-    build: BTreeMap<BuildTarget, BTreeMap<Option<build::pgo::Stage>, BTreeMap<build::job::Phase, BuildEntry>>>,
+    build: BTreeMap<String, BTreeMap<Option<build::pgo::Stage>, BTreeMap<build::job::Phase, BuildEntry>>>,
     analyze: Duration,
     emit: Duration,
 }
@@ -40,13 +40,10 @@ impl Timing {
                 self.populate.insert(populate, elapsed);
             }
             Kind::Fetch => self.fetch = elapsed,
-            Kind::Build(
-                build @ Build {
-                    target,
-                    pgo_stage,
-                    phase,
-                },
-            ) => {
+            Kind::Build(build) => {
+                let target = build.target.clone();
+                let pgo_stage = build.pgo_stage;
+                let phase = build.phase;
                 self.build
                     .entry(target)
                     .or_default()
@@ -121,7 +118,7 @@ impl Timing {
         );
 
         for (target, stages) in &self.build {
-            println!("│{}", build::build_target_prefix(*target, 0));
+            println!("│{}", build::build_target_prefix(target, 0));
 
             for (stage, phases) in stages {
                 if let Some(stage) = stage {
@@ -211,10 +208,10 @@ impl From<Populate> for Kind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Build {
-    /// Build target (arch)
-    pub target: BuildTarget,
+    /// Exact opaque build-policy target name.
+    pub target: String,
     /// PGO stage, if applicable
     pub pgo_stage: Option<build::pgo::Stage>,
     /// Build phase (prepare, setup, build, etc)
