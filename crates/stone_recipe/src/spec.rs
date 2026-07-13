@@ -220,6 +220,14 @@ pub fn is_canonical_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+/// Whether `value` is the canonical textual encoding of a full Git object ID.
+pub fn is_canonical_git_commit(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
 pub(crate) fn is_safe_artifact_component(value: &str) -> bool {
     !value.is_empty()
         && value != "."
@@ -275,5 +283,12 @@ mod tests {
         assert!(options.strip);
         assert!(options.lastrip);
         assert!(!options.networking);
+    }
+
+    #[test]
+    fn git_commits_have_one_canonical_textual_encoding() {
+        assert!(is_canonical_git_commit("0123456789abcdef0123456789abcdef01234567"));
+        assert!(!is_canonical_git_commit("0123456789ABCDEF0123456789ABCDEF01234567"));
+        assert!(!is_canonical_git_commit("01234567"));
     }
 }

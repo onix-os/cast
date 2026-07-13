@@ -528,7 +528,10 @@ cast.mk_package (cast.meta {
         let cases = [
             ("{".to_owned(), "evaluate source lock"),
             (source_lock::encode_source_lock(&wrong_schema), "unsupported schema"),
-            (source_lock::encode_source_lock(&short_commit), "complete 40-hex"),
+            (
+                source_lock::encode_source_lock(&short_commit),
+                "exactly 40 lowercase hexadecimal",
+            ),
         ];
 
         for (contents, expected) in cases {

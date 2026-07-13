@@ -25,7 +25,7 @@ use crate::build_policy::{
 };
 use crate::{
     package::valid_package_name,
-    spec::{is_canonical_sha256, is_safe_artifact_component},
+    spec::{is_canonical_git_commit, is_canonical_sha256, is_safe_artifact_component},
 };
 
 pub use self::build_lock::{
@@ -675,7 +675,7 @@ impl LockedSource {
                 validate_url(index, url)?;
                 require_nonempty(&format!("sources[{index}].requested_ref"), requested_ref)?;
                 validate_source_destination(index, "directory", directory)?;
-                if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                if !is_canonical_git_commit(commit) {
                     return Err(DerivationValidationError::InvalidGitCommit {
                         index,
                         value: commit.clone(),
@@ -1920,7 +1920,7 @@ pub enum DerivationValidationError {
         #[source]
         source: url::ParseError,
     },
-    #[error("sources[{index}].commit: expected a complete 40-hex Git commit, found `{value}`")]
+    #[error("sources[{index}].commit: expected exactly 40 lowercase ASCII hexadecimal characters, found `{value}`")]
     InvalidGitCommit { index: usize, value: String },
     #[error(
         "sources[{index}].materialization_sha256: expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`"
@@ -2199,14 +2199,7 @@ fn validate_source_destination(
     field: &'static str,
     value: &str,
 ) -> Result<(), DerivationValidationError> {
-    let path = Path::new(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || path.components().count() != 1
-        || !path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-    {
+    if !is_safe_artifact_component(value) {
         return Err(DerivationValidationError::UnsafeSourceDestination {
             index,
             field,
@@ -4025,7 +4018,17 @@ mod tests {
 
     #[test]
     fn validation_rejects_source_materialization_path_escape() {
-        for value in ["", ".", "../escape", "/absolute", "nested/file"] {
+        for value in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "/absolute",
+            "nested/file",
+            "nested\\file",
+            "line\nbreak",
+            "escape\u{1b}",
+        ] {
             let mut plan = sample_plan();
             let LockedSource::Archive { filename, .. } = &mut plan.sources[0] else {
                 unreachable!()
@@ -4039,6 +4042,40 @@ mod tests {
                     ..
                 })
             ));
+        }
+    }
+
+    #[test]
+    fn validation_requires_a_canonical_lowercase_git_commit() {
+        for value in [
+            String::new(),
+            "a".repeat(39),
+            "a".repeat(41),
+            format!("{}g", "a".repeat(39)),
+            "A".repeat(40),
+            "é".repeat(20),
+        ] {
+            let mut plan = sample_plan();
+            plan.sources = vec![sample_git_source(0, "hello.git")];
+            let LockedSource::Git { commit, .. } = &mut plan.sources[0] else {
+                unreachable!()
+            };
+            *commit = value.clone();
+
+            let error = plan.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                DerivationValidationError::InvalidGitCommit {
+                    index: 0,
+                    value: ref found,
+                } if found == &value
+            ));
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "sources[0].commit: expected exactly 40 lowercase ASCII hexadecimal characters, found `{value}`"
+                )
+            );
         }
     }
 

@@ -19,7 +19,10 @@ use std::{
 
 use fs_err as fs;
 use gluon_config::{Diagnostic, Evaluator, Source as GluonSource};
-use stone_recipe::{UpstreamSpec, spec::is_canonical_sha256};
+use stone_recipe::{
+    UpstreamSpec,
+    spec::{is_canonical_git_commit, is_canonical_sha256},
+};
 use thiserror::Error;
 use url::Url;
 
@@ -116,7 +119,7 @@ impl SourceLock {
                     }
                 }
                 SourceResolution::Git(git) => {
-                    if !is_complete_git_commit(&git.commit) {
+                    if !is_canonical_git_commit(&git.commit) {
                         return Err(ValidationError::InvalidGitCommit {
                             field: format!("sources[{index}].commit"),
                             value: git.commit.clone(),
@@ -319,10 +322,6 @@ impl GluonSourceResolution {
     }
 }
 
-fn is_complete_git_commit(commit: &str) -> bool {
-    commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 fn validate_equal(order: usize, field: &'static str, expected: &str, found: &str) -> Result<(), ValidationError> {
     if expected == found {
         Ok(())
@@ -374,7 +373,7 @@ pub enum ValidationError {
     },
     #[error("{field}: archive digest must be exactly 64 lowercase hexadecimal characters, found `{value}`")]
     InvalidArchiveSha256 { field: String, value: String },
-    #[error("{field}: Git commit must be a complete 40-hex identifier, found `{value}`")]
+    #[error("{field}: Git commit must be exactly 40 lowercase hexadecimal characters, found `{value}`")]
     InvalidGitCommit { field: String, value: String },
     #[error("{field}: Git materialization digest must be exactly 64 lowercase hexadecimal characters, found `{value}`")]
     InvalidMaterializationSha256 { field: String, value: String },
@@ -669,7 +668,14 @@ type SourceLock = {
                 canonical.replace(ARCHIVE_SHA256, &"g".repeat(64)),
                 "archive digest must be exactly 64 lowercase hexadecimal",
             ),
-            (canonical.replace(FULL_COMMIT, "abc123d"), "complete 40-hex"),
+            (
+                canonical.replace(FULL_COMMIT, "abc123d"),
+                "exactly 40 lowercase hexadecimal",
+            ),
+            (
+                canonical.replace(FULL_COMMIT, &FULL_COMMIT.to_ascii_uppercase()),
+                "exactly 40 lowercase hexadecimal",
+            ),
             (
                 canonical.replace(MATERIALIZATION_SHA256, &"A".repeat(64)),
                 "64 lowercase hexadecimal",
