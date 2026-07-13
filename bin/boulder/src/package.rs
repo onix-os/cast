@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsString};
 use std::io::{self, BufReader, Read};
 use std::num::NonZeroU64;
@@ -28,6 +28,9 @@ use self::collect::Collector;
 mod analysis;
 mod collect;
 mod emit;
+
+const PUBLISHED_ARTEFACT_MODE: u32 = 0o644;
+const PUBLISHED_BUNDLE_MODE: u32 = 0o755;
 
 #[cfg(test)]
 pub(crate) use emit::test_derivation_plan;
@@ -193,6 +196,24 @@ fn frozen_architecture(value: &str) -> crate::Architecture {
     }
 }
 
+fn stone_artefact_filename(
+    package_name: &str,
+    version: &str,
+    source_release: u64,
+    build_release: u64,
+    architecture: crate::Architecture,
+) -> String {
+    format!("{package_name}-{version}-{source_release}-{build_release}-{architecture}.stone")
+}
+
+fn binary_manifest_filename(architecture: crate::Architecture) -> String {
+    format!("manifest.{architecture}.bin")
+}
+
+fn jsonc_manifest_filename(architecture: crate::Architecture) -> String {
+    format!("manifest.{architecture}.jsonc")
+}
+
 impl Packager {
     pub fn new(paths: &Paths, recipe: &Recipe) -> Result<Self, Error> {
         let mut collector = Collector::new(paths.install().guest);
@@ -298,17 +319,22 @@ pub enum Publication {
 /// The final path is `<output>/<derivation-id>/`. A new bundle is assembled in
 /// a sibling temporary directory and installed with Linux `RENAME_NOREPLACE`,
 /// so no observer can see a partial final bundle and an existing bundle is
-/// never replaced. Re-publishing the same derivation succeeds only when the
-/// complete direct regular-file set and every file's bytes match.
+/// never replaced. The frozen plan defines the complete allowed file set;
+/// published regular files are normalized to mode 0644 and the bundle
+/// directory to 0755. Re-publishing the same derivation succeeds only when the
+/// complete file set, bytes, and normalized modes match.
 pub fn publish_artefacts(paths: &Paths, plan: &DerivationPlan) -> Result<Publication, PublishError> {
+    plan.validate().map_err(PublishError::InvalidFrozenPlan)?;
     paths.require_plan(plan).map_err(PublishError::InvalidFrozenPaths)?;
     let derivation_id = plan.derivation_id();
+    let expected = expected_bundle_files(plan);
     let staged_root = paths.artefacts().host;
-    let staged = regular_bundle_files(&staged_root, "staged")?;
+    let staged = regular_bundle_files(&staged_root, "staged", None)?;
+    require_expected_file_set("staged", &staged_root, &expected, &staged)?;
     let final_root = paths.output_dir().join(derivation_id.as_str());
 
     if final_root_exists(&final_root)? {
-        verify_existing_bundle(&staged, &final_root)?;
+        verify_existing_bundle(&expected, &staged, &final_root)?;
         return Ok(Publication::Reused);
     }
 
@@ -323,6 +349,14 @@ pub fn publish_artefacts(paths: &Paths, plan: &DerivationPlan) -> Result<Publica
     for (name, source) in &staged {
         copy_regular_file(source, &temporary.path().join(name))?;
     }
+    fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(PUBLISHED_BUNDLE_MODE)).map_err(
+        |source| PublishError::NormalizeMode {
+            role: "temporary bundle",
+            path: temporary.path().to_owned(),
+            mode: PUBLISHED_BUNDLE_MODE,
+            source,
+        },
+    )?;
     sync_directory(temporary.path(), "temporary")?;
 
     match rename_noreplace(temporary.path(), &final_root) {
@@ -336,7 +370,7 @@ pub fn publish_artefacts(paths: &Paths, plan: &DerivationPlan) -> Result<Publica
         Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
             // Another publisher won the race. Its result is reusable only when
             // it is exactly the bundle this derivation would have published.
-            verify_existing_bundle(&staged, &final_root)?;
+            verify_existing_bundle(&expected, &staged, &final_root)?;
             Ok(Publication::Reused)
         }
         Err(source) => Err(PublishError::Install {
@@ -347,9 +381,32 @@ pub fn publish_artefacts(paths: &Paths, plan: &DerivationPlan) -> Result<Publica
     }
 }
 
+fn expected_bundle_files(plan: &DerivationPlan) -> BTreeSet<OsString> {
+    let architecture = frozen_architecture(&plan.package.architecture);
+    let mut expected = plan
+        .outputs
+        .iter()
+        .map(|output| {
+            OsString::from(stone_artefact_filename(
+                &output.package_name,
+                &plan.package.version,
+                plan.package.source_release,
+                plan.package.build_release,
+                architecture,
+            ))
+        })
+        .collect::<BTreeSet<_>>();
+    expected.insert(OsString::from(binary_manifest_filename(architecture)));
+    expected.insert(OsString::from(jsonc_manifest_filename(architecture)));
+    expected
+}
+
 fn final_root_exists(path: &Path) -> Result<bool, PublishError> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            require_mode("published bundle", path, &metadata, PUBLISHED_BUNDLE_MODE)?;
+            Ok(true)
+        }
         Ok(_) => Err(PublishError::UnexpectedRoot {
             role: "published",
             path: path.to_owned(),
@@ -363,7 +420,11 @@ fn final_root_exists(path: &Path) -> Result<bool, PublishError> {
     }
 }
 
-fn regular_bundle_files(root: &Path, role: &'static str) -> Result<BTreeMap<OsString, PathBuf>, PublishError> {
+fn regular_bundle_files(
+    root: &Path,
+    role: &'static str,
+    expected_root_mode: Option<u32>,
+) -> Result<BTreeMap<OsString, PathBuf>, PublishError> {
     let metadata = fs::symlink_metadata(root).map_err(|source| PublishError::Inspect {
         role,
         path: root.to_owned(),
@@ -374,6 +435,9 @@ fn regular_bundle_files(root: &Path, role: &'static str) -> Result<BTreeMap<OsSt
             role,
             path: root.to_owned(),
         });
+    }
+    if let Some(expected) = expected_root_mode {
+        require_mode(role, root, &metadata, expected)?;
     }
 
     let entries = fs::read_dir(root).map_err(|source| PublishError::Inspect {
@@ -402,17 +466,32 @@ fn regular_bundle_files(root: &Path, role: &'static str) -> Result<BTreeMap<OsSt
     Ok(files)
 }
 
-fn verify_existing_bundle(staged: &BTreeMap<OsString, PathBuf>, final_root: &Path) -> Result<(), PublishError> {
-    let published = regular_bundle_files(final_root, "published")?;
-    let staged_names = staged.keys().cloned().collect::<Vec<_>>();
-    let published_names = published.keys().cloned().collect::<Vec<_>>();
-    if staged_names != published_names {
-        return Err(PublishError::FileSetMismatch {
-            path: final_root.to_owned(),
-            staged: staged_names,
-            published: published_names,
-        });
+fn require_expected_file_set(
+    role: &'static str,
+    root: &Path,
+    expected: &BTreeSet<OsString>,
+    files: &BTreeMap<OsString, PathBuf>,
+) -> Result<(), PublishError> {
+    let found = files.keys().cloned().collect::<BTreeSet<_>>();
+    if &found == expected {
+        Ok(())
+    } else {
+        Err(PublishError::FrozenFileSetMismatch {
+            role,
+            path: root.to_owned(),
+            expected: expected.iter().cloned().collect(),
+            found: found.into_iter().collect(),
+        })
     }
+}
+
+fn verify_existing_bundle(
+    expected: &BTreeSet<OsString>,
+    staged: &BTreeMap<OsString, PathBuf>,
+    final_root: &Path,
+) -> Result<(), PublishError> {
+    let published = regular_bundle_files(final_root, "published bundle", Some(PUBLISHED_BUNDLE_MODE))?;
+    require_expected_file_set("published", final_root, expected, &published)?;
 
     for (name, staged_path) in staged {
         let published_path = &published[name];
@@ -424,6 +503,25 @@ fn verify_existing_bundle(staged: &BTreeMap<OsString, PathBuf>, final_root: &Pat
         }
     }
     Ok(())
+}
+
+fn require_mode(
+    role: &'static str,
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    expected: u32,
+) -> Result<(), PublishError> {
+    let found = metadata.permissions().mode() & 0o7777;
+    if found == expected {
+        Ok(())
+    } else {
+        Err(PublishError::ModeMismatch {
+            role,
+            path: path.to_owned(),
+            expected,
+            found,
+        })
+    }
 }
 
 fn open_regular_file(path: &Path, role: &'static str) -> Result<fs::File, PublishError> {
@@ -456,20 +554,10 @@ fn open_regular_file(path: &Path, role: &'static str) -> Result<fs::File, Publis
 
 fn copy_regular_file(source: &Path, target: &Path) -> Result<(), PublishError> {
     let mut input = open_regular_file(source, "staged")?;
-    let mode = input
-        .metadata()
-        .map_err(|source_error| PublishError::Inspect {
-            role: "staged",
-            path: source.to_owned(),
-            source: source_error,
-        })?
-        .permissions()
-        .mode()
-        & 0o7777;
     let mut output = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(mode)
+        .mode(PUBLISHED_ARTEFACT_MODE)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(target)
         .map_err(|source_error| PublishError::Copy {
@@ -483,7 +571,7 @@ fn copy_regular_file(source: &Path, target: &Path) -> Result<(), PublishError> {
         source: source_error,
     })?;
     output
-        .set_permissions(std::fs::Permissions::from_mode(mode))
+        .set_permissions(std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE))
         .and_then(|()| output.sync_all())
         .map_err(|source_error| PublishError::Copy {
             staged: source.to_owned(),
@@ -495,6 +583,27 @@ fn copy_regular_file(source: &Path, target: &Path) -> Result<(), PublishError> {
 fn regular_files_equal(staged: &Path, published: &Path) -> Result<bool, PublishError> {
     let staged_file = open_regular_file(staged, "staged")?;
     let published_file = open_regular_file(published, "published")?;
+    // Staging modes are deliberately non-semantic: a new publication
+    // normalizes them. Reuse must nevertheless prove that the already-visible
+    // result retained the frozen publication mode.
+    let published_mode = published_file
+        .metadata()
+        .map_err(|source| PublishError::Inspect {
+            role: "published",
+            path: published.to_owned(),
+            source,
+        })?
+        .permissions()
+        .mode()
+        & 0o7777;
+    if published_mode != PUBLISHED_ARTEFACT_MODE {
+        return Err(PublishError::ModeMismatch {
+            role: "published",
+            path: published.to_owned(),
+            expected: PUBLISHED_ARTEFACT_MODE,
+            found: published_mode,
+        });
+    }
     let staged_len = staged_file
         .metadata()
         .map_err(|source| PublishError::Inspect {
@@ -597,6 +706,8 @@ pub enum PublishError {
     },
     #[error("frozen artefact paths are not bound to the published derivation")]
     InvalidFrozenPaths(#[source] io::Error),
+    #[error("invalid frozen derivation plan")]
+    InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
     #[error("{role} artefact root {path:?} must be a real directory")]
     UnexpectedRoot { role: &'static str, path: PathBuf },
     #[error("{role} artefact entry {path:?} must be a direct regular file")]
@@ -614,13 +725,27 @@ pub enum PublishError {
         #[source]
         source: io::Error,
     },
-    #[error(
-        "published derivation bundle {path:?} has a different file set (staged {staged:?}, published {published:?})"
-    )]
-    FileSetMismatch {
+    #[error("{role} artefact bundle {path:?} does not match the frozen plan (expected {expected:?}, found {found:?})")]
+    FrozenFileSetMismatch {
+        role: &'static str,
         path: PathBuf,
-        staged: Vec<OsString>,
-        published: Vec<OsString>,
+        expected: Vec<OsString>,
+        found: Vec<OsString>,
+    },
+    #[error("{role} path {path:?} has mode {found:#06o}; expected reproducible mode {expected:#06o}")]
+    ModeMismatch {
+        role: &'static str,
+        path: PathBuf,
+        expected: u32,
+        found: u32,
+    },
+    #[error("set {role} path {path:?} to reproducible mode {mode:#06o}")]
+    NormalizeMode {
+        role: &'static str,
+        path: PathBuf,
+        mode: u32,
+        #[source]
+        source: io::Error,
     },
     #[error("published artefact {published:?} does not match staged bytes from {staged:?}")]
     ContentMismatch { staged: PathBuf, published: PathBuf },
@@ -951,32 +1076,86 @@ mod tests {
         entries
     }
 
+    fn stage_expected_bundle(plan: &DerivationPlan, paths: &Paths) -> Vec<OsString> {
+        let names = expected_bundle_files(plan).into_iter().collect::<Vec<_>>();
+        for name in &names {
+            let path = paths.artefacts().host.join(name);
+            fs::write(&path, b"frozen artefact bytes").unwrap();
+            fs::set_permissions(path, std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE)).unwrap();
+        }
+        names
+    }
+
+    fn stone_name(names: &[OsString]) -> &OsString {
+        names
+            .iter()
+            .find(|name| name.to_string_lossy().ends_with(".stone"))
+            .unwrap()
+    }
+
+    #[test]
+    fn frozen_bundle_contract_names_every_declared_output_and_both_manifests() {
+        let mut plan = test_derivation_plan();
+        plan.outputs.push(OutputPlan {
+            name: "dev".to_owned(),
+            package_name: "example-devel".to_owned(),
+            include_in_manifest: true,
+            summary: None,
+            description: None,
+            provides_exclude: Vec::new(),
+            runtime_exclude: Vec::new(),
+            runtime_inputs: Vec::new(),
+            conflicts: Vec::new(),
+        });
+        plan.validate().unwrap();
+
+        assert_eq!(
+            expected_bundle_files(&plan).into_iter().collect::<Vec<_>>(),
+            [
+                OsString::from("example-1.2.3-1-1-x86_64.stone"),
+                OsString::from("example-devel-1.2.3-1-1-x86_64.stone"),
+                OsString::from("manifest.x86_64.bin"),
+                OsString::from("manifest.x86_64.jsonc"),
+            ]
+        );
+    }
+
     #[test]
     fn publishes_and_reuses_one_complete_derivation_bundle() {
         let (_root, plan, paths) = publication_fixture();
         let staged = paths.artefacts().host;
-        let package = staged.join("hello.stone");
-        let manifest = staged.join("manifest.x86_64.bin");
-        fs::write(&package, b"stone bytes").unwrap();
-        fs::set_permissions(&package, std::fs::Permissions::from_mode(0o640)).unwrap();
-        fs::write(&manifest, b"manifest bytes").unwrap();
+        let names = stage_expected_bundle(&plan, &paths);
+        assert_eq!(
+            names,
+            [
+                OsString::from("example-1.2.3-1-1-x86_64.stone"),
+                OsString::from("manifest.x86_64.bin"),
+                OsString::from("manifest.x86_64.jsonc"),
+            ]
+        );
+        let package = staged.join(stone_name(&names));
 
         assert_eq!(publish_artefacts(&paths, &plan).unwrap(), Publication::Published);
 
         let bundle = paths.output_dir().join(plan.derivation_id().as_str());
-        assert_eq!(fs::read(bundle.join("hello.stone")).unwrap(), b"stone bytes");
-        assert_eq!(fs::read(bundle.join("manifest.x86_64.bin")).unwrap(), b"manifest bytes");
         assert_eq!(
-            fs::metadata(bundle.join("hello.stone")).unwrap().permissions().mode() & 0o7777,
-            0o640
+            fs::metadata(&bundle).unwrap().permissions().mode() & 0o7777,
+            PUBLISHED_BUNDLE_MODE
         );
+        for name in &names {
+            assert_eq!(fs::read(bundle.join(name)).unwrap(), b"frozen artefact bytes");
+            assert_eq!(
+                fs::metadata(bundle.join(name)).unwrap().permissions().mode() & 0o7777,
+                PUBLISHED_ARTEFACT_MODE
+            );
+        }
         assert_ne!(
             fs::metadata(&package).unwrap().ino(),
-            fs::metadata(bundle.join("hello.stone")).unwrap().ino(),
+            fs::metadata(bundle.join(stone_name(&names))).unwrap().ino(),
             "published files must not retain mutable staging inodes"
         );
         assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
-        assert!(!paths.output_dir().join("hello.stone").exists());
+        assert!(!paths.output_dir().join(stone_name(&names)).exists());
 
         assert_eq!(publish_artefacts(&paths, &plan).unwrap(), Publication::Reused);
         assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
@@ -986,20 +1165,170 @@ mod tests {
     fn mismatched_existing_bundle_is_never_modified() {
         let (_root, plan, paths) = publication_fixture();
         let staged = paths.artefacts().host;
-        fs::write(staged.join("hello.stone"), b"original").unwrap();
+        let names = stage_expected_bundle(&plan, &paths);
+        let package_name = stone_name(&names);
         publish_artefacts(&paths, &plan).unwrap();
         let bundle = paths.output_dir().join(plan.derivation_id().as_str());
 
-        fs::write(staged.join("hello.stone"), b"different").unwrap();
+        fs::write(staged.join(package_name), b"different").unwrap();
         let error = publish_artefacts(&paths, &plan).unwrap_err();
         assert!(matches!(error, PublishError::ContentMismatch { .. }));
-        assert_eq!(fs::read(bundle.join("hello.stone")).unwrap(), b"original");
+        assert_eq!(fs::read(bundle.join(package_name)).unwrap(), b"frozen artefact bytes");
 
+        fs::write(staged.join(package_name), b"frozen artefact bytes").unwrap();
         fs::write(staged.join("extra.stone"), b"extra").unwrap();
         let error = publish_artefacts(&paths, &plan).unwrap_err();
-        assert!(matches!(error, PublishError::FileSetMismatch { .. }));
+        assert!(matches!(
+            error,
+            PublishError::FrozenFileSetMismatch { role: "staged", .. }
+        ));
         assert!(!bundle.join("extra.stone").exists());
         assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
+    }
+
+    #[test]
+    fn missing_or_extra_staged_files_are_rejected_before_publication() {
+        let (_root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        let staged = paths.artefacts().host;
+        let missing = names[0].clone();
+        fs::remove_file(staged.join(&missing)).unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(
+            &error,
+            PublishError::FrozenFileSetMismatch {
+                role: "staged",
+                expected,
+                found,
+                ..
+            } if expected.contains(&missing) && !found.contains(&missing)
+        ));
+        assert!(output_entries(&paths).is_empty());
+
+        fs::write(staged.join(&missing), b"frozen artefact bytes").unwrap();
+        fs::set_permissions(
+            staged.join(&missing),
+            std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE),
+        )
+        .unwrap();
+        let extra = OsString::from("undeclared-debug-output.stone");
+        fs::write(staged.join(&extra), b"undeclared").unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(
+            &error,
+            PublishError::FrozenFileSetMismatch {
+                role: "staged",
+                expected,
+                found,
+                ..
+            } if !expected.contains(&extra) && found.contains(&extra)
+        ));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn wrong_staged_modes_are_normalized_to_reproducible_0644() {
+        let (_root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        let staged_path = paths.artefacts().host.join(&names[0]);
+        fs::set_permissions(&staged_path, std::fs::Permissions::from_mode(0o6755)).unwrap();
+
+        publish_artefacts(&paths, &plan).unwrap();
+
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        assert_eq!(fs::metadata(staged_path).unwrap().permissions().mode() & 0o7777, 0o6755);
+        for name in names {
+            assert_eq!(
+                fs::metadata(bundle.join(name)).unwrap().permissions().mode() & 0o7777,
+                PUBLISHED_ARTEFACT_MODE
+            );
+        }
+    }
+
+    #[test]
+    fn existing_bundle_mode_mismatch_is_never_reused() {
+        let (_root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        publish_artefacts(&paths, &plan).unwrap();
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        let published = bundle.join(&names[0]);
+        fs::set_permissions(&published, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(
+            error,
+            PublishError::ModeMismatch {
+                role: "published",
+                expected: PUBLISHED_ARTEFACT_MODE,
+                found: 0o600,
+                ..
+            }
+        ));
+        assert_eq!(fs::metadata(published).unwrap().permissions().mode() & 0o7777, 0o600);
+    }
+
+    #[test]
+    fn existing_bundle_directory_mode_mismatch_is_never_reused() {
+        let (_root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        publish_artefacts(&paths, &plan).unwrap();
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        fs::set_permissions(&bundle, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(
+            error,
+            PublishError::ModeMismatch {
+                role: "published bundle",
+                expected: PUBLISHED_BUNDLE_MODE,
+                found: 0o700,
+                ..
+            }
+        ));
+        assert_eq!(fs::metadata(bundle).unwrap().permissions().mode() & 0o7777, 0o700);
+    }
+
+    #[test]
+    fn existing_bundle_file_set_must_still_match_the_frozen_plan() {
+        let (_root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        publish_artefacts(&paths, &plan).unwrap();
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        let missing = names[0].clone();
+        fs::remove_file(bundle.join(&missing)).unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(
+            &error,
+            PublishError::FrozenFileSetMismatch {
+                role: "published",
+                expected,
+                found,
+                ..
+            } if expected.contains(&missing) && !found.contains(&missing)
+        ));
+
+        fs::write(bundle.join(&missing), b"frozen artefact bytes").unwrap();
+        fs::set_permissions(
+            bundle.join(&missing),
+            std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE),
+        )
+        .unwrap();
+        let extra = OsString::from("undeclared-published-file");
+        fs::write(bundle.join(&extra), b"extra").unwrap();
+
+        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        assert!(matches!(
+            &error,
+            PublishError::FrozenFileSetMismatch {
+                role: "published",
+                expected,
+                found,
+                ..
+            } if !expected.contains(&extra) && found.contains(&extra)
+        ));
     }
 
     #[test]
@@ -1032,15 +1361,16 @@ mod tests {
     #[test]
     fn rejects_unexpected_entries_in_an_existing_final_bundle() {
         let (_root, plan, paths) = publication_fixture();
-        fs::write(paths.artefacts().host.join("hello.stone"), b"bytes").unwrap();
+        let names = stage_expected_bundle(&plan, &paths);
+        let package_name = stone_name(&names);
         let bundle = paths.output_dir().join(plan.derivation_id().as_str());
         fs::create_dir(&bundle).unwrap();
-        symlink("missing", bundle.join("hello.stone")).unwrap();
+        symlink("missing", bundle.join(package_name)).unwrap();
 
         let error = publish_artefacts(&paths, &plan).unwrap_err();
         assert!(matches!(error, PublishError::UnexpectedEntry { .. }));
         assert!(
-            fs::symlink_metadata(bundle.join("hello.stone"))
+            fs::symlink_metadata(bundle.join(package_name))
                 .unwrap()
                 .file_type()
                 .is_symlink()

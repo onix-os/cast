@@ -55,8 +55,8 @@ impl<'a> Manifest<'a> {
     }
 
     pub fn write_binary(&self) -> Result<(), Error> {
-        let mut output =
-            fs::File::create(self.output_dir.join(format!("manifest.{}.bin", self.arch))).context(IoSnafu)?;
+        let mut output = fs::File::create(self.output_dir.join(super::super::binary_manifest_filename(self.arch)))
+            .context(IoSnafu)?;
 
         binary::write(
             &mut output,
@@ -70,7 +70,7 @@ impl<'a> Manifest<'a> {
 
     pub fn write_json(&self) -> Result<(), Error> {
         json::write(
-            &self.output_dir.join(format!("manifest.{}.jsonc", self.arch)),
+            &self.output_dir.join(super::super::jsonc_manifest_filename(self.arch)),
             self.identity,
             self.recipe_fingerprint,
             &self.packages,

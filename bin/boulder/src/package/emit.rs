@@ -68,9 +68,12 @@ impl<'a> Package<'a> {
     }
 
     pub fn filename(&self) -> String {
-        format!(
-            "{}-{}-{}-{}-{}.stone",
-            self.name, self.identity.version, self.identity.source_release, self.build_release, self.architecture
+        super::stone_artefact_filename(
+            self.name,
+            &self.identity.version,
+            self.identity.source_release,
+            self.build_release.get(),
+            self.architecture,
         )
     }
 
