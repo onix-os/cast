@@ -3,6 +3,7 @@
 use std::{
     io::{self, Write},
     num::NonZeroU64,
+    path::PathBuf,
     time::Duration,
 };
 
@@ -21,7 +22,7 @@ use tempfile::NamedTempFile;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::manifest::Manifest;
-use super::{ResolvedOutput, analysis};
+use super::{ResolvedOutput, analysis, collect};
 use crate::{Architecture, Paths};
 
 mod manifest;
@@ -207,6 +208,9 @@ pub fn emit_frozen(
 
     manifest.write_binary().context(ManifestSnafu)?;
     manifest.write_json().context(ManifestSnafu)?;
+    for package in packages {
+        verify_paths(&package.analysis.paths)?;
+    }
 
     println!();
 
@@ -221,21 +225,43 @@ fn emit_package(
 ) -> Result<(), Error> {
     let filename = package.filename();
 
-    // Filter for all files -> dedupe by hash -> sort largest to smallest
-    let files = package
-        .analysis
-        .paths
-        .iter()
-        // Filter by file
-        .filter_map(|info| info.file_hash().map(|hash| (hash, info)))
-        // Dedupe by hash
-        .unique_by(|(hash, _)| *hash)
-        // Sort largest to smallest
-        .sorted_by(|(_, a), (_, b)| a.size.cmp(&b.size).reverse())
-        .map(|(_, info)| info)
-        .collect::<Vec<_>>();
+    verify_paths(&package.analysis.paths)?;
 
-    let total_file_size = files.iter().map(|info| info.size).sum();
+    // Choose a deterministic representative for each content hash, then emit
+    // larger blobs first. Collection identities, rather than host paths, are
+    // retained for every selected file.
+    let mut hashed_files = Vec::new();
+    try_reserve(
+        &mut hashed_files,
+        package.analysis.paths.len(),
+        "package content references",
+    )?;
+    for info in &package.analysis.paths {
+        if let Some(hash) = info.file_hash() {
+            hashed_files.push((hash, info));
+        }
+    }
+    hashed_files.sort_unstable_by(|(left_hash, left), (right_hash, right)| {
+        left_hash
+            .cmp(right_hash)
+            .then_with(|| left.target_path.cmp(&right.target_path))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    hashed_files.dedup_by(|left, right| left.0 == right.0);
+    hashed_files.sort_unstable_by(|(left_hash, left), (right_hash, right)| {
+        right
+            .size
+            .cmp(&left.size)
+            .then_with(|| left_hash.cmp(right_hash))
+            .then_with(|| left.target_path.cmp(&right.target_path))
+    });
+
+    let mut total_file_size = 0u64;
+    for (_, info) in &hashed_files {
+        total_file_size = total_file_size.checked_add(info.size).ok_or(Error::SizeOverflow {
+            resource: "package content bytes",
+        })?;
+    }
 
     let pb = ProgressBar::new(total_file_size)
         .with_message(format!("Generating {filename}"))
@@ -265,19 +291,16 @@ fn emit_package(
 
     // Add layouts
     {
-        let layouts = package
-            .analysis
-            .paths
-            .iter()
-            .map(|p| p.layout.clone())
-            .collect::<Vec<_>>();
+        let mut layouts = Vec::new();
+        try_reserve(&mut layouts, package.analysis.paths.len(), "package layout records")?;
+        layouts.extend(package.analysis.paths.iter().map(|path| path.layout.clone()));
         if !layouts.is_empty() {
             writer.add_payload(layouts.as_slice()).context(StoneBinaryWriterSnafu)?;
         }
     }
 
     // Only add content payload if we have some files
-    if !files.is_empty() {
+    if !hashed_files.is_empty() {
         // Unique plan-runtime-local scratch avoids collisions between
         // concurrent builds of the same output.
         let mut temp_content = NamedTempFile::new_in(&paths.artefacts().guest).context(IoSnafu)?;
@@ -287,26 +310,81 @@ fn emit_package(
             .with_content(temp_content.as_file_mut(), Some(total_file_size), package.jobs)
             .context(StoneBinaryWriterSnafu)?;
 
-        for info in files {
-            let file = File::open(&info.path).context(IoSnafu)?;
-            writer
-                .add_content(&mut pb.wrap_read(&file))
-                .context(StoneBinaryWriterSnafu)?;
+        for (_, info) in hashed_files {
+            let mut file = info.open_verified().map_err(|source| Error::VerifiedInput {
+                path: info.path.clone(),
+                source,
+            })?;
+            let write_result = {
+                let mut progress = pb.wrap_read(&mut file);
+                writer.add_content(&mut progress)
+            };
+            let verify_result = file.finish();
+            if let Err(source) = verify_result {
+                return Err(Error::VerifiedInput {
+                    path: info.path.clone(),
+                    source,
+                });
+            }
+            write_result.context(StoneBinaryWriterSnafu)?;
         }
 
         // Finalize & flush
         writer.finalize().context(StoneBinaryWriterSnafu)?;
         out_file.flush().context(IoSnafu)?;
+        verify_paths(&package.analysis.paths)?;
     } else {
         // Finalize & flush
         writer.finalize().context(StoneBinaryWriterSnafu)?;
         out_file.flush().context(IoSnafu)?;
+        verify_paths(&package.analysis.paths)?;
     }
 
     pb.suspend(|| println!("{} {filename}", "Emitted".green()));
     pb.finish_and_clear();
 
     Ok(())
+}
+
+fn verify_paths(paths: &[collect::PathInfo]) -> Result<(), Error> {
+    for info in paths {
+        info.verify_unchanged().map_err(|source| Error::VerifiedInput {
+            path: info.path.clone(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn try_reserve<T>(items: &mut Vec<T>, additional: usize, resource: &'static str) -> Result<(), Error> {
+    items.try_reserve(additional).map_err(|source| Error::Allocation {
+        resource,
+        requested: additional,
+        detail: source.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod verification_tests {
+    use super::*;
+
+    #[test]
+    fn emitter_rejects_a_path_replaced_after_collection() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("file");
+        std::fs::write(&path, b"payload").unwrap();
+        let mut collector = collect::Collector::new(root.path());
+        collector
+            .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
+            .unwrap();
+        let info = collector
+            .path(&path, &mut stone::StoneDigestWriterHasher::new())
+            .unwrap();
+        std::fs::rename(&path, root.path().join("old")).unwrap();
+        std::fs::write(&path, b"payload").unwrap();
+
+        assert!(matches!(verify_paths(&[info]), Err(Error::VerifiedInput { .. })));
+    }
 }
 
 #[cfg(test)]
@@ -503,4 +581,14 @@ pub enum Error {
     Manifest { source: manifest::Error },
     #[snafu(display("io"))]
     Io { source: io::Error },
+    #[snafu(display("verified package input {}: {source}", path.display()))]
+    VerifiedInput { path: PathBuf, source: collect::Error },
+    #[snafu(display("failed to reserve {requested} units for {resource}: {detail}"))]
+    Allocation {
+        resource: &'static str,
+        requested: usize,
+        detail: String,
+    },
+    #[snafu(display("size overflow while totaling {resource}"))]
+    SizeOverflow { resource: &'static str },
 }

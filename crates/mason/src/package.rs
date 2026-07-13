@@ -112,11 +112,9 @@ impl<'a> FrozenPackager<'a> {
             let package = output_packages
                 .get(rule.output.as_str())
                 .ok_or_else(|| Error::MissingFrozenOutput(rule.output.clone()))?;
-            collector.add_rule(collect::Rule {
-                pattern: rule.pattern.clone(),
-                package: (*package).to_owned(),
-                kind: rule.kind,
-            });
+            collector
+                .add_rule(&rule.pattern, package, rule.kind)
+                .map_err(Error::CollectPaths)?;
         }
 
         let manifest_build_inputs = plan
@@ -156,7 +154,7 @@ impl<'a> FrozenPackager<'a> {
             .packages
             .iter()
             .map(|(name, package)| {
-                let bucket = analysis.buckets.remove(name).unwrap_or_default();
+                let bucket = analysis.buckets.remove(name.as_str()).unwrap_or_default();
                 emit::Package::new_with_architecture(
                     name,
                     &self.identity,
@@ -169,7 +167,7 @@ impl<'a> FrozenPackager<'a> {
             })
             .collect::<Vec<_>>();
         if let Some(name) = analysis.buckets.keys().next() {
-            return Err(Error::UnexpectedAnalyzedOutput(name.clone()));
+            return Err(Error::UnexpectedAnalyzedOutput(name.to_string()));
         }
         emit::emit_frozen(
             self.paths,
@@ -230,7 +228,7 @@ impl Packager {
         self.collector
             .rules()
             .iter()
-            .map(|rule| (rule.package.as_str(), rule.kind, rule.pattern.as_str()))
+            .map(|rule| (rule.package(), rule.kind(), rule.pattern()))
     }
 }
 
@@ -242,11 +240,7 @@ fn resolve_packages(recipe: &Recipe, collector: &mut Collector) -> Result<BTreeM
         let package = resolved_output(output, index)?;
         for path in &output.paths {
             let (kind, pattern) = collection_rule(path);
-            collector.add_rule(collect::Rule {
-                pattern: pattern.to_owned(),
-                package: name.clone(),
-                kind,
-            });
+            collector.add_rule(pattern, &name, kind).map_err(Error::CollectPaths)?;
         }
         packages.insert(name, package);
     }
@@ -850,11 +844,11 @@ mod tests {
         );
         let rules = collector.rules();
         assert_eq!(
-            rules.last().map(|rule| (rule.package.as_str(), rule.pattern.as_str())),
+            rules.last().map(|rule| (rule.package(), rule.pattern())),
             Some(("hello-demos", "/usr/lib/qt*/examples"))
         );
         assert_ne!(
-            rules.last().map(|rule| rule.package.as_str()),
+            rules.last().map(|rule| rule.package()),
             packages.keys().last().map(String::as_str),
             "collector precedence must retain composition order rather than package-map order"
         );
@@ -865,8 +859,8 @@ mod tests {
         assert_eq!(
             rules
                 .iter()
-                .filter(|rule| rule.package == "hello")
-                .map(|rule| (rule.kind, rule.pattern.as_str()))
+                .filter(|rule| rule.package() == "hello")
+                .map(|rule| (rule.kind(), rule.pattern()))
                 .collect::<Vec<_>>(),
             [(PathRuleKind::Any, "*")]
         );
@@ -886,8 +880,8 @@ mod tests {
         assert_eq!(
             rules
                 .iter()
-                .filter(|rule| rule.package == "hello-devel")
-                .map(|rule| rule.pattern.as_str())
+                .filter(|rule| rule.package() == "hello-devel")
+                .map(|rule| rule.pattern())
                 .collect::<Vec<_>>(),
             [
                 "/usr/include",
@@ -1038,7 +1032,7 @@ mod tests {
                 .collector
                 .rules()
                 .iter()
-                .map(|rule| (rule.package.as_str(), rule.kind, rule.pattern.as_str()))
+                .map(|rule| (rule.package(), rule.kind(), rule.pattern()))
                 .collect::<Vec<_>>(),
             [
                 ("frozen", PathRuleKind::Any, "*"),

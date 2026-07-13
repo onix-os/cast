@@ -29,7 +29,7 @@ pub struct Chain<'a> {
     paths: &'a Paths,
     collector: &'a Collector,
     hasher: &'a mut StoneDigestWriterHasher,
-    pub buckets: BTreeMap<String, Bucket>,
+    pub buckets: BTreeMap<std::sync::Arc<str>, Bucket>,
 }
 
 impl<'a> Chain<'a> {
@@ -262,20 +262,14 @@ mod tests {
         fs::write(&original, b"original").unwrap();
         fs::write(&replacement, b"replacement").unwrap();
         let mut collector = Collector::new(install.path());
-        collector.add_rule(super::super::collect::Rule {
-            pattern: "*".to_owned(),
-            package: "root-output".to_owned(),
-            kind: PathRuleKind::Any,
-        });
-        collector.add_rule(super::super::collect::Rule {
-            pattern: "/replacement".to_owned(),
-            package: "replacement-output".to_owned(),
-            kind: PathRuleKind::Any,
-        });
+        collector.add_rule("*", "root-output", PathRuleKind::Any).unwrap();
+        collector
+            .add_rule("/replacement", "replacement-output", PathRuleKind::Any)
+            .unwrap();
 
         let mut hasher = StoneDigestWriterHasher::new();
         let original = collector.path(&original, &mut hasher).unwrap();
-        assert_eq!(original.package, "root-output");
+        assert_eq!(original.package.as_ref(), "root-output");
         let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
         chain.handlers = vec![HandlerEntry {
             kind: AnalyzerKind::IncludeAny,

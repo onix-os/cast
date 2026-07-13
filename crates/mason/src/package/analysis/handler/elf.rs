@@ -168,7 +168,8 @@ mod tests {
                 file: StonePayloadLayoutFile::Regular(0, target_path.to_string_lossy().into()),
             },
             size: executable.metadata().unwrap().len(),
-            package: "fixture".to_owned(),
+            package: std::sync::Arc::<str>::from("fixture"),
+            verified: None,
         };
         let mut providers = BTreeSet::new();
         let mut dependencies = BTreeSet::new();
