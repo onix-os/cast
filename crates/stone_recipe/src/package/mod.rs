@@ -10,11 +10,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
+use crate::{
+    NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec,
+    spec::{UpstreamValidationError, is_safe_artifact_component},
+};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
-use url::Url;
-
-use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 
 pub use self::gluon::{
     EvaluatedPackage, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
@@ -337,20 +338,17 @@ pub enum PackageConversionError {
         "options.networking: frozen builds must declare fetched content as locked sources; network access during execution is unsupported"
     )]
     FrozenBuildNetworkingUnsupported,
-    #[error("{field}: invalid URL `{value}`")]
-    InvalidUrl {
+    #[error("{field}: {source}")]
+    InvalidSource {
+        field: String,
+        #[source]
+        source: UpstreamValidationError,
+    },
+    #[error("{field}: materialization destination `{value}` duplicates `{first_field}`")]
+    DuplicateSourceMaterialization {
         field: String,
         value: String,
-        #[source]
-        source: url::ParseError,
-    },
-    #[error("{field}: source materialization directory `{value}` must be one normalized filename component")]
-    InvalidSourceMaterializationComponent { field: String, value: String },
-    #[error("{field}: `{value}` is outside the valid {expected} range")]
-    IntegerOutOfRange {
-        field: String,
-        value: i64,
-        expected: &'static str,
+        first_field: String,
     },
     #[error("{field}: invalid dependency: {source}")]
     InvalidDependency {
@@ -420,9 +418,8 @@ impl PackageConversionError {
             Self::InvalidVersionComponent { .. } => "meta.version",
             Self::ReleaseMustBePositive { .. } => "meta.release",
             Self::FrozenBuildNetworkingUnsupported => "options.networking",
-            Self::InvalidUrl { field, .. }
-            | Self::InvalidSourceMaterializationComponent { field, .. }
-            | Self::IntegerOutOfRange { field, .. }
+            Self::InvalidSource { field, .. }
+            | Self::DuplicateSourceMaterialization { field, .. }
             | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
             | Self::MissingOutputReference { field, .. }
@@ -473,29 +470,29 @@ impl PackageSpec {
             return Err(PackageConversionError::FrozenBuildNetworkingUnsupported);
         }
 
+        let mut source_destinations = BTreeMap::<String, (usize, &'static str)>::new();
         for (index, source) in self.sources.iter().enumerate() {
-            let (url, strip_dirs, materialization_component) = match source {
-                UpstreamSpec::Archive { url, strip_dirs, .. } => (url, *strip_dirs, None),
-                UpstreamSpec::Git { url, clone_dir, .. } => (url, None, clone_dir.as_deref()),
-            };
-            Url::parse(url).map_err(|source| PackageConversionError::InvalidUrl {
-                field: format!("sources[{index}].url"),
-                value: url.clone(),
-                source,
-            })?;
-            if let Some(value) = strip_dirs {
-                u8::try_from(value).map_err(|_| PackageConversionError::IntegerOutOfRange {
-                    field: format!("sources[{index}].strip_dirs"),
-                    value,
-                    expected: "0..=255 integer",
+            source
+                .validate()
+                .map_err(|source_error| PackageConversionError::InvalidSource {
+                    field: format!("sources[{index}].{}", source_error.field()),
+                    source: source_error,
                 })?;
-            }
-            if let Some(value) = materialization_component
-                && !is_safe_artifact_component(value)
+            let destination =
+                source
+                    .materialization_name()
+                    .map_err(|source_error| PackageConversionError::InvalidSource {
+                        field: format!("sources[{index}].{}", source_error.field()),
+                        source: source_error,
+                    })?;
+            let destination_field = source.materialization_field();
+            if let Some((first_index, first_destination_field)) =
+                source_destinations.insert(destination.clone(), (index, destination_field))
             {
-                return Err(PackageConversionError::InvalidSourceMaterializationComponent {
-                    field: format!("sources[{index}].clone_dir"),
-                    value: value.to_owned(),
+                return Err(PackageConversionError::DuplicateSourceMaterialization {
+                    field: format!("sources[{index}].{destination_field}"),
+                    value: destination,
+                    first_field: format!("sources[{first_index}].{first_destination_field}"),
                 });
             }
         }
@@ -987,14 +984,6 @@ pub(crate) fn valid_package_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_'))
 }
 
-pub(crate) fn is_safe_artifact_component(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && !value.contains(['/', '\\'])
-        && !value.chars().any(char::is_control)
-}
-
 fn valid_output_name(name: &str) -> bool {
     valid_package_name(name)
 }
@@ -1096,6 +1085,25 @@ mod tests {
             native_build_inputs: Vec::new(),
             build_inputs: Vec::new(),
             check_inputs: Vec::new(),
+        }
+    }
+
+    fn archive_source() -> UpstreamSpec {
+        UpstreamSpec::Archive {
+            url: "https://example.com/source.tar.xz".to_owned(),
+            hash: "a".repeat(64),
+            rename: None,
+            strip_dirs: None,
+            unpack: true,
+            unpack_dir: None,
+        }
+    }
+
+    fn git_source() -> UpstreamSpec {
+        UpstreamSpec::Git {
+            url: "https://example.com/source.git".to_owned(),
+            git_ref: "main".to_owned(),
+            clone_dir: None,
         }
     }
 
@@ -1427,14 +1435,21 @@ mod tests {
         ));
         assert_eq!(error.field(), "meta.release");
 
+        let mut invalid_source = git_source();
+        let UpstreamSpec::Git { url, .. } = &mut invalid_source else {
+            unreachable!()
+        };
+        *url = "not a URL".to_owned();
         let mut invalid = package();
-        invalid.sources.push(UpstreamSpec::Git {
-            url: "not a URL".to_owned(),
-            git_ref: "main".to_owned(),
-            clone_dir: None,
-        });
+        invalid.sources.push(invalid_source);
         let error = invalid.validate().unwrap_err();
-        assert!(matches!(error, PackageConversionError::InvalidUrl { .. }));
+        assert!(matches!(
+            error,
+            PackageConversionError::InvalidSource {
+                source: UpstreamValidationError::InvalidUrl { .. },
+                ..
+            }
+        ));
         assert_eq!(error.field(), "sources[0].url");
 
         for clone_dir in ["", ".", "..", "nested/source", "nested\\source", "source\nname"] {
@@ -1447,7 +1462,10 @@ mod tests {
             let error = invalid.validate().unwrap_err();
             assert!(matches!(
                 error,
-                PackageConversionError::InvalidSourceMaterializationComponent { .. }
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidMaterializationComponent { .. },
+                    ..
+                }
             ));
             assert_eq!(error.field(), "sources[0].clone_dir");
         }
@@ -1463,15 +1481,245 @@ mod tests {
         let mut invalid = package();
         invalid.sources.push(UpstreamSpec::Archive {
             url: "https://example.com/source.tar.xz".to_owned(),
-            hash: "hash".to_owned(),
+            hash: "a".repeat(64),
             rename: None,
             strip_dirs: Some(256),
             unpack: true,
             unpack_dir: None,
         });
         let error = invalid.validate().unwrap_err();
-        assert!(matches!(error, PackageConversionError::IntegerOutOfRange { .. }));
+        assert!(matches!(
+            error,
+            PackageConversionError::InvalidSource {
+                source: UpstreamValidationError::InvalidStripDirs { .. },
+                ..
+            }
+        ));
         assert_eq!(error.field(), "sources[0].strip_dirs");
+    }
+
+    #[test]
+    fn every_authored_source_field_is_validated_before_lowering() {
+        for hash in ["short".to_owned(), "A".repeat(64), format!("{}g", "a".repeat(63))] {
+            let mut source = archive_source();
+            let UpstreamSpec::Archive { hash: value, .. } = &mut source else {
+                unreachable!()
+            };
+            *value = hash;
+            let mut invalid = package();
+            invalid.sources.push(source);
+
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidArchiveSha256 { .. },
+                    ..
+                }
+            ));
+            assert_eq!(error.field(), "sources[0].hash");
+            assert!(error.to_string().contains("64 lowercase ASCII hexadecimal"));
+        }
+
+        for rename in [
+            "",
+            ".",
+            "..",
+            "/escape",
+            "nested/source",
+            "nested\\source",
+            "source\nname",
+        ] {
+            let mut source = archive_source();
+            let UpstreamSpec::Archive { rename: value, .. } = &mut source else {
+                unreachable!()
+            };
+            *value = Some(rename.to_owned());
+            let mut invalid = package();
+            invalid.sources.push(source);
+
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidMaterializationComponent { field: "rename", .. },
+                    ..
+                }
+            ));
+            assert_eq!(error.field(), "sources[0].rename");
+        }
+
+        for unpack_dir in [
+            "",
+            ".",
+            "..",
+            "/escape",
+            "nested//source",
+            "nested/./source",
+            "nested/../escape",
+            "nested\\source",
+            "source\nname",
+        ] {
+            let mut source = archive_source();
+            let UpstreamSpec::Archive { unpack_dir: value, .. } = &mut source else {
+                unreachable!()
+            };
+            *value = Some(unpack_dir.to_owned());
+            let mut invalid = package();
+            invalid.sources.push(source);
+
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidUnpackDir { .. },
+                    ..
+                }
+            ));
+            assert_eq!(error.field(), "sources[0].unpack_dir");
+            assert!(error.to_string().contains("normalized, non-empty relative path"));
+        }
+
+        for field in ["strip_dirs", "unpack_dir"] {
+            let mut source = archive_source();
+            let UpstreamSpec::Archive {
+                strip_dirs,
+                unpack,
+                unpack_dir,
+                ..
+            } = &mut source
+            else {
+                unreachable!()
+            };
+            *unpack = false;
+            if field == "strip_dirs" {
+                *strip_dirs = Some(1);
+            } else {
+                *unpack_dir = Some("source".to_owned());
+            }
+            let mut invalid = package();
+            invalid.sources.push(source);
+
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::OptionRequiresUnpack { .. },
+                    ..
+                }
+            ));
+            assert_eq!(error.field(), format!("sources[0].{field}"));
+            assert!(error.to_string().contains("unless `unpack` is true"));
+        }
+
+        for git_ref in ["", "main\nother"] {
+            let mut source = git_source();
+            let UpstreamSpec::Git { git_ref: value, .. } = &mut source else {
+                unreachable!()
+            };
+            *value = git_ref.to_owned();
+            let mut invalid = package();
+            invalid.sources.push(source);
+
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidGitRef { .. },
+                    ..
+                }
+            ));
+            assert_eq!(error.field(), "sources[0].git_ref");
+        }
+
+        let mut archive_without_name = archive_source();
+        let UpstreamSpec::Archive { url, .. } = &mut archive_without_name else {
+            unreachable!()
+        };
+        *url = "https://example.com/".to_owned();
+        let mut git_without_name = git_source();
+        let UpstreamSpec::Git { url, .. } = &mut git_without_name else {
+            unreachable!()
+        };
+        *url = "https://example.com/".to_owned();
+        for source in [archive_without_name, git_without_name] {
+            let mut invalid = package();
+            invalid.sources.push(source);
+
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidSource {
+                    source: UpstreamValidationError::InvalidDefaultMaterializationName { .. },
+                    ..
+                }
+            ));
+            assert_eq!(error.field(), "sources[0].url");
+            assert!(error.to_string().contains("set `"));
+        }
+    }
+
+    #[test]
+    fn source_validation_accepts_normalized_explicit_destinations() {
+        let mut archive = archive_source();
+        let UpstreamSpec::Archive {
+            rename,
+            strip_dirs,
+            unpack_dir,
+            ..
+        } = &mut archive
+        else {
+            unreachable!()
+        };
+        *rename = Some("source archive;literal.tar.xz".to_owned());
+        *strip_dirs = Some(0);
+        *unpack_dir = Some("vendor/source tree".to_owned());
+
+        let mut git = git_source();
+        let UpstreamSpec::Git { git_ref, clone_dir, .. } = &mut git else {
+            unreachable!()
+        };
+        *git_ref = "refs/tags/v1.0.0^{}".to_owned();
+        *clone_dir = Some("git source".to_owned());
+
+        let mut valid = package();
+        valid.sources = vec![archive, git];
+
+        valid.validate().unwrap();
+    }
+
+    #[test]
+    fn duplicate_source_materialization_destinations_are_rejected_before_resolution() {
+        let mut archive = archive_source();
+        let UpstreamSpec::Archive { rename, .. } = &mut archive else {
+            unreachable!()
+        };
+        *rename = Some("same-source".to_owned());
+        let mut git = git_source();
+        let UpstreamSpec::Git { clone_dir, .. } = &mut git else {
+            unreachable!()
+        };
+        *clone_dir = Some("same-source".to_owned());
+
+        let mut invalid = package();
+        invalid.sources = vec![archive, git];
+
+        let error = invalid.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::DuplicateSourceMaterialization {
+                ref field,
+                ref first_field,
+                ref value,
+            } if field == "sources[1].clone_dir"
+                && first_field == "sources[0].rename"
+                && value == "same-source"
+        ));
+        assert_eq!(error.field(), "sources[1].clone_dir");
+        assert_eq!(
+            error.to_string(),
+            "sources[1].clone_dir: materialization destination `same-source` duplicates `sources[0].rename`"
+        );
     }
 
     #[test]

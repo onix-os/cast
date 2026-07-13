@@ -40,7 +40,7 @@ let cmake = import! boulder.builders.cmake.v2
         sources = [
             b.source.archive
                 "https://example.invalid/factory-hello-1.0.0.tar.xz"
-                "0123456789abcdef",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ],
         .. base
     }

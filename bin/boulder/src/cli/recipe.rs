@@ -617,7 +617,9 @@ let base = boulder.mk_package (boulder.meta {
     license = ["MPL-2.0"],
 })
 {
-    sources = [boulder.source.archive "https://example.com/source.tar.xz" "aaaaaaaa"],
+    sources = [boulder.source.archive
+        "https://example.com/source.tar.xz"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     .. base
 }
 "#;
@@ -743,7 +745,7 @@ let base = boulder.mk_package (boulder.meta {
         let lock = SourceLock::new(vec![SourceResolution::Archive(ArchiveResolution {
             order: 0,
             url: "https://example.com/source.tar.xz".to_owned(),
-            sha256: "different-hash".to_owned(),
+            sha256: "b".repeat(64),
         })]);
         fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), encode_source_lock(&lock)).unwrap();
 

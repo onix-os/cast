@@ -585,7 +585,7 @@ boulder.mk_package (boulder.meta {
         let source_lock::SourceResolution::Archive(archive) = &mut hash.sources[0] else {
             unreachable!();
         };
-        archive.sha256 = "changed-hash".to_owned();
+        archive.sha256 = "b".repeat(64);
 
         let mut requested_ref = matching_source_lock();
         let source_lock::SourceResolution::Git(git) = &mut requested_ref.sources[1] else {

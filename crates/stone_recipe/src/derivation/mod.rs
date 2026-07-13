@@ -23,7 +23,10 @@ use crate::build_policy::{
     SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
     layers::BuildPolicyOperation,
 };
-use crate::package::{is_safe_artifact_component, valid_package_name};
+use crate::{
+    package::valid_package_name,
+    spec::{is_canonical_sha256, is_safe_artifact_component},
+};
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
@@ -651,7 +654,7 @@ impl LockedSource {
             } => {
                 require_nonempty(&format!("sources[{index}].url"), url)?;
                 validate_url(index, url)?;
-                if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                if !is_canonical_sha256(sha256) {
                     return Err(DerivationValidationError::InvalidArchiveSha256 {
                         index,
                         value: sha256.clone(),
@@ -677,11 +680,7 @@ impl LockedSource {
                         value: commit.clone(),
                     });
                 }
-                if materialization_sha256.len() != 64
-                    || !materialization_sha256
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-                {
+                if !is_canonical_sha256(materialization_sha256) {
                     return Err(DerivationValidationError::InvalidGitMaterializationSha256 {
                         index,
                         value: materialization_sha256.clone(),
@@ -1926,7 +1925,7 @@ pub enum DerivationValidationError {
         "sources[{index}].materialization_sha256: expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`"
     )]
     InvalidGitMaterializationSha256 { index: usize, value: String },
-    #[error("sources[{index}].sha256: expected exactly 64 ASCII hexadecimal characters, found `{value}`")]
+    #[error("sources[{index}].sha256: expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`")]
     InvalidArchiveSha256 { index: usize, value: String },
     #[error("sources[{index}].{field}: unsafe relative materialization path {value:?}")]
     UnsafeSourceDestination {
@@ -3978,30 +3977,24 @@ mod tests {
     }
 
     #[test]
-    fn validation_requires_a_complete_archive_sha256() {
+    fn validation_requires_a_canonical_archive_sha256() {
         for value in [
-            "",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag",
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            format!("{}g", "a".repeat(63)),
+            "A".repeat(64),
         ] {
             let mut plan = sample_plan();
             let LockedSource::Archive { sha256, .. } = &mut plan.sources[0] else {
                 unreachable!()
             };
-            *sha256 = value.to_owned();
+            *sha256 = value;
             assert!(matches!(
                 plan.validate(),
                 Err(DerivationValidationError::InvalidArchiveSha256 { index: 0, .. })
             ));
         }
-
-        let mut uppercase = sample_plan();
-        let LockedSource::Archive { sha256, .. } = &mut uppercase.sources[0] else {
-            unreachable!()
-        };
-        *sha256 = "ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD".to_owned();
-        uppercase.validate().unwrap();
     }
 
     #[test]

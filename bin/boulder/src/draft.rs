@@ -288,7 +288,7 @@ mod test {
     fn generated_draft_is_a_valid_standalone_gluon_recipe() {
         let metadata = Metadata::new(vec![Upstream {
             uri: Url::parse("https://example.com/example-1.2.3.tar.xz").unwrap(),
-            hash: "0123456789abcdef".to_owned(),
+            hash: "0123456789abcdef".repeat(4),
         }]);
         let source = encode_package_v3(
             &metadata,

@@ -42,7 +42,7 @@ let cmake = import! boulder.builders.cmake.v2
         sources = [
             b.source.archive
                 "https://example.invalid/hello-1.0.0.tar.xz"
-                "0123456789abcdef",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ],
         .. base
     }
@@ -316,10 +316,16 @@ Declare archives or Git requests in `sources`:
 
 ```gluon
 sources = [
-    b.source.archive "https://example.invalid/hello.tar.xz" "sha256-hex",
+    b.source.archive
+        "https://example.invalid/hello.tar.xz"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     b.source.git "https://example.invalid/hello.git" "v1.0.0",
 ]
 ```
+
+Archive hashes are exactly 64 lowercase hexadecimal characters. They bind the
+authored request, generated source lock, frozen derivation, and fetched bytes
+to one canonical SHA-256 identity.
 
 Use `archive_with` to set `rename`, `strip_dirs`, `unpack`, or `unpack_dir`, and
 `git_with` to set `clone_dir`:
@@ -332,8 +338,12 @@ b.source.git_with {
 }
 ```
 
-`clone_dir` must be one safe filename component and becomes the exact source
-directory recorded in the frozen plan. These values are authored requests.
+`rename` and `clone_dir` must each be one safe filename component. `unpack_dir`
+must be a normalized relative path without empty, `.` or `..` components;
+`strip_dirs` and `unpack_dir` are rejected when `unpack` is false because they
+would otherwise be ignored. Effective materialization names must be unique and
+become the exact source destinations recorded in the frozen plan. These values
+are authored requests.
 Boulder writes generated `sources.lock.glu` schema v2 beside `stone.glu`; each
 Git entry contains a full commit ID and a required
 `materialization_sha256`. Refresh it without rewriting authored Gluon:

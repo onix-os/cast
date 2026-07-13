@@ -376,6 +376,69 @@ b.mk_package (b.meta {
 }
 
 #[test]
+fn evaluator_rejects_malformed_source_fields_before_planning() {
+    for (source, expected_field, expected_message) in [
+        (
+            r#"b.source.archive "https://example.com/source.tar.xz" "short""#,
+            "sources[0].hash",
+            "64 lowercase ASCII hexadecimal",
+        ),
+        (
+            r#"b.source.archive_with {
+                url = "https://example.com/source.tar.xz",
+                hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                rename = b.optional.set "../escape",
+                strip_dirs = b.optional.unset,
+                unpack = b.boolean.true,
+                unpack_dir = b.optional.unset,
+            }"#,
+            "sources[0].rename",
+            "normalized filename component",
+        ),
+        (
+            r#"b.source.archive_with {
+                url = "https://example.com/source.tar.xz",
+                hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                rename = b.optional.unset,
+                strip_dirs = b.optional.unset,
+                unpack = b.boolean.true,
+                unpack_dir = b.optional.set "../../escape",
+            }"#,
+            "sources[0].unpack_dir",
+            "normalized, non-empty relative path",
+        ),
+        (
+            r#"b.source.git "https://example.com/source.git" """#,
+            "sources[0].git_ref",
+            "must be non-empty",
+        ),
+    ] {
+        let source = authored(&format!(
+            r#"
+let base = b.mk_package (b.meta {{
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+}})
+{{
+    sources = [{source}],
+    .. base
+}}
+"#
+        ));
+
+        let error = evaluate_gluon(&source).unwrap_err();
+        let PackageEvaluationError::Conversion(conversion) = &error else {
+            panic!("malformed source reached the wrong diagnostic layer: {error}")
+        };
+        assert_eq!(conversion.field(), expected_field);
+        assert!(
+            error.to_string().contains(expected_message),
+            "diagnostic did not explain {expected_field}: {error}"
+        );
+    }
+}
+
+#[test]
 fn evaluator_rejects_package_metadata_that_can_escape_artifact_paths() {
     for (pname, version, field) in [
         ("../../escape", "1.0.0", "meta.pname"),
