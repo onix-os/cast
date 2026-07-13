@@ -8,6 +8,7 @@
 //! Rust never receives or retains a Gluon closure or a second recipe model.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path};
 
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
@@ -333,6 +334,16 @@ pub enum PackageConversionError {
     DuplicateOutput { index: usize, name: String },
     #[error("outputs[{index}].name: invalid output name `{name}`")]
     InvalidOutputName { index: usize, name: String },
+    #[error("profiles[{index}].name: profile name `{name}` must be a normalized safe relative path")]
+    InvalidProfileName { index: usize, name: String },
+    #[error(
+        "profiles[{duplicate_index}].name: duplicate profile name `{name}`; first declared at profiles[{first_index}].name"
+    )]
+    DuplicateProfileName {
+        first_index: usize,
+        duplicate_index: usize,
+        name: String,
+    },
     #[error("{field}: output `{output}` does not exist in package `{package}`")]
     MissingOutputReference {
         field: String,
@@ -368,6 +379,7 @@ impl PackageConversionError {
             | Self::UnsupportedBuilderHook { field } => field,
             Self::MissingRootOutput => "outputs",
             Self::DuplicateOutput { .. } | Self::InvalidOutputName { .. } => "outputs",
+            Self::InvalidProfileName { .. } | Self::DuplicateProfileName { .. } => "profiles",
         }
     }
 }
@@ -420,6 +432,23 @@ impl PackageSpec {
                     value,
                     expected: "0..=255 integer",
                 })?;
+            }
+        }
+
+        let mut profile_names = BTreeMap::new();
+        for (index, profile) in self.profiles.iter().enumerate() {
+            if !valid_profile_name(&profile.name) {
+                return Err(PackageConversionError::InvalidProfileName {
+                    index,
+                    name: profile.name.clone(),
+                });
+            }
+            if let Some(first_index) = profile_names.insert(profile.name.as_str(), index) {
+                return Err(PackageConversionError::DuplicateProfileName {
+                    first_index,
+                    duplicate_index: index,
+                    name: profile.name.clone(),
+                });
             }
         }
 
@@ -751,6 +780,17 @@ fn valid_output_name(name: &str) -> bool {
     valid_package_name(name)
 }
 
+fn valid_profile_name(name: &str) -> bool {
+    let path = Path::new(name);
+    !path.is_absolute()
+        && name
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
 impl BuilderSpec {
     pub fn required_tools(&self) -> &[DependencySpec] {
         &self.required_tools
@@ -801,6 +841,17 @@ mod tests {
             environment: vec![environment],
             phases,
             supported_hooks: SupportedHooksSpec::all(),
+        }
+    }
+
+    fn profile(name: &str) -> ProfileSpec {
+        ProfileSpec {
+            name: name.to_owned(),
+            builder: BuilderSpec::default(),
+            hooks: HooksSpec::default(),
+            native_build_inputs: Vec::new(),
+            build_inputs: Vec::new(),
+            check_inputs: Vec::new(),
         }
     }
 
@@ -972,6 +1023,67 @@ mod tests {
         assert_eq!(
             package.builder_for_profile(Some("missing")).environment,
             [BuilderEnvironmentSpec::CMake]
+        );
+    }
+
+    #[test]
+    fn profile_names_are_unique_normalized_target_keys() {
+        for name in ["x86_64", "x86_64-v3x", "emul32/x86_64", "tier/.hidden"] {
+            let mut spec = package();
+            spec.profiles.push(profile(name));
+
+            spec.validate()
+                .unwrap_or_else(|error| panic!("profile name `{name}` was rejected: {error}"));
+        }
+
+        for name in [
+            "",
+            "/x86_64",
+            "//x86_64",
+            "emul32//x86_64",
+            "emul32/",
+            "./x86_64",
+            "emul32/./x86_64",
+            ".",
+            "../x86_64",
+            "emul32/../x86_64",
+            "..",
+        ] {
+            let mut spec = package();
+            spec.profiles.push(profile(name));
+
+            let error = spec.validate().unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    PackageConversionError::InvalidProfileName {
+                        index: 0,
+                        name: ref found,
+                    }
+                        if found == name
+                ),
+                "profile name `{name}` was not rejected as an invalid target key: {error}"
+            );
+            assert_eq!(error.field(), "profiles");
+            assert!(error.to_string().starts_with("profiles[0].name:"));
+        }
+
+        let mut duplicate = package();
+        duplicate.profiles = vec![profile("native"), profile("emul32/x86_64"), profile("native")];
+
+        let error = duplicate.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::DuplicateProfileName {
+                first_index: 0,
+                duplicate_index: 2,
+                ref name,
+            } if name == "native"
+        ));
+        assert_eq!(error.field(), "profiles");
+        assert_eq!(
+            error.to_string(),
+            "profiles[2].name: duplicate profile name `native`; first declared at profiles[0].name"
         );
     }
 

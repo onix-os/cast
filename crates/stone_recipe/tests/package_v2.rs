@@ -258,6 +258,54 @@ b.mk_package (b.meta {{
 }
 
 #[test]
+fn evaluator_rejects_unsafe_or_duplicate_profile_keys() {
+    let unsafe_profile = authored(
+        r#"
+let base = b.mk_package (b.meta {
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+})
+{
+    profiles = [b.profile "emul32/../x86_64"],
+    .. base
+}
+"#,
+    );
+
+    let error = evaluate_gluon(&unsafe_profile).unwrap_err();
+    assert!(matches!(
+        error,
+        PackageEvaluationError::Conversion(PackageConversionError::InvalidProfileName {
+            index: 0,
+            ref name,
+        }) if name == "emul32/../x86_64"
+    ));
+
+    let duplicate_profiles = authored(
+        r#"
+let base = b.mk_package (b.meta {
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+})
+{
+    profiles = [b.profile "native", b.profile "emul32/x86_64", b.profile "native"],
+    .. base
+}
+"#,
+    );
+
+    let error = evaluate_gluon(&duplicate_profiles).unwrap_err();
+    assert!(matches!(
+        error,
+        PackageEvaluationError::Conversion(PackageConversionError::DuplicateProfileName {
+            first_index: 0,
+            duplicate_index: 2,
+            ref name,
+        }) if name == "native"
+    ));
+}
+
+#[test]
 fn evaluator_rejects_networked_frozen_packages_with_locked_source_guidance() {
     let source = authored(
         r#"
