@@ -302,8 +302,8 @@ let create_source_directory = source_command "mkdir" [
 
 let sources = {
     archive = {
-        // The extractor is unconditional because every unpacked archive uses
-        // this exact command. This closes the old rpm/deb dependency gap.
+        // Every archive format is handled by this exact structural command;
+        // closure requirements cannot drift from an extension-only switch.
         required_tools = [p.tool.binary "mkdir", p.tool.binary "bsdtar-static"],
         create_directory = create_source_directory,
         unpack = source_command "bsdtar-static" [
@@ -313,16 +313,6 @@ let sources = {
             ctx c.source_destination,
             cat [lit "--strip-components=", ctx c.source_strip_components],
             lit "--no-same-owner",
-        ],
-        tool_rules = [
-            {
-                extensions = ["rpm"],
-                required_tools = [p.tool.binary "rpm2cpio", p.tool.package "cpio"],
-            },
-            {
-                extensions = ["deb"],
-                required_tools = [p.tool.binary "ar"],
-            },
         ],
     },
     git = {

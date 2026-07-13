@@ -254,16 +254,10 @@ type BuilderCommandSpec = {
     working_dir : TextSpec,
 }
 
-type ArchiveToolRuleSpec = {
-    extensions : Array String,
-    required_tools : Array BuildToolSpec,
-}
-
 type ArchivePreparationPolicySpec = {
     required_tools : Array BuildToolSpec,
     create_directory : BuilderCommandSpec,
     unpack : BuilderCommandSpec,
-    tool_rules : Array ArchiveToolRuleSpec,
 }
 
 type GitPreparationPolicySpec = {

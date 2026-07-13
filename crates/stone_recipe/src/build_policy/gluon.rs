@@ -7,14 +7,13 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    ArchivePreparationPolicySpec, ArchiveToolRuleSpec, BuildPolicyConversionError, BuildPolicySpec,
-    BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
-    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
-    EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec,
-    NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
-    RetiredTargetPolicySpec, SandboxPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec,
-    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
-    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
+    ArchivePreparationPolicySpec, BuildPolicyConversionError, BuildPolicySpec, BuildRootPolicySpec, BuildToolSpec,
+    BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec,
+    ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec,
+    InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec,
+    PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec, RetiredTargetPolicySpec, SandboxPolicySpec,
+    SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec,
+    ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
 };
 
 /// Version of the typed repository build-policy ABI.
@@ -329,17 +328,10 @@ struct GluonBuilderCommandSpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonArchiveToolRuleSpec {
-    extensions: Vec<String>,
-    required_tools: Vec<GluonBuildToolSpec>,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonArchivePreparationPolicySpec {
     required_tools: Vec<GluonBuildToolSpec>,
     create_directory: GluonBuilderCommandSpec,
     unpack: GluonBuilderCommandSpec,
-    tool_rules: Vec<GluonArchiveToolRuleSpec>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -737,22 +729,12 @@ impl From<GluonBuildRootPolicySpec> for BuildRootPolicySpec {
     }
 }
 
-impl From<GluonArchiveToolRuleSpec> for ArchiveToolRuleSpec {
-    fn from(value: GluonArchiveToolRuleSpec) -> Self {
-        Self {
-            extensions: value.extensions,
-            required_tools: convert_tools(value.required_tools),
-        }
-    }
-}
-
 impl From<GluonArchivePreparationPolicySpec> for ArchivePreparationPolicySpec {
     fn from(value: GluonArchivePreparationPolicySpec) -> Self {
         Self {
             required_tools: convert_tools(value.required_tools),
             create_directory: value.create_directory.into(),
             unpack: value.unpack.into(),
-            tool_rules: value.tool_rules.into_iter().map(Into::into).collect(),
         }
     }
 }

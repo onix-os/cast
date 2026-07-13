@@ -248,31 +248,12 @@ fn extend_source_tools(
 ) -> Result<(), Error> {
     for source in sources {
         match source {
-            UpstreamSpec::Archive {
-                url,
-                rename,
-                unpack: true,
-                ..
-            } => {
+            UpstreamSpec::Archive { unpack: true, .. } => {
                 extend_policy_tools(
                     packages,
                     "sources.archive.required_tools",
                     &policy.sources.archive.required_tools,
                 )?;
-                let url = url::Url::parse(url).expect("validated package source URL");
-                let archive_name = rename.as_deref().unwrap_or_else(|| url.path());
-                let Some((_, extension)) = archive_name.rsplit_once('.') else {
-                    continue;
-                };
-                for rule in &policy.sources.archive.tool_rules {
-                    if rule.extensions.iter().any(|candidate| candidate == extension) {
-                        extend_policy_tools(
-                            packages,
-                            "sources.archive.tool_rules.required_tools",
-                            &rule.required_tools,
-                        )?;
-                    }
-                }
             }
             UpstreamSpec::Archive { unpack: false, .. } => {}
             UpstreamSpec::Git { .. } => extend_policy_tools(
@@ -494,16 +475,6 @@ let unrelated = b.profile_with {
         policy.build_root.compiler_cache.required_tools = vec![BuildToolSpec::Binary("policy-cache".to_owned())];
         policy.builders.cmake.required_tools = vec![BuildToolSpec::SystemBinary("policy-cmake".to_owned())];
         policy.sources.archive.required_tools = vec![BuildToolSpec::Binary("policy-archive".to_owned())];
-        policy.sources.archive.tool_rules = vec![
-            stone_recipe::build_policy::ArchiveToolRuleSpec {
-                extensions: vec!["rpm".to_owned()],
-                required_tools: vec![BuildToolSpec::Package("policy-rpm".to_owned())],
-            },
-            stone_recipe::build_policy::ArchiveToolRuleSpec {
-                extensions: vec!["zip".to_owned()],
-                required_tools: vec![BuildToolSpec::Package("wrong-skipped-archive".to_owned())],
-            },
-        ];
         policy.sources.git.required_tools = vec![BuildToolSpec::SystemBinary("policy-git".to_owned())];
 
         let mut package = selected_inputs_package();
@@ -556,7 +527,6 @@ let unrelated = b.profile_with {
             "binary(policy-mold)",
             "policy-base",
             "policy-gnu32",
-            "policy-rpm",
             "sysbinary(policy-cmake)",
             "sysbinary(policy-emul-base)",
             "sysbinary(policy-git)",

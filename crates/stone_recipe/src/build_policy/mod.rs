@@ -353,20 +353,12 @@ pub struct BuilderCommandSpec {
     pub working_dir: TextSpec,
 }
 
-/// Extra closure requirements selected by a filename extension.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchiveToolRuleSpec {
-    pub extensions: Vec<String>,
-    pub required_tools: Vec<BuildToolSpec>,
-}
-
 /// Structural extraction policy for one archive source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchivePreparationPolicySpec {
     pub required_tools: Vec<BuildToolSpec>,
     pub create_directory: BuilderCommandSpec,
     pub unpack: BuilderCommandSpec,
-    pub tool_rules: Vec<ArchiveToolRuleSpec>,
 }
 
 /// Structural copy policy for one already-fetched git source.
@@ -492,8 +484,6 @@ pub enum BuildPolicyConversionError {
         value: String,
         expected: String,
     },
-    #[error("{field}: invalid archive extension `{value}`")]
-    InvalidArchiveExtension { field: String, value: String },
 }
 
 impl BuildPolicySpec {
@@ -702,37 +692,6 @@ fn validate_sources(sources: &SourcePreparationPolicySpec) -> Result<(), BuildPo
     validate_tools("sources.archive.required_tools", &sources.archive.required_tools)?;
     validate_command("sources.archive.create_directory", &sources.archive.create_directory)?;
     validate_command("sources.archive.unpack", &sources.archive.unpack)?;
-
-    let mut extensions = BTreeSet::new();
-    for (rule_index, rule) in sources.archive.tool_rules.iter().enumerate() {
-        let field = format!("sources.archive.tool_rules[{rule_index}]");
-        validate_tools(&format!("{field}.required_tools"), &rule.required_tools)?;
-        if rule.extensions.is_empty() {
-            return Err(BuildPolicyConversionError::Empty {
-                field: format!("{field}.extensions"),
-            });
-        }
-        for (extension_index, extension) in rule.extensions.iter().enumerate() {
-            let extension_field = format!("{field}.extensions[{extension_index}]");
-            if extension.is_empty()
-                || extension.starts_with('.')
-                || extension
-                    .chars()
-                    .any(|character| !character.is_ascii_lowercase() && !character.is_ascii_digit())
-            {
-                return Err(BuildPolicyConversionError::InvalidArchiveExtension {
-                    field: extension_field,
-                    value: extension.clone(),
-                });
-            }
-            if !extensions.insert(extension.as_str()) {
-                return Err(BuildPolicyConversionError::Duplicate {
-                    field: "sources.archive.tool_rules.extensions".to_owned(),
-                    value: extension.clone(),
-                });
-            }
-        }
-    }
 
     validate_tools("sources.git.required_tools", &sources.git.required_tools)?;
     validate_command("sources.git.create_directory", &sources.git.create_directory)?;

@@ -488,21 +488,6 @@ fn repository_source_preparation_is_argv_preserving_policy() {
             TextSpec::Literal("--no-same-owner".to_owned()),
         ]
     );
-    assert_eq!(archive.tool_rules.len(), 2);
-    assert_eq!(archive.tool_rules[0].extensions, ["rpm"]);
-    assert_eq!(
-        archive.tool_rules[0].required_tools,
-        [
-            BuildToolSpec::Binary("rpm2cpio".to_owned()),
-            BuildToolSpec::Package("cpio".to_owned()),
-        ]
-    );
-    assert_eq!(archive.tool_rules[1].extensions, ["deb"]);
-    assert_eq!(
-        archive.tool_rules[1].required_tools,
-        [BuildToolSpec::Binary("ar".to_owned())]
-    );
-
     let git = policy.sources.git;
     assert_eq!(git.copy.program, TextSpec::Literal("cp".to_owned()));
     assert_eq!(
@@ -710,14 +695,6 @@ fn root_source_sandbox_and_platform_semantics_are_rejected_early() {
         policy.validate(),
         Err(BuildPolicyConversionError::Duplicate { field, value })
             if field == "build_root.base" && value == "bash"
-    ));
-
-    let mut policy = repository_policy_value();
-    policy.sources.archive.tool_rules[1].extensions[0] = "rpm".to_owned();
-    assert!(matches!(
-        policy.validate(),
-        Err(BuildPolicyConversionError::Duplicate { field, value })
-            if field == "sources.archive.tool_rules.extensions" && value == "rpm"
     ));
 
     let mut policy = repository_policy_value();
