@@ -22,7 +22,7 @@ use super::{
 /// Version of the typed repository build-policy ABI.
 pub const BUILD_POLICY_ABI_VERSION: u32 = 3;
 
-/// Pure helpers imported by policy roots as `boulder.build_policy.v3`.
+/// Pure helpers imported by policy roots as `cast.build_policy.v3`.
 pub const GLUON_BUILD_POLICY_ABI: &str = include_str!("../../gluon/build_policy.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
@@ -1102,7 +1102,7 @@ pub fn evaluate_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("cast.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)?;
 
@@ -1143,7 +1143,7 @@ pub fn evaluate_patch_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("cast.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)?;
 

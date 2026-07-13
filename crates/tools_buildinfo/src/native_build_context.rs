@@ -80,7 +80,7 @@ const EXACT_VALUES: &[&str] = &[
     "WASM_MUSL_SYSROOT",
 ];
 
-// These are the knobs read by native dependencies in the Boulder/Stone
+// These are the knobs read by native dependencies in the Mason/Stone
 // closure.  Restricting this list avoids turning the complete ambient process
 // environment into implementation identity.
 const DEPENDENCY_VALUES: &[&str] = &[
@@ -214,7 +214,7 @@ impl NativeBuildContext {
 /// `probe` receives the tool role and selected command and returns its
 /// content-strong executable identity, including stable `--version` output.
 /// Every selected command must return an identity; otherwise two different
-/// implementations could share one Boulder semantic fingerprint.
+/// implementations could share one Mason semantic fingerprint.
 pub(crate) fn collect<I, F>(environment: I, workspace_root: &Path, mut probe: F) -> io::Result<NativeBuildContext>
 where
     I: IntoIterator<Item = (OsString, OsString)>,

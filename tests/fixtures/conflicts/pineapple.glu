@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v3
+let b = import! cast.package.v3
 let scripts = b.scripts {
     install = b.phase [
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "mkdir", b.program.binary "touch"],
-            script = r#"mkdir -p "${BOULDER_INSTALL_ROOT}${BOULDER_VENDORDIR}" && touch "${BOULDER_INSTALL_ROOT}${BOULDER_VENDORDIR}/pineapple""#,
+            script = r#"mkdir -p "${CAST_INSTALL_ROOT}${CAST_VENDORDIR}" && touch "${CAST_INSTALL_ROOT}${CAST_VENDORDIR}/pineapple""#,
         },
     ],
     .. b.defaults.scripts

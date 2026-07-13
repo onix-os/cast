@@ -32,7 +32,7 @@ fn package(builder_import: &str, body: &str) -> Source {
     Source::new(
         "stone.glu",
         format!(
-            r#"let b = import! boulder.package.v3
+            r#"let b = import! cast.package.v3
 let builder = import! {builder_import}
 let base = b.mk_package (b.meta {{
     pname = "example", version = "1.0.0", release = 1,
@@ -50,7 +50,7 @@ let base = b.mk_package (b.meta {{
 #[test]
 fn meson_builder_returns_tools_environment_phases_and_hooks() {
     let source = package(
-        "boulder.builders.meson.v2",
+        "cast.builders.meson.v2",
         r#"builder.builder {
             flags = ["-Ddocumentation=false"],
             run_tests = b.boolean.false,
@@ -79,14 +79,14 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
             .fingerprint
             .imported_modules
             .iter()
-            .any(|module| module.logical_name == "boulder.builders.meson.v2")
+            .any(|module| module.logical_name == "cast.builders.meson.v2")
     );
 }
 
 #[test]
 fn cmake_builder_returns_tools_environment_phases_and_hooks() {
     let source = package(
-        "boulder.builders.cmake.v2",
+        "cast.builders.cmake.v2",
         r#"builder.builder {
             flags = ["-DBUILD_SHARED_LIBS=ON"],
             run_tests = b.boolean.true,
@@ -115,7 +115,7 @@ fn cmake_builder_returns_tools_environment_phases_and_hooks() {
 #[test]
 fn cargo_builder_declares_features_binaries_environment_and_checks() {
     let source = package(
-        "boulder.builders.cargo.v2",
+        "cast.builders.cargo.v2",
         r#"builder.builder {
             features = ["cli", "tls"],
             binaries = ["example", "examplectl"],
@@ -146,7 +146,7 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
 #[test]
 fn autotools_builder_declares_structural_phase_contract() {
     let source = package(
-        "boulder.builders.autotools.v2",
+        "cast.builders.autotools.v2",
         r#"builder.builder {
             flags = ["--disable-static"],
             .. builder.defaults
@@ -179,7 +179,7 @@ fn autotools_builder_declares_structural_phase_contract() {
 fn custom_shell_builder_requires_structural_tools_and_composes_hooks() {
     let source = Source::new(
         "stone.glu",
-        r#"let b = import! boulder.package.v3
+        r#"let b = import! cast.package.v3
 let base = b.mk_package (b.meta {
     pname = "example", version = "1.0.0", release = 1,
     homepage = "https://example.com", license = ["MPL-2.0"],
@@ -189,14 +189,14 @@ let scripts = b.scripts {
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "zig"],
-            script = "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build",
+            script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-cache\" zig build",
         },
     ],
     install = b.phase [
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "zig"],
-            script = "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build install --prefix \"${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}\"",
+            script = "ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-cache\" zig build install --prefix \"${CAST_INSTALL_ROOT}${CAST_PREFIX}\"",
         },
     ],
     .. b.defaults.scripts
@@ -229,7 +229,7 @@ let scripts = b.scripts {
                 args: Vec::new(),
             },
             shell(
-                r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build"#,
+                r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-cache" zig build"#,
                 vec![binary_program("zig")],
             ),
             StepSpec::Run {
@@ -241,7 +241,7 @@ let scripts = b.scripts {
     assert_eq!(
         phases.install.steps,
         [shell(
-            r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#,
+            r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-cache" zig build install --prefix "${CAST_INSTALL_ROOT}${CAST_PREFIX}""#,
             vec![binary_program("zig")],
         )]
     );

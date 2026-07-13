@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-// Embedded, pure module imported by package factories as `boulder.package.v3`.
+// Embedded, pure module imported by package factories as `cast.package.v3`.
 
 let _ = import! std.types
 let arrays = import! std.array.prim
@@ -304,10 +304,10 @@ let local_output = \pname output -> Output {
     },
 }
 
-// Versioned boulder.package.v3 output defaults are part of the pure package
+// Versioned cast.package.v3 output defaults are part of the pure package
 // factory ABI, not a filesystem-discovered or layered repository policy.
 // Changing their semantics requires a new package ABI. Output relations remain
-// symbolic here and are validated before Boulder sees the concrete PackageSpec.
+// symbolic here and are validated before Mason sees the concrete PackageSpec.
 let default_output_set = \pname -> {
     root = output_with {
         paths = [Any { path = "*" }],
@@ -437,8 +437,8 @@ let choose_optional = \authored default ->
     | Unset -> default
     | Set value -> Set value
 
-// Overlay one authored output on its factory default. Lists which historically
-// accumulated through Boulder's package-template merge remain cumulative.
+// Overlay one authored output on its factory default. Lists which accumulated
+// through the legacy package-template merge remain cumulative.
 let overlay_output = \authored default -> {
     name = authored.name,
     include_in_manifest = authored.include_in_manifest,

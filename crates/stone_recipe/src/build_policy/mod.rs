@@ -379,7 +379,7 @@ pub struct BuildRootPolicySpec {
 }
 
 /// Stable guest paths mounted into every sandbox. These paths participate in
-/// policy identity instead of being ambient Boulder constants.
+/// policy identity instead of being ambient Mason constants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxPolicySpec {
     pub hostname: String,

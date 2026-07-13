@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let boulder = import! boulder.package.v3
-let base = boulder.mk_package (boulder.meta {
+let cast = import! cast.package.v3
+let base = cast.mk_package (cast.meta {
     pname = "example",
     version = "1.2.3",
     release = 1,
@@ -11,10 +11,10 @@ let base = boulder.mk_package (boulder.meta {
 })
 {
     sources = [
-        boulder.source.archive
+        cast.source.archive
             "https://example.com/source.tar.xz"
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        boulder.source.git "https://example.com/source.git" "main",
+        cast.source.git "https://example.com/source.git" "main",
     ],
     .. base
 }

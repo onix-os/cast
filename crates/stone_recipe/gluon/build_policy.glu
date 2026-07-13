@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Embedded, pure API imported by repository build policy as
-// `boulder.build_policy.v3`.
+// `cast.build_policy.v3`.
 
 let _ = import! std.types
 let arrays = import! std.array.prim

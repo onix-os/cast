@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Pure ordered composition manifest imported as
-// `boulder.build_policy.layers.v1`.
+// `cast.build_policy.layers.v1`.
 
 type Operation =
     | Add

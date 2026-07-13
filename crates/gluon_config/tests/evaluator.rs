@@ -224,10 +224,8 @@ fn nested_relative_imports_resolve_from_the_importing_module() {
 
 #[test]
 fn evaluates_an_explicit_embedded_module() {
-    let policy = ImportPolicy::new()
-        .with_embedded_module("boulder.answer", "42")
-        .unwrap();
-    let source = Source::new("root.glu", "let answer = import! boulder.answer\nanswer");
+    let policy = ImportPolicy::new().with_embedded_module("cast.answer", "42").unwrap();
+    let source = Source::new("root.glu", "let answer = import! cast.answer\nanswer");
 
     let evaluation = Evaluator::default()
         .with_import_policy(policy)
@@ -236,20 +234,17 @@ fn evaluates_an_explicit_embedded_module() {
 
     assert_eq!(evaluation.value, 42);
     assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
-    assert_eq!(
-        evaluation.fingerprint.imported_modules[0].logical_name,
-        "boulder.answer"
-    );
+    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "cast.answer");
 }
 
 #[test]
 fn duplicate_embedded_module_is_rejected_without_replacing_the_first() {
     let mut policy = ImportPolicy::new();
-    policy.insert_embedded_module("moss.value", "41").unwrap();
-    let error = policy.insert_embedded_module("moss.value", "42").unwrap_err();
+    policy.insert_embedded_module("cast.value", "41").unwrap();
+    let error = policy.insert_embedded_module("cast.value", "42").unwrap_err();
     let evaluation = Evaluator::default()
         .with_import_policy(policy)
-        .evaluate::<i64>(&Source::new("root.glu", "import! moss.value"))
+        .evaluate::<i64>(&Source::new("root.glu", "import! cast.value"))
         .unwrap();
 
     assert_eq!(error.category, DiagnosticCategory::Import);

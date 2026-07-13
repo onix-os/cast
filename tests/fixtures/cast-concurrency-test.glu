@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: 2023 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+let scripts = b.scripts {
+    setup = b.phase [b.step.shell_with {
+        interpreter = b.program.binary "bash",
+        declared_programs = [b.program.binary "touch"],
+        script = "for f in a b c d e f g h; do touch $f; done",
+    }],
+    build = b.phase [b.step.shell "for f in a b c d e f g h; do echo $f >> build.log; done"],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm00644 build.log "${CAST_INSTALL_ROOT}${CAST_LIBEXECDIR}/build.log""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = {
+    summary = b.optional.set "Concurrency test for Cast",
+    description = b.optional.set "Concurrency test for Cast",
+    .. b.output "out"
+}
+
+{
+    builder = b.builder.shell scripts [],
+    outputs = b.outputs.with_root "cast-concurrency-test" root,
+    .. b.mk_package (b.meta {
+        pname = "cast-concurrency-test",
+        version = "1",
+        release = 1,
+        homepage = "https://github.com/bresilla/os-tools",
+        license = ["MPL-2.0"],
+    })
+}

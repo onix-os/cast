@@ -10,8 +10,8 @@ use stone_recipe::build_policy::{
 
 fn repository_policy_source() -> Source {
     Source::new(
-        "bin/boulder/data/policy/default.glu",
-        include_str!("../../../bin/boulder/data/policy/default.glu"),
+        "crates/mason/data/policy/default.glu",
+        include_str!("../../mason/data/policy/default.glu"),
     )
 }
 
@@ -22,7 +22,7 @@ fn repository_policy() -> stone_recipe::build_policy::BuildPolicySpec {
 fn authored_patch(body: &str) -> Source {
     Source::new(
         "tests/fixtures/build-policy-patch.glu",
-        format!("let b = import! boulder.build_policy.v3\n{body}\n"),
+        format!("let b = import! cast.build_policy.v3\n{body}\n"),
     )
 }
 

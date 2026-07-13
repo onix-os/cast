@@ -10,7 +10,7 @@ use zstd::zstd_safe::{CParameter, ResetDirective};
 type Context = zstd_safe::CCtx<'static>;
 
 /// Transparent encapsulation of zstd compression with the purpose
-/// of encoding moss (.stone) payloads to a stream
+/// of encoding Cast (.stone) payloads to a stream
 pub struct Writer<'a, W: Write> {
     writer: W,
     encoder: &'a mut Encoder,

@@ -16,7 +16,7 @@ use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, U
 /// Version of the package-function ABI.
 pub const PACKAGE_ABI_VERSION: u32 = 3;
 
-/// Pure Gluon definitions exposed as `boulder.package.v3`.
+/// Pure Gluon definitions exposed as `cast.package.v3`.
 pub const GLUON_PACKAGE_ABI: &str = include_str!("../../gluon/package.glu");
 
 pub const GLUON_CMAKE_BUILDER_ABI: &str = include_str!("../../gluon/builders/cmake.glu");
@@ -634,11 +634,11 @@ pub fn evaluate_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.package.v3", GLUON_PACKAGE_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("cast.package.v3", GLUON_PACKAGE_ABI)?;
+    import_policy.insert_embedded_module("cast.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("cast.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("cast.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("cast.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
     let package = PackageSpec::from(evaluation.value);

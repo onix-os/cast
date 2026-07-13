@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v3
+let b = import! cast.package.v3
 let output_defaults = b.outputs.named "llvm"
 
 let scripts = b.scripts {
@@ -10,17 +10,17 @@ let scripts = b.scripts {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "cmake"],
             script = r#"cmake -G Ninja \
-    -B "$BOULDER_BUILDER_DIR" \
+    -B "$CAST_BUILDER_DIR" \
     -DCMAKE_VERBOSE_MAKEFILE=ON \
     -DCMAKE_C_FLAGS_RELEASE=-DNDEBUG \
     -DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG \
     -DCMAKE_Fortran_FLAGS_RELEASE=-DNDEBUG \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_DO_STRIP=OFF \
-    -DCMAKE_INSTALL_LIBDIR="${BOULDER_LIBDIR#${BOULDER_PREFIX}/}" \
-    -DCMAKE_INSTALL_LIBEXECDIR="$BOULDER_LIBEXECDIR" \
-    -DCMAKE_INSTALL_PREFIX="$BOULDER_PREFIX" \
-    -DCMAKE_LIB_SUFFIX="${BOULDER_LIBDIR#${BOULDER_PREFIX}/lib}" \
+    -DCMAKE_INSTALL_LIBDIR="${CAST_LIBDIR#${CAST_PREFIX}/}" \
+    -DCMAKE_INSTALL_LIBEXECDIR="$CAST_LIBEXECDIR" \
+    -DCMAKE_INSTALL_PREFIX="$CAST_PREFIX" \
+    -DCMAKE_LIB_SUFFIX="${CAST_LIBDIR#${CAST_PREFIX}/lib}" \
     -S llvm \
     -DLLVM_BUILD_LLVM_DYLIB=ON \
     -DLLVM_ENABLE_PROJECTS=clang\;lld"#,
@@ -30,14 +30,14 @@ let scripts = b.scripts {
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "cmake"],
-            script = r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" cmake --build "$BOULDER_BUILDER_DIR" --verbose --parallel "$BOULDER_JOBS""#,
+            script = r#"LD_LIBRARY_PATH="${CAST_WORK_DIR}/${CAST_BUILDER_DIR}/lib" cmake --build "$CAST_BUILDER_DIR" --verbose --parallel "$CAST_JOBS""#,
         },
     ],
     install = b.phase [
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [b.program.binary "cmake"],
-            script = r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" DESTDIR="$BOULDER_INSTALL_ROOT" cmake --install "$BOULDER_BUILDER_DIR" --verbose"#,
+            script = r#"LD_LIBRARY_PATH="${CAST_WORK_DIR}/${CAST_BUILDER_DIR}/lib" DESTDIR="$CAST_INSTALL_ROOT" cmake --install "$CAST_BUILDER_DIR" --verbose"#,
         },
     ],
     .. b.defaults.scripts

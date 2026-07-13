@@ -328,56 +328,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "boulder"
-version = "0.26.6"
-dependencies = [
- "astr",
- "chrono",
- "clap",
- "clap_complete",
- "clap_mangen",
- "config",
- "container",
- "derive_more",
- "dirs",
- "elf",
- "filetime",
- "fs-err",
- "futures-util",
- "gitwrap",
- "glob",
- "gluon",
- "gluon_codegen",
- "gluon_config",
- "hex",
- "humansize",
- "itertools 0.14.0",
- "mailparse",
- "moss",
- "nix 0.27.1",
- "path-clean",
- "rapidfuzz",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "snafu",
- "stone",
- "stone_recipe",
- "strum",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tools_buildinfo",
- "tui",
- "url",
- "version_parse",
- "walkdir",
- "zstd",
-]
-
-[[package]]
 name = "brotli"
 version = "8.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -431,6 +381,24 @@ name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
+name = "cast"
+version = "0.26.6"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "clap_mangen",
+ "forge",
+ "fs-err",
+ "mason",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tools_buildinfo",
+ "tracing",
+ "tracing_common",
+ "tui",
+]
 
 [[package]]
 name = "cbindgen"
@@ -783,7 +751,7 @@ checksum = "950046b2aa2492f9a536f5f4f9a3de7b9e2476e575e05bd6c333371add4d98f3"
 dependencies = [
  "alloca",
  "anes",
- "cast",
+ "cast 0.3.0",
  "ciborium",
  "clap",
  "criterion-plot",
@@ -806,7 +774,7 @@ version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
 dependencies = [
- "cast",
+ "cast 0.3.0",
  "itertools 0.13.0",
 ]
 
@@ -1268,6 +1236,59 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "forge"
+version = "0.26.6"
+dependencies = [
+ "arc-swap",
+ "astr",
+ "blsforme",
+ "bytes",
+ "camino",
+ "chrono",
+ "clap",
+ "config",
+ "container",
+ "dag",
+ "derive_more",
+ "diesel",
+ "diesel_migrations",
+ "filetime",
+ "fnmatch",
+ "fs-err",
+ "futures-util",
+ "gluon",
+ "gluon_codegen",
+ "gluon_config",
+ "hex",
+ "indexmap 2.14.0",
+ "itertools 0.14.0",
+ "libsqlite3-sys",
+ "log",
+ "nix 0.27.1",
+ "os-info",
+ "rayon",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "snafu",
+ "stone",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "triggers",
+ "tui",
+ "url",
+ "vfs",
+ "xxhash-rust",
+ "zbus",
+]
 
 [[package]]
 name = "form_urlencoded"
@@ -2343,6 +2364,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "mason"
+version = "0.26.6"
+dependencies = [
+ "astr",
+ "chrono",
+ "clap",
+ "config",
+ "container",
+ "derive_more",
+ "dirs",
+ "elf",
+ "filetime",
+ "forge",
+ "fs-err",
+ "futures-util",
+ "gitwrap",
+ "glob",
+ "gluon",
+ "gluon_codegen",
+ "gluon_config",
+ "hex",
+ "humansize",
+ "itertools 0.14.0",
+ "mailparse",
+ "nix 0.27.1",
+ "path-clean",
+ "rapidfuzz",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snafu",
+ "stone",
+ "stone_recipe",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tools_buildinfo",
+ "tui",
+ "url",
+ "version_parse",
+ "walkdir",
+ "zstd",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2413,65 +2482,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "moss"
-version = "0.26.6"
-dependencies = [
- "arc-swap",
- "astr",
- "blsforme",
- "bytes",
- "camino",
- "chrono",
- "clap",
- "clap_complete",
- "clap_mangen",
- "config",
- "container",
- "dag",
- "derive_more",
- "diesel",
- "diesel_migrations",
- "filetime",
- "fnmatch",
- "fs-err",
- "futures-util",
- "gluon",
- "gluon_codegen",
- "gluon_config",
- "hex",
- "indexmap 2.14.0",
- "itertools 0.14.0",
- "libsqlite3-sys",
- "log",
- "moss",
- "nix 0.27.1",
- "os-info",
- "rayon",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "similar",
- "snafu",
- "stone",
- "strum",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tools_buildinfo",
- "tracing",
- "tracing-subscriber",
- "tracing_common",
- "triggers",
- "tui",
- "url",
- "vfs",
- "xxhash-rust",
- "zbus",
 ]
 
 [[package]]

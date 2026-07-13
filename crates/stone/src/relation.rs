@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! Canonical package dependency and provider relations shared by Stone,
-//! Boulder, Moss, and declarative package evaluation.
+//! Mason, Forge, and declarative package evaluation.
 
 use std::{fmt, str::FromStr};
 

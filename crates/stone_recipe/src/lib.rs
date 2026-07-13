@@ -22,8 +22,8 @@ mod test {
                 include_str!("../../../tests/fixtures/llvm-stone.glu"),
             ),
             (
-                "tests/fixtures/boulder-stone.glu",
-                include_str!("../../../tests/fixtures/boulder-stone.glu"),
+                "tests/fixtures/cast-stone.glu",
+                include_str!("../../../tests/fixtures/cast-stone.glu"),
             ),
             (
                 "tests/fixtures/conflicts/italian-pizza.glu",
@@ -34,8 +34,8 @@ mod test {
                 include_str!("../../../tests/fixtures/conflicts/pineapple.glu"),
             ),
             (
-                "tests/fixtures/boulder-concurrency-test.glu",
-                include_str!("../../../tests/fixtures/boulder-concurrency-test.glu"),
+                "tests/fixtures/cast-concurrency-test.glu",
+                include_str!("../../../tests/fixtures/cast-concurrency-test.glu"),
             ),
         ];
 

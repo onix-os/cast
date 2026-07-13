@@ -11,8 +11,8 @@ use stone_recipe::build_policy::{
 
 fn repository_policy() -> Source {
     Source::new(
-        "bin/boulder/data/policy/default.glu",
-        include_str!("../../../bin/boulder/data/policy/default.glu"),
+        "crates/mason/data/policy/default.glu",
+        include_str!("../../mason/data/policy/default.glu"),
     )
 }
 
@@ -78,25 +78,27 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
-        "boulder.build_policy.v3"
+        "cast.build_policy.v3"
     );
 }
 
 #[test]
 fn build_policy_v3_is_a_hard_abi_boundary() {
     assert_eq!(BUILD_POLICY_ABI_VERSION, 3);
-    let error = evaluate_gluon(&Source::new("legacy-policy.glu", "import! boulder.build_policy.v2")).unwrap_err();
-    assert!(error.to_string().contains("boulder.build_policy.v2"));
+    for retired in ["boulder.build_policy.v3", "cast.build_policy.v2"] {
+        let error = evaluate_gluon(&Source::new("retired-policy.glu", format!("import! {retired}"))).unwrap_err();
+        assert!(error.to_string().contains(retired));
+    }
 }
 
 #[test]
 fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
     let original = evaluate_gluon(&repository_policy()).unwrap();
-    let alternative_source = include_str!("../../../bin/boulder/data/policy/default.glu").replace(
+    let alternative_source = include_str!("../../mason/data/policy/default.glu").replace(
         "dev = p.sandbox_filesystems.dev.minimal",
         "dev = p.sandbox_filesystems.dev.none",
     );
-    let alternative = evaluate_gluon(&Source::new("bin/boulder/data/policy/default.glu", alternative_source)).unwrap();
+    let alternative = evaluate_gluon(&Source::new("crates/mason/data/policy/default.glu", alternative_source)).unwrap();
 
     assert_eq!(alternative.policy.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
     assert_eq!(alternative.policy.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
@@ -107,12 +109,12 @@ fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
 
 #[test]
 fn legacy_read_only_proc_selector_is_not_available() {
-    let legacy_source = include_str!("../../../bin/boulder/data/policy/default.glu").replace(
+    let legacy_source = include_str!("../../mason/data/policy/default.glu").replace(
         "tmp = p.sandbox_filesystems.tmp.empty",
         "proc = p.sandbox_filesystems.proc.read_only,\n        tmp = p.sandbox_filesystems.tmp.empty",
     );
 
-    let error = evaluate_gluon(&Source::new("bin/boulder/data/policy/default.glu", legacy_source)).unwrap_err();
+    let error = evaluate_gluon(&Source::new("crates/mason/data/policy/default.glu", legacy_source)).unwrap_err();
 
     assert!(error.to_string().contains("proc"));
 }
@@ -628,7 +630,7 @@ fn repository_build_root_inputs_preserve_relation_kinds_and_conditions() {
         root.base,
         [
             "bash",
-            "boulder",
+            "cast",
             "coreutils",
             "dash",
             "diffutils",
@@ -699,7 +701,7 @@ fn repository_build_root_inputs_preserve_relation_kinds_and_conditions() {
 #[test]
 fn repository_sandbox_and_cache_paths_are_explicit_guest_abi() {
     let policy = repository_policy_value();
-    assert_eq!(policy.sandbox.hostname, "boulder");
+    assert_eq!(policy.sandbox.hostname, "cast-builder");
     assert_eq!(policy.sandbox.guest_root, "/mason");
     assert_eq!(policy.sandbox.artifacts_dir, "/mason/artefacts");
     assert_eq!(policy.sandbox.build_dir, "/mason/build");
@@ -986,7 +988,7 @@ fn root_source_sandbox_and_platform_semantics_are_rejected_early() {
     ));
 
     let too_long = "x".repeat(65);
-    for hostname in ["", "-boulder", "boulder-", "bad host", "bad/host", too_long.as_str()] {
+    for hostname in ["", "-cast", "cast-", "bad host", "bad/host", too_long.as_str()] {
         let mut policy = repository_policy_value();
         policy.sandbox.hostname = hostname.to_owned();
         assert!(matches!(

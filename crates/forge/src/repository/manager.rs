@@ -1,0 +1,772 @@
+// SPDX-FileCopyrightText: 2023 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+use std::collections::BTreeMap;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use astr::AStr;
+use fs_err::{self as fs, File};
+use futures_util::{StreamExt, stream};
+use gluon_config::Evaluator;
+use sha2::{Digest, Sha256};
+use stone::{StoneDecodedPayload, StonePayloadMetaTag, StoneReadError};
+use thiserror::Error;
+use url::Url;
+use xxhash_rust::xxh3::xxh3_64;
+
+use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
+
+use crate::{
+    Installation, Package,
+    db::meta,
+    environment, package,
+    repository::{self, Format, OutdatedRepoIndexUri, Repository, format},
+    runtime,
+    system_model::LoadedSystemModel,
+};
+
+#[derive(Debug)]
+pub enum Source {
+    ConfigManager(config::Manager),
+    SystemModel {
+        identifier: String,
+        system_model: LoadedSystemModel,
+    },
+    Explicit {
+        identifier: String,
+        repos: repository::Map,
+    },
+}
+
+impl Source {
+    fn identifier(&self) -> &str {
+        match self {
+            Source::ConfigManager(_) => environment::NAME,
+            Source::SystemModel { identifier, .. } => identifier,
+            Source::Explicit { identifier, .. } => identifier,
+        }
+    }
+}
+
+/// Manage a bunch of repositories
+pub struct Manager {
+    source: Arc<Source>,
+    installation: Installation,
+    repositories: BTreeMap<repository::Id, repository::Cached>,
+}
+
+impl Manager {
+    pub fn is_config_source(&self) -> bool {
+        matches!(*self.source, Source::ConfigManager { .. })
+    }
+
+    /// Create a [`Manager`] for the supplied [`Installation`] using repositories loaded
+    /// via the supplied [`config::Manager`]
+    pub fn with_config_manager(config: config::Manager, installation: Installation) -> Result<Self, Error> {
+        Self::new(Source::ConfigManager(config), installation)
+    }
+
+    /// Create a [`Manager`] for the supplied [`Installation`] using repositories
+    /// defined in the provided [`SystemModel`]
+    ///
+    /// [`Manager`] can't be used to `add` new repos in this mode
+    pub fn with_system_model(
+        identifier: impl ToString,
+        system_model: LoadedSystemModel,
+        installation: Installation,
+    ) -> Result<Self, Error> {
+        Self::new(
+            Source::SystemModel {
+                identifier: identifier.to_string(),
+                system_model,
+            },
+            installation,
+        )
+    }
+
+    /// Create a [`Manager`] for the supplied [`Installation`] using the provided configurations
+    ///
+    /// [`Manager`] can't be used to `add` new repos in this mode
+    pub fn with_explicit(
+        identifier: impl ToString,
+        repos: repository::Map,
+        installation: Installation,
+    ) -> Result<Self, Error> {
+        Self::new(
+            Source::Explicit {
+                identifier: identifier.to_string(),
+                repos,
+            },
+            installation,
+        )
+    }
+
+    fn new(source: Source, installation: Installation) -> Result<Self, Error> {
+        let configs = match &source {
+            Source::ConfigManager(config) =>
+            // Load all configs, default if none exist
+            {
+                config
+                    .load_gluon(&Evaluator::default(), &repository::RepositoryCodec)
+                    .map_err(|error| Error::LoadConfig(Box::new(error)))?
+                    .into_iter()
+                    .map(|loaded| (Some(loaded.path), loaded.value))
+                    .collect()
+            }
+            Source::SystemModel { system_model, .. } => vec![(None, system_model.repositories.clone())],
+            Source::Explicit { repos, .. } => vec![(None, repos.clone())],
+        };
+
+        // Open all repo meta dbs and collect into hash map
+        let repositories = configs
+            .into_iter()
+            .flat_map(|(config_path, repo_map)| {
+                repo_map
+                    .into_iter()
+                    .map(|(id, repository)| {
+                        let db = open_meta_db(source.identifier(), &repository, &installation)?;
+
+                        let index_uri = match &repository.source {
+                            repository::Source::DirectIndex(uri) => Some(uri.clone()),
+                            repository::Source::RootIndex(_) => {
+                                load_cached_index_uri(source.identifier(), &repository, &installation)?
+                            }
+                        };
+
+                        Ok((
+                            id.clone(),
+                            repository::Cached::new(id, repository, db, config_path.clone(), index_uri),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Result<_, Error>>()?;
+
+        Ok(Self {
+            source: Arc::new(source),
+            installation,
+            repositories,
+        })
+    }
+
+    /// Add a [`Repository`]
+    pub fn add_repository(&mut self, id: repository::Id, repository: Repository) -> Result<(), Error> {
+        let Source::ConfigManager(config) = &*self.source else {
+            return Err(Error::ExplicitUnsupported);
+        };
+
+        // Save repo as new config file
+        // We save it as a map for easy merging across
+        // multiple configuration files
+        let map = repository::Map::with([(id.clone(), repository.clone())]);
+        let config_path = config
+            .save_gluon(&id, &map, &repository::RepositoryCodec)
+            .map_err(|error| Error::SaveConfig(Box::new(error)))?;
+
+        let db = open_meta_db(self.source.identifier(), &repository, &self.installation)?;
+
+        let index_uri = match &repository.source {
+            repository::Source::DirectIndex(uri) => Some(uri.clone()),
+            repository::Source::RootIndex(_) => {
+                load_cached_index_uri(self.source.identifier(), &repository, &self.installation)?
+            }
+        };
+
+        self.repositories.insert(
+            id.clone(),
+            repository::Cached::new(id, repository, db, Some(config_path), index_uri),
+        );
+
+        Ok(())
+    }
+
+    /// Refresh a [`Repository`] by Id
+    pub async fn refresh(&self, id: &repository::Id) -> Result<(), Error> {
+        let Some(repo) = self.repositories.get(id).cloned() else {
+            return Err(Error::UnknownRepo(id.clone()));
+        };
+
+        if repo.repository.active {
+            let file = fetch_index(&self.source, &repo, &self.installation).await?;
+            runtime::unblock(move || update_meta_db(&repo, &file)).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Refresh all [`Repository`]'s by fetching it's latest index
+    /// file and updating it's associated meta database
+    pub async fn refresh_all(&self) -> Result<(), Error> {
+        let mpb = MultiProgress::new();
+
+        // Fetch index files asynchronously and then
+        // update to DB
+        stream::iter(self.repositories.iter().filter(|(_, r)| r.repository.active))
+            .map(|(id, _)| async {
+                let pb = mpb.add(
+                    ProgressBar::new_spinner()
+                        .with_style(
+                            ProgressStyle::with_template(" {spinner} {wide_msg}")
+                                .unwrap()
+                                .tick_chars("--=≡■≡=--"),
+                        )
+                        .with_message(format!("{} {}", "Refreshing".blue(), *id)),
+                );
+                pb.enable_steady_tick(Duration::from_millis(150));
+
+                self.refresh(id).await?;
+
+                pb.suspend(|| println!("{} {}", "Refreshed".green(), *id));
+
+                Ok(())
+            })
+            .buffer_unordered(environment::MAX_NETWORK_CONCURRENCY)
+            .fold(Ok(()), |acc, result| async {
+                match (acc, result) {
+                    (Ok(_), Ok(_)) => Ok(()),
+                    (Err(err), Ok(_)) => Err(err),
+                    (Err(Error::UnsupportedRepos(a)), Err(Error::UnsupportedRepos(b))) => {
+                        Err(Error::UnsupportedRepos(a.into_iter().chain(b).collect()))
+                    }
+                    (Err(Error::OutdatedRepos(_, a)), Err(Error::OutdatedRepos(_, b))) => Err(Error::OutdatedRepos(
+                        self.source.clone(),
+                        a.into_iter().chain(b).collect(),
+                    )),
+                    (_, Err(err)) => Err(err),
+                }
+            })
+            .await
+    }
+
+    /// Ensures all repositories are initialized - index file downloaded and meta db
+    /// populated.
+    ///
+    /// This is useful to call when initializing the Cast client in case users added configs
+    /// manually outside the CLI
+    pub async fn ensure_all_initialized(&mut self) -> Result<usize, Error> {
+        let uninitialized = self
+            .repositories
+            .iter()
+            .filter(|(_, r)| r.repository.active)
+            .filter_map(|(id, state)| {
+                let index_file =
+                    cache_dir(self.source.identifier(), &state.repository, &self.installation).join("stone.index");
+
+                if !index_file.exists() { Some(id) } else { None }
+            })
+            .collect::<Vec<_>>();
+
+        if uninitialized.is_empty() {
+            return Ok(0);
+        }
+
+        let mpb = MultiProgress::new();
+
+        // Fetch index files asynchronously and then
+        // update to DB
+        stream::iter(&uninitialized)
+            .map(|id| async {
+                let pb = mpb.add(
+                    ProgressBar::new_spinner()
+                        .with_style(
+                            ProgressStyle::with_template(" {spinner} {wide_msg}")
+                                .unwrap()
+                                .tick_chars("--=≡■≡=--"),
+                        )
+                        .with_message(format!("{} {}", "Refreshing".blue(), *id)),
+                );
+                pb.enable_steady_tick(Duration::from_millis(150));
+
+                self.refresh(id).await?;
+
+                pb.suspend(|| println!("{} {}", "Refreshed".green(), *id));
+
+                Ok(()) as Result<_, Error>
+            })
+            .buffer_unordered(environment::MAX_NETWORK_CONCURRENCY)
+            .fold(Ok(()), |acc, result| async {
+                match (acc, result) {
+                    (Ok(_), Ok(_)) => Ok(()),
+                    (Err(err), Ok(_)) => Err(err),
+                    (Err(Error::UnsupportedRepos(a)), Err(Error::UnsupportedRepos(b))) => {
+                        Err(Error::UnsupportedRepos(a.into_iter().chain(b).collect()))
+                    }
+                    (Err(Error::OutdatedRepos(_, a)), Err(Error::OutdatedRepos(_, b))) => Err(Error::OutdatedRepos(
+                        self.source.clone(),
+                        a.into_iter().chain(b).collect(),
+                    )),
+                    (_, Err(err)) => Err(err),
+                }
+            })
+            .await?;
+
+        Ok(uninitialized.len())
+    }
+
+    /// Returns the active repositories held by this manager
+    pub(crate) fn active(&self) -> impl Iterator<Item = repository::Cached> + '_ {
+        self.repositories.values().filter(|c| c.repository.active).cloned()
+    }
+
+    /// Resolve an exact package only from explicitly configured, active
+    /// repositories. Repository priority and ID provide a stable selection
+    /// order when the same content identity appears in multiple indexes.
+    pub(crate) fn resolve_exact_package(
+        &self,
+        package: &package::Id,
+    ) -> Result<Option<(repository::Id, Package)>, Error> {
+        let mut repositories = self.active().collect::<Vec<_>>();
+        repositories.sort_by(|left, right| {
+            let left_priority = u64::from(left.repository.priority);
+            let right_priority = u64::from(right.repository.priority);
+            right_priority.cmp(&left_priority).then_with(|| left.id.cmp(&right.id))
+        });
+
+        for repository in repositories {
+            let mut meta = match repository.db.get(package) {
+                Ok(meta) => meta,
+                Err(meta::Error::RowNotFound) => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let index_uri = repository
+                .index_uri()
+                .ok_or_else(|| Error::MissingIndexUri(repository.id.clone()))?;
+            meta.uri = meta
+                .uri
+                .and_then(|relative| index_uri.join(&relative).ok())
+                .map(|uri| uri.to_string());
+
+            return Ok(Some((
+                repository.id,
+                Package {
+                    id: package.clone(),
+                    meta,
+                    flags: package::Flags::new().with_available(),
+                },
+            )));
+        }
+
+        Ok(None)
+    }
+
+    /// Return the active repository which supplied an exact package ID, using
+    /// the same priority order as registry resolution.
+    pub(crate) fn repository_for_package(&self, package: &package::Id) -> Result<Option<repository::Id>, Error> {
+        let mut repositories = self.active().collect::<Vec<_>>();
+        repositories.sort_by(|left, right| {
+            let left_priority = u64::from(left.repository.priority);
+            let right_priority = u64::from(right.repository.priority);
+            right_priority.cmp(&left_priority).then_with(|| left.id.cmp(&right.id))
+        });
+        for repository in repositories {
+            if repository.db.package_ids()?.contains(package) {
+                return Ok(Some(repository.id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Hash the exact cached `stone.index` bytes for every active repository.
+    pub fn index_snapshots(&self) -> Result<Vec<repository::IndexSnapshot>, Error> {
+        let mut snapshots = self
+            .active()
+            .map(|repository| {
+                let path =
+                    cache_dir(self.source.identifier(), &repository.repository, &self.installation).join("stone.index");
+                let bytes = fs::read(&path).map_err(|source| Error::ReadIndexSnapshot {
+                    path: path.clone(),
+                    source,
+                })?;
+                let index_uri = repository
+                    .index_uri()
+                    .ok_or_else(|| Error::MissingIndexUri(repository.id.clone()))?;
+                Ok(repository::IndexSnapshot {
+                    id: repository.id,
+                    index_uri,
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(snapshots)
+    }
+
+    /// Remove a repository, deleting any related config & cached data
+    pub fn remove(&mut self, id: impl Into<repository::Id>) -> Result<Removal, Error> {
+        // Only allow removal for system repo manager
+        let Source::ConfigManager(config) = &*self.source else {
+            return Err(Error::ExplicitUnsupported);
+        };
+
+        // Remove from memory
+        let Some(repo) = self.repositories.remove(&id.into()) else {
+            return Ok(Removal::NotFound);
+        };
+
+        let cache_dir = cache_dir(self.source.identifier(), &repo.repository, &self.installation);
+
+        // Remove cache
+        if cache_dir.exists() {
+            fs::remove_dir_all(&cache_dir).map_err(Error::RemoveDir)?;
+        }
+
+        // Delete config, only succeeds for configs that live in their
+        // own config file w/ matching repo name
+        if config.delete_gluon::<repository::Map>(&repo.id).is_err() {
+            return Ok(Removal::ConfigDeleted(false));
+        }
+
+        Ok(Removal::ConfigDeleted(true))
+    }
+
+    /// List all of the known repositories
+    pub fn list(&self) -> impl ExactSizeIterator<Item = (&repository::Id, &Repository)> {
+        self.repositories.iter().map(|(id, state)| (id, &state.repository))
+    }
+
+    /// Sets the repo as active or not
+    async fn set_active(&mut self, id: &repository::Id, active: bool) -> Result<(), Error> {
+        // Only allow disable for system repo manager
+        let Source::ConfigManager(config) = &*self.source else {
+            return Err(Error::ExplicitUnsupported);
+        };
+
+        let Some(cached) = self.repositories.get_mut(id) else {
+            return Err(Error::UnknownRepo(id.clone()));
+        };
+
+        if active != cached.repository.active {
+            cached.repository.active = active;
+
+            let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
+            config
+                .save_gluon(id, &map, &repository::RepositoryCodec)
+                .map_err(|error| Error::SaveConfig(Box::new(error)))?;
+        }
+
+        Ok(())
+    }
+
+    /// Enable the repo
+    pub async fn enable(&mut self, id: &repository::Id) -> Result<(), Error> {
+        self.set_active(id, true).await
+    }
+
+    /// Disable the repo
+    pub async fn disable(&mut self, id: &repository::Id) -> Result<(), Error> {
+        self.set_active(id, false).await
+    }
+}
+
+/// Directory for the repo cached data (db & stone index), hashed by identifier & repo URI
+fn cache_dir(identifier: &str, repo: &Repository, installation: &Installation) -> PathBuf {
+    let hash = match &repo.source {
+        repository::Source::DirectIndex(uri) => {
+            format!("{:02x}", xxh3_64(format!("{identifier}-{uri}").as_bytes()))
+        }
+        repository::Source::RootIndex(repository::RootIndexSource {
+            base_uri,
+            channel,
+            version,
+            arch,
+        }) => format!(
+            "{:02x}",
+            xxh3_64(format!("{identifier}-{base_uri}-{channel}-{version}-{arch}").as_bytes())
+        ),
+    };
+
+    installation.repo_path(hash)
+}
+
+/// Open the meta db file, ensuring it's
+/// directory exists
+fn open_meta_db(identifier: &str, repo: &Repository, installation: &Installation) -> Result<meta::Database, Error> {
+    let dir = cache_dir(identifier, repo, installation);
+
+    fs::create_dir_all(&dir).map_err(Error::CreateDir)?;
+
+    let db = meta::Database::new(dir.join("db").to_str().unwrap_or_default())?;
+
+    Ok(db)
+}
+
+fn load_cached_index_uri(
+    identifier: &str,
+    repo: &Repository,
+    installation: &Installation,
+) -> Result<Option<Url>, Error> {
+    let dir = cache_dir(identifier, repo, installation);
+
+    let path = dir.join("index-uri");
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs_err::read_to_string(path).map_err(Error::ReadCachedIndexUri)?;
+
+    content.parse().map_err(Error::ParseCachedIndexUri).map(Some)
+}
+
+/// Fetches a stone index file from the repository URL
+/// and saves it to the repo installation path
+async fn fetch_index(
+    source: &Arc<Source>,
+    state: &repository::Cached,
+    installation: &Installation,
+) -> Result<PathBuf, Error> {
+    let out_dir = cache_dir(source.identifier(), &state.repository, installation);
+
+    fs_err::tokio::create_dir_all(&out_dir)
+        .await
+        .map_err(Error::CreateDir)?;
+
+    let index_uri = match &state.repository.source {
+        repository::Source::DirectIndex(uri) => match identify_legacy_index_uri(uri) {
+            None => uri.clone(),
+            Some(legacy_index) => {
+                // The compatible root index source for this legacy index uri
+                let root_source = legacy_index.compatible_root_index_source();
+
+                // If this root index exists & the related stream is now on v0+, we
+                // need to return an error informing the user to upgrade their repo
+                // configuration to the new format
+                if let Ok(root_index) = root_source.fetch_root_index().await
+                    && let Some((_, history)) = root_index.resolve_version_to_history(&root_source.version)
+                    && history.format != Format::Legacy
+                {
+                    return Err(Error::OutdatedRepos(
+                        source.clone(),
+                        vec![OutdatedRepoIndexUri {
+                            repository: state.clone(),
+                            legacy_index_uri: uri.clone(),
+                            compatible_root_index_source: root_source,
+                        }],
+                    ));
+                }
+
+                uri.clone()
+            }
+        },
+        repository::Source::RootIndex(source) => resolve_index_from_root(state, &out_dir, source).await?,
+    };
+
+    let out_path = out_dir.join("stone.index");
+
+    // Fetch index & write to `out_path`
+    repository::fetch_index(index_uri, &out_path).await?;
+
+    Ok(out_path)
+}
+
+/// Updates a stones metadata into the meta db
+fn update_meta_db(state: &repository::Cached, index_path: &Path) -> Result<(), Error> {
+    // Wipe db since we're refreshing from a new index file
+    state.db.wipe()?;
+
+    // Get a stream of payloads
+    let mut file = File::open(index_path).map_err(Error::OpenIndex)?;
+    let mut reader = stone::read(&mut file)?;
+
+    let payloads = reader.payloads()?.collect::<Result<Vec<_>, _>>()?;
+
+    // Construct Meta for each payload
+    let packages = payloads
+        .into_iter()
+        .filter_map(|payload| {
+            if let StoneDecodedPayload::Meta(meta) = payload {
+                Some(meta)
+            } else {
+                None
+            }
+        })
+        .map(|payload| {
+            let meta = package::Meta::from_stone_payload(&payload.body)?;
+
+            // Create id from hash of meta
+            let hash = meta
+                .hash
+                .as_deref()
+                .ok_or(Error::MissingMetaField(StonePayloadMetaTag::PackageHash))?;
+            let id = package::Id::from(AStr::from(hash));
+
+            Ok((id, meta))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+
+    // Batch add to db
+    state.db.batch_add(packages)?;
+
+    Ok(())
+}
+
+async fn resolve_index_from_root(
+    state: &repository::Cached,
+    out_dir: &Path,
+    source: &repository::RootIndexSource,
+) -> Result<Url, Error> {
+    let index_uri = match source.resolve_history_index_uri().await? {
+        repository::ResolvedHistoryIndexUri::Supported(uri) => uri,
+        repository::ResolvedHistoryIndexUri::Unsupported {
+            format,
+            version,
+            root_index_uri,
+            upgrade_via_index_uri,
+        } => {
+            return Err(Error::UnsupportedRepos(vec![UnsupportedRepoFormat {
+                repository: state.clone(),
+                root_index_uri,
+                upgrade_via_index_uri,
+                version,
+                format,
+            }]));
+        }
+    };
+
+    fs_err::tokio::write(out_dir.join("index-uri"), index_uri.as_str().as_bytes())
+        .await
+        .map_err(Error::WriteCachedIndexUri)?;
+
+    state.set_index_uri(index_uri.clone());
+
+    Ok(index_uri)
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Can't modify repos when using explicit configs or authored Gluon system intent")]
+    ExplicitUnsupported,
+    #[error("Missing metadata field: {0:?}")]
+    MissingMetaField(StonePayloadMetaTag),
+    #[error("create directory")]
+    CreateDir(#[source] io::Error),
+    #[error("remove directory")]
+    RemoveDir(#[source] io::Error),
+    #[error("fetch index file")]
+    FetchIndex(#[from] repository::FetchError),
+    #[error("open index file")]
+    OpenIndex(#[source] io::Error),
+    #[error("read index file")]
+    ReadStone(#[from] StoneReadError),
+    #[error("meta db")]
+    Database(#[from] meta::Error),
+    #[error("save config")]
+    SaveConfig(#[source] Box<config::SaveGluonError>),
+    #[error("load config")]
+    LoadConfig(#[source] Box<config::LoadGluonError>),
+    #[error("unknown repo")]
+    UnknownRepo(repository::Id),
+    #[error("resolve history index uri from root index")]
+    ResolveHistoryIndexUri(#[from] repository::ResolveHistoryIndexUriError),
+    #[error("root index doesn't have version identifier {0}")]
+    MissingRootIndexVersion(format::ScopedIdentifier),
+    #[error("read cached index uri")]
+    ReadCachedIndexUri(#[source] io::Error),
+    #[error("write cached index uri")]
+    WriteCachedIndexUri(#[source] io::Error),
+    #[error("parse cached index uri")]
+    ParseCachedIndexUri(#[source] url::ParseError),
+    #[error("read repository index snapshot {path:?}")]
+    ReadIndexSnapshot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("repository `{0}` has no resolved index URI; initialize or refresh it before resolution")]
+    MissingIndexUri(repository::Id),
+    #[error("one or more repositories has an unsupported format")]
+    UnsupportedRepos(Vec<UnsupportedRepoFormat>),
+    #[error("one or more repositories with a legacy URI need to be upgraded to the new configuration format")]
+    OutdatedRepos(Arc<Source>, Vec<OutdatedRepoIndexUri>),
+}
+
+impl From<package::MissingMetaFieldError> for Error {
+    fn from(error: package::MissingMetaFieldError) -> Self {
+        Self::MissingMetaField(error.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Removal {
+    NotFound,
+    ConfigDeleted(bool),
+}
+
+#[derive(Debug, Clone)]
+pub struct UnsupportedRepoFormat {
+    pub repository: repository::Cached,
+    pub root_index_uri: Url,
+    pub upgrade_via_index_uri: Option<Url>,
+    pub version: format::ScopedIdentifier,
+    pub format: Format,
+}
+
+struct LegacyIndexUri {
+    base_uri: Url,
+    stream: LegacyIndexUriStream,
+}
+
+enum LegacyIndexUriStream {
+    Volatile,
+    Unstable,
+}
+
+impl LegacyIndexUri {
+    fn compatible_root_index_source(self) -> repository::RootIndexSource {
+        repository::RootIndexSource {
+            version: self.stream.version(),
+            base_uri: self.base_uri,
+            channel: repository::DEFAULT_CHANNEL.try_into().expect("valid identifier"),
+            arch: repository::DEFAULT_ARCH.to_owned(),
+        }
+    }
+}
+
+impl LegacyIndexUriStream {
+    fn version(&self) -> format::ScopedIdentifier {
+        format::ScopedIdentifier::Stream(
+            format::Identifier::new(match self {
+                LegacyIndexUriStream::Volatile => "volatile",
+                LegacyIndexUriStream::Unstable => "unstable",
+            })
+            .expect("valid ident"),
+        )
+    }
+}
+
+fn identify_legacy_index_uri(uri: &Url) -> Option<LegacyIndexUri> {
+    const DOMAINS: &[&str] = &[
+        "dev.serpentos.com",
+        "packages.aerynos.com",
+        "cdn.aerynos.dev",
+        "packages.aerynos.dev",
+        "build.aerynos.dev",
+        "infratest.aerynos.dev",
+    ];
+    const VOLATILE_PATHS: &[&str] = &["/volatile/x86_64/stone.index", "/stream/volatile/x86_64/stone.index"];
+    const UNSTABLE_PATHS: &[&str] = &["/unstable/x86_64/stone.index", "/stream/unstable/x86_64/stone.index"];
+
+    let mut stream = None;
+
+    if uri.domain().is_some_and(|domain| DOMAINS.contains(&domain)) {
+        if VOLATILE_PATHS.contains(&uri.path()) {
+            stream = Some(LegacyIndexUriStream::Volatile);
+        }
+
+        if UNSTABLE_PATHS.contains(&uri.path()) {
+            stream = Some(LegacyIndexUriStream::Unstable);
+        }
+    }
+
+    if let Some(stream) = stream {
+        let mut base_uri = uri.clone();
+        base_uri.set_path("");
+
+        Some(LegacyIndexUri { base_uri, stream })
+    } else {
+        None
+    }
+}

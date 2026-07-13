@@ -8,7 +8,19 @@ use triggers::{
 };
 
 fn authored(body: &str) -> Source {
-    Source::new("trigger.glu", format!("let moss = import! moss.trigger.v1\n{body}"))
+    Source::new("trigger.glu", format!("let cast = import! cast.trigger.v1\n{body}"))
+}
+
+#[test]
+fn retired_moss_trigger_abi_is_not_a_compatibility_alias() {
+    let error = evaluate_gluon(&Source::new("retired-trigger.glu", "import! moss.trigger.v1")).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TriggerEvaluationError::Evaluation(ref diagnostic)
+            if diagnostic.category == DiagnosticCategory::Import
+                && diagnostic.message.contains("moss.trigger.v1")
+    ));
 }
 
 #[test]
@@ -27,28 +39,28 @@ fn documented_trigger_example_remains_loadable() {
 fn constructors_cover_run_delete_inhibitors_patterns_and_path_kinds() {
     let source = authored(
         r#"
-let base = moss.trigger "kernel" "Maintain kernel metadata"
+let base = cast.trigger "kernel" "Maintain kernel metadata"
 {
-    before = moss.optional.set "boot",
-    after = moss.optional.set "filesystem",
-    inhibitors = moss.optional.set (moss.inhibitors
+    before = cast.optional.set "boot",
+    after = cast.optional.set "filesystem",
+    inhibitors = cast.optional.set (cast.inhibitors
         ["/etc/inhibit"]
         ["chroot", "live"]),
     paths = [
-        moss.path
+        cast.path
             "/usr/lib/modules/(version:*)/kernel"
             ["depmod"]
-            (moss.optional.set moss.path_kind.directory),
-        moss.path
+            (cast.optional.set cast.path_kind.directory),
+        cast.path
             "/var/lib/example-link"
             ["cleanup"]
-            (moss.optional.set moss.path_kind.symlink),
+            (cast.optional.set cast.path_kind.symlink),
     ],
     handlers = [
-        moss.handler.named "depmod" (moss.handler.run
+        cast.handler.named "depmod" (cast.handler.run
             "/sbin/depmod"
             ["-a", "$(version)"]),
-        moss.handler.named "cleanup" (moss.handler.delete
+        cast.handler.named "cleanup" (cast.handler.delete
             ["/var/cache/example", "/var/lib/example.old"]),
     ],
     .. base
@@ -100,9 +112,9 @@ let base = moss.trigger "kernel" "Maintain kernel metadata"
 fn missing_handler_reference_is_reported_by_collection() {
     let source = authored(
         r#"
-let base = moss.trigger "broken" "References an absent handler"
+let base = cast.trigger "broken" "References an absent handler"
 {
-    paths = [moss.path "/usr/lib/broken" ["missing"] moss.optional.unset],
+    paths = [cast.path "/usr/lib/broken" ["missing"] cast.optional.unset],
     .. base
 }
 "#,
@@ -121,9 +133,9 @@ let base = moss.trigger "broken" "References an absent handler"
 fn invalid_pattern_has_an_indexed_conversion_field() {
     let source = authored(
         r#"
-let base = moss.trigger "broken-pattern" "Invalid pattern"
+let base = cast.trigger "broken-pattern" "Invalid pattern"
 {
-    paths = [moss.path "/usr/lib/(unterminated" [] moss.optional.unset],
+    paths = [cast.path "/usr/lib/(unterminated" [] cast.optional.unset],
     .. base
 }
 "#,
@@ -141,11 +153,11 @@ let base = moss.trigger "broken-pattern" "Invalid pattern"
 fn invalid_types_and_unknown_fields_are_type_errors() {
     for body in [
         r#"
-let base = moss.trigger "wrong-type" "Wrong type"
+let base = cast.trigger "wrong-type" "Wrong type"
 { description = 42, .. base }
 "#,
         r#"
-let base = moss.trigger "unknown-field" "Unknown field"
+let base = cast.trigger "unknown-field" "Unknown field"
 { unexpected = "value", .. base }
 "#,
     ] {
@@ -163,7 +175,7 @@ fn forbidden_host_effects_are_rejected() {
     let source = authored(
         r#"
 let _ = import! std.fs
-moss.trigger "forbidden" "Forbidden host effect"
+cast.trigger "forbidden" "Forbidden host effect"
 "#,
     );
 
@@ -179,8 +191,8 @@ moss.trigger "forbidden" "Forbidden host effect"
 fn fingerprint_is_deterministic_and_includes_the_versioned_abi() {
     let source = authored(
         r#"
-let abi_version: Int = moss.abi_version
-moss.trigger "fingerprint" "Fingerprint"
+let abi_version: Int = cast.abi_version
+cast.trigger "fingerprint" "Fingerprint"
 "#,
     );
     let evaluator = Evaluator::default();
@@ -200,6 +212,6 @@ moss.trigger "fingerprint" "Fingerprint"
             .iter()
             .map(|module| module.logical_name.as_str())
             .collect::<Vec<_>>(),
-        ["moss.trigger.v1"]
+        ["cast.trigger.v1"]
     );
 }

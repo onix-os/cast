@@ -15,7 +15,7 @@ use thiserror::Error;
 /// Version of the ordered build-policy layer ABI.
 pub const BUILD_POLICY_LAYERS_ABI_VERSION: u32 = 1;
 
-/// Pure helpers imported as `boulder.build_policy.layers.v1`.
+/// Pure helpers imported as `cast.build_policy.layers.v1`.
 pub const GLUON_BUILD_POLICY_LAYERS_ABI: &str = include_str!("../../gluon/build_policy_layers.glu");
 
 /// One total state transition in an authored policy layer.
@@ -201,7 +201,7 @@ pub fn evaluate_gluon_with_inputs(
 ) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {
     let mut import_policy = evaluator.import_policy().clone();
     import_policy.enable_array_primitives();
-    import_policy.insert_embedded_module("boulder.build_policy.layers.v1", GLUON_BUILD_POLICY_LAYERS_ABI)?;
+    import_policy.insert_embedded_module("cast.build_policy.layers.v1", GLUON_BUILD_POLICY_LAYERS_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyRootSpec>(source, explicit_inputs)?;
     let root: BuildPolicyRootSpec = evaluation.value.into();

@@ -17,7 +17,7 @@ fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
 }
 
 fn authored(body: &str) -> Source {
-    Source::new("stone.glu", format!("let b = import! boulder.package.v3\n{body}"))
+    Source::new("stone.glu", format!("let b = import! cast.package.v3\n{body}"))
 }
 
 fn binary_program(name: &str) -> ProgramSpec {
@@ -28,13 +28,19 @@ fn binary_program(name: &str) -> ProgramSpec {
 }
 
 #[test]
-fn removed_package_and_builder_abis_are_not_compatibility_aliases() {
+fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
     for module in [
+        "boulder.package.v3",
+        "boulder.builders.cmake.v2",
+        "boulder.builders.meson.v2",
+        "boulder.builders.cargo.v2",
+        "boulder.builders.autotools.v2",
+        "cast.package.v2",
+        "cast.builders.cmake.v1",
+        "cast.builders.meson.v1",
+        "cast.builders.cargo.v1",
+        "cast.builders.autotools.v1",
         "boulder.package.v2",
-        "boulder.builders.cmake.v1",
-        "boulder.builders.meson.v1",
-        "boulder.builders.cargo.v1",
-        "boulder.builders.autotools.v1",
     ] {
         let error = evaluate_gluon(&Source::new("stone.glu", format!("import! {module}"))).unwrap_err();
         assert!(matches!(
@@ -87,7 +93,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
             StepSpec::Shell {
                 interpreter: binary_program("bash"),
                 declared_programs: vec![binary_program("ln")],
-                script: r#"ln -s factory-hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hello""#.to_owned()
+                script: r#"ln -s factory-hello "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hello""#.to_owned()
             }
         ]
     );
@@ -146,7 +152,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
             .fingerprint
             .imported_modules
             .iter()
-            .any(|module| module.logical_name == "boulder.package.v3")
+            .any(|module| module.logical_name == "cast.package.v3")
     );
 }
 

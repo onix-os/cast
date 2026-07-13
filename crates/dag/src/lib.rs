@@ -12,7 +12,7 @@ use self::subgraph::subgraph;
 
 mod subgraph;
 
-/// NodeIndex as employed in moss-rs usage
+/// NodeIndex as employed by Cast's Forge engine
 pub type NodeIndex = petgraph::prelude::NodeIndex<u32>;
 
 /// The concrete node path which would become cyclic after adding an edge.

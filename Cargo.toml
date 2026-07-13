@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MPL-2.0
 
 [workspace]
-members = ["bin/boulder", "bin/moss", "crates/*"]
-default-members = ["bin/moss"]
+members = ["bin/cast", "crates/*"]
+default-members = ["bin/cast"]
 resolver = "3"
 
 [workspace.package]

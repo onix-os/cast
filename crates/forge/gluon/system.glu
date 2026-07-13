@@ -1,0 +1,102 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Pure, embedded API imported by authored system intent as `cast.system.v1`.
+
+type Optional a =
+    | None
+    | Some a
+
+type Boolean =
+    | False
+    | True
+
+type RepositorySourceSpec =
+    | DirectIndex { uri: String }
+    | RootIndex {
+        base_uri: String,
+        channel: Optional String,
+        version: String,
+        arch: Optional String,
+    }
+
+type RepositorySpec = {
+    id: String,
+    description: Optional String,
+    source: RepositorySourceSpec,
+    priority: Optional Int,
+    enabled: Optional Boolean,
+}
+
+type SystemSpec = {
+    disable_warning: Boolean,
+    repositories: Array RepositorySpec,
+    packages: Array String,
+}
+
+let direct = \id uri -> {
+    id,
+    description = None,
+    source = DirectIndex { uri },
+    priority = None,
+    enabled = None,
+}
+
+let direct_with = \value -> {
+    id = value.id,
+    description = value.description,
+    source = DirectIndex { uri = value.uri },
+    priority = value.priority,
+    enabled = value.enabled,
+}
+
+let root = \id base_uri version -> {
+    id,
+    description = None,
+    source = RootIndex {
+        base_uri,
+        channel = None,
+        version,
+        arch = None,
+    },
+    priority = None,
+    enabled = None,
+}
+
+let root_with = \value -> {
+    id = value.id,
+    description = value.description,
+    source = RootIndex {
+        base_uri = value.base_uri,
+        channel = value.channel,
+        version = value.version,
+        arch = value.arch,
+    },
+    priority = value.priority,
+    enabled = value.enabled,
+}
+
+let system: SystemSpec = {
+    disable_warning = False,
+    repositories = [],
+    packages = [],
+}
+
+{
+    abi_version = 1,
+    system,
+    optional = {
+        none = None,
+        some = \value -> Some value,
+    },
+    boolean = {
+        false = False,
+        true = True,
+    },
+    repository = {
+        direct,
+        direct_with,
+        root,
+        root_with,
+    },
+}

@@ -54,4 +54,4 @@ created close-on-exec, so it is never inherited by commands run in a payload.
 
 #### Why don't you just use Docker, or Podman, or... ?
 
-Those are full-fledged containerization solutions. They offer many features we don't need, and they have to be set up or installed first. Boulder owns the namespace and isolated-root setup directly; rootless execution uses only the standard, fixed-path `newgidmap` privilege boundary needed to clear inherited groups safely.
+Those are full-fledged containerization solutions. They offer many features we don't need, and they have to be set up or installed first. Mason owns the namespace and isolated-root setup directly; rootless execution uses only the standard, fixed-path `newgidmap` privilege boundary needed to clear inherited groups safely.

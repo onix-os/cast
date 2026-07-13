@@ -1,0 +1,48 @@
+// SPDX-FileCopyrightText: 2023 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let root = {
+    summary = b.optional.set "Declarative package and system delivery tool",
+    description = b.optional.set "Cast plans, builds, and applies declarative Stone packages.",
+    runtime_inputs = [b.dep.binary "cast-container"],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast",
+    version = "1.0.1",
+    release = 35,
+    homepage = "https://github.com/bresilla/os-tools",
+    license = ["Zlib"],
+})
+
+{
+    builder = meson.builder {
+        flags = ["--buildtype", "debugoptimized"],
+        run_tests = b.boolean.false,
+    },
+    build_inputs = [
+        b.dep.package "ldc",
+        b.dep.package "ldc-devel",
+        b.dep.package "lmdb-devel",
+        b.dep.pkgconfig "libcurl",
+        b.dep.pkgconfig "libxxhash",
+        b.dep.pkgconfig "libzstd",
+    ],
+    outputs = b.outputs.with_root base.meta.pname root,
+    sources = [
+        b.source.git "https://github.com/bresilla/os-tools" "v1.0.1",
+        b.source.archive_with {
+            url = "https://github.com/example/cast-support/releases/download/v1.2.0/cast-support-1.2.0.tar.xz",
+            hash = "cbf684b5a37a3a433e0526beb04a7b3419b71e81b3709c3b0d7ed6a1987d3dcb",
+            rename = b.optional.unset,
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-support",
+        },
+    ],
+    .. base
+}

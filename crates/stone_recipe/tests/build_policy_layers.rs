@@ -10,8 +10,19 @@ use stone_recipe::build_policy::layers::{
 fn authored(body: &str) -> Source {
     Source::new(
         "policy.glu",
-        format!("let layers = import! boulder.build_policy.layers.v1\n{body}"),
+        format!("let layers = import! cast.build_policy.layers.v1\n{body}"),
     )
+}
+
+#[test]
+fn retired_boulder_layer_abi_is_not_a_compatibility_alias() {
+    let error = evaluate_gluon(&Source::new(
+        "retired-policy-layers.glu",
+        "import! boulder.build_policy.layers.v1",
+    ))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("boulder.build_policy.layers.v1"));
 }
 
 #[test]
@@ -59,7 +70,7 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
             .fingerprint
             .imported_modules
             .iter()
-            .any(|module| module.logical_name == "boulder.build_policy.layers.v1")
+            .any(|module| module.logical_name == "cast.build_policy.layers.v1")
     );
 }
 

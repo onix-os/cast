@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Pure embedded API imported by authored profile fragments as
+// `cast.profile.v1`.
+
+type Optional a =
+    | None
+    | Some a
+
+type Boolean =
+    | False
+    | True
+
+type RepositorySourceSpec =
+    | DirectIndex { uri: String }
+    | RootIndex {
+        base_uri: String,
+        channel: Optional String,
+        version: String,
+        arch: Optional String,
+    }
+
+type RepositorySpec = {
+    id: String,
+    description: Optional String,
+    source: RepositorySourceSpec,
+    priority: Optional Int,
+    enabled: Optional Boolean,
+}
+
+type ProfileSpec = {
+    id: String,
+    repositories: Array RepositorySpec,
+}
+
+type DirectIndexOptions = {
+    id: String,
+    description: Optional String,
+    uri: String,
+    priority: Optional Int,
+    enabled: Optional Boolean,
+}
+
+type RootIndexOptions = {
+    id: String,
+    description: Optional String,
+    base_uri: String,
+    channel: Optional String,
+    version: String,
+    arch: Optional String,
+    priority: Optional Int,
+    enabled: Optional Boolean,
+}
+
+let direct: String -> String -> RepositorySpec = \id uri -> {
+    id,
+    description = None,
+    source = DirectIndex { uri },
+    priority = None,
+    enabled = None,
+}
+
+let direct_with: DirectIndexOptions -> RepositorySpec = \value -> {
+    id = value.id,
+    description = value.description,
+    source = DirectIndex { uri = value.uri },
+    priority = value.priority,
+    enabled = value.enabled,
+}
+
+let root_index: String -> String -> String -> RepositorySpec = \id base_uri version -> {
+    id,
+    description = None,
+    source = RootIndex {
+        base_uri,
+        channel = None,
+        version,
+        arch = None,
+    },
+    priority = None,
+    enabled = None,
+}
+
+let root_index_with: RootIndexOptions -> RepositorySpec = \value -> {
+    id = value.id,
+    description = value.description,
+    source = RootIndex {
+        base_uri = value.base_uri,
+        channel = value.channel,
+        version = value.version,
+        arch = value.arch,
+    },
+    priority = value.priority,
+    enabled = value.enabled,
+}
+
+let profile: String -> Array RepositorySpec -> ProfileSpec = \id repositories -> { id, repositories }
+let profiles: Array ProfileSpec -> Array ProfileSpec = \values -> values
+
+{
+    abi_version = 1,
+    profiles,
+    profile,
+    optional = {
+        none = None,
+        some = \value -> Some value,
+    },
+    boolean = {
+        false = False,
+        true = True,
+    },
+    defaults = {
+        description = "",
+        channel = "main",
+        arch = "x86_64",
+        priority = 0,
+        enabled = True,
+    },
+    repository = {
+        direct,
+        direct_with,
+        root = root_index,
+        root_index,
+        root_with = root_index_with,
+        root_index_with,
+    },
+}

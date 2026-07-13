@@ -38,11 +38,11 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 12;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 13;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
-const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
-const POLICY_COMPOSITION_IDENTITY_DOMAIN: &str = "boulder-build-policy-composition-v2";
+const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"cast-profile-fragments-v2\0";
+const POLICY_COMPOSITION_IDENTITY_DOMAIN: &str = "cast-build-policy-composition-v2";
 
 /// Complete authored and repository-policy provenance frozen into a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,8 +331,8 @@ fn validate_policy_origin(field: &str, origin: &str) -> Result<(), DerivationVal
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivationPlan {
     pub schema_version: u32,
-    pub boulder_version: String,
-    pub boulder_fingerprint: String,
+    pub cast_version: String,
+    pub cast_fingerprint: String,
     pub package: PackageIdentity,
     pub provenance: DerivationProvenance,
     pub source_lock_digest: String,
@@ -354,8 +354,8 @@ impl DerivationPlan {
     pub fn new(package: PackageIdentity, build_lock: BuildLock, provenance: DerivationProvenance) -> Self {
         Self {
             schema_version: DERIVATION_PLAN_SCHEMA_VERSION,
-            boulder_version: String::new(),
-            boulder_fingerprint: String::new(),
+            cast_version: String::new(),
+            cast_fingerprint: String::new(),
             package,
             provenance,
             source_lock_digest: String::new(),
@@ -383,8 +383,8 @@ impl DerivationPlan {
             });
         }
 
-        require_nonempty("boulder_version", &self.boulder_version)?;
-        require_nonempty("boulder_fingerprint", &self.boulder_fingerprint)?;
+        require_nonempty("cast_version", &self.cast_version)?;
+        require_nonempty("cast_fingerprint", &self.cast_fingerprint)?;
         self.package.validate()?;
         if !SUPPORTED_ARTIFACT_ARCHITECTURES.contains(&self.package.architecture.as_str()) {
             return Err(DerivationValidationError::UnsupportedArtifactArchitecture {
@@ -520,8 +520,8 @@ impl DerivationPlan {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut encoder = CanonicalEncoder::new(DERIVATION_HASH_DOMAIN);
         encoder.u32(self.schema_version);
-        encoder.string(&self.boulder_version);
-        encoder.string(&self.boulder_fingerprint);
+        encoder.string(&self.cast_version);
+        encoder.string(&self.cast_fingerprint);
         self.package.encode(&mut encoder);
         self.provenance.encode(&mut encoder);
         encoder.string(&self.source_lock_digest);
@@ -2381,8 +2381,8 @@ mod tests {
             build_lock,
             provenance,
         );
-        plan.boulder_version = "0.26.6".to_owned();
-        plan.boulder_fingerprint = "sha256:test-boulder-semantics".to_owned();
+        plan.cast_version = "0.26.6".to_owned();
+        plan.cast_fingerprint = "sha256:test-cast-semantics".to_owned();
         plan.source_lock_digest = sha256(SOURCE_LOCK_BYTES);
         plan.sources = vec![LockedSource::Archive {
             order: 0,
@@ -2418,7 +2418,7 @@ mod tests {
             ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
         ]);
         plan.layout = BuilderLayout {
-            hostname: "boulder".to_owned(),
+            hostname: "cast-builder".to_owned(),
             guest_root: "/mason".to_owned(),
             artifacts_dir: "/mason/artefacts".to_owned(),
             build_dir: "/mason/build".to_owned(),
@@ -2435,7 +2435,7 @@ mod tests {
         };
         plan.execution = ExecutionPolicy {
             executor: LockedIdentity {
-                name: "boulder-executor-v1".to_owned(),
+                name: "cast-executor-v1".to_owned(),
                 fingerprint: "executor-fingerprint".to_owned(),
             },
             root_materialization: RootMaterializationMode::LockedClosure,
@@ -2512,6 +2512,20 @@ mod tests {
         assert_eq!(first.derivation_id(), repeated.derivation_id());
         assert_eq!(first.derivation_id().as_str().len(), 64);
         first.validate().unwrap();
+    }
+
+    #[test]
+    fn validation_rejects_pre_cast_schema_twelve() {
+        let mut plan = sample_plan();
+        plan.schema_version = 12;
+
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::UnsupportedSchema {
+                found: 12,
+                expected: DERIVATION_PLAN_SCHEMA_VERSION,
+            })
+        ));
     }
 
     #[test]
@@ -2959,15 +2973,15 @@ mod tests {
     }
 
     #[test]
-    fn validation_requires_complete_boulder_implementation_identity() {
+    fn validation_requires_complete_cast_implementation_identity() {
         for (field, clear) in [
             (
-                "boulder_version",
-                Box::new(|plan: &mut DerivationPlan| plan.boulder_version.clear()) as Box<dyn Fn(&mut DerivationPlan)>,
+                "cast_version",
+                Box::new(|plan: &mut DerivationPlan| plan.cast_version.clear()) as Box<dyn Fn(&mut DerivationPlan)>,
             ),
             (
-                "boulder_fingerprint",
-                Box::new(|plan: &mut DerivationPlan| plan.boulder_fingerprint.clear()),
+                "cast_fingerprint",
+                Box::new(|plan: &mut DerivationPlan| plan.cast_fingerprint.clear()),
             ),
         ] {
             let mut plan = sample_plan();
@@ -3423,13 +3437,10 @@ mod tests {
         let original = sample_plan();
         let original_id = original.derivation_id();
         let mutations: Vec<(&str, Box<dyn Fn(&mut DerivationPlan)>)> = vec![
+            ("cast-version", Box::new(|plan| plan.cast_version.push_str("-changed"))),
             (
-                "boulder-version",
-                Box::new(|plan| plan.boulder_version.push_str("-changed")),
-            ),
-            (
-                "boulder-implementation",
-                Box::new(|plan| plan.boulder_fingerprint.push_str("-changed")),
+                "cast-implementation",
+                Box::new(|plan| plan.cast_fingerprint.push_str("-changed")),
             ),
             (
                 "source",

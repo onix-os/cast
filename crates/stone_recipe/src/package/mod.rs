@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-//! Typed package declarations for the `boulder.package.v3` Gluon ABI.
+//! Typed package declarations for the `cast.package.v3` Gluon ABI.
 //!
 //! A package factory is evaluated completely inside Gluon and produces one
 //! concrete [`PackageSpec`]. This module deliberately contains values only:
@@ -213,7 +213,7 @@ pub struct ProfileSpec {
 /// One explicit Stone output.
 ///
 /// `out` is the root package. Other local names lower temporarily to
-/// `<pname>-<name>` subpackages until Boulder and Stone consume output names
+/// `<pname>-<name>` subpackages until Mason and Stone consume output names
 /// directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputSpec {
@@ -244,7 +244,7 @@ pub struct OutputRef {
 }
 
 /// A typed package relationship converted through the shared Stone relation
-/// model whenever Boulder crosses into package resolution or metadata.
+/// model whenever Mason crosses into package resolution or metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DependencySpec {
     Package(PackageRef),
