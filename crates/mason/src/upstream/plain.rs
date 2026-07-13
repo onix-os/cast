@@ -8,15 +8,25 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use forge::{request, util};
 use fs_err as fs;
+use fs_err::os::unix::fs::OpenOptionsExt as _;
 use sha2::{Digest, Sha256};
 use stone_recipe::spec::is_canonical_sha256;
 use thiserror::Error;
 use tui::{ProgressBar, ProgressStyle};
 use url::Url;
+
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// Package source archives are substantially more constrained than Forge's
+/// general artifact downloads. This policy applies to authoring, resolution,
+/// frozen builds, cached verification, and build-visible sharing.
+pub(crate) const ARCHIVE_DOWNLOAD_LIMITS: request::DownloadLimits =
+    request::DownloadLimits::new(2 * GIB, Duration::from_secs(20 * 60));
 
 /// Upstream based on an archive (typically a tarball).
 #[derive(Debug, Clone)]
@@ -61,16 +71,7 @@ impl Plain {
             fs::create_dir_all(&parent).await?;
         }
 
-        let hash = fetch(self.url.clone(), &path, pb).await?;
-        if hash != self.hash {
-            fs::remove_file(&path).await?;
-
-            return Err(Error::HashMismatch {
-                name: self.name().to_owned(),
-                expected: self.hash.to_string(),
-                got: hash,
-            });
-        }
+        fetch(self.url.clone(), &path, &self.hash, self.name(), pb).await?;
 
         Ok(StoredPlain {
             name: self.name().to_owned(),
@@ -85,15 +86,21 @@ impl Plain {
     /// not found in the storage directory, or its hash doesn't match
     /// [Self::hash].
     pub fn stored(&self, storage_dir: &Path) -> Result<StoredPlain, Error> {
+        self.stored_with_max_bytes(storage_dir, ARCHIVE_DOWNLOAD_LIMITS.max_bytes)
+    }
+
+    fn stored_with_max_bytes(&self, storage_dir: &Path, max_bytes: u64) -> Result<StoredPlain, Error> {
         let path = self.stored_path(storage_dir);
 
-        let mut file = fs_err::File::open(&path)?;
-        let hash = util::sha256_hash(&mut file)?;
-        if hash != self.hash.deref() {
+        let mut file = open_regular_archive(&path, self.name())?;
+        reject_file_size(&file, self.name(), max_bytes)?;
+        let mut sink = io::sink();
+        let hash = copy_and_hash_bounded(&mut file, &mut sink, self.name(), max_bytes)?;
+        if hash != self.hash {
             return Err(Error::HashMismatch {
                 name: self.name().to_owned(),
                 expected: self.hash.to_string(),
-                got: Hash(hash),
+                got: hash,
             });
         }
 
@@ -148,8 +155,13 @@ impl StoredPlain {
     /// cache. Build scripts are allowed to modify their source directory; a
     /// hard link here would silently mutate the verified cache entry too.
     pub fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
+        self.share_with_max_bytes(dest_dir, source_date_epoch, ARCHIVE_DOWNLOAD_LIMITS.max_bytes)
+    }
+
+    fn share_with_max_bytes(&self, dest_dir: &Path, source_date_epoch: i64, max_bytes: u64) -> Result<(), Error> {
         let target = dest_dir.join(self.name.clone());
-        let mut source = fs::File::open(&self.path)?;
+        let mut source = open_regular_archive(&self.path, &self.name)?;
+        reject_file_size(&source, &self.name, max_bytes)?;
         let mut temporary = tempfile::Builder::new()
             .prefix(".cast-archive-")
             .tempfile_in(dest_dir)
@@ -157,17 +169,7 @@ impl StoredPlain {
                 parent: dest_dir.to_owned(),
                 source,
             })?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = source.read(&mut buffer)?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-            temporary.as_file_mut().write_all(&buffer[..read])?;
-        }
-        let found = Hash(hex::encode(hasher.finalize()));
+        let found = copy_and_hash_bounded(&mut source, temporary.as_file_mut(), &self.name, max_bytes)?;
         if found != self.hash {
             return Err(Error::HashMismatch {
                 name: self.name.clone(),
@@ -186,6 +188,60 @@ impl StoredPlain {
 
         Ok(())
     }
+}
+
+fn open_regular_archive(path: &Path, name: &str) -> Result<fs::File, Error> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(Error::NotRegular { name: name.to_owned() });
+    }
+    Ok(file)
+}
+
+fn reject_file_size(file: &fs::File, name: &str, max_bytes: u64) -> Result<(), Error> {
+    if file.metadata()?.len() > max_bytes {
+        Err(Error::TooLarge {
+            name: name.to_owned(),
+            limit: max_bytes,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn copy_and_hash_bounded<R: Read, W: Write>(
+    source: &mut R,
+    destination: &mut W,
+    name: &str,
+    max_bytes: u64,
+) -> Result<Hash, Error> {
+    let mut hasher = Sha256::new();
+    let mut completed = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        // Probe one byte beyond the allowance so growth after the metadata
+        // preflight cannot bypass the limit.
+        let remaining = max_bytes.saturating_sub(completed);
+        let read_capacity = remaining.saturating_add(1).min(buffer.len() as u64) as usize;
+        let read = source.read(&mut buffer[..read_capacity])?;
+        if read == 0 {
+            break;
+        }
+        if read as u64 > remaining {
+            return Err(Error::TooLarge {
+                name: name.to_owned(),
+                limit: max_bytes,
+            });
+        }
+        destination.write_all(&buffer[..read])?;
+        hasher.update(&buffer[..read]);
+        completed += read as u64;
+    }
+
+    Ok(Hash(hex::encode(hasher.finalize())))
 }
 
 #[cfg(test)]
@@ -277,6 +333,90 @@ mod tests {
     }
 
     #[test]
+    fn cached_archive_limit_accepts_n_and_rejects_n_plus_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = directory.path().join("cache");
+        let exact = Plain {
+            url: Url::parse("https://example.invalid/exact.tar.zst").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"1234"))),
+            rename: None,
+        };
+        let exact_path = exact.stored_path(&storage);
+        fs::create_dir_all(exact_path.parent().unwrap()).unwrap();
+        fs::write(&exact_path, b"1234").unwrap();
+        assert!(exact.stored_with_max_bytes(&storage, 4).is_ok());
+
+        let oversized = Plain {
+            url: Url::parse("https://example.invalid/oversized.tar.zst").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"12345"))),
+            rename: None,
+        };
+        let oversized_path = oversized.stored_path(&storage);
+        fs::create_dir_all(oversized_path.parent().unwrap()).unwrap();
+        fs::write(&oversized_path, b"12345").unwrap();
+        assert!(matches!(
+            oversized.stored_with_max_bytes(&storage, 4),
+            Err(Error::TooLarge { limit: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn cached_archive_stream_limit_independently_probes_n_plus_one() {
+        let mut exact = io::Cursor::new(b"1234".to_vec());
+        let mut sink = io::sink();
+        assert!(copy_and_hash_bounded(&mut exact, &mut sink, "source", 4).is_ok());
+
+        let mut oversized = io::Cursor::new(b"12345".to_vec());
+        assert!(matches!(
+            copy_and_hash_bounded(&mut oversized, &mut sink, "source", 4),
+            Err(Error::TooLarge { limit: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn sharing_n_plus_one_archive_removes_private_staging() {
+        let directory = tempfile::tempdir().unwrap();
+        let cached = directory.path().join("cache/source.tar.zst");
+        let shared = directory.path().join("build/sources");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(&cached, b"12345").unwrap();
+        let source = StoredPlain {
+            name: "source.tar.zst".to_owned(),
+            path: cached,
+            hash: Hash(hex::encode(Sha256::digest(b"12345"))),
+            was_cached: true,
+        };
+
+        assert!(matches!(
+            source.share_with_max_bytes(&shared, 0, 4),
+            Err(Error::TooLarge { limit: 4, .. })
+        ));
+        assert!(fs::read_dir(shared).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn cached_archive_symlink_is_never_followed() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let storage = directory.path().join("cache");
+        let outside = directory.path().join("outside.tar.zst");
+        fs::write(&outside, b"locked bytes").unwrap();
+        let plain = Plain {
+            url: Url::parse("https://example.invalid/source.tar.zst").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"locked bytes"))),
+            rename: None,
+        };
+        let cached = plain.stored_path(&storage);
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        symlink(&outside, &cached).unwrap();
+
+        assert!(matches!(plain.stored(&storage), Err(Error::Io(_))));
+        assert_eq!(fs::read(&outside).unwrap(), b"locked bytes");
+    }
+
+    #[test]
     fn archive_hash_parser_uses_the_canonical_source_digest_contract() {
         assert!("a".repeat(64).parse::<Hash>().is_ok());
         for invalid in ["a".repeat(63), "A".repeat(64), format!("{}g", "a".repeat(63))] {
@@ -340,6 +480,12 @@ pub enum Error {
     /// Two hashes did not match.
     #[error("hash mismatch for {name}, expected {expected:?} got {:?}", got.0)]
     HashMismatch { name: String, expected: String, got: Hash },
+    /// A source archive exceeded the package-source resource policy.
+    #[error("archive {name:?} exceeds byte limit of {limit}")]
+    TooLarge { name: String, limit: u64 },
+    /// The cache path did not name an ordinary archive file.
+    #[error("archive {name:?} is not a regular file")]
+    NotRegular { name: String },
     #[error("request")]
     /// A local or remote fetch failed.
     Request(#[from] request::Error),
@@ -360,16 +506,32 @@ pub enum Error {
     Io(#[from] io::Error),
 }
 
-async fn fetch(url: Url, dest: &Path, pb: &ProgressBar) -> Result<Hash, Error> {
+async fn fetch(url: Url, dest: &Path, expected: &Hash, name: &str, pb: &ProgressBar) -> Result<(), Error> {
     pb.set_style(
         ProgressStyle::with_template(" {spinner} {wide_msg} {binary_bytes_per_sec:>.dim} ")
             .unwrap()
             .tick_chars("--=≡■≡=--"),
     );
 
-    request::download_with_progress_and_sha256(url, dest, |progress| pb.inc(progress.delta))
-        .await
-        .map_err(Error::from)?
-        .try_into()
-        .map_err(Error::from)
+    match request::download_with_progress_and_expected_sha256_and_limits(
+        url,
+        dest,
+        expected,
+        ARCHIVE_DOWNLOAD_LIMITS,
+        |progress| pb.inc(progress.delta),
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(request::Error::HashMismatch { expected, actual }) => Err(Error::HashMismatch {
+            name: name.to_owned(),
+            expected,
+            got: Hash(actual),
+        }),
+        Err(request::Error::TooLarge { limit }) => Err(Error::TooLarge {
+            name: name.to_owned(),
+            limit,
+        }),
+        Err(source) => Err(Error::Request(source)),
+    }
 }

@@ -13,6 +13,7 @@ use std::{
 
 use snafu::{OptionExt, ResultExt as _, Snafu, ensure};
 use stone::{StoneDecodedPayload, StoneDigestWriter, StoneDigestWriterHasher, StoneReadError};
+use tokio::io::AsyncReadExt as _;
 use tracing::warn;
 use url::Url;
 
@@ -88,6 +89,7 @@ pub async fn fetch(
     let url = meta.uri.as_deref().context(MissingUrlSnafu)?;
     let url = url.parse::<Url>().context(InvalidUrlSnafu { url })?;
     let hash = meta.hash.as_ref().context(MissingHashSnafu)?;
+    let limits = package_download_limits(meta.download_size);
 
     let destination_path = download_path(installation, hash)?;
 
@@ -95,19 +97,7 @@ pub async fn fetch(
         fs::create_dir_all(parent).await?;
     }
 
-    let is_cached = async || -> Result<bool, FetchError> {
-        if fs::try_exists(&destination_path).await? {
-            // Ensure content is valid before trusting it
-            let mut file = fs::File::open(&destination_path).await?;
-            let actual_hash = util::sha256_hash_async(&mut file).await?;
-
-            return Ok(*hash == actual_hash);
-        }
-
-        Ok(false)
-    };
-
-    match is_cached().await {
+    match cached_download_matches(&destination_path, hash, limits).await {
         Ok(true) => {
             return Ok(Download {
                 id: meta.id().into(),
@@ -127,23 +117,30 @@ pub async fn fetch(
         }
     }
 
-    let actual_hash = request::download_with_progress_and_sha256(url, &destination_path, |progress| {
-        (on_progress)(Progress {
-            delta: progress.delta,
-            completed: progress.completed,
-            total: meta.download_size.unwrap_or(progress.completed),
-        });
-    })
-    .await?;
-
-    ensure!(
-        *hash == actual_hash,
-        BinaryStoneHashMismatchSnafu {
-            package: meta.name.to_string(),
-            expected: hash.clone(),
-            actual: actual_hash
-        }
-    );
+    if let Err(source) = request::download_with_progress_and_expected_sha256_and_limits(
+        url,
+        &destination_path,
+        hash,
+        limits,
+        |progress| {
+            (on_progress)(Progress {
+                delta: progress.delta,
+                completed: progress.completed,
+                total: meta.download_size.unwrap_or(progress.completed),
+            });
+        },
+    )
+    .await
+    {
+        return match source {
+            request::Error::HashMismatch { expected, actual } => Err(FetchError::BinaryStoneHashMismatch {
+                package: meta.name.to_string(),
+                expected,
+                actual,
+            }),
+            source => Err(FetchError::Request { source }),
+        };
+    }
 
     Ok(Download {
         id: meta.id().into(),
@@ -151,6 +148,48 @@ pub async fn fetch(
         installation: installation.clone(),
         was_cached: false,
     })
+}
+
+async fn cached_download_matches(
+    path: &Path,
+    expected_hash: &str,
+    limits: request::DownloadLimits,
+) -> io::Result<bool> {
+    if !tokio::fs::try_exists(path).await? {
+        return Ok(false);
+    }
+
+    // Never follow a cache-entry symlink or block on a FIFO/device. The
+    // descriptor's type and size are checked after open before hashing.
+    let file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
+        .await?;
+    let metadata = file.metadata().await?;
+    if !metadata.file_type().is_file() || metadata.len() > limits.max_bytes {
+        return Ok(false);
+    }
+
+    let probe_limit = limits.max_bytes.saturating_add(1);
+    let mut file = file.take(probe_limit);
+    let actual_hash = util::sha256_hash_async(&mut file).await?;
+    if probe_limit != u64::MAX && file.limit() == 0 {
+        return Ok(false);
+    }
+
+    Ok(expected_hash == actual_hash)
+}
+
+pub(super) fn package_download_limits(declared_size: Option<u64>) -> request::DownloadLimits {
+    request::DownloadLimits {
+        // Repository metadata is an exact package-file size when present. It
+        // may tighten, but never enlarge, the general Forge artifact ceiling.
+        max_bytes: declared_size
+            .unwrap_or(request::DEFAULT_DOWNLOAD_LIMITS.max_bytes)
+            .min(request::DEFAULT_DOWNLOAD_LIMITS.max_bytes),
+        total_timeout: request::DEFAULT_DOWNLOAD_LIMITS.total_timeout,
+    }
 }
 
 /// A package that has been downloaded to the installation
@@ -398,4 +437,56 @@ pub enum FetchError {
         expected: String,
         actual: String,
     },
+}
+
+#[cfg(test)]
+mod download_limit_tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    #[test]
+    fn declared_package_size_can_only_tighten_the_global_ceiling() {
+        assert_eq!(package_download_limits(Some(42)).max_bytes, 42);
+        assert_eq!(package_download_limits(None), request::DEFAULT_DOWNLOAD_LIMITS);
+        assert_eq!(
+            package_download_limits(Some(request::DEFAULT_DOWNLOAD_LIMITS.max_bytes + 1)).max_bytes,
+            request::DEFAULT_DOWNLOAD_LIMITS.max_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_package_symlink_is_rejected_without_reading_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        let cached = directory.path().join("cached");
+        std::fs::write(&outside, b"outside bytes").unwrap();
+        symlink(&outside, &cached).unwrap();
+
+        assert!(
+            cached_download_matches(&cached, "irrelevant", request::DEFAULT_DOWNLOAD_LIMITS)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(outside).unwrap(), b"outside bytes");
+    }
+
+    #[tokio::test]
+    async fn cached_package_fifo_is_rejected_without_blocking() {
+        use nix::{sys::stat::Mode, unistd::mkfifo};
+
+        let directory = tempfile::tempdir().unwrap();
+        let cached = directory.path().join("cached");
+        mkfifo(&cached, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+        let started = Instant::now();
+
+        assert!(
+            !cached_download_matches(&cached, "irrelevant", request::DEFAULT_DOWNLOAD_LIMITS)
+                .await
+                .unwrap()
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 }

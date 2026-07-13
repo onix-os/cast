@@ -18,7 +18,7 @@ use tokio::process::Command;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 use url::Url;
 
-use crate::Env;
+use crate::{Env, upstream::ARCHIVE_DOWNLOAD_LIMITS};
 
 pub struct Upstream {
     pub uri: Url,
@@ -45,7 +45,8 @@ pub fn fetch_and_extract(env: &Env, upstreams: &[Url], extract_root: &Path) -> R
                 );
                 pb.enable_steady_tick(Duration::from_millis(150));
 
-                let hash = request::download_with_sha256(uri.clone(), &temp_path).await?;
+                let hash =
+                    request::download_with_sha256_and_limits(uri.clone(), &temp_path, ARCHIVE_DOWNLOAD_LIMITS).await?;
 
                 // Hardlink or copy fetched asset to cache dir so we don't need
                 // to refetch it when the user finally builds this new recipe

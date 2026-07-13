@@ -29,6 +29,8 @@ mod git;
 mod plain;
 mod share_root;
 
+pub(crate) use plain::ARCHIVE_DOWNLOAD_LIMITS;
+
 /// An upstream is a backend where
 /// to get source code from.
 #[derive(Debug, Clone)]

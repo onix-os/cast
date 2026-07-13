@@ -95,6 +95,11 @@ pub fn fetch(client: &mut Client, pkgs: &[&str], output_dir: &Path, verbose: boo
                     .as_deref()
                     .expect("registry packages must have uri defined"),
             )?;
+            let expected_hash = pkg
+                .meta
+                .hash
+                .as_deref()
+                .ok_or_else(|| Error::MissingHash(pkg.meta.name.clone()))?;
             let file_name = uri
                 .path_segments()
                 .and_then(|mut segments| segments.next_back())
@@ -102,17 +107,23 @@ pub fn fetch(client: &mut Client, pkgs: &[&str], output_dir: &Path, verbose: boo
 
             let dest_path = output_dir.join(file_name);
 
-            request::download_with_progress(uri, &dest_path, |progress| {
-                progress_bar.inc(progress.delta);
-                info!(
-                    progress = progress.completed as f32 / download_size as f32,
-                    current = progress.completed as usize,
-                    total = download_size as usize,
-                    event_type = "progress_update",
-                    "Downloading {}",
-                    pkg.meta.name
-                );
-            })
+            request::download_with_progress_and_expected_sha256_and_limits(
+                uri,
+                &dest_path,
+                expected_hash,
+                client::cache::package_download_limits(pkg.meta.download_size),
+                |progress| {
+                    progress_bar.inc(progress.delta);
+                    info!(
+                        progress = progress.completed as f32 / download_size as f32,
+                        current = progress.completed as usize,
+                        total = download_size as usize,
+                        event_type = "progress_update",
+                        "Downloading {}",
+                        pkg.meta.name
+                    );
+                },
+            )
             .await
             .map_err(|err| Error::FetchPackage(err, pkg.meta.name.clone()))?;
 
@@ -216,6 +227,9 @@ pub enum Error {
 
     #[error("could not determine filename from uri: {0}")]
     NoFileNameInUri(String),
+
+    #[error("package {0} has no locked download hash")]
+    MissingHash(package::Name),
 
     #[error("fetch package {1}")]
     FetchPackage(#[source] request::Error, package::Name),

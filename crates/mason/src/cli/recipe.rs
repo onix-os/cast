@@ -12,6 +12,7 @@ use crate::{
     draft::{self, Drafter, upstream::fetched_upstream_cache_path},
     planner, profile, recipe,
     source_lock::{SOURCE_LOCK_FILE_NAME, WriteOutcome},
+    upstream::ARCHIVE_DOWNLOAD_LIMITS,
 };
 use clap::{Args, Parser};
 use forge::{request, runtime, util};
@@ -505,9 +506,14 @@ async fn fetch_and_cache_upstream(env: &Env, uri: Url, mpb: &MultiProgress) -> R
         .map_err(Error::CreateTempFile)?
         .into_temp_path();
 
-    let hash = request::download_with_progress_and_sha256(uri.clone(), &temp_file_path, |progress| {
-        pb.inc(progress.delta);
-    })
+    let hash = request::download_with_progress_and_sha256_and_limits(
+        uri.clone(),
+        &temp_file_path,
+        ARCHIVE_DOWNLOAD_LIMITS,
+        |progress| {
+            pb.inc(progress.delta);
+        },
+    )
     .await?;
 
     // Move fetched asset to cache dir so we don't need to refetch it
