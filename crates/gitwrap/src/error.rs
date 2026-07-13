@@ -43,6 +43,8 @@ impl Error {
                 | InnerError::RepositoryBytes { .. }
                 | InnerError::RepositoryEntries { .. }
                 | InnerError::RepositoryDepth { .. }
+                | InnerError::RepositorySnapshotMemory { .. }
+                | InnerError::RepositoryChangedDuringScan
         )
     }
 
@@ -104,6 +106,15 @@ pub(crate) enum InnerError {
     /// Descriptor-rooted traversal crossed its safe nesting ceiling.
     #[error("Git repository nesting exceeds the scanner's {limit}-directory descriptor budget")]
     RepositoryDepth { limit: usize },
+
+    /// An exact strict inventory crossed its parent-side memory budget.
+    #[error("Git repository strict inventory exceeds its {limit}-byte memory budget")]
+    RepositorySnapshotMemory { limit: u64 },
+
+    /// A mandatory scan observed disappearance, replacement, or unequal
+    /// descriptor-rooted inventories.
+    #[error("Git repository changed during strict quota verification")]
+    RepositoryChangedDuringScan,
 
     /// A clone destination already exists and therefore cannot be installed
     /// using no-replace semantics.

@@ -13,6 +13,7 @@
 //! module implemented.
 
 use std::{
+    collections::BTreeMap,
     env,
     ffi::{CString, OsStr},
     io as std_io,
@@ -905,16 +906,18 @@ impl MonitoredRepository {
 
     fn scanner(&self, limits: Limits) -> Result<RepositoryUsageScanner, Error> {
         match self {
-            Self::Path(path) => RepositoryUsageScanner::new(path, limits),
-            Self::Directory(directory) => {
-                RepositoryUsageScanner::from_directory(directory.try_clone().map_err(InnerError::from)?, limits)
-            }
+            Self::Path(path) => RepositoryUsageScanner::new(path, limits, ScanMode::Live),
+            Self::Directory(directory) => RepositoryUsageScanner::from_directory(
+                directory.try_clone().map_err(InnerError::from)?,
+                limits,
+                ScanMode::Live,
+            ),
         }
     }
 
     fn verify(&self, limits: Limits) -> Result<RepositoryUsage, Error> {
         match self {
-            Self::Path(path) => verify_repository_usage(path, limits),
+            Self::Path(path) => verify_repository_usage_or_absent_for_creation(path, limits),
             Self::Directory(directory) => verify_repository_usage_directory(directory, limits),
         }
     }
@@ -1455,8 +1458,10 @@ fn openat_root_file(root: &fs::File, name: &std::ffi::CStr, access: i32) -> Resu
         return Err(InnerError::Io(std_io::Error::last_os_error()).into());
     }
     let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-    let file: std::fs::File = descriptor.into();
-    Ok(fs::File::from_parts(file, Path::new("<descriptor-rooted Git file>")))
+    Ok(fs::File::from_parts(
+        descriptor.into(),
+        Path::new("<descriptor-rooted Git file>"),
+    ))
 }
 
 fn createat_private_file(root: &fs::File, name: &std::ffi::CStr) -> std_io::Result<fs::File> {
@@ -1472,9 +1477,8 @@ fn createat_private_file(root: &fs::File, name: &std::ffi::CStr) -> std_io::Resu
         return Err(std_io::Error::last_os_error());
     }
     let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-    let file: std::fs::File = descriptor.into();
     Ok(fs::File::from_parts(
-        file,
+        descriptor.into(),
         Path::new("<descriptor-rooted private Git file>"),
     ))
 }
@@ -1510,40 +1514,159 @@ fn verify_repository_usage(path: &Path, limits: Limits) -> Result<RepositoryUsag
     verify_repository_usage_before(path, limits, deadline)
 }
 
+/// Creation monitors start before Git creates their staging root. Absence is
+/// accepted only at this explicit pre-spawn boundary; every mandatory scan of
+/// an expected root uses strict mode and rejects disappearance.
+fn verify_repository_usage_or_absent_for_creation(path: &Path, limits: Limits) -> Result<RepositoryUsage, Error> {
+    match open_directory(path) {
+        Ok(directory) => verify_repository_usage_directory(&directory, limits),
+        Err(source) if source.kind() == std_io::ErrorKind::NotFound => Ok(RepositoryUsage::default()),
+        Err(source)
+            if source.kind() == std_io::ErrorKind::NotADirectory || source.raw_os_error() == Some(nix::libc::ELOOP) =>
+        {
+            Err(InnerError::InvalidRepositoryRoot.into())
+        }
+        Err(source) => Err(InnerError::Io(source).into()),
+    }
+}
+
 fn verify_repository_usage_directory(directory: &fs::File, limits: Limits) -> Result<RepositoryUsage, Error> {
     let deadline = Instant::now()
         .checked_add(limits.wall_timeout)
         .ok_or(InnerError::InvalidLimits)?;
-    let mut scanner = RepositoryUsageScanner::from_directory(directory.try_clone().map_err(InnerError::from)?, limits)?;
-    while !scanner.advance(8192, Some(deadline))? {}
-    Ok(scanner.usage)
+    verify_two_repository_snapshots(|| scan_repository_directory_strict(directory, limits, deadline))
 }
 
 fn verify_repository_usage_before(path: &Path, limits: Limits, deadline: Instant) -> Result<RepositoryUsage, Error> {
-    let mut scanner = RepositoryUsageScanner::new(path, limits)?;
+    verify_two_repository_snapshots(|| scan_repository_path_strict(path, limits, deadline))
+}
+
+fn scan_repository_directory_strict(
+    directory: &fs::File,
+    limits: Limits,
+    deadline: Instant,
+) -> Result<RepositorySnapshot, Error> {
+    let mut scanner = RepositoryUsageScanner::from_directory(
+        directory.try_clone().map_err(InnerError::from)?,
+        limits,
+        ScanMode::Strict,
+    )?;
     while !scanner.advance(8192, Some(deadline))? {}
-    Ok(scanner.usage)
+    Ok(scanner.snapshot)
+}
+
+fn scan_repository_path_strict(path: &Path, limits: Limits, deadline: Instant) -> Result<RepositorySnapshot, Error> {
+    let mut scanner = RepositoryUsageScanner::new(path, limits, ScanMode::Strict)?;
+    while !scanner.advance(8192, Some(deadline))? {}
+    Ok(scanner.snapshot)
+}
+
+fn verify_two_repository_snapshots(
+    mut scan: impl FnMut() -> Result<RepositorySnapshot, Error>,
+) -> Result<RepositoryUsage, Error> {
+    let first = scan()?;
+    let second = scan()?;
+    if first == second {
+        Ok(second.usage)
+    } else {
+        Err(InnerError::RepositoryChangedDuringScan.into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScanMode {
+    Live,
+    Strict,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RepositorySnapshot {
+    usage: RepositoryUsage,
+    entries: BTreeMap<Vec<u8>, SnapshotMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SnapshotMetadata {
+    device: nix::libc::dev_t,
+    inode: nix::libc::ino_t,
+    mode: nix::libc::mode_t,
+    links: nix::libc::nlink_t,
+    logical_bytes: nix::libc::off_t,
+    allocated_blocks: nix::libc::blkcnt_t,
+    modified_seconds: nix::libc::time_t,
+    modified_nanoseconds: nix::libc::c_long,
+    changed_seconds: nix::libc::time_t,
+    changed_nanoseconds: nix::libc::c_long,
+}
+
+impl SnapshotMetadata {
+    fn from_stat(stat: &nix::libc::stat) -> Self {
+        Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            mode: stat.st_mode,
+            links: stat.st_nlink,
+            logical_bytes: stat.st_size,
+            allocated_blocks: stat.st_blocks,
+            modified_seconds: stat.st_mtime,
+            modified_nanoseconds: stat.st_mtime_nsec,
+            changed_seconds: stat.st_ctime,
+            changed_nanoseconds: stat.st_ctime_nsec,
+        }
+    }
+
+    fn usage(self) -> RepositoryUsage {
+        let logical_bytes = u64::try_from(self.logical_bytes).unwrap_or(u64::MAX);
+        let blocks = u64::try_from(self.allocated_blocks).unwrap_or(u64::MAX);
+        RepositoryUsage {
+            logical_bytes,
+            allocated_bytes: blocks.saturating_mul(512),
+            entries: 1,
+        }
+    }
+
+    fn is_directory(self) -> bool {
+        self.mode & nix::libc::S_IFMT == nix::libc::S_IFDIR
+    }
+
+    fn same_inode(self, other: Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.mode & nix::libc::S_IFMT == other.mode & nix::libc::S_IFMT
+    }
 }
 
 struct RepositoryUsageScanner {
     limits: Limits,
-    usage: RepositoryUsage,
+    mode: ScanMode,
+    snapshot: RepositorySnapshot,
+    snapshot_bytes: u64,
+    snapshot_limit: u64,
     directory_limit: usize,
     directories: Vec<DirectoryCursor>,
 }
 
+const SNAPSHOT_ENTRY_OVERHEAD: u64 = 128;
+
 impl RepositoryUsageScanner {
-    fn new(path: &Path, limits: Limits) -> Result<Self, Error> {
+    fn new(path: &Path, limits: Limits, mode: ScanMode) -> Result<Self, Error> {
         let directory_limit = scanner_directory_limit(limits)?;
+        let snapshot_limit = repository_snapshot_limit(limits);
         let root = match DirectoryCursor::open(path) {
             Ok(root) => root,
-            Err(source) if source.kind() == std_io::ErrorKind::NotFound => {
+            Err(source) if source.kind() == std_io::ErrorKind::NotFound && mode == ScanMode::Live => {
                 return Ok(Self {
                     limits,
-                    usage: RepositoryUsage::default(),
+                    mode,
+                    snapshot: RepositorySnapshot::default(),
+                    snapshot_bytes: 0,
+                    snapshot_limit,
                     directory_limit,
                     directories: Vec::new(),
                 });
+            }
+            Err(source) if source.kind() == std_io::ErrorKind::NotFound => {
+                return Err(InnerError::RepositoryChangedDuringScan.into());
             }
             Err(source)
                 if source.kind() == std_io::ErrorKind::NotADirectory
@@ -1553,29 +1676,64 @@ impl RepositoryUsageScanner {
             }
             Err(source) => return Err(InnerError::Io(source).into()),
         };
-        Self::from_root(root, limits, directory_limit)
+        Self::from_root(root, limits, mode, directory_limit, snapshot_limit)
     }
 
-    fn from_directory(directory: fs::File, limits: Limits) -> Result<Self, Error> {
+    fn from_directory(directory: fs::File, limits: Limits, mode: ScanMode) -> Result<Self, Error> {
         let directory_limit = scanner_directory_limit(limits)?;
+        let snapshot_limit = repository_snapshot_limit(limits);
         let root = DirectoryCursor::from_directory(directory).map_err(InnerError::from)?;
-        Self::from_root(root, limits, directory_limit)
+        Self::from_root(root, limits, mode, directory_limit, snapshot_limit)
     }
 
-    fn from_root(root: DirectoryCursor, limits: Limits, directory_limit: usize) -> Result<Self, Error> {
-        let metadata = root.directory.metadata().map_err(InnerError::from)?;
-        let usage = RepositoryUsage {
-            logical_bytes: metadata.len(),
-            allocated_bytes: metadata.blocks().saturating_mul(512),
-            entries: 0,
-        };
+    fn from_root(
+        root: DirectoryCursor,
+        limits: Limits,
+        mode: ScanMode,
+        directory_limit: usize,
+        snapshot_limit: u64,
+    ) -> Result<Self, Error> {
+        let metadata = metadata_for_descriptor(&root.directory).map_err(InnerError::from)?;
+        let mut usage = metadata.usage();
+        usage.entries = 0;
         enforce_repository_usage(usage, limits)?;
-        Ok(Self {
+        let mut scanner = Self {
             limits,
-            usage,
+            mode,
+            snapshot: RepositorySnapshot {
+                usage,
+                entries: BTreeMap::new(),
+            },
+            snapshot_bytes: 0,
+            snapshot_limit,
             directory_limit,
             directories: vec![root],
-        })
+        };
+        scanner.record_snapshot(Vec::new(), metadata)?;
+        Ok(scanner)
+    }
+
+    fn record_snapshot(&mut self, relative: Vec<u8>, metadata: SnapshotMetadata) -> Result<(), Error> {
+        if self.mode == ScanMode::Live {
+            return Ok(());
+        }
+
+        let path_bytes = u64::try_from(relative.len()).unwrap_or(u64::MAX);
+        let next = self
+            .snapshot_bytes
+            .saturating_add(SNAPSHOT_ENTRY_OVERHEAD)
+            .saturating_add(path_bytes);
+        if next > self.snapshot_limit {
+            return Err(InnerError::RepositorySnapshotMemory {
+                limit: self.snapshot_limit,
+            }
+            .into());
+        }
+        if self.snapshot.entries.insert(relative, metadata).is_some() {
+            return Err(InnerError::RepositoryChangedDuringScan.into());
+        }
+        self.snapshot_bytes = next;
+        Ok(())
     }
 
     /// Process at most `entry_budget` entries. Returning to the async select
@@ -1600,32 +1758,77 @@ impl RepositoryUsageScanner {
             };
             let entry = match entry {
                 Ok(entry) => entry,
-                Err(source) if source.kind() == std_io::ErrorKind::NotFound => continue,
+                Err(source) if self.mode == ScanMode::Live && transient_directory_replacement(&source) => continue,
+                Err(source) if transient_directory_replacement(&source) => {
+                    return Err(InnerError::RepositoryChangedDuringScan.into());
+                }
                 Err(source) => return Err(InnerError::Io(source).into()),
             };
             processed += 1;
-            let metadata = match fs::symlink_metadata(entry.path()) {
-                Ok(metadata) => metadata,
-                Err(source) if source.kind() == std_io::ErrorKind::NotFound => continue,
-                Err(source) => return Err(InnerError::Io(source).into()),
+            let name = entry.file_name();
+            let name = CString::new(name.as_bytes()).map_err(|_| {
+                InnerError::Io(std_io::Error::new(
+                    std_io::ErrorKind::InvalidData,
+                    "Git repository entry contains NUL",
+                ))
+            })?;
+            let (metadata, relative) = {
+                let parent = self.directories.last().expect("current descriptor cursor");
+                let Some(metadata) = scan_metadata_at(&parent.directory, &name, self.mode)? else {
+                    continue;
+                };
+                let relative = if self.mode == ScanMode::Live {
+                    Vec::new()
+                } else {
+                    let remaining = self
+                        .snapshot_limit
+                        .saturating_sub(self.snapshot_bytes)
+                        .saturating_sub(SNAPSHOT_ENTRY_OVERHEAD);
+                    parent.child_relative(name.as_bytes(), remaining, self.snapshot_limit)?
+                };
+                (metadata, relative)
             };
-            self.usage.entries = self.usage.entries.saturating_add(1);
-            self.usage.logical_bytes = self.usage.logical_bytes.saturating_add(metadata.len());
-            self.usage.allocated_bytes = self
+            self.record_snapshot(relative.clone(), metadata)?;
+            let entry_usage = metadata.usage();
+            self.snapshot.usage.entries = self.snapshot.usage.entries.saturating_add(1);
+            self.snapshot.usage.logical_bytes = self
+                .snapshot
+                .usage
+                .logical_bytes
+                .saturating_add(entry_usage.logical_bytes);
+            self.snapshot.usage.allocated_bytes = self
+                .snapshot
                 .usage
                 .allocated_bytes
-                .saturating_add(metadata.blocks().saturating_mul(512));
-            enforce_repository_usage(self.usage, self.limits)?;
-            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                .saturating_add(entry_usage.allocated_bytes);
+            enforce_repository_usage(self.snapshot.usage, self.limits)?;
+            if metadata.is_directory() {
                 if self.directories.len() >= self.directory_limit {
                     return Err(InnerError::RepositoryDepth {
                         limit: self.directory_limit,
                     }
                     .into());
                 }
-                match DirectoryCursor::open(&entry.path()) {
-                    Ok(directory) => self.directories.push(directory),
-                    Err(source) if transient_directory_replacement(&source) => {}
+                let opened = {
+                    let parent = self.directories.last().expect("current descriptor cursor");
+                    DirectoryCursor::open_child(parent, &name, relative)
+                };
+                match opened {
+                    Ok(directory) => {
+                        let opened_metadata =
+                            metadata_for_descriptor(&directory.directory).map_err(InnerError::from)?;
+                        if !metadata.same_inode(opened_metadata) {
+                            if self.mode == ScanMode::Live {
+                                continue;
+                            }
+                            return Err(InnerError::RepositoryChangedDuringScan.into());
+                        }
+                        self.directories.push(directory);
+                    }
+                    Err(source) if self.mode == ScanMode::Live && transient_directory_replacement(&source) => {}
+                    Err(source) if transient_directory_replacement(&source) => {
+                        return Err(InnerError::RepositoryChangedDuringScan.into());
+                    }
                     Err(source) => return Err(InnerError::Io(source).into()),
                 }
             }
@@ -1666,6 +1869,12 @@ fn scanner_directory_limit(limits: Limits) -> Result<usize, Error> {
     Ok(usize::try_from(cursors).unwrap_or(usize::MAX))
 }
 
+fn repository_snapshot_limit(limits: Limits) -> u64 {
+    const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
+
+    (limits.address_space_bytes / 4).min(MAX_SNAPSHOT_BYTES)
+}
+
 fn scanner_cursor_capacity(ceiling: u64, open: u64, reserve: u64, descriptors_per_cursor: u64) -> u64 {
     ceiling.saturating_sub(open).saturating_sub(reserve) / descriptors_per_cursor
 }
@@ -1685,6 +1894,7 @@ struct DirectoryCursor {
     /// a name with a symlink cannot redirect accounting outside this root.
     directory: fs::File,
     entries: fs::ReadDir,
+    relative: Vec<u8>,
 }
 
 impl DirectoryCursor {
@@ -1693,10 +1903,105 @@ impl DirectoryCursor {
     }
 
     fn from_directory(directory: fs::File) -> std_io::Result<Self> {
+        Self::from_directory_relative(directory, Vec::new())
+    }
+
+    fn open_child(parent: &Self, name: &std::ffi::CStr, relative: Vec<u8>) -> std_io::Result<Self> {
+        Self::from_directory_relative(openat_directory(&parent.directory, name)?, relative)
+    }
+
+    fn from_directory_relative(directory: fs::File, relative: Vec<u8>) -> std_io::Result<Self> {
         let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
         let entries = fs::read_dir(descriptor_path)?;
-        Ok(Self { directory, entries })
+        Ok(Self {
+            directory,
+            entries,
+            relative,
+        })
     }
+
+    fn child_relative(&self, name: &[u8], remaining: u64, snapshot_limit: u64) -> Result<Vec<u8>, Error> {
+        let separator = usize::from(!self.relative.is_empty());
+        let length = self
+            .relative
+            .len()
+            .checked_add(separator)
+            .and_then(|length| length.checked_add(name.len()))
+            .ok_or(InnerError::RepositorySnapshotMemory { limit: snapshot_limit })?;
+        if u64::try_from(length).unwrap_or(u64::MAX) > remaining {
+            return Err(InnerError::RepositorySnapshotMemory { limit: snapshot_limit }.into());
+        }
+        let mut relative = Vec::new();
+        relative
+            .try_reserve_exact(length)
+            .map_err(|_| InnerError::RepositorySnapshotMemory { limit: snapshot_limit })?;
+        relative.extend_from_slice(&self.relative);
+        if separator == 1 {
+            relative.push(b'/');
+        }
+        relative.extend_from_slice(name);
+        Ok(relative)
+    }
+}
+
+fn metadata_for_descriptor(file: &fs::File) -> std_io::Result<SnapshotMetadata> {
+    let mut stat = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+    let result = unsafe { nix::libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) };
+    if result == -1 {
+        Err(std_io::Error::last_os_error())
+    } else {
+        let stat = unsafe { stat.assume_init() };
+        Ok(SnapshotMetadata::from_stat(&stat))
+    }
+}
+
+fn metadata_at(directory: &fs::File, name: &std::ffi::CStr) -> std_io::Result<SnapshotMetadata> {
+    let mut stat = std::mem::MaybeUninit::<nix::libc::stat>::uninit();
+    let result = unsafe {
+        nix::libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            nix::libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == -1 {
+        Err(std_io::Error::last_os_error())
+    } else {
+        let stat = unsafe { stat.assume_init() };
+        Ok(SnapshotMetadata::from_stat(&stat))
+    }
+}
+
+fn scan_metadata_at(
+    directory: &fs::File,
+    name: &std::ffi::CStr,
+    mode: ScanMode,
+) -> Result<Option<SnapshotMetadata>, Error> {
+    match metadata_at(directory, name) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(source) if mode == ScanMode::Live && transient_directory_replacement(&source) => Ok(None),
+        Err(source) if transient_directory_replacement(&source) => Err(InnerError::RepositoryChangedDuringScan.into()),
+        Err(source) => Err(InnerError::Io(source).into()),
+    }
+}
+
+fn openat_directory(directory: &fs::File, name: &std::ffi::CStr) -> std_io::Result<fs::File> {
+    let descriptor = unsafe {
+        nix::libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW,
+        )
+    };
+    if descriptor == -1 {
+        return Err(std_io::Error::last_os_error());
+    }
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    Ok(fs::File::from_parts(
+        descriptor.into(),
+        Path::new("<descriptor-rooted Git directory>"),
+    ))
 }
 
 fn open_directory(path: &Path) -> std_io::Result<fs::File> {
@@ -2149,6 +2454,92 @@ mod tests {
         let error = verify_repository_usage(&root, exact).unwrap_err();
         assert!(error.limit_exceeded());
         assert!(error.to_string().contains("bytes"));
+    }
+
+    #[test]
+    fn strict_entry_quota_rejects_n_plus_one_without_sampling_slack() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("one"), b"").unwrap();
+        let mut limits = test_limits();
+        limits.repository_entries = 1;
+        let one = verify_repository_usage(temporary.path(), limits).unwrap();
+        assert_eq!(one.entries, 1);
+
+        fs::write(temporary.path().join("two"), b"").unwrap();
+        let error = verify_repository_usage(temporary.path(), limits).unwrap_err();
+        assert!(error.limit_exceeded());
+        assert!(error.to_string().contains("filesystem entries"));
+    }
+
+    #[test]
+    fn live_scan_may_retry_a_vanished_name_but_strict_scan_fails_closed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = open_directory(temporary.path()).unwrap();
+        let vanished = CString::new("vanished").unwrap();
+
+        assert!(scan_metadata_at(&root, &vanished, ScanMode::Live).unwrap().is_none());
+        let error = scan_metadata_at(&root, &vanished, ScanMode::Strict).unwrap_err();
+        assert!(error.limit_exceeded());
+        assert!(error.to_string().contains("changed during strict quota"));
+    }
+
+    #[test]
+    fn live_scan_allows_initial_absence_without_building_a_strict_inventory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("not-created-yet");
+        let mut limits = test_limits();
+        limits.address_space_bytes = 1;
+
+        let absent = RepositoryUsageScanner::new(&missing, limits, ScanMode::Live).unwrap();
+        assert!(absent.directories.is_empty());
+        let error = match RepositoryUsageScanner::new(&missing, limits, ScanMode::Strict) {
+            Err(error) => error,
+            Ok(_) => panic!("strict scan accepted a missing mandatory root"),
+        };
+        assert!(error.limit_exceeded());
+
+        let root = temporary.path().join("created");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("entry"), b"contents").unwrap();
+        let mut scanner = RepositoryUsageScanner::new(&root, limits, ScanMode::Live).unwrap();
+        while !scanner.advance(1, None).unwrap() {}
+        assert_eq!(scanner.snapshot.usage.entries, 1);
+        assert!(scanner.snapshot.entries.is_empty());
+        assert_eq!(scanner.snapshot_bytes, 0);
+    }
+
+    #[test]
+    fn strict_relative_path_allocation_is_prechecked_against_snapshot_budget() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cursor = DirectoryCursor::open(temporary.path()).unwrap();
+        let error = cursor.child_relative(b"four", 3, 100).unwrap_err();
+        assert!(error.limit_exceeded());
+        assert!(error.to_string().contains("100-byte memory budget"));
+    }
+
+    #[test]
+    fn strict_two_snapshot_verification_rejects_same_name_inode_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("repository");
+        fs::create_dir(&root).unwrap();
+        let entry = root.join("entry");
+        let old_entry = temporary.path().join("old-entry");
+        fs::write(&entry, b"same-size").unwrap();
+        let limits = test_limits();
+        let deadline = Instant::now() + limits.wall_timeout;
+        let mut pass = 0_u8;
+
+        let error = verify_two_repository_snapshots(|| {
+            if pass == 1 {
+                fs::rename(&entry, &old_entry).unwrap();
+                fs::write(&entry, b"same-size").unwrap();
+            }
+            pass += 1;
+            scan_repository_path_strict(&root, limits, deadline)
+        })
+        .unwrap_err();
+        assert!(error.limit_exceeded());
+        assert!(error.to_string().contains("changed during strict quota"));
     }
 
     #[test]
