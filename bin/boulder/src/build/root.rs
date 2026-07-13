@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::{io, iter, path::PathBuf};
 
 use fs_err as fs;
-use moss::{Installation, package, repository, runtime, util};
+use moss::{Installation, package, repository, util};
 use stone_recipe::upstream;
 use stone_recipe::{
     derivation::{BuildLock, DerivationPlan, LockedPackage, RepositorySnapshot},
@@ -15,22 +15,6 @@ use thiserror::Error;
 
 use crate::build::Builder;
 use crate::{Timing, container, timing};
-
-pub fn populate_locked(
-    builder: &Builder,
-    build_lock: &BuildLock,
-    timing: &mut Timing,
-    initialize_timer: timing::Timer,
-) -> Result<(), Error> {
-    populate_frozen(
-        &builder.paths,
-        &builder.env.moss_dir,
-        builder.repositories().clone(),
-        build_lock,
-        timing,
-        initialize_timer,
-    )
-}
 
 pub fn populate_frozen(
     paths: &crate::Paths,
@@ -122,85 +106,6 @@ fn safe_child(root: &std::path::Path, path: &std::path::Path) -> bool {
                 std::path::Component::ParentDir | std::path::Component::CurDir
             )
         })
-}
-
-pub fn populate(
-    builder: &Builder,
-    repositories: repository::Map,
-    timing: &mut Timing,
-    initialize_timer: timing::Timer,
-    update_repos: bool,
-) -> Result<(), Error> {
-    let packages = packages(builder);
-    let rootfs = builder.paths.rootfs().host;
-    let installation = Installation::open(&builder.env.moss_dir, None)?;
-    let mut moss_client = moss::Client::builder("boulder", installation)
-        .repositories(repositories)
-        .ephemeral(rootfs)
-        .build()?;
-
-    if update_repos {
-        runtime::block_on(moss_client.refresh_repositories())?;
-        println!();
-    } else if runtime::block_on(moss_client.ensure_repos_initialized())? > 0 {
-        println!();
-    }
-    timing.finish(initialize_timer);
-    let install_timing = moss_client.install(&packages, true, false)?;
-    timing.record(timing::Populate::Resolve, install_timing.resolve);
-    timing.record(timing::Populate::Fetch, install_timing.fetch);
-    timing.record(timing::Populate::Blit, install_timing.blit);
-    Ok(())
-}
-
-pub fn recreate(builder: &Builder) -> Result<(), Error> {
-    clean(builder)?;
-
-    // Now we can safely recreate the rootfs
-    util::recreate_dir(&builder.paths.rootfs().host)?;
-
-    Ok(())
-}
-
-pub fn remove(builder: &Builder) -> Result<(), Error> {
-    if builder.paths.rootfs().host.exists() {
-        clean(builder)?;
-
-        // Now we can safely remove the rootfs
-        fs::remove_dir_all(&builder.paths.rootfs().host)?;
-    }
-
-    Ok(())
-}
-
-fn clean(builder: &Builder) -> Result<(), Error> {
-    // Dont't need to clean if it doesn't exist
-    if !builder.paths.rootfs().host.exists() {
-        return Ok(());
-    }
-
-    // We remove certain paths inside the container so we don't
-    // get permissions error if this is a rootless build
-    // and there's subuid mappings into the user namespace
-    container::exec(&builder.paths, false, || {
-        // Remove install dir
-        let install_dir = builder.paths.install().guest;
-        if install_dir.exists() {
-            fs::remove_dir_all(install_dir)?;
-        }
-
-        for target in &builder.targets {
-            for job in &target.jobs {
-                if job.build_dir.exists() {
-                    fs::remove_dir_all(&job.build_dir)?;
-                }
-            }
-        }
-
-        Ok(()) as io::Result<_>
-    })?;
-
-    Ok(())
 }
 
 fn require_locked_repositories(client: &moss::Client, build_lock: &BuildLock) -> Result<(), Error> {

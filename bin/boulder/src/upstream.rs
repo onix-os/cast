@@ -195,18 +195,6 @@ pub(crate) fn refresh_source_lock(recipe: &Recipe, storage_dir: &Path) -> Result
     write_resolved_source_lock(recipe, &stored)
 }
 
-/// Helper that stores and shares a list of [Upstream]s.
-pub fn sync(
-    recipe: &Recipe,
-    upstreams: &[Upstream],
-    storage_dir: &Path,
-    share_dir: &Path,
-) -> Result<Vec<Stored>, Error> {
-    let stored = sync_upstreams(upstreams, storage_dir, share_dir)?;
-    require_current_source_lock(recipe, &stored)?;
-    Ok(stored)
-}
-
 /// Fetch and share only the exact source identities frozen into a derivation.
 ///
 /// This path does not load or rewrite authored recipe/source-lock state.
@@ -301,15 +289,6 @@ fn sync_upstreams(upstreams: &[Upstream], storage_dir: &Path, share_dir: &Path) 
     Ok(stored)
 }
 
-fn require_current_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<(), Error> {
-    if write_resolved_source_lock(recipe, stored)? == WriteOutcome::Written {
-        return Err(Error::SourceLockChanged {
-            path: recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME),
-        });
-    }
-    Ok(())
-}
-
 pub(crate) fn write_resolved_source_lock(recipe: &Recipe, stored: &[Stored]) -> Result<WriteOutcome, Error> {
     let sources = recipe
         .parsed
@@ -385,8 +364,6 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
-    #[error("Gluon source lock {path:?} was created or updated; rerun the build to bind it into provenance")]
-    SourceLockChanged { path: std::path::PathBuf },
     #[error("locked source {index} has an invalid URL")]
     LockedSourceUrl {
         index: usize,
@@ -506,11 +483,10 @@ let base = boulder.mk_package (boulder.meta {{
         assert!(recipe.source_lock.is_none());
         let stored = resolved_upstreams();
 
-        let error = require_current_source_lock(&recipe, &stored).unwrap_err();
-        assert!(matches!(
-            error,
-            Error::SourceLockChanged { path } if path == lock_path
-        ));
+        assert_eq!(
+            write_resolved_source_lock(&recipe, &stored).unwrap(),
+            WriteOutcome::Written
+        );
         assert_eq!(fs::read_to_string(&recipe_path).unwrap(), authored);
 
         let lock_bytes = fs::read(&lock_path).unwrap();
@@ -531,7 +507,10 @@ let base = boulder.mk_package (boulder.meta {{
         ));
 
         let before = fs::metadata(&lock_path).unwrap();
-        require_current_source_lock(&loaded, &stored).unwrap();
+        assert_eq!(
+            write_resolved_source_lock(&loaded, &stored).unwrap(),
+            WriteOutcome::Unchanged
+        );
         let after = fs::metadata(&lock_path).unwrap();
 
         #[cfg(unix)]

@@ -101,7 +101,6 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         &builder.recipe,
         &builder.macros,
         std::slice::from_ref(target),
-        request.build_release,
     )?;
     let package_names = packager.resolved_packages().keys().cloned().collect::<Vec<_>>();
     let mut requested_packages = build::root::packages(&builder)

@@ -84,7 +84,7 @@ mod tests {
             paths: Vec::new(),
             conflicts: Vec::new(),
         };
-        let package = Package::new(
+        let package = Package::new_with_architecture(
             "example",
             &source,
             &definition,
@@ -92,6 +92,8 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             FINGERPRINT,
             &derivation_id,
+            crate::Architecture::X86_64,
+            1,
         );
         let recipe_ref = format!("{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{FINGERPRINT}");
         let derivation_ref = format!("{DERIVATION_ID_SOURCE_REF_PREFIX}{derivation_id}");
@@ -137,7 +139,7 @@ mod tests {
             paths: Vec::new(),
             conflicts: Vec::new(),
         };
-        let package = Package::new(
+        let package = Package::new_with_architecture(
             "example",
             &source,
             &definition,
@@ -145,6 +147,8 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             FINGERPRINT,
             &derivation_id,
+            crate::Architecture::X86_64,
+            1,
         );
 
         let error = package.meta_payload().unwrap_err();
@@ -166,7 +170,7 @@ mod tests {
             run_deps: Vec::new(),
             ..definition
         };
-        let valid_package = Package::new(
+        let valid_package = Package::new_with_architecture(
             "example",
             &source,
             &valid_definition,
@@ -174,6 +178,8 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             FINGERPRINT,
             &derivation_id,
+            crate::Architecture::X86_64,
+            1,
         );
         let mut output = Cursor::new(Vec::new());
         let error = write(

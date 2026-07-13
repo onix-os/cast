@@ -11,26 +11,21 @@ use thiserror::Error;
 use moss::util;
 use stone_recipe::{
     Package, PathKind,
-    derivation::{AnalysisPlan, AnalysisToolchain, DerivationId, DerivationPlan, OutputRelation, PathRuleKind},
+    derivation::{AnalysisPlan, DerivationId, DerivationPlan, OutputRelation, PathRuleKind},
     script,
-    tuning::Toolchain,
 };
 
-use crate::{Macros, Paths, Recipe, Timing, build, container, timing};
+use crate::{Macros, Paths, Recipe, Timing, build, timing};
 
 use self::collect::Collector;
-use self::emit::emit;
 
 mod analysis;
 mod collect;
 mod emit;
 
-pub struct Packager<'a> {
-    paths: &'a Paths,
-    recipe: &'a Recipe,
+pub struct Packager {
     packages: BTreeMap<String, Package>,
     collector: Collector,
-    build_release: NonZeroU64,
 }
 
 pub struct FrozenPackager<'a> {
@@ -189,14 +184,8 @@ fn parse_frozen_architecture(value: &str) -> Result<crate::Architecture, Error> 
     }
 }
 
-impl<'a> Packager<'a> {
-    pub fn new(
-        paths: &'a Paths,
-        recipe: &'a Recipe,
-        macros: &'a Macros,
-        targets: &'a [build::Target],
-        build_release: NonZeroU64,
-    ) -> Result<Self, Error> {
+impl Packager {
+    pub fn new(paths: &Paths, recipe: &Recipe, macros: &Macros, targets: &[build::Target]) -> Result<Self, Error> {
         let mut collector = Collector::new(paths.install().guest);
 
         // Arch names used to parse [`Macros`] for package templates
@@ -210,76 +199,7 @@ impl<'a> Packager<'a> {
         // package paths to [`Collector`]
         let packages = resolve_packages(arches, macros, recipe, &mut collector)?;
 
-        Ok(Self {
-            paths,
-            recipe,
-            collector,
-            packages,
-            build_release,
-        })
-    }
-
-    pub fn package(&self, timing: &mut Timing, derivation_id: &DerivationId) -> Result<(), Error> {
-        // Hasher used for calculating file digests
-        let mut hasher = StoneDigestWriterHasher::new();
-
-        let timer = timing.begin(timing::Kind::Analyze);
-
-        // Collect all paths under install root
-        let paths = self
-            .collector
-            .enumerate_paths(None, &mut hasher)
-            .map_err(Error::CollectPaths)?;
-
-        // Process all paths with the analysis chain
-        // This will determine which files get included
-        // and what deps / provides they produce
-        let analysis_plan = AnalysisPlan {
-            toolchain: match self.recipe.parsed.options.toolchain {
-                Toolchain::Llvm => AnalysisToolchain::Llvm,
-                Toolchain::Gnu => AnalysisToolchain::Gnu,
-            },
-            debug: self.recipe.parsed.options.debug,
-            strip: self.recipe.parsed.options.strip,
-            compress_man: self.recipe.parsed.options.compressman,
-            remove_libtool: self.recipe.parsed.options.lastrip,
-        };
-        let mut analysis = analysis::Chain::new(self.paths, &analysis_plan, &self.collector, &mut hasher);
-        analysis.process(paths).map_err(Error::Analysis)?;
-
-        timing.finish(timer);
-
-        let timer = timing.begin(timing::Kind::Emit);
-
-        // Combine the package definition with the analysis results
-        // for that package. We will use this to emit the package stones & manifests.
-        //
-        // If no bucket exists, that means no paths matched this package so we can
-        // safely filter it out
-        let packages = self
-            .packages
-            .iter()
-            .filter_map(|(name, package)| {
-                let bucket = analysis.buckets.remove(name)?;
-
-                Some(emit::Package::new(
-                    name,
-                    &self.recipe.parsed.source,
-                    package,
-                    bucket,
-                    self.build_release,
-                    &self.recipe.fingerprint.sha256,
-                    derivation_id,
-                ))
-            })
-            .collect::<Vec<_>>();
-
-        // Emit package stones and manifest files to artefact directory
-        emit(self.paths, self.recipe, &packages, derivation_id).map_err(Error::Emit)?;
-
-        timing.finish(timer);
-
-        Ok(())
+        Ok(Self { collector, packages })
     }
 
     pub(crate) fn resolved_packages(&self) -> &BTreeMap<String, Package> {
@@ -437,8 +357,6 @@ pub enum Error {
     Analysis(#[source] analysis::BoxError),
     #[error("emit packages")]
     Emit(#[from] emit::Error),
-    #[error("container")]
-    Container(#[from] container::Error),
     #[error("invalid fully expanded package relation")]
     InvalidPackageRelation(#[source] stone_recipe::ValidationError),
     #[error("invalid frozen derivation plan")]
@@ -454,7 +372,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use stone_recipe::derivation::{CollectionRulePlan, OutputPlan, PathRuleKind, PathRulePlan};
+    use stone_recipe::derivation::{AnalysisToolchain, CollectionRulePlan, OutputPlan, PathRuleKind, PathRulePlan};
 
     #[test]
     fn repository_package_policy_expands_and_merges_for_x86_64() {

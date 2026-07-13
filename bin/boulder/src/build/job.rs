@@ -23,7 +23,6 @@ mod phase;
 
 #[derive(Debug)]
 pub struct Job {
-    pub target: BuildTarget,
     pub pgo_stage: Option<pgo::Stage>,
     pub phases: BTreeMap<Phase, Script>,
     pub work_dir: PathBuf,
@@ -54,7 +53,6 @@ impl Job {
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
-            target,
             pgo_stage,
             phases,
             work_dir,

@@ -9,7 +9,7 @@ use std::{
 
 use fs_err::{self as fs, File};
 use itertools::Itertools;
-use moss::{package::Meta, util};
+use moss::package::Meta;
 use regex::Regex;
 use snafu::{ResultExt, Snafu};
 use stone::{
@@ -23,7 +23,7 @@ use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::manifest::Manifest;
 use super::analysis;
-use crate::{Architecture, Paths, Recipe, architecture};
+use crate::{Architecture, Paths};
 
 mod manifest;
 
@@ -78,28 +78,6 @@ pub struct Package<'a> {
 }
 
 impl<'a> Package<'a> {
-    pub fn new(
-        name: &'a str,
-        source: &'a stone_recipe::Source,
-        template: &'a stone_recipe::Package,
-        analysis: analysis::Bucket,
-        build_release: NonZeroU64,
-        recipe_fingerprint: &'a str,
-        derivation_id: &DerivationId,
-    ) -> Self {
-        Self::new_with_architecture(
-            name,
-            source,
-            template,
-            analysis,
-            build_release,
-            recipe_fingerprint,
-            derivation_id,
-            architecture::host(),
-            util::num_cpus().get() as u32,
-        )
-    }
-
     pub fn new_with_architecture(
         name: &'a str,
         source: &'a stone_recipe::Source,
@@ -244,30 +222,6 @@ impl Ord for Package<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.name.cmp(other.name)
     }
-}
-
-pub fn emit(
-    paths: &Paths,
-    recipe: &Recipe,
-    packages: &[Package<'_>],
-    derivation_id: &DerivationId,
-) -> Result<(), Error> {
-    let build_deps = recipe
-        .parsed
-        .build
-        .build_deps
-        .iter()
-        .chain(&recipe.parsed.build.check_deps)
-        .cloned();
-    emit_frozen(
-        paths,
-        &recipe.parsed.source,
-        &recipe.fingerprint.sha256,
-        build_deps,
-        architecture::host(),
-        packages,
-        derivation_id,
-    )
 }
 
 pub fn emit_frozen(
