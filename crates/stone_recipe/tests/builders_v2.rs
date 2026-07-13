@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use gluon_config::Source;
-use stone_recipe::package::{StepSpec, evaluate_gluon};
+use stone_recipe::package::{DependencySpec, StepSpec, evaluate_gluon};
+
+fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
+    dependencies
+        .iter()
+        .map(|dependency| dependency.dependency().unwrap().to_name())
+        .collect()
+}
 
 fn package(builder_import: &str, body: &str) -> Source {
     Source::new(
@@ -24,7 +31,7 @@ let base = b.mk_package (b.meta {{
 }
 
 #[test]
-fn meson_builder_lowers_tools_flags_and_disabled_checks() {
+fn meson_builder_declares_tools_flags_and_disabled_checks() {
     let source = package(
         "boulder.builders.meson.v1",
         r#"builder.builder {
@@ -35,11 +42,9 @@ fn meson_builder_lowers_tools_flags_and_disabled_checks() {
     let evaluated = evaluate_gluon(&source).unwrap();
 
     assert_eq!(
-        evaluated.recipe.build.build_deps,
+        dependency_names(evaluated.package.builder.required_tools()),
         ["binary(cmake)", "binary(meson)", "binary(ninja)", "binary(pkgconf)",]
     );
-    assert!(evaluated.recipe.build.setup.is_none());
-    assert!(evaluated.recipe.build.check.is_none());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -49,6 +54,7 @@ fn meson_builder_lowers_tools_flags_and_disabled_checks() {
     );
     assert_eq!(phases.build.steps, [StepSpec::MesonBuild]);
     assert_eq!(phases.install.steps, [StepSpec::MesonInstall]);
+    assert!(phases.check.is_empty());
     assert!(
         evaluated
             .fingerprint
@@ -59,7 +65,7 @@ fn meson_builder_lowers_tools_flags_and_disabled_checks() {
 }
 
 #[test]
-fn cmake_builder_lowers_to_structural_steps() {
+fn cmake_builder_declares_structural_steps() {
     let source = package(
         "boulder.builders.cmake.v1",
         r#"builder.builder {
@@ -70,10 +76,9 @@ fn cmake_builder_lowers_to_structural_steps() {
     let evaluated = evaluate_gluon(&source).unwrap();
 
     assert_eq!(
-        evaluated.recipe.build.build_deps,
+        dependency_names(evaluated.package.builder.required_tools()),
         ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
     );
-    assert!(evaluated.recipe.build.setup.is_none());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -87,7 +92,7 @@ fn cmake_builder_lowers_to_structural_steps() {
 }
 
 #[test]
-fn cargo_builder_lowers_features_binaries_environment_and_checks() {
+fn cargo_builder_declares_features_binaries_environment_and_checks() {
     let source = package(
         "boulder.builders.cargo.v1",
         r#"builder.builder {
@@ -98,8 +103,10 @@ fn cargo_builder_lowers_features_binaries_environment_and_checks() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(evaluated.recipe.build.build_deps, ["binary(cargo)"]);
-    assert!(evaluated.recipe.build.build.is_none());
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(cargo)"]
+    );
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.build.steps,
@@ -118,7 +125,7 @@ fn cargo_builder_lowers_features_binaries_environment_and_checks() {
 }
 
 #[test]
-fn autotools_builder_lowers_to_existing_phase_contract() {
+fn autotools_builder_declares_structural_phase_contract() {
     let source = package(
         "boulder.builders.autotools.v1",
         r#"builder.builder {
@@ -129,10 +136,9 @@ fn autotools_builder_lowers_to_existing_phase_contract() {
     let evaluated = evaluate_gluon(&source).unwrap();
 
     assert_eq!(
-        evaluated.recipe.build.build_deps,
+        dependency_names(evaluated.package.builder.required_tools()),
         ["binary(autoconf)", "binary(automake)", "binary(make)"]
     );
-    assert!(evaluated.recipe.build.setup.is_none());
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -173,13 +179,29 @@ let scripts = b.scripts {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(evaluated.recipe.build.build_deps, ["binary(zig)"]);
     assert_eq!(
-        evaluated.recipe.build.build.as_deref(),
-        Some("prepare-generated-files\nzig build\nverify-generated-files")
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(zig)"]
+    );
+    let phases = evaluated.package.phases();
+    assert_eq!(
+        phases.build.steps,
+        [
+            StepSpec::Shell {
+                script: "prepare-generated-files".to_owned()
+            },
+            StepSpec::Shell {
+                script: "zig build".to_owned()
+            },
+            StepSpec::Shell {
+                script: "verify-generated-files".to_owned()
+            }
+        ]
     );
     assert_eq!(
-        evaluated.recipe.build.environment.as_deref(),
-        Some("ZIG_GLOBAL_CACHE_DIR=%(buildroot)/zig-cache; export ZIG_GLOBAL_CACHE_DIR")
+        phases.environment.steps,
+        [StepSpec::Shell {
+            script: "ZIG_GLOBAL_CACHE_DIR=%(buildroot)/zig-cache; export ZIG_GLOBAL_CACHE_DIR".to_owned()
+        }]
     );
 }

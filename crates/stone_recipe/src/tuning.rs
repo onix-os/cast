@@ -7,13 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{KeyValue, Macros};
 
 #[derive(Debug, Clone)]
-pub enum Tuning {
-    Enable,
-    Disable,
-    Config(String),
-}
-
-#[derive(Debug, Clone)]
 pub struct TuningFlag {
     root: CompilerFlags,
     gnu: CompilerFlags,

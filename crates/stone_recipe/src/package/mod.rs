@@ -5,9 +5,7 @@
 //!
 //! A package factory is evaluated completely inside Gluon and produces one
 //! concrete [`PackageSpec`]. This module deliberately contains values only:
-//! Rust never receives or retains a Gluon closure. The specification still
-//! lowers into the existing [`crate::Recipe`] domain model while Boulder is
-//! migrated to consume package declarations directly.
+//! Rust never receives or retains a Gluon closure or a second recipe model.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,10 +16,7 @@ use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
 use url::Url;
 
-use crate::{
-    BuildSpec, KeyValueSpec, OptionsSpec, PackageSpec as LegacyPackageSpec, PathSpec, Recipe, RecipeConversionError,
-    RecipeSpec, SourceSpec, TuningSpec, UpstreamSpec,
-};
+use crate::{KeyValueSpec, OptionsSpec, PathSpec, TuningSpec, UpstreamSpec};
 
 pub use self::gluon::{
     EvaluatedPackage, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
@@ -222,11 +217,8 @@ pub struct OutputRef {
     pub output: String,
 }
 
-/// A typed package relationship.
-///
-/// The current recipe domain still stores relation expressions as strings.
-/// Conversion through [`stone::relation`] is the one transitional lowering
-/// point; authored v2 packages never construct those strings themselves.
+/// A typed package relationship converted through the shared Stone relation
+/// model whenever Boulder crosses into package resolution or metadata.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DependencySpec {
     Package(PackageRef),
@@ -293,7 +285,7 @@ impl DependencySpec {
     }
 }
 
-/// Failure to lower a v2 package declaration into the current recipe domain.
+/// Failure to validate a concrete package-v2 declaration.
 #[derive(Debug, Error)]
 pub enum PackageConversionError {
     #[error("meta.version: version must start with an integer (found `{version}`)")]
@@ -339,8 +331,6 @@ pub enum PackageConversionError {
     },
     #[error("{field}: package output dependency cycle: {cycle}")]
     OutputDependencyCycle { field: String, cycle: String },
-    #[error(transparent)]
-    Recipe(#[from] RecipeConversionError),
 }
 
 impl PackageConversionError {
@@ -356,105 +346,7 @@ impl PackageConversionError {
             | Self::OutputDependencyCycle { field, .. } => field,
             Self::MissingRootOutput => "outputs",
             Self::DuplicateOutput { .. } | Self::InvalidOutputName { .. } => "outputs",
-            Self::Recipe(error) => error.field(),
         }
-    }
-}
-
-impl TryFrom<PackageSpec> for Recipe {
-    type Error = PackageConversionError;
-
-    fn try_from(package: PackageSpec) -> Result<Self, Self::Error> {
-        package.validate()?;
-
-        let PackageSpec {
-            meta,
-            builder,
-            hooks,
-            native_build_inputs,
-            build_inputs,
-            check_inputs,
-            outputs,
-            options,
-            profiles,
-            sources,
-            architectures,
-            tuning,
-            emul32,
-            mold,
-        } = package;
-
-        let root_index = outputs
-            .iter()
-            .position(|output| output.name == "out")
-            .ok_or(PackageConversionError::MissingRootOutput)?;
-        let root = outputs[root_index].clone();
-
-        let lowered = builder.lower(hooks);
-        let build_deps = lowered
-            .required_tools
-            .into_iter()
-            .chain(native_build_inputs)
-            .chain(build_inputs)
-            .map(|dependency| {
-                dependency
-                    .dependency()
-                    .expect("package relations were validated")
-                    .to_name()
-            })
-            .collect();
-        let check_deps = check_inputs
-            .into_iter()
-            .map(|dependency| {
-                dependency
-                    .dependency()
-                    .expect("package relations were validated")
-                    .to_name()
-            })
-            .collect();
-
-        let profiles = profiles
-            .into_iter()
-            .map(|profile| {
-                let key = profile.name.clone();
-                KeyValueSpec {
-                    key,
-                    value: profile.into_build_spec(),
-                }
-            })
-            .collect();
-
-        let sub_packages = outputs
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| *index != root_index)
-            .map(|(_, output)| KeyValueSpec {
-                key: format!("{}-{}", meta.pname, output.name),
-                value: output.into_legacy(),
-            })
-            .collect();
-
-        let recipe = RecipeSpec {
-            source: SourceSpec {
-                name: meta.pname,
-                version: meta.version,
-                release: meta.release,
-                homepage: meta.homepage,
-                license: meta.license,
-            },
-            build: lowered.phases.into_legacy_build_spec(build_deps, check_deps),
-            package: root.into_legacy(),
-            options,
-            profiles,
-            sub_packages,
-            upstreams: sources,
-            architectures,
-            tuning,
-            emul32,
-            mold,
-        };
-
-        Ok(Recipe::try_from(recipe)?)
     }
 }
 
@@ -734,12 +626,6 @@ fn valid_output_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_'))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LoweredBuilder {
-    phases: PhasesSpec,
-    required_tools: Vec<DependencySpec>,
-}
-
 fn binary(name: &str) -> DependencySpec {
     DependencySpec::Binary(name.to_owned())
 }
@@ -768,12 +654,7 @@ impl BuilderSpec {
     }
 
     pub fn phases(&self, hooks: &HooksSpec) -> PhasesSpec {
-        self.clone().lower(hooks.clone()).phases
-    }
-
-    fn lower(self, hooks: HooksSpec) -> LoweredBuilder {
-        let required_tools = self.required_tools().to_vec();
-        let phases = match self {
+        let phases = match self.clone() {
             Self::CMake { flags, run_tests } => PhasesSpec {
                 setup: PhaseSpec::new([StepSpec::CMakeConfigure { flags }]),
                 build: PhaseSpec::new([StepSpec::CMakeBuild]),
@@ -810,11 +691,7 @@ impl BuilderSpec {
             },
             Self::Custom { scripts, .. } => scripts.into(),
         };
-
-        LoweredBuilder {
-            phases: hooks.apply(phases),
-            required_tools,
-        }
+        hooks.clone().apply(phases)
     }
 }
 
@@ -848,97 +725,9 @@ impl From<ScriptsSpec> for PhasesSpec {
     }
 }
 
-impl PhasesSpec {
-    fn into_legacy_build_spec(self, build_deps: Vec<String>, check_deps: Vec<String>) -> BuildSpec {
-        BuildSpec {
-            setup: self.setup.shell_script(),
-            build: self.build.shell_script(),
-            install: self.install.shell_script(),
-            check: self.check.shell_script(),
-            workload: self.workload.shell_script(),
-            environment: self.environment.shell_script(),
-            build_deps,
-            check_deps,
-        }
-    }
-}
-
-impl PhaseSpec {
-    fn shell_script(self) -> Option<String> {
-        let scripts = self
-            .steps
-            .into_iter()
-            .map(|step| match step {
-                StepSpec::Shell { script } => Some(script),
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()?;
-        (!scripts.is_empty()).then(|| scripts.join("\n"))
-    }
-}
-
 impl ProfileSpec {
     pub fn phases(&self) -> PhasesSpec {
         self.builder.phases(&self.hooks)
-    }
-
-    fn into_build_spec(self) -> BuildSpec {
-        let lowered = self.builder.lower(self.hooks);
-        let build_deps = lowered
-            .required_tools
-            .into_iter()
-            .chain(self.native_build_inputs)
-            .chain(self.build_inputs)
-            .map(|dependency| {
-                dependency
-                    .dependency()
-                    .expect("package relations were validated")
-                    .to_name()
-            })
-            .collect();
-        let check_deps = self
-            .check_inputs
-            .into_iter()
-            .map(|dependency| {
-                dependency
-                    .dependency()
-                    .expect("package relations were validated")
-                    .to_name()
-            })
-            .collect();
-        lowered.phases.into_legacy_build_spec(build_deps, check_deps)
-    }
-}
-
-impl OutputSpec {
-    fn into_legacy(self) -> LegacyPackageSpec {
-        LegacyPackageSpec {
-            summary: self.summary,
-            description: self.description,
-            provides_exclude: self.provides_exclude,
-            run_deps: self
-                .runtime_inputs
-                .into_iter()
-                .map(|dependency| {
-                    dependency
-                        .dependency()
-                        .expect("package relations were validated")
-                        .to_name()
-                })
-                .collect(),
-            run_deps_exclude: self.runtime_exclude,
-            paths: self.paths,
-            conflicts: self
-                .conflicts
-                .into_iter()
-                .map(|dependency| {
-                    dependency
-                        .provider()
-                        .expect("package relations were validated")
-                        .to_name()
-                })
-                .collect(),
-        }
     }
 }
 
@@ -985,9 +774,14 @@ mod tests {
     }
 
     #[test]
-    fn typed_dependencies_lower_at_one_boundary() {
-        let recipe = Recipe::try_from(package()).unwrap();
-        assert_eq!(recipe.build.build_deps, ["binary(cmake)", "zlib"]);
+    fn typed_dependencies_use_the_shared_relation_model() {
+        let package = package();
+        package.validate().unwrap();
+        assert_eq!(
+            package.native_build_inputs[0].dependency().unwrap().to_name(),
+            "binary(cmake)"
+        );
+        assert_eq!(package.build_inputs[0].dependency().unwrap().to_name(), "zlib");
         assert_eq!(
             DependencySpec::Soname("libz.so.1".to_owned())
                 .dependency()
@@ -1001,13 +795,13 @@ mod tests {
     fn canonical_relation_errors_keep_the_typed_package_field() {
         let mut dependency = package();
         dependency.native_build_inputs = vec![DependencySpec::Binary(String::new())];
-        let error = Recipe::try_from(dependency).unwrap_err();
+        let error = dependency.validate().unwrap_err();
         assert!(matches!(error, PackageConversionError::InvalidDependency { .. }));
         assert_eq!(error.field(), "native_build_inputs[0]");
 
         let mut provider = package();
         provider.outputs[0].conflicts = vec![DependencySpec::PkgConfig(String::new())];
-        let error = Recipe::try_from(provider).unwrap_err();
+        let error = provider.validate().unwrap_err();
         assert!(matches!(error, PackageConversionError::InvalidProvider { .. }));
         assert_eq!(error.field(), "outputs[0].conflicts[0]");
 
@@ -1018,7 +812,7 @@ mod tests {
             },
             output: String::new(),
         })];
-        let error = Recipe::try_from(output).unwrap_err();
+        let error = output.validate().unwrap_err();
         assert!(matches!(error, PackageConversionError::InvalidDependency { .. }));
         assert_eq!(error.field(), "build_inputs[0]");
     }
@@ -1175,14 +969,14 @@ mod tests {
         let mut missing = package();
         missing.outputs[0].name = "dev".to_owned();
         assert!(matches!(
-            Recipe::try_from(missing),
+            missing.validate(),
             Err(PackageConversionError::MissingRootOutput)
         ));
 
         let mut duplicate = package();
         duplicate.outputs.push(duplicate.outputs[0].clone());
         assert!(matches!(
-            Recipe::try_from(duplicate),
+            duplicate.validate(),
             Err(PackageConversionError::DuplicateOutput { .. })
         ));
     }
@@ -1199,7 +993,7 @@ mod tests {
                 output: "dev".to_owned(),
             }));
         assert!(matches!(
-            Recipe::try_from(missing),
+            missing.validate(),
             Err(PackageConversionError::MissingOutputReference { .. })
         ));
 
@@ -1211,7 +1005,7 @@ mod tests {
             output: "out".to_owned(),
         }));
         assert!(matches!(
-            Recipe::try_from(cyclic),
+            cyclic.validate(),
             Err(PackageConversionError::OutputDependencyCycle { .. })
         ));
     }

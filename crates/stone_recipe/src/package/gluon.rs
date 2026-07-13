@@ -10,7 +10,7 @@ use super::{
     BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef,
     PackageSpec, PhaseSpec, ProfileSpec, ScriptsSpec, StepSpec,
 };
-use crate::{KeyValueSpec, OptionsSpec, PathSpec, Recipe, ToolchainSpec, TuningSpec, UpstreamSpec};
+use crate::{KeyValueSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
 /// Version of the package-function ABI.
 pub const PACKAGE_ABI_VERSION: u32 = 2;
@@ -43,15 +43,14 @@ type Ordering =
 { Bool, Option, Result, Ordering }
 "#;
 
-/// A normalized v2 package and its transitional recipe lowering.
+/// A normalized package-v2 value returned by restricted Gluon evaluation.
 #[derive(Debug, Clone)]
 pub struct EvaluatedPackage {
     pub package: PackageSpec,
-    pub recipe: Recipe,
     pub fingerprint: EvaluationFingerprint,
 }
 
-/// Failure to evaluate or lower a package factory result.
+/// Failure to evaluate or validate a package factory result.
 #[derive(Debug, Error)]
 pub enum PackageEvaluationError {
     #[error(transparent)]
@@ -570,11 +569,9 @@ pub fn evaluate_gluon_with_inputs(
     let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
     let package = PackageSpec::from(evaluation.value);
     package.validate()?;
-    let recipe = Recipe::try_from(package.clone())?;
 
     Ok(EvaluatedPackage {
         package,
-        recipe,
         fingerprint: evaluation.fingerprint,
     })
 }

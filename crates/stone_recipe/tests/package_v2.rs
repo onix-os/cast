@@ -9,12 +9,19 @@ use stone_recipe::package::{
     evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
+fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
+    dependencies
+        .iter()
+        .map(|dependency| dependency.dependency().unwrap().to_name())
+        .collect()
+}
+
 fn authored(body: &str) -> Source {
     Source::new("stone.glu", format!("let b = import! boulder.package.v2\n{body}"))
 }
 
 #[test]
-fn imported_factory_arguments_and_typed_patch_lower_to_recipe() {
+fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
     let source_root = SourceRoot::new(&root).unwrap();
     let source = source_root
@@ -32,13 +39,10 @@ fn imported_factory_arguments_and_typed_patch_lower_to_recipe() {
         DependencySpec::Package(ref package) if package.name == "zlib"
     ));
     assert_eq!(
-        evaluated.recipe.build.build_deps,
-        ["binary(cmake)", "binary(ninja)", "binary(ctest)", "zlib"]
+        dependency_names(evaluated.package.builder.required_tools()),
+        ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
     );
-    assert!(evaluated.recipe.build.setup.is_none());
-    assert!(evaluated.recipe.build.build.is_none());
-    assert!(evaluated.recipe.build.check.is_none());
-    assert!(evaluated.recipe.build.install.is_none());
+    assert_eq!(dependency_names(&evaluated.package.build_inputs), ["zlib"]);
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -57,10 +61,24 @@ fn imported_factory_arguments_and_typed_patch_lower_to_recipe() {
             }
         ]
     );
-    assert_eq!(evaluated.recipe.package.run_deps, ["pkgconfig(libressl)"]);
-    assert_eq!(evaluated.recipe.sub_packages[0].key, "factory-hello-dev");
-    assert_eq!(evaluated.recipe.sub_packages[0].value.run_deps, ["factory-hello"]);
-    assert_eq!(evaluated.recipe.architectures, ["x86_64"]);
+    assert_eq!(
+        evaluated
+            .package
+            .outputs
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect::<Vec<_>>(),
+        ["out", "dev"]
+    );
+    assert_eq!(
+        dependency_names(&evaluated.package.outputs[0].runtime_inputs),
+        ["pkgconfig(libressl)"]
+    );
+    assert_eq!(
+        dependency_names(&evaluated.package.outputs[1].runtime_inputs),
+        ["factory-hello"]
+    );
+    assert_eq!(evaluated.package.architectures, ["x86_64"]);
     assert_eq!(PACKAGE_ABI_VERSION, 2);
     assert!(
         evaluated
@@ -145,7 +163,7 @@ let root = {
 }
 
 #[test]
-fn evaluator_validates_the_concrete_package_before_recipe_lowering() {
+fn evaluator_validates_the_concrete_package() {
     let source = authored(
         r#"
 b.mk_package (b.meta {

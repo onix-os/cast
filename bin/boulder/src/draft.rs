@@ -307,9 +307,9 @@ mod test {
         assert!(source.contains("boulder.package.v2"));
         assert!(source.contains("boulder.builders.cargo.v1"));
         assert!(source.contains("UPDATE SUMMARY"));
-        assert_eq!(evaluated.recipe.source.name, "example");
-        assert_eq!(evaluated.recipe.source.version, "1.2.3");
-        assert_eq!(evaluated.recipe.upstreams.len(), 1);
-        assert!(evaluated.recipe.options.networking);
+        assert_eq!(evaluated.package.meta.pname, "example");
+        assert_eq!(evaluated.package.meta.version, "1.2.3");
+        assert_eq!(evaluated.package.sources.len(), 1);
+        assert!(evaluated.package.options.networking);
     }
 }

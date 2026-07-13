@@ -21,9 +21,6 @@ use crate::{
 pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
-    /// Transitional adapter used only by the legacy package-template resolver.
-    /// All build planning reads [`Self::declaration`] directly.
-    pub(crate) parsed: stone_recipe::Recipe,
     /// Concrete package-v2 declaration produced by the authored factory.
     pub declaration: PackageSpec,
     pub source_lock: Option<SourceLock>,
@@ -35,27 +32,17 @@ impl Recipe {
     /// Desired recipe value invariants are checked here
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, declaration, parsed, source_lock, fingerprint) =
-            load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
+        let (source, declaration, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
 
-        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint, None)
+        Self::from_loaded(path, source, declaration, source_lock, fingerprint, None)
     }
 
     /// Load using an explicit reproducible build timestamp. No process
     /// environment, Git metadata, or clock fallback participates.
     pub(crate) fn load_at(path: impl AsRef<Path>, build_time: DateTime<Utc>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, declaration, parsed, source_lock, fingerprint) =
-            load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
-        Self::from_loaded(
-            path,
-            source,
-            declaration,
-            parsed,
-            source_lock,
-            fingerprint,
-            Some(build_time),
-        )
+        let (source, declaration, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
+        Self::from_loaded(path, source, declaration, source_lock, fingerprint, Some(build_time))
     }
 
     /// Load only the authored expression, ignoring any generated source lock.
@@ -64,16 +51,15 @@ impl Recipe {
     /// state must not prevent Boulder from evaluating the authoritative source.
     pub(crate) fn load_authored(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, declaration, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
+        let (source, declaration, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
 
-        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint, None)
+        Self::from_loaded(path, source, declaration, source_lock, fingerprint, None)
     }
 
     fn from_loaded(
         path: PathBuf,
         source: String,
         declaration: PackageSpec,
-        parsed: stone_recipe::Recipe,
         source_lock: Option<SourceLock>,
         fingerprint: EvaluationFingerprint,
         explicit_build_time: Option<DateTime<Utc>>,
@@ -81,12 +67,9 @@ impl Recipe {
         let build_time = explicit_build_time
             .unwrap_or_else(|| DateTime::from_timestamp(0, 0).expect("the Unix epoch is a valid UTC timestamp"));
 
-        parsed.validate()?;
-
         Ok(Self {
             path,
             source,
-            parsed,
             declaration,
             source_lock,
             fingerprint,
@@ -167,16 +150,7 @@ enum SourceLockPolicy {
 fn load_gluon(
     path: &Path,
     source_lock_policy: SourceLockPolicy,
-) -> Result<
-    (
-        String,
-        PackageSpec,
-        stone_recipe::Recipe,
-        Option<SourceLock>,
-        EvaluationFingerprint,
-    ),
-    Error,
-> {
+) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationFingerprint), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
@@ -220,7 +194,6 @@ fn load_gluon(
     Ok((
         source.text().to_owned(),
         evaluated.package,
-        evaluated.recipe,
         source_lock,
         evaluated.fingerprint,
     ))
@@ -265,8 +238,6 @@ pub enum Error {
     },
     #[error("evaluate Gluon recipe")]
     EvaluateGluon(#[from] stone_recipe::package::PackageEvaluationError),
-    #[error("invalid recipe")]
-    Validation(#[from] stone_recipe::ValidationError),
 }
 
 #[cfg(test)]

@@ -17,7 +17,6 @@ nom.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 stone.path = "../stone"
-strum.workspace = true
 thiserror.workspace = true
 url.workspace = true
 
