@@ -25,7 +25,24 @@ fn evaluates_a_typed_record_literal() {
         }
     );
     assert_eq!(evaluation.fingerprint.gluon_version, "0.18.3");
+    assert_eq!(evaluation.fingerprint.root_logical_name, "literal.glu");
     assert!(evaluation.fingerprint.imported_modules.is_empty());
+}
+
+#[test]
+fn root_logical_name_participates_in_the_evaluation_identity() {
+    let evaluator = Evaluator::default();
+    let first = evaluator.evaluate::<i64>(&Source::new("first.glu", "42")).unwrap();
+    let renamed = evaluator.evaluate::<i64>(&Source::new("renamed.glu", "42")).unwrap();
+
+    assert_eq!(first.value, renamed.value);
+    assert_eq!(first.fingerprint.root_logical_name, "first.glu");
+    assert_eq!(renamed.fingerprint.root_logical_name, "renamed.glu");
+    assert_eq!(
+        first.fingerprint.root_source_sha256,
+        renamed.fingerprint.root_source_sha256
+    );
+    assert_ne!(first.fingerprint.sha256, renamed.fingerprint.sha256);
 }
 
 #[test]

@@ -22,6 +22,7 @@ impl ModuleFingerprint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationFingerprint {
+    pub root_logical_name: String,
     pub root_source_sha256: String,
     pub imported_modules: Vec<ModuleFingerprint>,
     pub gluon_version: &'static str,
@@ -33,13 +34,14 @@ pub struct EvaluationFingerprint {
 
 impl EvaluationFingerprint {
     pub(crate) fn new(source: &Source, mut imported_modules: Vec<ModuleFingerprint>, explicit_inputs: &[u8]) -> Self {
+        let root_logical_name = source.logical_name().to_owned();
         let root_source_sha256 = sha256(source.text().as_bytes());
         let explicit_inputs_sha256 = sha256(explicit_inputs);
         imported_modules.sort();
         imported_modules.dedup_by(|left, right| left.logical_name == right.logical_name);
         let mut digest = Sha256::new();
         digest.update(b"os-tools-gluon-evaluation\0");
-        update_field(&mut digest, source.logical_name().as_bytes());
+        update_field(&mut digest, root_logical_name.as_bytes());
         update_field(&mut digest, root_source_sha256.as_bytes());
         update_field(&mut digest, GLUON_VERSION.as_bytes());
         digest.update(CONFIGURATION_ABI_VERSION.to_le_bytes());
@@ -52,6 +54,7 @@ impl EvaluationFingerprint {
         let sha256 = format!("{:x}", digest.finalize());
 
         Self {
+            root_logical_name,
             root_source_sha256,
             imported_modules,
             gluon_version: GLUON_VERSION,
