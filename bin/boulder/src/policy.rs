@@ -21,6 +21,19 @@ pub struct BuildPolicy {
     pub origin: String,
 }
 
+/// One source module which contributed to the evaluated typed policy.
+///
+/// The root is listed first. Relative and embedded imports follow in the
+/// evaluator's canonical fingerprint order, so explanation output describes
+/// exactly the code bound into the policy identity without pretending that an
+/// import performed an unrecorded mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicySource {
+    pub origin: String,
+    pub fingerprint: String,
+    pub root: bool,
+}
+
 impl BuildPolicy {
     const ROOT: &'static str = "default.glu";
 
@@ -63,6 +76,20 @@ impl BuildPolicy {
                 requested: name.to_owned(),
                 available: self.spec.targets.iter().map(|target| target.name.clone()).collect(),
             })
+    }
+
+    pub fn sources(&self) -> Vec<PolicySource> {
+        std::iter::once(PolicySource {
+            origin: self.origin.clone(),
+            fingerprint: self.fingerprint.root_source_sha256.clone(),
+            root: true,
+        })
+        .chain(self.fingerprint.imported_modules.iter().map(|module| PolicySource {
+            origin: module.logical_name.clone(),
+            fingerprint: module.sha256.clone(),
+            root: false,
+        }))
+        .collect()
     }
 
     #[cfg(test)]
@@ -126,6 +153,22 @@ mod tests {
             policy.target("host-default"),
             Err(Error::UnknownTarget { requested, .. }) if requested == "host-default"
         ));
+    }
+
+    #[test]
+    fn exposes_exact_root_and_import_provenance() {
+        let policy = BuildPolicy::repository_for_tests();
+        let sources = policy.sources();
+
+        assert_eq!(sources[0].origin, "default.glu");
+        assert_eq!(sources[0].fingerprint, policy.fingerprint.root_source_sha256);
+        assert!(sources[0].root);
+        assert!(sources[1..].iter().all(|source| !source.root));
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.origin == "boulder.build_policy.v1")
+        );
     }
 
     #[test]
