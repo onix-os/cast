@@ -70,13 +70,13 @@ impl Drafter {
             build::System::Autotools
         });
 
-        let stone = encode_package_v2(&metadata, build_system, build.dependencies, licenses);
+        let stone = encode_package_v3(&metadata, build_system, build.dependencies, licenses);
 
         Ok(Draft { stone })
     }
 }
 
-fn encode_package_v2(
+fn encode_package_v3(
     metadata: &Metadata,
     build_system: build::System,
     dependencies: impl IntoIterator<Item = Dependency>,
@@ -84,12 +84,12 @@ fn encode_package_v2(
 ) -> String {
     use std::fmt::Write as _;
 
-    let mut output = String::from("let b = import! boulder.package.v2\n");
+    let mut output = String::from("let b = import! boulder.package.v3\n");
     let builder_module = match build_system {
-        build::System::Cmake => Some("boulder.builders.cmake.v1"),
-        build::System::Meson => Some("boulder.builders.meson.v1"),
-        build::System::Cargo => Some("boulder.builders.cargo.v1"),
-        build::System::Autotools => Some("boulder.builders.autotools.v1"),
+        build::System::Cmake => Some("boulder.builders.cmake.v2"),
+        build::System::Meson => Some("boulder.builders.meson.v2"),
+        build::System::Cargo => Some("boulder.builders.cargo.v2"),
+        build::System::Autotools => Some("boulder.builders.autotools.v2"),
         _ => None,
     };
     if let Some(module) = builder_module {
@@ -290,7 +290,7 @@ mod test {
             uri: Url::parse("https://example.com/example-1.2.3.tar.xz").unwrap(),
             hash: "0123456789abcdef".to_owned(),
         }]);
-        let source = encode_package_v2(
+        let source = encode_package_v3(
             &metadata,
             build::System::Cargo,
             BTreeSet::<Dependency>::new(),
@@ -299,8 +299,8 @@ mod test {
 
         let evaluated = evaluate_gluon(&GluonSource::new("stone.glu", source.clone())).unwrap();
 
-        assert!(source.contains("boulder.package.v2"));
-        assert!(source.contains("boulder.builders.cargo.v1"));
+        assert!(source.contains("boulder.package.v3"));
+        assert!(source.contains("boulder.builders.cargo.v2"));
         assert!(source.contains("UPDATE SUMMARY"));
         assert_eq!(evaluated.package.meta.pname, "example");
         assert_eq!(evaluated.package.meta.version, "1.2.3");

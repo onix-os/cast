@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-//! Typed package declarations for the `boulder.package.v2` Gluon ABI.
+//! Typed package declarations for the `boulder.package.v3` Gluon ABI.
 //!
 //! A package factory is evaluated completely inside Gluon and produces one
 //! concrete [`PackageSpec`]. This module deliberately contains values only:
@@ -55,24 +55,46 @@ pub struct MetaSpec {
 
 /// One executable, structural build step.
 ///
-/// Standard builders use dedicated variants. [`Self::Shell`] is the only
-/// escape hatch for commands which cannot be expressed structurally.
+/// Standard builders use dedicated variants. [`Self::Run`] executes one
+/// declared program directly. [`Self::Shell`] is the only escape hatch for
+/// commands which cannot be expressed structurally, and makes both its
+/// interpreter and every additional executable capability explicit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepSpec {
-    Shell { script: String },
-    CMakeConfigure { flags: Vec<String> },
+    Run {
+        program: ProgramSpec,
+        args: Vec<String>,
+    },
+    Shell {
+        interpreter: ProgramSpec,
+        declared_programs: Vec<ProgramSpec>,
+        script: String,
+    },
+    CMakeConfigure {
+        flags: Vec<String>,
+    },
     CMakeBuild,
     CMakeInstall,
     CMakeTest,
-    MesonSetup { flags: Vec<String> },
+    MesonSetup {
+        flags: Vec<String>,
+    },
     MesonBuild,
     MesonInstall,
     MesonTest,
     CargoFetch,
-    CargoBuild { features: Vec<String> },
-    CargoInstall { binaries: Vec<String> },
-    CargoTest { features: Vec<String> },
-    AutotoolsConfigure { flags: Vec<String> },
+    CargoBuild {
+        features: Vec<String>,
+    },
+    CargoInstall {
+        binaries: Vec<String>,
+    },
+    CargoTest {
+        features: Vec<String>,
+    },
+    AutotoolsConfigure {
+        flags: Vec<String>,
+    },
     AutotoolsBuild,
     AutotoolsInstall,
     AutotoolsTest,
@@ -236,6 +258,18 @@ pub enum DependencySpec {
     Interpreter(String),
 }
 
+/// One executable path bound to the dependency capability which supplies it.
+///
+/// The path is guest-visible and absolute. `Binary` and `SystemBinary`
+/// requirements are bound to their canonical `/usr/bin` and `/usr/sbin`
+/// locations; package and output requirements may expose a program at another
+/// normalized absolute path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramSpec {
+    pub path: String,
+    pub requirement: DependencySpec,
+}
+
 impl DependencySpec {
     /// Convert the authored typed value into the canonical shared dependency.
     pub fn dependency(&self) -> Result<Dependency, ParseError> {
@@ -288,7 +322,7 @@ impl DependencySpec {
     }
 }
 
-/// Failure to validate a concrete package-v2 declaration.
+/// Failure to validate a concrete package-v3 declaration.
 #[derive(Debug, Error)]
 pub enum PackageConversionError {
     #[error("meta.pname: package name `{name}` must use only ASCII letters, digits, '+', '-', '.', or '_'")]
@@ -359,6 +393,21 @@ pub enum PackageConversionError {
     },
     #[error("{field}: hook is not supported by the selected builder")]
     UnsupportedBuilderHook { field: String },
+    #[error("{field}: program path `{value}` must be a normalized non-root absolute path")]
+    InvalidProgramPath { field: String, value: String },
+    #[error("{field}: {requirement:?} is not an executable program capability")]
+    UnsupportedProgramRequirement { field: String, requirement: DependencySpec },
+    #[error("{field}: {requirement:?} is not a normalized executable capability")]
+    InvalidProgramRequirement { field: String, requirement: DependencySpec },
+    #[error("{field}: package/output program path `{value}` is ambiguous under the canonical binary directories")]
+    AmbiguousPackageProgramPath { field: String, value: String },
+    #[error("{field}: program path `{actual}` does not match the canonical path `{expected}` for {requirement:?}")]
+    ProgramRequirementPathMismatch {
+        field: String,
+        requirement: DependencySpec,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl PackageConversionError {
@@ -376,7 +425,12 @@ impl PackageConversionError {
             | Self::MissingOutputReference { field, .. }
             | Self::OutputDependencyCycle { field, .. }
             | Self::DuplicateBuilderEnvironment { field, .. }
-            | Self::UnsupportedBuilderHook { field } => field,
+            | Self::UnsupportedBuilderHook { field }
+            | Self::InvalidProgramPath { field, .. }
+            | Self::UnsupportedProgramRequirement { field, .. }
+            | Self::InvalidProgramRequirement { field, .. }
+            | Self::AmbiguousPackageProgramPath { field, .. }
+            | Self::ProgramRequirementPathMismatch { field, .. } => field,
             Self::MissingRootOutput => "outputs",
             Self::DuplicateOutput { .. } | Self::InvalidOutputName { .. } => "outputs",
             Self::InvalidProfileName { .. } | Self::DuplicateProfileName { .. } => "profiles",
@@ -608,6 +662,7 @@ impl PackageSpec {
         self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, false)?;
         self.validate_dependency_list(&self.builder.required_tools, "builder.required_tools", &outputs, false)?;
+        self.validate_builder_programs(&self.builder, &self.hooks, "builder", "hooks", &outputs)?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
             let parent = format!("profiles[{index}]");
@@ -634,6 +689,13 @@ impl PackageSpec {
                 &format!("{parent}.check_inputs"),
                 &outputs,
                 false,
+            )?;
+            self.validate_builder_programs(
+                &profile.builder,
+                &profile.hooks,
+                &format!("{parent}.builder"),
+                &format!("{parent}.hooks"),
+                &outputs,
             )?;
         }
 
@@ -664,35 +726,181 @@ impl PackageSpec {
     ) -> Result<(), PackageConversionError> {
         for (index, dependency) in dependencies.iter().enumerate() {
             let field = format!("{field}[{index}]");
-            let parsed = if provider {
-                dependency.provider().map(|_| ())
+            self.validate_dependency(dependency, &field, outputs, provider)?;
+        }
+        Ok(())
+    }
+
+    fn validate_dependency(
+        &self,
+        dependency: &DependencySpec,
+        field: &str,
+        outputs: &BTreeMap<&str, usize>,
+        provider: bool,
+    ) -> Result<(), PackageConversionError> {
+        let parsed = if provider {
+            dependency.provider().map(|_| ())
+        } else {
+            dependency.dependency().map(|_| ())
+        };
+        parsed.map_err(|source| {
+            if provider {
+                PackageConversionError::InvalidProvider {
+                    field: field.to_owned(),
+                    source,
+                }
             } else {
-                dependency.dependency().map(|_| ())
-            };
-            parsed.map_err(|source| {
-                if provider {
-                    PackageConversionError::InvalidProvider {
-                        field: field.clone(),
-                        source,
-                    }
-                } else {
-                    PackageConversionError::InvalidDependency {
-                        field: field.clone(),
-                        source,
+                PackageConversionError::InvalidDependency {
+                    field: field.to_owned(),
+                    source,
+                }
+            }
+        })?;
+        if let Some((package, output)) = dependency.package_and_output()
+            && package == self.meta.pname
+            && !outputs.contains_key(output)
+        {
+            return Err(PackageConversionError::MissingOutputReference {
+                field: field.to_owned(),
+                package: package.to_owned(),
+                output: output.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_builder_programs(
+        &self,
+        builder: &BuilderSpec,
+        hooks: &HooksSpec,
+        builder_field: &str,
+        hooks_field: &str,
+        outputs: &BTreeMap<&str, usize>,
+    ) -> Result<(), PackageConversionError> {
+        for (name, phase) in [
+            ("setup", &builder.phases.setup),
+            ("build", &builder.phases.build),
+            ("install", &builder.phases.install),
+            ("check", &builder.phases.check),
+            ("workload", &builder.phases.workload),
+        ] {
+            self.validate_steps(&phase.steps, &format!("{builder_field}.phases.{name}.steps"), outputs)?;
+        }
+
+        for (name, steps) in [
+            ("pre_setup", hooks.pre_setup.as_slice()),
+            ("post_setup", hooks.post_setup.as_slice()),
+            ("pre_build", hooks.pre_build.as_slice()),
+            ("post_build", hooks.post_build.as_slice()),
+            ("pre_check", hooks.pre_check.as_slice()),
+            ("post_check", hooks.post_check.as_slice()),
+            ("pre_install", hooks.pre_install.as_slice()),
+            ("post_install", hooks.post_install.as_slice()),
+            ("pre_workload", hooks.pre_workload.as_slice()),
+            ("post_workload", hooks.post_workload.as_slice()),
+        ] {
+            self.validate_steps(steps, &format!("{hooks_field}.{name}"), outputs)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_steps(
+        &self,
+        steps: &[StepSpec],
+        field: &str,
+        outputs: &BTreeMap<&str, usize>,
+    ) -> Result<(), PackageConversionError> {
+        for (index, step) in steps.iter().enumerate() {
+            let field = format!("{field}[{index}]");
+            match step {
+                StepSpec::Run { program, .. } => {
+                    self.validate_program(program, &format!("{field}.program"), outputs)?;
+                }
+                StepSpec::Shell {
+                    interpreter,
+                    declared_programs,
+                    ..
+                } => {
+                    self.validate_program(interpreter, &format!("{field}.interpreter"), outputs)?;
+                    for (program_index, program) in declared_programs.iter().enumerate() {
+                        self.validate_program(
+                            program,
+                            &format!("{field}.declared_programs[{program_index}]"),
+                            outputs,
+                        )?;
                     }
                 }
-            })?;
-            if let Some((package, output)) = dependency.package_and_output()
-                && package == self.meta.pname
-                && !outputs.contains_key(output)
-            {
-                return Err(PackageConversionError::MissingOutputReference {
-                    field,
-                    package: package.to_owned(),
-                    output: output.to_owned(),
-                });
+                _ => {}
             }
         }
+        Ok(())
+    }
+
+    fn validate_program(
+        &self,
+        program: &ProgramSpec,
+        field: &str,
+        outputs: &BTreeMap<&str, usize>,
+    ) -> Result<(), PackageConversionError> {
+        let path_field = format!("{field}.path");
+        if !valid_program_path(&program.path) {
+            return Err(PackageConversionError::InvalidProgramPath {
+                field: path_field,
+                value: program.path.clone(),
+            });
+        }
+
+        let requirement_field = format!("{field}.requirement");
+        self.validate_dependency(&program.requirement, &requirement_field, outputs, false)?;
+
+        let expected = match &program.requirement {
+            DependencySpec::Package(_) | DependencySpec::Output(_) => {
+                if Path::new(&program.path)
+                    .parent()
+                    .is_some_and(|parent| parent == Path::new("/usr/bin") || parent == Path::new("/usr/sbin"))
+                {
+                    return Err(PackageConversionError::AmbiguousPackageProgramPath {
+                        field: path_field,
+                        value: program.path.clone(),
+                    });
+                }
+                return Ok(());
+            }
+            DependencySpec::Binary(target) => {
+                if !is_safe_artifact_component(target) {
+                    return Err(PackageConversionError::InvalidProgramRequirement {
+                        field: requirement_field,
+                        requirement: program.requirement.clone(),
+                    });
+                }
+                format!("/usr/bin/{target}")
+            }
+            DependencySpec::SystemBinary(target) => {
+                if !is_safe_artifact_component(target) {
+                    return Err(PackageConversionError::InvalidProgramRequirement {
+                        field: requirement_field,
+                        requirement: program.requirement.clone(),
+                    });
+                }
+                format!("/usr/sbin/{target}")
+            }
+            requirement => {
+                return Err(PackageConversionError::UnsupportedProgramRequirement {
+                    field: requirement_field,
+                    requirement: requirement.clone(),
+                });
+            }
+        };
+        if program.path != expected {
+            return Err(PackageConversionError::ProgramRequirementPathMismatch {
+                field: path_field,
+                requirement: program.requirement.clone(),
+                expected,
+                actual: program.path.clone(),
+            });
+        }
+
         Ok(())
     }
 
@@ -791,6 +999,16 @@ fn valid_profile_name(name: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn valid_program_path(path: &str) -> bool {
+    path.starts_with('/')
+        && path != "/"
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+        && path[1..]
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+}
+
 impl BuilderSpec {
     pub fn required_tools(&self) -> &[DependencySpec] {
         &self.required_tools
@@ -829,6 +1047,21 @@ mod tests {
 
     fn dependency(name: &str) -> DependencySpec {
         DependencySpec::Package(PackageRef { name: name.to_owned() })
+    }
+
+    fn binary_program(name: &str) -> ProgramSpec {
+        ProgramSpec {
+            path: format!("/usr/bin/{name}"),
+            requirement: DependencySpec::Binary(name.to_owned()),
+        }
+    }
+
+    fn shell(script: &str) -> StepSpec {
+        StepSpec::Shell {
+            interpreter: binary_program("bash"),
+            declared_programs: Vec::new(),
+            script: script.to_owned(),
+        }
     }
 
     fn structural_builder(
@@ -935,6 +1168,62 @@ mod tests {
     }
 
     #[test]
+    fn executable_steps_bind_normalized_paths_to_capabilities() {
+        let mut valid = package();
+        valid.builder.phases.build = PhaseSpec::new([StepSpec::Run {
+            program: ProgramSpec {
+                path: "/opt/tools/bin/codegen".to_owned(),
+                requirement: dependency("codegen-tools"),
+            },
+            args: vec!["--frozen".to_owned()],
+        }]);
+        valid.validate().unwrap();
+
+        let mut relative = package();
+        relative.builder.phases.build = PhaseSpec::new([StepSpec::Run {
+            program: ProgramSpec {
+                path: "usr/bin/tool".to_owned(),
+                requirement: DependencySpec::Binary("tool".to_owned()),
+            },
+            args: Vec::new(),
+        }]);
+        let error = relative.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidProgramPath { .. }));
+        assert_eq!(error.field(), "builder.phases.build.steps[0].program.path");
+
+        let mut mismatch = package();
+        mismatch.builder.phases.build = PhaseSpec::new([StepSpec::Run {
+            program: ProgramSpec {
+                path: "/usr/bin/other".to_owned(),
+                requirement: DependencySpec::Binary("tool".to_owned()),
+            },
+            args: Vec::new(),
+        }]);
+        let error = mismatch.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::ProgramRequirementPathMismatch { .. }
+        ));
+        assert_eq!(error.field(), "builder.phases.build.steps[0].program.path");
+
+        let mut unsupported = package();
+        unsupported.hooks.pre_install = vec![StepSpec::Shell {
+            interpreter: binary_program("bash"),
+            declared_programs: vec![ProgramSpec {
+                path: "/usr/bin/pkg-config".to_owned(),
+                requirement: DependencySpec::PkgConfig("libexample".to_owned()),
+            }],
+            script: "pkg-config --exists libexample".to_owned(),
+        }];
+        let error = unsupported.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            PackageConversionError::UnsupportedProgramRequirement { .. }
+        ));
+        assert_eq!(error.field(), "hooks.pre_install[0].declared_programs[0].requirement");
+    }
+
+    #[test]
     fn base_and_selected_profile_semantics_stay_structural() {
         let mut package = package();
         package.builder = structural_builder(
@@ -971,9 +1260,7 @@ mod tests {
                 },
             ),
             hooks: HooksSpec {
-                pre_build: vec![StepSpec::Shell {
-                    script: "prepare-profile".to_owned(),
-                }],
+                pre_build: vec![shell("prepare-profile")],
                 ..HooksSpec::default()
             },
             native_build_inputs: vec![dependency("profile-native")],
@@ -1000,9 +1287,7 @@ mod tests {
         assert_eq!(
             package.phases_for_profile(Some("emul32/x86_64")).build.steps,
             [
-                StepSpec::Shell {
-                    script: "prepare-profile".to_owned()
-                },
+                shell("prepare-profile"),
                 StepSpec::CargoBuild {
                     features: vec!["profile".to_owned()]
                 }
@@ -1213,9 +1498,7 @@ mod tests {
 
         let mut unsupported = package();
         unsupported.builder.supported_hooks.build = false;
-        unsupported.hooks.pre_build = vec![StepSpec::Shell {
-            script: "prepare".to_owned(),
-        }];
+        unsupported.hooks.pre_build = vec![shell("prepare")];
         let error = unsupported.validate().unwrap_err();
         assert!(matches!(error, PackageConversionError::UnsupportedBuilderHook { .. }));
         assert_eq!(error.field(), "hooks.pre_build");

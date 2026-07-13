@@ -33,9 +33,10 @@ fn evaluates_repository_build_policy_as_typed_data() {
     assert_eq!(policy.targets.len(), 6);
     assert_eq!(policy.targets[0].target_triple, "x86_64-unknown-linux-gnu");
     assert_eq!(policy.targets[2].lib_suffix, "32");
+    assert_eq!(policy.builders.cmake.setup.program.path, "/usr/bin/cmake");
     assert_eq!(
-        policy.builders.cmake.setup.program,
-        TextSpec::Literal("cmake".to_owned())
+        policy.builders.cmake.setup.program.requirement,
+        BuildToolSpec::Binary("cmake".to_owned())
     );
     assert!(
         policy
@@ -47,7 +48,8 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(policy.pgo.stage_one.finish.as_ref().unwrap().inputs.len(), 1);
     assert_eq!(policy.pgo.stage_two.finish.as_ref().unwrap().inputs.len(), 2);
-    assert_eq!(policy.pgo.merge_program, TextSpec::Literal("llvm-profdata".to_owned()));
+    assert_eq!(policy.pgo.shell_interpreter.path, "/usr/bin/bash");
+    assert_eq!(policy.pgo.merge_program.path, "/usr/bin/llvm-profdata");
     assert_eq!(
         policy.pgo.merge_args,
         [
@@ -55,8 +57,8 @@ fn evaluates_repository_build_policy_as_typed_data() {
             TextSpec::Literal("--failure-mode=all".to_owned()),
         ]
     );
-    assert_eq!(policy.pgo.copy_program, TextSpec::Literal("cp".to_owned()));
-    assert_eq!(policy.pgo.remove_program, TextSpec::Literal("rm".to_owned()));
+    assert_eq!(policy.pgo.copy_program.path, "/usr/bin/cp");
+    assert_eq!(policy.pgo.remove_program.path, "/usr/bin/rm");
     assert_eq!(policy.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
     assert_eq!(policy.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
     assert_eq!(policy.sandbox.filesystems.dev, SandboxDevPolicySpec::Minimal);
@@ -76,15 +78,15 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
-        "boulder.build_policy.v2"
+        "boulder.build_policy.v3"
     );
 }
 
 #[test]
-fn build_policy_v2_is_a_hard_abi_boundary() {
-    assert_eq!(BUILD_POLICY_ABI_VERSION, 2);
-    let error = evaluate_gluon(&Source::new("legacy-policy.glu", "import! boulder.build_policy.v1")).unwrap_err();
-    assert!(error.to_string().contains("boulder.build_policy.v1"));
+fn build_policy_v3_is_a_hard_abi_boundary() {
+    assert_eq!(BUILD_POLICY_ABI_VERSION, 3);
+    let error = evaluate_gluon(&Source::new("legacy-policy.glu", "import! boulder.build_policy.v2")).unwrap_err();
+    assert!(error.to_string().contains("boulder.build_policy.v2"));
 }
 
 #[test]
@@ -722,14 +724,11 @@ fn repository_sandbox_and_cache_paths_are_explicit_guest_abi() {
 fn repository_source_preparation_is_argv_preserving_policy() {
     let policy = repository_policy_value();
     let archive = policy.sources.archive;
+    assert_eq!(archive.create_directory.program.path, "/usr/bin/mkdir");
     assert_eq!(
-        archive.required_tools,
-        [
-            BuildToolSpec::Binary("mkdir".to_owned()),
-            BuildToolSpec::Binary("bsdtar-static".to_owned()),
-        ]
+        archive.create_directory.program.requirement,
+        BuildToolSpec::Binary("mkdir".to_owned())
     );
-    assert_eq!(archive.create_directory.program, TextSpec::Literal("mkdir".to_owned()));
     assert_eq!(
         archive.create_directory.args,
         [
@@ -737,7 +736,7 @@ fn repository_source_preparation_is_argv_preserving_policy() {
             TextSpec::Context(ContextValue::SourceDestination),
         ]
     );
-    assert_eq!(archive.unpack.program, TextSpec::Literal("bsdtar-static".to_owned()));
+    assert_eq!(archive.unpack.program.path, "/usr/bin/bsdtar-static");
     assert_eq!(
         archive.unpack.args,
         [
@@ -753,7 +752,7 @@ fn repository_source_preparation_is_argv_preserving_policy() {
         ]
     );
     let git = policy.sources.git;
-    assert_eq!(git.copy.program, TextSpec::Literal("cp".to_owned()));
+    assert_eq!(git.copy.program.path, "/usr/bin/cp");
     assert_eq!(
         git.copy.args,
         [
@@ -944,10 +943,10 @@ fn pgo_command_policy_is_complete_before_lowering() {
     ));
 
     let mut policy = repository_policy_value();
-    policy.pgo.copy_program = TextSpec::Literal(String::new());
+    policy.pgo.copy_program.path.clear();
     assert!(matches!(
         policy.validate(),
-        Err(BuildPolicyConversionError::Empty { field }) if field == "pgo.copy_program"
+        Err(BuildPolicyConversionError::InvalidProgramPath { field, .. }) if field == "pgo.copy_program.path"
     ));
 }
 

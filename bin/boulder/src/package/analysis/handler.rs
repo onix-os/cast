@@ -256,7 +256,7 @@ pub fn pkg_config(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Res
         .pkg_config
         .as_ref()
         .expect("validated analysis plan requires pkg-config for the pkg-config handler")
-        .program;
+        .path;
     let mut command = analyzer_command(program);
     command
         .args(["--print-requires", "--print-requires-private", "--silence-errors"])

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-//! Typed lowering context for standard package-v2 build steps.
+//! Typed lowering context for standard package-v3 build steps.
 //!
 //! This boundary deliberately accepts concrete values. It does not know about
 //! legacy actions, definition names, or the script parser.
@@ -11,10 +11,10 @@ use std::collections::BTreeMap;
 use stone_recipe::{
     ToolchainSpec,
     build_policy::{
-        BuildPolicySpec, BuilderCommandSpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue,
+        BuildPolicySpec, BuildProgramSpec, BuilderCommandSpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue,
         EnvironmentBindingSpec, EnvironmentCondition, TargetPolicySpec, TextSpec,
     },
-    derivation::{StepPlan, StepPlan::Run},
+    derivation::{ExecutablePlan, RelationPlan, StepPlan, StepPlan::Run},
     package::StepSpec,
 };
 use thiserror::Error;
@@ -207,7 +207,7 @@ impl BuildContext {
     /// the phase planner and therefore do not produce an executable step here.
     pub fn resolve_standard_step(&self, step: &StepSpec) -> Result<Option<StepPlan>, ContextError> {
         let command = match step {
-            StepSpec::Shell { .. } => return Ok(None),
+            StepSpec::Run { .. } | StepSpec::Shell { .. } => return Ok(None),
             StepSpec::CMakeConfigure { .. } => &self.policy.builders.cmake.setup,
             StepSpec::CMakeBuild => &self.policy.builders.cmake.build,
             StepSpec::CMakeInstall => &self.policy.builders.cmake.install,
@@ -260,7 +260,8 @@ impl BuildContext {
                         .map(|binary| format!("target/{}/release/{binary}", self.target.target_triple)),
                 );
             }
-            StepSpec::Shell { .. }
+            StepSpec::Run { .. }
+            | StepSpec::Shell { .. }
             | StepSpec::CMakeBuild
             | StepSpec::CMakeInstall
             | StepSpec::CMakeTest
@@ -291,7 +292,7 @@ impl BuildContext {
         environment.extend(resolver.resolve_environment(&command.environment, &[])?);
 
         Ok(Run {
-            program: resolver.resolve(&command.program)?,
+            program: freeze_policy_program(&command.program),
             args: command
                 .args
                 .iter()
@@ -300,6 +301,17 @@ impl BuildContext {
             environment,
             working_dir: resolver.resolve(&command.working_dir)?,
         })
+    }
+}
+
+pub(crate) fn freeze_policy_program(program: &BuildProgramSpec) -> ExecutablePlan {
+    let dependency = program
+        .requirement
+        .dependency()
+        .expect("validated build policy program requirement");
+    ExecutablePlan {
+        path: program.path.clone(),
+        requirement: RelationPlan::from(dependency),
     }
 }
 
@@ -591,6 +603,7 @@ pub enum ContextError {
 mod tests {
     use super::*;
     use crate::BuildPolicy;
+    use stone_recipe::build_policy::BuildToolSpec;
 
     fn fixture_context(target_name: &str, compiler_cache_enabled: bool, mold_enabled: bool) -> BuildContext {
         let policy = BuildPolicy::repository_for_tests();
@@ -709,7 +722,8 @@ mod tests {
         else {
             panic!("expected run")
         };
-        assert_eq!(program, "cmake");
+        assert_eq!(program.path, "/usr/bin/cmake");
+        assert_eq!(program.requirement.canonical_name(), "binary(cmake)");
         assert_eq!(working_dir, "/mason/build/x86_64/source");
         assert_eq!(&args[..4], ["-G", "Ninja", "-B", "aerynos-builddir"]);
         assert_eq!(args.last().unwrap(), "-DBUILD_TESTS=OFF");
@@ -776,7 +790,8 @@ mod tests {
     fn changing_policy_command_data_changes_frozen_argv() {
         let mut policy = BuildPolicy::repository_for_tests();
         let target = policy.target("x86_64").unwrap().clone();
-        policy.spec.builders.cmake.build.program = TextSpec::Literal("policy-cmake".to_owned());
+        policy.spec.builders.cmake.build.program.path = "/usr/bin/policy-cmake".to_owned();
+        policy.spec.builders.cmake.build.program.requirement = BuildToolSpec::Binary("policy-cmake".to_owned());
         policy.spec.builders.cmake.build.args = vec![
             TextSpec::Literal("--policy-build".to_owned()),
             TextSpec::Context(ContextValue::BuilderDir),
@@ -787,7 +802,8 @@ mod tests {
         let Run { program, args, .. } = context.resolve_standard_step(&StepSpec::CMakeBuild).unwrap().unwrap() else {
             panic!("expected run")
         };
-        assert_eq!(program, "policy-cmake");
+        assert_eq!(program.path, "/usr/bin/policy-cmake");
+        assert_eq!(program.requirement.canonical_name(), "binary(policy-cmake)");
         assert_eq!(args, ["--policy-build", "aerynos-builddir"]);
     }
 
@@ -817,7 +833,7 @@ mod tests {
         else {
             panic!("expected run")
         };
-        assert_eq!(program, "bsdtar-static");
+        assert_eq!(program.path, "/usr/bin/bsdtar-static");
         assert_eq!(working_dir, "/mason/build/x86_64");
         assert_eq!(
             args,

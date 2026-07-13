@@ -3,20 +3,19 @@
 
 use moss::util;
 use std::{
-    collections::BTreeMap,
     num::NonZeroUsize,
     path::{Component, Path},
 };
 use stone_recipe::{
     ToolchainSpec, UpstreamSpec,
     build_policy::{CompilerFlagsSpec, ContextValue, TargetPolicySpec, TextSpec},
-    derivation::{PhasePlan, StepPlan},
-    package::{BuilderEnvironmentSpec, PhaseSpec, StepSpec},
+    derivation::{ExecutablePlan, PhasePlan, RelationPlan, StepPlan},
+    package::{BuilderEnvironmentSpec, PhaseSpec, ProgramSpec, StepSpec},
 };
 use tui::Styled;
 
 use crate::build::{
-    context::{BuildContext, PgoContextStage, TextContextOverlay, TypedContextInputs},
+    context::{BuildContext, PgoContextStage, TextContextOverlay, TypedContextInputs, freeze_policy_program},
     pgo,
 };
 use crate::{BuildPolicy, Paths, Recipe};
@@ -181,9 +180,10 @@ impl Phase {
         };
         if matches!(self, Phase::Workload)
             && matches!(recipe.declaration.options.toolchain, ToolchainSpec::Llvm)
-            && let Some(step) = pgo_finish_step(pgo_stage, &context, policy, &working_dir)?
+            && let finish_steps = pgo_finish_steps(pgo_stage, &context, policy, &working_dir)?
+            && !finish_steps.is_empty()
         {
-            steps.push(step);
+            steps.extend(finish_steps);
         }
         let post = compile_steps(post_hooks, &context, &working_dir)?;
         if pre.is_empty() && steps.is_empty() && post.is_empty() {
@@ -202,9 +202,26 @@ fn compile_steps(typed_steps: &[StepSpec], context: &BuildContext, working_dir: 
     let mut steps = Vec::with_capacity(typed_steps.len());
     for step in typed_steps {
         match step {
-            StepSpec::Shell { script } => {
-                steps.push(literal_shell(script.clone(), &context.environment, working_dir));
-            }
+            StepSpec::Run { program, args } => steps.push(StepPlan::Run {
+                program: freeze_package_program(program)?,
+                args: args.clone(),
+                environment: context.environment.clone(),
+                working_dir: working_dir.to_owned(),
+            }),
+            StepSpec::Shell {
+                interpreter,
+                declared_programs,
+                script,
+            } => steps.push(StepPlan::Shell {
+                interpreter: freeze_package_program(interpreter)?,
+                declared_programs: declared_programs
+                    .iter()
+                    .map(freeze_package_program)
+                    .collect::<Result<_, _>>()?,
+                script: script.clone(),
+                environment: context.environment.clone(),
+                working_dir: working_dir.to_owned(),
+            }),
             _ => {
                 if let Some(step) = context.resolve_standard_step(step)? {
                     steps.push(step);
@@ -215,28 +232,30 @@ fn compile_steps(typed_steps: &[StepSpec], context: &BuildContext, working_dir: 
     Ok(steps)
 }
 
-fn literal_shell(script: String, environment: &BTreeMap<String, String>, working_dir: &str) -> StepPlan {
-    StepPlan::Shell {
-        interpreter: "/usr/bin/bash".to_owned(),
-        script,
-        environment: environment.clone(),
-        working_dir: working_dir.to_owned(),
-    }
+fn freeze_package_program(program: &ProgramSpec) -> Result<ExecutablePlan, Error> {
+    let dependency = program
+        .requirement
+        .dependency()
+        .map_err(|source| Error::InvalidProgramRequirement { source })?;
+    Ok(ExecutablePlan {
+        path: program.path.clone(),
+        requirement: RelationPlan::from(dependency),
+    })
 }
 
-fn pgo_finish_step(
+fn pgo_finish_steps(
     stage: Option<pgo::Stage>,
     context: &BuildContext,
     policy: &BuildPolicy,
     working_dir: &str,
-) -> Result<Option<StepPlan>, Error> {
+) -> Result<Vec<StepPlan>, Error> {
     let stage = match stage {
         Some(pgo::Stage::One) => &policy.spec.pgo.stage_one,
         Some(pgo::Stage::Two) => &policy.spec.pgo.stage_two,
-        Some(pgo::Stage::Use) | None => return Ok(None),
+        Some(pgo::Stage::Use) | None => return Ok(Vec::new()),
     };
     let Some(finish) = &stage.finish else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
 
     let pgo_dir = context.resolve_text(&TextSpec::Context(ContextValue::PgoDir))?;
@@ -262,7 +281,6 @@ fn pgo_finish_step(
         .transpose()?;
 
     let resolve = |value: &TextSpec| context.resolve_text(value).map_err(Error::from);
-    let merge_program = resolve(&policy.spec.pgo.merge_program)?;
     let merge_args = policy
         .spec
         .pgo
@@ -270,29 +288,36 @@ fn pgo_finish_step(
         .iter()
         .map(resolve)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut lines = vec!["set -euo pipefail".to_owned()];
+    let mut steps = Vec::new();
     if finish.remove_output_first {
-        lines.push(format!(
-            "{} {}",
-            shell_quote(&resolve(&policy.spec.pgo.remove_program)?),
-            shell_quote(&output)
-        ));
+        steps.push(StepPlan::Run {
+            program: freeze_policy_program(&policy.spec.pgo.remove_program),
+            args: vec![output.clone()],
+            environment: context.environment.clone(),
+            working_dir: working_dir.to_owned(),
+        });
     }
-    let mut merge = vec![shell_quote(&merge_program)];
+    let mut merge = vec![shell_quote(&policy.spec.pgo.merge_program.path)];
     merge.extend(merge_args.iter().map(|argument| shell_quote(argument)));
     merge.push(shell_quote(&format!("-output={output}")));
     merge.extend(inputs.iter().map(|input| shell_glob(input)));
-    lines.push(merge.join(" "));
+    steps.push(StepPlan::Shell {
+        interpreter: freeze_policy_program(&policy.spec.pgo.shell_interpreter),
+        declared_programs: vec![freeze_policy_program(&policy.spec.pgo.merge_program)],
+        script: format!("set -euo pipefail\n{}", merge.join(" ")),
+        environment: context.environment.clone(),
+        working_dir: working_dir.to_owned(),
+    });
     if let Some(copy_to) = copy_to {
-        lines.push(format!(
-            "{} {} {}",
-            shell_quote(&resolve(&policy.spec.pgo.copy_program)?),
-            shell_quote(&output),
-            shell_quote(&copy_to)
-        ));
+        steps.push(StepPlan::Run {
+            program: freeze_policy_program(&policy.spec.pgo.copy_program),
+            args: vec![output, copy_to],
+            environment: context.environment.clone(),
+            working_dir: working_dir.to_owned(),
+        });
     }
 
-    Ok(Some(literal_shell(lines.join("\n"), &context.environment, working_dir)))
+    Ok(steps)
 }
 
 fn validate_pgo_path(path: &str, pgo_dir: &str) -> Result<(), Error> {
@@ -437,11 +462,11 @@ mod direct_tests {
     use chrono::DateTime;
     use std::path::Path;
     use stone_recipe::{
-        build_policy::{EnvironmentBindingSpec, EnvironmentCondition},
+        build_policy::{BuildToolSpec, EnvironmentBindingSpec, EnvironmentCondition},
         derivation::StepPlan,
         package::{
-            BuilderEnvironmentSpec, BuilderSpec, HooksSpec, PhaseSpec, PhasesSpec, ProfileSpec, StepSpec,
-            SupportedHooksSpec,
+            BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PhaseSpec, PhasesSpec, ProfileSpec,
+            ProgramSpec, StepSpec, SupportedHooksSpec,
         },
     };
 
@@ -504,6 +529,17 @@ mod direct_tests {
         steps.iter().map(shell_script).collect()
     }
 
+    fn authored_shell(script: &str) -> StepSpec {
+        StepSpec::Shell {
+            interpreter: ProgramSpec {
+                path: "/usr/bin/bash".to_owned(),
+                requirement: DependencySpec::Binary("bash".to_owned()),
+            },
+            declared_programs: Vec::new(),
+            script: script.to_owned(),
+        }
+    }
+
     #[test]
     fn standard_steps_freeze_as_run_with_exact_context() {
         let (mut recipe, policy, root) = fixture();
@@ -541,7 +577,7 @@ mod direct_tests {
         else {
             panic!("standard builder step must be Run")
         };
-        assert_eq!(program, "cmake");
+        assert_eq!(program.path, "/usr/bin/cmake");
         assert_eq!(working_dir, "/mason/build/x86_64");
         assert_eq!(environment["BOULDER_PACKAGE_NAME"], "hello");
         assert_eq!(environment["BOULDER_JOBS"], "3");
@@ -552,9 +588,7 @@ mod direct_tests {
     #[test]
     fn selected_profile_hooks_preserve_exact_phase_groups_and_order() {
         let (mut recipe, policy, root) = fixture();
-        let shell = |script: &str| StepSpec::Shell {
-            script: script.to_owned(),
-        };
+        let shell = authored_shell;
         recipe.declaration.profiles = vec![ProfileSpec {
             name: "x86_64".to_owned(),
             builder: BuilderSpec {
@@ -614,20 +648,14 @@ mod direct_tests {
             required_tools: Vec::new(),
             environment: Vec::new(),
             phases: PhasesSpec {
-                workload: PhaseSpec::new([StepSpec::Shell {
-                    script: "workload-body".to_owned(),
-                }]),
+                workload: PhaseSpec::new([authored_shell("workload-body")]),
                 ..PhasesSpec::default()
             },
             supported_hooks: SupportedHooksSpec::all(),
         };
         recipe.declaration.hooks = HooksSpec {
-            pre_workload: vec![StepSpec::Shell {
-                script: "pre-workload".to_owned(),
-            }],
-            post_workload: vec![StepSpec::Shell {
-                script: "post-workload".to_owned(),
-            }],
+            pre_workload: vec![authored_shell("pre-workload")],
+            post_workload: vec![authored_shell("post-workload")],
             ..HooksSpec::default()
         };
 
@@ -647,7 +675,7 @@ mod direct_tests {
             .unwrap();
 
         assert_eq!(shell_scripts(&plan.pre), ["pre-workload"]);
-        assert_eq!(plan.steps.len(), 2);
+        assert_eq!(plan.steps.len(), 3);
         let StepPlan::Shell { script, .. } = &plan.steps[0] else {
             panic!("authored workload must remain a shell step")
         };
@@ -656,6 +684,10 @@ mod direct_tests {
             panic!("PGO completion must be frozen into the workload body")
         };
         assert!(script.starts_with("set -euo pipefail\n"));
+        let StepPlan::Run { program, .. } = &plan.steps[2] else {
+            panic!("PGO profile copy must be a structural run step")
+        };
+        assert_eq!(program.path, "/usr/bin/cp");
         assert_eq!(shell_scripts(&plan.post), ["post-workload"]);
     }
 
@@ -667,9 +699,7 @@ mod direct_tests {
             required_tools: Vec::new(),
             environment: Vec::new(),
             phases: PhasesSpec {
-                build: PhaseSpec::new([StepSpec::Shell {
-                    script: literal.to_owned(),
-                }]),
+                build: PhaseSpec::new([authored_shell(literal)]),
                 ..PhasesSpec::default()
             },
             supported_hooks: SupportedHooksSpec::all(),
@@ -714,9 +744,7 @@ mod direct_tests {
             required_tools: Vec::new(),
             environment: vec![BuilderEnvironmentSpec::CMake, BuilderEnvironmentSpec::Cargo],
             phases: PhasesSpec {
-                build: PhaseSpec::new([StepSpec::Shell {
-                    script: "true".to_owned(),
-                }]),
+                build: PhaseSpec::new([authored_shell("true")]),
                 ..PhasesSpec::default()
             },
             supported_hooks: SupportedHooksSpec::all(),
@@ -773,7 +801,7 @@ mod direct_tests {
         let StepPlan::Run { program, args, .. } = &steps[1] else {
             panic!("archive preparation must be structural")
         };
-        assert_eq!(program, "bsdtar-static");
+        assert_eq!(program.path, "/usr/bin/bsdtar-static");
         assert_eq!(args[1], format!("/mason/sourcedir/{archive_name}"));
         assert_eq!(args[3], "source tree");
         assert_eq!(args[4], "--strip-components=2");
@@ -782,7 +810,7 @@ mod direct_tests {
         let StepPlan::Run { program, args, .. } = &steps[3] else {
             panic!("git preparation must be structural")
         };
-        assert_eq!(program, "cp");
+        assert_eq!(program.path, "/usr/bin/cp");
         assert_eq!(args[2], "/mason/sourcedir/project.git/.");
         assert_eq!(args[3], "git tree");
     }
@@ -790,27 +818,39 @@ mod direct_tests {
     #[test]
     fn pgo_finish_uses_typed_policy_commands_and_controlled_globs() {
         let (recipe, mut policy, root) = fixture();
-        policy.spec.pgo.merge_program = TextSpec::Literal("policy-profdata".to_owned());
+        policy.spec.pgo.merge_program.path = "/usr/bin/policy-profdata".to_owned();
+        policy.spec.pgo.merge_program.requirement = BuildToolSpec::Binary("policy-profdata".to_owned());
         let paths = test_paths(&recipe, &policy, root.path());
         let context = context_for(&recipe, &paths, &policy, Some(pgo::Stage::One));
 
+        let steps = pgo_finish_steps(Some(pgo::Stage::One), &context, &policy, "/mason/build/x86_64").unwrap();
+        assert_eq!(steps.len(), 2);
         let StepPlan::Shell {
-            script, environment, ..
-        } = pgo_finish_step(Some(pgo::Stage::One), &context, &policy, "/mason/build/x86_64")
-            .unwrap()
-            .unwrap()
+            interpreter,
+            declared_programs,
+            script,
+            environment,
+            ..
+        } = &steps[0]
         else {
             panic!("PGO glob completion requires a controlled shell step")
         };
 
+        assert_eq!(interpreter.path, "/usr/bin/bash");
+        assert_eq!(declared_programs[0].path, "/usr/bin/policy-profdata");
         assert!(script.starts_with("set -euo pipefail\n"));
-        assert!(script.contains("'policy-profdata' 'merge' '--failure-mode=all'"));
+        assert!(script.contains("'/usr/bin/policy-profdata' 'merge' '--failure-mode=all'"));
         assert!(script.contains("'-output=/mason/build/x86_64-pgo/ir.profdata'"));
         assert!(script.contains("'/mason/build/x86_64-pgo/IR/default'*'.profraw'"));
-        assert!(
-            script.contains("'cp' '/mason/build/x86_64-pgo/ir.profdata' '/mason/build/x86_64-pgo/combined.profdata'")
-        );
         assert_eq!(environment["PGO_STAGE"], "ONE");
+        let StepPlan::Run { program, args, .. } = &steps[1] else {
+            panic!("PGO profile copy must be a structural run step")
+        };
+        assert_eq!(program.path, "/usr/bin/cp");
+        assert_eq!(
+            args.join("\n"),
+            "/mason/build/x86_64-pgo/ir.profdata\n/mason/build/x86_64-pgo/combined.profdata"
+        );
     }
 
     #[test]
@@ -822,7 +862,7 @@ mod direct_tests {
         let context = context_for(&recipe, &paths, &policy, Some(pgo::Stage::One));
 
         assert!(matches!(
-            pgo_finish_step(
+            pgo_finish_steps(
                 Some(pgo::Stage::One),
                 &context,
                 &policy,

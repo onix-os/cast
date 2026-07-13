@@ -21,8 +21,8 @@ constructed only during that conversion.
 
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
-| Boulder package | `stone.glu` | `boulder.package.v2` and `boulder.builders.*.v1` |
-| Boulder build policy | `bin/boulder/data/policy/policy.glu` | `boulder.build_policy.layers.v1` and `boulder.build_policy.v2` |
+| Boulder package | `stone.glu` | `boulder.package.v3` and `boulder.builders.*.v2` |
+| Boulder build policy | `bin/boulder/data/policy/policy.glu` | `boulder.build_policy.layers.v1` and `boulder.build_policy.v3` |
 | Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
 | Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
 | Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |
@@ -68,7 +68,7 @@ effect, thread, channel, and reference modules are explicitly denied.
 There are two import classes:
 
 1. Versioned in-memory modules supplied by OS Tools, such as
-   `boulder.package.v2` and `moss.system.v1`.
+   `boulder.package.v3` and `moss.system.v1`.
 2. Quoted relative modules beneath the explicit source root, for example
    `import! "./package-policy.glu"`.
 
@@ -101,8 +101,9 @@ or terminating the process.
 ## Typed and versioned ABIs
 
 The shared configuration boundary is version `1`. The canonical Boulder
-package ABI is version `2`; the build-policy manifest, build-policy value, and
-standard-builder modules are version `1`.
+package ABI is version `3`; the standard-builder modules are version `2`; the
+build-policy manifest remains version `1` and the build-policy value is version
+`3`.
 The embedded modules expose constructors, defaults, explicit option/boolean
 variants, and immutable records. Gluon-facing DTOs use only stable language
 shapes such as strings, integers, arrays, records, and explicit variants.
@@ -111,7 +112,7 @@ Record update syntax makes policy composition ordinary Gluon rather than a
 sidecar overlay format:
 
 ```gluon
-let boulder = import! boulder.package.v2
+let boulder = import! boulder.package.v3
 let add_runtime = import! "./package_policy.glu"
 
 let meta = boulder.meta {
@@ -137,13 +138,17 @@ ordered `StepSpec` phases, and supported hooks. Repository policy separately
 owns the typed command templates and environment bindings selected by those
 values. Rust performs typed lowering only; it neither synthesizes a standard
 phase graph nor supplies a second builder-tool list. Builders do not lower
-through `%action` strings. `b.step.shell` remains the literal escape hatch and
-cannot invoke `%action` or `%(definition)` syntax. The executor receives only
-the resulting frozen `StepPlan` and environment values.
+through `%action` strings. Direct `Run` steps bind an absolute guest program to
+its dependency capability. `Shell` binds its interpreter and every declared
+program the same way; `b.step.shell` remains ergonomic shorthand for a
+Gluon-constructed `/usr/bin/bash` capability and an empty declared-program
+list. Shell text stays literal and cannot invoke `%action` or `%(definition)`
+syntax. The executor receives only the resulting frozen `StepPlan` and
+environment values.
 
 The former `boulder.recipe.v1`, `boulder.macros.v1`, and `boulder.policy.v1`
 embedded modules, evaluators, and standalone encoders have been removed.
-`boulder.package.v2` is the only recipe ABI, repository build policy evaluates
+`boulder.package.v3` is the only recipe ABI, repository build policy evaluates
 directly as `BuildPolicySpec`, and Boulder plans and packages the concrete
 values without a second recipe or macro domain.
 
@@ -347,7 +352,7 @@ Print the concrete normalized package declaration produced by the factory:
 boulder recipe eval ./stone.glu
 ```
 
-Boulder build, check, update, and evaluation all use `boulder.package.v2`.
+Boulder build, check, update, and evaluation all use `boulder.package.v3`.
 There is no automatic legacy-recipe fallback or dual-source precedence.
 
 Freeze a target-specific derivation and create or refresh its generated build

@@ -433,16 +433,26 @@ pub enum SandboxDevPolicySpec {
 /// lists are added by the typed builder lowering, not hidden in these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuilderCommandSpec {
-    pub program: TextSpec,
+    pub program: BuildProgramSpec,
     pub args: Vec<TextSpec>,
     pub environment: Vec<EnvironmentBindingSpec>,
     pub working_dir: TextSpec,
 }
 
+/// One exact executable capability used by repository-owned structural policy.
+///
+/// The path is static data rather than context-expanded text. Its typed
+/// provider request is carried beside it so planning can lock the executable
+/// without basename inference, `PATH` lookup, or host filesystem discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildProgramSpec {
+    pub path: String,
+    pub requirement: BuildToolSpec,
+}
+
 /// Structural extraction policy for one archive source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchivePreparationPolicySpec {
-    pub required_tools: Vec<BuildToolSpec>,
     pub create_directory: BuilderCommandSpec,
     pub unpack: BuilderCommandSpec,
 }
@@ -450,7 +460,6 @@ pub struct ArchivePreparationPolicySpec {
 /// Structural copy policy for one already-fetched git source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitPreparationPolicySpec {
-    pub required_tools: Vec<BuildToolSpec>,
     pub create_directory: BuilderCommandSpec,
     pub copy: BuilderCommandSpec,
 }
@@ -472,7 +481,7 @@ pub struct StandardBuilderPolicySpec {
     pub check: BuilderCommandSpec,
 }
 
-/// Closed set of standard builders supported by package-v2.
+/// Closed set of standard builders supported by package-v3.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildersPolicySpec {
     pub cmake: StandardBuilderPolicySpec,
@@ -509,11 +518,11 @@ pub struct PgoStagePolicySpec {
 /// Complete PGO policy. `sample` augments `use_profile` when requested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PgoPolicySpec {
-    pub required_tools: Vec<BuildToolSpec>,
-    pub merge_program: TextSpec,
+    pub shell_interpreter: BuildProgramSpec,
+    pub merge_program: BuildProgramSpec,
     pub merge_args: Vec<TextSpec>,
-    pub copy_program: TextSpec,
-    pub remove_program: TextSpec,
+    pub copy_program: BuildProgramSpec,
+    pub remove_program: BuildProgramSpec,
     pub sample: ToolchainFlagsSpec,
     pub stage_one: PgoStagePolicySpec,
     pub stage_two: PgoStagePolicySpec,
@@ -754,6 +763,18 @@ pub enum BuildPolicyConversionError {
     AnalyzerToolMustBeExecutable { field: String },
     #[error("{field}: analyzer executable `{value}` must be one normalized filename component")]
     InvalidAnalyzerExecutable { field: String, value: String },
+    #[error("{field}: executable path `{value}` must be a normalized, non-root absolute path")]
+    InvalidProgramPath { field: String, value: String },
+    #[error("{field}: executable requirement `{value}` is invalid")]
+    InvalidProgramRequirement { field: String, value: String },
+    #[error("{field}: expected executable path `{expected}` for its provider, found `{found}`")]
+    ProgramPathMismatch {
+        field: String,
+        expected: String,
+        found: String,
+    },
+    #[error("{field}: package-bound executable path `{value}` must not use the binary provider namespaces")]
+    AmbiguousPackageProgram { field: String, value: String },
 }
 
 impl BuildPolicySpec {
@@ -814,8 +835,8 @@ impl BuildPolicySpec {
         }
         validate_analyzers(&self.analyzers)?;
 
-        validate_tools("pgo.required_tools", &self.pgo.required_tools)?;
-        require_text("pgo.merge_program", &self.pgo.merge_program)?;
+        validate_program("pgo.shell_interpreter", &self.pgo.shell_interpreter)?;
+        validate_program("pgo.merge_program", &self.pgo.merge_program)?;
         if self.pgo.merge_args.is_empty() {
             return Err(BuildPolicyConversionError::Empty {
                 field: "pgo.merge_args".to_owned(),
@@ -824,8 +845,8 @@ impl BuildPolicySpec {
         for (index, argument) in self.pgo.merge_args.iter().enumerate() {
             require_text(&format!("pgo.merge_args[{index}]"), argument)?;
         }
-        require_text("pgo.copy_program", &self.pgo.copy_program)?;
-        require_text("pgo.remove_program", &self.pgo.remove_program)?;
+        validate_program("pgo.copy_program", &self.pgo.copy_program)?;
+        validate_program("pgo.remove_program", &self.pgo.remove_program)?;
         validate_pgo_stage("pgo.stage_one", &self.pgo.stage_one)?;
         validate_pgo_stage("pgo.stage_two", &self.pgo.stage_two)?;
         validate_pgo_stage("pgo.use_profile", &self.pgo.use_profile)
@@ -1124,11 +1145,9 @@ fn validate_toolchain_inputs(field: &str, inputs: &ToolchainInputPolicySpec) -> 
 }
 
 fn validate_sources(sources: &SourcePreparationPolicySpec) -> Result<(), BuildPolicyConversionError> {
-    validate_tools("sources.archive.required_tools", &sources.archive.required_tools)?;
     validate_command("sources.archive.create_directory", &sources.archive.create_directory)?;
     validate_command("sources.archive.unpack", &sources.archive.unpack)?;
 
-    validate_tools("sources.git.required_tools", &sources.git.required_tools)?;
     validate_command("sources.git.create_directory", &sources.git.create_directory)?;
     validate_command("sources.git.copy", &sources.git.copy)
 }
@@ -1385,12 +1404,79 @@ fn validate_builder(field: &str, builder: &StandardBuilderPolicySpec) -> Result<
 }
 
 fn validate_command(field: &str, command: &BuilderCommandSpec) -> Result<(), BuildPolicyConversionError> {
-    require_text(&format!("{field}.program"), &command.program)?;
+    validate_program(&format!("{field}.program"), &command.program)?;
     require_text(&format!("{field}.working_dir"), &command.working_dir)?;
     for (index, argument) in command.args.iter().enumerate() {
         require_text(&format!("{field}.args[{index}]"), argument)?;
     }
     validate_bindings(&format!("{field}.environment"), &command.environment)
+}
+
+fn validate_program(field: &str, program: &BuildProgramSpec) -> Result<(), BuildPolicyConversionError> {
+    let path = Path::new(&program.path);
+    let mut normalized = PathBuf::new();
+    let mut normal_components = 0;
+    let mut safe_components = true;
+    for component in path.components() {
+        match component {
+            Component::RootDir if normalized.as_os_str().is_empty() => normalized.push(component.as_os_str()),
+            Component::Normal(_) => {
+                normal_components += 1;
+                normalized.push(component.as_os_str());
+            }
+            Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir => {
+                safe_components = false;
+            }
+        }
+    }
+    if !path.is_absolute() || normal_components == 0 || !safe_components || normalized.as_os_str() != path.as_os_str() {
+        return Err(BuildPolicyConversionError::InvalidProgramPath {
+            field: format!("{field}.path"),
+            value: program.path.clone(),
+        });
+    }
+
+    let target = match &program.requirement {
+        BuildToolSpec::Package(target) => {
+            require_string(&format!("{field}.requirement"), target)?;
+            program
+                .requirement
+                .dependency()
+                .map_err(|_| BuildPolicyConversionError::InvalidProgramRequirement {
+                    field: format!("{field}.requirement"),
+                    value: target.clone(),
+                })?;
+            if path
+                .parent()
+                .is_some_and(|parent| parent == Path::new("/usr/bin") || parent == Path::new("/usr/sbin"))
+            {
+                return Err(BuildPolicyConversionError::AmbiguousPackageProgram {
+                    field: format!("{field}.path"),
+                    value: program.path.clone(),
+                });
+            }
+            return Ok(());
+        }
+        BuildToolSpec::Binary(target) | BuildToolSpec::SystemBinary(target) => target,
+    };
+    if !is_normalized_executable_name(target) || program.requirement.dependency().is_err() {
+        return Err(BuildPolicyConversionError::InvalidProgramRequirement {
+            field: format!("{field}.requirement"),
+            value: target.clone(),
+        });
+    }
+    let expected = program
+        .requirement
+        .executable_program()
+        .expect("binary requirements have canonical programs");
+    if program.path != expected {
+        return Err(BuildPolicyConversionError::ProgramPathMismatch {
+            field: format!("{field}.path"),
+            expected,
+            found: program.path.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_bindings(field: &str, bindings: &[EnvironmentBindingSpec]) -> Result<(), BuildPolicyConversionError> {

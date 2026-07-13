@@ -7,7 +7,7 @@
 //! profiles, or Moss provider resolution. Those belong to planning.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
@@ -17,6 +17,7 @@ use std::{
 use fs_err as fs;
 use nix::{
     errno::Errno,
+    sched::{CpuSet, sched_getaffinity, sched_setaffinity},
     sys::{
         signal::{Signal, kill},
         wait::{WaitStatus, waitpid},
@@ -73,6 +74,11 @@ impl<'a> Executor<'a> {
 
     pub fn run(&self, timing: &mut Timing) -> Result<(), Error> {
         require_pid_namespace_init(getpid())?;
+        // Linux affinity is inherited by every subsequently created thread
+        // and process. Pin PID 1 before execution scratch can create any
+        // workers; the restriction therefore also remains in force for the
+        // frozen package analyzers that run after all build steps.
+        restrict_current_cpu_affinity(self.plan.execution.jobs)?;
         prepare_execution_scratch(self.plan)?;
         setpgid(Pid::from_raw(0), Pid::from_raw(0))?;
         let pgid = getpgrp();
@@ -111,14 +117,15 @@ impl<'a> Executor<'a> {
                 args,
                 environment,
                 working_dir,
-            } => (program.as_str(), args.clone(), environment, working_dir.as_str()),
+            } => (program.path.as_str(), args.clone(), environment, working_dir.as_str()),
             StepPlan::Shell {
                 interpreter,
                 script,
                 environment,
                 working_dir,
+                ..
             } => (
-                interpreter.as_str(),
+                interpreter.path.as_str(),
                 vec!["-c".to_owned(), script.clone()],
                 environment,
                 working_dir.as_str(),
@@ -186,7 +193,7 @@ fn clear_directory_contents(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn unique_pgo_dirs(jobs: &[JobPlan]) -> std::collections::BTreeSet<&str> {
+fn unique_pgo_dirs(jobs: &[JobPlan]) -> BTreeSet<&str> {
     jobs.iter().filter_map(|job| job.pgo_dir.as_deref()).collect()
 }
 
@@ -207,6 +214,89 @@ fn validate_build_host(required: &str, actual: &str) -> Result<(), Error> {
             actual: actual.to_owned(),
         })
     }
+}
+
+/// Restrict the calling task to the deterministic prefix of its current CPU
+/// affinity. The container payload is a single-task PID 1 at this point, so
+/// all later threads and subprocesses inherit this exact mask.
+fn restrict_current_cpu_affinity(jobs: u32) -> Result<(), Error> {
+    let current = sched_getaffinity(Pid::from_raw(0))?;
+    let allowed = affinity_cpu_ids(&current)?;
+    let selected = select_cpu_ids(&allowed, jobs, CpuSet::count())?;
+    let selected_mask = affinity_mask(&selected)?;
+
+    sched_setaffinity(Pid::from_raw(0), &selected_mask)?;
+
+    // The kernel may intersect a requested mask with cpuset/cgroup policy.
+    // Never continue with fewer CPUs (or a different equally-sized set) than
+    // the plan declares.
+    let applied = sched_getaffinity(Pid::from_raw(0))?;
+    let applied = affinity_cpu_ids(&applied)?;
+    let expected = usize::try_from(jobs).map_err(|_| Error::UnrepresentableCpuAffinity {
+        requested: jobs,
+        representable: CpuSet::count(),
+    })?;
+    if applied.len() != expected {
+        return Err(Error::CpuAffinityCardinalityMismatch {
+            expected: jobs,
+            actual: applied.len(),
+        });
+    }
+    if applied != selected {
+        return Err(Error::CpuAffinityMaskMismatch {
+            expected: selected,
+            actual: applied,
+        });
+    }
+
+    Ok(())
+}
+
+fn affinity_cpu_ids(mask: &CpuSet) -> Result<Vec<usize>, Errno> {
+    let mut cpus = Vec::new();
+    for cpu in 0..CpuSet::count() {
+        if mask.is_set(cpu)? {
+            cpus.push(cpu);
+        }
+    }
+    Ok(cpus)
+}
+
+fn affinity_mask(cpus: &[usize]) -> Result<CpuSet, Errno> {
+    let mut mask = CpuSet::new();
+    for cpu in cpus {
+        mask.set(*cpu)?;
+    }
+    Ok(mask)
+}
+
+/// Select the lowest numbered representable CPUs, independent of the order in
+/// which the parent mask was supplied.
+fn select_cpu_ids(allowed: &[usize], jobs: u32, representable: usize) -> Result<Vec<usize>, Error> {
+    let requested = usize::try_from(jobs).map_err(|_| Error::UnrepresentableCpuAffinity {
+        requested: jobs,
+        representable,
+    })?;
+    if requested > representable {
+        return Err(Error::UnrepresentableCpuAffinity {
+            requested: jobs,
+            representable,
+        });
+    }
+
+    let allowed = allowed
+        .iter()
+        .copied()
+        .filter(|cpu| *cpu < representable)
+        .collect::<BTreeSet<_>>();
+    if requested > allowed.len() {
+        return Err(Error::InsufficientCpuAffinity {
+            requested: jobs,
+            available: allowed.len(),
+        });
+    }
+
+    Ok(allowed.into_iter().take(requested).collect())
 }
 
 fn logged(
@@ -391,6 +481,16 @@ pub enum Error {
     IncompatibleBuildHost { required: String, actual: String },
     #[error("frozen executor must run as PID 1 in its dedicated PID namespace, got PID {0}")]
     PidNamespaceInitRequired(i32),
+    #[error("frozen execution requests {requested} CPUs, but this executor can represent at most {representable}")]
+    UnrepresentableCpuAffinity { requested: u32, representable: usize },
+    #[error(
+        "frozen execution requests {requested} CPUs, but the current allowed affinity provides only {available} representable CPUs"
+    )]
+    InsufficientCpuAffinity { requested: u32, available: usize },
+    #[error("kernel applied {actual} CPUs to frozen execution; expected exactly {expected}")]
+    CpuAffinityCardinalityMismatch { expected: u32, actual: usize },
+    #[error("kernel applied CPU affinity {actual:?}; expected deterministic affinity {expected:?}")]
+    CpuAffinityMaskMismatch { expected: Vec<usize>, actual: Vec<usize> },
     #[error("unsupported frozen PGO stage {0}")]
     UnsupportedPgoStage(String),
     #[error("unsupported frozen phase {0}")]
@@ -414,6 +514,7 @@ mod tests {
     use std::{
         os::{fd::AsRawFd, unix::fs::symlink},
         path::PathBuf,
+        process::Command,
         time::{Duration, Instant},
     };
 
@@ -487,6 +588,36 @@ mod tests {
         );
     }
 
+    struct AffinityRestore(CpuSet);
+
+    impl Drop for AffinityRestore {
+        fn drop(&mut self) {
+            let _ = sched_setaffinity(Pid::from_raw(0), &self.0);
+        }
+    }
+
+    fn assert_child_inherits_single_cpu(cpu: usize) {
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                r#"
+                    found=
+                    while read -r key value rest; do
+                        if [ "$key" = "Cpus_allowed_list:" ]; then
+                            found=$value
+                            break
+                        fi
+                    done < /proc/self/status
+                    [ "$found" = "$EXPECTED_CPU" ]
+                "#,
+            ])
+            .env_clear()
+            .env("EXPECTED_CPU", cpu.to_string())
+            .status()
+            .unwrap();
+        assert!(status.success(), "child did not inherit the single-CPU affinity");
+    }
+
     #[test]
     fn repeated_pgo_directories_are_recreated_once() {
         let job = JobPlan {
@@ -518,6 +649,78 @@ mod tests {
                 ("OVERRIDE".to_owned(), "step".to_owned()),
                 ("STEP".to_owned(), "present".to_owned()),
             ])
+        );
+    }
+
+    #[test]
+    fn cpu_selection_uses_the_lowest_unique_representable_allowed_ids() {
+        assert_eq!(select_cpu_ids(&[9, 5, 3, 5, 7], 3, 8).unwrap(), [3, 5, 7]);
+
+        assert!(matches!(
+            select_cpu_ids(&[2, 4], 3, 8),
+            Err(Error::InsufficientCpuAffinity {
+                requested: 3,
+                available: 2
+            })
+        ));
+        assert!(matches!(
+            select_cpu_ids(&[0, 1, 2, 3], 4, 3),
+            Err(Error::UnrepresentableCpuAffinity {
+                requested: 4,
+                representable: 3
+            })
+        ));
+    }
+
+    #[test]
+    fn linux_cpu_affinity_is_exact_parent_relative_and_inherited() {
+        let current_task = Pid::from_raw(0);
+        let original = sched_getaffinity(current_task).unwrap();
+        let original_ids = affinity_cpu_ids(&original).unwrap();
+        assert!(!original_ids.is_empty(), "the test task must have an allowed CPU");
+
+        {
+            let _restore = AffinityRestore(original);
+
+            restrict_current_cpu_affinity(1).unwrap();
+            assert_eq!(
+                affinity_cpu_ids(&sched_getaffinity(current_task).unwrap()).unwrap(),
+                [original_ids[0]]
+            );
+            assert_child_inherits_single_cpu(original_ids[0]);
+
+            // Restore the complete parent mask before constructing a distinct
+            // one. An unprivileged task may widen its mask only within the
+            // enclosing cpuset, which is precisely the original set here.
+            sched_setaffinity(current_task, &original).unwrap();
+            if original_ids.len() > 1 {
+                let alternate_parent = affinity_mask(&original_ids[1..]).unwrap();
+                sched_setaffinity(current_task, &alternate_parent).unwrap();
+                let alternate_jobs = original_ids[1..].len().min(2) as u32;
+                restrict_current_cpu_affinity(alternate_jobs).unwrap();
+                assert_eq!(
+                    affinity_cpu_ids(&sched_getaffinity(current_task).unwrap()).unwrap(),
+                    original_ids[1..]
+                        .iter()
+                        .copied()
+                        .take(alternate_jobs as usize)
+                        .collect::<Vec<_>>()
+                );
+            }
+
+            sched_setaffinity(current_task, &original).unwrap();
+            let unavailable_jobs = u32::try_from(original_ids.len() + 1).unwrap();
+            assert!(matches!(
+                restrict_current_cpu_affinity(unavailable_jobs),
+                Err(Error::InsufficientCpuAffinity { .. } | Error::UnrepresentableCpuAffinity { .. })
+            ));
+            assert_eq!(sched_getaffinity(current_task).unwrap(), original);
+        }
+
+        assert_eq!(
+            sched_getaffinity(current_task).unwrap(),
+            original,
+            "the affinity test must restore its caller mask"
         );
     }
 

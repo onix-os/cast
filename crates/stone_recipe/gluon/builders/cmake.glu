@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 
 let defaults = {
     flags = [],
@@ -9,11 +9,9 @@ let defaults = {
 }
 
 let builder = \config -> b.builder.structured {
-    required_tools = [
-        b.dep.binary "cmake",
-        b.dep.binary "ninja",
-        b.dep.binary "ctest",
-    ],
+    // CMake and CTest are bound by the selected policy commands. Ninja is an
+    // indirect generator dependency and therefore remains explicit here.
+    required_tools = [b.dep.binary "ninja"],
     environment = [b.environment.cmake],
     phases = b.scripts {
         setup = b.phase [b.step.cmake_configure config.flags],
@@ -26,7 +24,7 @@ let builder = \config -> b.builder.structured {
 }
 
 {
-    abi_version = 1,
+    abi_version = 2,
     defaults,
     builder,
     default = builder defaults,

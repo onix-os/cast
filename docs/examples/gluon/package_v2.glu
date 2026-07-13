@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
-let cmake = import! boulder.builders.cmake.v1
+let b = import! boulder.package.v3
+let cmake = import! boulder.builders.cmake.v2
 
 // Package factories are ordinary pure Gluon functions. The root module calls
 // the function, so Rust receives a concrete PackageSpec rather than a closure.
@@ -27,7 +27,11 @@ let cmake = import! boulder.builders.cmake.v1
         },
         hooks = {
             post_install = [
-                b.step.shell r#"ln -s factory-hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hello""#,
+                b.step.shell_with {
+                    interpreter = b.program.binary "bash",
+                    declared_programs = [b.program.binary "ln"],
+                    script = r#"ln -s factory-hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hello""#,
+                },
             ],
             .. b.defaults.hooks
         },

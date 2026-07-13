@@ -6,7 +6,7 @@ use std::path::Path;
 use gluon_config::{DiagnosticCategory, Evaluator, Source, SourceRoot};
 use stone_recipe::package::{
     BuilderEnvironmentSpec, DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError, PackageEvaluationError,
-    StepSpec, SupportedHooksSpec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
+    ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -17,7 +17,14 @@ fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
 }
 
 fn authored(body: &str) -> Source {
-    Source::new("stone.glu", format!("let b = import! boulder.package.v2\n{body}"))
+    Source::new("stone.glu", format!("let b = import! boulder.package.v3\n{body}"))
+}
+
+fn binary_program(name: &str) -> ProgramSpec {
+    ProgramSpec {
+        path: format!("/usr/bin/{name}"),
+        requirement: DependencySpec::Binary(name.to_owned()),
+    }
 }
 
 #[test]
@@ -40,7 +47,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     ));
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
+        ["binary(ninja)"]
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
@@ -59,6 +66,8 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
         [
             StepSpec::CMakeInstall,
             StepSpec::Shell {
+                interpreter: binary_program("bash"),
+                declared_programs: vec![binary_program("ln")],
                 script: r#"ln -s factory-hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hello""#.to_owned()
             }
         ]
@@ -112,13 +121,13 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
         ["factory-hello"]
     );
     assert_eq!(evaluated.package.architectures, ["x86_64"]);
-    assert_eq!(PACKAGE_ABI_VERSION, 2);
+    assert_eq!(PACKAGE_ABI_VERSION, 3);
     assert!(
         evaluated
             .fingerprint
             .imported_modules
             .iter()
-            .any(|module| module.logical_name == "boulder.package.v2")
+            .any(|module| module.logical_name == "boulder.package.v3")
     );
 }
 
@@ -140,6 +149,119 @@ let root = b.output "out"
     let evaluated = evaluate_gluon(&source).unwrap();
     assert_eq!(evaluated.package.outputs.len(), 1);
     assert!(evaluated.package.outputs[0].include_in_manifest);
+}
+
+#[test]
+fn run_and_shell_steps_preserve_explicit_program_capabilities() {
+    let source = authored(
+        r#"
+let tool = b.package_ref "odd-tool"
+let scripts = b.scripts {
+    build = b.phase [
+        b.step.run (b.program.package tool "/opt/odd/bin/tool") ["--frozen"],
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.package tool "/opt/odd/bin/helper"],
+            script = "helper --check",
+        },
+        b.step.shell "echo builtin",
+    ],
+    .. b.defaults.scripts
+}
+{
+    builder = b.builder.custom scripts [],
+    outputs = [b.output "out"],
+    .. b.mk_package (b.meta {
+        pname = "example", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    })
+}
+"#,
+    );
+
+    let evaluated = evaluate_gluon(&source).unwrap();
+    assert_eq!(
+        evaluated.package.builder.phases.build.steps,
+        [
+            StepSpec::Run {
+                program: ProgramSpec {
+                    path: "/opt/odd/bin/tool".to_owned(),
+                    requirement: DependencySpec::Package(stone_recipe::package::PackageRef {
+                        name: "odd-tool".to_owned(),
+                    }),
+                },
+                args: vec!["--frozen".to_owned()],
+            },
+            StepSpec::Shell {
+                interpreter: binary_program("dash"),
+                declared_programs: vec![ProgramSpec {
+                    path: "/opt/odd/bin/helper".to_owned(),
+                    requirement: DependencySpec::Package(stone_recipe::package::PackageRef {
+                        name: "odd-tool".to_owned(),
+                    }),
+                }],
+                script: "helper --check".to_owned(),
+            },
+            StepSpec::Shell {
+                interpreter: binary_program("bash"),
+                declared_programs: Vec::new(),
+                script: "echo builtin".to_owned(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn invalid_program_bindings_are_rejected_before_planning() {
+    for (program, expected_field) in [
+        (
+            r#"{ path = "tool", requirement = b.dep.binary "tool" }"#,
+            "builder.phases.build.steps[0].program.path",
+        ),
+        (
+            r#"{ path = "/usr/bin/other", requirement = b.dep.binary "tool" }"#,
+            "builder.phases.build.steps[0].program.path",
+        ),
+        (
+            r#"{ path = "/usr/bin/pkg-config", requirement = b.dep.pkgconfig "example" }"#,
+            "builder.phases.build.steps[0].program.requirement",
+        ),
+        (
+            r#"{ path = "/usr/bin/nested/tool", requirement = b.dep.binary "nested/tool" }"#,
+            "builder.phases.build.steps[0].program.requirement",
+        ),
+        (
+            r#"{ path = "/usr/bin/tool", requirement = b.dep.package "tool-package" }"#,
+            "builder.phases.build.steps[0].program.path",
+        ),
+    ] {
+        let source = authored(&format!(
+            r#"
+let scripts = b.scripts {{
+    build = b.phase [b.step.run {program} []],
+    .. b.defaults.scripts
+}}
+{{
+    builder = b.builder.custom scripts [],
+    outputs = [b.output "out"],
+    .. b.mk_package (b.meta {{
+        pname = "example", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    }})
+}}
+"#
+        ));
+
+        let error = evaluate_gluon(&source).unwrap_err();
+        assert!(matches!(error, PackageEvaluationError::Conversion(_)));
+        assert_eq!(
+            match &error {
+                PackageEvaluationError::Conversion(error) => error.field(),
+                PackageEvaluationError::Evaluation(_) => unreachable!(),
+            },
+            expected_field
+        );
+    }
 }
 
 #[test]

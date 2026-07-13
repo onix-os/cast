@@ -8,14 +8,15 @@ use thiserror::Error;
 
 use super::{
     BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
-    PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, StepSpec, SupportedHooksSpec,
+    PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, ProgramSpec, StepSpec,
+    SupportedHooksSpec,
 };
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
 /// Version of the package-function ABI.
-pub const PACKAGE_ABI_VERSION: u32 = 2;
+pub const PACKAGE_ABI_VERSION: u32 = 3;
 
-/// Pure Gluon definitions exposed as `boulder.package.v2`.
+/// Pure Gluon definitions exposed as `boulder.package.v3`.
 pub const GLUON_PACKAGE_ABI: &str = include_str!("../../gluon/package.glu");
 
 pub const GLUON_CMAKE_BUILDER_ABI: &str = include_str!("../../gluon/builders/cmake.glu");
@@ -43,7 +44,7 @@ type Ordering =
 { Bool, Option, Result, Ordering }
 "#;
 
-/// A normalized package-v2 value returned by restricted Gluon evaluation.
+/// A normalized package-v3 value returned by restricted Gluon evaluation.
 #[derive(Debug, Clone)]
 pub struct EvaluatedPackage {
     pub package: PackageSpec,
@@ -114,20 +115,40 @@ struct GluonPhaseSpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 enum GluonStepSpec {
-    Shell { script: String },
-    CMakeConfigure { flags: Vec<String> },
+    Run {
+        program: GluonProgramSpec,
+        args: Vec<String>,
+    },
+    Shell {
+        interpreter: GluonProgramSpec,
+        declared_programs: Vec<GluonProgramSpec>,
+        script: String,
+    },
+    CMakeConfigure {
+        flags: Vec<String>,
+    },
     CMakeBuild,
     CMakeInstall,
     CMakeTest,
-    MesonSetup { flags: Vec<String> },
+    MesonSetup {
+        flags: Vec<String>,
+    },
     MesonBuild,
     MesonInstall,
     MesonTest,
     CargoFetch,
-    CargoBuild { features: Vec<String> },
-    CargoInstall { binaries: Vec<String> },
-    CargoTest { features: Vec<String> },
-    AutotoolsConfigure { flags: Vec<String> },
+    CargoBuild {
+        features: Vec<String>,
+    },
+    CargoInstall {
+        binaries: Vec<String>,
+    },
+    CargoTest {
+        features: Vec<String>,
+    },
+    AutotoolsConfigure {
+        flags: Vec<String>,
+    },
     AutotoolsBuild,
     AutotoolsInstall,
     AutotoolsTest,
@@ -170,6 +191,12 @@ enum GluonDependencySpec {
     CMake { target: String },
     Python { target: String },
     Interpreter { target: String },
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonProgramSpec {
+    path: String,
+    requirement: GluonDependencySpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -348,7 +375,19 @@ impl From<GluonPhaseSpec> for PhaseSpec {
 impl From<GluonStepSpec> for StepSpec {
     fn from(spec: GluonStepSpec) -> Self {
         match spec {
-            GluonStepSpec::Shell { script } => Self::Shell { script },
+            GluonStepSpec::Run { program, args } => Self::Run {
+                program: program.into(),
+                args,
+            },
+            GluonStepSpec::Shell {
+                interpreter,
+                declared_programs,
+                script,
+            } => Self::Shell {
+                interpreter: interpreter.into(),
+                declared_programs: declared_programs.into_iter().map(Into::into).collect(),
+                script,
+            },
             GluonStepSpec::CMakeConfigure { flags } => Self::CMakeConfigure { flags },
             GluonStepSpec::CMakeBuild => Self::CMakeBuild,
             GluonStepSpec::CMakeInstall => Self::CMakeInstall,
@@ -414,6 +453,15 @@ impl From<GluonDependencySpec> for DependencySpec {
             GluonDependencySpec::CMake { target } => Self::CMake(target),
             GluonDependencySpec::Python { target } => Self::Python(target),
             GluonDependencySpec::Interpreter { target } => Self::Interpreter(target),
+        }
+    }
+}
+
+impl From<GluonProgramSpec> for ProgramSpec {
+    fn from(spec: GluonProgramSpec) -> Self {
+        Self {
+            path: spec.path,
+            requirement: spec.requirement.into(),
         }
     }
 }
@@ -566,17 +614,17 @@ impl From<GluonNamedTuningSpec> for NamedTuningSpec {
     }
 }
 
-/// Evaluate a v2 package with the restricted default evaluator.
+/// Evaluate a v3 package with the restricted default evaluator.
 pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
     evaluate_gluon_with(&Evaluator::default(), source)
 }
 
-/// Evaluate a v2 package with caller-selected limits and source root.
+/// Evaluate a v3 package with caller-selected limits and source root.
 pub fn evaluate_gluon_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
     evaluate_gluon_with_inputs(evaluator, source, &[])
 }
 
-/// Evaluate a v2 package and bind lock bytes into its fingerprint.
+/// Evaluate a v3 package and bind lock bytes into its fingerprint.
 pub fn evaluate_gluon_with_inputs(
     evaluator: &Evaluator,
     source: &Source,
@@ -586,11 +634,11 @@ pub fn evaluate_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.package.v2", GLUON_PACKAGE_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.cmake.v1", GLUON_CMAKE_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.meson.v1", GLUON_MESON_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.cargo.v1", GLUON_CARGO_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("boulder.builders.autotools.v1", GLUON_AUTOTOOLS_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.package.v3", GLUON_PACKAGE_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
+    import_policy.insert_embedded_module("boulder.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
     let package = PackageSpec::from(evaluation.value);

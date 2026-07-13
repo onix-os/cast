@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 let output_defaults = b.outputs.named "llvm"
 
 let scripts = b.scripts {
     setup = b.phase [
-        b.step.shell r#"cmake -G Ninja \
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "cmake"],
+            script = r#"cmake -G Ninja \
     -B "$BOULDER_BUILDER_DIR" \
     -DCMAKE_VERBOSE_MAKEFILE=ON \
     -DCMAKE_C_FLAGS_RELEASE=-DNDEBUG \
@@ -21,12 +24,21 @@ let scripts = b.scripts {
     -S llvm \
     -DLLVM_BUILD_LLVM_DYLIB=ON \
     -DLLVM_ENABLE_PROJECTS=clang\;lld"#,
+        },
     ],
     build = b.phase [
-        b.step.shell r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" cmake --build "$BOULDER_BUILDER_DIR" --verbose --parallel "$BOULDER_JOBS""#,
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "cmake"],
+            script = r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" cmake --build "$BOULDER_BUILDER_DIR" --verbose --parallel "$BOULDER_JOBS""#,
+        },
     ],
     install = b.phase [
-        b.step.shell r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" DESTDIR="$BOULDER_INSTALL_ROOT" cmake --install "$BOULDER_BUILDER_DIR" --verbose"#,
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "cmake"],
+            script = r#"LD_LIBRARY_PATH="${BOULDER_WORK_DIR}/${BOULDER_BUILDER_DIR}/lib" DESTDIR="$BOULDER_INSTALL_ROOT" cmake --install "$BOULDER_BUILDER_DIR" --verbose"#,
+        },
     ],
     .. b.defaults.scripts
 }

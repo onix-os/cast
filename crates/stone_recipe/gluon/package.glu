@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-// Embedded, pure module imported by package factories as `boulder.package.v2`.
+// Embedded, pure module imported by package factories as `boulder.package.v3`.
 
 let _ = import! std.types
 let arrays = import! std.array.prim
@@ -23,8 +23,37 @@ type MetaSpec = {
     license: Array String,
 }
 
+type PackageRef = { name: String }
+
+type OutputRef = {
+    package: PackageRef,
+    output: String,
+}
+
+type DependencySpec =
+    | Package { value: PackageRef }
+    | Output { value: OutputRef }
+    | Binary { target: String }
+    | SystemBinary { target: String }
+    | PkgConfig { target: String }
+    | PkgConfig32 { target: String }
+    | Soname { target: String }
+    | CMake { target: String }
+    | Python { target: String }
+    | Interpreter { target: String }
+
+type ProgramSpec = {
+    path: String,
+    requirement: DependencySpec,
+}
+
 type StepSpec =
-    | Shell { script: String }
+    | Run { program: ProgramSpec, args: Array String }
+    | Shell {
+        interpreter: ProgramSpec,
+        declared_programs: Array ProgramSpec,
+        script: String,
+    }
     | CMakeConfigure { flags: Array String }
     | CMakeBuild
     | CMakeInstall
@@ -66,25 +95,6 @@ type HooksSpec = {
     pre_workload: Array StepSpec,
     post_workload: Array StepSpec,
 }
-
-type PackageRef = { name: String }
-
-type OutputRef = {
-    package: PackageRef,
-    output: String,
-}
-
-type DependencySpec =
-    | Package { value: PackageRef }
-    | Output { value: OutputRef }
-    | Binary { target: String }
-    | SystemBinary { target: String }
-    | PkgConfig { target: String }
-    | PkgConfig32 { target: String }
-    | Soname { target: String }
-    | CMake { target: String }
-    | Python { target: String }
-    | Interpreter { target: String }
 
 type BuilderEnvironmentSpec =
     | CMakeEnvironment
@@ -294,7 +304,7 @@ let local_output = \pname output -> Output {
     },
 }
 
-// Versioned boulder.package.v2 output defaults are part of the pure package
+// Versioned boulder.package.v3 output defaults are part of the pure package
 // factory ABI, not a filesystem-discovered or layered repository policy.
 // Changing their semantics requires a new package ABI. Output relations remain
 // symbolic here and are validated before Boulder sees the concrete PackageSpec.
@@ -531,6 +541,28 @@ let package_ref = \name -> { name }
 let output_ref = \package output -> { package, output }
 let named = \key value -> { key, value }
 
+let binary_program: String -> ProgramSpec = \target -> {
+    path = strings.append "/usr/bin/" target,
+    requirement = Binary { target },
+}
+
+let system_binary_program: String -> ProgramSpec = \target -> {
+    path = strings.append "/usr/sbin/" target,
+    requirement = SystemBinary { target },
+}
+
+let package_program: PackageRef -> String -> ProgramSpec = \package path -> {
+    path,
+    requirement = Package { value = package },
+}
+
+let output_program: OutputRef -> String -> ProgramSpec = \output path -> {
+    path,
+    requirement = Output { value = output },
+}
+
+let bash_program = binary_program "bash"
+
 let archive = \url hash -> ArchiveSource {
     url,
     hash,
@@ -547,13 +579,19 @@ let git = \url git_ref -> GitSource {
 }
 
 {
-    abi_version = 2,
+    abi_version = 3,
     mk_package,
     meta = \value -> value,
     scripts = \value -> value,
     phase = \steps -> { steps },
     step = {
-        shell = \script -> Shell { script },
+        run = \program args -> Run { program, args },
+        shell = \script -> Shell {
+            interpreter = bash_program,
+            declared_programs = [],
+            script,
+        },
+        shell_with = \value -> Shell value,
         cmake_configure = \flags -> CMakeConfigure { flags },
         cmake_build = CMakeBuild,
         cmake_install = CMakeInstall,
@@ -613,6 +651,12 @@ let git = \url git_ref -> GitSource {
     },
     package_ref,
     output_ref,
+    program = {
+        binary = binary_program,
+        system_binary = system_binary_program,
+        package = package_program,
+        output = output_program,
+    },
     dep = {
         package = \name -> Package { value = package_ref name },
         output = \package output -> Output { value = output_ref package output },

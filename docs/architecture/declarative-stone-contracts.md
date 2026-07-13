@@ -39,7 +39,7 @@ policy, or outputs.
 
 Implemented:
 
-- `boulder.package.v2` is the only public recipe ABI; the v1 Gluon module,
+- `boulder.package.v3` is the only public recipe ABI; the older Gluon modules,
   evaluator, encoders, and fixtures are removed.
 - `stone::relation` is the shared typed relation representation used by Stone,
   Boulder, Moss, and `stone_recipe` validation.

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 let make = import! "./package_v2.glu"
 let packages = import! "./package_set.glu"
 

@@ -8,21 +8,21 @@ use thiserror::Error;
 
 use super::{
     AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArchivePreparationPolicySpec, ArrayPatch,
-    BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec, BuildRootPolicySpec, BuildToolSpec,
-    BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec,
-    ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec,
-    InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec,
-    PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec, RetiredTargetPolicySpec, SandboxCredentialPolicySpec,
-    SandboxDevPolicySpec, SandboxFilesystemPolicySpec, SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec,
-    SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec,
-    ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
-    ValuePatch,
+    BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec, BuildProgramSpec, BuildRootPolicySpec,
+    BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec, CompilerFlagsSpec,
+    CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition,
+    GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec,
+    NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
+    RetiredTargetPolicySpec, SandboxCredentialPolicySpec, SandboxDevPolicySpec, SandboxFilesystemPolicySpec,
+    SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, SourcePreparationPolicySpec,
+    StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec,
+    ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
 
 /// Version of the typed repository build-policy ABI.
-pub const BUILD_POLICY_ABI_VERSION: u32 = 2;
+pub const BUILD_POLICY_ABI_VERSION: u32 = 3;
 
-/// Pure helpers imported by policy roots as `boulder.build_policy.v2`.
+/// Pure helpers imported by policy roots as `boulder.build_policy.v3`.
 pub const GLUON_BUILD_POLICY_ABI: &str = include_str!("../../gluon/build_policy.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
@@ -376,22 +376,26 @@ struct GluonSandboxPolicySpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBuilderCommandSpec {
-    program: GluonTextSpec,
+    program: GluonBuildProgramSpec,
     args: Vec<GluonTextSpec>,
     environment: Vec<GluonEnvironmentBindingSpec>,
     working_dir: GluonTextSpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuildProgramSpec {
+    path: String,
+    requirement: GluonBuildToolSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonArchivePreparationPolicySpec {
-    required_tools: Vec<GluonBuildToolSpec>,
     create_directory: GluonBuilderCommandSpec,
     unpack: GluonBuilderCommandSpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonGitPreparationPolicySpec {
-    required_tools: Vec<GluonBuildToolSpec>,
     create_directory: GluonBuilderCommandSpec,
     copy: GluonBuilderCommandSpec,
 }
@@ -498,11 +502,11 @@ struct GluonPgoStagePolicySpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonPgoPolicySpec {
-    required_tools: Vec<GluonBuildToolSpec>,
-    merge_program: GluonTextSpec,
+    shell_interpreter: GluonBuildProgramSpec,
+    merge_program: GluonBuildProgramSpec,
     merge_args: Vec<GluonTextSpec>,
-    copy_program: GluonTextSpec,
-    remove_program: GluonTextSpec,
+    copy_program: GluonBuildProgramSpec,
+    remove_program: GluonBuildProgramSpec,
     sample: GluonToolchainFlagsSpec,
     stage_one: GluonPgoStagePolicySpec,
     stage_two: GluonPgoStagePolicySpec,
@@ -768,6 +772,15 @@ impl From<GluonBuilderCommandSpec> for BuilderCommandSpec {
     }
 }
 
+impl From<GluonBuildProgramSpec> for BuildProgramSpec {
+    fn from(value: GluonBuildProgramSpec) -> Self {
+        Self {
+            path: value.path,
+            requirement: value.requirement.into(),
+        }
+    }
+}
+
 fn convert_tools(tools: Vec<GluonBuildToolSpec>) -> Vec<BuildToolSpec> {
     tools.into_iter().map(Into::into).collect()
 }
@@ -853,7 +866,6 @@ impl From<GluonBuildRootPolicySpec> for BuildRootPolicySpec {
 impl From<GluonArchivePreparationPolicySpec> for ArchivePreparationPolicySpec {
     fn from(value: GluonArchivePreparationPolicySpec) -> Self {
         Self {
-            required_tools: convert_tools(value.required_tools),
             create_directory: value.create_directory.into(),
             unpack: value.unpack.into(),
         }
@@ -863,7 +875,6 @@ impl From<GluonArchivePreparationPolicySpec> for ArchivePreparationPolicySpec {
 impl From<GluonGitPreparationPolicySpec> for GitPreparationPolicySpec {
     fn from(value: GluonGitPreparationPolicySpec) -> Self {
         Self {
-            required_tools: convert_tools(value.required_tools),
             create_directory: value.create_directory.into(),
             copy: value.copy.into(),
         }
@@ -911,7 +922,7 @@ impl From<GluonPgoStagePolicySpec> for PgoStagePolicySpec {
 impl From<GluonPgoPolicySpec> for PgoPolicySpec {
     fn from(value: GluonPgoPolicySpec) -> Self {
         Self {
-            required_tools: value.required_tools.into_iter().map(Into::into).collect(),
+            shell_interpreter: value.shell_interpreter.into(),
             merge_program: value.merge_program.into(),
             merge_args: value.merge_args.into_iter().map(Into::into).collect(),
             copy_program: value.copy_program.into(),
@@ -1089,8 +1100,9 @@ pub fn evaluate_gluon_with_inputs(
 ) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
     let mut import_policy = evaluator.import_policy().clone();
     import_policy.enable_array_primitives();
+    import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.build_policy.v2", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("boulder.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)?;
 
@@ -1129,8 +1141,9 @@ pub fn evaluate_patch_gluon_with_inputs(
 ) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
     let mut import_policy = evaluator.import_policy().clone();
     import_policy.enable_array_primitives();
+    import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("boulder.build_policy.v2", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("boulder.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)?;
 

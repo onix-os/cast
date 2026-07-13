@@ -58,11 +58,11 @@ pub enum Subcommand {
     Plan(PlanCommand),
     #[command(about = "Explain derivation identity and input provenance")]
     Explain(ExplainCommand),
-    #[command(about = "Evaluate and print the concrete normalized package-v2 declaration")]
+    #[command(about = "Evaluate and print the concrete normalized package-v3 declaration")]
     Eval {
         #[arg(
             default_value = "./stone.glu",
-            help = "Path to a package-v2 stone.glu file or recipe directory"
+            help = "Path to a package-v3 stone.glu file or recipe directory"
         )]
         recipe: PathBuf,
     },
@@ -281,7 +281,7 @@ fn check(path: PathBuf) -> Result<(), Error> {
 
 fn eval(path: PathBuf) -> Result<(), Error> {
     let recipe = recipe::Recipe::load(path).map_err(Error::CheckRecipe)?;
-    println!("package-v2-evaluation {{");
+    println!("package-v3-evaluation {{");
     println!("  recipe = {:?}", recipe.path.display().to_string());
     println!("  fingerprint = {:?}", recipe.fingerprint.sha256);
     println!("  declaration = {:#?}", recipe.declaration);
@@ -596,7 +596,7 @@ impl From<planner::Error> for Error {
 mod tests {
     use super::*;
 
-    const AUTHORED_EXPRESSION: &str = r#"let boulder = import! boulder.package.v2
+    const AUTHORED_EXPRESSION: &str = r#"let boulder = import! boulder.package.v3
 let release = 1
 let version = "1.2.3"
 boulder.mk_package (boulder.meta {
@@ -608,7 +608,7 @@ boulder.mk_package (boulder.meta {
 })
 "#;
 
-    const AUTHORED_WITH_ARCHIVE: &str = r#"let boulder = import! boulder.package.v2
+    const AUTHORED_WITH_ARCHIVE: &str = r#"let boulder = import! boulder.package.v3
 let base = boulder.mk_package (boulder.meta {
     pname = "example",
     version = "1.2.3",

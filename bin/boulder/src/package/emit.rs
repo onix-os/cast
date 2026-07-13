@@ -328,8 +328,8 @@ fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> 
 fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     use stone_recipe::build_policy::{AnalyzerKind, layers::BuildPolicyOperation};
     use stone_recipe::derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, ExecutionCredentials,
-        FrozenAnalyzerTool, LockedIdentity, LockedOutput, LockedPackage, LockedRequest, OutputPlan, PackageIdentity,
+        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, ExecutablePlan,
+        ExecutionCredentials, LockedIdentity, LockedOutput, LockedPackage, LockedRequest, OutputPlan, PackageIdentity,
         Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
         RelationKind, RelationPlan, RepositorySnapshot, policy_composition_identity, profile_aggregate_fingerprint,
     };
@@ -464,8 +464,8 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
         AnalyzerKind::CompressMan,
         AnalyzerKind::IncludeAny,
     ];
-    let analyzer_tool = |name: &str| FrozenAnalyzerTool {
-        program: format!("/usr/bin/{name}"),
+    let analyzer_tool = |name: &str| ExecutablePlan {
+        path: format!("/usr/bin/{name}"),
         requirement: RelationPlan {
             kind: RelationKind::Binary,
             name: name.to_owned(),

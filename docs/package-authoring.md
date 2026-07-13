@@ -6,7 +6,7 @@
 # Package authoring
 
 Boulder packages are pure Gluon programs evaluated through
-`boulder.package.v2`. A recipe may import local modules and call functions, but
+`boulder.package.v3`. A recipe may import local modules and call functions, but
 Rust receives one concrete, validated `PackageSpec`; it never retains a Gluon
 closure. The former `boulder.recipe.v1` ABI is not a compatibility path.
 
@@ -21,8 +21,8 @@ record containing symbolic dependencies selected by the caller:
 
 ```gluon
 // package.glu
-let b = import! boulder.package.v2
-let cmake = import! boulder.builders.cmake.v1
+let b = import! boulder.package.v3
+let cmake = import! boulder.builders.cmake.v2
 
 \scope ->
     let base = b.mk_package (b.meta {
@@ -52,7 +52,7 @@ The root `stone.glu` supplies the scope and therefore produces the concrete
 package value:
 
 ```gluon
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 let make = import! "./package.glu"
 
 make {
@@ -112,16 +112,16 @@ overriding typed settings:
 
 | Module | Settings | Structural phases | Environment marker |
 |---|---|---|---|
-| `boulder.builders.cmake.v1` | `flags`, `run_tests` | configure, build, install, test | CMake |
-| `boulder.builders.meson.v1` | `flags`, `run_tests` | setup, build, install, test | Meson |
-| `boulder.builders.cargo.v1` | `features`, `binaries`, `run_tests` | build, install, test | Cargo |
-| `boulder.builders.autotools.v1` | `flags`, `run_tests` | configure, build, install, test | Autotools |
+| `boulder.builders.cmake.v2` | `flags`, `run_tests` | configure, build, install, test | CMake |
+| `boulder.builders.meson.v2` | `flags`, `run_tests` | setup, build, install, test | Meson |
+| `boulder.builders.cargo.v2` | `features`, `binaries`, `run_tests` | build, install, test | Cargo |
+| `boulder.builders.autotools.v2` | `flags`, `run_tests` | configure, build, install, test | Autotools |
 
 Booleans use `b.boolean.true` and `b.boolean.false`. For example:
 
 ```gluon
-let b = import! boulder.package.v2
-let cargo = import! boulder.builders.cargo.v1
+let b = import! boulder.package.v3
+let cargo = import! boulder.builders.cargo.v2
 
 cargo.builder {
     features = ["cli", "tls"],
@@ -146,9 +146,13 @@ body:
 
 ```gluon
 hooks = b.hooks {
-    pre_build = [b.step.shell "generate-sources"],
+    pre_build = [b.step.run (b.program.binary "generate-sources") []],
     post_install = [
-        b.step.shell r#"ln -s hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hi""#,
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "ln"],
+            script = r#"ln -s hello "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/hi""#,
+        },
     ],
     .. b.defaults.hooks
 }
@@ -157,37 +161,44 @@ hooks = b.hooks {
 The current standard modules support `pre_` and `post_` positions for `setup`,
 `build`, `check`, `install`, and `workload`; unsupported populated hooks are a
 package-validation error. Hook and builder step order is preserved, but every
-frozen shell step runs in its own `bash -c` process. Filesystem effects persist;
+frozen shell step runs in its own declared interpreter process. `b.step.shell`
+is shorthand for a Gluon-authored `/usr/bin/bash` capability with no additional
+programs. Filesystem effects persist;
 process-local variables and working-directory changes never cross step
 boundaries. Put a one-command environment assignment directly on the command
 which consumes it.
 
 The package ABI exposes the typed standard-step constructors used by the
-embedded modules, plus `b.step.shell` and `b.step.cargo_fetch` for explicit
-custom work. Package authors normally select a standard module rather than
-rebuilding its phase graph step by step.
+embedded modules, plus `b.step.run`, `b.step.shell`, `b.step.shell_with`, and
+`b.step.cargo_fetch` for explicit custom work. Package authors normally select
+a standard module rather than rebuilding its phase graph step by step.
 
 ## Custom shell builders
 
 Use a custom builder only when the build cannot be represented by a standard
-builder. Every phase is an explicit `b.phase` and every executable program must
-also be declared in `required_tools`:
+builder. Every phase is an explicit `b.phase`. A direct `Run` binds one program
+to the dependency capability which provides it; a `Shell` binds its interpreter
+and every non-builtin program invoked by the script:
 
 ```gluon
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 
 let scripts = b.scripts {
-    setup = b.phase [b.step.shell "zig build --fetch"],
-    build = b.phase [b.step.shell "zig build -Doptimize=ReleaseSafe"],
-    check = b.phase [b.step.shell "zig build test"],
+    setup = b.phase [b.step.run (b.program.binary "zig") ["build", "--fetch"]],
+    build = b.phase [b.step.run (b.program.binary "zig") ["build", "-Doptimize=ReleaseSafe"]],
+    check = b.phase [b.step.run (b.program.binary "zig") ["build", "test"]],
     install = b.phase [
-        b.step.shell r#"zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#,
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "zig"],
+            script = r#"zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#,
+        },
     ],
     .. b.defaults.scripts
 }
 
 {
-    builder = b.builder.custom scripts [b.dep.binary "zig"],
+    builder = b.builder.custom scripts [],
     .. b.mk_package (b.meta {
         pname = "zig-hello",
         version = "1.0.0",
@@ -199,8 +210,12 @@ let scripts = b.scripts {
 ```
 
 `Shell` is an explicit, literal escape hatch. It never enters the former macro
-parser: `%name` and `%(name)` have no special meaning. Call tools directly and
-declare every executable in `required_tools`.
+parser: `%name` and `%(name)` have no special meaning. `b.program.binary` and
+`b.program.system_binary` construct canonical `/usr/bin` and `/usr/sbin`
+bindings. `b.program.package` and `b.program.output` bind an arbitrary
+normalized absolute guest path to a package or output capability. Relative,
+traversing, mismatched, and non-executable relation bindings are rejected
+during package validation.
 
 Every step receives a frozen build context. Shell steps access it through
 stable variables including:
@@ -223,7 +238,7 @@ names are local names; Boulder currently lowers `dev` to `<pname>-dev` at the
 internal packaging boundary.
 
 `b.mk_package` starts with the deterministic output set exported by
-`boulder.package.v2` (root, documentation, development, debug, libraries,
+`boulder.package.v3` (root, documentation, development, debug, libraries,
 32-bit, and demos). These are versioned package-ABI defaults: they are ordinary
 Gluon values present in the concrete evaluated `PackageSpec`, not a hidden Rust
 merge or a repository policy layer. A package can replace `outputs` explicitly
@@ -328,7 +343,7 @@ an independent cache inode, fixed mode, and the frozen timestamp.
 ### Frozen builds are offline
 
 Every byte fetched from outside the build root must be declared in `sources`
-and admitted through `sources.lock.glu` before execution. The package-v2
+and admitted through `sources.lock.glu` before execution. The package-v3
 `options.networking` field remains in the typed ABI as a possible future
 fixed-output request, but setting it to `b.boolean.true` is currently a package
 validation error. No valid frozen `PackageSpec` can enable in-build network

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use gluon_config::Source;
-use stone_recipe::package::{BuilderEnvironmentSpec, DependencySpec, StepSpec, SupportedHooksSpec, evaluate_gluon};
+use stone_recipe::package::{
+    BuilderEnvironmentSpec, DependencySpec, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
+};
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
     dependencies
@@ -11,11 +13,26 @@ fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
         .collect()
 }
 
+fn binary_program(name: &str) -> ProgramSpec {
+    ProgramSpec {
+        path: format!("/usr/bin/{name}"),
+        requirement: DependencySpec::Binary(name.to_owned()),
+    }
+}
+
+fn shell(script: &str, declared_programs: Vec<ProgramSpec>) -> StepSpec {
+    StepSpec::Shell {
+        interpreter: binary_program("bash"),
+        declared_programs,
+        script: script.to_owned(),
+    }
+}
+
 fn package(builder_import: &str, body: &str) -> Source {
     Source::new(
         "stone.glu",
         format!(
-            r#"let b = import! boulder.package.v2
+            r#"let b = import! boulder.package.v3
 let builder = import! {builder_import}
 let base = b.mk_package (b.meta {{
     pname = "example", version = "1.0.0", release = 1,
@@ -33,7 +50,7 @@ let base = b.mk_package (b.meta {{
 #[test]
 fn meson_builder_returns_tools_environment_phases_and_hooks() {
     let source = package(
-        "boulder.builders.meson.v1",
+        "boulder.builders.meson.v2",
         r#"builder.builder {
             flags = ["-Ddocumentation=false"],
             run_tests = b.boolean.false,
@@ -43,7 +60,7 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
 
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cmake)", "binary(meson)", "binary(ninja)", "binary(pkgconf)"]
+        ["binary(cmake)", "binary(ninja)", "binary(pkgconf)"]
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Meson]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
@@ -62,14 +79,14 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
             .fingerprint
             .imported_modules
             .iter()
-            .any(|module| module.logical_name == "boulder.builders.meson.v1")
+            .any(|module| module.logical_name == "boulder.builders.meson.v2")
     );
 }
 
 #[test]
 fn cmake_builder_returns_tools_environment_phases_and_hooks() {
     let source = package(
-        "boulder.builders.cmake.v1",
+        "boulder.builders.cmake.v2",
         r#"builder.builder {
             flags = ["-DBUILD_SHARED_LIBS=ON"],
             run_tests = b.boolean.true,
@@ -79,7 +96,7 @@ fn cmake_builder_returns_tools_environment_phases_and_hooks() {
 
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cmake)", "binary(ninja)", "binary(ctest)"]
+        ["binary(ninja)"]
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
@@ -98,7 +115,7 @@ fn cmake_builder_returns_tools_environment_phases_and_hooks() {
 #[test]
 fn cargo_builder_declares_features_binaries_environment_and_checks() {
     let source = package(
-        "boulder.builders.cargo.v1",
+        "boulder.builders.cargo.v2",
         r#"builder.builder {
             features = ["cli", "tls"],
             binaries = ["example", "examplectl"],
@@ -107,10 +124,7 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
     );
     let evaluated = evaluate_gluon(&source).unwrap();
 
-    assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cargo)"]
-    );
+    assert!(evaluated.package.builder.required_tools().is_empty());
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Cargo]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
     let phases = evaluated.package.phases();
@@ -132,7 +146,7 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
 #[test]
 fn autotools_builder_declares_structural_phase_contract() {
     let source = package(
-        "boulder.builders.autotools.v1",
+        "boulder.builders.autotools.v2",
         r#"builder.builder {
             flags = ["--disable-static"],
             .. builder.defaults
@@ -142,7 +156,7 @@ fn autotools_builder_declares_structural_phase_contract() {
 
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(autoconf)", "binary(automake)", "binary(make)"]
+        ["binary(autoconf)", "binary(automake)"]
     );
     assert_eq!(
         evaluated.package.builder.environment,
@@ -165,25 +179,33 @@ fn autotools_builder_declares_structural_phase_contract() {
 fn custom_shell_builder_requires_structural_tools_and_composes_hooks() {
     let source = Source::new(
         "stone.glu",
-        r#"let b = import! boulder.package.v2
+        r#"let b = import! boulder.package.v3
 let base = b.mk_package (b.meta {
     pname = "example", version = "1.0.0", release = 1,
     homepage = "https://example.com", license = ["MPL-2.0"],
 })
 let scripts = b.scripts {
     build = b.phase [
-        b.step.shell "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build",
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "zig"],
+            script = "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build",
+        },
     ],
     install = b.phase [
-        b.step.shell "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build install --prefix \"${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}\"",
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "zig"],
+            script = "ZIG_GLOBAL_CACHE_DIR=\"${BOULDER_BUILD_ROOT}/zig-cache\" zig build install --prefix \"${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}\"",
+        },
     ],
     .. b.defaults.scripts
 }
 {
     builder = b.builder.shell scripts [b.dep.binary "zig"],
     hooks = b.hooks {
-        pre_build = [b.step.shell "prepare-generated-files"],
-        post_build = [b.step.shell "verify-generated-files"],
+        pre_build = [b.step.run (b.program.binary "prepare-generated-files") []],
+        post_build = [b.step.run (b.program.binary "verify-generated-files") []],
         .. b.defaults.hooks
     },
     .. base
@@ -202,22 +224,25 @@ let scripts = b.scripts {
     assert_eq!(
         phases.build.steps,
         [
-            StepSpec::Shell {
-                script: "prepare-generated-files".to_owned()
+            StepSpec::Run {
+                program: binary_program("prepare-generated-files"),
+                args: Vec::new(),
             },
-            StepSpec::Shell {
-                script: r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build"#.to_owned()
-            },
-            StepSpec::Shell {
-                script: "verify-generated-files".to_owned()
+            shell(
+                r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build"#,
+                vec![binary_program("zig")],
+            ),
+            StepSpec::Run {
+                program: binary_program("verify-generated-files"),
+                args: Vec::new(),
             }
         ]
     );
     assert_eq!(
         phases.install.steps,
-        [StepSpec::Shell {
-            script: r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#
-                .to_owned()
-        }]
+        [shell(
+            r#"ZIG_GLOBAL_CACHE_DIR="${BOULDER_BUILD_ROOT}/zig-cache" zig build install --prefix "${BOULDER_INSTALL_ROOT}${BOULDER_PREFIX}""#,
+            vec![binary_program("zig")],
+        )]
     );
 }

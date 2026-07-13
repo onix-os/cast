@@ -7,8 +7,8 @@
 use std::fmt::{Arguments, Write as _};
 
 use stone_recipe::derivation::{
-    DerivationPlan, LockedIdentity, LockedSource, NetworkMode, OutputRelation, PathRuleKind, Platform, RelationKind,
-    RelationPlan, StepPlan,
+    BuildLock, DerivationPlan, ExecutablePlan, LockedIdentity, LockedSource, NetworkMode, OutputRelation, PathRuleKind,
+    Platform, RelationKind, RelationPlan, StepPlan,
 };
 
 use stone_recipe::build_policy::layers::BuildPolicyOperation;
@@ -304,9 +304,9 @@ impl Explanation<'_> {
             for (phase_index, phase) in job.phases.iter().enumerate() {
                 formatter.indexed_open(4, "phase", phase_index);
                 formatter.string(5, "name", &phase.name);
-                format_steps(formatter, 5, "pre", &phase.pre);
-                format_steps(formatter, 5, "steps", &phase.steps);
-                format_steps(formatter, 5, "post", &phase.post);
+                format_steps(formatter, 5, "pre", &phase.pre, &self.plan.build_lock);
+                format_steps(formatter, 5, "steps", &phase.steps, &self.plan.build_lock);
+                format_steps(formatter, 5, "post", &phase.post, &self.plan.build_lock);
                 formatter.close(4);
             }
             formatter.close(3);
@@ -408,7 +408,7 @@ impl Explanation<'_> {
                 .expect("validated analysis tool must have an exact locked provider");
             formatter.indexed_open(3, "tool", index);
             formatter.string(4, "role", role);
-            formatter.string(4, "program", &tool.program);
+            formatter.string(4, "path", &tool.path);
             formatter.string(4, "requirement", &request_name);
             formatter.string(4, "package_id", &request.package_id);
             formatter.string(4, "output", &request.output);
@@ -569,7 +569,7 @@ const fn policy_operation(operation: BuildPolicyOperation) -> &'static str {
     }
 }
 
-fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[StepPlan]) {
+fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[StepPlan], build_lock: &BuildLock) {
     formatter.open(indent, name);
     for (index, step) in steps.iter().enumerate() {
         formatter.indexed_open(indent + 1, "step", index);
@@ -581,7 +581,7 @@ fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[S
                 working_dir,
             } => {
                 formatter.string(indent + 2, "kind", "run");
-                formatter.string(indent + 2, "program", program);
+                format_executable(formatter, indent + 2, "program", program, build_lock);
                 formatter.string_list(indent + 2, "args", args.iter().map(String::as_str));
                 formatter.open(indent + 2, "environment");
                 for (key, value) in environment {
@@ -592,12 +592,20 @@ fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[S
             }
             StepPlan::Shell {
                 interpreter,
+                declared_programs,
                 script,
                 environment,
                 working_dir,
             } => {
                 formatter.string(indent + 2, "kind", "shell");
-                formatter.string(indent + 2, "interpreter", interpreter);
+                format_executable(formatter, indent + 2, "interpreter", interpreter, build_lock);
+                formatter.open(indent + 2, "declared_programs");
+                for (program_index, program) in declared_programs.iter().enumerate() {
+                    formatter.indexed_open(indent + 3, "program", program_index);
+                    format_executable(formatter, indent + 4, "executable", program, build_lock);
+                    formatter.close(indent + 3);
+                }
+                formatter.close(indent + 2);
                 formatter.string(indent + 2, "script", script);
                 formatter.open(indent + 2, "environment");
                 for (key, value) in environment {
@@ -609,6 +617,27 @@ fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[S
         }
         formatter.close(indent + 1);
     }
+    formatter.close(indent);
+}
+
+fn format_executable(
+    formatter: &mut Formatter,
+    indent: usize,
+    name: &str,
+    executable: &ExecutablePlan,
+    build_lock: &BuildLock,
+) {
+    let request_name = executable.requirement.canonical_name();
+    let request = build_lock
+        .requests
+        .iter()
+        .find(|request| request.request == request_name)
+        .expect("validated executable must have an exact locked provider");
+    formatter.open(indent, name);
+    formatter.string(indent + 1, "path", &executable.path);
+    formatter.string(indent + 1, "requirement", &request_name);
+    formatter.string(indent + 1, "package_id", &request.package_id);
+    formatter.string(indent + 1, "output", &request.output);
     formatter.close(indent);
 }
 
@@ -713,8 +742,8 @@ mod tests {
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
             AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
-            DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutionCredentials, ExecutionPolicy,
-            FrozenAnalyzerTool, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
+            DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutablePlan, ExecutionCredentials,
+            ExecutionPolicy, JobPlan, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, OutputPlan,
             PackageIdentity, PhasePlan, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
             ProfileFragmentProvenance, RepositorySnapshot, RootMaterializationMode, policy_composition_identity,
             profile_aggregate_fingerprint,
@@ -837,6 +866,21 @@ mod tests {
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
                 },
+                LockedRequest {
+                    request: "binary(prepare)".to_owned(),
+                    package_id: "alpha-id".to_owned(),
+                    output: "out".to_owned(),
+                },
+                LockedRequest {
+                    request: "binary(bash)".to_owned(),
+                    package_id: "alpha-id".to_owned(),
+                    output: "out".to_owned(),
+                },
+                LockedRequest {
+                    request: "binary(finish)".to_owned(),
+                    package_id: "alpha-id".to_owned(),
+                    output: "out".to_owned(),
+                },
             ],
             packages: vec![
                 LockedPackage {
@@ -894,7 +938,15 @@ mod tests {
                 fingerprint: profile_aggregate_fingerprint(&provenance.profiles),
             },
             toolchain: identity("llvm"),
-            builder: identity("boulder.builders.cmake.v1"),
+            builder: identity("boulder.builders.cmake.v2"),
+        };
+
+        let executable = |name: &str| ExecutablePlan {
+            path: format!("/usr/bin/{name}"),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary,
+                name: name.to_owned(),
+            },
         };
 
         let plan = DerivationPlan {
@@ -936,7 +988,7 @@ mod tests {
                 phases: vec![PhasePlan {
                     name: "build".to_owned(),
                     pre: vec![StepPlan::Run {
-                        program: "prepare".to_owned(),
+                        program: executable("prepare"),
                         args: vec!["--first".to_owned(), "second value".to_owned()],
                         environment: BTreeMap::from([
                             ("Z_PRE".to_owned(), "z".to_owned()),
@@ -945,13 +997,14 @@ mod tests {
                         working_dir: "/sandbox/build/job/work".to_owned(),
                     }],
                     steps: vec![StepPlan::Shell {
-                        interpreter: "/bin/sh".to_owned(),
+                        interpreter: executable("bash"),
+                        declared_programs: vec![executable("alpha")],
                         script: "printf 'build\\n'".to_owned(),
                         environment: BTreeMap::from([("BUILD_MODE".to_owned(), "release".to_owned())]),
                         working_dir: "/sandbox/build/job/work".to_owned(),
                     }],
                     post: vec![StepPlan::Run {
-                        program: "finish".to_owned(),
+                        program: executable("finish"),
                         args: Vec::new(),
                         environment: BTreeMap::new(),
                         working_dir: "/sandbox/build/job".to_owned(),
@@ -990,8 +1043,8 @@ mod tests {
             analysis: AnalysisPlan {
                 handlers: vec![AnalyzerKind::Elf, AnalyzerKind::Binary, AnalyzerKind::IncludeAny],
                 tools: AnalysisToolsPlan {
-                    objcopy: Some(FrozenAnalyzerTool {
-                        program: "/usr/bin/objcopy".to_owned(),
+                    objcopy: Some(ExecutablePlan {
+                        path: "/usr/bin/objcopy".to_owned(),
                         requirement: RelationPlan {
                             kind: RelationKind::Binary,
                             name: "objcopy".to_owned(),
@@ -1080,10 +1133,17 @@ mod tests {
 
     #[test]
     fn complete_explanation_matches_the_golden() {
-        assert_eq!(
-            fixture().render(),
-            include_str!("../../../tests/golden/recipe-explain.txt")
-        );
+        let rendered = fixture().render();
+        if std::env::var_os("BLESS").is_some() {
+            fs_err::write(
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/recipe-explain.txt"),
+                rendered,
+            )
+            .expect("golden explanation must be writable");
+            return;
+        }
+
+        assert_eq!(rendered, include_str!("../../../tests/golden/recipe-explain.txt"));
     }
 
     #[test]

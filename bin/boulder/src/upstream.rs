@@ -36,7 +36,7 @@ pub enum Upstream {
 }
 
 impl Upstream {
-    /// Constructs an upstream from one concrete package-v2 source request.
+    /// Constructs an upstream from one concrete package-v3 source request.
     pub fn from_package_source(
         source: &UpstreamSpec,
         original_index: usize,
@@ -397,7 +397,7 @@ mod tests {
 
     fn gluon_git_recipe(url: &str) -> String {
         format!(
-            r#"let boulder = import! boulder.package.v2
+            r#"let boulder = import! boulder.package.v3
 let base = boulder.mk_package (boulder.meta {{
     pname = "example",
     version = "1.2.3",

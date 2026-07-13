@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 
 let defaults = {
     flags = [],
@@ -12,7 +12,6 @@ let builder = \config -> b.builder.structured {
     required_tools = [
         b.dep.binary "autoconf",
         b.dep.binary "automake",
-        b.dep.binary "make",
     ],
     environment = [b.environment.autotools],
     phases = b.scripts {
@@ -26,7 +25,7 @@ let builder = \config -> b.builder.structured {
 }
 
 {
-    abi_version = 1,
+    abi_version = 2,
     defaults,
     builder,
     default = builder defaults,

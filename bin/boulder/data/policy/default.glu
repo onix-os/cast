@@ -4,7 +4,7 @@
 // Repository-owned build policy. This file contains data only; every dynamic
 // value is an explicit member of the finite build context.
 
-let p = import! boulder.build_policy.v2
+let p = import! boulder.build_policy.v3
 
 let lit = p.text.literal
 let ctx = \value -> p.text.context value
@@ -35,7 +35,7 @@ let llvm_architecture_flags = \llvm -> {
 }
 
 let command = \program args environment -> p.command {
-    program = lit program,
+    program = p.program.binary program,
     args,
     environment,
     working_dir = ctx c.work_dir,
@@ -308,7 +308,7 @@ let build_root = {
 }
 
 let source_command = \program args -> p.command {
-    program = lit program,
+    program = p.program.binary program,
     args,
     environment = [],
     working_dir = ctx c.build_root,
@@ -322,7 +322,6 @@ let sources = {
     archive = {
         // Every archive format is handled by this exact structural command;
         // closure requirements cannot drift from an extension-only switch.
-        required_tools = [p.tool.binary "mkdir", p.tool.binary "bsdtar-static"],
         create_directory = create_source_directory,
         unpack = source_command "bsdtar-static" [
             lit "xf",
@@ -334,7 +333,6 @@ let sources = {
         ],
     },
     git = {
-        required_tools = [p.tool.binary "mkdir", p.tool.binary "cp"],
         create_directory = create_source_directory,
         copy = source_command "cp" [
             lit "-Ra",
@@ -491,7 +489,7 @@ let cargo = p.builder {
 
 let autotools = p.builder {
     environment = config_shell,
-    setup = command "/usr/bin/dash" [
+    setup = command "dash" [
         lit "./configure",
         cat [lit "--prefix=", ctx c.prefix],
         cat [lit "--bindir=", ctx c.bindir],
@@ -2332,11 +2330,11 @@ p.policy {
         p.analyzer.include_any,
     ],
     pgo = {
-        required_tools = [p.tool.binary "llvm-profdata"],
-        merge_program = lit "llvm-profdata",
+        shell_interpreter = p.program.binary "bash",
+        merge_program = p.program.binary "llvm-profdata",
         merge_args = [lit "merge", lit "--failure-mode=all"],
-        copy_program = lit "cp",
-        remove_program = lit "rm",
+        copy_program = p.program.binary "cp",
+        remove_program = p.program.binary "rm",
         sample = pgo_sample,
         stage_one = p.pgo_stage {
             flags = pgo_stage_one_flags,

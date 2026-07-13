@@ -40,7 +40,7 @@ pub struct Packager {
     collector: Collector,
 }
 
-/// One emitted package resolved from a direct package-v2 output.
+/// One emitted package resolved from a direct package-v3 output.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolvedOutput {
     pub(crate) include_in_manifest: bool,
@@ -811,12 +811,12 @@ mod tests {
     use super::*;
     use stone_recipe::build_policy::AnalyzerKind;
     use stone_recipe::derivation::{
-        AnalysisToolsPlan, CollectionRulePlan, FrozenAnalyzerTool, OutputPlan, PathRuleKind, RelationKind, RelationPlan,
+        AnalysisToolsPlan, CollectionRulePlan, ExecutablePlan, OutputPlan, PathRuleKind, RelationKind, RelationPlan,
     };
 
-    fn frozen_analyzer_tool(name: &str) -> FrozenAnalyzerTool {
-        FrozenAnalyzerTool {
-            program: format!("/usr/bin/{name}"),
+    fn frozen_analyzer_tool(name: &str) -> ExecutablePlan {
+        ExecutablePlan {
+            path: format!("/usr/bin/{name}"),
             requirement: RelationPlan {
                 kind: RelationKind::Binary,
                 name: name.to_owned(),

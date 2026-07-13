@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Embedded, pure API imported by repository build policy as
-// `boulder.build_policy.v2`.
+// `boulder.build_policy.v3`.
 
-let arrays = import! std.array.prim
 let _ = import! std.types
+let arrays = import! std.array.prim
+let strings = import! std.string.prim
 
 type Boolean =
     | False
@@ -198,6 +199,11 @@ type BuildToolSpec =
     | Binary { target : String }
     | SystemBinary { target : String }
 
+type BuildProgramSpec = {
+    path : String,
+    requirement : BuildToolSpec,
+}
+
 type ToolchainInputPolicySpec = {
     llvm : Array BuildToolSpec,
     gnu : Array BuildToolSpec,
@@ -284,20 +290,18 @@ type SandboxPolicySpec = {
 }
 
 type BuilderCommandSpec = {
-    program : TextSpec,
+    program : BuildProgramSpec,
     args : Array TextSpec,
     environment : Array EnvironmentBindingSpec,
     working_dir : TextSpec,
 }
 
 type ArchivePreparationPolicySpec = {
-    required_tools : Array BuildToolSpec,
     create_directory : BuilderCommandSpec,
     unpack : BuilderCommandSpec,
 }
 
 type GitPreparationPolicySpec = {
-    required_tools : Array BuildToolSpec,
     create_directory : BuilderCommandSpec,
     copy : BuilderCommandSpec,
 }
@@ -379,11 +383,11 @@ type PgoStagePolicySpec = {
 }
 
 type PgoPolicySpec = {
-    required_tools : Array BuildToolSpec,
-    merge_program : TextSpec,
+    shell_interpreter : BuildProgramSpec,
+    merge_program : BuildProgramSpec,
     merge_args : Array TextSpec,
-    copy_program : TextSpec,
-    remove_program : TextSpec,
+    copy_program : BuildProgramSpec,
+    remove_program : BuildProgramSpec,
     sample : ToolchainFlagsSpec,
     stage_one : PgoStagePolicySpec,
     stage_two : PgoStagePolicySpec,
@@ -465,6 +469,18 @@ let flags: CompilerFlagsSpec -> CompilerFlagsSpec = \value -> value
 let target: TargetPolicySpec -> TargetPolicySpec = \value -> value
 let retired_target: RetiredTargetPolicySpec -> RetiredTargetPolicySpec = \value -> value
 let command: BuilderCommandSpec -> BuilderCommandSpec = \value -> value
+let binary_program = \target -> {
+    path = strings.append "/usr/bin/" target,
+    requirement = Binary { target },
+}
+let system_binary_program = \target -> {
+    path = strings.append "/usr/sbin/" target,
+    requirement = SystemBinary { target },
+}
+let package_program = \target path -> {
+    path,
+    requirement = Package { target },
+}
 let builder: StandardBuilderPolicySpec -> StandardBuilderPolicySpec = \value -> value
 let pgo_finish: PgoFinishSpec -> PgoFinishSpec = \value -> value
 let pgo_stage: PgoStagePolicySpec -> PgoStagePolicySpec = \value -> value
@@ -491,7 +507,7 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
 }
 
 {
-    abi_version = 1,
+    abi_version = 3,
     policy,
     policy_patch,
     text = {
@@ -608,6 +624,11 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
         package = \target -> Package { target },
         binary = \target -> Binary { target },
         system_binary = \target -> SystemBinary { target },
+    },
+    program = {
+        binary = binary_program,
+        system_binary = system_binary_program,
+        package = package_program,
     },
     target_emulation = {
         native = Native,

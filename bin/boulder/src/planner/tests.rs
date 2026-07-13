@@ -30,7 +30,7 @@ const ALTERNATE_PROFILE: &str = "planner-hermetic-alternate";
 const TARGET: &str = "x86_64";
 const SOURCE_DATE_EPOCH: i64 = 1_700_000_000;
 
-const RECIPE: &str = r#"let b = import! boulder.package.v2
+const RECIPE: &str = r#"let b = import! boulder.package.v3
 
 let scripts = b.scripts {
     build = b.phase [b.step.shell "printf planner-hermetic > build.log"],

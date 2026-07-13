@@ -46,7 +46,7 @@ mod tests {
         fs::write(
             root.path().join("stone.glu"),
             format!(
-                r#"let b = import! boulder.package.v2
+                r#"let b = import! boulder.package.v3
 let base = b.mk_package (b.meta {{
     pname = "example", version = "1.0.0", release = 1,
     homepage = "https://example.invalid", license = ["MPL-2.0"],

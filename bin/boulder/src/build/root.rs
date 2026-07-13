@@ -7,14 +7,14 @@ use std::{io, path::PathBuf};
 use fs_err as fs;
 use moss::{Installation, package, repository, util};
 use stone_recipe::{
-    ToolchainSpec, UpstreamSpec,
+    ToolchainSpec,
     build_policy::{AnalyzerKind, BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
-    derivation::{BuildLock, DerivationPlan, LockedPackage, RelationPlan, RepositorySnapshot},
+    derivation::{BuildLock, DerivationPlan, LockedPackage, RelationPlan, RepositorySnapshot, StepPlan},
     package::PackageSpec,
 };
 use thiserror::Error;
 
-use crate::build::{Builder, pgo};
+use crate::build::{Builder, job::Job};
 use crate::{Timing, container, timing};
 
 pub fn populate_frozen(
@@ -189,14 +189,15 @@ fn locked_metadata_matches(locked: &LockedPackage, package: &moss::Package) -> b
 }
 
 pub(crate) fn packages(builder: &Builder) -> Result<Vec<String>, Error> {
-    packages_for(
+    let mut packages = packages_for(
         &builder.target.build_policy.spec,
         &builder.recipe.declaration,
         builder.recipe.build_target_profile_key(&builder.target.target_policy),
         &builder.target.target_policy,
         builder.ccache,
-        pgo::stages(&builder.recipe, &builder.target.target_policy).is_some(),
-    )
+    )?;
+    extend_job_executables(&mut packages, &builder.target.jobs);
+    Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
 }
 
 fn packages_for(
@@ -205,7 +206,6 @@ fn packages_for(
     profile: Option<&str>,
     target: &TargetPolicySpec,
     compiler_cache: bool,
-    pgo_enabled: bool,
 ) -> Result<Vec<String>, Error> {
     let mut packages = Vec::new();
     extend_policy_tools(&mut packages, "build_root.base", &policy.build_root.base)?;
@@ -240,10 +240,6 @@ fn packages_for(
         )?;
     }
 
-    if pgo_enabled && matches!(package.options.toolchain, ToolchainSpec::Llvm) {
-        extend_policy_tools(&mut packages, "pgo.required_tools", &policy.pgo.required_tools)?;
-    }
-
     for (field, tool) in selected_analyzer_tools(policy, package).entries() {
         extend_policy_tools(&mut packages, field, std::slice::from_ref(tool))?;
     }
@@ -253,34 +249,31 @@ fn packages_for(
             .into_iter()
             .map(|relation| relation.canonical_name()),
     );
-    extend_source_tools(&mut packages, policy, &package.sources)?;
-
     Ok(packages.into_iter().collect::<BTreeSet<_>>().into_iter().collect())
 }
 
-fn extend_source_tools(
-    packages: &mut Vec<String>,
-    policy: &BuildPolicySpec,
-    sources: &[UpstreamSpec],
-) -> Result<(), Error> {
-    for source in sources {
-        match source {
-            UpstreamSpec::Archive { unpack: true, .. } => {
-                extend_policy_tools(
-                    packages,
-                    "sources.archive.required_tools",
-                    &policy.sources.archive.required_tools,
-                )?;
+fn extend_job_executables(packages: &mut Vec<String>, jobs: &[Job]) {
+    for step in jobs
+        .iter()
+        .flat_map(|job| job.phases.values())
+        .flat_map(|phase| phase.pre.iter().chain(&phase.steps).chain(&phase.post))
+    {
+        match step {
+            StepPlan::Run { program, .. } => packages.push(program.requirement.canonical_name()),
+            StepPlan::Shell {
+                interpreter,
+                declared_programs,
+                ..
+            } => {
+                packages.push(interpreter.requirement.canonical_name());
+                packages.extend(
+                    declared_programs
+                        .iter()
+                        .map(|program| program.requirement.canonical_name()),
+                );
             }
-            UpstreamSpec::Archive { unpack: false, .. } => {}
-            UpstreamSpec::Git { .. } => extend_policy_tools(
-                packages,
-                "sources.git.required_tools",
-                &policy.sources.git.required_tools,
-            )?,
         }
     }
-    Ok(())
 }
 
 fn extend_policy_tools(packages: &mut Vec<String>, field: &'static str, tools: &[BuildToolSpec]) -> Result<(), Error> {
@@ -411,10 +404,11 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use gluon_config::Source;
     use moss::package::{Flags, Meta, Name};
+    use stone_recipe::UpstreamSpec;
     use stone_recipe::derivation::{LockedOutput, LockedOutputRef};
 
     use super::*;
@@ -459,7 +453,7 @@ mod tests {
     fn selected_inputs_package() -> PackageSpec {
         let source = Source::new(
             "stone.glu",
-            r#"let b = import! boulder.package.v2
+            r#"let b = import! boulder.package.v3
 let base = b.mk_package (b.meta {
     pname = "example", version = "1.0.0", release = 1,
     homepage = "https://example.invalid", license = ["MPL-2.0"],
@@ -496,8 +490,8 @@ let unrelated = b.profile_with {
     fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
         let source = Source::new(
             "stone.glu",
-            r#"let b = import! boulder.package.v2
-let cmake = import! boulder.builders.cmake.v1
+            r#"let b = import! boulder.package.v3
+let cmake = import! boulder.builders.cmake.v2
 let base = b.mk_package (b.meta {
     pname = "example", version = "1.0.0", release = 1,
     homepage = "https://example.invalid", license = ["MPL-2.0"],
@@ -539,8 +533,6 @@ let base = b.mk_package (b.meta {
         policy.build_root.emul32.toolchains.gnu = vec![BuildToolSpec::Package("policy-gnu32".to_owned())];
         policy.build_root.mold.required_tools = vec![BuildToolSpec::Binary("policy-mold".to_owned())];
         policy.build_root.compiler_cache.required_tools = vec![BuildToolSpec::Binary("policy-cache".to_owned())];
-        policy.sources.archive.required_tools = vec![BuildToolSpec::Binary("policy-archive".to_owned())];
-        policy.sources.git.required_tools = vec![BuildToolSpec::SystemBinary("policy-git".to_owned())];
 
         let mut package = selected_inputs_package();
         package.options.toolchain = ToolchainSpec::Gnu;
@@ -576,17 +568,14 @@ let base = b.mk_package (b.meta {
             .unwrap()
             .clone();
 
-        let packages = packages_for(&policy, &package, None, &target, true, false).unwrap();
+        let packages = packages_for(&policy, &package, None, &target, true).unwrap();
         let expected = [
             "base-build",
             "base-check",
             "base-native",
-            "binary(cmake)",
-            "binary(ctest)",
             "binary(ninja)",
             "binary(objcopy)",
             "binary(pkg-config)",
-            "binary(policy-archive)",
             "binary(policy-cache)",
             "binary(policy-gnu)",
             "binary(policy-mold)",
@@ -595,7 +584,6 @@ let base = b.mk_package (b.meta {
             "policy-base",
             "policy-gnu32",
             "sysbinary(policy-emul-base)",
-            "sysbinary(policy-git)",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -660,27 +648,53 @@ let base = b.mk_package (b.meta {
         );
     }
 
+    fn executable(name: &str) -> stone_recipe::derivation::ExecutablePlan {
+        stone_recipe::derivation::ExecutablePlan {
+            path: format!("/usr/bin/{name}"),
+            requirement: RelationPlan {
+                kind: stone_recipe::derivation::RelationKind::Binary,
+                name: name.to_owned(),
+            },
+        }
+    }
+
     #[test]
-    fn pgo_policy_tools_follow_the_llvm_finish_command() {
-        let mut policy = repository_policy();
-        policy.pgo.required_tools = vec![BuildToolSpec::SystemBinary("policy-profdata".to_owned())];
-        let mut package = selected_inputs_package();
-        let target = policy
-            .targets
-            .iter()
-            .find(|target| target.name == "x86_64")
-            .unwrap()
-            .clone();
+    fn exact_root_executables_follow_only_reachable_frozen_jobs() {
+        let jobs = [Job {
+            pgo_stage: None,
+            phases: BTreeMap::from([(
+                crate::build::job::Phase::Workload,
+                stone_recipe::derivation::PhasePlan {
+                    name: "workload".to_owned(),
+                    pre: vec![StepPlan::Run {
+                        program: executable("remove"),
+                        args: Vec::new(),
+                        environment: BTreeMap::new(),
+                        working_dir: "/mason/build".to_owned(),
+                    }],
+                    steps: vec![StepPlan::Shell {
+                        interpreter: executable("bash"),
+                        declared_programs: vec![executable("profdata")],
+                        script: "ambient-command must-not-be-inferred".to_owned(),
+                        environment: BTreeMap::new(),
+                        working_dir: "/mason/build".to_owned(),
+                    }],
+                    post: Vec::new(),
+                },
+            )]),
+            work_dir: PathBuf::from("/mason/build"),
+            build_dir: PathBuf::from("/mason/build"),
+        }];
 
-        package.options.toolchain = ToolchainSpec::Llvm;
-        let llvm = packages_for(&policy, &package, None, &target, false, true).unwrap();
-        let llvm_without_pgo = packages_for(&policy, &package, None, &target, false, false).unwrap();
-        package.options.toolchain = ToolchainSpec::Gnu;
-        let gnu = packages_for(&policy, &package, None, &target, false, true).unwrap();
-
-        assert!(llvm.contains(&"sysbinary(policy-profdata)".to_owned()));
-        assert!(!llvm_without_pgo.contains(&"sysbinary(policy-profdata)".to_owned()));
-        assert!(!gnu.contains(&"sysbinary(policy-profdata)".to_owned()));
+        let mut requested = Vec::new();
+        extend_job_executables(&mut requested, &jobs);
+        assert_eq!(
+            requested.into_iter().collect::<BTreeSet<_>>(),
+            ["binary(bash)", "binary(profdata)", "binary(remove)"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
     }
 
     #[test]

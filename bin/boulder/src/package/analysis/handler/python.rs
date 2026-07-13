@@ -48,7 +48,7 @@ pub fn python(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Respons
         .python
         .as_ref()
         .expect("validated analysis plan requires Python for the Python handler")
-        .program;
+        .path;
     let mut command = analyzer_command(program);
     command.arg("-c").arg(find_deps_script).arg(dist_path).envs([
         ("LC_ALL", "C"),

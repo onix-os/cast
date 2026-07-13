@@ -14,14 +14,16 @@ use moss::{Installation, runtime};
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
-    DerivationProvenance, DerivationValidationError, ExecutionCredentials, ExecutionPolicy, FilesystemPolicy,
-    FrozenAnalyzerTool, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
+    DerivationProvenance, DerivationValidationError, ExecutablePlan, ExecutionCredentials, ExecutionPolicy,
+    FilesystemPolicy, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
     LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan, RepositorySnapshot,
     RootMaterializationMode, StepPlan, profile_aggregate_fingerprint,
 };
 use stone_recipe::{
     build_policy::{BuildPolicySpec, BuildToolSpec},
-    package::{BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PackageSpec, PhaseSpec, StepSpec},
+    package::{
+        BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PackageSpec, PhaseSpec, ProgramSpec, StepSpec,
+    },
 };
 use thiserror::Error;
 
@@ -146,7 +148,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
     let request_fingerprint = hash_fields(
         [
-            "boulder-build-lock-request-v4",
+            "boulder-build-lock-request-v5",
             builder.recipe.fingerprint.sha256.as_str(),
             source_lock_digest.as_str(),
             target_name.as_str(),
@@ -382,12 +384,12 @@ fn freeze_analyzer_tool(
     field: &'static str,
     tool: &BuildToolSpec,
     build_lock: &BuildLock,
-) -> Result<FrozenAnalyzerTool, Error> {
+) -> Result<ExecutablePlan, Error> {
     let dependency = tool
         .dependency()
         .map_err(|source| Error::InvalidAnalyzerTool { field, source })?;
     let requirement = RelationPlan::from(&dependency);
-    let program = tool
+    let path = tool
         .executable_program()
         .ok_or(Error::AnalyzerToolNotExecutable { field })?;
     let request = requirement.canonical_name();
@@ -395,7 +397,7 @@ fn freeze_analyzer_tool(
         return Err(Error::UnlockedAnalyzerTool { field, request });
     }
 
-    Ok(FrozenAnalyzerTool { program, requirement })
+    Ok(ExecutablePlan { path, requirement })
 }
 
 fn freeze_jobs(target: &build::Target) -> Result<Vec<JobPlan>, Error> {
@@ -422,20 +424,22 @@ fn jobs_use_package_directory(jobs: &[JobPlan], package_dir: &str) -> bool {
                 args,
                 environment,
                 working_dir,
-            } => std::iter::once(program)
-                .chain(args)
-                .chain(environment.values())
-                .chain(std::iter::once(working_dir))
+            } => std::iter::once(program.path.as_str())
+                .chain(args.iter().map(String::as_str))
+                .chain(environment.values().map(String::as_str))
+                .chain(std::iter::once(working_dir.as_str()))
                 .any(|value| value.contains(package_dir)),
             StepPlan::Shell {
                 interpreter,
+                declared_programs,
                 script,
                 environment,
                 working_dir,
-            } => std::iter::once(interpreter)
-                .chain(std::iter::once(script))
-                .chain(environment.values())
-                .chain(std::iter::once(working_dir))
+            } => std::iter::once(interpreter.path.as_str())
+                .chain(declared_programs.iter().map(|program| program.path.as_str()))
+                .chain(std::iter::once(script.as_str()))
+                .chain(environment.values().map(String::as_str))
+                .chain(std::iter::once(working_dir.as_str()))
                 .any(|value| value.contains(package_dir)),
         })
 }
@@ -572,10 +576,10 @@ fn structural_builder_name(builder: &BuilderSpec) -> String {
         .environment
         .iter()
         .map(|environment| match environment {
-            BuilderEnvironmentSpec::CMake => "boulder.builders.cmake.v1",
-            BuilderEnvironmentSpec::Meson => "boulder.builders.meson.v1",
-            BuilderEnvironmentSpec::Cargo => "boulder.builders.cargo.v1",
-            BuilderEnvironmentSpec::Autotools => "boulder.builders.autotools.v1",
+            BuilderEnvironmentSpec::CMake => "boulder.builders.cmake.v2",
+            BuilderEnvironmentSpec::Meson => "boulder.builders.meson.v2",
+            BuilderEnvironmentSpec::Cargo => "boulder.builders.cargo.v2",
+            BuilderEnvironmentSpec::Autotools => "boulder.builders.autotools.v2",
         })
         .collect::<Vec<_>>()
         .join("+")
@@ -600,7 +604,7 @@ struct StructuralBuilderEncoder(Sha256);
 impl StructuralBuilderEncoder {
     fn new() -> Self {
         let mut digest = Sha256::new();
-        digest.update(b"boulder-structural-builder-v1\0");
+        digest.update(b"boulder-structural-builder-v2\0");
         Self(digest)
     }
 
@@ -684,46 +688,65 @@ fn encode_steps(encoder: &mut StructuralBuilderEncoder, steps: &[StepSpec]) {
     encoder.len(steps.len());
     for step in steps {
         match step {
-            StepSpec::Shell { script } => {
+            StepSpec::Run { program, args } => {
                 encoder.variant(0);
+                encode_program(encoder, program);
+                encoder.strings(args);
+            }
+            StepSpec::Shell {
+                interpreter,
+                declared_programs,
+                script,
+            } => {
+                encoder.variant(1);
+                encode_program(encoder, interpreter);
+                encoder.len(declared_programs.len());
+                for program in declared_programs {
+                    encode_program(encoder, program);
+                }
                 encoder.string(script);
             }
             StepSpec::CMakeConfigure { flags } => {
-                encoder.variant(1);
+                encoder.variant(2);
                 encoder.strings(flags);
             }
-            StepSpec::CMakeBuild => encoder.variant(2),
-            StepSpec::CMakeInstall => encoder.variant(3),
-            StepSpec::CMakeTest => encoder.variant(4),
+            StepSpec::CMakeBuild => encoder.variant(3),
+            StepSpec::CMakeInstall => encoder.variant(4),
+            StepSpec::CMakeTest => encoder.variant(5),
             StepSpec::MesonSetup { flags } => {
-                encoder.variant(5);
+                encoder.variant(6);
                 encoder.strings(flags);
             }
-            StepSpec::MesonBuild => encoder.variant(6),
-            StepSpec::MesonInstall => encoder.variant(7),
-            StepSpec::MesonTest => encoder.variant(8),
-            StepSpec::CargoFetch => encoder.variant(9),
+            StepSpec::MesonBuild => encoder.variant(7),
+            StepSpec::MesonInstall => encoder.variant(8),
+            StepSpec::MesonTest => encoder.variant(9),
+            StepSpec::CargoFetch => encoder.variant(10),
             StepSpec::CargoBuild { features } => {
-                encoder.variant(10);
+                encoder.variant(11);
                 encoder.strings(features);
             }
             StepSpec::CargoInstall { binaries } => {
-                encoder.variant(11);
+                encoder.variant(12);
                 encoder.strings(binaries);
             }
             StepSpec::CargoTest { features } => {
-                encoder.variant(12);
+                encoder.variant(13);
                 encoder.strings(features);
             }
             StepSpec::AutotoolsConfigure { flags } => {
-                encoder.variant(13);
+                encoder.variant(14);
                 encoder.strings(flags);
             }
-            StepSpec::AutotoolsBuild => encoder.variant(14),
-            StepSpec::AutotoolsInstall => encoder.variant(15),
-            StepSpec::AutotoolsTest => encoder.variant(16),
+            StepSpec::AutotoolsBuild => encoder.variant(15),
+            StepSpec::AutotoolsInstall => encoder.variant(16),
+            StepSpec::AutotoolsTest => encoder.variant(17),
         }
     }
+}
+
+fn encode_program(encoder: &mut StructuralBuilderEncoder, program: &ProgramSpec) {
+    encoder.string(&program.path);
+    encode_dependency(encoder, &program.requirement);
 }
 
 fn encode_dependency(encoder: &mut StructuralBuilderEncoder, dependency: &DependencySpec) {
@@ -859,6 +882,27 @@ mod tests {
     use super::*;
     use stone_recipe::derivation::PhasePlan;
 
+    fn package_shell(script: &str) -> StepSpec {
+        StepSpec::Shell {
+            interpreter: ProgramSpec {
+                path: "/usr/bin/bash".to_owned(),
+                requirement: DependencySpec::Binary("bash".to_owned()),
+            },
+            declared_programs: Vec::new(),
+            script: script.to_owned(),
+        }
+    }
+
+    fn executable(name: &str) -> ExecutablePlan {
+        ExecutablePlan {
+            path: format!("/usr/bin/{name}"),
+            requirement: RelationPlan {
+                kind: stone_recipe::derivation::RelationKind::Binary,
+                name: name.to_owned(),
+            },
+        }
+    }
+
     #[test]
     fn boulder_implementation_changes_executor_identity() {
         assert_ne!(
@@ -891,9 +935,7 @@ mod tests {
                     StepSpec::CMakeConfigure {
                         flags: vec!["-DBUILD_TESTS=ON".to_owned()],
                     },
-                    StepSpec::Shell {
-                        script: "printf configured".to_owned(),
-                    },
+                    package_shell("printf configured"),
                 ]),
                 build: PhaseSpec::new([StepSpec::CMakeBuild]),
                 install: PhaseSpec::new([StepSpec::CMakeInstall]),
@@ -906,12 +948,8 @@ mod tests {
 
     fn sample_hooks() -> HooksSpec {
         HooksSpec {
-            pre_build: vec![StepSpec::Shell {
-                script: "printf pre".to_owned(),
-            }],
-            post_install: vec![StepSpec::Shell {
-                script: "printf post".to_owned(),
-            }],
+            pre_build: vec![package_shell("printf pre")],
+            post_install: vec![package_shell("printf post")],
             ..HooksSpec::default()
         }
     }
@@ -925,7 +963,7 @@ mod tests {
             original,
             structural_builder_fingerprint(&builder.clone(), &hooks.clone(), Some("emul32/x86_64"))
         );
-        assert_eq!(structural_builder_name(&builder), "boulder.builders.cmake.v1");
+        assert_eq!(structural_builder_name(&builder), "boulder.builders.cmake.v2");
 
         let builder_mutations: Vec<(&str, Box<dyn Fn(&mut BuilderSpec)>)> = vec![
             (
@@ -981,7 +1019,7 @@ mod tests {
         }
 
         let mut changed_hooks = hooks.clone();
-        let StepSpec::Shell { script } = &mut changed_hooks.pre_build[0] else {
+        let StepSpec::Shell { script, .. } = &mut changed_hooks.pre_build[0] else {
             unreachable!();
         };
         script.push_str(" changed");
@@ -1026,7 +1064,14 @@ mod tests {
                 name: "build".to_owned(),
                 pre: Vec::new(),
                 steps: vec![StepPlan::Shell {
-                    interpreter: "/usr/bin/bash".to_owned(),
+                    interpreter: executable("bash"),
+                    declared_programs: vec![ExecutablePlan {
+                        path: "/mason/recipe/pkg/helper".to_owned(),
+                        requirement: RelationPlan {
+                            kind: stone_recipe::derivation::RelationKind::PackageName,
+                            name: "helper-package".to_owned(),
+                        },
+                    }],
                     script: "install /mason/recipe/pkg/helper /usr/bin/helper".to_owned(),
                     environment: BTreeMap::new(),
                     working_dir: "/mason/build/x86_64/source".to_owned(),

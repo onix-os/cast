@@ -19,7 +19,7 @@ use crate::source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock};
 pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
-    /// Concrete package-v2 declaration produced by the authored factory.
+    /// Concrete package-v3 declaration produced by the authored factory.
     pub declaration: PackageSpec,
     pub source_lock: Option<SourceLock>,
     pub fingerprint: EvaluationFingerprint,
@@ -120,19 +120,19 @@ impl Recipe {
         self.declaration.profiles.iter().find(|profile| profile.name == key)
     }
 
-    /// Select the structural package-v2 builder for one target.
+    /// Select the structural package-v3 builder for one target.
     pub fn build_target_builder(&self, target: &TargetPolicySpec) -> &BuilderSpec {
         self.declaration
             .builder_for_profile(self.build_target_profile_key(target))
     }
 
-    /// Select the package-v2 hooks paired with the target's structural builder.
+    /// Select the package-v3 hooks paired with the target's structural builder.
     pub fn build_target_hooks(&self, target: &TargetPolicySpec) -> &HooksSpec {
         self.declaration
             .hooks_for_profile(self.build_target_profile_key(target))
     }
 
-    /// Select the structural package-v2 phases for one target.
+    /// Select the structural package-v3 phases for one target.
     pub fn build_target_phases(&self, target: &TargetPolicySpec) -> PhasesSpec {
         self.declaration
             .phases_for_profile(self.build_target_profile_key(target))
@@ -259,7 +259,7 @@ mod tests {
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
     fn gluon_recipe(source: &str) -> String {
-        format!("let boulder = import! boulder.package.v2\nboulder.mk_package (boulder.meta {source})")
+        format!("let boulder = import! boulder.package.v3\nboulder.mk_package (boulder.meta {source})")
     }
 
     fn minimal_recipe() -> Recipe {
@@ -285,7 +285,7 @@ mod tests {
 
     fn gluon_recipe_with_upstreams() -> String {
         format!(
-            r#"let boulder = import! boulder.package.v2
+            r#"let boulder = import! boulder.package.v3
 let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
 {{
     sources = [
@@ -411,7 +411,7 @@ let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
             fingerprint
                 .imported_modules
                 .iter()
-                .any(|module| module.logical_name == "boulder.package.v2")
+                .any(|module| module.logical_name == "boulder.package.v3")
         );
     }
 
@@ -422,7 +422,7 @@ let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
         fs::write(
             root.path().join("stone.glu"),
             r#"
-let boulder = import! boulder.package.v2
+let boulder = import! boulder.package.v3
 let source = import! "source.glu"
 boulder.mk_package (boulder.meta source)
 "#,
@@ -441,7 +441,7 @@ boulder.mk_package (boulder.meta source)
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
             [
-                "boulder.package.v2",
+                "boulder.package.v3",
                 "source.glu",
                 "std.array.prim",
                 "std.string.prim",
@@ -456,7 +456,7 @@ boulder.mk_package (boulder.meta source)
         fs::write(
             root.path().join("stone.glu"),
             r#"
-let boulder = import! boulder.package.v2
+let boulder = import! boulder.package.v3
 boulder.mk_package (boulder.meta {
     pname = "example",
     version = "1.2.3",

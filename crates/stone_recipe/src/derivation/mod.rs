@@ -34,7 +34,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 9;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 10;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
@@ -424,7 +424,7 @@ impl DerivationPlan {
         }
 
         for (index, job) in self.jobs.iter().enumerate() {
-            job.validate(index, Path::new(&self.layout.build_dir))?;
+            job.validate(index, Path::new(&self.layout.build_dir), &self.build_lock)?;
         }
         for (index, input) in self.manifest_build_inputs.iter().enumerate() {
             input.validate(&format!("manifest_build_inputs[{index}]"))?;
@@ -722,10 +722,15 @@ pub struct PhasePlan {
 }
 
 impl PhasePlan {
-    fn validate(&self, parent: &str, build_dir: &Path) -> Result<(), DerivationValidationError> {
+    fn validate(
+        &self,
+        parent: &str,
+        build_dir: &Path,
+        build_lock: &BuildLock,
+    ) -> Result<(), DerivationValidationError> {
         for (group, steps) in [("pre", &self.pre), ("steps", &self.steps), ("post", &self.post)] {
             for (step_index, step) in steps.iter().enumerate() {
-                step.validate(&format!("{parent}.{group}[{step_index}]"), build_dir)?;
+                step.validate(&format!("{parent}.{group}[{step_index}]"), build_dir, build_lock)?;
             }
         }
         Ok(())
@@ -751,7 +756,12 @@ pub struct JobPlan {
 }
 
 impl JobPlan {
-    fn validate(&self, job_index: usize, layout_build_dir: &Path) -> Result<(), DerivationValidationError> {
+    fn validate(
+        &self,
+        job_index: usize,
+        layout_build_dir: &Path,
+        build_lock: &BuildLock,
+    ) -> Result<(), DerivationValidationError> {
         let build_field = format!("jobs[{job_index}].build_dir");
         let work_field = format!("jobs[{job_index}].work_dir");
         let build_dir = validate_normalized_absolute_path(&build_field, &self.build_dir)?;
@@ -800,7 +810,11 @@ impl JobPlan {
                     name: phase.name.clone(),
                 });
             }
-            phase.validate(&format!("jobs[{job_index}].phases[{phase_index}]"), build_dir)?;
+            phase.validate(
+                &format!("jobs[{job_index}].phases[{phase_index}]"),
+                build_dir,
+                build_lock,
+            )?;
         }
         Ok(())
     }
@@ -824,13 +838,14 @@ impl JobPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepPlan {
     Run {
-        program: String,
+        program: ExecutablePlan,
         args: Vec<String>,
         environment: BTreeMap<String, String>,
         working_dir: String,
     },
     Shell {
-        interpreter: String,
+        interpreter: ExecutablePlan,
+        declared_programs: Vec<ExecutablePlan>,
         script: String,
         environment: BTreeMap<String, String>,
         working_dir: String,
@@ -838,21 +853,25 @@ pub enum StepPlan {
 }
 
 impl StepPlan {
-    fn validate(&self, field: &str, build_dir: &Path) -> Result<(), DerivationValidationError> {
+    fn validate(&self, field: &str, build_dir: &Path, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
         match self {
             Self::Run {
                 program, working_dir, ..
             } => {
-                require_nonempty(&format!("{field}.program"), program)?;
+                program.validate(&format!("{field}.program"), build_lock)?;
                 validate_step_working_dir(field, working_dir, build_dir)
             }
             Self::Shell {
                 interpreter,
+                declared_programs,
                 script,
                 working_dir,
                 ..
             } => {
-                require_nonempty(&format!("{field}.interpreter"), interpreter)?;
+                interpreter.validate(&format!("{field}.interpreter"), build_lock)?;
+                for (index, program) in declared_programs.iter().enumerate() {
+                    program.validate(&format!("{field}.declared_programs[{index}]"), build_lock)?;
+                }
                 require_nonempty(&format!("{field}.script"), script)?;
                 validate_step_working_dir(field, working_dir, build_dir)
             }
@@ -868,19 +887,21 @@ impl StepPlan {
                 working_dir,
             } => {
                 encoder.variant(0);
-                encoder.string(program);
+                program.encode(encoder);
                 encoder.strings(args);
                 encoder.map(environment);
                 encoder.string(working_dir);
             }
             Self::Shell {
                 interpreter,
+                declared_programs,
                 script,
                 environment,
                 working_dir,
             } => {
                 encoder.variant(1);
-                encoder.string(interpreter);
+                interpreter.encode(encoder);
+                encoder.sequence(declared_programs, |encoder, program| program.encode(encoder));
                 encoder.string(script);
                 encoder.map(environment);
                 encoder.string(working_dir);
@@ -1229,44 +1250,61 @@ pub enum NetworkMode {
     Enabled,
 }
 
-/// One external analyzer program and the capability whose exact provider is
+/// One executable guest path and the capability whose exact provider is
 /// already resolved by [`BuildLock::requests`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FrozenAnalyzerTool {
-    pub program: String,
+pub struct ExecutablePlan {
+    pub path: String,
     pub requirement: RelationPlan,
 }
 
-impl FrozenAnalyzerTool {
+impl ExecutablePlan {
     fn validate(&self, field: &str, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
-        let prefix = match self.requirement.kind {
-            RelationKind::Binary => "/usr/bin",
-            RelationKind::SystemBinary => "/usr/sbin",
+        let path = validate_normalized_absolute_path(&format!("{field}.path"), &self.path)?;
+        self.requirement.validate(&format!("{field}.requirement"))?;
+        match self.requirement.kind {
+            RelationKind::Binary | RelationKind::SystemBinary => {
+                if !is_safe_artifact_component(&self.requirement.name) {
+                    return Err(DerivationValidationError::InvalidExecutableRequirement {
+                        field: format!("{field}.requirement"),
+                        value: self.requirement.name.clone(),
+                    });
+                }
+                let prefix = if self.requirement.kind == RelationKind::Binary {
+                    "/usr/bin"
+                } else {
+                    "/usr/sbin"
+                };
+                let expected = format!("{prefix}/{}", self.requirement.name);
+                if self.path != expected {
+                    return Err(DerivationValidationError::ExecutablePathMismatch {
+                        field: format!("{field}.path"),
+                        expected,
+                        found: self.path.clone(),
+                    });
+                }
+            }
+            RelationKind::PackageName => {
+                if path
+                    .parent()
+                    .is_some_and(|parent| parent == Path::new("/usr/bin") || parent == Path::new("/usr/sbin"))
+                {
+                    return Err(DerivationValidationError::AmbiguousPackageExecutable {
+                        field: format!("{field}.path"),
+                        value: self.path.clone(),
+                    });
+                }
+            }
             _ => {
-                return Err(DerivationValidationError::AnalyzerToolNotExecutable {
+                return Err(DerivationValidationError::ExecutableRequirementNotRunnable {
                     field: format!("{field}.requirement"),
                     value: self.requirement.canonical_name(),
                 });
             }
-        };
-        if !is_safe_artifact_component(&self.requirement.name) {
-            return Err(DerivationValidationError::InvalidAnalyzerExecutable {
-                field: format!("{field}.requirement"),
-                value: self.requirement.name.clone(),
-            });
-        }
-        self.requirement.validate(&format!("{field}.requirement"))?;
-        let expected = format!("{prefix}/{}", self.requirement.name);
-        if self.program != expected {
-            return Err(DerivationValidationError::AnalyzerProgramMismatch {
-                field: format!("{field}.program"),
-                expected,
-                found: self.program.clone(),
-            });
         }
         let request = self.requirement.canonical_name();
         if !build_lock.requests.iter().any(|locked| locked.request == request) {
-            return Err(DerivationValidationError::UnlockedAnalyzerTool {
+            return Err(DerivationValidationError::UnlockedExecutable {
                 field: format!("{field}.requirement"),
                 request,
             });
@@ -1275,7 +1313,7 @@ impl FrozenAnalyzerTool {
     }
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
-        encoder.string(&self.program);
+        encoder.string(&self.path);
         self.requirement.encode(encoder);
     }
 }
@@ -1283,10 +1321,10 @@ impl FrozenAnalyzerTool {
 /// Exact analyzer programs reachable from the frozen handler/options graph.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnalysisToolsPlan {
-    pub pkg_config: Option<FrozenAnalyzerTool>,
-    pub python: Option<FrozenAnalyzerTool>,
-    pub objcopy: Option<FrozenAnalyzerTool>,
-    pub strip: Option<FrozenAnalyzerTool>,
+    pub pkg_config: Option<ExecutablePlan>,
+    pub python: Option<ExecutablePlan>,
+    pub objcopy: Option<ExecutablePlan>,
+    pub strip: Option<ExecutablePlan>,
 }
 
 /// Frozen ordered handlers, tools, and switches consumed by package analysis.
@@ -1401,7 +1439,7 @@ impl AnalysisPlan {
 fn validate_analyzer_tool(
     field: &str,
     required: bool,
-    tool: Option<&FrozenAnalyzerTool>,
+    tool: Option<&ExecutablePlan>,
     build_lock: &BuildLock,
 ) -> Result<(), DerivationValidationError> {
     match (required, tool) {
@@ -1416,7 +1454,7 @@ fn validate_analyzer_tool(
     }
 }
 
-fn encode_optional_analyzer_tool(encoder: &mut CanonicalEncoder, tool: Option<&FrozenAnalyzerTool>) {
+fn encode_optional_analyzer_tool(encoder: &mut CanonicalEncoder, tool: Option<&ExecutablePlan>) {
     match tool {
         Some(tool) => {
             encoder.variant(1);
@@ -1786,18 +1824,20 @@ pub enum DerivationValidationError {
     MissingAnalyzerTool { field: String },
     #[error("{field}: analyzer tool is unreachable from the frozen handler/options graph")]
     UnexpectedAnalyzerTool { field: String },
-    #[error("{field}: analyzer requirement {value:?} is not an executable capability")]
-    AnalyzerToolNotExecutable { field: String, value: String },
-    #[error("{field}: analyzer executable {value:?} must be one normalized filename component")]
-    InvalidAnalyzerExecutable { field: String, value: String },
-    #[error("{field}: expected canonical analyzer program {expected:?}, found {found:?}")]
-    AnalyzerProgramMismatch {
+    #[error("{field}: requirement {value:?} is not an executable capability")]
+    ExecutableRequirementNotRunnable { field: String, value: String },
+    #[error("{field}: executable requirement {value:?} must be one normalized filename component")]
+    InvalidExecutableRequirement { field: String, value: String },
+    #[error("{field}: expected canonical executable path {expected:?}, found {found:?}")]
+    ExecutablePathMismatch {
         field: String,
         expected: String,
         found: String,
     },
-    #[error("{field}: analyzer provider request {request:?} is absent from build_lock.requests")]
-    UnlockedAnalyzerTool { field: String, request: String },
+    #[error("{field}: package-bound executable path {value:?} must not use the binary provider namespaces")]
+    AmbiguousPackageExecutable { field: String, value: String },
+    #[error("{field}: executable provider request {request:?} is absent from build_lock.requests")]
+    UnlockedExecutable { field: String, request: String },
     #[error("{field}: unknown locked output `{package}:{output}`")]
     UnknownOutputReference {
         field: String,
@@ -2291,6 +2331,8 @@ mod tests {
                 "llvm-strip",
                 "objcopy",
                 "strip",
+                "cmake",
+                "bash",
             ]
             .into_iter()
             .map(|name| LockedRequest {
@@ -2334,7 +2376,13 @@ mod tests {
                 name: "build".to_owned(),
                 pre: Vec::new(),
                 steps: vec![StepPlan::Run {
-                    program: "/usr/bin/cmake".to_owned(),
+                    program: ExecutablePlan {
+                        path: "/usr/bin/cmake".to_owned(),
+                        requirement: RelationPlan {
+                            kind: RelationKind::Binary,
+                            name: "cmake".to_owned(),
+                        },
+                    },
                     args: vec!["--build".to_owned(), ".".to_owned()],
                     environment: BTreeMap::from([("CFLAGS".to_owned(), "-O2".to_owned())]),
                     working_dir: "/mason/build".to_owned(),
@@ -2411,9 +2459,9 @@ mod tests {
         plan
     }
 
-    fn sample_analyzer_tool(name: &str) -> FrozenAnalyzerTool {
-        FrozenAnalyzerTool {
-            program: format!("/usr/bin/{name}"),
+    fn sample_analyzer_tool(name: &str) -> ExecutablePlan {
+        ExecutablePlan {
+            path: format!("/usr/bin/{name}"),
             requirement: RelationPlan {
                 kind: RelationKind::Binary,
                 name: name.to_owned(),
@@ -3168,10 +3216,10 @@ mod tests {
         ));
 
         let mut non_executable = sample_plan();
-        non_executable.analysis.tools.python.as_mut().unwrap().requirement.kind = RelationKind::PackageName;
+        non_executable.analysis.tools.python.as_mut().unwrap().requirement.kind = RelationKind::PkgConfig;
         assert!(matches!(
             non_executable.validate(),
-            Err(DerivationValidationError::AnalyzerToolNotExecutable { field, .. })
+            Err(DerivationValidationError::ExecutableRequirementNotRunnable { field, .. })
                 if field == "analysis.tools.python.requirement"
         ));
 
@@ -3179,26 +3227,152 @@ mod tests {
         unsafe_name.analysis.tools.python.as_mut().unwrap().requirement.name = "../python3".to_owned();
         assert!(matches!(
             unsafe_name.validate(),
-            Err(DerivationValidationError::InvalidAnalyzerExecutable { field, .. })
+            Err(DerivationValidationError::InvalidExecutableRequirement { field, .. })
                 if field == "analysis.tools.python.requirement"
         ));
 
         let mut program_mismatch = sample_plan();
-        program_mismatch.analysis.tools.python.as_mut().unwrap().program = "/usr/bin/not-python".to_owned();
+        program_mismatch.analysis.tools.python.as_mut().unwrap().path = "/usr/bin/not-python".to_owned();
         assert!(matches!(
             program_mismatch.validate(),
-            Err(DerivationValidationError::AnalyzerProgramMismatch { field, .. })
-                if field == "analysis.tools.python.program"
+            Err(DerivationValidationError::ExecutablePathMismatch { field, .. })
+                if field == "analysis.tools.python.path"
         ));
 
         let mut unlocked = sample_plan();
         let python = unlocked.analysis.tools.python.as_mut().unwrap();
         python.requirement.name = "unlocked-python".to_owned();
-        python.program = "/usr/bin/unlocked-python".to_owned();
+        python.path = "/usr/bin/unlocked-python".to_owned();
         assert!(matches!(
             unlocked.validate(),
-            Err(DerivationValidationError::UnlockedAnalyzerTool { field, request })
+            Err(DerivationValidationError::UnlockedExecutable { field, request })
                 if field == "analysis.tools.python.requirement" && request == "binary(unlocked-python)"
+        ));
+    }
+
+    #[test]
+    fn every_structural_executable_is_path_bound_and_exactly_locked() {
+        for path in ["cmake", "/", "/usr/bin/../bin/cmake", "/usr/bin//cmake"] {
+            let mut plan = sample_plan();
+            let StepPlan::Run { program, .. } = &mut plan.jobs[0].phases[0].steps[0] else {
+                unreachable!()
+            };
+            program.path = path.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::UnsafeAbsolutePath { field, .. })
+                    if field == "jobs[0].phases[0].steps[0].program.path"
+            ));
+        }
+
+        let mut unsupported = sample_plan();
+        let StepPlan::Run { program, .. } = &mut unsupported.jobs[0].phases[0].steps[0] else {
+            unreachable!()
+        };
+        program.requirement.kind = RelationKind::PkgConfig;
+        assert!(matches!(
+            unsupported.validate(),
+            Err(DerivationValidationError::ExecutableRequirementNotRunnable { field, .. })
+                if field == "jobs[0].phases[0].steps[0].program.requirement"
+        ));
+
+        let mut mismatched = sample_plan();
+        let StepPlan::Run { program, .. } = &mut mismatched.jobs[0].phases[0].steps[0] else {
+            unreachable!()
+        };
+        program.requirement.kind = RelationKind::SystemBinary;
+        assert!(matches!(
+            mismatched.validate(),
+            Err(DerivationValidationError::ExecutablePathMismatch { field, expected, .. })
+                if field == "jobs[0].phases[0].steps[0].program.path" && expected == "/usr/sbin/cmake"
+        ));
+
+        let mut unlocked_run = sample_plan();
+        let StepPlan::Run { program, .. } = &mut unlocked_run.jobs[0].phases[0].steps[0] else {
+            unreachable!()
+        };
+        program.path = "/usr/bin/unlocked-run".to_owned();
+        program.requirement.name = "unlocked-run".to_owned();
+        assert!(matches!(
+            unlocked_run.validate(),
+            Err(DerivationValidationError::UnlockedExecutable { field, request })
+                if field == "jobs[0].phases[0].steps[0].program.requirement"
+                    && request == "binary(unlocked-run)"
+        ));
+
+        let shell = |interpreter: ExecutablePlan, declared_programs: Vec<ExecutablePlan>| StepPlan::Shell {
+            interpreter,
+            declared_programs,
+            script: "true".to_owned(),
+            environment: BTreeMap::new(),
+            working_dir: "/mason/build".to_owned(),
+        };
+        let mut unlocked_interpreter = sample_plan();
+        unlocked_interpreter.jobs[0].phases[0].steps = vec![shell(
+            ExecutablePlan {
+                path: "/usr/bin/unlocked-shell".to_owned(),
+                requirement: RelationPlan {
+                    kind: RelationKind::Binary,
+                    name: "unlocked-shell".to_owned(),
+                },
+            },
+            Vec::new(),
+        )];
+        assert!(matches!(
+            unlocked_interpreter.validate(),
+            Err(DerivationValidationError::UnlockedExecutable { field, .. })
+                if field == "jobs[0].phases[0].steps[0].interpreter.requirement"
+        ));
+
+        let mut unlocked_declared = sample_plan();
+        unlocked_declared.jobs[0].phases[0].steps = vec![shell(
+            sample_analyzer_tool("bash"),
+            vec![ExecutablePlan {
+                path: "/usr/bin/unlocked-declared".to_owned(),
+                requirement: RelationPlan {
+                    kind: RelationKind::Binary,
+                    name: "unlocked-declared".to_owned(),
+                },
+            }],
+        )];
+        assert!(matches!(
+            unlocked_declared.validate(),
+            Err(DerivationValidationError::UnlockedExecutable { field, .. })
+                if field == "jobs[0].phases[0].steps[0].declared_programs[0].requirement"
+        ));
+    }
+
+    #[test]
+    fn unusual_program_paths_require_an_explicit_package_capability() {
+        let mut plan = sample_plan();
+        plan.build_lock.requests.push(LockedRequest {
+            request: "odd-tool".to_owned(),
+            package_id: "hello-id".to_owned(),
+            output: "out".to_owned(),
+        });
+        plan.build_lock.normalize();
+        {
+            let StepPlan::Run { program, .. } = &mut plan.jobs[0].phases[0].steps[0] else {
+                unreachable!()
+            };
+            *program = ExecutablePlan {
+                path: "/opt/odd/bin/tool".to_owned(),
+                requirement: RelationPlan {
+                    kind: RelationKind::PackageName,
+                    name: "odd-tool".to_owned(),
+                },
+            };
+        }
+        plan.validate().unwrap();
+
+        let StepPlan::Run { program, .. } = &mut plan.jobs[0].phases[0].steps[0] else {
+            unreachable!()
+        };
+        program.path = "/usr/bin/tool".to_owned();
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::AmbiguousPackageExecutable { field, .. })
+                if field == "jobs[0].phases[0].steps[0].program.path"
         ));
     }
 
@@ -3265,6 +3439,24 @@ mod tests {
                 }),
             ),
             (
+                "step-program-path",
+                Box::new(|plan| {
+                    let StepPlan::Run { program, .. } = &mut plan.jobs[0].phases[0].steps[0] else {
+                        unreachable!()
+                    };
+                    program.path.push_str("-changed");
+                }),
+            ),
+            (
+                "step-program-requirement",
+                Box::new(|plan| {
+                    let StepPlan::Run { program, .. } = &mut plan.jobs[0].phases[0].steps[0] else {
+                        unreachable!()
+                    };
+                    program.requirement.name.push_str("-changed");
+                }),
+            ),
+            (
                 "environment",
                 Box::new(|plan| {
                     plan.environment.insert("LANG".to_owned(), "C".to_owned());
@@ -3296,13 +3488,7 @@ mod tests {
             (
                 "analysis-tool-program",
                 Box::new(|plan| {
-                    plan.analysis
-                        .tools
-                        .python
-                        .as_mut()
-                        .unwrap()
-                        .program
-                        .push_str("-changed");
+                    plan.analysis.tools.python.as_mut().unwrap().path.push_str("-changed");
                 }),
             ),
             (
@@ -3349,6 +3535,52 @@ mod tests {
             let mut changed = original.clone();
             mutate(&mut changed);
             assert_ne!(original_id, changed.derivation_id(), "{name} mutation was not hashed");
+        }
+    }
+
+    #[test]
+    fn shell_interpreter_and_declared_programs_change_identity() {
+        let mut original = sample_plan();
+        original.jobs[0].phases[0].steps = vec![StepPlan::Shell {
+            interpreter: sample_analyzer_tool("bash"),
+            declared_programs: vec![sample_analyzer_tool("cmake")],
+            script: "cmake --build .".to_owned(),
+            environment: BTreeMap::new(),
+            working_dir: "/mason/build".to_owned(),
+        }];
+        original.validate().unwrap();
+        let original_id = original.derivation_id();
+
+        let mutations: [fn(&mut StepPlan); 4] = [
+            |step: &mut StepPlan| {
+                let StepPlan::Shell { interpreter, .. } = step else {
+                    unreachable!()
+                };
+                interpreter.path.push_str("-changed");
+            },
+            |step: &mut StepPlan| {
+                let StepPlan::Shell { interpreter, .. } = step else {
+                    unreachable!()
+                };
+                interpreter.requirement.name.push_str("-changed");
+            },
+            |step: &mut StepPlan| {
+                let StepPlan::Shell { declared_programs, .. } = step else {
+                    unreachable!()
+                };
+                declared_programs[0].path.push_str("-changed");
+            },
+            |step: &mut StepPlan| {
+                let StepPlan::Shell { declared_programs, .. } = step else {
+                    unreachable!()
+                };
+                declared_programs[0].requirement.name.push_str("-changed");
+            },
+        ];
+        for mutate in mutations {
+            let mut changed = original.clone();
+            mutate(&mut changed.jobs[0].phases[0].steps[0]);
+            assert_ne!(original_id, changed.derivation_id());
         }
     }
 
@@ -3557,7 +3789,14 @@ mod tests {
 
         let mut shell_plan = sample_plan();
         shell_plan.jobs[0].phases[0].steps = vec![StepPlan::Shell {
-            interpreter: "/usr/bin/bash".to_owned(),
+            interpreter: ExecutablePlan {
+                path: "/usr/bin/bash".to_owned(),
+                requirement: RelationPlan {
+                    kind: RelationKind::Binary,
+                    name: "bash".to_owned(),
+                },
+            },
+            declared_programs: Vec::new(),
             script: "true".to_owned(),
             environment: BTreeMap::new(),
             working_dir: "/tmp/ambient".to_owned(),

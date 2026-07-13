@@ -1,6 +1,6 @@
 derivation_explain {
   schema {
-    derivation_plan = 9
+    derivation_plan = 10
     build_lock = 3
   }
   identity {
@@ -8,7 +8,7 @@ derivation_explain {
     boulder_fingerprint = "sha256:boulder"
     recipe = "9a77dd152cbee683b8f15a7f9747c7c3bd9bc00c1532cbf58b4c917dbdb0ad69"
     source_lock = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
-    build_lock = "bec28011c65ed07c4ef49751073d35d9e420bed32c772d7b1b785039926dc231"
+    build_lock = "acac1f6c1d00ecce0f2f091b2d2c66b037c60890f774e678c6f9919649ae38ad"
     request = "locked-request-fingerprint"
   }
   recipe_provenance {
@@ -75,8 +75,8 @@ derivation_explain {
       fingerprint = "llvm-fingerprint"
     }
     builder {
-      name = "boulder.builders.cmake.v1"
-      fingerprint = "boulder.builders.cmake.v1-fingerprint"
+      name = "boulder.builders.cmake.v2"
+      fingerprint = "boulder.builders.cmake.v2-fingerprint"
     }
   }
   profile_fragments {
@@ -213,9 +213,18 @@ derivation_explain {
       request = "binary(alpha)"
     }
     provider 1 {
-      request = "binary(objcopy)"
+      request = "binary(bash)"
     }
     provider 2 {
+      request = "binary(finish)"
+    }
+    provider 3 {
+      request = "binary(objcopy)"
+    }
+    provider 4 {
+      request = "binary(prepare)"
+    }
+    provider 5 {
       request = "pkg(zeta)"
     }
   }
@@ -238,11 +247,26 @@ derivation_explain {
       output = "out"
     }
     request 1 {
-      provider = "binary(objcopy)"
+      provider = "binary(bash)"
       package_id = "alpha-id"
       output = "out"
     }
     request 2 {
+      provider = "binary(finish)"
+      package_id = "alpha-id"
+      output = "out"
+    }
+    request 3 {
+      provider = "binary(objcopy)"
+      package_id = "alpha-id"
+      output = "out"
+    }
+    request 4 {
+      provider = "binary(prepare)"
+      package_id = "alpha-id"
+      output = "out"
+    }
+    request 5 {
       provider = "pkg(zeta)"
       package_id = "zeta-id"
       output = "devel"
@@ -297,7 +321,12 @@ derivation_explain {
           pre {
             step 0 {
               kind = "run"
-              program = "prepare"
+              program {
+                path = "/usr/bin/prepare"
+                requirement = "binary(prepare)"
+                package_id = "alpha-id"
+                output = "out"
+              }
               args = ["--first", "second value"]
               environment {
                 "A_PRE" = "a"
@@ -309,7 +338,22 @@ derivation_explain {
           steps {
             step 0 {
               kind = "shell"
-              interpreter = "/bin/sh"
+              interpreter {
+                path = "/usr/bin/bash"
+                requirement = "binary(bash)"
+                package_id = "alpha-id"
+                output = "out"
+              }
+              declared_programs {
+                program 0 {
+                  executable {
+                    path = "/usr/bin/alpha"
+                    requirement = "binary(alpha)"
+                    package_id = "alpha-id"
+                    output = "out"
+                  }
+                }
+              }
               script = "printf 'build\\n'"
               environment {
                 "BUILD_MODE" = "release"
@@ -320,7 +364,12 @@ derivation_explain {
           post {
             step 0 {
               kind = "run"
-              program = "finish"
+              program {
+                path = "/usr/bin/finish"
+                requirement = "binary(finish)"
+                package_id = "alpha-id"
+                output = "out"
+              }
               args = []
               environment {
               }
@@ -390,7 +439,7 @@ derivation_explain {
     tools {
       tool 0 {
         role = "objcopy"
-        program = "/usr/bin/objcopy"
+        path = "/usr/bin/objcopy"
         requirement = "binary(objcopy)"
         package_id = "alpha-id"
         output = "out"
@@ -470,6 +519,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "41be30866663eccc2ebc9f7b084c5f32446799a96534519cc4cc3fcc543d754e"
+    derivation_id = "30e2a2a2148bab97318dc0fb916e00473af69df378d75b0e17fb6bac36d8a7a5"
   }
 }

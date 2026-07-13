@@ -115,6 +115,11 @@ pub enum Error {
     Context(#[from] crate::build::context::ContextError),
     #[error("build policy")]
     BuildPolicy(#[from] crate::policy::Error),
+    #[error("package executable has an invalid typed requirement")]
+    InvalidProgramRequirement {
+        #[source]
+        source: stone::relation::ParseError,
+    },
     #[error("PGO path {path:?} must be normalized and remain beneath {pgo_dir:?}")]
     UnsafePgoPath { path: String, pgo_dir: String },
     #[error("io")]

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
-let meson = import! boulder.builders.meson.v1
+let b = import! boulder.package.v3
+let meson = import! boulder.builders.meson.v2
 
 let root = {
     summary = b.optional.set "Package creation tool for Serpent OS",
@@ -26,7 +26,11 @@ let base = b.mk_package (b.meta {
     },
     hooks = {
         post_install = [
-            b.step.shell r#"ln -sf boulder "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/mason""#,
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [b.program.binary "ln"],
+                script = r#"ln -sf boulder "${BOULDER_INSTALL_ROOT}${BOULDER_BINDIR}/mason""#,
+            },
         ],
         .. b.defaults.hooks
     },

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let b = import! boulder.package.v2
+let b = import! boulder.package.v3
 
 let defaults = {
     features = [],
@@ -10,7 +10,8 @@ let defaults = {
 }
 
 let builder = \config -> b.builder.structured {
-    required_tools = [b.dep.binary "cargo"],
+    // Cargo itself is bound by each selected policy command.
+    required_tools = [],
     environment = [b.environment.cargo],
     phases = b.scripts {
         build = b.phase [b.step.cargo_build config.features],
@@ -22,7 +23,7 @@ let builder = \config -> b.builder.structured {
 }
 
 {
-    abi_version = 1,
+    abi_version = 2,
     defaults,
     builder,
     default = builder defaults,

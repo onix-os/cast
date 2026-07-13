@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let boulder = import! boulder.package.v2
+let boulder = import! boulder.package.v3
 
 \output ->
     let output = boulder.output_with output

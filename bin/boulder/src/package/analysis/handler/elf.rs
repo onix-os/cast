@@ -112,7 +112,7 @@ mod tests {
     };
     use stone::relation::Kind as RelationKind;
     use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
-    use stone_recipe::derivation::{FrozenAnalyzerTool, RelationPlan};
+    use stone_recipe::derivation::{ExecutablePlan, RelationPlan};
 
     fn open_build_id_fixture() -> fs_err::File {
         let mut candidates = vec![PathBuf::from("/bin/sh"), PathBuf::from("/usr/bin/env")];
@@ -141,15 +141,15 @@ mod tests {
         let mut analysis = plan.analysis;
         analysis.debug = debug;
         analysis.strip = strip;
-        analysis.tools.objcopy = debug.then(|| FrozenAnalyzerTool {
-            program: "/usr/bin/llvm-objcopy".to_owned(),
+        analysis.tools.objcopy = debug.then(|| ExecutablePlan {
+            path: "/usr/bin/llvm-objcopy".to_owned(),
             requirement: RelationPlan {
                 kind: RelationKind::Binary.into(),
                 name: "llvm-objcopy".to_owned(),
             },
         });
-        analysis.tools.strip = strip.then(|| FrozenAnalyzerTool {
-            program: "/usr/bin/llvm-strip".to_owned(),
+        analysis.tools.strip = strip.then(|| ExecutablePlan {
+            path: "/usr/bin/llvm-strip".to_owned(),
             requirement: RelationPlan {
                 kind: RelationKind::Binary.into(),
                 name: "llvm-strip".to_owned(),
@@ -454,7 +454,7 @@ fn split_debug(
         .objcopy
         .as_ref()
         .expect("validated analysis plan requires objcopy when ELF debug splitting is enabled")
-        .program;
+        .path;
 
     let debug_dir = if matches!(bit_size, Class::ELF64) {
         Path::new("usr/lib/debug/.build-id")
@@ -502,7 +502,7 @@ fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
         .strip
         .as_ref()
         .expect("validated analysis plan requires strip when ELF stripping is enabled")
-        .program;
+        .path;
     let is_executable = info
         .path
         .parent()
