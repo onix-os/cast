@@ -100,9 +100,9 @@ steps and environment before freezing them into the plan.
 - Mutable local `%(pkgdir)` inputs are rejected before freeze. Supporting them
   requires a local-source ABI which hashes their content and destination into
   the derivation rather than exposing an untracked recipe-directory mount.
-- Configured policy layers beyond the explicit repository policy root remain
-  deferred until their order and provenance are part of `recipe explain` and
-  derivation identity.
+- The explicit repository policy root now declares named layers in authored
+  order. `recipe explain` prints their layer and entry provenance, and the
+  evaluated root fingerprint binds that order into derivation identity.
 
 ## Target semantics
 
@@ -396,7 +396,7 @@ scope graph or Rust `PackageSet` ABI is implied.
   resolution.
 - [x] Support ordinary Gluon package-argument overrides.
 - [x] Support typed whole-package patches analogous to attribute overrides.
-- [ ] Allow configured, ordered policy layers only when they are visible in
+- [x] Allow configured, ordered policy layers only when they are visible in
   `recipe explain` and included in the derivation identity.
 - [x] Detect missing scope entries and cycles with actionable diagnostics.
 

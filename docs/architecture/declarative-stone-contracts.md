@@ -73,9 +73,9 @@ Still transitional:
   `stone_recipe::script`; standard builder steps themselves are structural;
 - mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
   hash their content and destination into the derivation;
-- configured policy layers beyond the explicit repository root remain
-  deferred until explain and derivation identity carry their order and
-  provenance.
+- the explicit repository policy root declares named layers in authored order;
+  `recipe explain` reports layer and entry provenance, and the evaluated root
+  fingerprint binds that order into derivation identity.
 
 ## Layer invariants
 
