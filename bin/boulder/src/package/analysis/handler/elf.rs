@@ -68,22 +68,11 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
     let mut generated_paths = vec![];
 
     if let Some(build_id) = build_id {
-        match split_debug(bucket, info, bit_size, &build_id) {
-            Ok(Some(debug_path)) => {
-                // Add new split file to be analyzed
-                generated_paths.push(debug_path);
-            }
-            Ok(None) => {}
-            // TODO: Error logging
-            Err(err) => {
-                eprintln!("error splitting debug info from {}: {err}", info.path.display());
-            }
+        if let Some(debug_path) = split_debug(bucket, info, bit_size, &build_id)? {
+            // Add new split file to be analyzed
+            generated_paths.push(debug_path);
         }
-
-        if let Err(err) = strip(bucket, info) {
-            // TODO: Error logging
-            eprintln!("error stripping {}: {err}", info.path.display());
-        }
+        strip(bucket, info)?;
 
         // Restat original file after split & strip
         info.restat(bucket.hasher)?;
@@ -111,7 +100,83 @@ fn package_private_rpath_dependency(rpath: &str, name: &str) -> Option<PathBuf> 
 mod tests {
     use super::{is_interpreter_candidate, package_private_rpath_dependency};
     use elf::abi::{ET_DYN, ET_EXEC};
-    use std::path::PathBuf;
+    use std::{
+        collections::BTreeSet,
+        os::fd::AsRawFd,
+        path::{Path, PathBuf},
+    };
+
+    use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
+    use stone_recipe::derivation::AnalysisToolchain;
+
+    use super::{elf, parse_build_id, parse_elf};
+    use crate::{
+        Paths, Recipe,
+        package::{analysis::BucketMut, collect::PathInfo, test_derivation_plan},
+    };
+
+    fn open_build_id_fixture() -> fs_err::File {
+        let mut candidates = vec![PathBuf::from("/bin/sh"), PathBuf::from("/usr/bin/env")];
+        candidates.push(std::env::current_exe().unwrap());
+
+        candidates
+            .into_iter()
+            .find_map(|path| {
+                let mut parsed = parse_elf(&path).ok()?;
+                parse_build_id(&mut parsed)?;
+                fs_err::File::open(path).ok()
+            })
+            .expect("the Linux analyzer tests require an ELF fixture with a GNU build ID")
+    }
+
+    fn assert_requested_tool_failure_is_propagated(debug: bool, strip: bool) {
+        let executable = open_build_id_fixture();
+        let proc_fd_path = PathBuf::from(format!("/proc/self/fd/{}", executable.as_raw_fd()));
+
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout, runtime.path(), output.path()).unwrap();
+        let mut analysis = plan.analysis;
+        analysis.toolchain = AnalysisToolchain::Gnu;
+        analysis.debug = debug;
+        analysis.strip = strip;
+
+        let target_path = PathBuf::from("/usr/bin/analyzer-failure-fixture");
+        let mut info = PathInfo {
+            path: proc_fd_path,
+            target_path: target_path.clone(),
+            layout: StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFREG | 0o755,
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(0, target_path.to_string_lossy().into()),
+            },
+            size: executable.metadata().unwrap().len(),
+            package: "fixture".to_owned(),
+        };
+        let mut providers = BTreeSet::new();
+        let mut dependencies = BTreeSet::new();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut bucket = BucketMut {
+            providers: &mut providers,
+            dependencies: &mut dependencies,
+            hasher: &mut hasher,
+            analysis: &analysis,
+            paths: &paths,
+        };
+
+        // The analyzer subprocess closes every inherited descriptor before
+        // exec, so its /proc/self/fd path cannot name the still-open ELF. The
+        // parent can still restat it: a swallowed tool error would return Ok.
+        assert!(
+            elf(&mut bucket, &mut info).is_err(),
+            "a requested ELF analyzer tool failure must abort package analysis"
+        );
+    }
 
     #[test]
     fn executable_dynamic_object_without_interp_is_interpreter_candidate() {
@@ -140,6 +205,16 @@ mod tests {
             Some(PathBuf::from("onix/stones/rootasrole/4.0.0-5/lib/libpam.so.0"))
         );
         assert_eq!(package_private_rpath_dependency("/usr/lib", "libpam.so.0"), None);
+    }
+
+    #[test]
+    fn requested_debug_split_failure_aborts_analysis() {
+        assert_requested_tool_failure_is_propagated(true, false);
+    }
+
+    #[test]
+    fn requested_strip_failure_aborts_analysis() {
+        assert_requested_tool_failure_is_propagated(false, true);
     }
 }
 
