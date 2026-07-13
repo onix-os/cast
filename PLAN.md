@@ -93,15 +93,18 @@ source overlays through a finite typed build context. The legacy macro policy,
 deleted. Explicit `Shell` steps are literal data and cannot invoke hidden
 expansion syntax.
 
+Repository build policy now starts at the explicit `policy.glu` manifest. It
+names ordered layers and strict `add`, `replace`, and `modify` entries; a
+`modify` entry evaluates a total typed patch and validates the resulting policy
+before the next entry. Manifest order, operation kind, module origin, and each
+module's complete evaluation fingerprint participate in policy identity and
+are reported by `boulder recipe explain`.
+
 ### Current blockers
 
 - Mutable local recipe-directory inputs are rejected before freeze. Supporting
   them requires a local-source ABI which hashes their content and destination
   into the derivation rather than exposing an untracked recipe-directory mount.
-- The typed build policy currently evaluates one explicit `default.glu` root.
-  A total typed patch algebra and configured layer composition still need to
-  replace the removed transitional macro-layer implementation before external
-  policy layers can be enabled.
 - Repository output policy still uses a dedicated deferred template DTO until
   it becomes a pure typed policy factory; it no longer reuses the package or
   recipe domain.
@@ -305,12 +308,13 @@ of the three specification layers.
   fingerprint.
 - [x] Delete directory-enumerated macro loading and evaluate the typed
   `BuildPolicySpec` root instead.
-- [ ] Implement strict typed `add`, `replace`, and `modify` composition over a
+- [x] Implement strict typed `add`, `replace`, and `modify` composition over a
   total `BuildPolicySpec` patch.
 - [x] Retain and propagate policy and profile fingerprints.
 - [x] Include selected target and policy inputs in evaluation provenance.
-- [ ] Add diagnostics showing which module introduced or modified a policy
-  value.
+- [x] Add diagnostics showing which module introduced, replaced, or modified
+  policy state. `recipe explain` emits every ordered transition and failures
+  retain its policy, layer, operation, order, and module origin.
 
 **Exit gate:** policy order is visible in Gluon, duplicate semantics are
 explicit, and no policy/profile fingerprint is discarded.
@@ -400,7 +404,7 @@ scope graph or Rust `PackageSet` ABI is implied.
   resolution.
 - [x] Support ordinary Gluon package-argument overrides.
 - [x] Support typed whole-package patches analogous to attribute overrides.
-- [ ] Allow configured, ordered policy layers only when they are visible in
+- [x] Allow configured, ordered policy layers only when they are visible in
   `recipe explain` and included in the derivation identity.
 - [x] Detect missing scope entries and cycles with actionable diagnostics.
 

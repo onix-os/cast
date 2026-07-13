@@ -22,7 +22,7 @@ constructed only during that conversion.
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
 | Boulder package | `stone.glu` | `boulder.package.v2` and `boulder.builders.*.v1` |
-| Boulder build policy | `bin/boulder/data/policy/default.glu` | `boulder.build_policy.v1` |
+| Boulder build policy | `bin/boulder/data/policy/policy.glu` | `boulder.build_policy.layers.v1` and `boulder.build_policy.v1` |
 | Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
 | Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
 | Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |
@@ -101,8 +101,8 @@ or terminating the process.
 ## Typed and versioned ABIs
 
 The shared configuration boundary is version `1`. The canonical Boulder
-package ABI is version `2`; the build-policy and standard-builder modules are
-version `1`.
+package ABI is version `2`; the build-policy manifest, build-policy value, and
+standard-builder modules are version `1`.
 The embedded modules expose constructors, defaults, explicit option/boolean
 variants, and immutable records. Gluon-facing DTOs use only stable language
 shapes such as strings, integers, arrays, records, and explicit variants.
@@ -148,6 +148,48 @@ values without a second recipe or macro domain.
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
 
+### Ordered build-policy composition
+
+`bin/boulder/data/policy/policy.glu` is the single repository policy entry
+point. It imports `boulder.build_policy.layers.v1` and names every participating
+module in semantic order:
+
+```gluon
+let layers = import! boulder.build_policy.layers.v1
+
+layers.policy "aerynos" [
+    layers.layer "foundation" [
+        layers.add "default.glu",
+    ],
+    layers.layer "site" [
+        layers.modify "site.glu",
+    ],
+]
+```
+
+Only modules named by this manifest participate; Boulder does not enumerate a
+policy directory or apply neighboring files implicitly. Layer names are
+unique, module origins are normalized relative paths beneath the policy source
+root, and the array order is preserved exactly.
+
+Composition is a strict state machine. `add` requires no current policy, while
+`replace` and `modify` require one. An `add` or `replace` module returns a
+complete `BuildPolicySpec`. A `modify` module returns a total
+`BuildPolicyPatchSpec`: every top-level policy field is present, scalar and
+structured fields use `Keep` or `Set`, and arrays use `Keep`, `Replace`,
+`Prepend`, or `Append`. Replacing an array with `[]` is therefore distinct from
+keeping it. Every complete value and every patched intermediate value is
+semantically validated before the next operation runs.
+
+Each successful operation records the policy and layer names, layer and entry
+positions, global operation order, operation kind, module origin, and the
+module's complete evaluation fingerprint. The final policy fingerprint binds
+that ordered stream, including imports of every operation module. It feeds the
+build-lock request, selected policy identity, and canonical derivation plan.
+`boulder recipe explain` prints both `policy_source` provenance and the ordered
+`policy_operation` records; transition, evaluation, and patch failures retain
+the same policy/layer/operation/origin context.
+
 ## Authored source and generated state
 
 Authored programs and generated values have different roles:
@@ -155,7 +197,7 @@ Authored programs and generated values have different roles:
 | Artifact | Owner | Rule |
 |---|---|---|
 | `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Boulder |
-| Boulder build-policy root | OS Tools/vendor | One explicit typed root is evaluated; invalid source is a visible error |
+| Boulder build-policy root | OS Tools/vendor | `policy.glu` explicitly orders named layers and operations; unlisted files are ignored and invalid manifests, modules, transitions, or intermediate values are visible errors |
 | Profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
 | `sources.lock.glu` | Boulder | Canonical standalone source resolution data, written atomically |
 | `build.lock.glu` | Boulder planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
@@ -218,6 +260,14 @@ Stable logical names are used instead of host paths. Identical source and
 inputs therefore produce an identical fingerprint, while a changed import,
 lock, ABI, runtime version, or evaluator policy changes it.
 
+For repository build policy, the finalized manifest evaluation also receives a
+canonical explicit input containing the policy name, ordered layer and entry
+positions, operation kinds, module origins, and complete per-operation
+fingerprints. Reordering a layer or operation, changing an operation kind or
+origin, or changing an operation module or one of its imports therefore changes
+the final policy fingerprint even when the resulting `BuildPolicySpec` happens
+to compare equal. An undeclared neighboring file contributes nothing.
+
 Boulder freezes a canonical target-specific `DerivationPlan` and hashes it as
 the derivation ID. The canonical data includes the recipe/source identities,
 build lock, ordered jobs/phases/steps, environment, builder layout, execution
@@ -276,6 +326,11 @@ boulder recipe explain ./stone.glu \
     --source-date-epoch 1700000000 \
     --jobs 8
 ```
+
+The explanation includes every policy source and every configured policy
+operation with its policy, layer, order, operation kind, module origin, and
+fingerprint. This is the same ordered composition identity used by planning;
+the command does not rediscover policy state after the plan is frozen.
 
 Normal builds use the same frozen plan:
 

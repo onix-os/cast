@@ -20,7 +20,7 @@ the restricted Gluon evaluator and Boulder.
 | Contract | Target module | Owner and responsibility |
 | --- | --- | --- |
 | `PackageSpec` | `stone_recipe::package` | Authored intent returned by a pure Gluon package factory. Validation may inspect only this value and explicit function arguments. |
-| `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. Evaluation is pure and fingerprinted; configured typed layers remain planned. |
+| `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, and output templates. An explicit manifest composes validated values and total patches through ordered, fingerprinted operations. |
 | `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
 
 The target contract gives `bin/boulder` orchestration only:
@@ -46,8 +46,12 @@ Implemented:
 - reusable dependency scopes are ordinary imported Gluon records passed to
   factories; missing fields are type errors, local output cycles are rejected,
   and Moss closure cycles report their concrete path;
-- typed build policy loads from one explicit `data/policy/default.glu` root;
-  its root and imported-module fingerprints participate in derivation identity;
+- typed build policy loads from the explicit `data/policy/policy.glu` manifest,
+  which names ordered layers and strict `add`, `replace`, and `modify`
+  operations; unlisted neighboring files do not participate;
+- `BuildPolicyPatchSpec` covers every top-level field, distinguishes scalar
+  `Keep`/`Set` from ordered-array `Keep`/`Replace`/`Prepend`/`Append`, and
+  validates every intermediate result;
 - CMake, Meson, Cargo, and Autotools produce structural `StepSpec` phases and
   declare their tools without authored `%action` strings;
 - phase planning resolves layout, tools, tuning, environment, commands, and
@@ -59,8 +63,9 @@ Implemented:
 - `boulder recipe plan` freezes and validates canonical target-specific jobs,
   phases, environment, layout, execution policy, analysis, collection rules,
   manifest inputs, outputs, and timestamp;
-- `recipe explain` exposes lock and policy provenance, and canonical mutation
-  tests prove that semantic changes alter the derivation ID;
+- `recipe explain` exposes lock provenance plus each policy source and ordered
+  policy operation, and canonical mutation tests prove that semantic changes
+  alter the derivation ID;
 - normal `boulder build` uses that same plan to verify repository snapshots,
   exact-install locked packages, materialize locked sources, enter a frozen
   container, execute plan steps, package plan-owned outputs, verify manifests
@@ -71,10 +76,7 @@ Implemented:
 Still transitional:
 
 - mutable local recipe `pkg/` inputs are rejected until a local-source ABI can
-  hash their content and destination into the derivation;
-- configured repository-policy layers remain disabled until the total typed
-  patch algebra, ordered composition, and per-operation provenance are wired to
-  the single build-policy root.
+  hash their content and destination into the derivation.
 
 ## Layer invariants
 
@@ -102,9 +104,15 @@ Still transitional:
   toolchains, standard builders, base build inputs, tuning defaults, package
   templates, analyzer policy, and fixed guest layout.
 - Is composed through ordered, one-way transformations with strict `add`,
-  `replace`, and `modify` operations. An unqualified duplicate addition is an
-  error.
-- Retains provenance and fingerprints for the root and every imported module.
+  `replace`, and `modify` operations. `add` requires absent state; `replace`
+  and `modify` require existing state, and each intermediate policy is
+  validated.
+- Uses a total top-level patch: scalar and structured values distinguish
+  `Keep` from `Set`, while arrays distinguish `Keep`, `Replace`, `Prepend`, and
+  `Append` without sorting or deduplication.
+- Retains provenance and complete fingerprints for the manifest and every
+  operation module and import. Manifest/layer/entry order, operation kind, and
+  module origin are part of the final policy identity.
 - Does not read the machine architecture, CPU count, environment, user home,
   filesystem, network, or clock while being evaluated.
 - May provide defaults, but applying those defaults is part of plan
@@ -161,7 +169,7 @@ implementation status above is authoritative for completed work.
 
 | Baseline value or behavior | Baseline location | Class | Required destination |
 | --- | --- | --- | --- |
-| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicit typed `BuildPolicySpec` root with complete evaluation fingerprint and import provenance. Implemented by `data/policy/default.glu`; the macro tree is deleted. |
+| Sorted discovery of `data/macros/actions/*.glu` and `data/macros/arch/*.glu` | former `bin/boulder/src/macros.rs` behavior | Repository policy | One explicit `data/policy/policy.glu` manifest with ordered typed operations and complete evaluation fingerprints. Its foundation `add` names `default.glu`; the macro tree is deleted. |
 | Base and target action/definition maps | `build/job/phase.rs` | Repository policy | Selected builder and platform policy, resolved into plan phases, tools, and environment. |
 | Architecture package templates | `package.rs::resolve_packages` | Repository policy | Typed output templates in `PolicySpec`, with explicit composition operations. |
 | Root and target-profile phase fallback | `build/job/phase.rs::Phase::script` | Authored intent | Package builder/hooks plus an explicit target override; the chosen phase is frozen in the plan. |
@@ -274,5 +282,6 @@ Phase 1 tests prove that repeated evaluation with identical explicit source,
 imports, ABI modules, and lock bytes produces equal values and fingerprints.
 The resolver and planner freeze and validate the canonical plan, and the normal
 build path enforces it through execution and emission. The internal recipe and
-macro representations are gone; remaining work must extend typed policy and
-local-source contracts without weakening this boundary.
+macro representations are gone; remaining contract work must extend the
+local-source ABI and any future typed policy fields without weakening this
+boundary.
