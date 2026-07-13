@@ -90,12 +90,8 @@ impl Phase {
             Phase::Workload => typed_phases.workload.clone(),
         };
 
-        let content = matches!(self, Phase::Prepare).then(|| prepare_script(&recipe.declaration.sources));
-        if typed_phase.is_empty() && content.is_none() {
-            return Ok(None);
-        }
-
-        if typed_phase.is_empty() && content.as_deref().is_some_and(str::is_empty) {
+        let prepare = matches!(self, Phase::Prepare);
+        if typed_phase.is_empty() && !prepare {
             return Ok(None);
         }
 
@@ -230,16 +226,8 @@ impl Phase {
         if !matches!(self, Phase::Prepare) {
             validate_environment_steps(&typed_phases.environment)?;
         }
-        let mut steps = if typed_phase.is_empty() {
-            content
-                .filter(|content| !content.is_empty())
-                .map(|content| {
-                    parser
-                        .parse_content(&content)
-                        .map(|script| vec![literal_shell(script, &context.environment, &working_dir)])
-                })
-                .transpose()?
-                .unwrap_or_default()
+        let mut steps = if prepare {
+            prepare_steps(&recipe.declaration.sources, paths, &context.environment, &working_dir)
         } else {
             compile_steps(&typed_phase, &context, &working_dir)?
         };
@@ -450,11 +438,19 @@ llvm-profdata merge --failure-mode=all -output="$BOULDER_PGO_DIR/combined.profda
     Some(literal_shell(script.to_owned(), &context.environment, working_dir))
 }
 
-fn prepare_script(sources: &[UpstreamSpec]) -> String {
-    use std::fmt::Write;
-
-    let mut content = String::default();
-
+fn prepare_steps(
+    sources: &[UpstreamSpec],
+    paths: &Paths,
+    environment: &BTreeMap<String, String>,
+    working_dir: &str,
+) -> Vec<StepPlan> {
+    let run = |program: &str, args: Vec<String>| StepPlan::Run {
+        program: program.to_owned(),
+        args,
+        environment: environment.clone(),
+        working_dir: working_dir.to_owned(),
+    };
+    let mut steps = Vec::new();
     for source in sources {
         match source {
             UpstreamSpec::Archive {
@@ -477,11 +473,18 @@ fn prepare_script(sources: &[UpstreamSpec]) -> String {
                 let unpack_dir = unpack_dir.as_ref().cloned().unwrap_or_else(|| rename.to_owned());
                 let strip_dirs = strip_dirs.unwrap_or(1);
 
-                let _ = writeln!(&mut content, "mkdir -p {unpack_dir}");
-                let _ = writeln!(
-                    &mut content,
-                    r#"bsdtar-static xf "%(sourcedir)/{rename}" -C "{unpack_dir}" --strip-components={strip_dirs} --no-same-owner || (echo "Failed to extract archive"; exit 1);"#,
-                );
+                steps.push(run("mkdir", vec!["-p".to_owned(), unpack_dir.clone()]));
+                steps.push(run(
+                    "bsdtar-static",
+                    vec![
+                        "xf".to_owned(),
+                        paths.upstreams().guest.join(rename).display().to_string(),
+                        "-C".to_owned(),
+                        unpack_dir,
+                        format!("--strip-components={strip_dirs}"),
+                        "--no-same-owner".to_owned(),
+                    ],
+                ));
             }
             UpstreamSpec::Git { url, clone_dir, .. } => {
                 let source = url
@@ -491,16 +494,20 @@ fn prepare_script(sources: &[UpstreamSpec]) -> String {
                     .unwrap_or_default();
                 let target = clone_dir.as_ref().cloned().unwrap_or_else(|| source.to_owned());
 
-                let _ = writeln!(&mut content, "mkdir -p {target}");
-                let _ = writeln!(
-                    &mut content,
-                    r#"cp -Ra --no-preserve=ownership "%(sourcedir)/{source}/." "{target}""#,
-                );
+                steps.push(run("mkdir", vec!["-p".to_owned(), target.clone()]));
+                steps.push(run(
+                    "cp",
+                    vec![
+                        "-Ra".to_owned(),
+                        "--no-preserve=ownership".to_owned(),
+                        paths.upstreams().guest.join(source).join(".").display().to_string(),
+                        target,
+                    ],
+                ));
             }
         }
     }
-
-    content
+    steps
 }
 
 fn add_tuning(
@@ -732,6 +739,47 @@ mod direct_tests {
             panic!("explicit shell must stay shell")
         };
         assert_eq!(script, literal);
+    }
+
+    #[test]
+    fn source_preparation_is_argv_preserving_and_never_parsed_as_shell() {
+        let (recipe, _, root) = fixture();
+        let paths = Paths::new(&recipe, None, root.path(), "/mason", root.path()).unwrap();
+        let archive_name = "source archive;echo-not-shell.tar.xz";
+        let sources = [
+            UpstreamSpec::Archive {
+                url: "https://example.invalid/source.tar.xz".to_owned(),
+                hash: "a".repeat(64),
+                rename: Some(archive_name.to_owned()),
+                strip_dirs: Some(2),
+                unpack: true,
+                unpack_dir: Some("source tree".to_owned()),
+            },
+            UpstreamSpec::Git {
+                url: "https://example.invalid/project.git".to_owned(),
+                git_ref: "main".to_owned(),
+                clone_dir: Some("git tree".to_owned()),
+            },
+        ];
+
+        let steps = prepare_steps(&sources, &paths, &BTreeMap::new(), "/mason/build/x86_64");
+
+        assert_eq!(steps.len(), 4);
+        let StepPlan::Run { program, args, .. } = &steps[1] else {
+            panic!("archive preparation must be structural")
+        };
+        assert_eq!(program, "bsdtar-static");
+        assert_eq!(args[1], format!("/mason/sourcedir/{archive_name}"));
+        assert_eq!(args[3], "source tree");
+        assert_eq!(args[4], "--strip-components=2");
+        assert!(!steps.iter().any(|step| matches!(step, StepPlan::Shell { .. })));
+
+        let StepPlan::Run { program, args, .. } = &steps[3] else {
+            panic!("git preparation must be structural")
+        };
+        assert_eq!(program, "cp");
+        assert_eq!(args[2], "/mason/sourcedir/project.git/.");
+        assert_eq!(args[3], "git tree");
     }
 
     #[test]
