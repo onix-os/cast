@@ -80,7 +80,10 @@ impl Encoder {
             .set_parameter(CParameter::CompressionLevel(18))
             .map_err(map_error_code)?;
         context
-            .set_parameter(CParameter::WindowLog(31))
+            // Keep newly emitted archives readable under StoneDecodeLimits'
+            // bounded default. Older archives which genuinely require a
+            // 2-GiB window remain available through read_with_limits.
+            .set_parameter(CParameter::WindowLog(30))
             .map_err(map_error_code)?;
         Ok(Self {
             context,

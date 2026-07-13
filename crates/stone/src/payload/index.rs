@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 
-use super::{Record, StonePayloadDecodeError, StonePayloadEncodeError};
+use super::{Record, RecordReader, StonePayloadDecodeError, StonePayloadEncodeError};
 use crate::ext::{ReadExt, WriteExt};
 
 /// An IndexEntry (a series of sequential entries within the IndexPayload)
@@ -24,7 +24,7 @@ pub struct StonePayloadIndexRecord {
 }
 
 impl Record for StonePayloadIndexRecord {
-    fn decode<R: Read>(mut reader: R) -> Result<Self, StonePayloadDecodeError> {
+    fn decode<R: Read>(reader: &mut RecordReader<R>) -> Result<Self, StonePayloadDecodeError> {
         let start = reader.read_u64()?;
         let end = reader.read_u64()?;
         let digest = reader.read_u128()?;

@@ -20,7 +20,10 @@ pub use self::payload::{
 };
 #[cfg(feature = "ffi")]
 pub use self::read::StonePayloadContentReader;
-pub use self::read::{StoneDecodedPayload, StoneReadError, StoneReader, read, read_bytes};
+pub use self::read::{
+    StoneDecodeLimits, StoneDecodedPayload, StoneReadError, StoneReader, read, read_bytes, read_bytes_with_limits,
+    read_with_limits,
+};
 pub use self::write::{
     StoneContentWriter, StoneDigestWriter, StoneDigestWriterHasher, StoneWriteError, StoneWritePayload, StoneWriter,
 };

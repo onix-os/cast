@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 
-use super::{Record, StonePayloadDecodeError, StonePayloadEncodeError};
+use super::{Record, RecordReader, StonePayloadDecodeError, StonePayloadEncodeError};
 use crate::ext::{ReadExt, WriteExt};
 
 /// The Meta payload contains a series of sequential records with
@@ -156,7 +156,7 @@ fn decode_dependency(i: u8) -> StonePayloadMetaDependency {
 }
 
 impl Record for StonePayloadMetaRecord {
-    fn decode<R: Read>(mut reader: R) -> Result<Self, StonePayloadDecodeError> {
+    fn decode<R: Read>(reader: &mut RecordReader<R>) -> Result<Self, StonePayloadDecodeError> {
         let length = reader.read_u32()?;
 
         let tag = match reader.read_u16()? {
@@ -186,30 +186,81 @@ impl Record for StonePayloadMetaRecord {
         let kind = reader.read_u8()?;
         let _padding = reader.read_array_::<1>()?;
 
+        reader.ensure_additional("metadata primitive", u64::from(length))?;
+
         // Remove null terminated byte from string
         let sanitize = |s: String| s.trim_end_matches('\0').to_owned();
 
+        let require_length = |expected| {
+            if length == expected {
+                Ok(())
+            } else {
+                Err(StonePayloadDecodeError::InvalidLength {
+                    field: "metadata primitive",
+                    expected: u64::from(expected),
+                    actual: u64::from(length),
+                })
+            }
+        };
+
         let primitive = match kind {
-            1 => StonePayloadMetaPrimitive::Int8(reader.read_u8()? as i8),
-            2 => StonePayloadMetaPrimitive::Uint8(reader.read_u8()?),
-            3 => StonePayloadMetaPrimitive::Int16(reader.read_u16()? as i16),
-            4 => StonePayloadMetaPrimitive::Uint16(reader.read_u16()?),
-            5 => StonePayloadMetaPrimitive::Int32(reader.read_u32()? as i32),
-            6 => StonePayloadMetaPrimitive::Uint32(reader.read_u32()?),
-            7 => StonePayloadMetaPrimitive::Int64(reader.read_u64()? as i64),
-            8 => StonePayloadMetaPrimitive::Uint64(reader.read_u64()?),
-            9 => StonePayloadMetaPrimitive::String(sanitize(reader.read_string(length as u64)?)),
-            10 => StonePayloadMetaPrimitive::Dependency(
-                // DependencyKind u8 subtracted from length
-                decode_dependency(reader.read_u8()?),
-                sanitize(reader.read_string(length as u64 - 1)?),
+            1 => {
+                require_length(1)?;
+                StonePayloadMetaPrimitive::Int8(reader.read_u8()? as i8)
+            }
+            2 => {
+                require_length(1)?;
+                StonePayloadMetaPrimitive::Uint8(reader.read_u8()?)
+            }
+            3 => {
+                require_length(2)?;
+                StonePayloadMetaPrimitive::Int16(reader.read_u16()? as i16)
+            }
+            4 => {
+                require_length(2)?;
+                StonePayloadMetaPrimitive::Uint16(reader.read_u16()?)
+            }
+            5 => {
+                require_length(4)?;
+                StonePayloadMetaPrimitive::Int32(reader.read_u32()? as i32)
+            }
+            6 => {
+                require_length(4)?;
+                StonePayloadMetaPrimitive::Uint32(reader.read_u32()?)
+            }
+            7 => {
+                require_length(8)?;
+                StonePayloadMetaPrimitive::Int64(reader.read_u64()? as i64)
+            }
+            8 => {
+                require_length(8)?;
+                StonePayloadMetaPrimitive::Uint64(reader.read_u64()?)
+            }
+            9 => StonePayloadMetaPrimitive::String(sanitize(
+                reader.read_sized_string("metadata string", u64::from(length))?,
+            )),
+            10 | 11 => {
+                if length == 0 {
+                    return Err(StonePayloadDecodeError::LengthTooSmall {
+                        field: "metadata dependency/provider",
+                        minimum: 1,
+                        actual: 0,
+                    });
+                }
+
+                let dependency = decode_dependency(reader.read_u8()?);
+                let value =
+                    sanitize(reader.read_sized_string("metadata dependency/provider string", u64::from(length - 1))?);
+
+                if kind == 10 {
+                    StonePayloadMetaPrimitive::Dependency(dependency, value)
+                } else {
+                    StonePayloadMetaPrimitive::Provider(dependency, value)
+                }
+            }
+            _ => StonePayloadMetaPrimitive::Unknown(
+                reader.read_sized_vec("unknown metadata primitive", u64::from(length))?,
             ),
-            11 => StonePayloadMetaPrimitive::Provider(
-                // DependencyKind u8 subtracted from length
-                decode_dependency(reader.read_u8()?),
-                sanitize(reader.read_string(length as u64 - 1)?),
-            ),
-            _ => StonePayloadMetaPrimitive::Unknown(reader.read_vec(length as usize)?),
         };
 
         Ok(Self { tag, primitive })

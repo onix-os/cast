@@ -19,6 +19,10 @@ where
     pub fn new(reader: R, hasher: &'a mut Hasher) -> Self {
         Self { inner: reader, hasher }
     }
+
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
 }
 
 impl<R> Read for Reader<'_, R>

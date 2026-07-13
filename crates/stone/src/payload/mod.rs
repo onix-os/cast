@@ -64,11 +64,19 @@ pub struct StonePayloadHeader {
 }
 
 impl StonePayloadHeader {
+    /// Size of a payload header in the version-1 wire format.
+    pub const SIZE: usize = 32;
+
     pub fn decode<R: Read>(mut reader: R) -> Result<Self, StonePayloadDecodeError> {
         let stored_size = reader.read_u64()?;
         let plain_size = reader.read_u64()?;
         let checksum = reader.read_array_()?;
-        let num_records = reader.read_u32()? as usize;
+        let encoded_num_records = reader.read_u32()?;
+        let num_records = usize::try_from(encoded_num_records).map_err(|_| StonePayloadDecodeError::LimitExceeded {
+            field: "payload record count",
+            limit: usize::MAX as u64,
+            actual: u64::from(encoded_num_records),
+        })?;
         let version = reader.read_u16()?;
 
         let kind = match reader.read_u8()? {
@@ -111,19 +119,108 @@ impl StonePayloadHeader {
 }
 
 pub(crate) trait Record: Sized {
-    fn decode<R: Read>(reader: R) -> Result<Self, StonePayloadDecodeError>;
+    fn decode<R: Read>(reader: &mut RecordReader<R>) -> Result<Self, StonePayloadDecodeError>;
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), StonePayloadEncodeError>;
     fn size(&self) -> usize;
+}
+
+pub(crate) struct RecordReader<R> {
+    inner: R,
+    limit: u64,
+    consumed: u64,
+}
+
+impl<R: Read> RecordReader<R> {
+    fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            limit,
+            consumed: 0,
+        }
+    }
+
+    pub(crate) fn ensure_additional(&self, field: &'static str, length: u64) -> Result<(), StonePayloadDecodeError> {
+        let requested = self
+            .consumed
+            .checked_add(length)
+            .ok_or(StonePayloadDecodeError::LengthOverflow { field })?;
+
+        if requested > self.limit {
+            return Err(StonePayloadDecodeError::LimitExceeded {
+                field,
+                limit: self.limit,
+                actual: requested,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn read_sized_vec(
+        &mut self,
+        field: &'static str,
+        length: u64,
+    ) -> Result<Vec<u8>, StonePayloadDecodeError> {
+        self.ensure_additional(field, length)?;
+        let length = usize::try_from(length).map_err(|_| StonePayloadDecodeError::LimitExceeded {
+            field,
+            limit: usize::MAX as u64,
+            actual: length,
+        })?;
+        Ok(self.read_vec(length)?)
+    }
+
+    pub(crate) fn read_sized_string(
+        &mut self,
+        field: &'static str,
+        length: u64,
+    ) -> Result<String, StonePayloadDecodeError> {
+        self.ensure_additional(field, length)?;
+        Ok(self.read_string(length)?)
+    }
+}
+
+impl<R: Read> Read for RecordReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let remaining = self.limit.saturating_sub(self.consumed);
+        if remaining == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("record exceeds the configured {} byte limit", self.limit),
+            ));
+        }
+
+        let allowed = usize::try_from(remaining).unwrap_or(usize::MAX).min(buf.len());
+        let read = self.inner.read(&mut buf[..allowed])?;
+        self.consumed = self
+            .consumed
+            .checked_add(read as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "record byte count overflow"))?;
+        Ok(read)
+    }
 }
 
 pub(crate) fn decode_records<T: Record, R: Read>(
     mut reader: R,
     num_records: usize,
+    max_record_bytes: u64,
 ) -> Result<Vec<T>, StonePayloadDecodeError> {
-    let mut records = Vec::with_capacity(num_records);
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(num_records)
+        .map_err(|error| StonePayloadDecodeError::Allocation {
+            field: "payload records",
+            requested: num_records as u64,
+            error: error.to_string(),
+        })?;
 
     for _ in 0..num_records {
-        records.push(T::decode(&mut reader)?);
+        let mut record = RecordReader::new(&mut reader, max_record_bytes);
+        records.push(T::decode(&mut record)?);
     }
 
     Ok(records)
@@ -151,6 +248,32 @@ pub struct StonePayload<T> {
 
 #[derive(Debug, Error)]
 pub enum StonePayloadDecodeError {
+    #[error("{field} length {actual} exceeds limit {limit}")]
+    LimitExceeded {
+        field: &'static str,
+        limit: u64,
+        actual: u64,
+    },
+    #[error("invalid {field} length {actual}; expected {expected}")]
+    InvalidLength {
+        field: &'static str,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("invalid {field} length {actual}; expected at least {minimum}")]
+    LengthTooSmall {
+        field: &'static str,
+        minimum: u64,
+        actual: u64,
+    },
+    #[error("{field} length arithmetic overflow")]
+    LengthOverflow { field: &'static str },
+    #[error("failed to reserve {requested} {field}: {error}")]
+    Allocation {
+        field: &'static str,
+        requested: u64,
+        error: String,
+    },
     #[error("io")]
     Io(#[from] io::Error),
 }
