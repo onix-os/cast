@@ -6,20 +6,14 @@
 //! This module deliberately has no access to recipes, policy macros,
 //! profiles, or Moss provider resolution. Those belong to planning.
 
-use std::{
-    collections::BTreeMap,
-    io,
-    os::unix::process::ExitStatusExt,
-    path::{Path, PathBuf},
-    process, thread,
-};
+use std::{collections::BTreeMap, io, os::unix::process::ExitStatusExt, path::Path, process, thread};
 
 use fs_err as fs;
 use nix::{
     sys::signal::Signal,
     unistd::{Pid, getpgrp, setpgid},
 };
-use stone_recipe::derivation::{DerivationPlan, JobPlan, PhasePlan, StepPlan};
+use stone_recipe::derivation::{DerivationPlan, JobPlan, StepPlan};
 use thiserror::Error;
 use tui::Styled;
 
@@ -50,8 +44,6 @@ impl<'a> Executor<'a> {
             });
         }
         validate_build_host(&plan.build_lock.build_platform.architecture, std::env::consts::ARCH)?;
-        validate_jobs(plan)?;
-        validate_execution_symbols(&plan.jobs)?;
         Ok(Self { plan })
     }
 
@@ -164,11 +156,6 @@ fn merged_environment(global: &BTreeMap<String, String>, step: &BTreeMap<String,
         .collect()
 }
 
-fn validate_jobs(plan: &DerivationPlan) -> Result<(), Error> {
-    let layout_root = Path::new(&plan.layout.build_dir);
-    validate_job_paths(layout_root, &plan.jobs)
-}
-
 fn validate_build_host(required: &str, actual: &str) -> Result<(), Error> {
     if required == actual {
         Ok(())
@@ -178,71 +165,6 @@ fn validate_build_host(required: &str, actual: &str) -> Result<(), Error> {
             actual: actual.to_owned(),
         })
     }
-}
-
-/// Reject executor vocabulary this Boulder cannot run before runtime setup
-/// mutates the build root, fetches sources, or installs the locked closure.
-fn validate_execution_symbols(jobs: &[JobPlan]) -> Result<(), Error> {
-    for job in jobs {
-        if let Some(stage) = &job.pgo_stage {
-            parse_pgo_stage(stage)?;
-        }
-        for phase in &job.phases {
-            parse_phase(&phase.name)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_job_paths(layout_root: &Path, jobs: &[JobPlan]) -> Result<(), Error> {
-    for (job_index, job) in jobs.iter().enumerate() {
-        let build_dir = Path::new(&job.build_dir);
-        let work_dir = Path::new(&job.work_dir);
-        if !safe_absolute(build_dir)
-            || !safe_absolute(work_dir)
-            || !build_dir.starts_with(layout_root)
-            || !work_dir.starts_with(build_dir)
-        {
-            return Err(Error::NonAbsoluteJobPath { job: job_index });
-        }
-        match (&job.pgo_stage, &job.pgo_dir) {
-            (Some(_), Some(pgo_dir))
-                if safe_absolute(Path::new(pgo_dir)) && Path::new(pgo_dir).starts_with(layout_root) => {}
-            (None, None) => {}
-            _ => return Err(Error::InvalidPgoDirectory { job: job_index }),
-        }
-        for phase in &job.phases {
-            validate_phase_working_dirs(job_index, job, phase)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_phase_working_dirs(job_index: usize, job: &JobPlan, phase: &PhasePlan) -> Result<(), Error> {
-    let build_dir = Path::new(&job.build_dir);
-    for step in phase.pre.iter().chain(&phase.steps).chain(&phase.post) {
-        let working_dir = match step {
-            StepPlan::Run { working_dir, .. } | StepPlan::Shell { working_dir, .. } => Path::new(working_dir),
-        };
-        if !safe_absolute(working_dir) || !working_dir.starts_with(build_dir) {
-            return Err(Error::WorkingDirectoryOutsideBuild {
-                job: job_index,
-                phase: phase.name.clone(),
-                working_dir: working_dir.to_path_buf(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn safe_absolute(path: &Path) -> bool {
-    path.is_absolute()
-        && !path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir | std::path::Component::CurDir
-            )
-        })
 }
 
 fn logged(
@@ -324,16 +246,6 @@ pub enum Error {
     IncompatibleExecutor { expected: &'static str, found: String },
     #[error("plan was created by Boulder {found}, but executor is {expected}")]
     IncompatibleBoulder { expected: String, found: String },
-    #[error("plan job {job} has a non-absolute build or work directory")]
-    NonAbsoluteJobPath { job: usize },
-    #[error("plan job {job} phase {phase} has working directory outside its build root: {working_dir:?}")]
-    WorkingDirectoryOutsideBuild {
-        job: usize,
-        phase: String,
-        working_dir: PathBuf,
-    },
-    #[error("plan job {job} has an invalid or missing frozen PGO directory")]
-    InvalidPgoDirectory { job: usize },
     #[error("frozen plan requires build host `{required}`, but Boulder is running on `{actual}`")]
     IncompatibleBuildHost { required: String, actual: String },
     #[error("unsupported frozen PGO stage {0}")]
@@ -358,66 +270,17 @@ pub enum Error {
 mod tests {
     use super::*;
 
-    fn shell(script: &str, working_dir: &str, environment: &[(&str, &str)]) -> StepPlan {
-        StepPlan::Shell {
-            interpreter: "/usr/bin/bash".to_owned(),
-            script: script.to_owned(),
-            environment: environment
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-                .collect(),
-            working_dir: working_dir.to_owned(),
-        }
-    }
-
     #[test]
-    fn validation_rejects_step_working_directories_outside_frozen_build_root() {
+    fn repeated_pgo_directories_are_recreated_once() {
         let job = JobPlan {
-            pgo_stage: None,
-            pgo_dir: None,
-            build_dir: "/mason/build/target".to_owned(),
-            work_dir: "/mason/build/target/source".to_owned(),
-            phases: vec![PhasePlan {
-                name: "build".to_owned(),
-                pre: Vec::new(),
-                steps: vec![shell("true", "/tmp/ambient", &[])],
-                post: Vec::new(),
-            }],
-        };
-
-        assert!(matches!(
-            validate_job_paths(Path::new("/mason/build"), &[job]),
-            Err(Error::WorkingDirectoryOutsideBuild { .. })
-        ));
-    }
-
-    #[test]
-    fn validation_contains_job_and_pgo_paths_under_frozen_layout() {
-        let mut job = JobPlan {
             pgo_stage: Some("one".to_owned()),
-            pgo_dir: Some("/outside/pgo".to_owned()),
+            pgo_dir: Some("/mason/build/target-pgo".to_owned()),
             build_dir: "/mason/build/target".to_owned(),
             work_dir: "/mason/build/target/source".to_owned(),
             phases: Vec::new(),
         };
-        assert!(matches!(
-            validate_job_paths(Path::new("/mason/build"), &[job.clone()]),
-            Err(Error::InvalidPgoDirectory { job: 0 })
-        ));
-
-        job.pgo_dir = Some("/mason/build/target-pgo".to_owned());
-        validate_job_paths(Path::new("/mason/build"), &[job.clone()]).unwrap();
         let repeated = job.clone();
-        assert_eq!(
-            unique_pgo_dirs(&[job.clone(), repeated]),
-            ["/mason/build/target-pgo"].into()
-        );
-
-        job.build_dir = "/outside/target".to_owned();
-        assert!(matches!(
-            validate_job_paths(Path::new("/mason/build"), &[job]),
-            Err(Error::NonAbsoluteJobPath { job: 0 })
-        ));
+        assert_eq!(unique_pgo_dirs(&[job, repeated]), ["/mason/build/target-pgo"].into());
     }
 
     #[test]
@@ -454,25 +317,20 @@ mod tests {
     }
 
     #[test]
-    fn executor_vocabulary_is_accepted_before_execution() {
-        let mut jobs = vec![JobPlan {
-            pgo_stage: Some("one".to_owned()),
-            pgo_dir: Some("/mason/build/target-pgo".to_owned()),
-            build_dir: "/mason/build/target".to_owned(),
-            work_dir: "/mason/build/target/source".to_owned(),
-            phases: vec![PhasePlan {
-                name: "build".to_owned(),
-                pre: Vec::new(),
-                steps: Vec::new(),
-                post: Vec::new(),
-            }],
-        }];
-
-        validate_execution_symbols(&jobs).unwrap();
-        jobs[0].phases[0].name = "ambient-phase".to_owned();
+    fn runtime_symbol_parsing_remains_a_defensive_backstop() {
+        for stage in ["one", "two", "use"] {
+            parse_pgo_stage(stage).unwrap();
+        }
+        for phase in ["Prepare", "setup", "BUILD", "install", "check", "workload"] {
+            parse_phase(phase).unwrap();
+        }
         assert!(matches!(
-            validate_execution_symbols(&jobs),
-            Err(Error::UnsupportedPhase(phase)) if phase == "ambient-phase"
+            parse_pgo_stage("ONE"),
+            Err(Error::UnsupportedPgoStage(stage)) if stage == "ONE"
+        ));
+        assert!(matches!(
+            parse_phase("environment"),
+            Err(Error::UnsupportedPhase(phase)) if phase == "environment"
         ));
     }
 

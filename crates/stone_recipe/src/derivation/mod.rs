@@ -9,7 +9,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use sha2::{Digest, Sha256};
@@ -126,7 +126,7 @@ impl DerivationPlan {
         }
 
         for (index, job) in self.jobs.iter().enumerate() {
-            job.validate(index)?;
+            job.validate(index, Path::new(&self.layout.build_dir))?;
         }
         for (index, flag) in self.tuning.iter().enumerate() {
             require_nonempty(&format!("tuning[{index}]"), flag)?;
@@ -414,10 +414,10 @@ pub struct PhasePlan {
 }
 
 impl PhasePlan {
-    fn validate(&self, parent: &str) -> Result<(), DerivationValidationError> {
+    fn validate(&self, parent: &str, build_dir: &Path) -> Result<(), DerivationValidationError> {
         for (group, steps) in [("pre", &self.pre), ("steps", &self.steps), ("post", &self.post)] {
             for (step_index, step) in steps.iter().enumerate() {
-                step.validate(&format!("{parent}.{group}[{step_index}]"))?;
+                step.validate(&format!("{parent}.{group}[{step_index}]"), build_dir)?;
             }
         }
         Ok(())
@@ -443,22 +443,56 @@ pub struct JobPlan {
 }
 
 impl JobPlan {
-    fn validate(&self, job_index: usize) -> Result<(), DerivationValidationError> {
-        require_nonempty(&format!("jobs[{job_index}].build_dir"), &self.build_dir)?;
-        require_nonempty(&format!("jobs[{job_index}].work_dir"), &self.work_dir)?;
-        if let Some(pgo_dir) = &self.pgo_dir {
-            require_nonempty(&format!("jobs[{job_index}].pgo_dir"), pgo_dir)?;
+    fn validate(&self, job_index: usize, layout_build_dir: &Path) -> Result<(), DerivationValidationError> {
+        let build_field = format!("jobs[{job_index}].build_dir");
+        let work_field = format!("jobs[{job_index}].work_dir");
+        let build_dir = validate_normalized_absolute_path(&build_field, &self.build_dir)?;
+        require_path_contained(&build_field, build_dir, "layout.build_dir", layout_build_dir)?;
+        let work_dir = validate_normalized_absolute_path(&work_field, &self.work_dir)?;
+        require_path_contained(&work_field, work_dir, &build_field, build_dir)?;
+
+        match (&self.pgo_stage, &self.pgo_dir) {
+            (Some(stage), Some(pgo_dir)) => {
+                if !matches!(stage.as_str(), "one" | "two" | "use") {
+                    return Err(DerivationValidationError::UnsupportedPgoStage {
+                        job: job_index,
+                        stage: stage.clone(),
+                    });
+                }
+                let field = format!("jobs[{job_index}].pgo_dir");
+                let pgo_dir = validate_normalized_absolute_path(&field, pgo_dir)?;
+                require_path_contained(&field, pgo_dir, "layout.build_dir", layout_build_dir)?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(DerivationValidationError::PgoStageDirectoryMismatch {
+                    job: job_index,
+                    stage: self.pgo_stage.clone(),
+                    directory: self.pgo_dir.clone(),
+                });
+            }
         }
+
         let mut phase_names = BTreeSet::new();
         for (phase_index, phase) in self.phases.iter().enumerate() {
-            require_nonempty(&format!("jobs[{job_index}].phases[{phase_index}].name"), &phase.name)?;
-            if !phase_names.insert(phase.name.as_str()) {
+            let name = phase.name.to_ascii_lowercase();
+            if !matches!(
+                name.as_str(),
+                "prepare" | "setup" | "build" | "install" | "check" | "workload"
+            ) {
+                return Err(DerivationValidationError::UnsupportedPhase {
+                    job: job_index,
+                    phase: phase_index,
+                    name: phase.name.clone(),
+                });
+            }
+            if !phase_names.insert(name) {
                 return Err(DerivationValidationError::DuplicatePhase {
                     job: job_index,
                     name: phase.name.clone(),
                 });
             }
-            phase.validate(&format!("jobs[{job_index}].phases[{phase_index}]"))?;
+            phase.validate(&format!("jobs[{job_index}].phases[{phase_index}]"), build_dir)?;
         }
         Ok(())
     }
@@ -496,13 +530,13 @@ pub enum StepPlan {
 }
 
 impl StepPlan {
-    fn validate(&self, field: &str) -> Result<(), DerivationValidationError> {
+    fn validate(&self, field: &str, build_dir: &Path) -> Result<(), DerivationValidationError> {
         match self {
             Self::Run {
                 program, working_dir, ..
             } => {
                 require_nonempty(&format!("{field}.program"), program)?;
-                require_nonempty(&format!("{field}.working_dir"), working_dir)
+                validate_step_working_dir(field, working_dir, build_dir)
             }
             Self::Shell {
                 interpreter,
@@ -512,7 +546,7 @@ impl StepPlan {
             } => {
                 require_nonempty(&format!("{field}.interpreter"), interpreter)?;
                 require_nonempty(&format!("{field}.script"), script)?;
-                require_nonempty(&format!("{field}.working_dir"), working_dir)
+                validate_step_working_dir(field, working_dir, build_dir)
             }
         }
     }
@@ -558,19 +592,17 @@ pub struct BuilderLayout {
 
 impl BuilderLayout {
     fn validate(&self) -> Result<(), DerivationValidationError> {
+        let build_dir = validate_normalized_absolute_path("layout.build_dir", &self.build_dir)?;
+        let guest_root = build_dir
+            .parent()
+            .expect("a safe absolute managed path always has a parent");
         for (field, value) in [
-            ("layout.build_dir", &self.build_dir),
             ("layout.source_dir", &self.source_dir),
             ("layout.install_dir", &self.install_dir),
             ("layout.package_dir", &self.package_dir),
         ] {
-            require_nonempty(field, value)?;
-            if !value.starts_with('/') {
-                return Err(DerivationValidationError::NonAbsoluteGuestPath {
-                    field: field.to_owned(),
-                    value: value.clone(),
-                });
-            }
+            let path = validate_normalized_absolute_path(field, value)?;
+            require_path_contained(field, path, "layout guest root", guest_root)?;
         }
         Ok(())
     }
@@ -832,8 +864,27 @@ pub enum DerivationValidationError {
     UnknownPlannedOutput { field: String, output: String },
     #[error("{field}: planned output dependency cycle: {}", cycle.join(" -> "))]
     PlannedOutputCycle { field: String, cycle: Vec<String> },
-    #[error("{field}: guest path must be absolute, found `{value}`")]
-    NonAbsoluteGuestPath { field: String, value: String },
+    #[error("{field}: path must be a normalized, non-root absolute path, found {value:?}")]
+    UnsafeAbsolutePath { field: String, value: String },
+    #[error("{field}: path {value:?} must remain within {root_field} {root:?}")]
+    PathOutsideRoot {
+        field: String,
+        value: String,
+        root_field: String,
+        root: String,
+    },
+    #[error("jobs[{job}].pgo_stage: unsupported frozen PGO stage {stage:?}")]
+    UnsupportedPgoStage { job: usize, stage: String },
+    #[error(
+        "jobs[{job}]: pgo_stage and pgo_dir must either both be set or both be absent (stage={stage:?}, directory={directory:?})"
+    )]
+    PgoStageDirectoryMismatch {
+        job: usize,
+        stage: Option<String>,
+        directory: Option<String>,
+    },
+    #[error("jobs[{job}].phases[{phase}].name: unsupported frozen phase {name:?}")]
+    UnsupportedPhase { job: usize, phase: usize, name: String },
     #[error("sources[{index}].url: invalid URL `{value}`")]
     InvalidSourceUrl {
         index: usize,
@@ -927,6 +978,60 @@ fn require_nonempty(field: &str, value: &str) -> Result<(), DerivationValidation
     } else {
         Ok(())
     }
+}
+
+fn validate_normalized_absolute_path<'a>(field: &str, value: &'a str) -> Result<&'a Path, DerivationValidationError> {
+    let path = Path::new(value);
+    let mut normalized = PathBuf::new();
+    let mut normal_components = 0usize;
+    let mut safe_components = true;
+    for component in path.components() {
+        match component {
+            Component::RootDir if normalized.as_os_str().is_empty() => normalized.push(component.as_os_str()),
+            Component::Normal(_) => {
+                normal_components += 1;
+                normalized.push(component.as_os_str());
+            }
+            Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir => {
+                safe_components = false;
+            }
+        }
+    }
+    if !path.is_absolute() || normal_components == 0 || !safe_components || normalized.as_os_str() != path.as_os_str() {
+        return Err(DerivationValidationError::UnsafeAbsolutePath {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        });
+    }
+    Ok(path)
+}
+
+fn require_path_contained(
+    field: &str,
+    path: &Path,
+    root_field: &str,
+    root: &Path,
+) -> Result<(), DerivationValidationError> {
+    if path.starts_with(root) {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::PathOutsideRoot {
+            field: field.to_owned(),
+            value: path.display().to_string(),
+            root_field: root_field.to_owned(),
+            root: root.display().to_string(),
+        })
+    }
+}
+
+fn validate_step_working_dir(
+    step_field: &str,
+    working_dir: &str,
+    build_dir: &Path,
+) -> Result<(), DerivationValidationError> {
+    let field = format!("{step_field}.working_dir");
+    let working_dir = validate_normalized_absolute_path(&field, working_dir)?;
+    require_path_contained(&field, working_dir, "job build_dir", build_dir)
 }
 
 fn encode_optional_string(encoder: &mut CanonicalEncoder, value: Option<&str>) {
@@ -1182,12 +1287,16 @@ mod tests {
                 Box::new(|plan| plan.build_lock.packages[0].package_id.push_str("-changed")),
             ),
             (
-                "target",
+                "target-platform",
                 Box::new(|plan| plan.build_lock.target_platform.architecture = "aarch64".to_owned()),
             ),
             (
                 "policy",
                 Box::new(|plan| plan.build_lock.policy.fingerprint.push_str("-changed")),
+            ),
+            (
+                "target-policy",
+                Box::new(|plan| plan.build_lock.target.fingerprint.push_str("-changed")),
             ),
             (
                 "profile",
@@ -1259,6 +1368,172 @@ mod tests {
         reordered.jobs.reverse();
 
         assert_ne!(first.derivation_id(), reordered.derivation_id());
+    }
+
+    #[test]
+    fn validation_requires_normalized_non_root_absolute_layout_paths() {
+        for value in [
+            "relative/build",
+            "/",
+            "/mason/../escape",
+            "/mason/./build",
+            "/mason//build",
+            "/mason/build/",
+        ] {
+            let mut plan = sample_plan();
+            plan.layout.build_dir = value.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::UnsafeAbsolutePath { field, value: found })
+                    if field == "layout.build_dir" && found == value
+            ));
+        }
+    }
+
+    #[test]
+    fn validation_contains_layout_and_job_paths_in_their_frozen_roots() {
+        let mut outside_layout = sample_plan();
+        outside_layout.layout.source_dir = "/outside/sources".to_owned();
+        assert!(matches!(
+            outside_layout.validate(),
+            Err(DerivationValidationError::PathOutsideRoot { field, root, .. })
+                if field == "layout.source_dir" && root == "/mason"
+        ));
+
+        let mut outside_layout_build = sample_plan();
+        outside_layout_build.jobs[0].build_dir = "/outside/build".to_owned();
+        outside_layout_build.jobs[0].work_dir = "/outside/build/work".to_owned();
+        assert!(matches!(
+            outside_layout_build.validate(),
+            Err(DerivationValidationError::PathOutsideRoot { field, root_field, .. })
+                if field == "jobs[0].build_dir" && root_field == "layout.build_dir"
+        ));
+
+        let mut outside_job_build = sample_plan();
+        outside_job_build.jobs[0].work_dir = "/mason/other".to_owned();
+        assert!(matches!(
+            outside_job_build.validate(),
+            Err(DerivationValidationError::PathOutsideRoot { field, root_field, .. })
+                if field == "jobs[0].work_dir" && root_field == "jobs[0].build_dir"
+        ));
+
+        let mut outside_pgo = sample_plan();
+        outside_pgo.jobs[0].pgo_stage = Some("one".to_owned());
+        outside_pgo.jobs[0].pgo_dir = Some("/outside/pgo".to_owned());
+        assert!(matches!(
+            outside_pgo.validate(),
+            Err(DerivationValidationError::PathOutsideRoot { field, root_field, .. })
+                if field == "jobs[0].pgo_dir" && root_field == "layout.build_dir"
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_traversal_and_escape_in_every_step_working_directory() {
+        for working_dir in [
+            "relative",
+            "/mason/build/../outside",
+            "/mason/build//nested",
+            "/mason/install",
+        ] {
+            let mut plan = sample_plan();
+            let StepPlan::Run {
+                working_dir: frozen, ..
+            } = &mut plan.jobs[0].phases[0].steps[0]
+            else {
+                unreachable!()
+            };
+            *frozen = working_dir.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::UnsafeAbsolutePath { .. })
+                    | Err(DerivationValidationError::PathOutsideRoot { .. })
+            ));
+        }
+
+        let mut shell_plan = sample_plan();
+        shell_plan.jobs[0].phases[0].steps = vec![StepPlan::Shell {
+            interpreter: "/usr/bin/bash".to_owned(),
+            script: "true".to_owned(),
+            environment: BTreeMap::new(),
+            working_dir: "/tmp/ambient".to_owned(),
+        }];
+        assert!(matches!(
+            shell_plan.validate(),
+            Err(DerivationValidationError::PathOutsideRoot { field, .. })
+                if field == "jobs[0].phases[0].steps[0].working_dir"
+        ));
+    }
+
+    #[test]
+    fn validation_freezes_only_the_executable_phase_vocabulary() {
+        let mut supported = sample_plan();
+        supported.jobs[0].phases = ["Prepare", "setup", "BUILD", "install", "check", "workload"]
+            .into_iter()
+            .map(|name| PhasePlan {
+                name: name.to_owned(),
+                pre: Vec::new(),
+                steps: Vec::new(),
+                post: Vec::new(),
+            })
+            .collect();
+        supported.validate().unwrap();
+
+        for name in ["environment", "ambient-phase", ""] {
+            let mut plan = sample_plan();
+            plan.jobs[0].phases[0].name = name.to_owned();
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::UnsupportedPhase {
+                    job: 0,
+                    phase: 0,
+                    name: found,
+                }) if found == name
+            ));
+        }
+
+        let mut duplicate = sample_plan();
+        duplicate.jobs[0].phases.push(PhasePlan {
+            name: "BUILD".to_owned(),
+            pre: Vec::new(),
+            steps: Vec::new(),
+            post: Vec::new(),
+        });
+        assert!(matches!(
+            duplicate.validate(),
+            Err(DerivationValidationError::DuplicatePhase { job: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn validation_requires_exact_pgo_vocabulary_and_stage_directory_pairing() {
+        for stage in ["one", "two", "use"] {
+            let mut plan = sample_plan();
+            plan.jobs[0].pgo_stage = Some(stage.to_owned());
+            plan.jobs[0].pgo_dir = Some("/mason/build/profile".to_owned());
+            plan.validate().unwrap();
+        }
+
+        let mut unsupported = sample_plan();
+        unsupported.jobs[0].pgo_stage = Some("ONE".to_owned());
+        unsupported.jobs[0].pgo_dir = Some("/mason/build/profile".to_owned());
+        assert!(matches!(
+            unsupported.validate(),
+            Err(DerivationValidationError::UnsupportedPgoStage { job: 0, stage })
+                if stage == "ONE"
+        ));
+
+        for (stage, directory) in [
+            (Some("one".to_owned()), None),
+            (None, Some("/mason/build/profile".to_owned())),
+        ] {
+            let mut plan = sample_plan();
+            plan.jobs[0].pgo_stage = stage;
+            plan.jobs[0].pgo_dir = directory;
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::PgoStageDirectoryMismatch { job: 0, .. })
+            ));
+        }
     }
 
     #[test]
