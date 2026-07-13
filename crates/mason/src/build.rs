@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{io, num::NonZeroUsize, path::PathBuf};
+use std::{io, num::NonZeroUsize, os::unix::fs::PermissionsExt, path::PathBuf};
 
 use forge::{repository, util};
 use fs_err as fs;
@@ -167,7 +167,11 @@ impl Runtime {
         initialize_timer: timing::Timer,
     ) -> Result<Vec<upstream::Stored>, Error> {
         self.paths.require_execution_lock(execution_lock, plan)?;
-        util::recreate_dir(&self.paths.artefacts().host).map_err(Error::RecreateArtefactsDir)?;
+        let artefacts = &self.paths.artefacts().host;
+        util::recreate_dir(artefacts).map_err(Error::RecreateArtefactsDir)?;
+        // The publisher rejects roots which another UID could mutate. Make
+        // the plan-owned staging root private independently of ambient umask.
+        fs::set_permissions(artefacts, std::fs::Permissions::from_mode(0o700))?;
         root::recreate_frozen(&self.paths, plan)?;
         root::populate_frozen(
             &self.paths,

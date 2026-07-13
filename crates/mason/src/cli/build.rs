@@ -169,7 +169,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     }
 
     // Publish the complete derivation bundle without replacing an existing one.
-    package::publish_artefacts(paths, &plan).map_err(Error::PublishArtefacts)?;
+    package::publish_artefacts(paths, &plan, &execution_lock).map_err(Error::PublishArtefacts)?;
 
     if cleanup {
         runtime

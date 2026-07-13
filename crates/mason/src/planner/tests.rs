@@ -545,7 +545,11 @@ fn execute_and_publish(planned: &Planned) -> Result<Publication, Box<dyn StdErro
         Ok(())
     })?;
 
-    Ok(package::publish_artefacts(&planned.runtime.paths, &planned.plan)?)
+    Ok(package::publish_artefacts(
+        &planned.runtime.paths,
+        &planned.plan,
+        &execution_lock,
+    )?)
 }
 
 fn capability_errno(error: &(dyn StdError + 'static)) -> bool {
@@ -983,13 +987,13 @@ fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivat
     let published_root = matrix.output_dir.join(derivation_id.as_str());
     assert_eq!(
         fs::metadata(&published_root).unwrap().permissions().mode() & 0o7777,
-        0o755
+        0o555
     );
     let published = assert_emitted_bundle(&first, &published_root);
     assert!(
         published
             .keys()
-            .all(|name| { fs::metadata(published_root.join(name)).unwrap().permissions().mode() & 0o7777 == 0o644 })
+            .all(|name| { fs::metadata(published_root.join(name)).unwrap().permissions().mode() & 0o7777 == 0o444 })
     );
 
     let locked = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir).unwrap();
