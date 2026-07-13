@@ -22,6 +22,18 @@ let empty_flags = p.flags {
     ld = [],
 }
 
+let common_architecture_flags = \common -> {
+    common,
+    gnu = empty_flags,
+    llvm = empty_flags,
+}
+
+let llvm_architecture_flags = \llvm -> {
+    common = empty_flags,
+    gnu = empty_flags,
+    llvm,
+}
+
 let command = \program args environment -> p.command {
     program = lit program,
     args,
@@ -97,12 +109,26 @@ let gnu_tools = {
     strip = lit "strip",
 }
 
-let target = \name target_triple build_platform host_platform lib_suffix architecture_flags -> p.target {
+let platform = \architecture -> {
+    architecture,
+    vendor = "aerynos",
+    operating_system = "linux",
+    abi = "gnu",
+}
+
+let target =
+    \name target_triple build_triple host_triple lib_suffix artifact_architecture emulation build_architecture architecture_flags ->
+    p.target {
     name,
     target_triple,
-    build_platform,
-    host_platform,
+    build_triple,
+    host_triple,
     lib_suffix,
+    artifact_architecture,
+    emulation,
+    build_platform = platform build_architecture,
+    host_platform = platform artifact_architecture,
+    target_platform = platform artifact_architecture,
     architecture_flags,
 }
 
@@ -150,6 +176,132 @@ let riscv64_architecture_flags = {
     .. empty_flags
 }
 
+let sandbox = {
+    guest_root = "/mason",
+    artifacts_dir = "/mason/artefacts",
+    build_dir = "/mason/build",
+    source_dir = "/mason/sourcedir",
+    recipe_dir = "/mason/recipe",
+    package_dir = "/mason/recipe/pkg",
+    install_dir = "/mason/install",
+    verify_dir = "/mason/verify",
+}
+
+let base_inputs = [
+    p.tool.package "bash",
+    p.tool.package "boulder",
+    p.tool.package "coreutils",
+    p.tool.package "dash",
+    p.tool.package "diffutils",
+    p.tool.package "findutils",
+    p.tool.package "gawk",
+    p.tool.package "glibc-devel",
+    p.tool.package "grep",
+    p.tool.package "layout",
+    p.tool.package "libarchive",
+    p.tool.package "linux-headers",
+    p.tool.package "os-info",
+    p.tool.package "pkgconf",
+    p.tool.package "sed",
+    p.tool.package "util-linux",
+    p.tool.binary "git",
+    p.tool.binary "hx",
+    p.tool.binary "less",
+    p.tool.binary "nano",
+    p.tool.binary "ps",
+    p.tool.binary "rg",
+    p.tool.binary "vim",
+]
+
+let compiler_cache = {
+    required_tools = [p.tool.binary "ccache", p.tool.binary "sccache"],
+    default_path = "/usr/bin:/bin",
+    compiler_path = "/usr/lib/ccache/bin:/usr/bin:/bin",
+    ccache_dir = "/mason/ccache",
+    sccache_dir = "/mason/sccache",
+    go_cache_dir = "/mason/gocache",
+    go_mod_cache_dir = "/mason/gomodcache",
+    cargo_cache_dir = "/mason/cargocache",
+    zig_cache_dir = "/mason/zigcache",
+    rustc_wrapper = "/usr/bin/sccache",
+}
+
+let mold = {
+    required_tools = [p.tool.binary "mold"],
+    linker = lit "ld.mold",
+    flags = {
+        c = [lit "-fuse-ld=mold"],
+        cxx = [lit "-fuse-ld=mold"],
+        rust = [lit "-Clink-arg=-fuse-ld=mold"],
+        .. empty_flags
+    },
+}
+
+let build_root = {
+    base = base_inputs,
+    toolchains = {
+        llvm = [p.tool.package "clang"],
+        gnu = [p.tool.binary "ld.bfd", p.tool.binary "gcc", p.tool.binary "g++"],
+    },
+    emul32 = {
+        base = [p.tool.package "glibc-32bit-devel"],
+        toolchains = {
+            llvm = [p.tool.package "clang-32bit"],
+            gnu = [p.tool.package "gcc-32bit", p.tool.package "libstdc++-32bit-devel"],
+        },
+    },
+    compiler_cache,
+    mold,
+}
+
+let source_command = \program args -> p.command {
+    program = lit program,
+    args,
+    environment = [],
+    working_dir = ctx c.build_root,
+}
+
+let create_source_directory = source_command "mkdir" [
+    lit "-p", ctx c.source_destination,
+]
+
+let sources = {
+    archive = {
+        // The extractor is unconditional because every unpacked archive uses
+        // this exact command. This closes the old rpm/deb dependency gap.
+        required_tools = [p.tool.binary "mkdir", p.tool.binary "bsdtar-static"],
+        create_directory = create_source_directory,
+        unpack = source_command "bsdtar-static" [
+            lit "xf",
+            ctx c.source_path,
+            lit "-C",
+            ctx c.source_destination,
+            cat [lit "--strip-components=", ctx c.source_strip_components],
+            lit "--no-same-owner",
+        ],
+        tool_rules = [
+            {
+                extensions = ["rpm"],
+                required_tools = [p.tool.binary "rpm2cpio", p.tool.package "cpio"],
+            },
+            {
+                extensions = ["deb"],
+                required_tools = [p.tool.binary "ar"],
+            },
+        ],
+    },
+    git = {
+        required_tools = [p.tool.binary "mkdir", p.tool.binary "cp"],
+        create_directory = create_source_directory,
+        copy = source_command "cp" [
+            lit "-Ra",
+            lit "--no-preserve=ownership",
+            cat [ctx c.source_path, lit "/."],
+            ctx c.source_destination,
+        ],
+    },
+}
+
 let environment = [
     p.env.always "BOULDER_PNAME" (ctx c.package_name),
     p.env.always "BOULDER_PACKAGE_NAME" (ctx c.package_name),
@@ -167,7 +319,7 @@ let environment = [
     p.env.always "TERM" (lit "dumb"),
     p.env.always "LANG" (lit "en_US.UTF-8"),
     p.env.always "LC_ALL" (lit "en_US.UTF-8"),
-    p.env.with_compiler_cache "PATH" (lit "/usr/lib/ccache/bin:/usr/bin:/bin"),
+    p.env.with_compiler_cache "PATH" (ctx c.compiler_path),
     p.env.without_compiler_cache "PATH" (lit "/usr/bin:/bin"),
     p.env.always "BOULDER_PREFIX" (ctx c.prefix),
     p.env.always "BOULDER_BINDIR" (ctx c.bindir),
@@ -197,15 +349,15 @@ let environment = [
     p.env.always "NM" (ctx c.nm),
     p.env.always "RANLIB" (ctx c.ranlib),
     p.env.always "STRIP" (ctx c.strip),
-    p.env.with_compiler_cache "CCACHE_DIR" (lit "/mason/ccache"),
+    p.env.with_compiler_cache "CCACHE_DIR" (ctx c.ccache_dir),
     p.env.with_compiler_cache "CCACHE_BASEDIR" (ctx c.work_dir),
-    p.env.with_compiler_cache "SCCACHE_DIR" (lit "/mason/sccache"),
-    p.env.with_compiler_cache "RUSTC_WRAPPER" (lit "/usr/bin/sccache"),
-    p.env.with_compiler_cache "GOCACHE" (lit "/mason/gocache"),
-    p.env.with_compiler_cache "GOMODCACHE" (lit "/mason/gomodcache"),
-    p.env.with_compiler_cache "CARGO_HOME" (lit "/mason/cargocache"),
-    p.env.with_compiler_cache "ZIG_GLOBAL_CACHE_DIR" (lit "/mason/zigcache"),
-    p.env.with_compiler_cache "ZIG_LOCAL_CACHE_DIR" (lit "/mason/zigcache"),
+    p.env.with_compiler_cache "SCCACHE_DIR" (ctx c.sccache_dir),
+    p.env.with_compiler_cache "RUSTC_WRAPPER" (ctx c.rustc_wrapper),
+    p.env.with_compiler_cache "GOCACHE" (ctx c.go_cache_dir),
+    p.env.with_compiler_cache "GOMODCACHE" (ctx c.go_mod_cache_dir),
+    p.env.with_compiler_cache "CARGO_HOME" (ctx c.cargo_cache_dir),
+    p.env.with_compiler_cache "ZIG_GLOBAL_CACHE_DIR" (ctx c.zig_cache_dir),
+    p.env.with_compiler_cache "ZIG_LOCAL_CACHE_DIR" (ctx c.zig_cache_dir),
 ]
 
 let cmake = p.builder {
@@ -2102,13 +2254,22 @@ p.policy {
         gnu = gnu_tools,
     },
     targets = [
-        target "x86_64" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" x86_64_flags,
-        target "x86_64-v3x" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" x86_64_v3x_flags,
-        target "x86" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" x86_flags,
-        target "emul32/x86_64" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" x86_flags,
-        target "aarch64" "aarch64-unknown-linux-gnu" "aarch64-aerynos-linux" "aarch64-aerynos-linux" "" aarch64_architecture_flags,
-        target "riscv64" "riscv64gc-unknown-linux-gnu" "riscv64-aerynos-linux" "riscv64-aerynos-linux" "" riscv64_architecture_flags,
+        target "x86_64" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" "x86_64" p.target_emulation.native "x86_64" (common_architecture_flags x86_64_flags),
+        target "x86_64-v3x" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" "x86_64" p.target_emulation.native "x86_64" (common_architecture_flags x86_64_v3x_flags),
+        target "x86" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" "x86" p.target_emulation.native "x86" (common_architecture_flags x86_flags),
+        target "emul32/x86_64" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" "x86" (p.target_emulation.emul32 "x86_64") "x86_64" (common_architecture_flags x86_flags),
+        target "aarch64" "aarch64-unknown-linux-gnu" "aarch64-aerynos-linux" "aarch64-aerynos-linux" "" "aarch64" p.target_emulation.native "aarch64" (llvm_architecture_flags aarch64_architecture_flags),
+        target "riscv64" "riscv64gc-unknown-linux-gnu" "riscv64-aerynos-linux" "riscv64-aerynos-linux" "" "riscv64" p.target_emulation.native "riscv64" (llvm_architecture_flags riscv64_architecture_flags),
     ],
+    retired_targets = [
+        p.retired_target {
+            name = "x86_64-stage1",
+            reason = "legacy bootstrap target was unreachable and its bootstrap_root had no consumer",
+        },
+    ],
+    sandbox,
+    build_root,
+    sources,
     tuning = {
         flags = tuning_flags,
         groups = tuning_groups,

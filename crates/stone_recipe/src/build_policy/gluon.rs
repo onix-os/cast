@@ -7,10 +7,13 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec,
-    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
-    InstallLayoutSpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec,
-    PgoStagePolicySpec, StandardBuilderPolicySpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainsSpec,
+    ArchivePreparationPolicySpec, ArchiveToolRuleSpec, BuildPolicyConversionError, BuildPolicySpec,
+    BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
+    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
+    EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec,
+    NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
+    RetiredTargetPolicySpec, SandboxPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec,
+    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
     TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
 };
 
@@ -119,6 +122,16 @@ enum GluonContextValue {
     Ranlib,
     Strip,
     CompilerPath,
+    CcacheDir,
+    SccacheDir,
+    GoCacheDir,
+    GoModCacheDir,
+    CargoCacheDir,
+    ZigCacheDir,
+    RustcWrapper,
+    SourcePath,
+    SourceDestination,
+    SourceStripComponents,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -197,13 +210,38 @@ struct GluonCompilerFlagsSpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonPlatformPolicySpec {
+    architecture: String,
+    vendor: String,
+    operating_system: String,
+    abi: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonTargetEmulationSpec {
+    Native,
+    Emul32 { host_architecture: String },
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonTargetPolicySpec {
     name: String,
     target_triple: String,
-    build_platform: String,
-    host_platform: String,
+    build_triple: String,
+    host_triple: String,
     lib_suffix: String,
-    architecture_flags: GluonCompilerFlagsSpec,
+    artifact_architecture: String,
+    emulation: GluonTargetEmulationSpec,
+    build_platform: GluonPlatformPolicySpec,
+    host_platform: GluonPlatformPolicySpec,
+    target_platform: GluonPlatformPolicySpec,
+    architecture_flags: GluonToolchainFlagsSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonRetiredTargetPolicySpec {
+    name: String,
+    reason: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -222,8 +260,63 @@ struct GluonEnvironmentBindingSpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 enum GluonBuildToolSpec {
+    Package { target: String },
     Binary { target: String },
     SystemBinary { target: String },
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonToolchainInputPolicySpec {
+    llvm: Vec<GluonBuildToolSpec>,
+    gnu: Vec<GluonBuildToolSpec>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonEmul32InputPolicySpec {
+    base: Vec<GluonBuildToolSpec>,
+    toolchains: GluonToolchainInputPolicySpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonCompilerCachePolicySpec {
+    required_tools: Vec<GluonBuildToolSpec>,
+    default_path: String,
+    compiler_path: String,
+    ccache_dir: String,
+    sccache_dir: String,
+    go_cache_dir: String,
+    go_mod_cache_dir: String,
+    cargo_cache_dir: String,
+    zig_cache_dir: String,
+    rustc_wrapper: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonMoldPolicySpec {
+    required_tools: Vec<GluonBuildToolSpec>,
+    linker: GluonTextSpec,
+    flags: GluonCompilerFlagsSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuildRootPolicySpec {
+    base: Vec<GluonBuildToolSpec>,
+    toolchains: GluonToolchainInputPolicySpec,
+    emul32: GluonEmul32InputPolicySpec,
+    compiler_cache: GluonCompilerCachePolicySpec,
+    mold: GluonMoldPolicySpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonSandboxPolicySpec {
+    guest_root: String,
+    artifacts_dir: String,
+    build_dir: String,
+    source_dir: String,
+    recipe_dir: String,
+    package_dir: String,
+    install_dir: String,
+    verify_dir: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -232,6 +325,33 @@ struct GluonBuilderCommandSpec {
     args: Vec<GluonTextSpec>,
     environment: Vec<GluonEnvironmentBindingSpec>,
     working_dir: GluonTextSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonArchiveToolRuleSpec {
+    extensions: Vec<String>,
+    required_tools: Vec<GluonBuildToolSpec>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonArchivePreparationPolicySpec {
+    required_tools: Vec<GluonBuildToolSpec>,
+    create_directory: GluonBuilderCommandSpec,
+    unpack: GluonBuilderCommandSpec,
+    tool_rules: Vec<GluonArchiveToolRuleSpec>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonGitPreparationPolicySpec {
+    required_tools: Vec<GluonBuildToolSpec>,
+    create_directory: GluonBuilderCommandSpec,
+    copy: GluonBuilderCommandSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonSourcePreparationPolicySpec {
+    archive: GluonArchivePreparationPolicySpec,
+    git: GluonGitPreparationPolicySpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -345,6 +465,10 @@ struct GluonBuildPolicySpec {
     layout: GluonInstallLayoutSpec,
     toolchains: GluonToolchainsSpec,
     targets: Vec<GluonTargetPolicySpec>,
+    retired_targets: Vec<GluonRetiredTargetPolicySpec>,
+    sandbox: GluonSandboxPolicySpec,
+    build_root: GluonBuildRootPolicySpec,
+    sources: GluonSourcePreparationPolicySpec,
     tuning: GluonTuningPolicySpec,
     environment: Vec<GluonEnvironmentBindingSpec>,
     builders: GluonBuildersPolicySpec,
@@ -415,6 +539,16 @@ impl From<GluonContextValue> for ContextValue {
             GluonContextValue::Ranlib => Self::Ranlib,
             GluonContextValue::Strip => Self::Strip,
             GluonContextValue::CompilerPath => Self::CompilerPath,
+            GluonContextValue::CcacheDir => Self::CcacheDir,
+            GluonContextValue::SccacheDir => Self::SccacheDir,
+            GluonContextValue::GoCacheDir => Self::GoCacheDir,
+            GluonContextValue::GoModCacheDir => Self::GoModCacheDir,
+            GluonContextValue::CargoCacheDir => Self::CargoCacheDir,
+            GluonContextValue::ZigCacheDir => Self::ZigCacheDir,
+            GluonContextValue::RustcWrapper => Self::RustcWrapper,
+            GluonContextValue::SourcePath => Self::SourcePath,
+            GluonContextValue::SourceDestination => Self::SourceDestination,
+            GluonContextValue::SourceStripComponents => Self::SourceStripComponents,
         }
     }
 }
@@ -469,10 +603,19 @@ convert_record!(GluonCompilerToolsSpec => CompilerToolsSpec {
     cc, cxx, objc, objcxx, cpp, objcpp, objcxxcpp, d, ar, ld, mold_ld, objcopy, nm, ranlib, strip,
 });
 convert_record!(GluonToolchainsSpec => ToolchainsSpec { llvm, gnu });
-convert_record!(GluonTargetPolicySpec => TargetPolicySpec {
-    name, target_triple, build_platform, host_platform, lib_suffix, architecture_flags,
+convert_record!(GluonPlatformPolicySpec => PlatformPolicySpec {
+    architecture, vendor, operating_system, abi,
 });
+convert_record!(GluonTargetPolicySpec => TargetPolicySpec {
+    name, target_triple, build_triple, host_triple, lib_suffix, artifact_architecture, emulation,
+    build_platform, host_platform, target_platform, architecture_flags,
+});
+convert_record!(GluonRetiredTargetPolicySpec => RetiredTargetPolicySpec { name, reason });
 convert_record!(GluonEnvironmentBindingSpec => EnvironmentBindingSpec { name, value, condition });
+convert_record!(GluonSandboxPolicySpec => SandboxPolicySpec {
+    guest_root, artifacts_dir, build_dir, source_dir, recipe_dir, package_dir, install_dir, verify_dir,
+});
+convert_record!(GluonSourcePreparationPolicySpec => SourcePreparationPolicySpec { archive, git });
 convert_record!(GluonBuildersPolicySpec => BuildersPolicySpec { cmake, meson, cargo, autotools });
 convert_record!(GluonToolchainFlagsSpec => ToolchainFlagsSpec { common, gnu, llvm });
 convert_record!(GluonNamedTuningFlagSpec => NamedTuningFlagSpec { name, value });
@@ -510,6 +653,97 @@ impl From<GluonBuilderCommandSpec> for BuilderCommandSpec {
             args: value.args.into_iter().map(Into::into).collect(),
             environment: value.environment.into_iter().map(Into::into).collect(),
             working_dir: value.working_dir.into(),
+        }
+    }
+}
+
+fn convert_tools(tools: Vec<GluonBuildToolSpec>) -> Vec<BuildToolSpec> {
+    tools.into_iter().map(Into::into).collect()
+}
+
+impl From<GluonToolchainInputPolicySpec> for ToolchainInputPolicySpec {
+    fn from(value: GluonToolchainInputPolicySpec) -> Self {
+        Self {
+            llvm: convert_tools(value.llvm),
+            gnu: convert_tools(value.gnu),
+        }
+    }
+}
+
+impl From<GluonEmul32InputPolicySpec> for Emul32InputPolicySpec {
+    fn from(value: GluonEmul32InputPolicySpec) -> Self {
+        Self {
+            base: convert_tools(value.base),
+            toolchains: value.toolchains.into(),
+        }
+    }
+}
+
+impl From<GluonCompilerCachePolicySpec> for CompilerCachePolicySpec {
+    fn from(value: GluonCompilerCachePolicySpec) -> Self {
+        Self {
+            required_tools: convert_tools(value.required_tools),
+            default_path: value.default_path,
+            compiler_path: value.compiler_path,
+            ccache_dir: value.ccache_dir,
+            sccache_dir: value.sccache_dir,
+            go_cache_dir: value.go_cache_dir,
+            go_mod_cache_dir: value.go_mod_cache_dir,
+            cargo_cache_dir: value.cargo_cache_dir,
+            zig_cache_dir: value.zig_cache_dir,
+            rustc_wrapper: value.rustc_wrapper,
+        }
+    }
+}
+
+impl From<GluonMoldPolicySpec> for MoldPolicySpec {
+    fn from(value: GluonMoldPolicySpec) -> Self {
+        Self {
+            required_tools: convert_tools(value.required_tools),
+            linker: value.linker.into(),
+            flags: value.flags.into(),
+        }
+    }
+}
+
+impl From<GluonBuildRootPolicySpec> for BuildRootPolicySpec {
+    fn from(value: GluonBuildRootPolicySpec) -> Self {
+        Self {
+            base: convert_tools(value.base),
+            toolchains: value.toolchains.into(),
+            emul32: value.emul32.into(),
+            compiler_cache: value.compiler_cache.into(),
+            mold: value.mold.into(),
+        }
+    }
+}
+
+impl From<GluonArchiveToolRuleSpec> for ArchiveToolRuleSpec {
+    fn from(value: GluonArchiveToolRuleSpec) -> Self {
+        Self {
+            extensions: value.extensions,
+            required_tools: convert_tools(value.required_tools),
+        }
+    }
+}
+
+impl From<GluonArchivePreparationPolicySpec> for ArchivePreparationPolicySpec {
+    fn from(value: GluonArchivePreparationPolicySpec) -> Self {
+        Self {
+            required_tools: convert_tools(value.required_tools),
+            create_directory: value.create_directory.into(),
+            unpack: value.unpack.into(),
+            tool_rules: value.tool_rules.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<GluonGitPreparationPolicySpec> for GitPreparationPolicySpec {
+    fn from(value: GluonGitPreparationPolicySpec) -> Self {
+        Self {
+            required_tools: convert_tools(value.required_tools),
+            create_directory: value.create_directory.into(),
+            copy: value.copy.into(),
         }
     }
 }
@@ -573,6 +807,10 @@ impl From<GluonBuildPolicySpec> for BuildPolicySpec {
             layout: value.layout.into(),
             toolchains: value.toolchains.into(),
             targets: value.targets.into_iter().map(Into::into).collect(),
+            retired_targets: value.retired_targets.into_iter().map(Into::into).collect(),
+            sandbox: value.sandbox.into(),
+            build_root: value.build_root.into(),
+            sources: value.sources.into(),
             tuning: value.tuning.into(),
             environment: value.environment.into_iter().map(Into::into).collect(),
             builders: value.builders.into(),
@@ -594,8 +832,18 @@ impl From<GluonEnvironmentCondition> for EnvironmentCondition {
 impl From<GluonBuildToolSpec> for BuildToolSpec {
     fn from(value: GluonBuildToolSpec) -> Self {
         match value {
+            GluonBuildToolSpec::Package { target } => Self::Package(target),
             GluonBuildToolSpec::Binary { target } => Self::Binary(target),
             GluonBuildToolSpec::SystemBinary { target } => Self::SystemBinary(target),
+        }
+    }
+}
+
+impl From<GluonTargetEmulationSpec> for TargetEmulationSpec {
+    fn from(value: GluonTargetEmulationSpec) -> Self {
+        match value {
+            GluonTargetEmulationSpec::Native => Self::Native,
+            GluonTargetEmulationSpec::Emul32 { host_architecture } => Self::Emul32 { host_architecture },
         }
     }
 }

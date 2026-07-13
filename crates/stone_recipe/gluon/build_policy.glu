@@ -67,6 +67,16 @@ type ContextValue =
     | Ranlib
     | Strip
     | CompilerPath
+    | CcacheDir
+    | SccacheDir
+    | GoCacheDir
+    | GoModCacheDir
+    | CargoCacheDir
+    | ZigCacheDir
+    | RustcWrapper
+    | SourcePath
+    | SourceDestination
+    | SourceStripComponents
 
 type TextPartSpec =
     | LiteralPart { value : String }
@@ -136,13 +146,40 @@ type CompilerFlagsSpec = {
     ld : Array TextSpec,
 }
 
+type ToolchainFlagsSpec = {
+    common : CompilerFlagsSpec,
+    gnu : CompilerFlagsSpec,
+    llvm : CompilerFlagsSpec,
+}
+
+type PlatformPolicySpec = {
+    architecture : String,
+    vendor : String,
+    operating_system : String,
+    abi : String,
+}
+
+type TargetEmulationSpec =
+    | Native
+    | Emul32 { host_architecture : String }
+
 type TargetPolicySpec = {
     name : String,
     target_triple : String,
-    build_platform : String,
-    host_platform : String,
+    build_triple : String,
+    host_triple : String,
     lib_suffix : String,
-    architecture_flags : CompilerFlagsSpec,
+    artifact_architecture : String,
+    emulation : TargetEmulationSpec,
+    build_platform : PlatformPolicySpec,
+    host_platform : PlatformPolicySpec,
+    target_platform : PlatformPolicySpec,
+    architecture_flags : ToolchainFlagsSpec,
+}
+
+type RetiredTargetPolicySpec = {
+    name : String,
+    reason : String,
 }
 
 type EnvironmentCondition =
@@ -157,14 +194,86 @@ type EnvironmentBindingSpec = {
 }
 
 type BuildToolSpec =
+    | Package { target : String }
     | Binary { target : String }
     | SystemBinary { target : String }
+
+type ToolchainInputPolicySpec = {
+    llvm : Array BuildToolSpec,
+    gnu : Array BuildToolSpec,
+}
+
+type Emul32InputPolicySpec = {
+    base : Array BuildToolSpec,
+    toolchains : ToolchainInputPolicySpec,
+}
+
+type CompilerCachePolicySpec = {
+    required_tools : Array BuildToolSpec,
+    default_path : String,
+    compiler_path : String,
+    ccache_dir : String,
+    sccache_dir : String,
+    go_cache_dir : String,
+    go_mod_cache_dir : String,
+    cargo_cache_dir : String,
+    zig_cache_dir : String,
+    rustc_wrapper : String,
+}
+
+type MoldPolicySpec = {
+    required_tools : Array BuildToolSpec,
+    linker : TextSpec,
+    flags : CompilerFlagsSpec,
+}
+
+type BuildRootPolicySpec = {
+    base : Array BuildToolSpec,
+    toolchains : ToolchainInputPolicySpec,
+    emul32 : Emul32InputPolicySpec,
+    compiler_cache : CompilerCachePolicySpec,
+    mold : MoldPolicySpec,
+}
+
+type SandboxPolicySpec = {
+    guest_root : String,
+    artifacts_dir : String,
+    build_dir : String,
+    source_dir : String,
+    recipe_dir : String,
+    package_dir : String,
+    install_dir : String,
+    verify_dir : String,
+}
 
 type BuilderCommandSpec = {
     program : TextSpec,
     args : Array TextSpec,
     environment : Array EnvironmentBindingSpec,
     working_dir : TextSpec,
+}
+
+type ArchiveToolRuleSpec = {
+    extensions : Array String,
+    required_tools : Array BuildToolSpec,
+}
+
+type ArchivePreparationPolicySpec = {
+    required_tools : Array BuildToolSpec,
+    create_directory : BuilderCommandSpec,
+    unpack : BuilderCommandSpec,
+    tool_rules : Array ArchiveToolRuleSpec,
+}
+
+type GitPreparationPolicySpec = {
+    required_tools : Array BuildToolSpec,
+    create_directory : BuilderCommandSpec,
+    copy : BuilderCommandSpec,
+}
+
+type SourcePreparationPolicySpec = {
+    archive : ArchivePreparationPolicySpec,
+    git : GitPreparationPolicySpec,
 }
 
 type StandardBuilderPolicySpec = {
@@ -181,12 +290,6 @@ type BuildersPolicySpec = {
     meson : StandardBuilderPolicySpec,
     cargo : StandardBuilderPolicySpec,
     autotools : StandardBuilderPolicySpec,
-}
-
-type ToolchainFlagsSpec = {
-    common : CompilerFlagsSpec,
-    gnu : CompilerFlagsSpec,
-    llvm : CompilerFlagsSpec,
 }
 
 type NamedTuningFlagSpec = {
@@ -259,6 +362,10 @@ type BuildPolicySpec = {
     layout : InstallLayoutSpec,
     toolchains : ToolchainsSpec,
     targets : Array TargetPolicySpec,
+    retired_targets : Array RetiredTargetPolicySpec,
+    sandbox : SandboxPolicySpec,
+    build_root : BuildRootPolicySpec,
+    sources : SourcePreparationPolicySpec,
     tuning : TuningPolicySpec,
     environment : Array EnvironmentBindingSpec,
     builders : BuildersPolicySpec,
@@ -281,6 +388,7 @@ let binding = \condition name value -> { name, value, condition }
 let policy: BuildPolicySpec -> BuildPolicySpec = \value -> value
 let flags: CompilerFlagsSpec -> CompilerFlagsSpec = \value -> value
 let target: TargetPolicySpec -> TargetPolicySpec = \value -> value
+let retired_target: RetiredTargetPolicySpec -> RetiredTargetPolicySpec = \value -> value
 let command: BuilderCommandSpec -> BuilderCommandSpec = \value -> value
 let builder: StandardBuilderPolicySpec -> StandardBuilderPolicySpec = \value -> value
 let pgo_finish: PgoFinishSpec -> PgoFinishSpec = \value -> value
@@ -354,6 +462,16 @@ let tuning_group: NamedTuningGroupSpec -> NamedTuningGroupSpec = \value -> value
         ranlib = Ranlib,
         strip = Strip,
         compiler_path = CompilerPath,
+        ccache_dir = CcacheDir,
+        sccache_dir = SccacheDir,
+        go_cache_dir = GoCacheDir,
+        go_mod_cache_dir = GoModCacheDir,
+        cargo_cache_dir = CargoCacheDir,
+        zig_cache_dir = ZigCacheDir,
+        rustc_wrapper = RustcWrapper,
+        source_path = SourcePath,
+        source_destination = SourceDestination,
+        source_strip_components = SourceStripComponents,
     },
     optional = {
         no_text = NoText,
@@ -379,11 +497,17 @@ let tuning_group: NamedTuningGroupSpec -> NamedTuningGroupSpec = \value -> value
         without_compiler_cache = binding CompilerCacheDisabled,
     },
     tool = {
+        package = \target -> Package { target },
         binary = \target -> Binary { target },
         system_binary = \target -> SystemBinary { target },
     },
+    target_emulation = {
+        native = Native,
+        emul32 = \host_architecture -> Emul32 { host_architecture },
+    },
     flags,
     target,
+    retired_target,
     command,
     builder,
     pgo_finish,

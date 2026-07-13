@@ -109,7 +109,7 @@ pub fn resolve(
             .ok_or_else(|| Error::MissingFlag { name: name.clone() })?;
         extend_flag(&mut resolved, flag, toolchain);
     }
-    extend_unique_flags(&mut resolved, &target.architecture_flags);
+    extend_toolchain_flags(&mut resolved, &target.architecture_flags, toolchain);
 
     Ok(Selection {
         groups: selected_groups,
@@ -165,17 +165,6 @@ fn extend_with_fallback(output: &mut CompilerFlagsSpec, flag: &ToolchainFlagsSpe
     extend!(vala);
     extend!(go);
     extend!(ld);
-}
-
-fn extend_unique_flags(output: &mut CompilerFlagsSpec, values: &CompilerFlagsSpec) {
-    extend_unique(&mut output.c, &values.c);
-    extend_unique(&mut output.cxx, &values.cxx);
-    extend_unique(&mut output.f, &values.f);
-    extend_unique(&mut output.d, &values.d);
-    extend_unique(&mut output.rust, &values.rust);
-    extend_unique(&mut output.vala, &values.vala);
-    extend_unique(&mut output.go, &values.go);
-    extend_unique(&mut output.ld, &values.ld);
 }
 
 fn extend_unique(output: &mut Vec<TextSpec>, values: &[TextSpec]) {

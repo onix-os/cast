@@ -8,6 +8,7 @@
 //! string interpolation or action expansion at this boundary.
 
 use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 use thiserror::Error;
 
@@ -76,6 +77,16 @@ pub enum ContextValue {
     Ranlib,
     Strip,
     CompilerPath,
+    CcacheDir,
+    SccacheDir,
+    GoCacheDir,
+    GoModCacheDir,
+    CargoCacheDir,
+    ZigCacheDir,
+    RustcWrapper,
+    SourcePath,
+    SourceDestination,
+    SourceStripComponents,
 }
 
 /// Text built without an open-ended template language.
@@ -202,15 +213,47 @@ pub struct TuningPolicySpec {
     pub default_groups: Vec<String>,
 }
 
-/// One concrete build/host/target platform policy.
+/// One concrete platform identity recorded in a frozen build lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformPolicySpec {
+    pub architecture: String,
+    pub vendor: String,
+    pub operating_system: String,
+    pub abi: String,
+}
+
+/// Whether a target executes natively or through one explicitly named
+/// compatibility mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetEmulationSpec {
+    Native,
+    Emul32 { host_architecture: String },
+}
+
+/// One concrete build/host/target policy. Autotools triples are kept separate
+/// from lock platform components: neither can be inferred safely from the
+/// other (notably for `emul32/x86_64`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetPolicySpec {
     pub name: String,
     pub target_triple: String,
-    pub build_platform: String,
-    pub host_platform: String,
+    pub build_triple: String,
+    pub host_triple: String,
     pub lib_suffix: String,
-    pub architecture_flags: CompilerFlagsSpec,
+    pub artifact_architecture: String,
+    pub emulation: TargetEmulationSpec,
+    pub build_platform: PlatformPolicySpec,
+    pub host_platform: PlatformPolicySpec,
+    pub target_platform: PlatformPolicySpec,
+    pub architecture_flags: ToolchainFlagsSpec,
+}
+
+/// A legacy target which must remain visible to policy consumers without
+/// silently remaining selectable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredTargetPolicySpec {
+    pub name: String,
+    pub reason: String,
 }
 
 /// Condition under which an environment binding is present.
@@ -232,8 +275,71 @@ pub struct EnvironmentBindingSpec {
 /// A typed tool dependency owned by repository policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BuildToolSpec {
+    Package(String),
     Binary(String),
     SystemBinary(String),
+}
+
+/// Compiler-specific packages installed into a build root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolchainInputPolicySpec {
+    pub llvm: Vec<BuildToolSpec>,
+    pub gnu: Vec<BuildToolSpec>,
+}
+
+/// Additional packages required by an emulated 32-bit target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emul32InputPolicySpec {
+    pub base: Vec<BuildToolSpec>,
+    pub toolchains: ToolchainInputPolicySpec,
+}
+
+/// Fixed compiler-cache inputs and guest paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompilerCachePolicySpec {
+    pub required_tools: Vec<BuildToolSpec>,
+    pub default_path: String,
+    pub compiler_path: String,
+    pub ccache_dir: String,
+    pub sccache_dir: String,
+    pub go_cache_dir: String,
+    pub go_mod_cache_dir: String,
+    pub cargo_cache_dir: String,
+    pub zig_cache_dir: String,
+    pub rustc_wrapper: String,
+}
+
+/// Mold is a selectable repository feature, not a package-authored shell
+/// fragment. Its linker executable, closure and language flags are all data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoldPolicySpec {
+    pub required_tools: Vec<BuildToolSpec>,
+    pub linker: TextSpec,
+    pub flags: CompilerFlagsSpec,
+}
+
+/// Hidden inputs which form the repository-owned base build root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildRootPolicySpec {
+    pub base: Vec<BuildToolSpec>,
+    pub toolchains: ToolchainInputPolicySpec,
+    pub emul32: Emul32InputPolicySpec,
+    pub compiler_cache: CompilerCachePolicySpec,
+    pub mold: MoldPolicySpec,
+}
+
+/// Stable guest paths mounted into every sandbox. These paths participate in
+/// policy identity instead of being ambient Boulder constants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxPolicySpec {
+    pub guest_root: String,
+    pub artifacts_dir: String,
+    pub build_dir: String,
+    pub source_dir: String,
+    pub recipe_dir: String,
+    pub package_dir: String,
+    pub install_dir: String,
+    pub verify_dir: String,
 }
 
 /// An argv-preserving command template. Package-specific flags and binary
@@ -244,6 +350,37 @@ pub struct BuilderCommandSpec {
     pub args: Vec<TextSpec>,
     pub environment: Vec<EnvironmentBindingSpec>,
     pub working_dir: TextSpec,
+}
+
+/// Extra closure requirements selected by a filename extension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveToolRuleSpec {
+    pub extensions: Vec<String>,
+    pub required_tools: Vec<BuildToolSpec>,
+}
+
+/// Structural extraction policy for one archive source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivePreparationPolicySpec {
+    pub required_tools: Vec<BuildToolSpec>,
+    pub create_directory: BuilderCommandSpec,
+    pub unpack: BuilderCommandSpec,
+    pub tool_rules: Vec<ArchiveToolRuleSpec>,
+}
+
+/// Structural copy policy for one already-fetched git source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitPreparationPolicySpec {
+    pub required_tools: Vec<BuildToolSpec>,
+    pub create_directory: BuilderCommandSpec,
+    pub copy: BuilderCommandSpec,
+}
+
+/// Repository-owned source preparation commands and their locked inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourcePreparationPolicySpec {
+    pub archive: ArchivePreparationPolicySpec,
+    pub git: GitPreparationPolicySpec,
 }
 
 /// Default commands and tools for one standard builder.
@@ -309,6 +446,10 @@ pub struct BuildPolicySpec {
     pub layout: InstallLayoutSpec,
     pub toolchains: ToolchainsSpec,
     pub targets: Vec<TargetPolicySpec>,
+    pub retired_targets: Vec<RetiredTargetPolicySpec>,
+    pub sandbox: SandboxPolicySpec,
+    pub build_root: BuildRootPolicySpec,
+    pub sources: SourcePreparationPolicySpec,
     pub tuning: TuningPolicySpec,
     pub environment: Vec<EnvironmentBindingSpec>,
     pub builders: BuildersPolicySpec,
@@ -330,6 +471,24 @@ pub enum BuildPolicyConversionError {
     InvalidDefault { field: String, value: String },
     #[error("{field}: flag `{value}` cannot be both enabled and disabled")]
     ConflictingTuningFlag { field: String, value: String },
+    #[error("{field}: guest path `{value}` must be absolute and normalized")]
+    InvalidGuestPath { field: String, value: String },
+    #[error("{field}: guest path `{value}` is outside `{guest_root}`")]
+    GuestPathOutsideRoot {
+        field: String,
+        value: String,
+        guest_root: String,
+    },
+    #[error("{field}: platform component must be explicit, found `{value}`")]
+    InvalidPlatformComponent { field: String, value: String },
+    #[error("{field}: architecture `{value}` does not match `{expected}`")]
+    ArchitectureMismatch {
+        field: String,
+        value: String,
+        expected: String,
+    },
+    #[error("{field}: invalid archive extension `{value}`")]
+    InvalidArchiveExtension { field: String, value: String },
 }
 
 impl BuildPolicySpec {
@@ -347,8 +506,21 @@ impl BuildPolicySpec {
             let field = format!("targets[{index}]");
             require_string(&format!("{field}.name"), &target.name)?;
             require_string(&format!("{field}.target_triple"), &target.target_triple)?;
-            require_string(&format!("{field}.build_platform"), &target.build_platform)?;
-            require_string(&format!("{field}.host_platform"), &target.host_platform)?;
+            require_string(&format!("{field}.build_triple"), &target.build_triple)?;
+            require_string(&format!("{field}.host_triple"), &target.host_triple)?;
+            require_string(&format!("{field}.artifact_architecture"), &target.artifact_architecture)?;
+            if !targets.insert(target.name.as_str()) {
+                return Err(BuildPolicyConversionError::Duplicate {
+                    field: "targets".to_owned(),
+                    value: target.name.clone(),
+                });
+            }
+            validate_target(&field, target)?;
+        }
+        for (index, target) in self.retired_targets.iter().enumerate() {
+            let field = format!("retired_targets[{index}]");
+            require_string(&format!("{field}.name"), &target.name)?;
+            require_string(&format!("{field}.reason"), &target.reason)?;
             if !targets.insert(target.name.as_str()) {
                 return Err(BuildPolicyConversionError::Duplicate {
                     field: "targets".to_owned(),
@@ -357,6 +529,9 @@ impl BuildPolicySpec {
             }
         }
 
+        validate_sandbox(&self.sandbox)?;
+        validate_build_root(&self.build_root, &self.sandbox)?;
+        validate_sources(&self.sources)?;
         validate_tuning(&self.tuning)?;
 
         validate_bindings("environment", &self.environment)?;
@@ -373,6 +548,206 @@ impl BuildPolicySpec {
         validate_pgo_stage("pgo.stage_one", &self.pgo.stage_one)?;
         validate_pgo_stage("pgo.stage_two", &self.pgo.stage_two)?;
         validate_pgo_stage("pgo.use_profile", &self.pgo.use_profile)
+    }
+}
+
+fn validate_target(field: &str, target: &TargetPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    validate_platform(&format!("{field}.build_platform"), &target.build_platform)?;
+    validate_platform(&format!("{field}.host_platform"), &target.host_platform)?;
+    validate_platform(&format!("{field}.target_platform"), &target.target_platform)?;
+    validate_toolchain_flags(&format!("{field}.architecture_flags"), &target.architecture_flags)?;
+
+    require_architecture(
+        &format!("{field}.host_platform.architecture"),
+        &target.host_platform.architecture,
+        &target.artifact_architecture,
+    )?;
+    require_architecture(
+        &format!("{field}.target_platform.architecture"),
+        &target.target_platform.architecture,
+        &target.artifact_architecture,
+    )?;
+    match &target.emulation {
+        TargetEmulationSpec::Native => require_architecture(
+            &format!("{field}.build_platform.architecture"),
+            &target.build_platform.architecture,
+            &target.artifact_architecture,
+        ),
+        TargetEmulationSpec::Emul32 { host_architecture } => {
+            require_string(&format!("{field}.emulation.host_architecture"), host_architecture)?;
+            require_architecture(
+                &format!("{field}.build_platform.architecture"),
+                &target.build_platform.architecture,
+                host_architecture,
+            )
+        }
+    }
+}
+
+fn validate_platform(field: &str, platform: &PlatformPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    for (name, value) in [
+        ("architecture", &platform.architecture),
+        ("vendor", &platform.vendor),
+        ("operating_system", &platform.operating_system),
+        ("abi", &platform.abi),
+    ] {
+        let field = format!("{field}.{name}");
+        require_string(&field, value)?;
+        if value == "unknown" {
+            return Err(BuildPolicyConversionError::InvalidPlatformComponent {
+                field,
+                value: value.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn require_architecture(field: &str, value: &str, expected: &str) -> Result<(), BuildPolicyConversionError> {
+    if value == expected {
+        Ok(())
+    } else {
+        Err(BuildPolicyConversionError::ArchitectureMismatch {
+            field: field.to_owned(),
+            value: value.to_owned(),
+            expected: expected.to_owned(),
+        })
+    }
+}
+
+fn validate_sandbox(sandbox: &SandboxPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    validate_guest_path("sandbox.guest_root", &sandbox.guest_root)?;
+    let mut paths = BTreeSet::new();
+    for (name, value) in [
+        ("artifacts_dir", &sandbox.artifacts_dir),
+        ("build_dir", &sandbox.build_dir),
+        ("source_dir", &sandbox.source_dir),
+        ("recipe_dir", &sandbox.recipe_dir),
+        ("package_dir", &sandbox.package_dir),
+        ("install_dir", &sandbox.install_dir),
+        ("verify_dir", &sandbox.verify_dir),
+    ] {
+        let field = format!("sandbox.{name}");
+        validate_guest_child(&field, value, &sandbox.guest_root)?;
+        if !paths.insert(value.as_str()) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: "sandbox".to_owned(),
+                value: value.clone(),
+            });
+        }
+    }
+    if !Path::new(&sandbox.package_dir).starts_with(&sandbox.recipe_dir) {
+        return Err(BuildPolicyConversionError::GuestPathOutsideRoot {
+            field: "sandbox.package_dir".to_owned(),
+            value: sandbox.package_dir.clone(),
+            guest_root: sandbox.recipe_dir.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_build_root(
+    build_root: &BuildRootPolicySpec,
+    sandbox: &SandboxPolicySpec,
+) -> Result<(), BuildPolicyConversionError> {
+    validate_tools("build_root.base", &build_root.base)?;
+    validate_toolchain_inputs("build_root.toolchains", &build_root.toolchains)?;
+    validate_tools("build_root.emul32.base", &build_root.emul32.base)?;
+    validate_toolchain_inputs("build_root.emul32.toolchains", &build_root.emul32.toolchains)?;
+
+    let cache = &build_root.compiler_cache;
+    validate_tools("build_root.compiler_cache.required_tools", &cache.required_tools)?;
+    require_string("build_root.compiler_cache.default_path", &cache.default_path)?;
+    require_string("build_root.compiler_cache.compiler_path", &cache.compiler_path)?;
+    for (name, value) in [
+        ("ccache_dir", &cache.ccache_dir),
+        ("sccache_dir", &cache.sccache_dir),
+        ("go_cache_dir", &cache.go_cache_dir),
+        ("go_mod_cache_dir", &cache.go_mod_cache_dir),
+        ("cargo_cache_dir", &cache.cargo_cache_dir),
+        ("zig_cache_dir", &cache.zig_cache_dir),
+    ] {
+        validate_guest_child(&format!("build_root.compiler_cache.{name}"), value, &sandbox.guest_root)?;
+    }
+    validate_guest_path("build_root.compiler_cache.rustc_wrapper", &cache.rustc_wrapper)?;
+
+    validate_tools("build_root.mold.required_tools", &build_root.mold.required_tools)?;
+    require_text("build_root.mold.linker", &build_root.mold.linker)?;
+    validate_compiler_flags("build_root.mold.flags", &build_root.mold.flags)
+}
+
+fn validate_toolchain_inputs(field: &str, inputs: &ToolchainInputPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    validate_tools(&format!("{field}.llvm"), &inputs.llvm)?;
+    validate_tools(&format!("{field}.gnu"), &inputs.gnu)
+}
+
+fn validate_sources(sources: &SourcePreparationPolicySpec) -> Result<(), BuildPolicyConversionError> {
+    validate_tools("sources.archive.required_tools", &sources.archive.required_tools)?;
+    validate_command("sources.archive.create_directory", &sources.archive.create_directory)?;
+    validate_command("sources.archive.unpack", &sources.archive.unpack)?;
+
+    let mut extensions = BTreeSet::new();
+    for (rule_index, rule) in sources.archive.tool_rules.iter().enumerate() {
+        let field = format!("sources.archive.tool_rules[{rule_index}]");
+        validate_tools(&format!("{field}.required_tools"), &rule.required_tools)?;
+        if rule.extensions.is_empty() {
+            return Err(BuildPolicyConversionError::Empty {
+                field: format!("{field}.extensions"),
+            });
+        }
+        for (extension_index, extension) in rule.extensions.iter().enumerate() {
+            let extension_field = format!("{field}.extensions[{extension_index}]");
+            if extension.is_empty()
+                || extension.starts_with('.')
+                || extension
+                    .chars()
+                    .any(|character| !character.is_ascii_lowercase() && !character.is_ascii_digit())
+            {
+                return Err(BuildPolicyConversionError::InvalidArchiveExtension {
+                    field: extension_field,
+                    value: extension.clone(),
+                });
+            }
+            if !extensions.insert(extension.as_str()) {
+                return Err(BuildPolicyConversionError::Duplicate {
+                    field: "sources.archive.tool_rules.extensions".to_owned(),
+                    value: extension.clone(),
+                });
+            }
+        }
+    }
+
+    validate_tools("sources.git.required_tools", &sources.git.required_tools)?;
+    validate_command("sources.git.create_directory", &sources.git.create_directory)?;
+    validate_command("sources.git.copy", &sources.git.copy)
+}
+
+fn validate_guest_child(field: &str, value: &str, guest_root: &str) -> Result<(), BuildPolicyConversionError> {
+    validate_guest_path(field, value)?;
+    if Path::new(value).starts_with(guest_root) && value != guest_root {
+        Ok(())
+    } else {
+        Err(BuildPolicyConversionError::GuestPathOutsideRoot {
+            field: field.to_owned(),
+            value: value.to_owned(),
+            guest_root: guest_root.to_owned(),
+        })
+    }
+}
+
+fn validate_guest_path(field: &str, value: &str) -> Result<(), BuildPolicyConversionError> {
+    let path = Path::new(value);
+    let normalized = path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir));
+    if normalized {
+        Ok(())
+    } else {
+        Err(BuildPolicyConversionError::InvalidGuestPath {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        })
     }
 }
 
@@ -617,7 +992,9 @@ fn validate_tools(field: &str, tools: &[BuildToolSpec]) -> Result<(), BuildPolic
     let mut values = BTreeSet::new();
     for (index, tool) in tools.iter().enumerate() {
         let target = match tool {
-            BuildToolSpec::Binary(target) | BuildToolSpec::SystemBinary(target) => target,
+            BuildToolSpec::Package(target) | BuildToolSpec::Binary(target) | BuildToolSpec::SystemBinary(target) => {
+                target
+            }
         };
         require_string(&format!("{field}[{index}]"), target)?;
         if !values.insert(tool) {
