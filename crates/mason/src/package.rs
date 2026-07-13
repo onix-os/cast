@@ -24,7 +24,7 @@ mod emit;
 mod publish;
 
 #[allow(unused_imports)]
-pub use publish::{Publication, PublishError, publish_artefacts};
+pub use publish::{ManifestVerification, Publication, PublishError, publish_artefacts};
 
 #[cfg(test)]
 use publish::{
@@ -337,7 +337,8 @@ mod tests {
     use std::ffi::OsString;
     use std::io;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use fs_err as fs;
 
@@ -621,7 +622,7 @@ mod tests {
         let execution_lock = paths
             .acquire_execution_lock(plan)
             .map_err(PublishError::InvalidExecutionLock)?;
-        super::publish_artefacts(paths, plan, &execution_lock)
+        super::publish_artefacts(paths, plan, &execution_lock, ManifestVerification::None)
     }
 
     fn publish_artefacts_with<F>(
@@ -636,7 +637,46 @@ mod tests {
         let execution_lock = paths
             .acquire_execution_lock(plan)
             .map_err(PublishError::InvalidExecutionLock)?;
-        super::publish_artefacts_with(paths, plan, &execution_lock, limits, hook)
+        super::publish_artefacts_with(paths, plan, &execution_lock, ManifestVerification::None, limits, hook)
+    }
+
+    fn publish_artefacts_verifying(
+        paths: &Paths,
+        plan: &DerivationPlan,
+        expected: &Path,
+    ) -> Result<Publication, PublishError> {
+        let execution_lock = paths
+            .acquire_execution_lock(plan)
+            .map_err(PublishError::InvalidExecutionLock)?;
+        super::publish_artefacts(
+            paths,
+            plan,
+            &execution_lock,
+            ManifestVerification::ExactBinary(expected),
+        )
+    }
+
+    fn publish_artefacts_verifying_with<F>(
+        paths: &Paths,
+        plan: &DerivationPlan,
+        expected: &Path,
+        limits: PublishLimits,
+        hook: F,
+    ) -> Result<Publication, PublishError>
+    where
+        F: FnMut(PublishCheckpoint) -> Result<(), PublishError>,
+    {
+        let execution_lock = paths
+            .acquire_execution_lock(plan)
+            .map_err(PublishError::InvalidExecutionLock)?;
+        super::publish_artefacts_with(
+            paths,
+            plan,
+            &execution_lock,
+            ManifestVerification::ExactBinary(expected),
+            limits,
+            hook,
+        )
     }
 
     fn output_entries(paths: &Paths) -> Vec<OsString> {
@@ -663,6 +703,27 @@ mod tests {
             .iter()
             .find(|name| name.to_string_lossy().ends_with(".stone"))
             .unwrap()
+    }
+
+    fn binary_manifest_name(names: &[OsString]) -> &OsString {
+        names
+            .iter()
+            .find(|name| name.to_string_lossy().ends_with(".bin"))
+            .unwrap()
+    }
+
+    fn reference_path(root: &Path, label: &str) -> PathBuf {
+        let parent = root.join(label);
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        parent.join("expected.bin")
+    }
+
+    fn reference_manifest(root: &Path, bytes: &[u8]) -> PathBuf {
+        let path = reference_path(root, "verification-reference");
+        fs::write(&path, bytes).unwrap();
+        fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        path
     }
 
     fn seal_test_bundle_directory(path: &Path, plan: &DerivationPlan) {
@@ -703,7 +764,7 @@ mod tests {
         let (_other_root, other_plan, other_paths) = publication_fixture();
         let wrong_lock = other_paths.acquire_execution_lock(&other_plan).unwrap();
 
-        let error = super::publish_artefacts(&paths, &plan, &wrong_lock).unwrap_err();
+        let error = super::publish_artefacts(&paths, &plan, &wrong_lock, ManifestVerification::None).unwrap_err();
 
         assert!(matches!(error, PublishError::InvalidExecutionLock(_)));
         assert!(output_entries(&paths).is_empty());
@@ -1084,6 +1145,295 @@ mod tests {
         }
         seal_test_bundle_directory(&bundle, plan);
         names
+    }
+
+    #[test]
+    fn verified_manifest_publishes_and_reuses_exact_bytes() {
+        let (root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), b"frozen artefact bytes");
+
+        assert_eq!(
+            publish_artefacts_verifying(&paths, &plan, &expected).unwrap(),
+            Publication::Published
+        );
+        assert_eq!(
+            publish_artefacts_verifying(&paths, &plan, &expected).unwrap(),
+            Publication::Reused
+        );
+        let published_manifest = paths
+            .output_dir()
+            .join(plan.derivation_id().as_str())
+            .join(binary_manifest_name(&names));
+        assert_eq!(
+            publish_artefacts_verifying(&paths, &plan, &published_manifest).unwrap(),
+            Publication::Reused,
+            "a published manifest is a useful independent reference for staged bytes"
+        );
+        assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
+    }
+
+    #[test]
+    fn manifest_mismatch_rolls_back_new_output_and_preserves_reused_output() {
+        let (root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), b"different artefact bytes");
+
+        let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+        assert!(matches!(error, PublishError::ManifestVerificationMismatch { .. }));
+        assert!(output_entries(&paths).is_empty());
+
+        publish_artefacts(&paths, &plan).unwrap();
+        let bundle = paths.output_dir().join(plan.derivation_id().as_str());
+        let manifest = bundle.join(binary_manifest_name(&names));
+        let corrupted = vec![b'X'; b"frozen artefact bytes".len()];
+        fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&manifest, &corrupted).unwrap();
+        fs::set_permissions(&manifest, std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE)).unwrap();
+        filetime::set_file_mtime(&manifest, filetime::FileTime::from_unix_time(plan.source_date_epoch, 0)).unwrap();
+        fs::write(&expected, b"frozen artefact bytes").unwrap();
+        let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+        assert!(matches!(error, PublishError::ManifestVerificationMismatch { .. }));
+        assert_eq!(fs::read(manifest).unwrap(), corrupted);
+        assert_eq!(output_entries(&paths), [OsString::from(plan.derivation_id().as_str())]);
+    }
+
+    #[test]
+    fn manifest_verification_limit_accepts_n_rejects_n_plus_one_and_expires() {
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let bytes = b"frozen artefact bytes";
+        let expected = reference_manifest(root.path(), bytes);
+        let limits = PublishLimits::with_manifest_verification(bytes.len() as u64, Duration::from_secs(30));
+        assert_eq!(
+            publish_artefacts_verifying_with(&paths, &plan, &expected, limits, |_| Ok(())).unwrap(),
+            Publication::Published
+        );
+
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let oversized = reference_manifest(root.path(), b"frozen artefact bytes+");
+        let limit = b"frozen artefact bytes".len() as u64;
+        let error = publish_artefacts_verifying_with(
+            &paths,
+            &plan,
+            &oversized,
+            PublishLimits::with_manifest_verification(limit, Duration::from_secs(30)),
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, PublishError::ArtifactTooLarge { maximum, found, .. } if maximum == limit && found == limit + 1)
+        );
+        assert!(output_entries(&paths).is_empty());
+
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), bytes);
+        let error = publish_artefacts_verifying_with(
+            &paths,
+            &plan,
+            &expected,
+            PublishLimits::with_manifest_verification(bytes.len() as u64, Duration::ZERO),
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, PublishError::Deadline { .. }));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn manifest_reference_rejects_symlink_directory_fifo_and_socket_without_blocking() {
+        fn assert_rejected<F>(label: &str, make: F)
+        where
+            F: FnOnce(&Path),
+        {
+            let (root, plan, paths) = publication_fixture();
+            stage_expected_bundle(&plan, &paths);
+            let expected = reference_path(root.path(), label);
+            make(&expected);
+            let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+            assert!(matches!(
+                error,
+                PublishError::UnexpectedEntry {
+                    role: "expected manifest",
+                    ..
+                }
+            ));
+            assert!(output_entries(&paths).is_empty());
+        }
+
+        assert_rejected("reference-symlink", |expected| symlink("missing", expected).unwrap());
+        assert_rejected("reference-directory", |expected| fs::create_dir(expected).unwrap());
+        assert_rejected("reference-fifo", |expected| {
+            nix::unistd::mkfifo(expected, nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).unwrap();
+        });
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_path(root.path(), "reference-socket");
+        match std::os::unix::net::UnixListener::bind(&expected) {
+            Ok(listener) => {
+                drop(listener);
+                let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+                assert!(matches!(
+                    error,
+                    PublishError::UnexpectedEntry {
+                        role: "expected manifest",
+                        ..
+                    }
+                ));
+                assert!(output_entries(&paths).is_empty());
+            }
+            // Some CI sandboxes prohibit AF_UNIX creation. The production
+            // rejection is still exercised whenever the kernel permits the
+            // fixture; FIFO covers the nonblocking special-file path always.
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => panic!("create manifest reference socket: {error}"),
+        }
+    }
+
+    #[test]
+    fn manifest_reference_cannot_alias_the_staged_manifest() {
+        let (_root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        let expected = paths.artefacts().host.join(binary_manifest_name(&names));
+
+        let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+        assert!(matches!(error, PublishError::ReferenceAliasesStagedManifest { .. }));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn manifest_reference_accepts_protected_hardlinks_and_trusted_owners() {
+        assert!(publish::reference_owner_is_trusted(1000, 1000));
+        assert!(publish::reference_owner_is_trusted(0, 1000));
+        assert!(!publish::reference_owner_is_trusted(1001, 1000));
+
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_path(root.path(), "hardlinked-reference");
+        let original = expected.parent().unwrap().join("original");
+        fs::write(&original, b"frozen artefact bytes").unwrap();
+        fs::set_permissions(&original, std::fs::Permissions::from_mode(0o644)).unwrap();
+        fs::hard_link(&original, &expected).unwrap();
+        assert_eq!(fs::metadata(&expected).unwrap().nlink(), 2);
+
+        assert_eq!(
+            publish_artefacts_verifying(&paths, &plan, &expected).unwrap(),
+            Publication::Published
+        );
+    }
+
+    #[test]
+    fn manifest_reference_rejects_group_or_other_writable_parent_and_file() {
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), b"frozen artefact bytes");
+        fs::set_permissions(&expected, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+        assert!(matches!(
+            error,
+            PublishError::WritableReferenceManifest { found: 0o666, .. }
+        ));
+        assert!(output_entries(&paths).is_empty());
+
+        fs::set_permissions(&expected, std::fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(expected.parent().unwrap(), std::fs::Permissions::from_mode(0o770)).unwrap();
+        let error = publish_artefacts_verifying(&paths, &plan, &expected).unwrap_err();
+        assert!(matches!(
+            error,
+            PublishError::WritableRoot {
+                role: "expected manifest parent",
+                found: 0o770,
+                ..
+            }
+        ));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn same_inode_reference_mutation_before_rename_rolls_back() {
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), b"frozen artefact bytes");
+        let mut mutated = false;
+
+        let error =
+            publish_artefacts_verifying_with(&paths, &plan, &expected, PublishLimits::default(), |checkpoint| {
+                if checkpoint == PublishCheckpoint::BeforeRename {
+                    mutated = true;
+                    fs::write(&expected, b"changed artefact bytes").unwrap();
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(mutated);
+        assert!(matches!(error, PublishError::ReferenceManifestChanged { .. }));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn replaced_reference_path_is_rejected_before_publication() {
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), b"frozen artefact bytes");
+        let mut replaced = false;
+
+        let error =
+            publish_artefacts_verifying_with(&paths, &plan, &expected, PublishLimits::default(), |checkpoint| {
+                if checkpoint == PublishCheckpoint::SourcesPinned {
+                    replaced = true;
+                    fs::remove_file(&expected).unwrap();
+                    fs::write(&expected, b"frozen artefact bytes").unwrap();
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(replaced);
+        assert!(matches!(error, PublishError::ReferenceManifestChanged { .. }));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn reference_change_after_rename_removes_the_new_final_bundle() {
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let expected = reference_manifest(root.path(), b"frozen artefact bytes");
+        let mut mutated = false;
+
+        let error =
+            publish_artefacts_verifying_with(&paths, &plan, &expected, PublishLimits::default(), |checkpoint| {
+                if checkpoint == PublishCheckpoint::AfterRename {
+                    mutated = true;
+                    fs::write(&expected, b"changed artefact bytes").unwrap();
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(mutated);
+        assert!(matches!(error, PublishError::ReferenceManifestChanged { .. }));
+        assert!(output_entries(&paths).is_empty());
+    }
+
+    #[test]
+    fn staged_manifest_mutation_before_rename_rolls_back_verified_publication() {
+        let (root, plan, paths) = publication_fixture();
+        let names = stage_expected_bundle(&plan, &paths);
+        let staged = paths.artefacts().host.join(binary_manifest_name(&names));
+        let expected = reference_manifest(root.path(), b"frozen artefact bytes");
+
+        let error =
+            publish_artefacts_verifying_with(&paths, &plan, &expected, PublishLimits::default(), |checkpoint| {
+                if checkpoint == PublishCheckpoint::BeforeRename {
+                    fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).unwrap();
+                    fs::write(&staged, b"changed artefact bytes").unwrap();
+                    fs::set_permissions(&staged, std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE)).unwrap();
+                }
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(matches!(error, PublishError::ArtifactChanged { .. }));
+        assert!(output_entries(&paths).is_empty());
     }
 
     #[test]

@@ -549,6 +549,7 @@ fn execute_and_publish(planned: &Planned) -> Result<Publication, Box<dyn StdErro
         &planned.runtime.paths,
         &planned.plan,
         &execution_lock,
+        package::ManifestVerification::None,
     )?)
 }
 

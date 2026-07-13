@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::io;
 use std::num::{NonZeroU32, NonZeroU64};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::build;
 use crate::executor::Executor;
@@ -97,22 +96,6 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         return Err(Error::MissingOutput(output));
     }
 
-    // Ensure verify against path isn't json/jsonc since
-    // we verify against binary manifest
-    if let Some(path) = verify_against.as_ref()
-        && path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.starts_with("json"))
-    {
-        return Err(Error::VerifyBinaryManifestRequired(path.to_owned()));
-    }
-    if let Some(path) = verify_against.as_ref()
-        && !path.is_file()
-    {
-        return Err(Error::MissingVerifyManifest(path.to_owned()));
-    }
-
     let planned = planner::plan_for_build(
         env,
         planner::Request {
@@ -164,12 +147,12 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         Ok(())
     })?;
 
-    if let Some(expected) = verify_against.as_ref() {
-        verify_frozen_manifest(paths, &plan, expected)?;
-    }
-
     // Publish the complete derivation bundle without replacing an existing one.
-    package::publish_artefacts(paths, &plan, &execution_lock).map_err(Error::PublishArtefacts)?;
+    let verification = verify_against.as_deref().map_or(
+        package::ManifestVerification::None,
+        package::ManifestVerification::ExactBinary,
+    );
+    package::publish_artefacts(paths, &plan, &execution_lock, verification).map_err(Error::PublishArtefacts)?;
 
     if cleanup {
         runtime
@@ -182,28 +165,6 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     );
 
-    Ok(())
-}
-
-fn verify_frozen_manifest(
-    paths: &crate::Paths,
-    plan: &stone_recipe::derivation::DerivationPlan,
-    expected: &Path,
-) -> Result<(), Error> {
-    let generated = paths
-        .artefacts()
-        .host
-        .join(format!("manifest.{}.bin", plan.package.architecture));
-    verify_manifest_bytes(&generated, expected)
-}
-
-fn verify_manifest_bytes(generated: &Path, expected: &Path) -> Result<(), Error> {
-    if fs_err::read(generated)? != fs_err::read(expected)? {
-        return Err(Error::VerificationMismatch {
-            generated: generated.to_owned(),
-            expected: expected.to_owned(),
-        });
-    }
     Ok(())
 }
 
@@ -221,18 +182,10 @@ pub enum Error {
     Container(#[from] container::Error),
     #[error("cleanup")]
     Cleanup(#[source] Box<build::Error>),
-    #[error("Binary manifest required for verification, got {0:?}")]
-    VerifyBinaryManifestRequired(PathBuf),
-    #[error("verification manifest does not exist or is not a file: {0:?}")]
-    MissingVerifyManifest(PathBuf),
     #[error("plan build")]
     Planner(#[source] Box<planner::Error>),
     #[error("execute frozen plan")]
     Executor(#[from] crate::executor::Error),
-    #[error("verify frozen manifest IO")]
-    VerifyIo(#[from] io::Error),
-    #[error("generated manifest {generated:?} does not match {expected:?}")]
-    VerificationMismatch { generated: PathBuf, expected: PathBuf },
 }
 
 impl From<build::Error> for Error {
@@ -281,27 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn host_manifest_verification_is_an_exact_byte_comparison() {
-        let root = tempfile::tempdir().unwrap();
-        let generated = root.path().join("generated.bin");
-        let expected = root.path().join("expected.bin");
-        fs_err::write(&generated, b"same bytes\0including binary").unwrap();
-        fs_err::write(&expected, b"same bytes\0including binary").unwrap();
-
-        verify_manifest_bytes(&generated, &expected).unwrap();
-
-        fs_err::write(&expected, b"same semantic records, different bytes").unwrap();
-        let error = verify_manifest_bytes(&generated, &expected).unwrap_err();
-        assert!(matches!(
-            error,
-            Error::VerificationMismatch {
-                generated: actual_generated,
-                expected: actual_expected,
-            } if actual_generated == generated && actual_expected == expected
-        ));
-    }
-
-    #[test]
     fn verify_flag_remains_a_host_path_input() {
         let command = Command::try_parse_from([
             "build",
@@ -310,10 +242,10 @@ mod tests {
             "--source-date-epoch",
             "1700000000",
             "--verify",
-            "/host/reference.bin",
+            "/host/reference.any-name",
         ])
         .unwrap();
 
-        assert_eq!(command.verify_against, Some(PathBuf::from("/host/reference.bin")));
+        assert_eq!(command.verify_against, Some(PathBuf::from("/host/reference.any-name")));
     }
 }

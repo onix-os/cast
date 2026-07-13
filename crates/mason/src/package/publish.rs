@@ -47,6 +47,7 @@ const MAX_MANIFEST_ARTEFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 // from turning publication into an effectively unbounded operation.
 const MAX_BUNDLE_BYTES: u64 = 8 * 1024 * 1024 * 1024 * 1024;
 const PUBLICATION_DEADLINE: Duration = Duration::from_secs(2 * 60 * 60);
+const MANIFEST_VERIFICATION_DEADLINE: Duration = Duration::from_secs(5 * 60);
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const TEMPORARY_ATTEMPTS: usize = 16;
 
@@ -61,6 +62,17 @@ pub enum Publication {
     Reused,
 }
 
+/// Optional host reference checked byte-for-byte against the binary manifest
+/// as part of the same publication transaction.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ManifestVerification<'a> {
+    /// Publish without a host reference.
+    #[default]
+    None,
+    /// Require the emitted binary manifest to match this protected host file.
+    ExactBinary(&'a Path),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PublishLimits {
     max_artefacts: usize,
@@ -68,6 +80,7 @@ pub(super) struct PublishLimits {
     max_manifest_bytes: u64,
     max_bundle_bytes: u64,
     deadline: Duration,
+    verification_deadline: Duration,
 }
 
 impl Default for PublishLimits {
@@ -78,6 +91,7 @@ impl Default for PublishLimits {
             max_manifest_bytes: MAX_MANIFEST_ARTEFACT_BYTES,
             max_bundle_bytes: MAX_BUNDLE_BYTES,
             deadline: PUBLICATION_DEADLINE,
+            verification_deadline: MANIFEST_VERIFICATION_DEADLINE,
         }
     }
 }
@@ -96,6 +110,14 @@ impl PublishLimits {
     pub(super) fn with_max_artefacts(max_artefacts: usize) -> Self {
         Self {
             max_artefacts,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn with_manifest_verification(maximum: u64, deadline: Duration) -> Self {
+        Self {
+            max_manifest_bytes: maximum,
+            verification_deadline: deadline,
             ..Self::default()
         }
     }
@@ -122,8 +144,16 @@ pub fn publish_artefacts(
     paths: &Paths,
     plan: &DerivationPlan,
     execution_lock: &ExecutionLock,
+    verification: ManifestVerification<'_>,
 ) -> Result<Publication, PublishError> {
-    publish_with(paths, plan, execution_lock, PublishLimits::default(), |_| Ok(()))
+    publish_with(
+        paths,
+        plan,
+        execution_lock,
+        verification,
+        PublishLimits::default(),
+        |_| Ok(()),
+    )
 }
 
 #[cfg(test)]
@@ -131,19 +161,21 @@ pub(super) fn publish_artefacts_with<F>(
     paths: &Paths,
     plan: &DerivationPlan,
     execution_lock: &ExecutionLock,
+    verification: ManifestVerification<'_>,
     limits: PublishLimits,
     hook: F,
 ) -> Result<Publication, PublishError>
 where
     F: FnMut(PublishCheckpoint) -> Result<(), PublishError>,
 {
-    publish_with(paths, plan, execution_lock, limits, hook)
+    publish_with(paths, plan, execution_lock, verification, limits, hook)
 }
 
 fn publish_with<F>(
     paths: &Paths,
     plan: &DerivationPlan,
     execution_lock: &ExecutionLock,
+    verification: ManifestVerification<'_>,
     limits: PublishLimits,
     mut hook: F,
 ) -> Result<Publication, PublishError>
@@ -158,9 +190,24 @@ where
     let specs = bundle_specs(plan, limits)?;
     let expected = expected_names(&specs)?;
     let deadline = Deadline::new(limits.deadline);
+    let manifest_name = binary_manifest_filename(frozen_architecture(&plan.package.architecture)).into_bytes();
+    validate_component(&manifest_name, "generated binary manifest")?;
 
     let staged_root = DirectoryHandle::open_root(&paths.artefacts().host, "staged")?;
     let mut staged = VerifiedBundle::open(staged_root, &specs, "staged", None, limits.max_bundle_bytes, &deadline)?;
+    let (reference, expected_manifest_digest) = match verification {
+        ManifestVerification::None => (None, None),
+        ManifestVerification::ExactBinary(path) => {
+            // The short verification budget covers only opening and streaming
+            // the exact host comparison. The potentially multi-TiB bundle
+            // copy remains governed by the independent publication deadline.
+            let verification_deadline = Deadline::new(limits.verification_deadline);
+            let mut reference = ReferenceManifest::open(path, limits.max_manifest_bytes, &verification_deadline)?;
+            staged.reject_manifest_alias(&manifest_name, &reference)?;
+            let digest = staged.compare_manifest(&manifest_name, &mut reference, &verification_deadline)?;
+            (Some(reference), Some(digest))
+        }
+    };
     let output = DirectoryHandle::open_root(paths.output_dir(), "output")?;
     staged.root.require_path_identity("staged")?;
     output.require_path_identity("output")?;
@@ -183,6 +230,16 @@ where
             limits.max_bundle_bytes,
             &deadline,
         )?;
+        if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+            reference.require_digest(digest)?;
+            published.verify_manifest_digest(
+                &manifest_name,
+                digest,
+                &reference.path,
+                &Deadline::new(limits.verification_deadline),
+            )?;
+            reference.require_digest(digest)?;
+        }
         verify_reuse(
             &mut staged,
             &mut published,
@@ -195,6 +252,22 @@ where
             },
             &mut hook,
         )?;
+        if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+            reference.require_digest(digest)?;
+            published.verify_manifest_digest(
+                &manifest_name,
+                digest,
+                &reference.path,
+                &Deadline::new(limits.verification_deadline),
+            )?;
+            staged.verify_manifest_digest(
+                &manifest_name,
+                digest,
+                &reference.path,
+                &Deadline::new(limits.verification_deadline),
+            )?;
+            reference.require_digest(digest)?;
+        }
         return Ok(Publication::Reused);
     }
 
@@ -202,11 +275,34 @@ where
     let preparation = (|| {
         for (index, source) in staged.entries.iter_mut().enumerate() {
             let digest = temporary.copy_from(index, source, &specs[index], &deadline)?;
+            if let Some(expected) = source.digest
+                && expected != digest
+            {
+                return Err(PublishError::ArtifactChanged {
+                    path: source.path.clone(),
+                });
+            }
             source.digest = Some(digest);
         }
         temporary.seal(&expected, &deadline)?;
         verify_digest_round(&mut staged, &expected, &deadline)?;
         hook(PublishCheckpoint::BeforeRename)?;
+        if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+            reference.require_digest(digest)?;
+            temporary.verify_manifest_digest(
+                &manifest_name,
+                digest,
+                &reference.path,
+                &Deadline::new(limits.verification_deadline),
+            )?;
+            staged.verify_manifest_digest(
+                &manifest_name,
+                digest,
+                &reference.path,
+                &Deadline::new(limits.verification_deadline),
+            )?;
+            reference.require_digest(digest)?;
+        }
         Ok(())
     })();
     if let Err(primary) = preparation {
@@ -218,9 +314,35 @@ where
             let publication = (|| {
                 hook(PublishCheckpoint::AfterRename)?;
                 temporary.verify_final(&expected, &deadline)?;
+                if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+                    reference.require_digest(digest)?;
+                    temporary.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    reference.require_digest(digest)?;
+                }
                 verify_digest_round(&mut staged, &expected, &deadline)?;
                 output.sync("output after bundle rename")?;
                 temporary.verify_final(&expected, &deadline)?;
+                if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+                    reference.require_digest(digest)?;
+                    temporary.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    staged.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    reference.require_digest(digest)?;
+                }
                 staged.root.require_path_identity("staged")?;
                 output.require_path_identity("output")?;
                 Ok(())
@@ -240,6 +362,22 @@ where
                 // us reuse bytes different from the ones this build prepared.
                 verify_digest_round(&mut staged, &expected, &deadline)?;
                 temporary.verify_entries(&expected, &deadline)?;
+                if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+                    reference.require_digest(digest)?;
+                    temporary.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    staged.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    reference.require_digest(digest)?;
+                }
                 let final_root = output
                     .open_child_directory(
                         final_name,
@@ -258,6 +396,16 @@ where
                     limits.max_bundle_bytes,
                     &deadline,
                 )?;
+                if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+                    reference.require_digest(digest)?;
+                    published.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    reference.require_digest(digest)?;
+                }
                 verify_reuse(
                     &mut staged,
                     &mut published,
@@ -269,7 +417,24 @@ where
                         deadline: &deadline,
                     },
                     &mut hook,
-                )
+                )?;
+                if let (Some(reference), Some(digest)) = (&reference, expected_manifest_digest) {
+                    reference.require_digest(digest)?;
+                    published.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    staged.verify_manifest_digest(
+                        &manifest_name,
+                        digest,
+                        &reference.path,
+                        &Deadline::new(limits.verification_deadline),
+                    )?;
+                    reference.require_digest(digest)?;
+                }
+                Ok(())
             })();
             if let Err(primary) = verification {
                 return Err(temporary.rollback_error(primary));
@@ -384,7 +549,7 @@ impl Deadline {
     }
 
     fn check(&self, operation: &'static str) -> Result<(), PublishError> {
-        if self.start.elapsed() > self.duration {
+        if self.start.elapsed() >= self.duration {
             Err(PublishError::Deadline {
                 operation,
                 limit: self.duration,
@@ -566,6 +731,14 @@ struct DirectoryHandle {
 
 impl DirectoryHandle {
     fn open_root(path: &Path, role: &'static str) -> Result<Self, PublishError> {
+        Self::open_root_with_policy(path, role, false)
+    }
+
+    fn open_reference_root(path: &Path) -> Result<Self, PublishError> {
+        Self::open_root_with_policy(path, "expected manifest parent", true)
+    }
+
+    fn open_root_with_policy(path: &Path, role: &'static str, reference: bool) -> Result<Self, PublishError> {
         let path = std::path::absolute(path).map_err(|source| PublishError::Io {
             operation: "make publication root absolute",
             path: path.to_owned(),
@@ -591,7 +764,11 @@ impl DirectoryHandle {
         if !metadata.file_type().is_dir() {
             return Err(PublishError::UnexpectedRoot { role, path });
         }
-        require_effective_owner(role, &path, &metadata)?;
+        if reference {
+            require_reference_owner(&path, &metadata)?;
+        } else {
+            require_effective_owner(role, &path, &metadata)?;
+        }
         require_protected_root_mode(role, &path, &metadata)?;
         Ok(Self {
             path,
@@ -613,6 +790,14 @@ impl DirectoryHandle {
     }
 
     fn require_path_identity(&self, role: &'static str) -> Result<(), PublishError> {
+        self.require_path_identity_with_policy(role, false)
+    }
+
+    fn require_reference_path_identity(&self) -> Result<(), PublishError> {
+        self.require_path_identity_with_policy("expected manifest parent", true)
+    }
+
+    fn require_path_identity_with_policy(&self, role: &'static str, reference: bool) -> Result<(), PublishError> {
         let reopened = openat2_file(
             libc::AT_FDCWD,
             self.path.as_os_str().as_bytes(),
@@ -635,7 +820,11 @@ impl DirectoryHandle {
                 path: self.path.clone(),
             });
         }
-        require_effective_owner(role, &self.path, &metadata)?;
+        if reference {
+            require_reference_owner(&self.path, &metadata)?;
+        } else {
+            require_effective_owner(role, &self.path, &metadata)?;
+        }
         require_protected_root_mode(role, &self.path, &metadata)?;
         Ok(())
     }
@@ -932,6 +1121,324 @@ impl VerifiedEntry {
 }
 
 #[derive(Debug)]
+struct ReferenceManifest {
+    parent: DirectoryHandle,
+    name: Vec<u8>,
+    path: PathBuf,
+    file: File,
+    witness: FileWitness,
+    digest: Option<[u8; 32]>,
+}
+
+impl ReferenceManifest {
+    fn open(path: &Path, maximum: u64, deadline: &Deadline) -> Result<Self, PublishError> {
+        deadline.check("open expected binary manifest")?;
+        let path = std::path::absolute(path).map_err(|source| PublishError::Io {
+            operation: "make expected binary manifest path absolute",
+            path: path.to_owned(),
+            source,
+        })?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| PublishError::InvalidReferencePath { path: path.clone() })?
+            .as_bytes();
+        validate_component(name, "expected binary manifest")?;
+        let name = copy_bytes(name, "expected binary manifest name")?;
+        let parent_path = path
+            .parent()
+            .ok_or_else(|| PublishError::InvalidReferencePath { path: path.clone() })?;
+        let parent = DirectoryHandle::open_reference_root(parent_path)?;
+        let Some((named_metadata, named_identity)) = parent.inspect(&name, "inspect expected binary manifest")? else {
+            return Err(PublishError::MissingReferenceManifest { path });
+        };
+        require_reference_regular(&path, &named_metadata, maximum)?;
+        let file = openat2_file(
+            parent.file.as_raw_fd(),
+            &name,
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            0,
+            descendant_resolution(),
+        )
+        .map_err(|source| PublishError::Io {
+            operation: "open expected binary manifest",
+            path: path.clone(),
+            source,
+        })?;
+        let metadata = file.metadata().map_err(|source| PublishError::Io {
+            operation: "inspect opened expected binary manifest",
+            path: path.clone(),
+            source,
+        })?;
+        if Identity::from_metadata(&metadata) != named_identity {
+            return Err(PublishError::OwnershipChanged { path });
+        }
+        require_reference_regular(&path, &metadata, maximum)?;
+        let reference = Self {
+            parent,
+            name,
+            path,
+            file,
+            witness: FileWitness::from_metadata(&metadata),
+            digest: None,
+        };
+        reference.require_stable()?;
+        Ok(reference)
+    }
+
+    fn require_stable(&self) -> Result<(), PublishError> {
+        let Some((metadata, identity)) = self
+            .parent
+            .inspect(&self.name, "authenticate expected binary manifest")?
+        else {
+            return Err(PublishError::ReferenceManifestChanged {
+                path: self.path.clone(),
+            });
+        };
+        if identity != self.witness.identity || FileWitness::from_metadata(&metadata) != self.witness {
+            return Err(PublishError::ReferenceManifestChanged {
+                path: self.path.clone(),
+            });
+        }
+        let descriptor = self.file.metadata().map_err(|source| PublishError::Io {
+            operation: "inspect retained expected binary manifest",
+            path: self.path.clone(),
+            source,
+        })?;
+        if FileWitness::from_metadata(&descriptor) != self.witness {
+            return Err(PublishError::ReferenceManifestChanged {
+                path: self.path.clone(),
+            });
+        }
+        self.parent.require_reference_path_identity()
+    }
+
+    fn require_digest(&self, expected: [u8; 32]) -> Result<(), PublishError> {
+        self.require_stable()?;
+        if self.digest == Some(expected) {
+            Ok(())
+        } else {
+            Err(PublishError::ReferenceManifestChanged {
+                path: self.path.clone(),
+            })
+        }
+    }
+
+    fn compare_file(
+        &mut self,
+        generated: &mut File,
+        generated_path: &Path,
+        generated_witness: FileWitness,
+        deadline: &Deadline,
+    ) -> Result<[u8; 32], PublishError> {
+        self.require_stable()?;
+        let digest = compare_manifest_files(
+            generated,
+            generated_path,
+            generated_witness,
+            &mut self.file,
+            &self.path,
+            self.witness,
+            deadline,
+        )?;
+        self.require_stable()?;
+        if let Some(expected) = self.digest
+            && expected != digest
+        {
+            return Err(PublishError::ReferenceManifestChanged {
+                path: self.path.clone(),
+            });
+        }
+        self.digest = Some(digest);
+        Ok(digest)
+    }
+}
+
+fn require_reference_regular(path: &Path, metadata: &Metadata, maximum: u64) -> Result<(), PublishError> {
+    if !metadata.file_type().is_file() {
+        return Err(PublishError::UnexpectedEntry {
+            role: "expected manifest",
+            path: path.to_owned(),
+        });
+    }
+    require_reference_owner(path, metadata)?;
+    let mode = metadata.mode() & 0o7777;
+    if mode & 0o022 != 0 {
+        return Err(PublishError::WritableReferenceManifest {
+            path: path.to_owned(),
+            found: mode,
+        });
+    }
+    if metadata.len() > maximum {
+        return Err(PublishError::ArtifactTooLarge {
+            path: path.to_owned(),
+            maximum,
+            found: metadata.len(),
+        });
+    }
+    Ok(())
+}
+
+fn compare_manifest_files(
+    generated: &mut File,
+    generated_path: &Path,
+    generated_witness: FileWitness,
+    reference: &mut File,
+    reference_path: &Path,
+    reference_witness: FileWitness,
+    deadline: &Deadline,
+) -> Result<[u8; 32], PublishError> {
+    require_file_witness(
+        generated,
+        generated_path,
+        generated_witness,
+        "generated manifest before comparison",
+    )?;
+    require_file_witness(
+        reference,
+        reference_path,
+        reference_witness,
+        "expected manifest before comparison",
+    )?;
+    if generated_witness.length != reference_witness.length {
+        require_file_witness(
+            generated,
+            generated_path,
+            generated_witness,
+            "generated manifest after comparison",
+        )?;
+        require_file_witness(
+            reference,
+            reference_path,
+            reference_witness,
+            "expected manifest after comparison",
+        )?;
+        return Err(PublishError::ManifestVerificationMismatch {
+            generated: generated_path.to_owned(),
+            expected: reference_path.to_owned(),
+        });
+    }
+    generated
+        .seek(SeekFrom::Start(0))
+        .map_err(|source| PublishError::Read {
+            path: generated_path.to_owned(),
+            source,
+        })?;
+    reference
+        .seek(SeekFrom::Start(0))
+        .map_err(|source| PublishError::Read {
+            path: reference_path.to_owned(),
+            source,
+        })?;
+    let mut generated_hash = Sha256::new();
+    let mut reference_hash = Sha256::new();
+    let mut generated_buffer = [0_u8; COPY_BUFFER_BYTES];
+    let mut reference_buffer = [0_u8; COPY_BUFFER_BYTES];
+    let mut remaining = generated_witness.length;
+    let mut mismatch = false;
+    while remaining > 0 {
+        deadline.check("compare binary manifests")?;
+        let amount = usize::try_from(remaining).unwrap_or(usize::MAX).min(COPY_BUFFER_BYTES);
+        read_exact_manifest_chunk(generated, &mut generated_buffer[..amount], generated_path, deadline)?;
+        read_exact_manifest_chunk(reference, &mut reference_buffer[..amount], reference_path, deadline)?;
+        generated_hash.update(&generated_buffer[..amount]);
+        reference_hash.update(&reference_buffer[..amount]);
+        if generated_buffer[..amount] != reference_buffer[..amount] {
+            mismatch = true;
+            break;
+        }
+        remaining -= amount as u64;
+    }
+    if !mismatch {
+        let mut generated_trailing = [0_u8; 1];
+        let mut reference_trailing = [0_u8; 1];
+        if generated
+            .read(&mut generated_trailing)
+            .map_err(|source| PublishError::Read {
+                path: generated_path.to_owned(),
+                source,
+            })?
+            != 0
+        {
+            return Err(PublishError::ArtifactChanged {
+                path: generated_path.to_owned(),
+            });
+        }
+        if reference
+            .read(&mut reference_trailing)
+            .map_err(|source| PublishError::Read {
+                path: reference_path.to_owned(),
+                source,
+            })?
+            != 0
+        {
+            return Err(PublishError::ReferenceManifestChanged {
+                path: reference_path.to_owned(),
+            });
+        }
+    }
+    deadline.check("finish binary manifest comparison")?;
+    require_file_witness(
+        generated,
+        generated_path,
+        generated_witness,
+        "generated manifest after comparison",
+    )?;
+    require_file_witness(
+        reference,
+        reference_path,
+        reference_witness,
+        "expected manifest after comparison",
+    )?;
+    let generated_digest: [u8; 32] = generated_hash.finalize().into();
+    let reference_digest: [u8; 32] = reference_hash.finalize().into();
+    if mismatch || generated_digest != reference_digest {
+        return Err(PublishError::ManifestVerificationMismatch {
+            generated: generated_path.to_owned(),
+            expected: reference_path.to_owned(),
+        });
+    }
+    Ok(generated_digest)
+}
+
+fn read_exact_manifest_chunk(
+    file: &mut File,
+    mut buffer: &mut [u8],
+    path: &Path,
+    deadline: &Deadline,
+) -> Result<(), PublishError> {
+    while !buffer.is_empty() {
+        deadline.check("read binary manifest")?;
+        let read = file.read(buffer).map_err(|source| PublishError::Read {
+            path: path.to_owned(),
+            source,
+        })?;
+        if read == 0 {
+            return Err(PublishError::ArtifactChanged { path: path.to_owned() });
+        }
+        buffer = &mut buffer[read..];
+    }
+    Ok(())
+}
+
+fn require_file_witness(
+    file: &File,
+    path: &Path,
+    witness: FileWitness,
+    operation: &'static str,
+) -> Result<(), PublishError> {
+    let metadata = file.metadata().map_err(|source| PublishError::Io {
+        operation,
+        path: path.to_owned(),
+        source,
+    })?;
+    if FileWitness::from_metadata(&metadata) == witness {
+        Ok(())
+    } else {
+        Err(PublishError::ArtifactChanged { path: path.to_owned() })
+    }
+}
+
+#[derive(Debug)]
 struct VerifiedBundle {
     root: DirectoryHandle,
     entries: Vec<VerifiedEntry>,
@@ -980,6 +1487,87 @@ impl VerifiedBundle {
         }
         root.require_path_identity(role)?;
         Ok(Self { root, entries })
+    }
+
+    fn reject_manifest_alias(&self, name: &[u8], reference: &ReferenceManifest) -> Result<(), PublishError> {
+        let entry =
+            self.entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .ok_or_else(|| PublishError::OwnershipChanged {
+                    path: self.root.display(name),
+                })?;
+        if entry.witness.identity == reference.witness.identity {
+            Err(PublishError::ReferenceAliasesStagedManifest {
+                generated: entry.path.clone(),
+                expected: reference.path.clone(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn compare_manifest(
+        &mut self,
+        name: &[u8],
+        reference: &mut ReferenceManifest,
+        deadline: &Deadline,
+    ) -> Result<[u8; 32], PublishError> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.name == name)
+            .ok_or_else(|| PublishError::OwnershipChanged {
+                path: self.root.display(name),
+            })?;
+        let root = &self.root;
+        let entry = &mut self.entries[index];
+        entry.require_named(root, "verified binary manifest")?;
+        let digest = reference.compare_file(&mut entry.file, &entry.path, entry.witness, deadline)?;
+        entry.require_named(root, "verified binary manifest")?;
+        if let Some(expected) = entry.digest
+            && expected != digest
+        {
+            return Err(PublishError::ArtifactChanged {
+                path: entry.path.clone(),
+            });
+        }
+        entry.digest = Some(digest);
+        Ok(digest)
+    }
+
+    fn verify_manifest_digest(
+        &mut self,
+        name: &[u8],
+        expected_digest: [u8; 32],
+        expected_path: &Path,
+        deadline: &Deadline,
+    ) -> Result<(), PublishError> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| PublishError::OwnershipChanged {
+                path: self.root.display(name),
+            })?;
+        entry.require_named(&self.root, "verified binary manifest")?;
+        let digest = entry.digest(deadline)?;
+        entry.require_named(&self.root, "verified binary manifest")?;
+        if let Some(previous) = entry.digest
+            && previous != digest
+        {
+            return Err(PublishError::ArtifactChanged {
+                path: entry.path.clone(),
+            });
+        }
+        if digest != expected_digest {
+            return Err(PublishError::ManifestVerificationMismatch {
+                generated: entry.path.clone(),
+                expected: expected_path.to_owned(),
+            });
+        }
+        entry.digest = Some(digest);
+        Ok(())
     }
 }
 
@@ -1082,6 +1670,53 @@ struct OwnedEntry {
     identity: Identity,
     witness: Option<FileWitness>,
     digest: Option<[u8; 32]>,
+    file: Option<File>,
+}
+
+impl OwnedEntry {
+    fn require_named(&self, directory: &DirectoryHandle, operation: &'static str) -> Result<(), PublishError> {
+        let path = directory.display(&self.name);
+        let witness = self
+            .witness
+            .ok_or_else(|| PublishError::ArtifactChanged { path: path.clone() })?;
+        let Some((metadata, identity)) = directory.inspect(&self.name, operation)? else {
+            return Err(PublishError::OwnershipChanged { path });
+        };
+        if identity != self.identity || FileWitness::from_metadata(&metadata) != witness {
+            return Err(PublishError::ArtifactChanged { path });
+        }
+        Ok(())
+    }
+
+    fn open_readonly(&self, directory: &DirectoryHandle, operation: &'static str) -> Result<File, PublishError> {
+        let path = directory.display(&self.name);
+        let witness = self
+            .witness
+            .ok_or_else(|| PublishError::ArtifactChanged { path: path.clone() })?;
+        self.require_named(directory, operation)?;
+        let file = openat2_file(
+            directory.file.as_raw_fd(),
+            &self.name,
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            0,
+            descendant_resolution(),
+        )
+        .map_err(|source| PublishError::Io {
+            operation,
+            path: path.clone(),
+            source,
+        })?;
+        let metadata = file.metadata().map_err(|source| PublishError::Io {
+            operation,
+            path: path.clone(),
+            source,
+        })?;
+        if Identity::from_metadata(&metadata) != self.identity || FileWitness::from_metadata(&metadata) != witness {
+            return Err(PublishError::ArtifactChanged { path });
+        }
+        self.require_named(directory, operation)?;
+        Ok(file)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1339,6 +1974,7 @@ impl<'a> TemporaryBundle<'a> {
             identity,
             witness: None,
             digest: None,
+            file: None,
         });
         if !metadata.file_type().is_file() || metadata.nlink() != 1 {
             return Err(PublishError::UnexpectedEntry {
@@ -1468,14 +2104,19 @@ impl<'a> TemporaryBundle<'a> {
             return Err(PublishError::ArtifactChanged { path });
         }
         let witness = FileWitness::from_metadata(&final_metadata);
-        let target_digest = hash_file(&mut target, &path, witness, deadline)?;
+        // chmod does not revoke access held by an existing O_RDWR descriptor.
+        // Close the construction descriptor before the bundle can be sealed,
+        // then authenticate a fresh descriptor-relative O_RDONLY handle.
+        drop(target);
+        self.entries[index].witness = Some(witness);
+        let mut readonly = self.entries[index].open_readonly(&self.directory, "open sealed temporary artefact")?;
+        let target_digest = hash_file(&mut readonly, &path, witness, deadline)?;
         if target_digest != source_digest {
             return Err(PublishError::ContentMismatch {
                 staged: source.path.clone(),
                 published: path,
             });
         }
-        self.entries[index].witness = Some(witness);
         self.entries[index].digest = Some(target_digest);
         Ok(source_digest)
     }
@@ -1492,6 +2133,49 @@ impl<'a> TemporaryBundle<'a> {
         self.directory.sync("temporary bundle")?;
         self.require_directory(PUBLISHED_BUNDLE_MODE)?;
         self.verify_entries(expected, deadline)
+    }
+
+    fn verify_manifest_digest(
+        &mut self,
+        name: &[u8],
+        expected_digest: [u8; 32],
+        expected_path: &Path,
+        deadline: &Deadline,
+    ) -> Result<(), PublishError> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.name == name)
+            .ok_or_else(|| PublishError::OwnershipChanged {
+                path: self.directory.display(name),
+            })?;
+        let directory = &self.directory;
+        let entry = &mut self.entries[index];
+        let path = directory.display(&entry.name);
+        let witness = entry
+            .witness
+            .ok_or_else(|| PublishError::ArtifactChanged { path: path.clone() })?;
+        entry.require_named(directory, "authenticate copied binary manifest")?;
+        if entry.file.is_none() {
+            entry.file = Some(entry.open_readonly(directory, "retain copied binary manifest")?);
+        }
+        let file = entry
+            .file
+            .as_mut()
+            .ok_or_else(|| PublishError::ArtifactChanged { path: path.clone() })?;
+        require_file_witness(file, &path, witness, "authenticate retained copied binary manifest")?;
+        let digest = hash_file(file, &path, witness, deadline)?;
+        if entry.digest != Some(digest) {
+            return Err(PublishError::ArtifactChanged { path });
+        }
+        if digest != expected_digest {
+            return Err(PublishError::ManifestVerificationMismatch {
+                generated: path,
+                expected: expected_path.to_owned(),
+            });
+        }
+        entry.require_named(directory, "reauthenticate copied binary manifest")?;
+        self.require_directory(PUBLISHED_BUNDLE_MODE)
     }
 
     fn install(&mut self) -> Result<InstallOutcome, PublishError> {
@@ -1536,29 +2220,11 @@ impl<'a> TemporaryBundle<'a> {
         self.directory.require_inventory("published", expected, deadline)?;
         for entry in &mut self.entries {
             let path = self.directory.display(&entry.name);
-            let Some((metadata, identity)) = self.directory.inspect(&entry.name, "authenticate owned bundle entry")?
-            else {
-                return Err(PublishError::OwnershipChanged { path });
-            };
             let witness = entry
                 .witness
                 .ok_or_else(|| PublishError::ArtifactChanged { path: path.clone() })?;
-            if identity != entry.identity || FileWitness::from_metadata(&metadata) != witness {
-                return Err(PublishError::ArtifactChanged { path });
-            }
-            let mut reopened = openat2_file(
-                self.directory.file.as_raw_fd(),
-                &entry.name,
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-                0,
-                descendant_resolution(),
-            )
-            .map_err(|source| PublishError::Io {
-                operation: "reopen owned bundle entry",
-                path: path.clone(),
-                source,
-            })?;
-            let digest = hash_file(&mut reopened, &path, witness, deadline)?;
+            let mut file = entry.open_readonly(&self.directory, "authenticate owned bundle entry")?;
+            let digest = hash_file(&mut file, &path, witness, deadline)?;
             if entry.digest != Some(digest) {
                 return Err(PublishError::ArtifactChanged { path });
             }
@@ -1705,6 +2371,25 @@ fn require_effective_owner(role: &'static str, path: &Path, metadata: &Metadata)
             role,
             path: path.to_owned(),
             expected,
+            found,
+        })
+    }
+}
+
+pub(super) fn reference_owner_is_trusted(found: u32, effective: u32) -> bool {
+    found == effective || found == 0
+}
+
+fn require_reference_owner(path: &Path, metadata: &Metadata) -> Result<(), PublishError> {
+    // SAFETY: geteuid has no preconditions and does not dereference memory.
+    let effective = unsafe { libc::geteuid() };
+    let found = metadata.uid();
+    if reference_owner_is_trusted(found, effective) {
+        Ok(())
+    } else {
+        Err(PublishError::ReferenceOwnerMismatch {
+            path: path.to_owned(),
+            effective,
             found,
         })
     }
@@ -2034,6 +2719,8 @@ pub enum PublishError {
         expected: u32,
         found: u32,
     },
+    #[error("expected manifest path {path:?} is owned by uid {found}; expected publisher euid {effective} or root")]
+    ReferenceOwnerMismatch { path: PathBuf, effective: u32, found: u32 },
     #[error("{role} publication root {path:?} has group/other-writable mode {found:#06o}")]
     WritableRoot {
         role: &'static str,
@@ -2078,6 +2765,18 @@ pub enum PublishError {
     },
     #[error("{role} name {name:?} is not one safe filesystem component")]
     InvalidName { role: &'static str, name: OsString },
+    #[error("expected binary manifest path {path:?} has no safe parent/name split")]
+    InvalidReferencePath { path: PathBuf },
+    #[error("expected binary manifest does not exist: {path:?}")]
+    MissingReferenceManifest { path: PathBuf },
+    #[error("expected binary manifest {path:?} has group/other-writable mode {found:#06o}")]
+    WritableReferenceManifest { path: PathBuf, found: u32 },
+    #[error("expected binary manifest changed during publication: {path:?}")]
+    ReferenceManifestChanged { path: PathBuf },
+    #[error("expected binary manifest {expected:?} aliases staged manifest {generated:?}")]
+    ReferenceAliasesStagedManifest { generated: PathBuf, expected: PathBuf },
+    #[error("generated binary manifest {generated:?} does not exactly match {expected:?}")]
+    ManifestVerificationMismatch { generated: PathBuf, expected: PathBuf },
     #[error("duplicate published artefact name {name:?}")]
     DuplicateName { name: OsString },
     #[error("{resource} exceeds the publication limit {limit}")]
