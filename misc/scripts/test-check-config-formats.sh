@@ -92,7 +92,8 @@ pass_case \
     'exact allowlist plus unrelated tracked paths' \
     "${allowed[@]}" \
     'bin/boulder/data/policy/default.glu' \
-    'docs/name.yaml.glu' \
+    'docs/name.glu' \
+    'source/libyaml-helper.rs' \
     'source/looks-yamlish'
 
 fail_case \
@@ -118,6 +119,30 @@ fail_case \
     'config/legacy.KdL' \
     "${allowed[@]}" \
     'config/legacy.KdL'
+
+fail_case \
+    'compound YAML extension' \
+    'recipes/stone.yaml.glu' \
+    "${allowed[@]}" \
+    'recipes/stone.yaml.glu'
+
+fail_case \
+    'compound mixed-case YML extension' \
+    'recipes/stone.YmL.in' \
+    "${allowed[@]}" \
+    'recipes/stone.YmL.in'
+
+fail_case \
+    'KDL directory component' \
+    'fixtures/control.kdl/canonical.glu' \
+    "${allowed[@]}" \
+    'fixtures/control.kdl/canonical.glu'
+
+fail_case \
+    'allowlisted path with a compound suffix is not allowlisted' \
+    '.github/dependabot.yml.backup' \
+    "${allowed[@]}" \
+    '.github/dependabot.yml.backup'
 
 fail_case \
     'allowlisted file with wrong case' \
@@ -211,10 +236,56 @@ pass_content_case \
     'docs/plans/gluon-migration.md' \
     'The former loader called serde_yaml::from_slice and parsed control.kdl.'
 
+pass_content_case \
+    'exact README removal statement is an audit exception' \
+    'README.md' \
+    'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is'
+
+fail_content_case \
+    'README is not a whole-file exception' \
+    'README.md:1: Recipes may use YAML compatibility loaders.' \
+    'README.md' \
+    'Recipes may use YAML compatibility loaders.'
+
+pass_content_case \
+    'exact PLAN removal requirement is an audit exception' \
+    'PLAN.md' \
+    '- YAML and KDL support must be completely absent from owned configuration,'
+
+fail_content_case \
+    'PLAN is not a whole-file exception' \
+    'PLAN.md:1: Keep the YAML fallback until a later release.' \
+    'PLAN.md' \
+    'Keep the YAML fallback until a later release.'
+
 fail_content_case \
     'new compatibility documentation requires explicit review' \
     'Unreviewed YAML/KDL documentation references' \
     'docs/compatibility.md' \
     'Recipes may fall back to stone.yaml through serde_yaml.'
+
+fail_content_case \
+    'reStructuredText documentation is scanned' \
+    'docs/compatibility.rst:1: Recipes may fall back to stone.yaml.' \
+    'docs/compatibility.rst' \
+    'Recipes may fall back to stone.yaml.'
+
+fail_content_case \
+    'AsciiDoc documentation is scanned' \
+    'docs/compatibility.adoc:1: Recipes may fall back to control.kdl.' \
+    'docs/compatibility.adoc' \
+    'Recipes may fall back to control.kdl.'
+
+fail_content_case \
+    'text documentation is scanned' \
+    'docs/compatibility.txt:1: Recipes may fall back to stone.yaml.' \
+    'docs/compatibility.txt' \
+    'Recipes may fall back to stone.yaml.'
+
+fail_content_case \
+    'extensionless root documentation is scanned' \
+    'NOTICE:1: Legacy KDL configuration remains supported.' \
+    'NOTICE' \
+    'Legacy KDL configuration remains supported.'
 
 echo "Configuration format gate self-tests passed (${case_number} cases)."

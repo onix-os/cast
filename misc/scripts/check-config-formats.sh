@@ -10,26 +10,18 @@ readonly -a allowed_config_files=(
     '.github/workflows/release.yaml'
 )
 
-# These documents describe the removal contract or preserve the completed
-# migration record. They are prose, not executable compatibility surfaces.
-readonly -a allowed_reference_docs=(
-    'PLAN.md'
-    'README.md'
-    'docs/gluon-configuration.md'
-    'docs/plans/gluon-migration.md'
-)
-
 usage() {
     cat <<'EOF'
 Usage: check-config-formats.sh [--repo-root DIR] [--tracked-paths0 FILE]
 
 Prove that owned configuration is Gluon-only by rejecting:
 
-  * tracked YAML and KDL files outside the exact external-service allowlist;
+  * tracked paths with YAML or KDL components outside the exact
+    external-service allowlist;
   * YAML/KDL dependency references in tracked Cargo manifests and Cargo.lock;
   * YAML/KDL references in owned runtime source, except exact negative-test and
     package-search fixtures; and
-  * YAML/KDL prose outside the exact documentation audit allowlist.
+  * YAML/KDL prose outside narrow historical and negative audit allowances.
 
 FILE must contain NUL-delimited tracked paths. Without the option, paths are
 read from `git ls-files -z` below DIR. DIR defaults to the Git worktree root.
@@ -154,15 +146,128 @@ is_allowed_runtime_reference() {
     return 1
 }
 
-is_allowed_reference_doc() {
+is_config_format_path() {
+    local remainder=$1
+    local component
+    local lower
+
+    # Treat the format name as a complete dot-delimited component, not merely
+    # as the final extension. This catches paths such as stone.yaml.glu and
+    # directories such as fixtures/control.kdl/ without flagging libyaml.
+    while true; do
+        component=${remainder%%/*}
+        lower=${component,,}
+        case ".${lower}." in
+            *'.yaml.'* | *'.yml.'* | *'.kdl.'*) return 0 ;;
+        esac
+
+        [[ "${remainder}" == */* ]] || return 1
+        remainder=${remainder#*/}
+    done
+}
+
+is_allowed_config_file() {
     local candidate=$1
     local allowed
 
-    for allowed in "${allowed_reference_docs[@]}"; do
+    for allowed in "${allowed_config_files[@]}"; do
         if [[ "${candidate}" == "${allowed}" ]]; then
             return 0
         fi
     done
+    return 1
+}
+
+is_documentation_path() {
+    local path=$1
+    local lower=${path,,}
+
+    case "${lower}" in
+        *.md | *.rst | *.adoc | *.txt) return 0 ;;
+    esac
+
+    # Extensionless and unusually suffixed project documents at the repository
+    # root are prose too. Do not let renaming README.md to README hide a new
+    # compatibility promise from this gate.
+    [[ "${path}" != */* ]] || return 1
+    case "${lower}" in
+        readme | readme.* \
+            | plan | plan.* \
+            | acknowledgments | acknowledgments.* \
+            | acknowledgements | acknowledgements.* \
+            | authors | authors.* \
+            | changelog | changelog.* \
+            | contributing | contributing.* \
+            | copying | copying.* \
+            | license | license.* \
+            | notice | notice.* \
+            | security | security.* \
+            | code_of_conduct | code_of_conduct.* \
+            | code-of-conduct | code-of-conduct.*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+is_allowed_documentation_reference() {
+    local path=$1
+    local line=$2
+
+    # This exact document is the completed historical migration record. It is
+    # retained to explain what was removed, not as current compatibility
+    # documentation. Other plans and readmes receive no whole-file exemption.
+    if [[ "${path}" == 'docs/plans/gluon-migration.md' ]]; then
+        return 0
+    fi
+
+    case "${path}" in
+        'README.md')
+            case "${line}" in
+                'This is a breaking architecture decision, not a file-extension change. YAML' \
+                    | 'and KDL loaders, fallbacks, dual writes, and intermediate representations have' \
+                    | 'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is' \
+                    | '`.github/dependabot.yml`, `.github/workflows/ci.yaml`, and' \
+                    | $'`.github/workflows/release.yaml`; these belong to GitHub\'s interfaces, not OS' \
+                    | 'Tools configuration. There are no tracked KDL files. `make test` runs the' \
+                    | '`config-formats` allowlist gate so new owned YAML/KDL paths fail validation.')
+                    return 0
+                    ;;
+            esac
+            ;;
+        'PLAN.md')
+            case "${line}" in
+                '> YAML/KDL removal guarantees rather than reopening the format migration.' \
+                    | '- YAML and KDL support must be completely absent from owned configuration,' \
+                    | 'documentation. YAML required by external services such as GitHub is not OS' \
+                    | '- [x] YAML and KDL configuration paths have been removed from OS Tools.' \
+                    | 'legacy YAML block syntax.' \
+                    | '- [x] Audit the repository for YAML/KDL loaders, fallbacks, compatibility' \
+                    | 'paths, examples, and documentation. The only owned YAML files are the' \
+                    | '`config-formats` gate rejects any tracked YAML/KDL path outside the exact' \
+                    | '- no OS Tools YAML/KDL compatibility path remains;' \
+                    | 'runs, Boulder executes only that plan, and no YAML, KDL, legacy recipe, or')
+                    return 0
+                    ;;
+            esac
+            ;;
+        'docs/gluon-configuration.md')
+            case "${line}" in
+                'boundary. YAML and KDL are not compatibility formats and are not used as' \
+                    | 'OS Tools configuration has no YAML or KDL compatibility loader, fallback, or' \
+                    | 'dual-write path. The old YAML updater crate, KDL control-file overlay, and Moss' \
+                    | 'KDL system-model round trip were removed. A file using an old configuration' \
+                    | 'The exact external-service YAML allowlist is `.github/dependabot.yml`,' \
+                    | '`.github/workflows/ci.yaml`, and `.github/workflows/release.yaml`. No KDL files' \
+                    | 'are tracked. Negative no-fallback tests, package names containing “yaml”, and' \
+                    | 'YAML/KDL paths with this exact allowlist, and `make test` runs the target before' \
+                    | 'tools; YAML/KDL and their compatibility dependencies are absent from the final')
+                    return 0
+                    ;;
+            esac
+            ;;
+    esac
+
     return 1
 }
 
@@ -208,15 +313,15 @@ scan_file() {
                 fi
             done < "${absolute_path}"
             ;;
-        *.md)
-            if is_allowed_reference_doc "${path}"; then
-                return 0
-            fi
+        *)
+            is_documentation_path "${path}" || return 0
             while IFS= read -r line || [[ -n "${line}" ]]; do
                 line_number=$((line_number + 1))
                 if contains_format_reference "${line}"; then
                     rendered=$(trim_line "${line}")
-                    documentation_references+=("${path}:${line_number}: ${rendered}")
+                    if ! is_allowed_documentation_reference "${path}" "${rendered}"; then
+                        documentation_references+=("${path}:${line_number}: ${rendered}")
+                    fi
                 fi
             done < "${absolute_path}"
             ;;
@@ -226,20 +331,15 @@ scan_file() {
 inspect_path() {
     local path=$1
 
-    # Git paths are byte strings. Only the ASCII extension is case-insensitive;
-    # the complete allowlisted path remains deliberately case-sensitive.
-    if [[ "${path}" =~ \.[Yy][Aa][Mm][Ll]$ \
-        || "${path}" =~ \.[Yy][Mm][Ll]$ \
-        || "${path}" =~ \.[Kk][Dd][Ll]$ ]]; then
+    # Git paths are byte strings. Format components are ASCII
+    # case-insensitive; complete allowlisted paths remain case-sensitive.
+    if is_config_format_path "${path}"; then
         found_config_files+=("${path}")
-        case "${path}" in
-            '.github/dependabot.yml' \
-                | '.github/workflows/ci.yaml' \
-                | '.github/workflows/release.yaml')
-                seen_config_files["${path}"]=1
-                ;;
-            *) unexpected_config_files+=("${path}") ;;
-        esac
+        if is_allowed_config_file "${path}"; then
+            seen_config_files["${path}"]=1
+        else
+            unexpected_config_files+=("${path}")
+        fi
     fi
 
     scan_file "${path}"
