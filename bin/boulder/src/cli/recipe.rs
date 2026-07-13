@@ -271,6 +271,19 @@ fn explain(env: Env, command: ExplainCommand) -> Result<(), Error> {
             source.root, source.origin, source.fingerprint
         );
     }
+    for change in planned.policy_changes {
+        println!(
+            "  policy_operation = {{ policy = {:?}, layer = {:?}, layer_order = {}, entry_order = {}, order = {}, operation = {:?}, origin = {:?}, fingerprint = {:?} }}",
+            change.policy,
+            change.layer,
+            change.layer_order,
+            change.entry_order,
+            change.order,
+            change.operation_name(),
+            change.origin,
+            change.fingerprint.sha256,
+        );
+    }
     for fingerprint in planned.profile_fingerprints {
         println!("  profile_fragment = {fingerprint:?}");
     }

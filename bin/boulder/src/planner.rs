@@ -52,6 +52,7 @@ pub struct Planned {
     pub request_fingerprint: String,
     pub requested_packages: Vec<String>,
     pub policy_provenance: Vec<crate::policy::PolicySource>,
+    pub policy_changes: Vec<crate::policy::PolicyChange>,
     pub profile_fingerprints: Vec<String>,
 }
 
@@ -229,6 +230,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.source_date_epoch = request.source_date_epoch;
     plan.validate()?;
     let policy_provenance = target.build_policy.sources();
+    let policy_changes = target.build_policy.changes().to_vec();
     let profile_fingerprints = builder
         .profile_fingerprints
         .iter()
@@ -244,6 +246,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         request_fingerprint,
         requested_packages,
         policy_provenance,
+        policy_changes,
         profile_fingerprints,
     })
 }
