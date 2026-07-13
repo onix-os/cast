@@ -146,6 +146,27 @@ fn target_names_reject_unsafe_or_non_normalized_paths() {
 }
 
 #[test]
+fn unsupported_artifact_architectures_are_rejected_before_planning() {
+    let mut policy = repository_policy_value();
+    let target = &mut policy.targets[0];
+    target.artifact_architecture = "loongarch64".to_owned();
+    target.build_platform.architecture = "loongarch64".to_owned();
+    target.host_platform.architecture = "loongarch64".to_owned();
+    target.target_platform.architecture = "loongarch64".to_owned();
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::UnsupportedArtifactArchitecture {
+            field,
+            value,
+            supported,
+        }) if field == "targets[0].artifact_architecture"
+            && value == "loongarch64"
+            && supported == "x86_64, x86, aarch64, riscv64"
+    ));
+}
+
+#[test]
 fn retired_target_names_obey_the_same_path_invariant() {
     let mut policy = repository_policy_value();
     policy.retired_targets[0].name = "retired/../active".to_owned();

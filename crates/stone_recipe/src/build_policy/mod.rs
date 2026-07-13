@@ -21,6 +21,9 @@ pub use self::gluon::{
 mod gluon;
 pub mod layers;
 
+/// Artifact architecture values supported by Stone emission in this ABI.
+pub const SUPPORTED_ARTIFACT_ARCHITECTURES: &[&str] = &["x86_64", "x86", "aarch64", "riscv64"];
+
 /// A value supplied explicitly by the planner when policy is resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextValue {
@@ -605,6 +608,12 @@ pub enum BuildPolicyConversionError {
     InvalidGuestPath { field: String, value: String },
     #[error("{field}: target name `{value}` must be a normalized safe relative path")]
     InvalidTargetName { field: String, value: String },
+    #[error("{field}: unsupported artifact architecture `{value}`; expected one of {supported}")]
+    UnsupportedArtifactArchitecture {
+        field: String,
+        value: String,
+        supported: String,
+    },
     #[error("{field}: guest path `{value}` is outside `{guest_root}`")]
     GuestPathOutsideRoot {
         field: String,
@@ -722,6 +731,14 @@ fn validate_target(field: &str, target: &TargetPolicySpec) -> Result<(), BuildPo
     validate_platform(&format!("{field}.target_platform"), &target.target_platform)?;
     validate_toolchain_flags(&format!("{field}.architecture_flags"), &target.architecture_flags)?;
     validate_bindings(&format!("{field}.environment"), &target.environment)?;
+
+    if !SUPPORTED_ARTIFACT_ARCHITECTURES.contains(&target.artifact_architecture.as_str()) {
+        return Err(BuildPolicyConversionError::UnsupportedArtifactArchitecture {
+            field: format!("{field}.artifact_architecture"),
+            value: target.artifact_architecture.clone(),
+            supported: SUPPORTED_ARTIFACT_ARCHITECTURES.join(", "),
+        });
+    }
 
     require_architecture(
         &format!("{field}.host_platform.architecture"),
