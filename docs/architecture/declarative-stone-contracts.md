@@ -155,7 +155,7 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, safe package/version/artifact filename components, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency, disabled networking, schema-v7 locked-closure root
+  concurrency, disabled networking, schema-v8 executor identity and locked-closure root
   materialization, and the finite sandbox-filesystem contract. The locked
   closure path copies only exact package IDs from `build.lock.glu`, creates the
   fixed build-root ABI links, and never reads package-manager system intent,

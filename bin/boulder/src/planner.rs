@@ -19,6 +19,7 @@ use stone_recipe::derivation::{
     PackageIdentity, Platform, RelationPlan, RepositorySnapshot, RootMaterializationMode, StepPlan,
     profile_aggregate_fingerprint,
 };
+use stone_recipe::package::{BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PhaseSpec, StepSpec};
 use thiserror::Error;
 
 use crate::{
@@ -112,11 +113,11 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     let boulder_version = tools_buildinfo::get_version().to_owned();
     let boulder_fingerprint = tools_buildinfo::get_semantic_fingerprint();
     let jobs = request.jobs.to_string();
-    let builder_fingerprint = builder_fingerprint(
-        &boulder_version,
-        boulder_fingerprint,
-        &target.build_policy.provenance.root.sha256,
-    );
+    let selected_builder = selected_builder_identity(&builder.recipe, target_policy);
+    let executor = LockedIdentity {
+        name: EXECUTOR_ABI.to_owned(),
+        fingerprint: executor_fingerprint(&boulder_version, boulder_fingerprint),
+    };
     let expected_lock = build_lock::ExpectedBuildLockContext {
         requested_providers: requested_packages.clone(),
         build_platform: platform(&target_policy.build_platform),
@@ -138,14 +139,11 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
             name: toolchain_name.to_owned(),
             fingerprint: toolchain_fingerprint(toolchain_name, &target.build_policy.provenance.root.sha256),
         },
-        builder: LockedIdentity {
-            name: EXECUTOR_ABI.to_owned(),
-            fingerprint: builder_fingerprint.clone(),
-        },
+        builder: selected_builder.clone(),
     };
     let request_fingerprint = hash_fields(
         [
-            "boulder-build-lock-request-v2",
+            "boulder-build-lock-request-v3",
             builder.recipe.fingerprint.sha256.as_str(),
             source_lock_digest.as_str(),
             target_name.as_str(),
@@ -153,7 +151,8 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
             profile_name.as_str(),
             profile_fingerprint.as_str(),
             toolchain_name,
-            builder_fingerprint.as_str(),
+            selected_builder.name.as_str(),
+            selected_builder.fingerprint.as_str(),
             jobs.as_str(),
         ]
         .into_iter()
@@ -218,6 +217,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     ]);
     plan.layout = builder.paths.layout().clone();
     plan.execution = ExecutionPolicy {
+        executor,
         root_materialization: RootMaterializationMode::LockedClosure,
         network: if builder.recipe.declaration.options.networking {
             NetworkMode::Enabled
@@ -488,12 +488,237 @@ fn freeze_sources(recipe: &crate::Recipe) -> Vec<LockedSource> {
         .unwrap_or_default()
 }
 
-pub(crate) fn builder_fingerprint(
-    boulder_version: &str,
-    boulder_fingerprint: &str,
-    policy_fingerprint: &str,
-) -> String {
-    hash_fields([EXECUTOR_ABI, boulder_version, boulder_fingerprint, policy_fingerprint])
+pub(crate) fn executor_fingerprint(boulder_version: &str, boulder_fingerprint: &str) -> String {
+    hash_fields([
+        "boulder-executor-identity-v1",
+        EXECUTOR_ABI,
+        boulder_version,
+        boulder_fingerprint,
+    ])
+}
+
+fn selected_builder_identity(
+    recipe: &crate::Recipe,
+    target: &stone_recipe::build_policy::TargetPolicySpec,
+) -> LockedIdentity {
+    let builder = recipe.build_target_builder(target);
+    let hooks = recipe.build_target_hooks(target);
+    let profile = recipe.build_target_profile_key(target);
+    LockedIdentity {
+        name: structural_builder_name(builder),
+        fingerprint: structural_builder_fingerprint(builder, hooks, profile),
+    }
+}
+
+/// Human-readable structural builder family. This is intentionally only a
+/// label: the fingerprint below is the authoritative identity and commits to
+/// the complete selected values.
+fn structural_builder_name(builder: &BuilderSpec) -> String {
+    if builder.environment.is_empty() {
+        return "custom".to_owned();
+    }
+    builder
+        .environment
+        .iter()
+        .map(|environment| match environment {
+            BuilderEnvironmentSpec::CMake => "boulder.builders.cmake.v1",
+            BuilderEnvironmentSpec::Meson => "boulder.builders.meson.v1",
+            BuilderEnvironmentSpec::Cargo => "boulder.builders.cargo.v1",
+            BuilderEnvironmentSpec::Autotools => "boulder.builders.autotools.v1",
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+fn structural_builder_fingerprint(builder: &BuilderSpec, hooks: &HooksSpec, profile: Option<&str>) -> String {
+    let mut encoder = StructuralBuilderEncoder::new();
+    match profile {
+        Some(profile) => {
+            encoder.variant(1);
+            encoder.string(profile);
+        }
+        None => encoder.variant(0),
+    }
+    encode_builder(&mut encoder, builder);
+    encode_hooks(&mut encoder, hooks);
+    encoder.finish()
+}
+
+struct StructuralBuilderEncoder(Sha256);
+
+impl StructuralBuilderEncoder {
+    fn new() -> Self {
+        let mut digest = Sha256::new();
+        digest.update(b"boulder-structural-builder-v1\0");
+        Self(digest)
+    }
+
+    fn variant(&mut self, value: u8) {
+        self.0.update([value]);
+    }
+
+    fn bool(&mut self, value: bool) {
+        self.variant(u8::from(value));
+    }
+
+    fn string(&mut self, value: &str) {
+        self.0.update((value.len() as u64).to_le_bytes());
+        self.0.update(value.as_bytes());
+    }
+
+    fn strings(&mut self, values: &[String]) {
+        self.len(values.len());
+        for value in values {
+            self.string(value);
+        }
+    }
+
+    fn len(&mut self, value: usize) {
+        self.0.update((value as u64).to_le_bytes());
+    }
+
+    fn finish(self) -> String {
+        format!("{:x}", self.0.finalize())
+    }
+}
+
+fn encode_builder(encoder: &mut StructuralBuilderEncoder, builder: &BuilderSpec) {
+    encoder.len(builder.required_tools.len());
+    for dependency in &builder.required_tools {
+        encode_dependency(encoder, dependency);
+    }
+    encoder.len(builder.environment.len());
+    for environment in &builder.environment {
+        encoder.variant(match environment {
+            BuilderEnvironmentSpec::CMake => 0,
+            BuilderEnvironmentSpec::Meson => 1,
+            BuilderEnvironmentSpec::Cargo => 2,
+            BuilderEnvironmentSpec::Autotools => 3,
+        });
+    }
+    encode_phase(encoder, &builder.phases.setup);
+    encode_phase(encoder, &builder.phases.build);
+    encode_phase(encoder, &builder.phases.install);
+    encode_phase(encoder, &builder.phases.check);
+    encode_phase(encoder, &builder.phases.workload);
+    encoder.bool(builder.supported_hooks.setup);
+    encoder.bool(builder.supported_hooks.build);
+    encoder.bool(builder.supported_hooks.check);
+    encoder.bool(builder.supported_hooks.install);
+    encoder.bool(builder.supported_hooks.workload);
+}
+
+fn encode_hooks(encoder: &mut StructuralBuilderEncoder, hooks: &HooksSpec) {
+    for steps in [
+        &hooks.pre_setup,
+        &hooks.post_setup,
+        &hooks.pre_build,
+        &hooks.post_build,
+        &hooks.pre_check,
+        &hooks.post_check,
+        &hooks.pre_install,
+        &hooks.post_install,
+        &hooks.pre_workload,
+        &hooks.post_workload,
+    ] {
+        encode_steps(encoder, steps);
+    }
+}
+
+fn encode_phase(encoder: &mut StructuralBuilderEncoder, phase: &PhaseSpec) {
+    encode_steps(encoder, &phase.steps);
+}
+
+fn encode_steps(encoder: &mut StructuralBuilderEncoder, steps: &[StepSpec]) {
+    encoder.len(steps.len());
+    for step in steps {
+        match step {
+            StepSpec::Shell { script } => {
+                encoder.variant(0);
+                encoder.string(script);
+            }
+            StepSpec::CMakeConfigure { flags } => {
+                encoder.variant(1);
+                encoder.strings(flags);
+            }
+            StepSpec::CMakeBuild => encoder.variant(2),
+            StepSpec::CMakeInstall => encoder.variant(3),
+            StepSpec::CMakeTest => encoder.variant(4),
+            StepSpec::MesonSetup { flags } => {
+                encoder.variant(5);
+                encoder.strings(flags);
+            }
+            StepSpec::MesonBuild => encoder.variant(6),
+            StepSpec::MesonInstall => encoder.variant(7),
+            StepSpec::MesonTest => encoder.variant(8),
+            StepSpec::CargoFetch => encoder.variant(9),
+            StepSpec::CargoBuild { features } => {
+                encoder.variant(10);
+                encoder.strings(features);
+            }
+            StepSpec::CargoInstall { binaries } => {
+                encoder.variant(11);
+                encoder.strings(binaries);
+            }
+            StepSpec::CargoTest { features } => {
+                encoder.variant(12);
+                encoder.strings(features);
+            }
+            StepSpec::AutotoolsConfigure { flags } => {
+                encoder.variant(13);
+                encoder.strings(flags);
+            }
+            StepSpec::AutotoolsBuild => encoder.variant(14),
+            StepSpec::AutotoolsInstall => encoder.variant(15),
+            StepSpec::AutotoolsTest => encoder.variant(16),
+        }
+    }
+}
+
+fn encode_dependency(encoder: &mut StructuralBuilderEncoder, dependency: &DependencySpec) {
+    match dependency {
+        DependencySpec::Package(package) => {
+            encoder.variant(0);
+            encoder.string(&package.name);
+        }
+        DependencySpec::Output(output) => {
+            encoder.variant(1);
+            encoder.string(&output.package.name);
+            encoder.string(&output.output);
+        }
+        DependencySpec::Binary(value) => {
+            encoder.variant(2);
+            encoder.string(value);
+        }
+        DependencySpec::SystemBinary(value) => {
+            encoder.variant(3);
+            encoder.string(value);
+        }
+        DependencySpec::PkgConfig(value) => {
+            encoder.variant(4);
+            encoder.string(value);
+        }
+        DependencySpec::PkgConfig32(value) => {
+            encoder.variant(5);
+            encoder.string(value);
+        }
+        DependencySpec::Soname(value) => {
+            encoder.variant(6);
+            encoder.string(value);
+        }
+        DependencySpec::CMake(value) => {
+            encoder.variant(7);
+            encoder.string(value);
+        }
+        DependencySpec::Python(value) => {
+            encoder.variant(8);
+            encoder.string(value);
+        }
+        DependencySpec::Interpreter(value) => {
+            encoder.variant(9);
+            encoder.string(value);
+        }
+    }
 }
 
 fn toolchain_fingerprint(toolchain: &str, policy_fingerprint: &str) -> String {
@@ -574,19 +799,158 @@ mod tests {
     use stone_recipe::derivation::PhasePlan;
 
     #[test]
-    fn typed_policy_changes_builder_and_toolchain_identities() {
+    fn boulder_implementation_changes_executor_identity() {
         assert_ne!(
-            builder_fingerprint("1", "semantic-a", "policy-a"),
-            builder_fingerprint("1", "semantic-a", "policy-b")
+            executor_fingerprint("1", "semantic-a"),
+            executor_fingerprint("2", "semantic-a")
         );
         assert_ne!(
-            builder_fingerprint("1", "semantic-a", "policy-a"),
-            builder_fingerprint("1", "semantic-b", "policy-a")
+            executor_fingerprint("1", "semantic-a"),
+            executor_fingerprint("1", "semantic-b")
         );
+    }
+
+    #[test]
+    fn typed_policy_changes_toolchain_identity() {
         assert_ne!(
             toolchain_fingerprint("llvm", "policy-a"),
             toolchain_fingerprint("llvm", "policy-b")
         );
+    }
+
+    fn sample_structural_builder() -> BuilderSpec {
+        BuilderSpec {
+            required_tools: vec![
+                DependencySpec::Binary("cmake".to_owned()),
+                DependencySpec::Binary("ninja".to_owned()),
+            ],
+            environment: vec![BuilderEnvironmentSpec::CMake],
+            phases: stone_recipe::package::PhasesSpec {
+                setup: PhaseSpec::new([
+                    StepSpec::CMakeConfigure {
+                        flags: vec!["-DBUILD_TESTS=ON".to_owned()],
+                    },
+                    StepSpec::Shell {
+                        script: "printf configured".to_owned(),
+                    },
+                ]),
+                build: PhaseSpec::new([StepSpec::CMakeBuild]),
+                install: PhaseSpec::new([StepSpec::CMakeInstall]),
+                check: PhaseSpec::new([StepSpec::CMakeTest]),
+                workload: PhaseSpec::default(),
+            },
+            supported_hooks: stone_recipe::package::SupportedHooksSpec::all(),
+        }
+    }
+
+    fn sample_hooks() -> HooksSpec {
+        HooksSpec {
+            pre_build: vec![StepSpec::Shell {
+                script: "printf pre".to_owned(),
+            }],
+            post_install: vec![StepSpec::Shell {
+                script: "printf post".to_owned(),
+            }],
+            ..HooksSpec::default()
+        }
+    }
+
+    #[test]
+    fn selected_builder_fingerprint_binds_complete_structure_hooks_and_profile() {
+        let builder = sample_structural_builder();
+        let hooks = sample_hooks();
+        let original = structural_builder_fingerprint(&builder, &hooks, Some("emul32/x86_64"));
+        assert_eq!(
+            original,
+            structural_builder_fingerprint(&builder.clone(), &hooks.clone(), Some("emul32/x86_64"))
+        );
+        assert_eq!(structural_builder_name(&builder), "boulder.builders.cmake.v1");
+
+        let builder_mutations: Vec<(&str, Box<dyn Fn(&mut BuilderSpec)>)> = vec![
+            (
+                "required-tool",
+                Box::new(|builder| builder.required_tools[0] = DependencySpec::Binary("cmake-next".to_owned())),
+            ),
+            (
+                "required-tool-kind",
+                Box::new(|builder| {
+                    builder.required_tools[0] = DependencySpec::SystemBinary("cmake".to_owned());
+                }),
+            ),
+            (
+                "required-tool-order",
+                Box::new(|builder| builder.required_tools.reverse()),
+            ),
+            (
+                "environment",
+                Box::new(|builder| builder.environment[0] = BuilderEnvironmentSpec::Meson),
+            ),
+            (
+                "phase-arguments",
+                Box::new(|builder| {
+                    let StepSpec::CMakeConfigure { flags } = &mut builder.phases.setup.steps[0] else {
+                        unreachable!();
+                    };
+                    flags.push("-DENABLE_EXTRA=ON".to_owned());
+                }),
+            ),
+            (
+                "phase-step-order",
+                Box::new(|builder| builder.phases.setup.steps.reverse()),
+            ),
+            (
+                "phase-membership",
+                Box::new(|builder| {
+                    builder.phases.workload.steps.push(StepSpec::CMakeBuild);
+                }),
+            ),
+            (
+                "supported-hooks",
+                Box::new(|builder| builder.supported_hooks.workload = false),
+            ),
+        ];
+        for (field, mutate) in builder_mutations {
+            let mut changed = builder.clone();
+            mutate(&mut changed);
+            assert_ne!(
+                original,
+                structural_builder_fingerprint(&changed, &hooks, Some("emul32/x86_64")),
+                "{field} was not fingerprinted"
+            );
+        }
+
+        let mut changed_hooks = hooks.clone();
+        let StepSpec::Shell { script } = &mut changed_hooks.pre_build[0] else {
+            unreachable!();
+        };
+        script.push_str(" changed");
+        assert_ne!(
+            original,
+            structural_builder_fingerprint(&builder, &changed_hooks, Some("emul32/x86_64"))
+        );
+        assert_ne!(
+            original,
+            structural_builder_fingerprint(&builder, &hooks, Some("emul32"))
+        );
+        assert_ne!(original, structural_builder_fingerprint(&builder, &hooks, None));
+    }
+
+    #[test]
+    fn builder_name_is_explanatory_not_the_identity() {
+        let builder = sample_structural_builder();
+        let hooks = sample_hooks();
+        let mut changed = builder.clone();
+        let StepSpec::CMakeConfigure { flags } = &mut changed.phases.setup.steps[0] else {
+            unreachable!();
+        };
+        flags.push("-DCHANGED=ON".to_owned());
+
+        assert_eq!(structural_builder_name(&builder), structural_builder_name(&changed));
+        assert_ne!(
+            structural_builder_fingerprint(&builder, &hooks, None),
+            structural_builder_fingerprint(&changed, &hooks, None)
+        );
+        assert_eq!(structural_builder_name(&BuilderSpec::default()), "custom");
     }
 
     #[test]

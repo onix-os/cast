@@ -34,7 +34,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 7;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 8;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
@@ -1002,6 +1002,9 @@ impl BuilderLayout {
 /// Semantic execution choices visible to the build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionPolicy {
+    /// Executor implementation contract, kept separate from the authored
+    /// structural builder selected in [`BuildLock::builder`].
+    pub executor: LockedIdentity,
     pub root_materialization: RootMaterializationMode,
     pub network: NetworkMode,
     pub filesystems: FilesystemPolicy,
@@ -1012,6 +1015,10 @@ pub struct ExecutionPolicy {
 impl Default for ExecutionPolicy {
     fn default() -> Self {
         Self {
+            executor: LockedIdentity {
+                name: String::new(),
+                fingerprint: String::new(),
+            },
             root_materialization: RootMaterializationMode::LockedClosure,
             network: NetworkMode::Disabled,
             filesystems: FilesystemPolicy::default(),
@@ -1023,6 +1030,8 @@ impl Default for ExecutionPolicy {
 
 impl ExecutionPolicy {
     fn validate(&self) -> Result<(), DerivationValidationError> {
+        require_nonempty("execution.executor.name", &self.executor.name)?;
+        require_nonempty("execution.executor.fingerprint", &self.executor.fingerprint)?;
         if matches!(self.root_materialization, RootMaterializationMode::PackageManagerState) {
             return Err(DerivationValidationError::PackageManagerRootMaterialization);
         }
@@ -1036,6 +1045,7 @@ impl ExecutionPolicy {
     }
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
+        self.executor.encode(encoder);
         encoder.variant(match self.root_materialization {
             RootMaterializationMode::LockedClosure => 0,
             RootMaterializationMode::PackageManagerState => 1,
@@ -2183,6 +2193,10 @@ mod tests {
             zig_cache_dir: "/mason/zigcache".to_owned(),
         };
         plan.execution = ExecutionPolicy {
+            executor: LockedIdentity {
+                name: "boulder-executor-v1".to_owned(),
+                fingerprint: "executor-fingerprint".to_owned(),
+            },
             root_materialization: RootMaterializationMode::LockedClosure,
             network: NetworkMode::Disabled,
             filesystems: FilesystemPolicy::default(),
@@ -2267,6 +2281,28 @@ mod tests {
             plan.validate(),
             Err(DerivationValidationError::NetworkEnabled)
         ));
+    }
+
+    #[test]
+    fn validation_requires_complete_executor_identity() {
+        for (field, clear) in [
+            (
+                "execution.executor.name",
+                Box::new(|plan: &mut DerivationPlan| plan.execution.executor.name.clear())
+                    as Box<dyn Fn(&mut DerivationPlan)>,
+            ),
+            (
+                "execution.executor.fingerprint",
+                Box::new(|plan: &mut DerivationPlan| plan.execution.executor.fingerprint.clear()),
+            ),
+        ] {
+            let mut plan = sample_plan();
+            clear(&mut plan);
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::Empty { field: actual }) if actual == field
+            ));
+        }
     }
 
     #[test]
@@ -2992,6 +3028,10 @@ mod tests {
                 Box::new(|plan| {
                     plan.execution.root_materialization = RootMaterializationMode::PackageManagerState;
                 }),
+            ),
+            (
+                "executor",
+                Box::new(|plan| plan.execution.executor.fingerprint.push_str("-changed")),
             ),
             (
                 "package-metadata",

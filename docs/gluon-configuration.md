@@ -240,7 +240,7 @@ suggestion.
 `build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
 planning, including `boulder build --update-lock`. Its request fingerprint
 binds the evaluated recipe and source lock, selected target and policy,
-profile, toolchain, builder, job count, and requested providers. Schema v2
+profile, toolchain, builder, job count, and requested providers. Schema v3
 contains the exact Moss-resolved package/output closure, only the repository
 snapshots used by that closure, build/host/target platforms, and independent
 policy-root, target, profile, toolchain, and builder identities. It rejects
@@ -249,6 +249,13 @@ context or request roots differ even when its header fingerprint was retained.
 Planning without `--update-lock` requires a current lock; missing and stale
 locks are errors with an explicit refresh command. `--refresh-repositories` is
 valid only while updating the lock.
+
+The builder identity names the selected structural family for explanation and
+fingerprints the complete target-selected `BuilderSpec`, `HooksSpec`, and
+package-profile key. It is not the Boulder executable identity. Derivation
+schema v8 freezes the executor ABI and implementation fingerprint separately
+inside `ExecutionPolicy`, so changing execution compatibility cannot be
+mistaken for changing authored builder structure.
 
 The lock is an explicit resolution input, not an authenticated statement from
 a remote service. Boulder validates its graph and selected planner context,

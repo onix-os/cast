@@ -36,10 +36,10 @@ pub struct Executor<'a> {
 impl<'a> Executor<'a> {
     pub fn new(plan: &'a DerivationPlan) -> Result<Self, Error> {
         plan.validate()?;
-        if plan.build_lock.builder.name != crate::planner::EXECUTOR_ABI {
+        if plan.execution.executor.name != crate::planner::EXECUTOR_ABI {
             return Err(Error::IncompatibleExecutor {
                 expected: crate::planner::EXECUTOR_ABI,
-                found: plan.build_lock.builder.name.clone(),
+                found: plan.execution.executor.name.clone(),
             });
         }
         let current_version = tools_buildinfo::get_version();
@@ -56,15 +56,11 @@ impl<'a> Executor<'a> {
                 found: plan.boulder_fingerprint.clone(),
             });
         }
-        let expected_builder = crate::planner::builder_fingerprint(
-            current_version,
-            current_fingerprint,
-            &plan.build_lock.policy.fingerprint,
-        );
-        if plan.build_lock.builder.fingerprint != expected_builder {
-            return Err(Error::IncompatibleBuilderFingerprint {
-                expected: expected_builder,
-                found: plan.build_lock.builder.fingerprint.clone(),
+        let expected_executor = crate::planner::executor_fingerprint(current_version, current_fingerprint);
+        if plan.execution.executor.fingerprint != expected_executor {
+            return Err(Error::IncompatibleExecutorFingerprint {
+                expected: expected_executor,
+                found: plan.execution.executor.fingerprint.clone(),
             });
         }
         validate_build_host(&plan.build_lock.build_platform.architecture, std::env::consts::ARCH)?;
@@ -309,8 +305,8 @@ pub enum Error {
     IncompatibleBoulder { expected: String, found: String },
     #[error("plan requires Boulder implementation {found}, but executor provides {expected}")]
     IncompatibleBoulderSemantics { expected: String, found: String },
-    #[error("plan builder identity is {found}, but executor requires {expected}")]
-    IncompatibleBuilderFingerprint { expected: String, found: String },
+    #[error("plan executor identity is {found}, but this Boulder requires {expected}")]
+    IncompatibleExecutorFingerprint { expected: String, found: String },
     #[error("frozen plan requires build host `{required}`, but Boulder is running on `{actual}`")]
     IncompatibleBuildHost { required: String, actual: String },
     #[error("unsupported frozen PGO stage {0}")]
@@ -344,6 +340,22 @@ mod tests {
 
     use super::*;
     use crate::package::test_derivation_plan;
+
+    fn compatible_executor_plan() -> DerivationPlan {
+        let mut plan = test_derivation_plan();
+        let version = tools_buildinfo::get_version();
+        let implementation = tools_buildinfo::get_semantic_fingerprint();
+        plan.boulder_version = version.to_owned();
+        plan.boulder_fingerprint = implementation.to_owned();
+        plan.execution.executor = stone_recipe::derivation::LockedIdentity {
+            name: crate::planner::EXECUTOR_ABI.to_owned(),
+            fingerprint: crate::planner::executor_fingerprint(version, implementation),
+        };
+        plan.package.architecture = std::env::consts::ARCH.to_owned();
+        plan.build_lock.build_platform.architecture = std::env::consts::ARCH.to_owned();
+        plan.build_lock.target_platform.architecture = std::env::consts::ARCH.to_owned();
+        plan
+    }
 
     fn execution_layout(root: &Path) -> BuilderLayout {
         let path = |relative: &str| root.join(relative).to_string_lossy().into_owned();
@@ -543,6 +555,34 @@ mod tests {
             validate_build_host("aarch64", "x86_64"),
             Err(Error::IncompatibleBuildHost { required, actual })
                 if required == "aarch64" && actual == "x86_64"
+        ));
+    }
+
+    #[test]
+    fn executor_preflight_uses_execution_identity_not_structural_builder_identity() {
+        let mut plan = compatible_executor_plan();
+        plan.build_lock.builder = stone_recipe::derivation::LockedIdentity {
+            name: "authored-custom-builder".to_owned(),
+            fingerprint: "authored-structural-fingerprint".to_owned(),
+        };
+
+        Executor::new(&plan).unwrap();
+
+        plan.execution.executor.name = "different-executor-abi".to_owned();
+        assert!(matches!(
+            Executor::new(&plan),
+            Err(Error::IncompatibleExecutor { found, .. }) if found == "different-executor-abi"
+        ));
+    }
+
+    #[test]
+    fn executor_preflight_rejects_changed_executor_fingerprint() {
+        let mut plan = compatible_executor_plan();
+        plan.execution.executor.fingerprint.push_str("-changed");
+
+        assert!(matches!(
+            Executor::new(&plan),
+            Err(Error::IncompatibleExecutorFingerprint { found, .. }) if found.ends_with("-changed")
         ));
     }
 }

@@ -222,6 +222,12 @@ fn identical_explicit_inputs_produce_identical_plans_and_locks() {
     let first_lock = fs::read(&first.lock_path).unwrap();
 
     assert_eq!(first.lock_outcome, Some(WriteOutcome::Written));
+    assert_eq!(first.plan.execution.executor.name, super::EXECUTOR_ABI);
+    assert_eq!(first.plan.build_lock.builder.name, "custom");
+    assert_ne!(
+        first.plan.build_lock.builder.name, first.plan.execution.executor.name,
+        "authored structural builder and executor identities must remain separate"
+    );
     assert_eq!(first.plan.execution.network, NetworkMode::Disabled);
     assert_eq!(first.plan.execution.filesystems, FilesystemPolicy::default());
     assert_eq!(

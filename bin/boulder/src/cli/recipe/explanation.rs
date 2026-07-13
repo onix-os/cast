@@ -344,6 +344,7 @@ impl Explanation<'_> {
 
     fn execution(&self, formatter: &mut Formatter) {
         formatter.open(1, "execution");
+        format_locked_identity(formatter, 2, "executor", &self.plan.execution.executor);
         formatter.string(
             2,
             "root_materialization",
@@ -866,7 +867,7 @@ mod tests {
                 fingerprint: profile_aggregate_fingerprint(&provenance.profiles),
             },
             toolchain: identity("llvm"),
-            builder: identity("boulder-executor-v1"),
+            builder: identity("boulder.builders.cmake.v1"),
         };
 
         let plan = DerivationPlan {
@@ -951,6 +952,7 @@ mod tests {
                 zig_cache_dir: "/sandbox/cache/zig".to_owned(),
             },
             execution: ExecutionPolicy {
+                executor: identity("boulder-executor-v1"),
                 root_materialization: RootMaterializationMode::LockedClosure,
                 network: NetworkMode::Disabled,
                 filesystems: Default::default(),

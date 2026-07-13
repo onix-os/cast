@@ -400,6 +400,10 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     );
     plan.boulder_version = "test-boulder".to_owned();
     plan.boulder_fingerprint = "sha256:test-boulder-semantics".to_owned();
+    plan.execution.executor = LockedIdentity {
+        name: "test-executor".to_owned(),
+        fingerprint: "test-executor-fingerprint".to_owned(),
+    };
     plan.source_lock_digest = plan.provenance.recipe.explicit_inputs_sha256.clone();
     plan.layout = BuilderLayout {
         hostname: "boulder".to_owned(),

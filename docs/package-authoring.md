@@ -341,10 +341,13 @@ step.
 
 ## Build closure and derivation planning
 
-`build.lock.glu` is also generated beside `stone.glu`. Schema v2 records the
+`build.lock.glu` is also generated beside `stone.glu`. Schema v3 records the
 exact reachable package/output closure, its used repository index snapshots,
 platform roles, and separate policy-root, target, profile, toolchain, and
-builder identities. It is not an authored overlay. Reuse validates every
+selected structural-builder identities. The builder fingerprint commits to
+the complete target-selected builder, hooks, and package-profile key; the
+executor ABI is a separate derivation execution-policy identity. The lock is
+not an authored overlay. Reuse validates every
 selected identity, platform component, and requested provider root rather than
 trusting only the generated request-fingerprint field.
 
