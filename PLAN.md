@@ -525,10 +525,36 @@ partial cache, staging object, or ambiguous fallback eligible for reuse.
 - [x] Make the complete check/evaluate/freeze/execute proof a discoverable,
   zero-test-resistant `make examples` gate and document what it does and does
   not prove.
+- [ ] Add content-addressed, offline fixture sources with real bytes and hashes
+  for CMake, Meson, Cargo, Autotools, custom-step, and split-output builds.
+  Seed them through a narrow verified cache-import boundary; do not weaken the
+  production HTTPS source policy or expose the mutable recipe directory.
+- [ ] Replace metadata-only execution providers with a pinned, contentful Stone
+  bootstrap closure containing the real declared tools and their runtime
+  dependencies. Test-only command shims, undeclared host tools, and a mounted
+  host or Nix store do not count as frozen execution.
+- [ ] Before entering the container, require every frozen executable binding to
+  resolve to the declared regular executable inside the materialized package
+  root. Provider metadata without its promised executable must fail closed.
+- [ ] Actually configure, compile, check, install, analyze, package, and publish
+  at least one hermetic fixture for each standard builder: CMake, Meson, Cargo,
+  and Autotools. Also execute one honest custom-step fixture and one native
+  split-output fixture containing an executable, shared library, development
+  files, pkg-config metadata, documentation, and a man page.
+- [ ] Decode each emitted fixture bundle and prove the expected metadata,
+  layout, index, content, output relations, modes, and manifest membership.
+  Rebuild from the unchanged source and build locks and require byte-identical
+  plans, derivation IDs, Stone files, and manifests before accepting reuse.
+- [ ] Add a required-capability Make lane for CI where unavailable namespace or
+  mount support is a failure, not a skip. The ordinary developer lane may
+  report a narrowly classified capability skip, but must never report it as an
+  execution success or use it to hide a payload failure.
 
 **Exit gate:** every example is checked and frozen through public production
-boundaries, repeated results are deterministic, and the executable fixture
-emits and reuses byte-identical Stone bundles on a capable Linux host.
+boundaries; all four standard builders plus the custom and split-output cases
+perform real offline builds using only their frozen Stone closure; decoded
+outputs and repeated bundles are byte-identical; and the required-capability
+lane passes on its supported Linux CI host.
 
 ## Validation gates
 
@@ -566,6 +592,9 @@ The final architecture must demonstrate:
   source ABI exists. Frozen execution deliberately has no recipe mount and
   rejects commands which depend on `pkg/`; a future ABI must hash file type,
   mode, symlink target, content, and destination before this can change.
+- Mounting the host or `/nix/store` into fixture containers, or substituting
+  fake command shims for declared compilers and build systems, to make an
+  execution example appear to pass.
 - Unrestricted global overlays or user-home policy discovery.
 - Removing Forge provider resolution in favor of a second dependency solver.
 - Eliminating all shell execution.
