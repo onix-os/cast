@@ -353,6 +353,16 @@ type PgoPolicySpec = {
     use_profile : PgoStagePolicySpec,
 }
 
+type AnalyzerKind =
+    | AnalyzerIgnoreBlocked
+    | AnalyzerBinary
+    | AnalyzerElf
+    | AnalyzerPkgConfig
+    | AnalyzerPython
+    | AnalyzerCMake
+    | AnalyzerCompressMan
+    | AnalyzerIncludeAny
+
 type BuildPolicySpec = {
     build_subdir : String,
     layout : InstallLayoutSpec,
@@ -365,6 +375,7 @@ type BuildPolicySpec = {
     tuning : TuningPolicySpec,
     environment : Array EnvironmentBindingSpec,
     builders : BuildersPolicySpec,
+    analyzers : Array AnalyzerKind,
     pgo : PgoPolicySpec,
 }
 
@@ -395,6 +406,7 @@ type BuildPolicyPatchSpec = {
     tuning : ValuePatch TuningPolicySpec,
     environment : ArrayPatch EnvironmentBindingSpec,
     builders : ValuePatch BuildersPolicySpec,
+    analyzers : ArrayPatch AnalyzerKind,
     pgo : ValuePatch PgoPolicySpec,
 }
 
@@ -437,6 +449,7 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
     tuning = KeepValue,
     environment = KeepArray,
     builders = KeepValue,
+    analyzers = KeepArray,
     pgo = KeepValue,
 }
 
@@ -547,6 +560,16 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
     target_emulation = {
         native = Native,
         emul32 = \host_architecture -> Emul32 { host_architecture },
+    },
+    analyzer = {
+        ignore_blocked = AnalyzerIgnoreBlocked,
+        binary = AnalyzerBinary,
+        elf = AnalyzerElf,
+        pkg_config = AnalyzerPkgConfig,
+        python = AnalyzerPython,
+        cmake = AnalyzerCMake,
+        compress_man = AnalyzerCompressMan,
+        include_any = AnalyzerIncludeAny,
     },
     defaults = {
         policy_patch = empty_policy_patch,

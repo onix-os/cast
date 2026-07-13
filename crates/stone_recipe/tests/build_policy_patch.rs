@@ -3,9 +3,9 @@
 
 use gluon_config::{Evaluator, Source};
 use stone_recipe::build_policy::{
-    ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, EnvironmentBindingSpec, EnvironmentCondition,
-    RetiredTargetPolicySpec, TextSpec, ValuePatch, evaluate_gluon, evaluate_patch_gluon, evaluate_patch_gluon_with,
-    evaluate_patch_gluon_with_inputs,
+    AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, EnvironmentBindingSpec,
+    EnvironmentCondition, RetiredTargetPolicySpec, TextSpec, ValuePatch, evaluate_gluon, evaluate_patch_gluon,
+    evaluate_patch_gluon_with, evaluate_patch_gluon_with_inputs,
 };
 
 fn repository_policy_source() -> Source {
@@ -53,6 +53,7 @@ fn exhaustive_patch_covers_every_build_policy_field() {
     expected.build_subdir = "layered-builddir".to_owned();
     expected.retired_targets.clear();
     expected.environment.clear();
+    expected.analyzers = vec![AnalyzerKind::Binary, AnalyzerKind::IncludeAny];
 
     let patch = BuildPolicyPatchSpec {
         build_subdir: ValuePatch::Set(expected.build_subdir.clone()),
@@ -66,6 +67,7 @@ fn exhaustive_patch_covers_every_build_policy_field() {
         tuning: ValuePatch::Set(expected.tuning.clone()),
         environment: ArrayPatch::Replace(expected.environment.clone()),
         builders: ValuePatch::Set(expected.builders.clone()),
+        analyzers: ArrayPatch::Replace(expected.analyzers.clone()),
         pgo: ValuePatch::Set(expected.pgo.clone()),
     };
 
@@ -99,6 +101,7 @@ b.policy_patch {
     environment = b.patch.array.append [
         b.env.always "PATCHED" (b.text.literal "yes"),
     ],
+    analyzers = b.patch.array.replace [b.analyzer.binary, b.analyzer.include_any],
     .. b.defaults.policy_patch
 }
 "#,
@@ -126,11 +129,17 @@ b.policy_patch {
     ));
     assert!(matches!(evaluated.patch.layout, ValuePatch::Keep));
     assert!(matches!(evaluated.patch.build_root, ValuePatch::Keep));
+    assert!(matches!(
+        evaluated.patch.analyzers,
+        ArrayPatch::Replace(ref values)
+            if values == &[AnalyzerKind::Binary, AnalyzerKind::IncludeAny]
+    ));
 
     let policy = evaluated.patch.clone().apply(repository_policy());
     assert!(policy.targets.is_empty());
     assert_eq!(policy.retired_targets[0].name, "removed-test");
     assert_eq!(policy.environment.last().unwrap().name, "PATCHED");
+    assert_eq!(policy.analyzers, [AnalyzerKind::Binary, AnalyzerKind::IncludeAny]);
     assert!(matches!(
         evaluated.patch.apply_validated(repository_policy()),
         Err(BuildPolicyConversionError::Empty { field }) if field == "targets"
@@ -147,4 +156,26 @@ fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
 
     assert_eq!(plain.patch, BuildPolicyPatchSpec::default());
     assert_ne!(first.fingerprint.sha256, second.fingerprint.sha256);
+}
+
+#[test]
+fn analyzer_order_is_preserved_and_participates_in_patch_identity() {
+    let first = evaluate_patch_gluon(&authored_patch(
+        "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.binary, b.analyzer.elf, b.analyzer.include_any], .. b.defaults.policy_patch }",
+    ))
+    .unwrap();
+    let second = evaluate_patch_gluon(&authored_patch(
+        "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.elf, b.analyzer.binary, b.analyzer.include_any], .. b.defaults.policy_patch }",
+    ))
+    .unwrap();
+
+    assert_ne!(first.fingerprint.sha256, second.fingerprint.sha256);
+    assert_eq!(
+        first.patch.apply_validated(repository_policy()).unwrap().analyzers,
+        [AnalyzerKind::Binary, AnalyzerKind::Elf, AnalyzerKind::IncludeAny]
+    );
+    assert_eq!(
+        second.patch.apply_validated(repository_policy()).unwrap().analyzers,
+        [AnalyzerKind::Elf, AnalyzerKind::Binary, AnalyzerKind::IncludeAny]
+    );
 }

@@ -3,8 +3,8 @@
 
 use gluon_config::Source;
 use stone_recipe::build_policy::{
-    BuildPolicyConversionError, BuildToolSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
-    TargetEmulationSpec, TextSpec, evaluate_gluon, evaluate_gluon_with_inputs,
+    AnalyzerKind, BuildPolicyConversionError, BuildToolSpec, ContextValue, EnvironmentBindingSpec,
+    EnvironmentCondition, TargetEmulationSpec, TextSpec, evaluate_gluon, evaluate_gluon_with_inputs,
 };
 
 fn repository_policy() -> Source {
@@ -56,6 +56,19 @@ fn evaluates_repository_build_policy_as_typed_data() {
     assert_eq!(policy.pgo.copy_program, TextSpec::Literal("cp".to_owned()));
     assert_eq!(policy.pgo.remove_program, TextSpec::Literal("rm".to_owned()));
     assert_eq!(
+        policy.analyzers,
+        [
+            AnalyzerKind::IgnoreBlocked,
+            AnalyzerKind::Binary,
+            AnalyzerKind::Elf,
+            AnalyzerKind::PkgConfig,
+            AnalyzerKind::Python,
+            AnalyzerKind::CMake,
+            AnalyzerKind::CompressMan,
+            AnalyzerKind::IncludeAny,
+        ]
+    );
+    assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
         "boulder.build_policy.v1"
     );
@@ -90,6 +103,56 @@ fn active_target_catalog_must_not_be_empty() {
     assert!(matches!(
         policy.validate(),
         Err(BuildPolicyConversionError::Empty { field }) if field == "targets"
+    ));
+}
+
+#[test]
+fn analyzer_catalog_must_not_be_empty() {
+    let mut policy = repository_policy_value();
+    policy.analyzers.clear();
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Empty { field }) if field == "analyzers"
+    ));
+}
+
+#[test]
+fn analyzer_catalog_is_unique() {
+    let mut policy = repository_policy_value();
+    policy.analyzers.insert(2, AnalyzerKind::Binary);
+
+    assert!(matches!(
+        policy.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "analyzers" && value == "Binary"
+    ));
+}
+
+#[test]
+fn include_any_is_required_exactly_once_and_last() {
+    let mut missing = repository_policy_value();
+    missing.analyzers.pop();
+    assert!(matches!(
+        missing.validate(),
+        Err(BuildPolicyConversionError::MissingRequired { field, value })
+            if field == "analyzers" && value == "IncludeAny"
+    ));
+
+    let mut misplaced = repository_policy_value();
+    misplaced.analyzers.swap(0, 7);
+    assert!(matches!(
+        misplaced.validate(),
+        Err(BuildPolicyConversionError::MustBeLast { field, value })
+            if field == "analyzers" && value == "IncludeAny"
+    ));
+
+    let mut duplicate = repository_policy_value();
+    duplicate.analyzers.push(AnalyzerKind::IncludeAny);
+    assert!(matches!(
+        duplicate.validate(),
+        Err(BuildPolicyConversionError::Duplicate { field, value })
+            if field == "analyzers" && value == "IncludeAny"
     ));
 }
 

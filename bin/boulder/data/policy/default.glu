@@ -2301,6 +2301,16 @@ p.policy {
         cargo,
         autotools,
     },
+    analyzers = [
+        p.analyzer.ignore_blocked,
+        p.analyzer.binary,
+        p.analyzer.elf,
+        p.analyzer.pkg_config,
+        p.analyzer.python,
+        p.analyzer.cmake,
+        p.analyzer.compress_man,
+        p.analyzer.include_any,
+    ],
     pgo = {
         required_tools = [p.tool.binary "llvm-profdata"],
         merge_program = lit "llvm-profdata",

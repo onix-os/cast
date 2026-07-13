@@ -438,6 +438,35 @@ pub struct PgoPolicySpec {
     pub use_profile: PgoStagePolicySpec,
 }
 
+/// One repository-authorized package analyzer in execution order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AnalyzerKind {
+    IgnoreBlocked,
+    Binary,
+    Elf,
+    PkgConfig,
+    Python,
+    CMake,
+    CompressMan,
+    IncludeAny,
+}
+
+impl AnalyzerKind {
+    /// Stable authored name used in diagnostics and canonical identities.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IgnoreBlocked => "IgnoreBlocked",
+            Self::Binary => "Binary",
+            Self::Elf => "Elf",
+            Self::PkgConfig => "PkgConfig",
+            Self::Python => "Python",
+            Self::CMake => "CMake",
+            Self::CompressMan => "CompressMan",
+            Self::IncludeAny => "IncludeAny",
+        }
+    }
+}
+
 /// Concrete repository build policy returned from restricted Gluon.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicySpec {
@@ -452,6 +481,7 @@ pub struct BuildPolicySpec {
     pub tuning: TuningPolicySpec,
     pub environment: Vec<EnvironmentBindingSpec>,
     pub builders: BuildersPolicySpec,
+    pub analyzers: Vec<AnalyzerKind>,
     pub pgo: PgoPolicySpec,
 }
 
@@ -522,6 +552,7 @@ pub struct BuildPolicyPatchSpec {
     pub tuning: ValuePatch<TuningPolicySpec>,
     pub environment: ArrayPatch<EnvironmentBindingSpec>,
     pub builders: ValuePatch<BuildersPolicySpec>,
+    pub analyzers: ArrayPatch<AnalyzerKind>,
     pub pgo: ValuePatch<PgoPolicySpec>,
 }
 
@@ -540,6 +571,7 @@ impl BuildPolicyPatchSpec {
             tuning,
             environment,
             builders,
+            analyzers,
             pgo,
         } = self;
         let BuildPolicySpec {
@@ -554,6 +586,7 @@ impl BuildPolicyPatchSpec {
             tuning: current_tuning,
             environment: current_environment,
             builders: current_builders,
+            analyzers: current_analyzers,
             pgo: current_pgo,
         } = policy;
 
@@ -569,6 +602,7 @@ impl BuildPolicyPatchSpec {
             tuning: tuning.apply(current_tuning),
             environment: environment.apply(current_environment),
             builders: builders.apply(current_builders),
+            analyzers: analyzers.apply(current_analyzers),
             pgo: pgo.apply(current_pgo),
         }
     }
@@ -589,6 +623,10 @@ pub enum BuildPolicyConversionError {
     Empty { field: String },
     #[error("{field}: duplicate value `{value}`")]
     Duplicate { field: String, value: String },
+    #[error("{field}: required value `{value}` is missing")]
+    MissingRequired { field: String, value: String },
+    #[error("{field}: value `{value}` must be last")]
+    MustBeLast { field: String, value: String },
     #[error("{field}: PGO finish must declare at least one input")]
     EmptyPgoInputs { field: String },
     #[error("{field}: unknown reference `{value}`")]
@@ -688,6 +726,7 @@ impl BuildPolicySpec {
         ] {
             validate_builder(&format!("builders.{name}"), builder)?;
         }
+        validate_analyzers(&self.analyzers)?;
 
         validate_tools("pgo.required_tools", &self.pgo.required_tools)?;
         require_text("pgo.merge_program", &self.pgo.merge_program)?;
@@ -705,6 +744,42 @@ impl BuildPolicySpec {
         validate_pgo_stage("pgo.stage_two", &self.pgo.stage_two)?;
         validate_pgo_stage("pgo.use_profile", &self.pgo.use_profile)
     }
+}
+
+fn validate_analyzers(analyzers: &[AnalyzerKind]) -> Result<(), BuildPolicyConversionError> {
+    if analyzers.is_empty() {
+        return Err(BuildPolicyConversionError::Empty {
+            field: "analyzers".to_owned(),
+        });
+    }
+
+    let mut values = BTreeSet::new();
+    for analyzer in analyzers {
+        if !values.insert(*analyzer) {
+            return Err(BuildPolicyConversionError::Duplicate {
+                field: "analyzers".to_owned(),
+                value: analyzer.as_str().to_owned(),
+            });
+        }
+    }
+
+    let Some(include_any) = analyzers
+        .iter()
+        .position(|analyzer| *analyzer == AnalyzerKind::IncludeAny)
+    else {
+        return Err(BuildPolicyConversionError::MissingRequired {
+            field: "analyzers".to_owned(),
+            value: AnalyzerKind::IncludeAny.as_str().to_owned(),
+        });
+    };
+    if include_any + 1 != analyzers.len() {
+        return Err(BuildPolicyConversionError::MustBeLast {
+            field: "analyzers".to_owned(),
+            value: AnalyzerKind::IncludeAny.as_str().to_owned(),
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_target_name(field: &str, value: &str) -> Result<(), BuildPolicyConversionError> {

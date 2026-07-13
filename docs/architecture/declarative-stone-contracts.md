@@ -109,8 +109,10 @@ Deliberately unsupported:
   not composition.
 - Contains every repository choice that can alter a build: platform data,
   toolchains, standard-builder command and environment templates, base build
-  inputs, tuning defaults, source preparation, analyzer policy, and fixed guest
-  layout. It does not duplicate module-owned builder capabilities or phases.
+  inputs, tuning defaults, source preparation, an explicitly ordered analyzer
+  pipeline, and fixed guest layout. It does not duplicate module-owned builder
+  capabilities or phases. Analyzer kinds are unique and `IncludeAny` is the
+  required final fallback.
 - Is composed through ordered, one-way transformations with strict `add`,
   `replace`, and `modify` operations. `add` requires absent state; `replace`
   and `modify` require existing state, and each intermediate policy is

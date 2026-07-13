@@ -7,14 +7,14 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    ArchivePreparationPolicySpec, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
-    BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
-    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
-    EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec,
-    NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
-    RetiredTargetPolicySpec, SandboxPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec,
-    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
-    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
+    AnalyzerKind, ArchivePreparationPolicySpec, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec,
+    BuildPolicySpec, BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec,
+    CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
+    EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec,
+    NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec,
+    PlatformPolicySpec, RetiredTargetPolicySpec, SandboxPolicySpec, SourcePreparationPolicySpec,
+    StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec,
+    ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
 
 /// Version of the typed repository build-policy ABI.
@@ -463,6 +463,18 @@ struct GluonPgoPolicySpec {
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonAnalyzerKind {
+    AnalyzerIgnoreBlocked,
+    AnalyzerBinary,
+    AnalyzerElf,
+    AnalyzerPkgConfig,
+    AnalyzerPython,
+    AnalyzerCMake,
+    AnalyzerCompressMan,
+    AnalyzerIncludeAny,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBuildPolicySpec {
     build_subdir: String,
     layout: GluonInstallLayoutSpec,
@@ -475,6 +487,7 @@ struct GluonBuildPolicySpec {
     tuning: GluonTuningPolicySpec,
     environment: Vec<GluonEnvironmentBindingSpec>,
     builders: GluonBuildersPolicySpec,
+    analyzers: Vec<GluonAnalyzerKind>,
     pgo: GluonPgoPolicySpec,
 }
 
@@ -506,6 +519,7 @@ struct GluonBuildPolicyPatchSpec {
     tuning: GluonValuePatch<GluonTuningPolicySpec>,
     environment: GluonArrayPatch<GluonEnvironmentBindingSpec>,
     builders: GluonValuePatch<GluonBuildersPolicySpec>,
+    analyzers: GluonArrayPatch<GluonAnalyzerKind>,
     pgo: GluonValuePatch<GluonPgoPolicySpec>,
 }
 
@@ -854,6 +868,7 @@ impl From<GluonBuildPolicySpec> for BuildPolicySpec {
             tuning: value.tuning.into(),
             environment: value.environment.into_iter().map(Into::into).collect(),
             builders: value.builders.into(),
+            analyzers: value.analyzers.into_iter().map(Into::into).collect(),
             pgo: value.pgo.into(),
         }
     }
@@ -900,7 +915,23 @@ impl From<GluonBuildPolicyPatchSpec> for BuildPolicyPatchSpec {
             tuning: value.tuning.into(),
             environment: value.environment.into(),
             builders: value.builders.into(),
+            analyzers: value.analyzers.into(),
             pgo: value.pgo.into(),
+        }
+    }
+}
+
+impl From<GluonAnalyzerKind> for AnalyzerKind {
+    fn from(value: GluonAnalyzerKind) -> Self {
+        match value {
+            GluonAnalyzerKind::AnalyzerIgnoreBlocked => Self::IgnoreBlocked,
+            GluonAnalyzerKind::AnalyzerBinary => Self::Binary,
+            GluonAnalyzerKind::AnalyzerElf => Self::Elf,
+            GluonAnalyzerKind::AnalyzerPkgConfig => Self::PkgConfig,
+            GluonAnalyzerKind::AnalyzerPython => Self::Python,
+            GluonAnalyzerKind::AnalyzerCMake => Self::CMake,
+            GluonAnalyzerKind::AnalyzerCompressMan => Self::CompressMan,
+            GluonAnalyzerKind::AnalyzerIncludeAny => Self::IncludeAny,
         }
     }
 }

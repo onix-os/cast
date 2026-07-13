@@ -183,6 +183,14 @@ structured fields use `Keep` or `Set`, and arrays use `Keep`, `Replace`,
 keeping it. Every complete value and every patched intermediate value is
 semantically validated before the next operation runs.
 
+`BuildPolicySpec.analyzers` is the repository-authoritative analyzer pipeline,
+not an implementation-defined registry order. The default policy declares
+`IgnoreBlocked`, `Binary`, `Elf`, `PkgConfig`, `Python`, `CMake`,
+`CompressMan`, then `IncludeAny`. The list must be non-empty and unique, and
+the `IncludeAny` fallback must appear exactly once at the end. Analyzer patches
+use the same order-preserving array operations, so reordering analyzers is a
+semantic policy and fingerprint change.
+
 Each successful operation records the policy and layer names, layer and entry
 positions, global operation order, operation kind, module origin, and the
 module's complete evaluation fingerprint. The final policy fingerprint binds
