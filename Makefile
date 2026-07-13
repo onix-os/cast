@@ -81,11 +81,27 @@ product-names:
 
 test: lint config-formats-test
 	@echo "Running tests in all packages..."
-	@$(CARGO) test --all
+	@$(CARGO) test --all --no-fail-fast
 
 examples:
 	@echo "Checking every Gluon package example through the public Cast CLI..."
-	@$(CARGO) test -p cast --test gluon_examples -- --nocapture
+	@$(CARGO) test -p cast --test gluon_examples -- --list | \
+		grep -Fqx 'every_gluon_package_example_passes_the_public_cast_cli: test'
+	@$(CARGO) test -p cast --test gluon_examples \
+		every_gluon_package_example_passes_the_public_cast_cli -- \
+		--exact --nocapture
+	@echo "Freezing every Gluon package example through the hermetic planner..."
+	@$(CARGO) test -p mason --lib -- --list | \
+		grep -Fqx 'planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks -- \
+		--exact --nocapture
+	@echo "Executing and packaging the minimal frozen Gluon example..."
+	@$(CARGO) test -p mason --lib -- --list | \
+		grep -Fqx 'planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation -- \
+		--exact --nocapture
 
 check:
 	@$(CARGO) check --workspace --all-targets
@@ -139,7 +155,7 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
-	@echo "  examples      Check and deterministically evaluate every Gluon package example"
+	@echo "  examples      Check, evaluate, freeze, and execute the Gluon package examples"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"

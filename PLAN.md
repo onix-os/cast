@@ -467,6 +467,69 @@ recursive package universe inside Gluon.
 **Exit gate:** only the package-function ABI, explicit Gluon policy, and frozen
 plan model remain.
 
+### Phase 9: Harden the complete declaration boundary
+
+The declarative architecture is not considered robust merely because Gluon
+evaluation is pure. Every byte, collection, subprocess, filesystem walk, and
+archive expansion between authored source and the published Stone bundle must
+also be finite and fail closed. Limits are operational safety ceilings, not
+hidden package semantics, and boundary tests must admit exactly `N` while
+rejecting `N + 1`.
+
+- [x] Bound root source, imported modules, the complete import graph, VM memory,
+  stack, evaluation time, and host conversion of the evaluated package value.
+- [x] Anchor recipe and imported-module reads to a trusted descriptor; reject
+  traversal, symlink components, root replacement, non-regular files, and
+  blocking special files.
+- [x] Bound generated locks, frozen plan jobs, phases, steps, arguments,
+  environment, paths, individual strings, aggregate process data, and the
+  final `execve` footprint.
+- [x] Require secure source transports, bounded downloads and metadata,
+  authoritative streamed byte limits, pre-publication hashes, private staging,
+  and atomic cache publication.
+- [x] Bound analyzer duration and output, and kill the full analyzer process
+  group before joining its output readers.
+- [x] Bound every frozen build step by wall time, independent and combined
+  output budgets, fixed-size drains, child-local resource limits, and complete
+  descendant cleanup.
+- [ ] Apply the same finite process, output, progress-record, repository-size,
+  and repository-entry policy to Git mirrors, fetches, and checkouts.
+- [x] Load, save, and delete Gluon configuration fragments through
+  descriptor-anchored, size/count-bounded, race-resistant operations.
+- [ ] Bound build-policy collections and recursive `TextSpec` expansion before
+  and after every policy patch.
+- [x] Bound Stone payload counts, records, declared and expanded sizes,
+  malformed lengths, content streaming, and aggregate archive consumption.
+- [ ] Replace recursive/unbounded package collection with a bounded,
+  descriptor-safe, deterministic walk and verified content reads.
+
+**Exit gate:** malformed, oversized, changing, blocking, or resource-exhausting
+inputs are rejected with structured diagnostics; no error path leaves a child,
+partial cache, staging object, or ambiguous fallback eligible for reuse.
+
+### Phase 10: Prove representative package declarations
+
+- [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
+  custom steps, hooks, feature functions, argument and attribute overrides,
+  typed dependency roles, multiple sources, split outputs, conflicts, tuning,
+  profiles, a source-less meta-package, and a larger daemon.
+- [x] Discover every checked-in example, require one non-symlink `stone.glu`
+  root, reject orphaned modules, and run public `cast recipe check` and
+  deterministic repeated `cast recipe eval` without mutating authored files.
+- [x] Freeze every example using hermetic content-addressed fixtures, write and
+  reuse its exact build lock, and require identical canonical plan bytes and
+  derivation IDs.
+- [x] Exercise the source-less minimal package through the actual frozen
+  executor and Stone packager twice when the host supports the required
+  unprivileged namespace; capability skips must not hide payload failures.
+- [x] Make the complete check/evaluate/freeze/execute proof a discoverable,
+  zero-test-resistant `make examples` gate and document what it does and does
+  not prove.
+
+**Exit gate:** every example is checked and frozen through public production
+boundaries, repeated results are deterministic, and the executable fixture
+emits and reuses byte-identical Stone bundles on a capable Linux host.
+
 ## Validation gates
 
 Every phase must add focused tests and finish with the relevant Make targets.

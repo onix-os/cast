@@ -72,10 +72,12 @@ There are two import classes:
 2. Quoted relative modules beneath the explicit source root, for example
    `import! "./package-policy.glu"`.
 
-Relative paths are canonicalized. Parent traversal, absolute paths, symlink
-escapes, implicit current-directory lookup, and collisions with embedded module
-names are rejected. `GLUON_PATH` is ignored. Embedded modules cannot use a
-recipe's source root to import host files.
+Relative paths are opened beneath an already trusted source-root descriptor.
+Parent traversal, absolute paths, symlink components, root replacement,
+implicit current-directory lookup, and collisions with embedded module names
+are rejected. Matching FIFOs and devices are never opened as source text.
+`GLUON_PATH` is ignored. Embedded modules cannot use a recipe's source root to
+import host files.
 
 ### Default resource limits
 
@@ -453,6 +455,27 @@ cast recipe update ./stone.glu
 
 The command writes only `sources.lock.glu`; `stone.glu` and its imported
 modules remain byte-for-byte unchanged.
+
+## Checked package corpus
+
+[`docs/examples/gluon`](examples/gluon/README.md) contains
+small Nix-inspired recipes for standard builders, pure feature functions,
+dependency and attribute overrides, typed dependency roles, hooks, custom
+steps, multiple sources, split outputs, profiles, tuning, conflicts, a
+source-less userspace meta-package, and a larger daemon.
+
+Run every checked-in package proof with:
+
+```sh
+make examples
+```
+
+The target checks and evaluates each recipe through the public Cast CLI,
+freezes each one hermetically with exact generated locks, repeats every result
+to prove deterministic output and plan identity, and exercises the minimal
+source-less recipe through execution and Stone packaging when the host permits
+the required unprivileged namespace. Fictional remote example URLs are replaced
+with local content-addressed fixtures during the planner proof.
 
 ## Compatibility policy
 
