@@ -5,7 +5,7 @@ use crate::draft::build::{Error, Phases, State};
 
 pub fn phases() -> Phases {
     Phases {
-        setup: Some("%cargo_fetch"),
+        setup: None,
         build: Some("%cargo_build"),
         install: Some("%cargo_install"),
         check: Some("%cargo_test"),

@@ -758,7 +758,9 @@ fn encode_steps(encoder: &mut StructuralBuilderEncoder, steps: &[StepSpec]) {
             StepSpec::MesonBuild => encoder.variant(7),
             StepSpec::MesonInstall => encoder.variant(8),
             StepSpec::MesonTest => encoder.variant(9),
-            StepSpec::CargoFetch => encoder.variant(10),
+            // Variant 10 was the removed CargoFetch escape hatch. Keep later
+            // tags stable so removing an impure operation does not change the
+            // identity of valid structural builders.
             StepSpec::CargoBuild { features } => {
                 encoder.variant(11);
                 encoder.strings(features);

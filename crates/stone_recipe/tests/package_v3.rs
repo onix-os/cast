@@ -53,6 +53,18 @@ fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
 }
 
 #[test]
+fn frozen_package_abi_has_no_cargo_fetch_escape_hatch() {
+    let error = evaluate_gluon(&authored("b.step.cargo_fetch")).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PackageEvaluationError::Evaluation(ref diagnostic)
+            if diagnostic.category == DiagnosticCategory::Type
+                && diagnostic.message.contains("cargo_fetch")
+    ));
+}
+
+#[test]
 fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
     let source_root = SourceRoot::new(&root).unwrap();

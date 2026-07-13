@@ -13,8 +13,9 @@ let base = b.mk_package (b.meta {
 })
 
 {
-    // The structural Cargo builder deliberately has no CargoFetch step. Source
-    // acquisition and locking happen before the isolated build begins.
+    // The structural Cargo builder deliberately has no fetch step. A real
+    // dependency-bearing source archive must include a locked vendor tree and
+    // Cargo source replacement configuration before the isolated build begins.
     builder = cargo.builder {
         features = ["pcre2", "unicode"],
         binaries = ["cargo-hello"],

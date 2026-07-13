@@ -699,7 +699,7 @@ mod direct_tests {
     #[test]
     fn authored_shell_percent_text_is_literal() {
         let (mut recipe, policy, root) = fixture();
-        let literal = "%cargo_fetch $CAST_INSTALL_ROOT %(jobs)";
+        let literal = "%unknown_action $CAST_INSTALL_ROOT %(jobs)";
         recipe.declaration.builder = BuilderSpec {
             required_tools: Vec::new(),
             environment: Vec::new(),

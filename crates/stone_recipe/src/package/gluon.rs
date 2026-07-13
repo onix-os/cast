@@ -136,7 +136,6 @@ enum GluonStepSpec {
     MesonBuild,
     MesonInstall,
     MesonTest,
-    CargoFetch,
     CargoBuild {
         features: Vec<String>,
     },
@@ -396,7 +395,6 @@ impl From<GluonStepSpec> for StepSpec {
             GluonStepSpec::MesonBuild => Self::MesonBuild,
             GluonStepSpec::MesonInstall => Self::MesonInstall,
             GluonStepSpec::MesonTest => Self::MesonTest,
-            GluonStepSpec::CargoFetch => Self::CargoFetch,
             GluonStepSpec::CargoBuild { features } => Self::CargoBuild { features },
             GluonStepSpec::CargoInstall { binaries } => Self::CargoInstall { binaries },
             GluonStepSpec::CargoTest { features } => Self::CargoTest { features },

@@ -117,7 +117,6 @@ pub enum StepSpec {
     MesonBuild,
     MesonInstall,
     MesonTest,
-    CargoFetch,
     CargoBuild {
         features: Vec<String>,
     },
@@ -1156,7 +1155,6 @@ impl PackageSpec {
                 | StepSpec::MesonBuild
                 | StepSpec::MesonInstall
                 | StepSpec::MesonTest
-                | StepSpec::CargoFetch
                 | StepSpec::AutotoolsBuild
                 | StepSpec::AutotoolsInstall
                 | StepSpec::AutotoolsTest => {}
@@ -1532,7 +1530,6 @@ impl PackageBudget {
             | StepSpec::MesonBuild
             | StepSpec::MesonInstall
             | StepSpec::MesonTest
-            | StepSpec::CargoFetch
             | StepSpec::AutotoolsBuild
             | StepSpec::AutotoolsInstall
             | StepSpec::AutotoolsTest => {}

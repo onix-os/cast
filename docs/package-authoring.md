@@ -169,9 +169,12 @@ boundaries. Put a one-command environment assignment directly on the command
 which consumes it.
 
 The package ABI exposes the typed standard-step constructors used by the
-embedded modules, plus `b.step.run`, `b.step.shell`, `b.step.shell_with`, and
-`b.step.cargo_fetch` for explicit custom work. Package authors normally select
-a standard module rather than rebuilding its phase graph step by step.
+embedded modules, plus `b.step.run`, `b.step.shell`, and `b.step.shell_with`
+for explicit custom work. It deliberately has no `cargo_fetch` step: a frozen
+build cannot resolve or download Cargo dependencies. Cargo inputs must already
+be present in a locked source, with Cargo configured to use that vendored tree;
+the standard Cargo builder runs with `--frozen`. Package authors normally
+select a standard module rather than rebuilding its phase graph step by step.
 
 ## Custom shell builders
 

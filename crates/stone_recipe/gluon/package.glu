@@ -62,7 +62,6 @@ type StepSpec =
     | MesonBuild
     | MesonInstall
     | MesonTest
-    | CargoFetch
     | CargoBuild { features: Array String }
     | CargoInstall { binaries: Array String }
     | CargoTest { features: Array String }
@@ -600,7 +599,6 @@ let git = \url git_ref -> GitSource {
         meson_build = MesonBuild,
         meson_install = MesonInstall,
         meson_test = MesonTest,
-        cargo_fetch = CargoFetch,
         cargo_build = \features -> CargoBuild { features },
         cargo_install = \binaries -> CargoInstall { binaries },
         cargo_test = \features -> CargoTest { features },

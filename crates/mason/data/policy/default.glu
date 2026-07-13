@@ -473,7 +473,13 @@ let cargo_environment = [
 
 let cargo = p.builder {
     environment = cargo_environment,
-    setup = command "cargo" [lit "fetch", lit "-v", lit "--locked"] [],
+    // The generic policy record has a setup slot, but package-v3 exposes no
+    // Cargo setup/fetch step. Keep even this unreachable template offline so
+    // a future wiring mistake cannot silently reintroduce dependency fetches.
+    setup = command "cargo" [
+        lit "metadata", lit "--offline", lit "--locked", lit "--no-deps",
+        lit "--format-version", lit "1",
+    ] [],
     build = command "cargo" [
         lit "build", lit "-v", lit "-j", ctx c.jobs, lit "--frozen",
         lit "--target", ctx c.target_triple, lit "--release",

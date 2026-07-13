@@ -216,7 +216,6 @@ impl BuildContext {
             StepSpec::MesonBuild => &self.policy.builders.meson.build,
             StepSpec::MesonInstall => &self.policy.builders.meson.install,
             StepSpec::MesonTest => &self.policy.builders.meson.check,
-            StepSpec::CargoFetch => &self.policy.builders.cargo.setup,
             StepSpec::CargoBuild { .. } => &self.policy.builders.cargo.build,
             StepSpec::CargoInstall { .. } => &self.policy.builders.cargo.install,
             StepSpec::CargoTest { .. } => &self.policy.builders.cargo.check,
@@ -268,7 +267,6 @@ impl BuildContext {
             | StepSpec::MesonBuild
             | StepSpec::MesonInstall
             | StepSpec::MesonTest
-            | StepSpec::CargoFetch
             | StepSpec::AutotoolsBuild
             | StepSpec::AutotoolsInstall
             | StepSpec::AutotoolsTest => {}
@@ -738,11 +736,6 @@ mod tests {
             panic!("expected run")
         };
         assert_eq!(&args[args.len() - 2..], ["-Ddocs=false", "aerynos-builddir"]);
-
-        let Run { environment, .. } = context.resolve_standard_step(&StepSpec::CargoFetch).unwrap().unwrap() else {
-            panic!("expected run")
-        };
-        assert!(!environment.contains_key("CARGO_BUILD_DEP_INFO_BASEDIR"));
 
         let cargo_environment = context.policy.builders.cargo.environment.clone();
         context.extend_environment(&cargo_environment).unwrap();

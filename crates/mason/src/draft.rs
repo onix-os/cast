@@ -145,11 +145,6 @@ fn encode_package_v3(
         output.push_str("        .. b.defaults.scripts\n    }) [],\n");
     }
 
-    if matches!(build_system, build::System::Cargo) {
-        output.push_str("    hooks = {\n");
-        output.push_str("        pre_setup = [b.step.cargo_fetch],\n");
-        output.push_str("        .. b.defaults.hooks\n    },\n");
-    }
     let dependencies = dependencies.into_iter().sorted().collect::<Vec<_>>();
     writeln!(
         output,
@@ -302,6 +297,7 @@ mod test {
         assert!(source.contains("cast.package.v3"));
         assert!(source.contains("cast.builders.cargo.v2"));
         assert!(source.contains("UPDATE SUMMARY"));
+        assert!(!source.contains("cargo_fetch"));
         assert_eq!(evaluated.package.meta.pname, "example");
         assert_eq!(evaluated.package.meta.version, "1.2.3");
         assert_eq!(evaluated.package.sources.len(), 1);
