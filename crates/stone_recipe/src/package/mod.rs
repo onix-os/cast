@@ -8,14 +8,15 @@
 //! Rust never receives or retains a Gluon closure or a second recipe model.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path};
+use std::path::Path;
 
 use crate::{
     NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec,
-    spec::{UpstreamValidationError, is_safe_artifact_component},
+    spec::{UpstreamValidationError, is_normalized_relative_path, is_safe_artifact_component},
 };
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 use thiserror::Error;
+use url::Url;
 
 pub use self::gluon::{
     EvaluatedPackage, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
@@ -334,6 +335,42 @@ pub enum PackageConversionError {
     InvalidVersionComponent { version: String },
     #[error("meta.release: release must be greater than zero (found `{release}`)")]
     ReleaseMustBePositive { release: i64 },
+    #[error("meta.homepage: invalid URL `{value}`")]
+    InvalidHomepage {
+        value: String,
+        #[source]
+        source: url::ParseError,
+    },
+    #[error("meta.homepage: URL `{value}` must be absolute HTTP or HTTPS with a host")]
+    UnsupportedHomepage { value: String },
+    #[error("meta.homepage: URL must not contain embedded credentials")]
+    HomepageCredentials,
+    #[error("{field}: value {value:?} {requirement}")]
+    InvalidText {
+        field: String,
+        value: String,
+        requirement: &'static str,
+    },
+    #[error("{field}: duplicate value {value:?}; first declared at {first_field}")]
+    DuplicateValue {
+        field: String,
+        value: String,
+        first_field: String,
+    },
+    #[error("{field}: invalid glob {value:?}")]
+    InvalidGlob {
+        field: String,
+        value: String,
+        #[source]
+        source: glob::PatternError,
+    },
+    #[error("{field}: invalid regular expression {value:?}")]
+    InvalidRegex {
+        field: String,
+        value: String,
+        #[source]
+        source: Box<regex::Error>,
+    },
     #[error(
         "options.networking: frozen builds must declare fetched content as locked sources; network access during execution is unsupported"
     )]
@@ -417,9 +454,16 @@ impl PackageConversionError {
             Self::VersionMustStartWithDigit { .. } => "meta.version",
             Self::InvalidVersionComponent { .. } => "meta.version",
             Self::ReleaseMustBePositive { .. } => "meta.release",
+            Self::InvalidHomepage { .. } | Self::UnsupportedHomepage { .. } | Self::HomepageCredentials => {
+                "meta.homepage"
+            }
             Self::FrozenBuildNetworkingUnsupported => "options.networking",
             Self::InvalidSource { field, .. }
             | Self::DuplicateSourceMaterialization { field, .. }
+            | Self::InvalidText { field, .. }
+            | Self::DuplicateValue { field, .. }
+            | Self::InvalidGlob { field, .. }
+            | Self::InvalidRegex { field, .. }
             | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
             | Self::MissingOutputReference { field, .. }
@@ -466,6 +510,9 @@ impl PackageSpec {
                 release: self.meta.release,
             });
         }
+        self.validate_metadata()?;
+        self.validate_selectors()?;
+        self.validate_outputs()?;
         if self.options.networking {
             return Err(PackageConversionError::FrozenBuildNetworkingUnsupported);
         }
@@ -525,6 +572,162 @@ impl PackageSpec {
         }
 
         self.validate_relations()
+    }
+
+    fn validate_metadata(&self) -> Result<(), PackageConversionError> {
+        let homepage = Url::parse(&self.meta.homepage).map_err(|source| PackageConversionError::InvalidHomepage {
+            value: self.meta.homepage.clone(),
+            source,
+        })?;
+        if !matches!(homepage.scheme(), "http" | "https") || !homepage.has_host() {
+            return Err(PackageConversionError::UnsupportedHomepage {
+                value: self.meta.homepage.clone(),
+            });
+        }
+        if !homepage.username().is_empty() || homepage.password().is_some() {
+            return Err(PackageConversionError::HomepageCredentials);
+        }
+
+        if self.meta.license.is_empty() {
+            return Err(PackageConversionError::InvalidText {
+                field: "meta.license".to_owned(),
+                value: String::new(),
+                requirement: "must declare at least one license expression",
+            });
+        }
+        let mut licenses = BTreeMap::new();
+        for (index, license) in self.meta.license.iter().enumerate() {
+            let field = format!("meta.license[{index}]");
+            validate_trimmed_text(
+                &field,
+                license,
+                "must be non-empty, trimmed, and contain no control characters",
+            )?;
+            if let Some(first_index) = licenses.insert(license.as_str(), index) {
+                return Err(PackageConversionError::DuplicateValue {
+                    field,
+                    value: license.clone(),
+                    first_field: format!("meta.license[{first_index}]"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_selectors(&self) -> Result<(), PackageConversionError> {
+        let mut architectures = BTreeMap::new();
+        for (index, architecture) in self.architectures.iter().enumerate() {
+            let field = format!("architectures[{index}]");
+            if !is_normalized_relative_path(architecture) {
+                return Err(PackageConversionError::InvalidText {
+                    field,
+                    value: architecture.clone(),
+                    requirement: "must be a normalized portable target name",
+                });
+            }
+            if let Some(first_index) = architectures.insert(architecture.as_str(), index) {
+                return Err(PackageConversionError::DuplicateValue {
+                    field,
+                    value: architecture.clone(),
+                    first_field: format!("architectures[{first_index}]"),
+                });
+            }
+        }
+
+        let mut tuning = BTreeMap::new();
+        for (index, entry) in self.tuning.iter().enumerate() {
+            let field = format!("tuning[{index}].key");
+            if !valid_package_name(&entry.key) {
+                return Err(PackageConversionError::InvalidText {
+                    field,
+                    value: entry.key.clone(),
+                    requirement: "must be a normalized tuning-group name",
+                });
+            }
+            if let Some(first_index) = tuning.insert(entry.key.as_str(), index) {
+                return Err(PackageConversionError::DuplicateValue {
+                    field,
+                    value: entry.key.clone(),
+                    first_field: format!("tuning[{first_index}].key"),
+                });
+            }
+            if let crate::TuningSpec::Config { value } = &entry.value
+                && !valid_package_name(value)
+            {
+                return Err(PackageConversionError::InvalidText {
+                    field: format!("tuning[{index}].value"),
+                    value: value.clone(),
+                    requirement: "must be a normalized tuning-choice name",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_outputs(&self) -> Result<(), PackageConversionError> {
+        for (output_index, output) in self.outputs.iter().enumerate() {
+            for (name, value) in [
+                ("summary", output.summary.as_deref()),
+                ("description", output.description.as_deref()),
+            ] {
+                if let Some(value) = value
+                    && value.contains('\0')
+                {
+                    return Err(PackageConversionError::InvalidText {
+                        field: format!("outputs[{output_index}].{name}"),
+                        value: value.to_owned(),
+                        requirement: "must not contain NUL characters",
+                    });
+                }
+            }
+
+            for (name, patterns) in [
+                ("provides_exclude", &output.provides_exclude),
+                ("runtime_exclude", &output.runtime_exclude),
+            ] {
+                let mut seen = BTreeMap::new();
+                for (pattern_index, pattern) in patterns.iter().enumerate() {
+                    let field = format!("outputs[{output_index}].{name}[{pattern_index}]");
+                    regex::Regex::new(pattern).map_err(|source| PackageConversionError::InvalidRegex {
+                        field: field.clone(),
+                        value: pattern.clone(),
+                        source: Box::new(source),
+                    })?;
+                    if let Some(first_index) = seen.insert(pattern.as_str(), pattern_index) {
+                        return Err(PackageConversionError::DuplicateValue {
+                            field,
+                            value: pattern.clone(),
+                            first_field: format!("outputs[{output_index}].{name}[{first_index}]"),
+                        });
+                    }
+                }
+            }
+
+            let mut paths = BTreeMap::new();
+            for (path_index, rule) in output.paths.iter().enumerate() {
+                let (kind, pattern) = match rule {
+                    PathSpec::Any { path } => ("any", path),
+                    PathSpec::Exe { path } => ("exe", path),
+                    PathSpec::Symlink { path } => ("symlink", path),
+                    PathSpec::Special { path } => ("special", path),
+                };
+                let field = format!("outputs[{output_index}].paths[{path_index}].path");
+                validate_trimmed_text(&field, pattern, "must be a non-empty glob without control characters")?;
+                glob::Pattern::new(pattern).map_err(|source| PackageConversionError::InvalidGlob {
+                    field: field.clone(),
+                    value: pattern.clone(),
+                    source,
+                })?;
+                if let Some(first_index) = paths.insert((kind, pattern.as_str()), path_index) {
+                    return Err(PackageConversionError::DuplicateValue {
+                        field,
+                        value: format!("{kind}:{pattern}"),
+                        first_field: format!("outputs[{output_index}].paths[{first_index}].path"),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn phases(&self) -> PhasesSpec {
@@ -732,9 +935,17 @@ impl PackageSpec {
         outputs: &BTreeMap<&str, usize>,
         provider: bool,
     ) -> Result<(), PackageConversionError> {
+        let mut seen = BTreeMap::new();
         for (index, dependency) in dependencies.iter().enumerate() {
-            let field = format!("{field}[{index}]");
-            self.validate_dependency(dependency, &field, outputs, provider)?;
+            let dependency_field = format!("{field}[{index}]");
+            let identity = self.validate_dependency(dependency, &dependency_field, outputs, provider)?;
+            if let Some(first_index) = seen.insert(identity.clone(), index) {
+                return Err(PackageConversionError::DuplicateValue {
+                    field: dependency_field,
+                    value: identity,
+                    first_field: format!("{field}[{first_index}]"),
+                });
+            }
         }
         Ok(())
     }
@@ -745,13 +956,13 @@ impl PackageSpec {
         field: &str,
         outputs: &BTreeMap<&str, usize>,
         provider: bool,
-    ) -> Result<(), PackageConversionError> {
+    ) -> Result<String, PackageConversionError> {
         let parsed = if provider {
-            dependency.provider().map(|_| ())
+            dependency.provider().map(|relation| relation.to_name())
         } else {
-            dependency.dependency().map(|_| ())
+            dependency.dependency().map(|relation| relation.to_name())
         };
-        parsed.map_err(|source| {
+        let parsed = parsed.map_err(|source| {
             if provider {
                 PackageConversionError::InvalidProvider {
                     field: field.to_owned(),
@@ -774,7 +985,7 @@ impl PackageSpec {
                 output: output.to_owned(),
             });
         }
-        Ok(())
+        Ok(parsed)
     }
 
     fn validate_builder_programs(
@@ -822,24 +1033,82 @@ impl PackageSpec {
         for (index, step) in steps.iter().enumerate() {
             let field = format!("{field}[{index}]");
             match step {
-                StepSpec::Run { program, .. } => {
+                StepSpec::Run { program, args } => {
                     self.validate_program(program, &format!("{field}.program"), outputs)?;
+                    for (argument_index, argument) in args.iter().enumerate() {
+                        if argument.contains('\0') {
+                            return Err(PackageConversionError::InvalidText {
+                                field: format!("{field}.args[{argument_index}]"),
+                                value: argument.clone(),
+                                requirement: "must not contain NUL characters",
+                            });
+                        }
+                    }
                 }
                 StepSpec::Shell {
                     interpreter,
                     declared_programs,
-                    ..
+                    script,
                 } => {
                     self.validate_program(interpreter, &format!("{field}.interpreter"), outputs)?;
+                    if script.trim().is_empty() || script.contains('\0') {
+                        return Err(PackageConversionError::InvalidText {
+                            field: format!("{field}.script"),
+                            value: script.clone(),
+                            requirement: "must be non-empty and contain no NUL characters",
+                        });
+                    }
+                    let mut paths = BTreeMap::new();
+                    paths.insert(interpreter.path.as_str(), format!("{field}.interpreter.path"));
                     for (program_index, program) in declared_programs.iter().enumerate() {
-                        self.validate_program(
-                            program,
-                            &format!("{field}.declared_programs[{program_index}]"),
-                            outputs,
-                        )?;
+                        let program_field = format!("{field}.declared_programs[{program_index}]");
+                        self.validate_program(program, &program_field, outputs)?;
+                        if let Some(first_field) = paths.insert(program.path.as_str(), format!("{program_field}.path"))
+                        {
+                            return Err(PackageConversionError::DuplicateValue {
+                                field: format!("{program_field}.path"),
+                                value: program.path.clone(),
+                                first_field,
+                            });
+                        }
                     }
                 }
-                _ => {}
+                StepSpec::CMakeConfigure { flags }
+                | StepSpec::MesonSetup { flags }
+                | StepSpec::AutotoolsConfigure { flags } => {
+                    validate_unique_step_values(
+                        flags,
+                        &format!("{field}.flags"),
+                        "must be non-empty, trimmed, and contain no control characters",
+                        false,
+                    )?;
+                }
+                StepSpec::CargoBuild { features } | StepSpec::CargoTest { features } => {
+                    validate_unique_step_values(
+                        features,
+                        &format!("{field}.features"),
+                        "must be non-empty, trimmed, and contain no control characters",
+                        false,
+                    )?;
+                }
+                StepSpec::CargoInstall { binaries } => {
+                    validate_unique_step_values(
+                        binaries,
+                        &format!("{field}.binaries"),
+                        "must be one normalized binary name",
+                        true,
+                    )?;
+                }
+                StepSpec::CMakeBuild
+                | StepSpec::CMakeInstall
+                | StepSpec::CMakeTest
+                | StepSpec::MesonBuild
+                | StepSpec::MesonInstall
+                | StepSpec::MesonTest
+                | StepSpec::CargoFetch
+                | StepSpec::AutotoolsBuild
+                | StepSpec::AutotoolsInstall
+                | StepSpec::AutotoolsTest => {}
             }
         }
         Ok(())
@@ -984,19 +1253,55 @@ pub(crate) fn valid_package_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.' | b'_'))
 }
 
+fn validate_trimmed_text(field: &str, value: &str, requirement: &'static str) -> Result<(), PackageConversionError> {
+    if !value.is_empty() && value.trim() == value && !value.chars().any(char::is_control) {
+        Ok(())
+    } else {
+        Err(PackageConversionError::InvalidText {
+            field: field.to_owned(),
+            value: value.to_owned(),
+            requirement,
+        })
+    }
+}
+
+fn validate_unique_step_values(
+    values: &[String],
+    field: &str,
+    requirement: &'static str,
+    normalized_name: bool,
+) -> Result<(), PackageConversionError> {
+    let mut seen = BTreeMap::new();
+    for (index, value) in values.iter().enumerate() {
+        let value_field = format!("{field}[{index}]");
+        if normalized_name {
+            if !valid_package_name(value) {
+                return Err(PackageConversionError::InvalidText {
+                    field: value_field,
+                    value: value.clone(),
+                    requirement,
+                });
+            }
+        } else {
+            validate_trimmed_text(&value_field, value, requirement)?;
+        }
+        if let Some(first_index) = seen.insert(value.as_str(), index) {
+            return Err(PackageConversionError::DuplicateValue {
+                field: value_field,
+                value: value.clone(),
+                first_field: format!("{field}[{first_index}]"),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn valid_output_name(name: &str) -> bool {
     valid_package_name(name)
 }
 
 fn valid_profile_name(name: &str) -> bool {
-    let path = Path::new(name);
-    !path.is_absolute()
-        && name
-            .split('/')
-            .all(|component| !component.is_empty() && component != "." && component != "..")
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
+    is_normalized_relative_path(name)
 }
 
 fn valid_program_path(path: &str) -> bool {
@@ -1352,6 +1657,8 @@ mod tests {
             "../x86_64",
             "emul32/../x86_64",
             "..",
+            "emul32\\x86_64",
+            "emul32\nx86_64",
         ] {
             let mut spec = package();
             spec.profiles.push(profile(name));
@@ -1496,6 +1803,116 @@ mod tests {
             }
         ));
         assert_eq!(error.field(), "sources[0].strip_dirs");
+    }
+
+    #[test]
+    fn metadata_urls_and_license_expressions_fail_closed() {
+        for homepage in ["not a URL", "ftp://example.com/package", "mailto:package@example.com"] {
+            let mut invalid = package();
+            invalid.meta.homepage = homepage.to_owned();
+            let error = invalid.validate().unwrap_err();
+            assert_eq!(error.field(), "meta.homepage");
+            assert!(matches!(
+                error,
+                PackageConversionError::InvalidHomepage { .. } | PackageConversionError::UnsupportedHomepage { .. }
+            ));
+        }
+
+        let mut credentials = package();
+        credentials.meta.homepage = "https://user:secret@example.com/package".to_owned();
+        let error = credentials.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::HomepageCredentials));
+        assert_eq!(error.field(), "meta.homepage");
+
+        let mut missing = package();
+        missing.meta.license.clear();
+        assert_eq!(missing.validate().unwrap_err().field(), "meta.license");
+
+        for license in ["", " MPL-2.0", "MPL-2.0\n"] {
+            let mut invalid = package();
+            invalid.meta.license = vec![license.to_owned()];
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(error, PackageConversionError::InvalidText { .. }));
+            assert_eq!(error.field(), "meta.license[0]");
+        }
+
+        let mut duplicate = package();
+        duplicate.meta.license = vec!["MIT".to_owned(), "MIT".to_owned()];
+        let error = duplicate.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::DuplicateValue { .. }));
+        assert_eq!(error.field(), "meta.license[1]");
+    }
+
+    #[test]
+    fn architecture_and_tuning_selectors_are_portable_and_unique() {
+        for architecture in ["", ".", "../x86_64", "x86_64\\escape", "x86_64\nother"] {
+            let mut invalid = package();
+            invalid.architectures = vec![architecture.to_owned()];
+            let error = invalid.validate().unwrap_err();
+            assert!(matches!(error, PackageConversionError::InvalidText { .. }));
+            assert_eq!(error.field(), "architectures[0]");
+        }
+
+        let mut duplicate_architecture = package();
+        duplicate_architecture.architectures = vec!["native".to_owned(), "native".to_owned()];
+        assert!(matches!(
+            duplicate_architecture.validate(),
+            Err(PackageConversionError::DuplicateValue { .. })
+        ));
+
+        let tuning = |key: &str, value| NamedTuningSpec {
+            key: key.to_owned(),
+            value,
+        };
+        let mut duplicate_tuning = package();
+        duplicate_tuning.tuning = vec![
+            tuning("optimize", crate::TuningSpec::Enable),
+            tuning("optimize", crate::TuningSpec::Disable),
+        ];
+        let error = duplicate_tuning.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::DuplicateValue { .. }));
+        assert_eq!(error.field(), "tuning[1].key");
+
+        let mut invalid_choice = package();
+        invalid_choice.tuning = vec![tuning(
+            "optimize",
+            crate::TuningSpec::Config {
+                value: "../speed".to_owned(),
+            },
+        )];
+        assert_eq!(invalid_choice.validate().unwrap_err().field(), "tuning[0].value");
+    }
+
+    #[test]
+    fn output_patterns_are_compiled_and_deduplicated_at_the_package_boundary() {
+        let mut invalid_regex = package();
+        invalid_regex.outputs[0].runtime_exclude = vec!["[".to_owned()];
+        let error = invalid_regex.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidRegex { .. }));
+        assert_eq!(error.field(), "outputs[0].runtime_exclude[0]");
+
+        let mut invalid_glob = package();
+        invalid_glob.outputs[0].paths = vec![PathSpec::Any { path: "[".to_owned() }];
+        let error = invalid_glob.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::InvalidGlob { .. }));
+        assert_eq!(error.field(), "outputs[0].paths[0].path");
+
+        let mut empty_glob = package();
+        empty_glob.outputs[0].paths = vec![PathSpec::Any { path: String::new() }];
+        assert!(matches!(
+            empty_glob.validate(),
+            Err(PackageConversionError::InvalidText { .. })
+        ));
+
+        let mut duplicate = package();
+        duplicate.outputs[0].provides_exclude = vec!["^private$".to_owned(), "^private$".to_owned()];
+        let error = duplicate.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::DuplicateValue { .. }));
+        assert_eq!(error.field(), "outputs[0].provides_exclude[1]");
+
+        let mut nul_summary = package();
+        nul_summary.outputs[0].summary = Some("summary\0hidden".to_owned());
+        assert_eq!(nul_summary.validate().unwrap_err().field(), "outputs[0].summary");
     }
 
     #[test]
@@ -1765,6 +2182,72 @@ mod tests {
             spec.validate().unwrap_err().field(),
             "profiles[0].builder.required_tools[0]"
         );
+    }
+
+    #[test]
+    fn semantically_duplicate_dependencies_are_rejected_per_role() {
+        let mut duplicate = package();
+        duplicate.build_inputs = vec![
+            dependency("zlib"),
+            DependencySpec::Output(OutputRef {
+                package: PackageRef {
+                    name: "zlib".to_owned(),
+                },
+                output: "out".to_owned(),
+            }),
+        ];
+
+        let error = duplicate.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::DuplicateValue { .. }));
+        assert_eq!(error.field(), "build_inputs[1]");
+        assert!(error.to_string().contains("build_inputs[0]"));
+    }
+
+    #[test]
+    fn structural_step_values_are_validated_before_planning() {
+        let mut duplicate_feature = package();
+        duplicate_feature.builder.phases.build = PhaseSpec::new([StepSpec::CargoBuild {
+            features: vec!["pcre2".to_owned(), "pcre2".to_owned()],
+        }]);
+        let error = duplicate_feature.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::DuplicateValue { .. }));
+        assert_eq!(error.field(), "builder.phases.build.steps[0].features[1]");
+
+        let mut invalid_binary = package();
+        invalid_binary.builder.phases.install = PhaseSpec::new([StepSpec::CargoInstall {
+            binaries: vec!["../escape".to_owned()],
+        }]);
+        assert_eq!(
+            invalid_binary.validate().unwrap_err().field(),
+            "builder.phases.install.steps[0].binaries[0]"
+        );
+
+        let mut nul_argument = package();
+        nul_argument.builder.phases.build = PhaseSpec::new([StepSpec::Run {
+            program: binary_program("printf"),
+            args: vec!["visible\0hidden".to_owned()],
+        }]);
+        assert_eq!(
+            nul_argument.validate().unwrap_err().field(),
+            "builder.phases.build.steps[0].args[0]"
+        );
+
+        let mut empty_shell = package();
+        empty_shell.hooks.pre_install = vec![shell("  \n")];
+        assert_eq!(
+            empty_shell.validate().unwrap_err().field(),
+            "hooks.pre_install[0].script"
+        );
+
+        let mut duplicate_program = package();
+        duplicate_program.hooks.pre_install = vec![StepSpec::Shell {
+            interpreter: binary_program("bash"),
+            declared_programs: vec![binary_program("bash")],
+            script: "echo hello".to_owned(),
+        }];
+        let error = duplicate_program.validate().unwrap_err();
+        assert!(matches!(error, PackageConversionError::DuplicateValue { .. }));
+        assert_eq!(error.field(), "hooks.pre_install[0].declared_programs[0].path");
     }
 
     #[test]

@@ -236,7 +236,7 @@ pub(crate) fn is_safe_artifact_component(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn is_normalized_relative_path(value: &str) -> bool {
+pub(crate) fn is_normalized_relative_path(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('/')
         && !value.contains('\\')
