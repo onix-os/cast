@@ -4,7 +4,7 @@
 use stone::relation::{Dependency, ParseError, Provider};
 use thiserror::Error;
 
-use crate::{Build, Package, Recipe};
+use crate::{Build, OutputTemplateSpec, Package, Recipe};
 
 /// A format-independent recipe invariant violation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -112,9 +112,9 @@ fn validate_providers(values: &[String], field: &str) -> Result<(), ValidationEr
     Ok(())
 }
 
-pub(crate) fn validate_package_templates(package: &Package, field: &str) -> Result<(), ValidationError> {
+pub(crate) fn validate_package_templates(package: &OutputTemplateSpec, field: &str) -> Result<(), ValidationError> {
     validate_relation_templates(
-        &package.run_deps,
+        &package.runtime_inputs,
         &format!("{field}.run_deps"),
         RelationRole::Dependency,
     )?;
@@ -298,22 +298,27 @@ mod tests {
 
     #[test]
     fn macro_package_templates_are_explicitly_deferred_but_not_recipe_values() {
-        let package = Package::from(PackageSpec {
-            run_deps: vec!["%(name)-devel".to_owned(), "binary(%(tool))".to_owned()],
+        let template = OutputTemplateSpec {
+            runtime_inputs: vec!["%(name)-devel".to_owned(), "binary(%(tool))".to_owned()],
             conflicts: vec!["%(name)-legacy".to_owned()],
+            ..OutputTemplateSpec::default()
+        };
+
+        validate_package_templates(&template, "packages[0].value").unwrap();
+        let package = Package::from(PackageSpec {
+            run_deps: template.runtime_inputs.clone(),
+            conflicts: template.conflicts.clone(),
             ..PackageSpec::default()
         });
-
-        validate_package_templates(&package, "packages[0].value").unwrap();
         let strict = validate_package(&package, "package").unwrap_err();
         assert_eq!(strict.field(), "package.run_deps[0]");
 
         for invalid in ["unknown(%(name))", "binary(%(name)", "%(not-valid)"] {
-            let package = Package::from(PackageSpec {
-                run_deps: vec![invalid.to_owned()],
-                ..PackageSpec::default()
-            });
-            let error = validate_package_templates(&package, "packages[0].value").unwrap_err();
+            let template = OutputTemplateSpec {
+                runtime_inputs: vec![invalid.to_owned()],
+                ..OutputTemplateSpec::default()
+            };
+            let error = validate_package_templates(&template, "packages[0].value").unwrap_err();
             assert_eq!(error.field(), "packages[0].value.run_deps[0]");
         }
     }

@@ -440,26 +440,14 @@ fn pending_direct_output(output: &OutputSpec, output_index: usize) -> Result<Pen
     })
 }
 
-fn pending_policy_output(package: stone_recipe::Package) -> PendingOutput {
+fn pending_policy_output(package: stone_recipe::OutputTemplateSpec) -> PendingOutput {
     PendingOutput {
         summary: package.summary,
         description: package.description,
         provides_exclude: package.provides_exclude,
-        runtime_inputs: package.run_deps,
-        runtime_exclude: package.run_deps_exclude,
-        paths: package
-            .paths
-            .into_iter()
-            .map(|path| ResolvedPath {
-                pattern: path.path,
-                kind: match path.kind {
-                    stone_recipe::PathKind::Any => PathRuleKind::Any,
-                    stone_recipe::PathKind::Exe => PathRuleKind::Executable,
-                    stone_recipe::PathKind::Symlink => PathRuleKind::Symlink,
-                    stone_recipe::PathKind::Special => PathRuleKind::Special,
-                },
-            })
-            .collect(),
+        runtime_inputs: package.runtime_inputs,
+        runtime_exclude: package.runtime_exclude,
+        paths: package.paths.iter().map(resolved_path).collect(),
         conflicts: package.conflicts,
     }
 }

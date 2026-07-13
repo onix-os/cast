@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::{
-    KeyValue, Package, PackageSpec,
+    KeyValue, PathSpec,
     spec::KeyValueSpec,
     tuning::{TuningFlag, TuningFlagSpec, TuningGroup, TuningGroupSpec},
 };
@@ -21,7 +21,7 @@ pub struct Macros {
     pub definitions: Vec<KeyValue<String>>,
     pub flags: Vec<KeyValue<TuningFlag>>,
     pub tuning: Vec<KeyValue<TuningGroup>>,
-    pub packages: Vec<KeyValue<Package>>,
+    pub packages: Vec<KeyValue<OutputTemplateSpec>>,
     pub default_tuning_groups: Vec<String>,
 }
 
@@ -75,7 +75,7 @@ pub struct MacrosSpec {
     pub definitions: Vec<KeyValueSpec<String>>,
     pub flags: Vec<KeyValueSpec<TuningFlagSpec>>,
     pub tuning: Vec<KeyValueSpec<TuningGroupSpec>>,
-    pub packages: Vec<KeyValueSpec<PackageSpec>>,
+    pub packages: Vec<KeyValueSpec<OutputTemplateSpec>>,
     pub default_tuning_groups: Vec<String>,
 }
 
@@ -86,6 +86,22 @@ pub struct ActionSpec {
     pub example: Option<String>,
     pub command: String,
     pub dependencies: Vec<String>,
+}
+
+/// Repository-policy template for one emitted package output.
+///
+/// Relationship strings deliberately remain deferred templates because the
+/// policy layer expands `%()` definitions against a concrete package before
+/// converting them to canonical Stone relations.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutputTemplateSpec {
+    pub summary: Option<String>,
+    pub description: Option<String>,
+    pub provides_exclude: Vec<String>,
+    pub runtime_inputs: Vec<String>,
+    pub runtime_exclude: Vec<String>,
+    pub paths: Vec<PathSpec>,
+    pub conflicts: Vec<String>,
 }
 
 impl From<MacrosSpec> for Macros {
@@ -156,7 +172,7 @@ mod test {
             }],
             packages: vec![KeyValueSpec {
                 key: "main".to_owned(),
-                value: PackageSpec {
+                value: OutputTemplateSpec {
                     summary: Some("Main package".to_owned()),
                     ..Default::default()
                 },

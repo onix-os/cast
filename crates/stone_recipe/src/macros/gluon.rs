@@ -7,9 +7,11 @@ use std::{error::Error, fmt, fmt::Write as _};
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 
-use super::{Action, ActionSpec, Macros, MacrosSpec, PolicyKind, PolicyLayer, PolicyModule, PolicyOperation};
+use super::{
+    Action, ActionSpec, Macros, MacrosSpec, OutputTemplateSpec, PolicyKind, PolicyLayer, PolicyModule, PolicyOperation,
+};
 use crate::{
-    Package, PackageSpec, PathKind, PathSpec, ValidationError,
+    PathSpec, ValidationError,
     spec::KeyValueSpec,
     tuning::{CompilerFlagsSpec, TuningFlagSpec, TuningGroupSpec, TuningOptionSpec},
     validation,
@@ -453,14 +455,14 @@ impl From<GluonTuningGroupSpec> for TuningGroupSpec {
     }
 }
 
-impl From<GluonPackageSpec> for PackageSpec {
+impl From<GluonPackageSpec> for OutputTemplateSpec {
     fn from(value: GluonPackageSpec) -> Self {
         Self {
             summary: value.summary.into(),
             description: value.description.into(),
             provides_exclude: value.provides_exclude,
-            run_deps: value.run_deps,
-            run_deps_exclude: value.run_deps_exclude,
+            runtime_inputs: value.run_deps,
+            runtime_exclude: value.run_deps_exclude,
             paths: value.paths.into_iter().map(Into::into).collect(),
             conflicts: value.conflicts,
         }
@@ -504,11 +506,8 @@ impl MacrosSpec {
             }
         }
         for (package_index, package) in self.packages.iter().enumerate() {
-            validation::validate_package_templates(
-                &Package::from(package.value.clone()),
-                &format!("packages[{package_index}].value"),
-            )
-            .map_err(MacrosConversionError::InvalidRelation)?;
+            validation::validate_package_templates(&package.value, &format!("packages[{package_index}].value"))
+                .map_err(MacrosConversionError::InvalidRelation)?;
             for (path_index, path) in package.value.paths.iter().enumerate() {
                 let path = match path {
                     PathSpec::Any { path }
@@ -585,7 +584,7 @@ impl From<&Macros> for MacrosSpec {
                 .iter()
                 .map(|value| KeyValueSpec {
                     key: value.key.clone(),
-                    value: package_to_spec(&value.value),
+                    value: value.value.clone(),
                 })
                 .collect(),
             default_tuning_groups: macros.default_tuning_groups.clone(),
@@ -601,35 +600,6 @@ impl From<&Action> for ActionSpec {
             command: action.command.clone(),
             dependencies: action.dependencies.clone(),
         }
-    }
-}
-
-fn package_to_spec(package: &Package) -> PackageSpec {
-    PackageSpec {
-        summary: package.summary.clone(),
-        description: package.description.clone(),
-        provides_exclude: package.provides_exclude.clone(),
-        run_deps: package.run_deps.clone(),
-        run_deps_exclude: package.run_deps_exclude.clone(),
-        paths: package
-            .paths
-            .iter()
-            .map(|value| match value.kind {
-                PathKind::Any => PathSpec::Any {
-                    path: value.path.clone(),
-                },
-                PathKind::Exe => PathSpec::Exe {
-                    path: value.path.clone(),
-                },
-                PathKind::Symlink => PathSpec::Symlink {
-                    path: value.path.clone(),
-                },
-                PathKind::Special => PathSpec::Special {
-                    path: value.path.clone(),
-                },
-            })
-            .collect(),
-        conflicts: package.conflicts.clone(),
     }
 }
 
@@ -820,7 +790,7 @@ fn encode_tuning_option(output: &mut String, option: &TuningOptionSpec, indent: 
     output.push('}');
 }
 
-fn encode_package(output: &mut String, package: &PackageSpec) {
+fn encode_package(output: &mut String, package: &OutputTemplateSpec) {
     output.push_str("{\n");
     writeln!(
         output,
@@ -835,8 +805,8 @@ fn encode_package(output: &mut String, package: &PackageSpec) {
     )
     .unwrap();
     encode_string_array_field(output, 4, "provides_exclude", &package.provides_exclude);
-    encode_string_array_field(output, 4, "run_deps", &package.run_deps);
-    encode_string_array_field(output, 4, "run_deps_exclude", &package.run_deps_exclude);
+    encode_string_array_field(output, 4, "run_deps", &package.runtime_inputs);
+    encode_string_array_field(output, 4, "run_deps_exclude", &package.runtime_exclude);
     output.push_str("                paths = [\n");
     for path in &package.paths {
         let (variant, path) = match path {
@@ -1026,7 +996,7 @@ boulder.set.actions actions definitions"#,
 
         assert_eq!(spec.flags[0].value, TuningFlagSpec::default());
         assert_eq!(spec.tuning[0].value, TuningGroupSpec::default());
-        assert_eq!(spec.packages[0].value, PackageSpec::default());
+        assert_eq!(spec.packages[0].value, OutputTemplateSpec::default());
     }
 
     #[test]
@@ -1095,7 +1065,7 @@ boulder.set.actions actions definitions"#,
         ))
         .unwrap();
         assert_eq!(
-            deferred_package.macros.packages[0].value.run_deps,
+            deferred_package.macros.packages[0].value.runtime_inputs,
             ["%(name)", "binary(%(tool))"]
         );
 
@@ -1274,12 +1244,12 @@ boulder.set.actions actions definitions"#,
             }],
             packages: vec![KeyValueSpec {
                 key: "main".to_owned(),
-                value: PackageSpec {
+                value: OutputTemplateSpec {
                     summary: Some("Main package".to_owned()),
                     description: Some("All runtime files".to_owned()),
                     provides_exclude: vec!["provided(*)".to_owned()],
-                    run_deps: vec!["runtime".to_owned()],
-                    run_deps_exclude: vec!["excluded(*)".to_owned()],
+                    runtime_inputs: vec!["runtime".to_owned()],
+                    runtime_exclude: vec!["excluded(*)".to_owned()],
                     paths: vec![
                         PathSpec::Any {
                             path: "/usr/share/example".to_owned(),
