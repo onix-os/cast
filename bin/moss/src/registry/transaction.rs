@@ -84,6 +84,11 @@ impl Transaction<'_> {
         self.packages.topo()
     }
 
+    /// Return the exact packages selected as direct dependencies of `package`.
+    pub fn dependencies<'a>(&'a self, package: &package::Id) -> impl Iterator<Item = &'a package::Id> + 'a {
+        self.packages.successors(package)
+    }
+
     /// Update internal package graph with all incoming packages & their deps
     #[tracing::instrument(skip_all, fields(lookup = %self.lookup))]
     pub fn add(&mut self, incoming: Vec<package::Id>) -> Result<(), Error> {

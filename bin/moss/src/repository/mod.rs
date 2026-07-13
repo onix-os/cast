@@ -72,6 +72,14 @@ pub struct Cached {
     index_uri: Arc<ArcSwap<Option<Url>>>,
 }
 
+/// Content identity of one initialized repository index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSnapshot {
+    pub id: Id,
+    pub index_uri: Url,
+    pub sha256: String,
+}
+
 impl Cached {
     pub fn new(
         id: Id,

@@ -52,6 +52,7 @@ use crate::{
 
 pub use self::extract::extract;
 pub use self::index::index;
+pub use self::resolve::{AvailableClosure, Error as ResolveError, ResolvedPackage, ResolvedRequest};
 pub use self::self_upgrade::self_upgrade;
 
 mod boot;
@@ -60,6 +61,7 @@ mod fetch;
 mod install;
 mod postblit;
 mod remove;
+mod resolve;
 mod self_upgrade;
 mod sync;
 mod verify;
@@ -315,6 +317,12 @@ impl Client {
         metadata.sort_by_key(|p| p.meta.name.to_string());
         metadata.dedup_by_key(|p| p.meta.name.to_string());
         Ok(metadata)
+    }
+
+    /// Content identities for all active repository indexes participating in
+    /// available-package resolution.
+    pub fn repository_index_snapshots(&self) -> Result<Vec<repository::IndexSnapshot>, Error> {
+        self.repositories.index_snapshots().map_err(Error::Repository)
     }
 
     /// Returns all unique packages which provide the supplied [`Provider`]

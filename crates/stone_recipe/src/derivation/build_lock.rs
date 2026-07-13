@@ -31,6 +31,7 @@ type Platform = {
 
 type RepositorySnapshot = {
     id : String,
+    index_uri : String,
     snapshot : String,
 }
 
@@ -54,10 +55,18 @@ type LockedPackage = {
     dependencies : Array LockedOutputRef,
 }
 
+type LockedRequest = {
+    request : String,
+    package_id : String,
+    output : String,
+}
+
 type BuildLock = {
     schema_version : Int,
+    request_fingerprint : String,
     base_state : String,
     repositories : Array RepositorySnapshot,
+    requests : Array LockedRequest,
     packages : Array LockedPackage,
     build_platform : Platform,
     host_platform : Platform,
@@ -74,8 +83,10 @@ type BuildLock = {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildLock {
     pub schema_version: u32,
+    pub request_fingerprint: String,
     pub base_state: String,
     pub repositories: Vec<RepositorySnapshot>,
+    pub requests: Vec<LockedRequest>,
     pub packages: Vec<LockedPackage>,
     pub build_platform: Platform,
     pub host_platform: Platform,
@@ -91,6 +102,7 @@ impl BuildLock {
     pub fn normalize(&mut self) {
         self.repositories
             .sort_by(|left, right| left.id.cmp(&right.id).then_with(|| left.snapshot.cmp(&right.snapshot)));
+        self.requests.sort_by(|left, right| left.request.cmp(&right.request));
         self.packages
             .sort_by(|left, right| left.package_id.cmp(&right.package_id));
         for package in &mut self.packages {
@@ -110,6 +122,7 @@ impl BuildLock {
                 expected: BUILD_LOCK_SCHEMA_VERSION,
             });
         }
+        require_nonempty("request_fingerprint", &self.request_fingerprint)?;
         require_nonempty("base_state", &self.base_state)?;
         self.build_platform.validate("build_platform")?;
         self.host_platform.validate("host_platform")?;
@@ -122,6 +135,7 @@ impl BuildLock {
         let mut repositories = BTreeMap::new();
         for (index, repository) in self.repositories.iter().enumerate() {
             require_nonempty(&format!("repositories[{index}].id"), &repository.id)?;
+            require_nonempty(&format!("repositories[{index}].index_uri"), &repository.index_uri)?;
             require_nonempty(&format!("repositories[{index}].snapshot"), &repository.snapshot)?;
             if let Some(first_index) = repositories.insert(repository.id.as_str(), index) {
                 return Err(BuildLockValidationError::DuplicateRepository {
@@ -146,6 +160,37 @@ impl BuildLock {
                 return Err(BuildLockValidationError::UnknownRepository {
                     package: package.package_id.clone(),
                     repository: package.repository.clone(),
+                });
+            }
+        }
+
+        let mut requests = BTreeMap::new();
+        for (index, request) in self.requests.iter().enumerate() {
+            require_nonempty(&format!("requests[{index}].request"), &request.request)?;
+            require_nonempty(&format!("requests[{index}].package_id"), &request.package_id)?;
+            require_nonempty(&format!("requests[{index}].output"), &request.output)?;
+            if let Some(first_index) = requests.insert(request.request.as_str(), index) {
+                return Err(BuildLockValidationError::DuplicateRequest {
+                    request: request.request.clone(),
+                    first_index,
+                    duplicate_index: index,
+                });
+            }
+            let Some(package_index) = packages.get(request.package_id.as_str()) else {
+                return Err(BuildLockValidationError::UnknownPackage {
+                    field: format!("requests[{index}]"),
+                    package: request.package_id.clone(),
+                });
+            };
+            if !self.packages[*package_index]
+                .outputs
+                .iter()
+                .any(|output| output.name == request.output)
+            {
+                return Err(BuildLockValidationError::UnknownOutput {
+                    field: format!("requests[{index}]"),
+                    package: request.package_id.clone(),
+                    output: request.output.clone(),
                 });
             }
         }
@@ -198,11 +243,16 @@ impl BuildLock {
 
     pub(super) fn encode_canonical(&self, encoder: &mut CanonicalEncoder) {
         encoder.u32(self.schema_version);
+        encoder.string(&self.request_fingerprint);
         encoder.string(&self.base_state);
 
         let mut repositories = self.repositories.iter().collect::<Vec<_>>();
         repositories.sort_by(|left, right| left.id.cmp(&right.id).then_with(|| left.snapshot.cmp(&right.snapshot)));
         encoder.sequence(&repositories, |encoder, repository| repository.encode(encoder));
+
+        let mut requests = self.requests.iter().collect::<Vec<_>>();
+        requests.sort_by(|left, right| left.request.cmp(&right.request));
+        encoder.sequence(&requests, |encoder, request| request.encode(encoder));
 
         let mut packages = self.packages.iter().collect::<Vec<_>>();
         packages.sort_by(|left, right| left.package_id.cmp(&right.package_id));
@@ -245,12 +295,14 @@ impl Platform {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySnapshot {
     pub id: String,
+    pub index_uri: String,
     pub snapshot: String,
 }
 
 impl RepositorySnapshot {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.string(&self.id);
+        encoder.string(&self.index_uri);
         encoder.string(&self.snapshot);
     }
 }
@@ -282,6 +334,21 @@ pub struct LockedPackage {
     pub repository: String,
     pub outputs: Vec<LockedOutput>,
     pub dependencies: Vec<LockedOutputRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockedRequest {
+    pub request: String,
+    pub package_id: String,
+    pub output: String,
+}
+
+impl LockedRequest {
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.string(&self.request);
+        encoder.string(&self.package_id);
+        encoder.string(&self.output);
+    }
 }
 
 impl LockedPackage {
@@ -405,12 +472,38 @@ pub fn encode_build_lock(lock: &BuildLock) -> String {
     output.push_str(STANDALONE_GLUON_TYPES);
     output.push_str("{\n");
     writeln!(output, "    schema_version = {},", lock.schema_version).unwrap();
+    writeln!(
+        output,
+        "    request_fingerprint = {},",
+        gluon_string(&lock.request_fingerprint)
+    )
+    .unwrap();
     writeln!(output, "    base_state = {},", gluon_string(&lock.base_state)).unwrap();
     output.push_str("    repositories = [\n");
     for repository in &lock.repositories {
         output.push_str("        {\n");
         writeln!(output, "            id = {},", gluon_string(&repository.id)).unwrap();
+        writeln!(
+            output,
+            "            index_uri = {},",
+            gluon_string(&repository.index_uri)
+        )
+        .unwrap();
         writeln!(output, "            snapshot = {},", gluon_string(&repository.snapshot)).unwrap();
+        output.push_str("        },\n");
+    }
+    output.push_str("    ],\n");
+    output.push_str("    requests = [\n");
+    for request in &lock.requests {
+        output.push_str("        {\n");
+        writeln!(output, "            request = {},", gluon_string(&request.request)).unwrap();
+        writeln!(
+            output,
+            "            package_id = {},",
+            gluon_string(&request.package_id)
+        )
+        .unwrap();
+        writeln!(output, "            output = {},", gluon_string(&request.output)).unwrap();
         output.push_str("        },\n");
     }
     output.push_str("    ],\n");
@@ -539,8 +632,10 @@ fn gluon_string(value: &str) -> String {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBuildLock {
     schema_version: i64,
+    request_fingerprint: String,
     base_state: String,
     repositories: Vec<GluonRepositorySnapshot>,
+    requests: Vec<GluonLockedRequest>,
     packages: Vec<GluonLockedPackage>,
     build_platform: GluonPlatform,
     host_platform: GluonPlatform,
@@ -562,6 +657,7 @@ struct GluonPlatform {
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonRepositorySnapshot {
     id: String,
+    index_uri: String,
     snapshot: String,
 }
 
@@ -580,6 +676,13 @@ struct GluonLockedPackage {
     repository: String,
     outputs: Vec<GluonLockedOutput>,
     dependencies: Vec<GluonLockedOutputRef>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonLockedRequest {
+    request: String,
+    package_id: String,
+    output: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -606,8 +709,10 @@ impl TryFrom<GluonBuildLock> for BuildLock {
                     expected: "non-negative 32-bit integer",
                 }
             })?,
+            request_fingerprint: lock.request_fingerprint,
             base_state: lock.base_state,
             repositories: lock.repositories.into_iter().map(Into::into).collect(),
+            requests: lock.requests.into_iter().map(Into::into).collect(),
             packages: lock.packages.into_iter().map(Into::into).collect(),
             build_platform: lock.build_platform.into(),
             host_platform: lock.host_platform.into(),
@@ -635,6 +740,7 @@ impl From<GluonRepositorySnapshot> for RepositorySnapshot {
     fn from(repository: GluonRepositorySnapshot) -> Self {
         Self {
             id: repository.id,
+            index_uri: repository.index_uri,
             snapshot: repository.snapshot,
         }
     }
@@ -659,6 +765,16 @@ impl From<GluonLockedPackage> for LockedPackage {
             repository: package.repository,
             outputs: package.outputs.into_iter().map(Into::into).collect(),
             dependencies: package.dependencies.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<GluonLockedRequest> for LockedRequest {
+    fn from(request: GluonLockedRequest) -> Self {
+        Self {
+            request: request.request,
+            package_id: request.package_id,
+            output: request.output,
         }
     }
 }
@@ -712,6 +828,12 @@ pub enum BuildLockValidationError {
     #[error("packages[{duplicate_index}].package_id: duplicate `{id}`, first used by packages[{first_index}]")]
     DuplicatePackage {
         id: String,
+        first_index: usize,
+        duplicate_index: usize,
+    },
+    #[error("requests[{duplicate_index}].request: duplicate `{request}`, first used by requests[{first_index}]")]
+    DuplicateRequest {
+        request: String,
         first_index: usize,
         duplicate_index: usize,
     },
@@ -820,10 +942,17 @@ pub(super) fn sample_lock() -> BuildLock {
     };
     BuildLock {
         schema_version: BUILD_LOCK_SCHEMA_VERSION,
+        request_fingerprint: "request-fingerprint".to_owned(),
         base_state: "base-state-id".to_owned(),
         repositories: vec![RepositorySnapshot {
             id: "volatile".to_owned(),
+            index_uri: "https://example.invalid/stone.index".to_owned(),
             snapshot: "repository-snapshot".to_owned(),
+        }],
+        requests: vec![LockedRequest {
+            request: "binary(cmake)".to_owned(),
+            package_id: "cmake-id".to_owned(),
+            output: "out".to_owned(),
         }],
         packages: vec![
             LockedPackage {
@@ -922,6 +1051,7 @@ mod tests {
         let mutations: Vec<Box<dyn Fn(&mut BuildLock)>> = vec![
             Box::new(|lock| lock.base_state.push_str("-changed")),
             Box::new(|lock| lock.repositories[0].snapshot.push_str("-changed")),
+            Box::new(|lock| lock.requests[0].package_id.push_str("-changed")),
             Box::new(|lock| lock.packages[0].outputs[0].id.push_str("-changed")),
             Box::new(|lock| lock.target_platform.architecture = "aarch64".to_owned()),
             Box::new(|lock| lock.policy.fingerprint.push_str("-changed")),

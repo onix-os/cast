@@ -11,6 +11,7 @@ use astr::AStr;
 use fs_err::{self as fs, File};
 use futures_util::{StreamExt, stream};
 use gluon_config::Evaluator;
+use sha2::{Digest, Sha256};
 use stone::{StoneDecodedPayload, StonePayloadMetaTag, StoneReadError};
 use thiserror::Error;
 use url::Url;
@@ -310,6 +311,48 @@ impl Manager {
         self.repositories.values().filter(|c| c.repository.active).cloned()
     }
 
+    /// Return the active repository which supplied an exact package ID, using
+    /// the same priority order as registry resolution.
+    pub(crate) fn repository_for_package(&self, package: &package::Id) -> Result<Option<repository::Id>, Error> {
+        let mut repositories = self.active().collect::<Vec<_>>();
+        repositories.sort_by(|left, right| {
+            let left_priority = u64::from(left.repository.priority);
+            let right_priority = u64::from(right.repository.priority);
+            right_priority.cmp(&left_priority).then_with(|| left.id.cmp(&right.id))
+        });
+        for repository in repositories {
+            if repository.db.package_ids()?.contains(package) {
+                return Ok(Some(repository.id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Hash the exact cached `stone.index` bytes for every active repository.
+    pub fn index_snapshots(&self) -> Result<Vec<repository::IndexSnapshot>, Error> {
+        let mut snapshots = self
+            .active()
+            .map(|repository| {
+                let path =
+                    cache_dir(self.source.identifier(), &repository.repository, &self.installation).join("stone.index");
+                let bytes = fs::read(&path).map_err(|source| Error::ReadIndexSnapshot {
+                    path: path.clone(),
+                    source,
+                })?;
+                let index_uri = repository
+                    .index_uri()
+                    .ok_or_else(|| Error::MissingIndexUri(repository.id.clone()))?;
+                Ok(repository::IndexSnapshot {
+                    id: repository.id,
+                    index_uri,
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        snapshots.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(snapshots)
+    }
+
     /// Remove a repository, deleting any related config & cached data
     pub fn remove(&mut self, id: impl Into<repository::Id>) -> Result<Removal, Error> {
         // Only allow removal for system repo manager
@@ -585,6 +628,14 @@ pub enum Error {
     WriteCachedIndexUri(#[source] io::Error),
     #[error("parse cached index uri")]
     ParseCachedIndexUri(#[source] url::ParseError),
+    #[error("read repository index snapshot {path:?}")]
+    ReadIndexSnapshot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("repository `{0}` has no resolved index URI; initialize or refresh it before resolution")]
+    MissingIndexUri(repository::Id),
     #[error("one or more repositories has an unsupported format")]
     UnsupportedRepos(Vec<UnsupportedRepoFormat>),
     #[error("one or more repositories with a legacy URI need to be upgraded to the new configuration format")]

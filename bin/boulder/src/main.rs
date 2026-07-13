@@ -15,6 +15,7 @@ pub use self::timing::Timing;
 
 mod architecture;
 mod build;
+mod build_lock;
 mod cli;
 mod container;
 mod draft;

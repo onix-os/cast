@@ -89,6 +89,14 @@ where
         self.0.node_weights()
     }
 
+    /// Return the direct outgoing dependencies of `node`.
+    pub fn successors<'a>(&'a self, node: &N) -> impl Iterator<Item = &'a N> + 'a {
+        self.get_index(node)
+            .into_iter()
+            .flat_map(|index| self.0.neighbors_directed(index, Direction::Outgoing))
+            .map(|index| &self.0[index])
+    }
+
     /// Perform a depth-first search, given the start index
     pub fn dfs(&self, start: NodeIndex) -> impl Iterator<Item = &'_ N> {
         let dfs = Dfs::new(&self.0, start);
@@ -237,5 +245,17 @@ mod tests {
         let graph: Dag<i32> = Dag::new();
         let batches = graph.batched_topo();
         assert_eq!(batches.len(), 0);
+    }
+
+    #[test]
+    fn successors_returns_only_direct_outgoing_nodes() {
+        let mut graph = Dag::new();
+        let root = graph.add_node_or_get_index(&"root");
+        let direct = graph.add_node_or_get_index(&"direct");
+        let transitive = graph.add_node_or_get_index(&"transitive");
+        graph.add_edge(root, direct);
+        graph.add_edge(direct, transitive);
+
+        assert_eq!(graph.successors(&"root").copied().collect::<Vec<_>>(), ["direct"]);
     }
 }

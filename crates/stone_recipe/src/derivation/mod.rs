@@ -14,8 +14,8 @@ use thiserror::Error;
 
 pub use self::build_lock::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError, BuildLockValidationError,
-    LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, Platform, RepositorySnapshot, decode_build_lock,
-    encode_build_lock,
+    LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, Platform, RepositorySnapshot,
+    decode_build_lock, encode_build_lock,
 };
 
 mod build_lock;
@@ -514,7 +514,6 @@ impl OutputPlan {
         let mut runtime_inputs = self.runtime_inputs.iter().collect::<Vec<_>>();
         runtime_inputs.sort();
         encoder.sequence(&runtime_inputs, |encoder, dependency| dependency.encode(encoder));
-
         let mut conflicts = self.conflicts.iter().collect::<Vec<_>>();
         conflicts.sort();
         encoder.sequence(&conflicts, |encoder, conflict| conflict.encode(encoder));
