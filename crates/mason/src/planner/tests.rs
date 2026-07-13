@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    error::Error as StdError,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -12,7 +14,11 @@ use forge::{
     package::{Meta, Name},
 };
 use fs_err as fs;
-use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
+use sha2::{Digest, Sha256};
+use stone::{
+    StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StonePayloadMetaPrimitive, StonePayloadMetaTag,
+    StoneWriter, relation::Kind as RelationKind,
+};
 use stone_recipe::{
     UpstreamSpec,
     derivation::{FilesystemPolicy, InputOrigin, NetworkMode, encode_build_lock},
@@ -20,12 +26,13 @@ use stone_recipe::{
 use tempfile::TempDir;
 use url::Url;
 
-use super::{Request, plan, plan_for_build};
+use super::{Planned, Request, plan, plan_for_build};
 use crate::{
-    Env,
+    Env, Timing,
     build::{self, Builder, BuilderRequest},
     build_lock::WriteOutcome,
-    package::Packager,
+    executor::Executor,
+    package::{self, FrozenPackager, Packager, Publication},
     profile,
     source_lock::{
         ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, encode_source_lock,
@@ -457,6 +464,9 @@ fn synthesize_source_lock(recipe_path: &Path) -> (Option<Vec<u8>>, usize) {
 }
 
 fn write_repository_index(path: &Path, requested: &[String]) {
+    let repository_dir = path.parent().expect("repository index has a parent");
+    let package_dir = repository_dir.join("packages");
+    fs::create_dir_all(&package_dir).unwrap();
     let mut file = fs::File::create(path).unwrap();
     let mut writer = StoneWriter::new(&mut file, StoneHeaderV1FileType::Repository).unwrap();
 
@@ -467,8 +477,9 @@ fn write_repository_index(path: &Path, requested: &[String]) {
         } else {
             format!("planner-provider-{index}")
         };
-        let hash = format!("{:064x}", index + 1);
-        let meta = Meta {
+        let package_name = format!("{index}.stone");
+        let package_path = package_dir.join(&package_name);
+        let mut meta = Meta {
             name: Name::from(name.clone()),
             version_identifier: "1.0.0".to_owned(),
             source_release: 1,
@@ -482,15 +493,289 @@ fn write_repository_index(path: &Path, requested: &[String]) {
             dependencies: BTreeSet::new(),
             providers: BTreeSet::from([provider]),
             conflicts: BTreeSet::new(),
-            uri: Some(format!("packages/{index}.stone")),
-            hash: Some(hash),
-            download_size: Some(1),
+            uri: None,
+            hash: None,
+            download_size: None,
         };
+
+        let mut package_file = fs::File::create(&package_path).unwrap();
+        let mut package_writer = StoneWriter::new(&mut package_file, StoneHeaderV1FileType::Binary).unwrap();
+        let payload = meta.clone().to_stone_payload();
+        package_writer.add_payload(payload.as_slice()).unwrap();
+        package_writer.finalize().unwrap();
+        drop(package_file);
+
+        let package_bytes = fs::read(&package_path).unwrap();
+        meta.uri = Some(format!("packages/{package_name}"));
+        meta.hash = Some(format!("{:x}", Sha256::digest(&package_bytes)));
+        meta.download_size = Some(u64::try_from(package_bytes.len()).unwrap());
         let payload = meta.to_stone_payload();
         writer.add_payload(payload.as_slice()).unwrap();
     }
 
     writer.finalize().unwrap();
+}
+
+#[derive(Debug, thiserror::Error)]
+enum FrozenExamplePayloadError {
+    #[error("execute frozen example")]
+    Execute(#[from] crate::executor::Error),
+    #[error("package frozen example")]
+    Package(#[from] package::Error),
+}
+
+fn execute_and_publish(planned: &Planned) -> Result<Publication, Box<dyn StdError + Send + Sync>> {
+    let executor = Executor::new(&planned.plan)?;
+    let packager = FrozenPackager::from_plan(&planned.runtime.paths, &planned.plan)?;
+    let execution_lock = planned.runtime.acquire_execution_lock(&planned.plan)?;
+    let mut timing = Timing::default();
+    let initialize_timer = timing.begin(crate::timing::Kind::Initialize);
+    let stored = planned
+        .runtime
+        .setup(&planned.plan, &execution_lock, &mut timing, initialize_timer)?;
+    assert_eq!(
+        stored.len(),
+        planned.plan.sources.len(),
+        "runtime setup must materialize exactly the frozen source set"
+    );
+
+    crate::container::exec_frozen::<FrozenExamplePayloadError>(&planned.runtime.paths, &planned.plan, || {
+        executor.run(&mut timing)?;
+        packager.package(&mut timing)?;
+        Ok(())
+    })?;
+
+    Ok(package::publish_artefacts(&planned.runtime.paths, &planned.plan)?)
+}
+
+fn capability_errno(error: &(dyn StdError + 'static)) -> bool {
+    if let Some(source) = error.downcast_ref::<std::io::Error>()
+        && (source.kind() == std::io::ErrorKind::PermissionDenied
+            || matches!(
+                source.raw_os_error(),
+                Some(code)
+                    if code == nix::libc::EPERM
+                        || code == nix::libc::EACCES
+                        || code == nix::libc::ENOSYS
+            ))
+    {
+        return true;
+    }
+    if let Some(source) = error.downcast_ref::<nix::errno::Errno>()
+        && matches!(
+            source,
+            nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS
+        )
+    {
+        return true;
+    }
+    error.source().is_some_and(capability_errno)
+}
+
+fn setup_capability_denial(message: &str) -> bool {
+    let message = message.strip_prefix("exited with failure: ").unwrap_or(message);
+    let setup_failure = [
+        "clear inherited supplementary groups",
+        "mount ",
+        "pivot_root",
+        "sethostname",
+        "unmount old root",
+        "drop payload mount-administration capability",
+    ]
+    .iter()
+    .any(|prefix| message.starts_with(prefix));
+    let permission_failure = message.contains("Operation not permitted")
+        || message.contains("Permission denied")
+        || message.contains("Function not implemented")
+        || message.contains("EPERM")
+        || message.contains("EACCES")
+        || message.contains("ENOSYS");
+    setup_failure && permission_failure
+}
+
+fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
+    // `thiserror` may make a transparent wrapper's concrete inner error
+    // unavailable to `downcast_ref`, but its exact display remains in the
+    // source chain. Accept only known setup labels, never `run: ...` payload
+    // failures.
+    if setup_capability_denial(&error.to_string()) {
+        return true;
+    }
+    if let Some(error) = error.downcast_ref::<::container::Error>() {
+        return match error {
+            // The container crate currently groups clone, pipe, signal, and
+            // wait errors into this variant. An errno alone therefore does
+            // not prove namespace capability unavailability.
+            ::container::Error::Nix { .. } => false,
+            ::container::Error::Idmap { source } => {
+                source
+                    .to_string()
+                    .contains("needs at least one delegated subordinate GID")
+                    || capability_errno(source)
+            }
+            ::container::Error::Failure { message } => setup_capability_denial(message),
+            ::container::Error::Signaled { .. } | ::container::Error::UnknownExit => false,
+        };
+    }
+    error.source().is_some_and(container_capability_unavailable)
+}
+
+fn error_chain(error: &(dyn StdError + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(error) = source {
+        messages.push(error.to_string());
+        source = error.source();
+    }
+    messages.join(": ")
+}
+
+fn run_or_skip_capability(planned: &Planned) -> Option<Publication> {
+    match execute_and_publish(planned) {
+        Ok(publication) => Some(publication),
+        Err(error) if container_capability_unavailable(error.as_ref()) => {
+            eprintln!(
+                "skipping frozen execution proof: this host cannot create the required user/mount namespaces: {}",
+                error_chain(error.as_ref())
+            );
+            None
+        }
+        Err(error) => panic!(
+            "frozen checked-in example failed after planning: {}",
+            error_chain(error.as_ref())
+        ),
+    }
+}
+
+fn bundle_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    fs::read_dir(root)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            assert!(
+                entry.file_type().unwrap().is_file(),
+                "bundle entries must be regular files"
+            );
+            (
+                entry.file_name().into_string().unwrap(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn metadata_payloads(
+    path: &Path,
+    expected_file_type: StoneHeaderV1FileType,
+) -> Vec<Vec<stone::StonePayloadMetaRecord>> {
+    let mut reader = stone::read(fs::File::open(path).unwrap()).unwrap();
+    assert!(
+        matches!(
+            reader.header,
+            StoneHeader::V1(header) if header.file_type == expected_file_type
+        ),
+        "unexpected Stone file type for {path:?}: {:?}",
+        reader.header
+    );
+    reader
+        .payloads()
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .filter_map(|payload| match payload {
+            StoneDecodedPayload::Meta(meta) => Some(meta.body),
+            _ => None,
+        })
+        .collect()
+}
+
+fn assert_frozen_provenance(records: &[stone::StonePayloadMetaRecord], planned: &Planned) {
+    let source_refs = records
+        .iter()
+        .filter_map(|record| match (&record.tag, &record.primitive) {
+            (StonePayloadMetaTag::SourceRef, StonePayloadMetaPrimitive::String(value)) => Some(value.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let recipe = format!("gluon-evaluation-sha256:{}", planned.plan.provenance.recipe.sha256);
+    let derivation = format!("derivation-sha256:{}", planned.plan.derivation_id());
+    assert_eq!(source_refs, BTreeSet::from([recipe.as_str(), derivation.as_str()]));
+}
+
+fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec<u8>> {
+    let bundle = bundle_bytes(root);
+    let package_names = planned
+        .plan
+        .outputs
+        .iter()
+        .map(|output| output.package_name.as_str())
+        .collect::<BTreeSet<_>>();
+    let expected_files = planned
+        .plan
+        .outputs
+        .iter()
+        .map(|output| {
+            format!(
+                "{}-{}-{}-{}-{}.stone",
+                output.package_name,
+                planned.plan.package.version,
+                planned.plan.package.source_release,
+                planned.plan.package.build_release,
+                planned.plan.package.architecture,
+            )
+        })
+        .chain([
+            format!("manifest.{}.bin", planned.plan.package.architecture),
+            format!("manifest.{}.jsonc", planned.plan.package.architecture),
+        ])
+        .collect::<BTreeSet<_>>();
+    assert_eq!(bundle.keys().cloned().collect::<BTreeSet<_>>(), expected_files);
+
+    for output in &planned.plan.outputs {
+        let filename = format!(
+            "{}-{}-{}-{}-{}.stone",
+            output.package_name,
+            planned.plan.package.version,
+            planned.plan.package.source_release,
+            planned.plan.package.build_release,
+            planned.plan.package.architecture,
+        );
+        let payloads = metadata_payloads(&root.join(filename), StoneHeaderV1FileType::Binary);
+        assert_eq!(payloads.len(), 1, "every emitted package has one metadata payload");
+        let meta = Meta::from_stone_payload(&payloads[0]).unwrap();
+        assert_eq!(meta.name.as_str(), output.package_name);
+        assert_eq!(meta.version_identifier, planned.plan.package.version);
+        assert_eq!(meta.source_release, planned.plan.package.source_release);
+        assert_eq!(meta.build_release, planned.plan.package.build_release);
+        assert_eq!(meta.architecture, planned.plan.package.architecture);
+        assert_frozen_provenance(&payloads[0], planned);
+    }
+
+    let manifest_path = root.join(format!("manifest.{}.bin", planned.plan.package.architecture));
+    let manifest_payloads = metadata_payloads(&manifest_path, StoneHeaderV1FileType::BuildManifest);
+    assert_eq!(manifest_payloads.len(), planned.plan.outputs.len());
+    assert_eq!(
+        manifest_payloads
+            .iter()
+            .map(|payload| {
+                assert_frozen_provenance(payload, planned);
+                Meta::from_stone_payload(payload).unwrap().name.to_string()
+            })
+            .collect::<BTreeSet<_>>(),
+        package_names.into_iter().map(str::to_owned).collect()
+    );
+
+    let jsonc_path = root.join(format!("manifest.{}.jsonc", planned.plan.package.architecture));
+    let jsonc = fs::read_to_string(jsonc_path).unwrap();
+    let (_, json) = jsonc.split_once('\n').unwrap();
+    let json: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(json["derivation-id"], planned.plan.derivation_id().as_str());
+    assert_eq!(json["recipe-fingerprint"], planned.plan.provenance.recipe.sha256);
+    assert_eq!(json["source-name"], "minimal-hello");
+    assert_eq!(json["packages"].as_object().unwrap().len(), planned.plan.outputs.len());
+
+    bundle
 }
 
 #[test]
@@ -649,6 +934,97 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
             example.name
         );
     }
+}
+
+#[test]
+fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation() {
+    let matrix = PackageExampleMatrix::new();
+    let example = matrix
+        .examples
+        .iter()
+        .find(|example| example.name == "minimal")
+        .expect("the explicitly inventoried example matrix contains minimal");
+
+    let first = plan_for_build(matrix.env(), matrix.request(example, true), &matrix.output_dir).unwrap();
+    assert_eq!(first.lock_outcome, Some(WriteOutcome::Written));
+    assert!(
+        first.plan.sources.is_empty(),
+        "minimal must remain a source-less execution fixture"
+    );
+    assert!(
+        first
+            .plan
+            .jobs
+            .iter()
+            .flat_map(|job| &job.phases)
+            .all(|phase| { phase.pre.is_empty() && phase.steps.is_empty() && phase.post.is_empty() }),
+        "minimal must prove executor/container/package plumbing without invoking host or package tools"
+    );
+    assert!(
+        first
+            .plan
+            .build_lock
+            .packages
+            .iter()
+            .all(|package| package.package_id.len() == 64
+                && package
+                    .package_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())),
+        "the frozen runtime closure must use the real SHA-256 identities of local Stone artifacts"
+    );
+    let first_plan = first.plan.canonical_bytes();
+    let derivation_id = first.plan.derivation_id();
+
+    let Some(first_publication) = run_or_skip_capability(&first) else {
+        return;
+    };
+    assert_eq!(first_publication, Publication::Published);
+    let published_root = matrix.output_dir.join(derivation_id.as_str());
+    assert_eq!(
+        fs::metadata(&published_root).unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+    let published = assert_emitted_bundle(&first, &published_root);
+    assert!(
+        published
+            .keys()
+            .all(|name| { fs::metadata(published_root.join(name)).unwrap().permissions().mode() & 0o7777 == 0o644 })
+    );
+
+    let locked = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir).unwrap();
+    assert_eq!(locked.lock_outcome, None);
+    assert_eq!(locked.plan.canonical_bytes(), first_plan);
+    assert_eq!(locked.plan.derivation_id(), derivation_id);
+
+    let Some(second_publication) = run_or_skip_capability(&locked) else {
+        return;
+    };
+    assert_eq!(second_publication, Publication::Reused);
+    assert_eq!(
+        assert_emitted_bundle(&locked, &locked.runtime.paths.artefacts().host),
+        published,
+        "a second isolated execution must reproduce every staged artifact byte-for-byte"
+    );
+    assert_eq!(bundle_bytes(&published_root), published);
+}
+
+#[test]
+fn frozen_execution_capability_skip_never_hides_payload_or_ambiguous_nix_failures() {
+    let setup = crate::container::Error::Container(::container::Error::Failure {
+        message: "clear inherited supplementary groups: EPERM: Operation not permitted".to_owned(),
+    });
+    assert!(container_capability_unavailable(&setup));
+
+    let payload = crate::container::Error::Container(::container::Error::Failure {
+        message: "run: package frozen example: permission denied".to_owned(),
+    });
+    assert!(!container_capability_unavailable(&payload));
+
+    let ambiguous = crate::container::Error::Container(::container::Error::Nix {
+        source: nix::errno::Errno::EPERM,
+    });
+    assert!(!container_capability_unavailable(&ambiguous));
 }
 
 #[test]
