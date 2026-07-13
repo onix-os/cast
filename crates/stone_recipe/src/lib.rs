@@ -13,6 +13,7 @@ pub use self::spec::{KeyValueSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningS
 pub use self::tuning::{CompilerFlagsSpec, TuningFlagSpec, TuningGroupSpec, TuningOptionSpec};
 pub use self::validation::ValidationError;
 
+pub mod build_policy;
 pub mod derivation;
 pub mod macros;
 pub mod package;

@@ -1,0 +1,342 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Embedded, pure API imported by repository build policy as
+// `boulder.build_policy.v1`.
+
+let arrays = import! std.array.prim
+let _ = import! std.types
+
+type Boolean =
+    | False
+    | True
+
+type ContextValue =
+    | PackageName
+    | PackageVersion
+    | PackageRelease
+    | SourceDir
+    | InstallRoot
+    | BuildRoot
+    | WorkDir
+    | BuilderDir
+    | PgoDir
+    | Jobs
+    | SourceDateEpoch
+    | PgoStage
+    | TargetTriple
+    | BuildPlatform
+    | HostPlatform
+    | LibSuffix
+    | Prefix
+    | BinDir
+    | SbinDir
+    | IncludeDir
+    | LibDir
+    | LibexecDir
+    | DataDir
+    | VendorDir
+    | DocDir
+    | InfoDir
+    | LocaleDir
+    | ManDir
+    | SysconfDir
+    | LocalStateDir
+    | SharedStateDir
+    | RunStateDir
+    | CFlags
+    | CxxFlags
+    | FFlags
+    | DFlags
+    | RustFlags
+    | ValaFlags
+    | GoFlags
+    | LdFlags
+    | Cc
+    | Cxx
+    | Objc
+    | Objcxx
+    | Cpp
+    | Objcpp
+    | Objcxxcpp
+    | D
+    | Ar
+    | Ld
+    | Objcopy
+    | Nm
+    | Ranlib
+    | Strip
+    | CompilerPath
+
+type TextPartSpec =
+    | LiteralPart { value : String }
+    | ContextPart { value : ContextValue }
+
+type TextSpec = {
+    parts : Array TextPartSpec,
+}
+
+type InstallLayoutSpec = {
+    prefix : TextSpec,
+    bindir : TextSpec,
+    sbindir : TextSpec,
+    includedir : TextSpec,
+    libdir : TextSpec,
+    libexecdir : TextSpec,
+    datadir : TextSpec,
+    vendordir : TextSpec,
+    docdir : TextSpec,
+    infodir : TextSpec,
+    localedir : TextSpec,
+    mandir : TextSpec,
+    sysconfdir : TextSpec,
+    localstatedir : TextSpec,
+    sharedstatedir : TextSpec,
+    runstatedir : TextSpec,
+    sysusersdir : TextSpec,
+    tmpfilesdir : TextSpec,
+    udevrulesdir : TextSpec,
+    bash_completions_dir : TextSpec,
+    fish_completions_dir : TextSpec,
+    elvish_completions_dir : TextSpec,
+    zsh_completions_dir : TextSpec,
+}
+
+type CompilerToolsSpec = {
+    cc : TextSpec,
+    cxx : TextSpec,
+    objc : TextSpec,
+    objcxx : TextSpec,
+    cpp : TextSpec,
+    objcpp : TextSpec,
+    objcxxcpp : TextSpec,
+    d : TextSpec,
+    ar : TextSpec,
+    ld : TextSpec,
+    mold_ld : TextSpec,
+    objcopy : TextSpec,
+    nm : TextSpec,
+    ranlib : TextSpec,
+    strip : TextSpec,
+}
+
+type ToolchainsSpec = {
+    llvm : CompilerToolsSpec,
+    gnu : CompilerToolsSpec,
+}
+
+type CompilerFlagsSpec = {
+    c : Array TextSpec,
+    cxx : Array TextSpec,
+    f : Array TextSpec,
+    d : Array TextSpec,
+    rust : Array TextSpec,
+    vala : Array TextSpec,
+    go : Array TextSpec,
+    ld : Array TextSpec,
+}
+
+type TargetPolicySpec = {
+    name : String,
+    target_triple : String,
+    build_platform : String,
+    host_platform : String,
+    lib_suffix : String,
+    architecture_flags : CompilerFlagsSpec,
+}
+
+type EnvironmentCondition =
+    | Always
+    | CompilerCacheEnabled
+    | CompilerCacheDisabled
+
+type EnvironmentBindingSpec = {
+    name : String,
+    value : TextSpec,
+    condition : EnvironmentCondition,
+}
+
+type BuildToolSpec =
+    | Binary { target : String }
+    | SystemBinary { target : String }
+
+type BuilderCommandSpec = {
+    program : TextSpec,
+    args : Array TextSpec,
+    environment : Array EnvironmentBindingSpec,
+    working_dir : TextSpec,
+}
+
+type StandardBuilderPolicySpec = {
+    required_tools : Array BuildToolSpec,
+    environment : Array EnvironmentBindingSpec,
+    setup : BuilderCommandSpec,
+    build : BuilderCommandSpec,
+    install : BuilderCommandSpec,
+    check : BuilderCommandSpec,
+}
+
+type BuildersPolicySpec = {
+    cmake : StandardBuilderPolicySpec,
+    meson : StandardBuilderPolicySpec,
+    cargo : StandardBuilderPolicySpec,
+    autotools : StandardBuilderPolicySpec,
+}
+
+type ToolchainFlagsSpec = {
+    common : CompilerFlagsSpec,
+    gnu : CompilerFlagsSpec,
+    llvm : CompilerFlagsSpec,
+}
+
+type OptionalTextSpec =
+    | NoText
+    | SomeText TextSpec
+
+type PgoFinishSpec = {
+    output : TextSpec,
+    inputs : Array TextSpec,
+    copy_to : OptionalTextSpec,
+    remove_output_first : Boolean,
+}
+
+type OptionalPgoFinishSpec =
+    | NoPgoFinish
+    | SomePgoFinish PgoFinishSpec
+
+type PgoStagePolicySpec = {
+    flags : ToolchainFlagsSpec,
+    finish : OptionalPgoFinishSpec,
+}
+
+type PgoPolicySpec = {
+    required_tools : Array BuildToolSpec,
+    sample : ToolchainFlagsSpec,
+    stage_one : PgoStagePolicySpec,
+    stage_two : PgoStagePolicySpec,
+    use_profile : PgoStagePolicySpec,
+}
+
+type BuildPolicySpec = {
+    vendor_id : String,
+    build_subdir : String,
+    layout : InstallLayoutSpec,
+    toolchains : ToolchainsSpec,
+    targets : Array TargetPolicySpec,
+    environment : Array EnvironmentBindingSpec,
+    builders : BuildersPolicySpec,
+    pgo : PgoPolicySpec,
+}
+
+let literal = \value -> { parts = [LiteralPart { value }] }
+let context = \value -> { parts = [ContextPart { value }] }
+let concat: Array TextSpec -> TextSpec = \values ->
+    rec let flatten remaining parts =
+        match arrays.len remaining with
+        | 0 -> { parts }
+        | _ ->
+            let value = arrays.index remaining 0
+            flatten
+                (arrays.slice remaining 1 (arrays.len remaining))
+                (arrays.append parts value.parts)
+    flatten values []
+let binding = \condition name value -> { name, value, condition }
+let policy: BuildPolicySpec -> BuildPolicySpec = \value -> value
+let flags: CompilerFlagsSpec -> CompilerFlagsSpec = \value -> value
+let target: TargetPolicySpec -> TargetPolicySpec = \value -> value
+let command: BuilderCommandSpec -> BuilderCommandSpec = \value -> value
+let builder: StandardBuilderPolicySpec -> StandardBuilderPolicySpec = \value -> value
+let pgo_finish: PgoFinishSpec -> PgoFinishSpec = \value -> value
+let pgo_stage: PgoStagePolicySpec -> PgoStagePolicySpec = \value -> value
+
+{
+    abi_version = 1,
+    policy,
+    text = {
+        literal,
+        context,
+        concat,
+    },
+    context = {
+        package_name = PackageName,
+        package_version = PackageVersion,
+        package_release = PackageRelease,
+        source_dir = SourceDir,
+        install_root = InstallRoot,
+        build_root = BuildRoot,
+        work_dir = WorkDir,
+        builder_dir = BuilderDir,
+        pgo_dir = PgoDir,
+        jobs = Jobs,
+        source_date_epoch = SourceDateEpoch,
+        pgo_stage = PgoStage,
+        target_triple = TargetTriple,
+        build_platform = BuildPlatform,
+        host_platform = HostPlatform,
+        lib_suffix = LibSuffix,
+        prefix = Prefix,
+        bindir = BinDir,
+        sbindir = SbinDir,
+        includedir = IncludeDir,
+        libdir = LibDir,
+        libexecdir = LibexecDir,
+        datadir = DataDir,
+        vendordir = VendorDir,
+        docdir = DocDir,
+        infodir = InfoDir,
+        localedir = LocaleDir,
+        mandir = ManDir,
+        sysconfdir = SysconfDir,
+        localstatedir = LocalStateDir,
+        sharedstatedir = SharedStateDir,
+        runstatedir = RunStateDir,
+        cflags = CFlags,
+        cxxflags = CxxFlags,
+        fflags = FFlags,
+        dflags = DFlags,
+        rustflags = RustFlags,
+        valaflags = ValaFlags,
+        goflags = GoFlags,
+        ldflags = LdFlags,
+        cc = Cc,
+        cxx = Cxx,
+        objc = Objc,
+        objcxx = Objcxx,
+        cpp = Cpp,
+        objcpp = Objcpp,
+        objcxxcpp = Objcxxcpp,
+        d = D,
+        ar = Ar,
+        ld = Ld,
+        objcopy = Objcopy,
+        nm = Nm,
+        ranlib = Ranlib,
+        strip = Strip,
+        compiler_path = CompilerPath,
+    },
+    optional = {
+        no_text = NoText,
+        text = \value -> SomeText value,
+        no_pgo_finish = NoPgoFinish,
+        pgo_finish = \value -> SomePgoFinish value,
+    },
+    boolean = {
+        false = False,
+        true = True,
+    },
+    env = {
+        always = binding Always,
+        with_compiler_cache = binding CompilerCacheEnabled,
+        without_compiler_cache = binding CompilerCacheDisabled,
+    },
+    tool = {
+        binary = \target -> Binary { target },
+        system_binary = \target -> SystemBinary { target },
+    },
+    flags,
+    target,
+    command,
+    builder,
+    pgo_finish,
+    pgo_stage,
+}

@@ -1,0 +1,450 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+// Repository-owned build policy. This file contains data only; every dynamic
+// value is an explicit member of the finite build context.
+
+let p = import! boulder.build_policy.v1
+
+let lit = p.text.literal
+let ctx = \value -> p.text.context value
+let cat = p.text.concat
+let c = p.context
+
+let empty_flags = p.flags {
+    c = [],
+    cxx = [],
+    f = [],
+    d = [],
+    rust = [],
+    vala = [],
+    go = [],
+    ld = [],
+}
+
+let command = \program args environment -> p.command {
+    program = lit program,
+    args,
+    environment,
+    working_dir = ctx c.work_dir,
+}
+
+let destdir = p.env.always "DESTDIR" (ctx c.install_root)
+let config_shell = [
+    p.env.always "CONFIG_SHELL" (lit "/usr/bin/dash"),
+    p.env.always "SHELL" (lit "/usr/bin/dash"),
+]
+
+let layout = {
+    prefix = lit "/usr",
+    bindir = lit "/usr/bin",
+    sbindir = lit "/usr/sbin",
+    includedir = lit "/usr/include",
+    libdir = cat [lit "/usr/lib", ctx c.lib_suffix],
+    libexecdir = cat [lit "/usr/lib", ctx c.lib_suffix, lit "/", ctx c.package_name],
+    datadir = lit "/usr/share",
+    vendordir = lit "/usr/share/defaults",
+    docdir = lit "/usr/share/doc",
+    infodir = lit "/usr/share/info",
+    localedir = lit "/usr/share/locale",
+    mandir = lit "/usr/share/man",
+    sysconfdir = lit "/etc",
+    localstatedir = lit "/var",
+    sharedstatedir = lit "/var/lib",
+    runstatedir = lit "/run",
+    sysusersdir = lit "/usr/lib/sysusers.d",
+    tmpfilesdir = lit "/usr/lib/tmpfiles.d",
+    udevrulesdir = lit "/usr/lib/udev/rules.d",
+    bash_completions_dir = lit "/usr/share/bash-completion/completions",
+    fish_completions_dir = lit "/usr/share/fish/vendor_completions.d",
+    elvish_completions_dir = lit "/usr/share/elvish/lib",
+    zsh_completions_dir = lit "/usr/share/zsh/site-functions",
+}
+
+let llvm_tools = {
+    cc = lit "clang",
+    cxx = lit "clang++",
+    objc = lit "clang",
+    objcxx = lit "clang++",
+    cpp = lit "clang-cpp",
+    objcpp = lit "clang -E -",
+    objcxxcpp = lit "clang++ -E",
+    d = lit "ldc2",
+    ar = lit "llvm-ar",
+    ld = lit "ld.lld",
+    mold_ld = lit "ld.mold",
+    objcopy = lit "llvm-objcopy",
+    nm = lit "llvm-nm",
+    ranlib = lit "llvm-ranlib",
+    strip = lit "llvm-strip",
+}
+
+let gnu_tools = {
+    cc = lit "gcc",
+    cxx = lit "g++",
+    objc = lit "gcc",
+    objcxx = lit "g++",
+    cpp = lit "gcc -E",
+    objcpp = lit "gcc -E",
+    objcxxcpp = lit "g++ -E",
+    d = lit "ldc2",
+    ar = lit "gcc-ar",
+    ld = lit "ld.bfd",
+    mold_ld = lit "ld.mold",
+    objcopy = lit "objcopy",
+    nm = lit "gcc-nm",
+    ranlib = lit "gcc-ranlib",
+    strip = lit "strip",
+}
+
+let target = \name target_triple build_platform host_platform lib_suffix architecture_flags -> p.target {
+    name,
+    target_triple,
+    build_platform,
+    host_platform,
+    lib_suffix,
+    architecture_flags,
+}
+
+let x86_64_flags = {
+    c = [lit "-march=x86-64-v2", lit "-mtune=ivybridge"],
+    cxx = [lit "-march=x86-64-v2", lit "-mtune=ivybridge"],
+    d = [lit "-mcpu=x86-64-v2"],
+    rust = [lit "-Ctarget-cpu=x86-64-v2"],
+    .. empty_flags
+}
+
+let x86_64_v3x_flags = {
+    c = [
+        lit "-march=x86-64-v3", lit "-mtune=znver1", lit "-maes", lit "-mfsgsbase",
+        lit "-mpclmul", lit "-mrdrnd", lit "-mxsaveopt",
+    ],
+    cxx = [
+        lit "-march=x86-64-v3", lit "-mtune=znver1", lit "-maes", lit "-mfsgsbase",
+        lit "-mpclmul", lit "-mrdrnd", lit "-mxsaveopt",
+    ],
+    rust = [
+        lit "-Ctarget-cpu=x86-64-v3",
+        lit "-Ctarget-features=+aes,+fsgsbase,+pclmulqdq,+xsaveopt",
+    ],
+    .. empty_flags
+}
+
+let x86_flags = {
+    c = [lit "-m32", lit "-march=i686", lit "-mtune=i686"],
+    cxx = [lit "-m32", lit "-march=i686", lit "-mtune=i686"],
+    rust = [lit "-Ctarget-cpu=i686"],
+    ld = [lit "-m32"],
+    .. empty_flags
+}
+
+let aarch64_architecture_flags = {
+    c = [lit "-march=armv8-a+simd+fp+crypto", lit "-mtune=cortex-a72"],
+    cxx = [lit "-march=armv8-a+simd+fp+crypto", lit "-mtune=cortex-a72"],
+    .. empty_flags
+}
+
+let riscv64_architecture_flags = {
+    c = [lit "-march=rv64gc", lit "-mtune=generic-ooo"],
+    cxx = [lit "-march=rv64gc", lit "-mtune=generic-ooo"],
+    .. empty_flags
+}
+
+let environment = [
+    p.env.always "BOULDER_PNAME" (ctx c.package_name),
+    p.env.always "BOULDER_PACKAGE_NAME" (ctx c.package_name),
+    p.env.always "BOULDER_PACKAGE_VERSION" (ctx c.package_version),
+    p.env.always "BOULDER_PACKAGE_RELEASE" (ctx c.package_release),
+    p.env.always "BOULDER_SOURCE_DIR" (ctx c.source_dir),
+    p.env.always "BOULDER_INSTALL_ROOT" (ctx c.install_root),
+    p.env.always "BOULDER_BUILD_ROOT" (ctx c.build_root),
+    p.env.always "BOULDER_WORK_DIR" (ctx c.work_dir),
+    p.env.always "BOULDER_BUILDER_DIR" (ctx c.builder_dir),
+    p.env.always "BOULDER_PGO_DIR" (ctx c.pgo_dir),
+    p.env.always "BOULDER_JOBS" (ctx c.jobs),
+    p.env.always "SOURCE_DATE_EPOCH" (ctx c.source_date_epoch),
+    p.env.always "PGO_STAGE" (ctx c.pgo_stage),
+    p.env.always "TERM" (lit "dumb"),
+    p.env.always "LANG" (lit "en_US.UTF-8"),
+    p.env.always "LC_ALL" (lit "en_US.UTF-8"),
+    p.env.with_compiler_cache "PATH" (lit "/usr/lib/ccache/bin:/usr/bin:/bin"),
+    p.env.without_compiler_cache "PATH" (lit "/usr/bin:/bin"),
+    p.env.always "BOULDER_PREFIX" (ctx c.prefix),
+    p.env.always "BOULDER_BINDIR" (ctx c.bindir),
+    p.env.always "BOULDER_LIBDIR" (ctx c.libdir),
+    p.env.always "BOULDER_LIBEXECDIR" (ctx c.libexecdir),
+    p.env.always "BOULDER_DATADIR" (ctx c.datadir),
+    p.env.always "BOULDER_VENDORDIR" (ctx c.vendordir),
+    p.env.always "PKG_CONFIG_PATH" (cat [ctx c.libdir, lit "/pkgconfig:/usr/share/pkgconfig"]),
+    p.env.always "CFLAGS" (ctx c.cflags),
+    p.env.always "CXXFLAGS" (ctx c.cxxflags),
+    p.env.always "FFLAGS" (ctx c.fflags),
+    p.env.always "DFLAGS" (ctx c.dflags),
+    p.env.always "RUSTFLAGS" (ctx c.rustflags),
+    p.env.always "VALAFLAGS" (ctx c.valaflags),
+    p.env.always "GOFLAGS" (ctx c.goflags),
+    p.env.always "LDFLAGS" (ctx c.ldflags),
+    p.env.always "CC" (ctx c.cc),
+    p.env.always "CXX" (ctx c.cxx),
+    p.env.always "OBJC" (ctx c.objc),
+    p.env.always "OBJCXX" (ctx c.objcxx),
+    p.env.always "CPP" (ctx c.cpp),
+    p.env.always "OBJCPP" (ctx c.objcpp),
+    p.env.always "OBJCXXCPP" (ctx c.objcxxcpp),
+    p.env.always "AR" (ctx c.ar),
+    p.env.always "LD" (ctx c.ld),
+    p.env.always "OBJCOPY" (ctx c.objcopy),
+    p.env.always "NM" (ctx c.nm),
+    p.env.always "RANLIB" (ctx c.ranlib),
+    p.env.always "STRIP" (ctx c.strip),
+    p.env.with_compiler_cache "CCACHE_DIR" (lit "/mason/ccache"),
+    p.env.with_compiler_cache "CCACHE_BASEDIR" (ctx c.work_dir),
+    p.env.with_compiler_cache "SCCACHE_DIR" (lit "/mason/sccache"),
+    p.env.with_compiler_cache "RUSTC_WRAPPER" (lit "/usr/bin/sccache"),
+    p.env.with_compiler_cache "GOCACHE" (lit "/mason/gocache"),
+    p.env.with_compiler_cache "GOMODCACHE" (lit "/mason/gomodcache"),
+    p.env.with_compiler_cache "CARGO_HOME" (lit "/mason/cargocache"),
+    p.env.with_compiler_cache "ZIG_GLOBAL_CACHE_DIR" (lit "/mason/zigcache"),
+    p.env.with_compiler_cache "ZIG_LOCAL_CACHE_DIR" (lit "/mason/zigcache"),
+]
+
+let cmake = p.builder {
+    required_tools = [p.tool.binary "cmake", p.tool.binary "ninja", p.tool.binary "ctest"],
+    environment = [],
+    setup = command "cmake" [
+        lit "-G", lit "Ninja",
+        lit "-B", ctx c.builder_dir,
+        lit "-DCMAKE_VERBOSE_MAKEFILE=ON",
+        lit "-DCMAKE_C_FLAGS_RELEASE=-DNDEBUG",
+        lit "-DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG",
+        lit "-DCMAKE_Fortran_FLAGS_RELEASE=-DNDEBUG",
+        lit "-DCMAKE_BUILD_TYPE=Release",
+        lit "-DCMAKE_INSTALL_DO_STRIP=OFF",
+        lit "-DCMAKE_INSTALL_LIBDIR=lib",
+        cat [lit "-DCMAKE_INSTALL_LIBEXECDIR=", ctx c.libexecdir],
+        cat [lit "-DCMAKE_INSTALL_PREFIX=", ctx c.prefix],
+        cat [lit "-DCMAKE_LIB_SUFFIX=", ctx c.lib_suffix],
+    ] [],
+    build = command "cmake" [
+        lit "--build", ctx c.builder_dir, lit "--verbose", lit "--parallel", ctx c.jobs,
+    ] [],
+    install = command "cmake" [lit "--install", ctx c.builder_dir, lit "--verbose"] [destdir],
+    check = command "ctest" [
+        lit "--test-dir", ctx c.builder_dir, lit "--verbose", lit "--parallel", ctx c.jobs,
+        lit "--output-on-failure", lit "--force-new-ctest-process",
+    ] [],
+}
+
+let meson = p.builder {
+    required_tools = [
+        p.tool.binary "cmake", p.tool.binary "meson", p.tool.binary "ninja", p.tool.binary "pkgconf",
+    ],
+    environment = [],
+    setup = command "meson" [
+        lit "setup",
+        lit "--buildtype=plain",
+        cat [lit "--prefix=", ctx c.prefix],
+        cat [lit "--libdir=lib", ctx c.lib_suffix],
+        lit "--bindir=bin",
+        lit "--sbindir=sbin",
+        cat [lit "--libexecdir=lib", ctx c.lib_suffix, lit "/", ctx c.package_name],
+        lit "--includedir=include",
+        lit "--datadir=share",
+        lit "--mandir=share/man",
+        lit "--infodir=share/info",
+        lit "--localedir=share/locale",
+        cat [lit "--sysconfdir=", ctx c.sysconfdir],
+        cat [lit "--localstatedir=", ctx c.localstatedir],
+        lit "--wrap-mode=nodownload",
+        ctx c.builder_dir,
+    ] [],
+    build = command "meson" [
+        lit "compile", lit "--verbose", lit "-j", ctx c.jobs, lit "-C", ctx c.builder_dir,
+    ] [],
+    install = command "meson" [
+        lit "install", lit "--no-rebuild", lit "-C", ctx c.builder_dir,
+    ] [destdir],
+    check = command "meson" [
+        lit "test", lit "--no-rebuild", lit "--print-errorlogs", lit "--verbose",
+        lit "-j", ctx c.jobs, lit "-C", ctx c.builder_dir,
+    ] [],
+}
+
+let cargo_environment = [
+    p.env.always "CARGO_BUILD_DEP_INFO_BASEDIR" (ctx c.work_dir),
+    p.env.always "CARGO_NET_RETRY" (lit "5"),
+    p.env.always "CARGO_PROFILE_RELEASE_DEBUG" (lit "full"),
+    p.env.always "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO" (lit "off"),
+    p.env.always "CARGO_PROFILE_RELEASE_LTO" (lit "off"),
+    p.env.always "CARGO_PROFILE_RELEASE_STRIP" (lit "none"),
+]
+
+let cargo = p.builder {
+    required_tools = [p.tool.binary "cargo"],
+    environment = cargo_environment,
+    setup = command "cargo" [lit "fetch", lit "-v", lit "--locked"] [],
+    build = command "cargo" [
+        lit "build", lit "-v", lit "-j", ctx c.jobs, lit "--frozen",
+        lit "--target", ctx c.target_triple, lit "--release",
+    ] [],
+    install = command "install" [
+        lit "-Dm00755", lit "-t", cat [ctx c.install_root, ctx c.bindir],
+    ] [],
+    check = command "cargo" [
+        lit "test", lit "-v", lit "-j", ctx c.jobs, lit "--frozen",
+        lit "--target", ctx c.target_triple, lit "--release", lit "--workspace",
+    ] [],
+}
+
+let autotools = p.builder {
+    required_tools = [p.tool.binary "autoconf", p.tool.binary "automake", p.tool.binary "make"],
+    environment = config_shell,
+    setup = command "/usr/bin/dash" [
+        lit "./configure",
+        cat [lit "--prefix=", ctx c.prefix],
+        cat [lit "--bindir=", ctx c.bindir],
+        cat [lit "--sbindir=", ctx c.sbindir],
+        cat [lit "--build=", ctx c.build_platform],
+        cat [lit "--host=", ctx c.host_platform],
+        cat [lit "--libdir=", ctx c.libdir],
+        cat [lit "--mandir=", ctx c.mandir],
+        cat [lit "--infodir=", ctx c.infodir],
+        cat [lit "--datadir=", ctx c.datadir],
+        cat [lit "--sysconfdir=", ctx c.sysconfdir],
+        cat [lit "--localstatedir=", ctx c.localstatedir],
+        cat [lit "--sharedstatedir=", ctx c.sharedstatedir],
+        cat [lit "--libexecdir=", ctx c.libexecdir],
+    ] config_shell,
+    build = command "make" [lit "VERBOSE=1", lit "-j", ctx c.jobs] [],
+    install = command "make" [lit "install", cat [lit "DESTDIR=", ctx c.install_root]] [],
+    check = command "make" [lit "check"] [],
+}
+
+let pgo_path = \suffix -> cat [ctx c.pgo_dir, lit suffix]
+
+let pgo_sample = {
+    common = empty_flags,
+    gnu = {
+        c = [lit "-fprofile-partial-training"],
+        cxx = [lit "-fprofile-partial-training"],
+        ld = [lit "-fprofile-partial-training"],
+        .. empty_flags
+    },
+    llvm = {
+        c = [lit "-fno-profile-sample-accurate"],
+        cxx = [lit "-fno-profile-sample-accurate"],
+        ld = [lit "-fno-profile-sample-accurate"],
+        .. empty_flags
+    },
+}
+
+let pgo_stage_one_flags = {
+    common = empty_flags,
+    gnu = {
+        c = [lit "-fprofile-generate", cat [lit "-fprofile-dir=", ctx c.pgo_dir]],
+        cxx = [lit "-fprofile-generate", cat [lit "-fprofile-dir=", ctx c.pgo_dir]],
+        ld = [lit "-fprofile-generate", cat [lit "-fprofile-dir=", ctx c.pgo_dir]],
+        .. empty_flags
+    },
+    llvm = {
+        c = [cat [lit "-fprofile-generate=", pgo_path "/IR"]],
+        cxx = [cat [lit "-fprofile-generate=", pgo_path "/IR"]],
+        rust = [
+            cat [lit "-Cprofile-generate=", pgo_path "/IR"],
+            cat [lit "-Clink-arg=-fprofile-generate=", pgo_path "/IR"],
+        ],
+        ld = [cat [lit "-fprofile-generate=", pgo_path "/IR"]],
+        .. empty_flags
+    },
+}
+
+let pgo_stage_two_flags = {
+    common = empty_flags,
+    gnu = empty_flags,
+    llvm = {
+        c = [
+            cat [lit "-fprofile-use=", pgo_path "/ir.profdata"],
+            cat [lit "-fcs-profile-generate=", pgo_path "/CS"],
+        ],
+        cxx = [
+            cat [lit "-fprofile-use=", pgo_path "/ir.profdata"],
+            cat [lit "-fcs-profile-generate=", pgo_path "/CS"],
+        ],
+        ld = [
+            cat [lit "-fprofile-use=", pgo_path "/ir.profdata"],
+            cat [lit "-fcs-profile-generate=", pgo_path "/CS"],
+        ],
+        .. empty_flags
+    },
+}
+
+let pgo_use_flags = {
+    common = empty_flags,
+    gnu = {
+        c = [lit "-fprofile-use", cat [lit "-fprofile-dir=", ctx c.pgo_dir], lit "-fprofile-correction"],
+        cxx = [lit "-fprofile-use", cat [lit "-fprofile-dir=", ctx c.pgo_dir], lit "-fprofile-correction"],
+        ld = [lit "-fprofile-use", cat [lit "-fprofile-dir=", ctx c.pgo_dir], lit "-fprofile-correction"],
+        .. empty_flags
+    },
+    llvm = {
+        c = [cat [lit "-fprofile-use=", pgo_path "/combined.profdata"]],
+        cxx = [cat [lit "-fprofile-use=", pgo_path "/combined.profdata"]],
+        rust = [
+            cat [lit "-Cprofile-use=", pgo_path "/combined.profdata"],
+            lit "-Cllvm-args=-pgo-warn-missing-function",
+        ],
+        ld = [cat [lit "-fprofile-use=", pgo_path "/combined.profdata"]],
+        .. empty_flags
+    },
+}
+
+p.policy {
+    vendor_id = "aerynos-linux",
+    build_subdir = "aerynos-builddir",
+    layout,
+    toolchains = {
+        llvm = llvm_tools,
+        gnu = gnu_tools,
+    },
+    targets = [
+        target "x86_64" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" x86_64_flags,
+        target "x86_64-v3x" "x86_64-unknown-linux-gnu" "x86_64-aerynos-linux" "x86_64-aerynos-linux" "" x86_64_v3x_flags,
+        target "x86" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" x86_flags,
+        target "emul32/x86_64" "i686-unknown-linux-gnu" "i686-aerynos-linux" "i686-aerynos-linux" "32" x86_flags,
+        target "aarch64" "aarch64-unknown-linux-gnu" "aarch64-aerynos-linux" "aarch64-aerynos-linux" "" aarch64_architecture_flags,
+        target "riscv64" "riscv64gc-unknown-linux-gnu" "riscv64-aerynos-linux" "riscv64-aerynos-linux" "" riscv64_architecture_flags,
+    ],
+    environment,
+    builders = {
+        cmake,
+        meson,
+        cargo,
+        autotools,
+    },
+    pgo = {
+        required_tools = [p.tool.binary "llvm-profdata"],
+        sample = pgo_sample,
+        stage_one = p.pgo_stage {
+            flags = pgo_stage_one_flags,
+            finish = p.optional.pgo_finish (p.pgo_finish {
+                output = pgo_path "/ir.profdata",
+                inputs = [pgo_path "/IR/default*.profraw"],
+                copy_to = p.optional.text (pgo_path "/combined.profdata"),
+                remove_output_first = p.boolean.false,
+            }),
+        },
+        stage_two = p.pgo_stage {
+            flags = pgo_stage_two_flags,
+            finish = p.optional.pgo_finish (p.pgo_finish {
+                output = pgo_path "/combined.profdata",
+                inputs = [pgo_path "/ir.profdata", pgo_path "/CS/default*.profraw"],
+                copy_to = p.optional.no_text,
+                remove_output_first = p.boolean.true,
+            }),
+        },
+        use_profile = p.pgo_stage {
+            flags = pgo_use_flags,
+            finish = p.optional.no_pgo_finish,
+        },
+    },
+}
