@@ -45,6 +45,39 @@ pub struct PackageSpec {
     pub mold: bool,
 }
 
+/// Explicit resource budget for one evaluated package declaration.
+///
+/// Gluon evaluation already has VM and source limits, but pure functions can
+/// still construct values much larger than their authored source. These
+/// limits keep conversion, regex/glob compilation, dependency resolution, and
+/// plan construction bounded after the value crosses into Rust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackageValidationLimits {
+    pub max_metadata_bytes: usize,
+    pub max_text_bytes: usize,
+    pub max_collection_items: usize,
+    pub max_outputs: usize,
+    pub max_profiles: usize,
+    pub max_sources: usize,
+    pub max_total_items: usize,
+    pub max_total_text_bytes: usize,
+}
+
+impl Default for PackageValidationLimits {
+    fn default() -> Self {
+        Self {
+            max_metadata_bytes: 4 * 1024,
+            max_text_bytes: 64 * 1024,
+            max_collection_items: 4 * 1024,
+            max_outputs: 128,
+            max_profiles: 128,
+            max_sources: 256,
+            max_total_items: 32 * 1024,
+            max_total_text_bytes: 2 * 1024 * 1024,
+        }
+    }
+}
+
 /// Package identity and user-facing source metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaSpec {
@@ -371,6 +404,13 @@ pub enum PackageConversionError {
         #[source]
         source: Box<regex::Error>,
     },
+    #[error("{field}: {actual} {unit} exceeds the package limit of {limit}")]
+    LimitExceeded {
+        field: String,
+        actual: usize,
+        limit: usize,
+        unit: &'static str,
+    },
     #[error(
         "options.networking: frozen builds must declare fetched content as locked sources; network access during execution is unsupported"
     )]
@@ -464,6 +504,7 @@ impl PackageConversionError {
             | Self::DuplicateValue { field, .. }
             | Self::InvalidGlob { field, .. }
             | Self::InvalidRegex { field, .. }
+            | Self::LimitExceeded { field, .. }
             | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
             | Self::MissingOutputReference { field, .. }
@@ -486,6 +527,12 @@ impl PackageSpec {
     /// Validate the concrete package declaration without lowering it through
     /// the transitional recipe model.
     pub fn validate(&self) -> Result<(), PackageConversionError> {
+        self.validate_with_limits(PackageValidationLimits::default())
+    }
+
+    /// Validate with an explicit post-evaluation resource budget.
+    pub fn validate_with_limits(&self, limits: PackageValidationLimits) -> Result<(), PackageConversionError> {
+        self.validate_budget(limits)?;
         if !valid_package_name(&self.meta.pname) {
             return Err(PackageConversionError::InvalidPackageName {
                 name: self.meta.pname.clone(),
@@ -572,6 +619,10 @@ impl PackageSpec {
         }
 
         self.validate_relations()
+    }
+
+    fn validate_budget(&self, limits: PackageValidationLimits) -> Result<(), PackageConversionError> {
+        PackageBudget::new(limits).validate(self)
     }
 
     fn validate_metadata(&self) -> Result<(), PackageConversionError> {
@@ -1209,6 +1260,326 @@ impl PackageSpec {
     }
 }
 
+struct PackageBudget {
+    limits: PackageValidationLimits,
+    total_items: usize,
+    total_text_bytes: usize,
+}
+
+impl PackageBudget {
+    fn new(limits: PackageValidationLimits) -> Self {
+        Self {
+            limits,
+            total_items: 0,
+            total_text_bytes: 0,
+        }
+    }
+
+    fn validate(mut self, package: &PackageSpec) -> Result<(), PackageConversionError> {
+        self.metadata_text("meta.pname", &package.meta.pname)?;
+        self.metadata_text("meta.version", &package.meta.version)?;
+        self.metadata_text("meta.homepage", &package.meta.homepage)?;
+        self.collection("meta.license", package.meta.license.len())?;
+        for (index, value) in package.meta.license.iter().enumerate() {
+            self.metadata_text(&format!("meta.license[{index}]"), value)?;
+        }
+
+        self.builder("builder", &package.builder)?;
+        self.hooks("hooks", &package.hooks)?;
+        self.dependencies("native_build_inputs", &package.native_build_inputs)?;
+        self.dependencies("build_inputs", &package.build_inputs)?;
+        self.dependencies("check_inputs", &package.check_inputs)?;
+
+        self.collection_with_limit("outputs", package.outputs.len(), self.limits.max_outputs)?;
+        for (index, output) in package.outputs.iter().enumerate() {
+            self.output(&format!("outputs[{index}]"), output)?;
+        }
+
+        self.collection_with_limit("profiles", package.profiles.len(), self.limits.max_profiles)?;
+        for (index, profile) in package.profiles.iter().enumerate() {
+            let field = format!("profiles[{index}]");
+            self.text(&format!("{field}.name"), &profile.name)?;
+            self.builder(&format!("{field}.builder"), &profile.builder)?;
+            self.hooks(&format!("{field}.hooks"), &profile.hooks)?;
+            self.dependencies(&format!("{field}.native_build_inputs"), &profile.native_build_inputs)?;
+            self.dependencies(&format!("{field}.build_inputs"), &profile.build_inputs)?;
+            self.dependencies(&format!("{field}.check_inputs"), &profile.check_inputs)?;
+        }
+
+        self.collection_with_limit("sources", package.sources.len(), self.limits.max_sources)?;
+        for (index, source) in package.sources.iter().enumerate() {
+            self.source(&format!("sources[{index}]"), source)?;
+        }
+
+        self.collection("architectures", package.architectures.len())?;
+        for (index, architecture) in package.architectures.iter().enumerate() {
+            self.text(&format!("architectures[{index}]"), architecture)?;
+        }
+
+        self.collection("tuning", package.tuning.len())?;
+        for (index, entry) in package.tuning.iter().enumerate() {
+            self.text(&format!("tuning[{index}].key"), &entry.key)?;
+            if let crate::TuningSpec::Config { value } = &entry.value {
+                self.text(&format!("tuning[{index}].value"), value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn metadata_text(&mut self, field: &str, value: &str) -> Result<(), PackageConversionError> {
+        self.text_with_limit(field, value, self.limits.max_metadata_bytes)
+    }
+
+    fn text(&mut self, field: &str, value: &str) -> Result<(), PackageConversionError> {
+        self.text_with_limit(field, value, self.limits.max_text_bytes)
+    }
+
+    fn text_with_limit(&mut self, field: &str, value: &str, limit: usize) -> Result<(), PackageConversionError> {
+        let actual = value.len();
+        if actual > limit {
+            return Err(PackageConversionError::LimitExceeded {
+                field: field.to_owned(),
+                actual,
+                limit,
+                unit: "bytes",
+            });
+        }
+        self.total_text_bytes =
+            self.total_text_bytes
+                .checked_add(actual)
+                .ok_or_else(|| PackageConversionError::LimitExceeded {
+                    field: field.to_owned(),
+                    actual: usize::MAX,
+                    limit: self.limits.max_total_text_bytes,
+                    unit: "total text bytes",
+                })?;
+        if self.total_text_bytes > self.limits.max_total_text_bytes {
+            return Err(PackageConversionError::LimitExceeded {
+                field: field.to_owned(),
+                actual: self.total_text_bytes,
+                limit: self.limits.max_total_text_bytes,
+                unit: "total text bytes",
+            });
+        }
+        Ok(())
+    }
+
+    fn collection(&mut self, field: &str, actual: usize) -> Result<(), PackageConversionError> {
+        self.collection_with_limit(field, actual, self.limits.max_collection_items)
+    }
+
+    fn collection_with_limit(
+        &mut self,
+        field: &str,
+        actual: usize,
+        limit: usize,
+    ) -> Result<(), PackageConversionError> {
+        if actual > limit {
+            return Err(PackageConversionError::LimitExceeded {
+                field: field.to_owned(),
+                actual,
+                limit,
+                unit: "items",
+            });
+        }
+        self.total_items =
+            self.total_items
+                .checked_add(actual)
+                .ok_or_else(|| PackageConversionError::LimitExceeded {
+                    field: field.to_owned(),
+                    actual: usize::MAX,
+                    limit: self.limits.max_total_items,
+                    unit: "total items",
+                })?;
+        if self.total_items > self.limits.max_total_items {
+            return Err(PackageConversionError::LimitExceeded {
+                field: field.to_owned(),
+                actual: self.total_items,
+                limit: self.limits.max_total_items,
+                unit: "total items",
+            });
+        }
+        Ok(())
+    }
+
+    fn source(&mut self, field: &str, source: &UpstreamSpec) -> Result<(), PackageConversionError> {
+        match source {
+            UpstreamSpec::Archive {
+                url,
+                hash,
+                rename,
+                unpack_dir,
+                ..
+            } => {
+                self.text(&format!("{field}.url"), url)?;
+                self.text(&format!("{field}.hash"), hash)?;
+                if let Some(value) = rename {
+                    self.text(&format!("{field}.rename"), value)?;
+                }
+                if let Some(value) = unpack_dir {
+                    self.text(&format!("{field}.unpack_dir"), value)?;
+                }
+            }
+            UpstreamSpec::Git {
+                url,
+                git_ref,
+                clone_dir,
+            } => {
+                self.text(&format!("{field}.url"), url)?;
+                self.text(&format!("{field}.git_ref"), git_ref)?;
+                if let Some(value) = clone_dir {
+                    self.text(&format!("{field}.clone_dir"), value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn output(&mut self, field: &str, output: &OutputSpec) -> Result<(), PackageConversionError> {
+        self.text(&format!("{field}.name"), &output.name)?;
+        if let Some(value) = &output.summary {
+            self.text(&format!("{field}.summary"), value)?;
+        }
+        if let Some(value) = &output.description {
+            self.text(&format!("{field}.description"), value)?;
+        }
+        self.strings(&format!("{field}.provides_exclude"), &output.provides_exclude)?;
+        self.dependencies(&format!("{field}.runtime_inputs"), &output.runtime_inputs)?;
+        self.strings(&format!("{field}.runtime_exclude"), &output.runtime_exclude)?;
+        self.collection(&format!("{field}.paths"), output.paths.len())?;
+        for (index, path) in output.paths.iter().enumerate() {
+            let value = match path {
+                PathSpec::Any { path }
+                | PathSpec::Exe { path }
+                | PathSpec::Symlink { path }
+                | PathSpec::Special { path } => path,
+            };
+            self.text(&format!("{field}.paths[{index}].path"), value)?;
+        }
+        self.dependencies(&format!("{field}.conflicts"), &output.conflicts)
+    }
+
+    fn builder(&mut self, field: &str, builder: &BuilderSpec) -> Result<(), PackageConversionError> {
+        self.dependencies(&format!("{field}.required_tools"), &builder.required_tools)?;
+        self.collection(&format!("{field}.environment"), builder.environment.len())?;
+        self.phase(&format!("{field}.phases.setup"), &builder.phases.setup)?;
+        self.phase(&format!("{field}.phases.build"), &builder.phases.build)?;
+        self.phase(&format!("{field}.phases.install"), &builder.phases.install)?;
+        self.phase(&format!("{field}.phases.check"), &builder.phases.check)?;
+        self.phase(&format!("{field}.phases.workload"), &builder.phases.workload)
+    }
+
+    fn hooks(&mut self, field: &str, hooks: &HooksSpec) -> Result<(), PackageConversionError> {
+        for (name, steps) in [
+            ("pre_setup", hooks.pre_setup.as_slice()),
+            ("post_setup", hooks.post_setup.as_slice()),
+            ("pre_build", hooks.pre_build.as_slice()),
+            ("post_build", hooks.post_build.as_slice()),
+            ("pre_check", hooks.pre_check.as_slice()),
+            ("post_check", hooks.post_check.as_slice()),
+            ("pre_install", hooks.pre_install.as_slice()),
+            ("post_install", hooks.post_install.as_slice()),
+            ("pre_workload", hooks.pre_workload.as_slice()),
+            ("post_workload", hooks.post_workload.as_slice()),
+        ] {
+            self.steps(&format!("{field}.{name}"), steps)?;
+        }
+        Ok(())
+    }
+
+    fn phase(&mut self, field: &str, phase: &PhaseSpec) -> Result<(), PackageConversionError> {
+        self.steps(&format!("{field}.steps"), &phase.steps)
+    }
+
+    fn steps(&mut self, field: &str, steps: &[StepSpec]) -> Result<(), PackageConversionError> {
+        self.collection(field, steps.len())?;
+        for (index, step) in steps.iter().enumerate() {
+            self.step(&format!("{field}[{index}]"), step)?;
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, field: &str, step: &StepSpec) -> Result<(), PackageConversionError> {
+        match step {
+            StepSpec::Run { program, args } => {
+                self.program(&format!("{field}.program"), program)?;
+                self.strings(&format!("{field}.args"), args)?;
+            }
+            StepSpec::Shell {
+                interpreter,
+                declared_programs,
+                script,
+            } => {
+                self.program(&format!("{field}.interpreter"), interpreter)?;
+                self.collection(&format!("{field}.declared_programs"), declared_programs.len())?;
+                for (index, program) in declared_programs.iter().enumerate() {
+                    self.program(&format!("{field}.declared_programs[{index}]"), program)?;
+                }
+                self.text(&format!("{field}.script"), script)?;
+            }
+            StepSpec::CMakeConfigure { flags }
+            | StepSpec::MesonSetup { flags }
+            | StepSpec::AutotoolsConfigure { flags } => self.strings(&format!("{field}.flags"), flags)?,
+            StepSpec::CargoBuild { features } | StepSpec::CargoTest { features } => {
+                self.strings(&format!("{field}.features"), features)?;
+            }
+            StepSpec::CargoInstall { binaries } => {
+                self.strings(&format!("{field}.binaries"), binaries)?;
+            }
+            StepSpec::CMakeBuild
+            | StepSpec::CMakeInstall
+            | StepSpec::CMakeTest
+            | StepSpec::MesonBuild
+            | StepSpec::MesonInstall
+            | StepSpec::MesonTest
+            | StepSpec::CargoFetch
+            | StepSpec::AutotoolsBuild
+            | StepSpec::AutotoolsInstall
+            | StepSpec::AutotoolsTest => {}
+        }
+        Ok(())
+    }
+
+    fn strings(&mut self, field: &str, values: &[String]) -> Result<(), PackageConversionError> {
+        self.collection(field, values.len())?;
+        for (index, value) in values.iter().enumerate() {
+            self.text(&format!("{field}[{index}]"), value)?;
+        }
+        Ok(())
+    }
+
+    fn dependencies(&mut self, field: &str, dependencies: &[DependencySpec]) -> Result<(), PackageConversionError> {
+        self.collection(field, dependencies.len())?;
+        for (index, dependency) in dependencies.iter().enumerate() {
+            self.dependency(&format!("{field}[{index}]"), dependency)?;
+        }
+        Ok(())
+    }
+
+    fn dependency(&mut self, field: &str, dependency: &DependencySpec) -> Result<(), PackageConversionError> {
+        match dependency {
+            DependencySpec::Package(package) => self.text(&format!("{field}.package"), &package.name),
+            DependencySpec::Output(output) => {
+                self.text(&format!("{field}.package"), &output.package.name)?;
+                self.text(&format!("{field}.output"), &output.output)
+            }
+            DependencySpec::Binary(value)
+            | DependencySpec::SystemBinary(value)
+            | DependencySpec::PkgConfig(value)
+            | DependencySpec::PkgConfig32(value)
+            | DependencySpec::Soname(value)
+            | DependencySpec::CMake(value)
+            | DependencySpec::Python(value)
+            | DependencySpec::Interpreter(value) => self.text(field, value),
+        }
+    }
+
+    fn program(&mut self, field: &str, program: &ProgramSpec) -> Result<(), PackageConversionError> {
+        self.text(&format!("{field}.path"), &program.path)?;
+        self.dependency(&format!("{field}.requirement"), &program.requirement)
+    }
+}
+
 fn find_cycle<'a>(
     node: &'a str,
     edges: &BTreeMap<&'a str, Vec<(&'a str, String)>>,
@@ -1445,6 +1816,151 @@ mod tests {
             emul32: false,
             mold: false,
         }
+    }
+
+    fn assert_limit(
+        error: PackageConversionError,
+        expected_field: &str,
+        expected_actual: usize,
+        expected_limit: usize,
+        expected_unit: &'static str,
+    ) {
+        let PackageConversionError::LimitExceeded {
+            field,
+            actual,
+            limit,
+            unit,
+        } = &error
+        else {
+            panic!("expected a package resource limit, found: {error}");
+        };
+        assert_eq!(field, expected_field);
+        assert_eq!(*actual, expected_actual);
+        assert_eq!(*limit, expected_limit);
+        assert_eq!(*unit, expected_unit);
+        assert_eq!(error.field(), expected_field);
+    }
+
+    #[test]
+    fn package_budget_accepts_exact_metadata_and_text_limits() {
+        let mut exact_metadata = package();
+        let mut limits = PackageValidationLimits {
+            max_metadata_bytes: exact_metadata.meta.homepage.len(),
+            ..PackageValidationLimits::default()
+        };
+        exact_metadata.validate_with_limits(limits).unwrap();
+
+        exact_metadata.meta.homepage.push('/');
+        let error = exact_metadata.validate_with_limits(limits).unwrap_err();
+        assert_limit(
+            error,
+            "meta.homepage",
+            exact_metadata.meta.homepage.len(),
+            exact_metadata.meta.homepage.len() - 1,
+            "bytes",
+        );
+
+        let mut exact_text = package();
+        exact_text.outputs[0].summary = Some("12345678".to_owned());
+        limits.max_metadata_bytes = PackageValidationLimits::default().max_metadata_bytes;
+        limits.max_text_bytes = 8;
+        exact_text.validate_with_limits(limits).unwrap();
+
+        exact_text.outputs[0].summary = Some("123456789".to_owned());
+        let error = exact_text.validate_with_limits(limits).unwrap_err();
+        assert_limit(error, "outputs[0].summary", 9, 8, "bytes");
+    }
+
+    #[test]
+    fn package_budget_caps_major_package_collections_at_the_boundary() {
+        let output_limits = PackageValidationLimits {
+            max_outputs: 1,
+            ..PackageValidationLimits::default()
+        };
+        let mut outputs = package();
+        outputs.validate_with_limits(output_limits).unwrap();
+        let mut output = outputs.outputs[0].clone();
+        output.name = "dev".to_owned();
+        outputs.outputs.push(output);
+        assert_limit(
+            outputs.validate_with_limits(output_limits).unwrap_err(),
+            "outputs",
+            2,
+            1,
+            "items",
+        );
+
+        let profile_limits = PackageValidationLimits {
+            max_profiles: 0,
+            ..PackageValidationLimits::default()
+        };
+        let mut profiles = package();
+        profiles.validate_with_limits(profile_limits).unwrap();
+        profiles.profiles.push(profile("native"));
+        assert_limit(
+            profiles.validate_with_limits(profile_limits).unwrap_err(),
+            "profiles",
+            1,
+            0,
+            "items",
+        );
+
+        let source_limits = PackageValidationLimits {
+            max_sources: 0,
+            ..PackageValidationLimits::default()
+        };
+        let mut sources = package();
+        sources.validate_with_limits(source_limits).unwrap();
+        sources.sources.push(archive_source());
+        assert_limit(
+            sources.validate_with_limits(source_limits).unwrap_err(),
+            "sources",
+            1,
+            0,
+            "items",
+        );
+    }
+
+    #[test]
+    fn package_budget_caps_nested_and_aggregate_item_counts() {
+        let per_collection = PackageValidationLimits {
+            max_collection_items: 1,
+            ..PackageValidationLimits::default()
+        };
+        package().validate_with_limits(per_collection).unwrap();
+
+        let mut over_collection = package();
+        over_collection.check_inputs = vec![
+            DependencySpec::Binary("first".to_owned()),
+            DependencySpec::Binary("second".to_owned()),
+        ];
+        let error = over_collection.validate_with_limits(per_collection).unwrap_err();
+        assert_limit(error, "check_inputs", 2, 1, "items");
+
+        let aggregate = PackageValidationLimits {
+            max_total_items: 4,
+            ..PackageValidationLimits::default()
+        };
+        package().validate_with_limits(aggregate).unwrap();
+
+        let mut over_aggregate = package();
+        over_aggregate.architectures.push("native".to_owned());
+        let error = over_aggregate.validate_with_limits(aggregate).unwrap_err();
+        assert_limit(error, "architectures", 5, 4, "total items");
+    }
+
+    #[test]
+    fn package_budget_caps_total_evaluated_text() {
+        let aggregate = PackageValidationLimits {
+            max_total_text_bytes: 50,
+            ..PackageValidationLimits::default()
+        };
+        package().validate_with_limits(aggregate).unwrap();
+
+        let mut over = package();
+        over.architectures.push("native".to_owned());
+        let error = over.validate_with_limits(aggregate).unwrap_err();
+        assert_limit(error, "architectures[0]", 56, 50, "total text bytes");
     }
 
     #[test]
