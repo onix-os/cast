@@ -85,9 +85,9 @@ fn resolve_forge_root(is_root: bool, custom: Option<PathBuf>) -> Result<PathBuf,
             Ok(dir)
         }
     } else if is_root {
-        Ok(PathBuf::from("/var/cache/cast/forge"))
+        Ok(PathBuf::from("/var/cache/cast/resolver"))
     } else {
-        Ok(dirs::cache_dir().ok_or(Error::UserCache)?.join("cast/forge"))
+        Ok(dirs::cache_dir().ok_or(Error::UserCache)?.join("cast/resolver"))
     }
 }
 
@@ -99,7 +99,7 @@ pub enum Error {
     UserConfig,
     #[error("cannot find data dir, $XDG_DATA_HOME or $HOME env not set")]
     UserData,
-    #[error("Cast cannot use a Forge system root")]
+    #[error("Cast cannot use `/` as its isolated package-resolution root")]
     ForgeSystemRoot,
     #[error("io")]
     Io(#[from] io::Error),

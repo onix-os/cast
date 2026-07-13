@@ -112,9 +112,9 @@ pub fn dispatch_cache(matches: &ArgMatches, context: Context) -> Result<(), Erro
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid Mason command arguments")]
+    #[error("invalid Cast command arguments")]
     Arguments(#[from] clap::Error),
-    #[error("unknown Mason command {name:?}")]
+    #[error("unknown Cast command {name:?}")]
     UnknownCommand { name: String },
     #[error("build")]
     Build(#[source] Box<build::Error>),

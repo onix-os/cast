@@ -924,9 +924,9 @@ pub enum Error {
     AnalyzerToolNotExecutable { field: &'static str },
     #[error("policy analyzer tool at {field} has no exact provider in build.lock.glu: {request}")]
     UnlockedAnalyzerTool { field: &'static str, request: String },
-    #[error("Forge resolved an input request with no typed planner origin: {request}")]
+    #[error("package resolution returned an input request with no typed planner origin: {request}")]
     UnclassifiedResolvedInput { request: String },
-    #[error("Forge omitted a typed input request from its exact resolution: {request}")]
+    #[error("package resolution omitted a typed input request from its exact result: {request}")]
     MissingResolvedInput { request: String },
 }
 

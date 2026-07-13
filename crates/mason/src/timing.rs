@@ -67,13 +67,13 @@ impl Timing {
             })
             .max()
             .unwrap_or_default()
-            // No-op (less than "Populate (Forge)")
+            // No-op (less than "Populate root")
             // .chain(self.populate.keys().map(|k| k.to_string().len()))
             // .max("Initialize".len())
             // .max("Fetch".len())
             // .max("Analyze".len())
             // .max("Emit".len());
-            .max("Populate (Forge)".len());
+            .max("Populate root".len());
         let total_elapsed = self
             .build
             .values()
@@ -96,7 +96,7 @@ impl Timing {
             fmt_progress(self.initialize, total_elapsed)
         );
 
-        println!("│{}", "Populate (Forge)".dim());
+        println!("│{}", "Populate root".dim());
         for (key, elapsed) in &self.populate {
             let gap = max_prefix_length - (key.to_string().len() + 1);
 
@@ -170,7 +170,7 @@ pub struct Timer(Kind, Instant);
 pub enum Kind {
     /// Initialize Cast.
     Initialize,
-    /// Populate root from Forge.
+    /// Populate the package root.
     Populate(Populate),
     /// Fetch upstreams
     Fetch,

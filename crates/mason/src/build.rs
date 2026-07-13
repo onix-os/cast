@@ -243,8 +243,8 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("recreate artefacts dir")]
     RecreateArtefactsDir(#[source] io::Error),
-    #[error("Forge client")]
+    #[error(transparent)]
     ForgeClient(#[from] forge::client::Error),
-    #[error("Forge installation")]
+    #[error(transparent)]
     ForgeInstallation(#[from] forge::installation::Error),
 }

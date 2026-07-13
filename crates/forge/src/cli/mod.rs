@@ -137,7 +137,7 @@ pub fn try_dispatch(command: &str, args: &ArgMatches, context: &Context) -> Resu
         "search-file" => search_file::handle(args, installation).map_err(Error::SearchFile)?,
         "state" => state::handle(args, installation, context.assume_yes, context.verbose).map_err(Error::State)?,
         "sync" => sync::handle(args, installation, context.assume_yes).map_err(Error::Sync)?,
-        _ => unreachable!("COMMAND_NAMES and Forge dispatch must stay aligned"),
+        _ => unreachable!("Cast command names and package dispatch must stay aligned"),
     }
 
     Ok(true)

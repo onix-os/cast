@@ -205,9 +205,9 @@ pub fn update<'a>(env: &'a Env, manager: profile::Manager<'a>, profile: &profile
 pub enum Error {
     #[error("profile")]
     Profile(#[from] profile::Error),
-    #[error("Forge client")]
+    #[error(transparent)]
     ForgeClient(#[from] forge::client::Error),
-    #[error("Forge installation")]
+    #[error(transparent)]
     ForgeInstallation(#[from] forge::installation::Error),
     #[error("io")]
     Io(#[from] io::Error),

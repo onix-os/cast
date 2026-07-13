@@ -245,9 +245,9 @@ pub fn generate_completions(command: &mut Command, directory: &Path) -> io::Resu
 pub enum Error {
     #[error("command line")]
     Clap(#[from] clap::Error),
-    #[error("Mason")]
+    #[error(transparent)]
     Mason(#[from] mason::cli::Error),
-    #[error("Forge")]
+    #[error(transparent)]
     Forge(#[from] forge::cli::Error),
     #[error("I/O")]
     Io(#[from] io::Error),
