@@ -19,6 +19,7 @@ pub enum DiagnosticCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimitKind {
     SourceSize,
+    ExplicitInputSize,
     ImportedFileSize,
     ImportCount,
     ImportGraphSize,

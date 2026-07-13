@@ -20,7 +20,7 @@ use gluon::{
     import::{DefaultImporter, Importer},
 };
 
-use crate::{Diagnostic, LimitKind, Limits, ModuleFingerprint, Source, SourceRoot};
+use crate::{Diagnostic, LimitKind, Limits, ModuleFingerprint, Source, SourceRoot, deadline::EvaluationDeadline};
 
 const FORBIDDEN_MODULE_PREFIXES: &[&str] = &[
     "std.fs",
@@ -159,11 +159,16 @@ pub(crate) fn prepare_imports(
     source_root: Option<&SourceRoot>,
     limits: Limits,
     root_source: &Source,
+    deadline: EvaluationDeadline,
 ) -> Result<PreparedImports, Diagnostic> {
+    let evaluation_source_name = root_source.logical_name();
+    deadline.check(evaluation_source_name)?;
     let mut graph = ImportGraph {
         policy,
         source_root,
         limits,
+        deadline,
+        evaluation_source_name: evaluation_source_name.to_owned(),
         total_bytes: root_source.text().len(),
         identities: BTreeSet::new(),
         aliases: BTreeMap::new(),
@@ -178,7 +183,11 @@ pub(crate) fn prepare_imports(
 
     graph.check_graph_bytes(root_source.logical_name())?;
     while let Some(pending) = graph.pending.pop_front() {
-        for request in collect_imports(parser_vm, &pending.source)? {
+        graph.checkpoint()?;
+        let requests = collect_imports(parser_vm, &pending.source);
+        graph.checkpoint()?;
+        for request in requests? {
+            graph.checkpoint()?;
             match request {
                 ImportRequest::Embedded(module) => graph.add_embedded(&pending, &module)?,
                 ImportRequest::Relative(path) => graph.add_relative(&pending, &path)?,
@@ -192,7 +201,7 @@ pub(crate) fn prepare_imports(
         }
     }
 
-    Ok(PreparedImports {
+    let prepared = PreparedImports {
         module_sources: graph
             .aliases
             .into_iter()
@@ -200,13 +209,17 @@ pub(crate) fn prepare_imports(
             .collect(),
         pure_builtin_modules: graph.pure_builtin_modules,
         fingerprints: graph.fingerprints.into_values().collect(),
-    })
+    };
+    deadline.check(evaluation_source_name)?;
+    Ok(prepared)
 }
 
 struct ImportGraph<'a> {
     policy: &'a ImportPolicy,
     source_root: Option<&'a SourceRoot>,
     limits: Limits,
+    deadline: EvaluationDeadline,
+    evaluation_source_name: String,
     total_bytes: usize,
     identities: BTreeSet<String>,
     aliases: BTreeMap<String, (String, String)>,
@@ -217,18 +230,19 @@ struct ImportGraph<'a> {
 
 impl ImportGraph<'_> {
     fn add_embedded(&mut self, parent: &PendingSource, module: &str) -> Result<(), Diagnostic> {
+        self.checkpoint()?;
         if RestrictedImporter::is_forbidden(module) {
             return Err(self.denied(parent, module, "forbidden host-capability module"));
         }
         if self.policy.pure_builtin_modules.contains(module) {
             return self.register_pure_builtin(module);
         }
-        let source = self
-            .policy
-            .embedded_modules
-            .get(module)
+        let source = self.policy.embedded_modules.get(module);
+        self.checkpoint()?;
+        let source = source
             .ok_or_else(|| self.denied(parent, module, "module is not explicitly embedded"))?
             .clone();
+        self.checkpoint()?;
         let identity = format!("embedded:{module}");
         self.register_alias(parent, module, &identity, &source)?;
         self.register_import(
@@ -240,6 +254,7 @@ impl ImportGraph<'_> {
     }
 
     fn add_relative(&mut self, parent: &PendingSource, raw_path: &str) -> Result<(), Diagnostic> {
+        self.checkpoint()?;
         if parent.class == SourceClass::Embedded {
             return Err(self.denied(parent, raw_path, "embedded modules cannot import source-root files"));
         }
@@ -262,7 +277,9 @@ impl ImportGraph<'_> {
             .parent()
             .unwrap_or_else(|| Path::new(""));
         let relative_path = base.join(requested_path);
-        let source = source_root.load_import(&relative_path, self.limits.max_imported_file_bytes)?;
+        let source = source_root.load_import(&relative_path, self.limits.max_imported_file_bytes);
+        self.checkpoint()?;
+        let source = source?;
         let identity = format!("relative:{}", source.logical_name());
         self.register_alias(parent, &alias, &identity, source.text())?;
         let fingerprint_name = source.logical_name().to_owned();
@@ -276,6 +293,7 @@ impl ImportGraph<'_> {
         identity: &str,
         source: &str,
     ) -> Result<(), Diagnostic> {
+        self.checkpoint()?;
         match self.aliases.get(alias) {
             Some((registered_identity, _)) if registered_identity != identity => {
                 Err(self.denied(parent, alias, "module alias resolves to more than one source"))
@@ -284,7 +302,7 @@ impl ImportGraph<'_> {
             None => {
                 self.aliases
                     .insert(alias.to_owned(), (identity.to_owned(), source.to_owned()));
-                Ok(())
+                self.checkpoint()
             }
         }
     }
@@ -296,8 +314,9 @@ impl ImportGraph<'_> {
         source: Source,
         fingerprint_name: String,
     ) -> Result<(), Diagnostic> {
+        self.checkpoint()?;
         if !self.identities.insert(identity.clone()) {
-            return Ok(());
+            return self.checkpoint();
         }
         if self.identities.len() > self.limits.max_imports {
             return Err(Diagnostic::limit(
@@ -324,22 +343,24 @@ impl ImportGraph<'_> {
             )
         })?;
         self.check_graph_bytes(source.logical_name())?;
-        self.fingerprints.insert(
-            identity.clone(),
-            ModuleFingerprint::new(fingerprint_name, source.text()),
-        );
+        let deadline = self.deadline;
+        let evaluation_source_name = self.evaluation_source_name.as_str();
+        let mut checkpoint = || deadline.check(evaluation_source_name);
+        let fingerprint = ModuleFingerprint::new_checked(fingerprint_name, source.text(), &mut checkpoint)?;
+        self.fingerprints.insert(identity.clone(), fingerprint);
         self.pending.push_back(PendingSource {
             identity,
             class,
             source,
         });
-        Ok(())
+        self.checkpoint()
     }
 
     fn register_pure_builtin(&mut self, module: &str) -> Result<(), Diagnostic> {
+        self.checkpoint()?;
         let identity = format!("pure-builtin:{module}");
         if !self.identities.insert(identity.clone()) {
-            return Ok(());
+            return self.checkpoint();
         }
         if self.identities.len() > self.limits.max_imports {
             return Err(Diagnostic::limit(
@@ -349,14 +370,17 @@ impl ImportGraph<'_> {
             ));
         }
         self.pure_builtin_modules.insert(module.to_owned());
-        self.fingerprints.insert(
-            identity,
-            ModuleFingerprint::new(module, &format!("gluon-0.18.3:pure-builtin:{module}")),
-        );
-        Ok(())
+        let fingerprint_source = format!("gluon-0.18.3:pure-builtin:{module}");
+        let deadline = self.deadline;
+        let evaluation_source_name = self.evaluation_source_name.as_str();
+        let mut checkpoint = || deadline.check(evaluation_source_name);
+        let fingerprint = ModuleFingerprint::new_checked(module, &fingerprint_source, &mut checkpoint)?;
+        self.fingerprints.insert(identity, fingerprint);
+        self.checkpoint()
     }
 
     fn check_graph_bytes(&self, source_name: &str) -> Result<(), Diagnostic> {
+        self.checkpoint()?;
         if self.total_bytes > self.limits.max_import_graph_bytes {
             return Err(Diagnostic::limit(
                 LimitKind::ImportGraphSize,
@@ -368,6 +392,10 @@ impl ImportGraph<'_> {
             ));
         }
         Ok(())
+    }
+
+    fn checkpoint(&self) -> Result<(), Diagnostic> {
+        self.deadline.check(&self.evaluation_source_name)
     }
 
     fn denied(&self, parent: &PendingSource, requested: &str, reason: &str) -> Diagnostic {

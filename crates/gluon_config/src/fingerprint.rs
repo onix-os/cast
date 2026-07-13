@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{collections::BTreeMap, error::Error as StdError, fmt};
+use std::{collections::BTreeMap, convert::Infallible, error::Error as StdError, fmt};
 
 use sha2::{Digest, Sha256};
 
 use crate::{CONFIGURATION_ABI_VERSION, EVALUATOR_POLICY_VERSION, GLUON_VERSION, Source};
+
+const HASH_CHECKPOINT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleFingerprint {
@@ -14,11 +16,22 @@ pub struct ModuleFingerprint {
 }
 
 impl ModuleFingerprint {
+    #[cfg(test)]
     pub(crate) fn new(logical_name: impl Into<String>, source: &str) -> Self {
-        Self {
-            logical_name: logical_name.into(),
-            sha256: sha256(source.as_bytes()),
-        }
+        let mut checkpoint = || Ok::<(), Infallible>(());
+        infallible(Self::new_checked(logical_name, source, &mut checkpoint))
+    }
+
+    pub(crate) fn new_checked<E>(
+        logical_name: impl Into<String>,
+        source: &str,
+        checkpoint: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<Self, E> {
+        checkpoint()?;
+        let logical_name = logical_name.into();
+        checkpoint()?;
+        let sha256 = sha256_checked(source.as_bytes(), checkpoint)?;
+        Ok(Self { logical_name, sha256 })
     }
 }
 
@@ -35,13 +48,32 @@ pub struct EvaluationFingerprint {
 }
 
 impl EvaluationFingerprint {
-    pub(crate) fn new(source: &Source, mut imported_modules: Vec<ModuleFingerprint>, explicit_inputs: &[u8]) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(source: &Source, imported_modules: Vec<ModuleFingerprint>, explicit_inputs: &[u8]) -> Self {
+        let mut checkpoint = || Ok::<(), Infallible>(());
+        infallible(Self::new_checked(
+            source,
+            imported_modules,
+            explicit_inputs,
+            &mut checkpoint,
+        ))
+    }
+
+    pub(crate) fn new_checked<E>(
+        source: &Source,
+        mut imported_modules: Vec<ModuleFingerprint>,
+        explicit_inputs: &[u8],
+        checkpoint: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<Self, E> {
+        checkpoint()?;
         let root_logical_name = source.logical_name().to_owned();
-        let root_source_sha256 = sha256(source.text().as_bytes());
-        let explicit_inputs_sha256 = sha256(explicit_inputs);
+        checkpoint()?;
+        let root_source_sha256 = sha256_checked(source.text().as_bytes(), checkpoint)?;
+        let explicit_inputs_sha256 = sha256_checked(explicit_inputs, checkpoint)?;
         imported_modules.sort();
         imported_modules.dedup_by(|left, right| left.logical_name == right.logical_name);
-        let sha256 = aggregate_sha256(
+        checkpoint()?;
+        let sha256 = aggregate_sha256_checked(
             &root_logical_name,
             &root_source_sha256,
             &imported_modules,
@@ -49,9 +81,11 @@ impl EvaluationFingerprint {
             CONFIGURATION_ABI_VERSION,
             EVALUATOR_POLICY_VERSION,
             &explicit_inputs_sha256,
-        );
+            checkpoint,
+        )?;
 
-        Self {
+        checkpoint()?;
+        Ok(Self {
             root_logical_name,
             root_source_sha256,
             imported_modules,
@@ -60,7 +94,7 @@ impl EvaluationFingerprint {
             evaluator_policy_version: EVALUATOR_POLICY_VERSION,
             explicit_inputs_sha256,
             sha256,
-        }
+        })
     }
 
     /// Validate that this is one canonical, internally consistent evaluation
@@ -217,6 +251,31 @@ fn aggregate_sha256(
     evaluator_policy_version: u32,
     explicit_inputs_sha256: &str,
 ) -> String {
+    let mut checkpoint = || Ok::<(), Infallible>(());
+    infallible(aggregate_sha256_checked(
+        root_logical_name,
+        root_source_sha256,
+        imported_modules,
+        gluon_version,
+        configuration_abi_version,
+        evaluator_policy_version,
+        explicit_inputs_sha256,
+        &mut checkpoint,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aggregate_sha256_checked<E>(
+    root_logical_name: &str,
+    root_source_sha256: &str,
+    imported_modules: &[ModuleFingerprint],
+    gluon_version: &str,
+    configuration_abi_version: u32,
+    evaluator_policy_version: u32,
+    explicit_inputs_sha256: &str,
+    checkpoint: &mut impl FnMut() -> Result<(), E>,
+) -> Result<String, E> {
+    checkpoint()?;
     let mut digest = Sha256::new();
     digest.update(b"os-tools-gluon-evaluation\0");
     update_field(&mut digest, root_logical_name.as_bytes());
@@ -228,8 +287,11 @@ fn aggregate_sha256(
     for module in imported_modules {
         update_field(&mut digest, module.logical_name.as_bytes());
         update_field(&mut digest, module.sha256.as_bytes());
+        checkpoint()?;
     }
-    format!("{:x}", digest.finalize())
+    let sha256 = format!("{:x}", digest.finalize());
+    checkpoint()?;
+    Ok(sha256)
 }
 
 fn update_field(digest: &mut Sha256, value: &[u8]) {
@@ -237,8 +299,29 @@ fn update_field(digest: &mut Sha256, value: &[u8]) {
     digest.update(value);
 }
 
+#[cfg(test)]
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let mut checkpoint = || Ok::<(), Infallible>(());
+    infallible(sha256_checked(bytes, &mut checkpoint))
+}
+
+fn sha256_checked<E>(bytes: &[u8], checkpoint: &mut impl FnMut() -> Result<(), E>) -> Result<String, E> {
+    checkpoint()?;
+    let mut digest = Sha256::new();
+    for chunk in bytes.chunks(HASH_CHECKPOINT_BYTES) {
+        digest.update(chunk);
+        checkpoint()?;
+    }
+    let sha256 = format!("{:x}", digest.finalize());
+    checkpoint()?;
+    Ok(sha256)
+}
+
+fn infallible<T>(result: Result<T, Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(never) => match never {},
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +354,37 @@ mod tests {
             ["a.module", "z.module"]
         );
         assert_eq!(fingerprint.validate(), Ok(()));
+    }
+
+    #[test]
+    fn checked_hashing_yields_at_bounded_intervals() {
+        let bytes = vec![0_u8; HASH_CHECKPOINT_BYTES * 2];
+        let mut checkpoints = 0;
+        let mut checkpoint = || {
+            checkpoints += 1;
+            if checkpoints == 3 { Err("deadline") } else { Ok(()) }
+        };
+
+        assert_eq!(sha256_checked(&bytes, &mut checkpoint), Err("deadline"));
+        // One checkpoint before hashing and one after each bounded chunk.
+        assert_eq!(checkpoints, 3);
+    }
+
+    #[test]
+    fn checked_and_unchecked_fingerprints_have_the_same_identity() {
+        let source = Source::new("root.glu", "42");
+        let modules = vec![ModuleFingerprint::new("cast.answer", "42")];
+        let expected = EvaluationFingerprint::new(&source, modules.clone(), b"inputs");
+        let mut checkpoints = 0;
+        let mut checkpoint = || {
+            checkpoints += 1;
+            Ok::<(), Infallible>(())
+        };
+
+        let checked = EvaluationFingerprint::new_checked(&source, modules, b"inputs", &mut checkpoint).unwrap();
+
+        assert_eq!(checked, expected);
+        assert!(checkpoints > 0);
     }
 
     #[test]

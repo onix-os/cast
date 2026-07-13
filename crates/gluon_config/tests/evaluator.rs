@@ -86,6 +86,23 @@ fn fingerprints_source_and_explicit_inputs() {
 }
 
 #[test]
+fn explicit_evaluation_inputs_are_bounded_before_fingerprinting() {
+    let limits = Limits {
+        max_explicit_input_bytes: 2,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits);
+    let source = Source::new("explicit-inputs.glu", "42");
+
+    assert_eq!(evaluator.evaluate_with_inputs::<i64>(&source, b"12").unwrap().value, 42);
+    let error = evaluator.evaluate_with_inputs::<i64>(&source, b"123").unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ExplicitInputSize));
+    assert_eq!(error.source_name.as_deref(), Some("explicit-inputs.glu"));
+}
+
+#[test]
 fn source_root_loads_only_contained_root_files() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("config.glu"), r#""rooted""#).unwrap();
@@ -134,6 +151,40 @@ fn recursive_evaluation_is_interrupted_by_the_watchdog() {
 
     assert_eq!(error.category, DiagnosticCategory::Limit);
     assert_eq!(error.limit, Some(LimitKind::Time));
+}
+
+#[test]
+fn zero_timeout_wins_before_import_discovery_and_parsing() {
+    let limits = Limits {
+        timeout: Duration::ZERO,
+        ..Limits::default()
+    };
+    // Without the total deadline this would be reported as a parse error
+    // before the old run_expr-only watchdog was even started.
+    let source = Source::new("malformed.glu", "let x = in import! \"missing.glu\"");
+
+    let error = Evaluator::new(limits).evaluate::<i64>(&source).unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::Time));
+    assert_eq!(error.source_name.as_deref(), Some("malformed.glu"));
+}
+
+#[test]
+fn evaluate_file_uses_one_deadline_for_loading_and_evaluation() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("config.glu"), "42").unwrap();
+    let limits = Limits {
+        timeout: Duration::ZERO,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+
+    let error = evaluator.evaluate_file::<i64>("config.glu").unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::Time));
+    assert_eq!(error.source_name.as_deref(), Some("config.glu"));
 }
 
 #[test]

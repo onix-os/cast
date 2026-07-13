@@ -7,6 +7,7 @@
 //! avoids convenience VM builders and ambient importers because those expose
 //! host I/O primitives and process-wide import paths.
 
+mod deadline;
 mod diagnostic;
 mod evaluator;
 mod fingerprint;
