@@ -5,8 +5,9 @@ use std::{io, path::Path, path::PathBuf};
 
 use itertools::Itertools;
 use licenses::match_licences;
-use moss::{Dependency, util};
-use stone_recipe::{BuildSpec, PackageSpec, RecipeSpec, SourceSpec, encode_recipe_gluon_spec};
+use moss::util;
+use stone::relation::{Dependency, Kind};
+use stone_recipe::UpstreamSpec;
 use thiserror::Error;
 use tui::Styled;
 use url::Url;
@@ -69,46 +70,116 @@ impl Drafter {
             build::System::Autotools
         });
 
-        let spec = draft_recipe_spec(&metadata, build_system, build.dependencies, licenses);
-        let stone = encode_recipe_gluon_spec(&spec)?;
+        let stone = encode_package_v2(&metadata, build_system, build.dependencies, licenses);
 
         Ok(Draft { stone })
     }
 }
 
-fn draft_recipe_spec(
+fn encode_package_v2(
     metadata: &Metadata,
     build_system: build::System,
     dependencies: impl IntoIterator<Item = Dependency>,
     licenses: Vec<String>,
-) -> RecipeSpec {
-    let source = SourceSpec {
-        name: placeholder(&metadata.source.name, "UPDATE-NAME"),
-        version: placeholder(&metadata.source.version, "0.0.0"),
-        release: 1,
-        homepage: placeholder(&metadata.source.homepage, "https://example.invalid/UPDATE-HOMEPAGE"),
-        license: licenses,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::from("let b = import! boulder.package.v2\n");
+    let builder_module = match build_system {
+        build::System::Cmake => Some("boulder.builders.cmake.v1"),
+        build::System::Meson => Some("boulder.builders.meson.v1"),
+        build::System::Cargo => Some("boulder.builders.cargo.v1"),
+        build::System::Autotools => Some("boulder.builders.autotools.v1"),
+        _ => None,
     };
-    let phases = build_system.phases();
-    let mut recipe = RecipeSpec::new(source);
-    recipe.upstreams = metadata.upstream_specs();
-    recipe.build = BuildSpec {
-        setup: phases.setup.map(str::to_owned),
-        build: phases.build.map(str::to_owned),
-        install: phases.install.map(str::to_owned),
-        check: phases.check.map(str::to_owned),
-        workload: None,
-        environment: build_system.environment().map(str::to_owned),
-        build_deps: builddeps(dependencies),
-        check_deps: Vec::new(),
-    };
-    recipe.package = PackageSpec {
-        summary: Some("UPDATE SUMMARY".to_owned()),
-        description: Some("UPDATE DESCRIPTION".to_owned()),
-        ..PackageSpec::default()
-    };
-    recipe.options.networking = build_system.options().networking;
-    recipe
+    if let Some(module) = builder_module {
+        writeln!(output, "let builder = import! {module}").unwrap();
+    }
+
+    output.push_str("let base = b.mk_package (b.meta {\n");
+    for (field, value) in [
+        ("pname", placeholder(&metadata.source.name, "UPDATE-NAME")),
+        ("version", placeholder(&metadata.source.version, "0.0.0")),
+        (
+            "homepage",
+            placeholder(&metadata.source.homepage, "https://example.invalid/UPDATE-HOMEPAGE"),
+        ),
+    ] {
+        writeln!(output, "    {field} = {},", quoted(&value)).unwrap();
+        if field == "version" {
+            output.push_str("    release = 1,\n");
+        }
+    }
+    writeln!(output, "    license = {},", string_array(&licenses)).unwrap();
+    output.push_str("})\n");
+    output.push_str("let root = {\n");
+    output.push_str("    summary = b.optional.set \"UPDATE SUMMARY\",\n");
+    output.push_str("    description = b.optional.set \"UPDATE DESCRIPTION\",\n");
+    output.push_str("    .. b.output \"out\"\n}\n");
+    output.push_str("{\n");
+
+    if builder_module.is_some() {
+        let run_tests = matches!(build_system, build::System::Cargo);
+        output.push_str("    builder = builder.builder {\n");
+        writeln!(
+            output,
+            "        run_tests = b.boolean.{},",
+            if run_tests { "true" } else { "false" }
+        )
+        .unwrap();
+        output.push_str("        .. builder.defaults\n    },\n");
+    } else {
+        let phases = build_system.phases();
+        output.push_str("    builder = b.builder.shell (b.scripts {\n");
+        for (name, value) in [
+            ("setup", phases.setup),
+            ("build", phases.build),
+            ("install", phases.install),
+            ("check", phases.check),
+            ("environment", build_system.environment()),
+        ] {
+            if let Some(value) = value {
+                writeln!(output, "        {name} = b.optional.set {},", quoted(value)).unwrap();
+            }
+        }
+        output.push_str("        .. b.defaults.scripts\n    }) [],\n");
+    }
+
+    if matches!(build_system, build::System::Cargo) {
+        output.push_str("    hooks = {\n");
+        output.push_str("        pre_setup = [\"%cargo_fetch\"],\n");
+        output.push_str("        .. b.defaults.hooks\n    },\n");
+    }
+    let dependencies = dependencies.into_iter().sorted().collect::<Vec<_>>();
+    writeln!(
+        output,
+        "    build_inputs = [{}],",
+        dependencies
+            .iter()
+            .map(encode_dependency)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .unwrap();
+    output.push_str("    sources = [\n");
+    for source in metadata.upstream_specs() {
+        match source {
+            UpstreamSpec::Archive { url, hash, .. } => {
+                writeln!(output, "        b.source.archive {} {},", quoted(&url), quoted(&hash)).unwrap();
+            }
+            UpstreamSpec::Git { url, git_ref, .. } => {
+                writeln!(output, "        b.source.git {} {},", quoted(&url), quoted(&git_ref)).unwrap();
+            }
+        }
+    }
+    output.push_str("    ],\n    outputs = [root],\n");
+    if build_system.options().networking {
+        output.push_str("    options = {\n");
+        output.push_str("        networking = b.boolean.true,\n");
+        output.push_str("        .. b.defaults.options\n    },\n");
+    }
+    output.push_str("    .. base\n}\n");
+    output
 }
 
 fn placeholder(value: &str, fallback: &str) -> String {
@@ -119,8 +190,27 @@ fn placeholder(value: &str, fallback: &str) -> String {
     }
 }
 
-fn builddeps(deps: impl IntoIterator<Item = Dependency>) -> Vec<String> {
-    deps.into_iter().map(|dep| dep.to_string()).sorted().collect()
+fn encode_dependency(dependency: &Dependency) -> String {
+    let constructor = match dependency.kind {
+        Kind::PackageName => "package",
+        Kind::SharedLibrary => "soname",
+        Kind::PkgConfig => "pkgconfig",
+        Kind::Interpreter => "interpreter",
+        Kind::CMake => "cmake",
+        Kind::Python => "python",
+        Kind::Binary => "binary",
+        Kind::SystemBinary => "system_binary",
+        Kind::PkgConfig32 => "pkgconfig32",
+    };
+    format!("b.dep.{constructor} {}", quoted(&dependency.name))
+}
+
+fn quoted(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a string is infallible")
+}
+
+fn string_array(values: &[String]) -> String {
+    format!("[{}]", values.iter().map(|value| quoted(value)).join(", "))
 }
 
 fn format_licenses(licenses: Vec<String>) -> Vec<String> {
@@ -170,8 +260,6 @@ pub enum Error {
     AnalyzeBuildSystem(#[source] build::Error),
     #[error("upstream")]
     Upstream(#[from] upstream::Error),
-    #[error("encode canonical Gluon recipe")]
-    EncodeRecipe(#[from] stone_recipe::RecipeConversionError),
     #[error("licensing")]
     Licenses(#[from] licenses::Error),
     #[error("io")]
@@ -185,7 +273,7 @@ mod test {
     use std::{collections::BTreeSet, path::Path};
 
     use gluon_config::Source as GluonSource;
-    use stone_recipe::evaluate_gluon;
+    use stone_recipe::package::evaluate_gluon;
 
     use super::*;
 
@@ -207,17 +295,17 @@ mod test {
             uri: Url::parse("https://example.com/example-1.2.3.tar.xz").unwrap(),
             hash: "0123456789abcdef".to_owned(),
         }]);
-        let spec = draft_recipe_spec(
+        let source = encode_package_v2(
             &metadata,
             build::System::Cargo,
             BTreeSet::<Dependency>::new(),
             vec!["MPL-2.0".to_owned()],
         );
 
-        let source = encode_recipe_gluon_spec(&spec).unwrap();
         let evaluated = evaluate_gluon(&GluonSource::new("stone.glu", source.clone())).unwrap();
 
-        assert!(source.contains("Canonical standalone Boulder recipe"));
+        assert!(source.contains("boulder.package.v2"));
+        assert!(source.contains("boulder.builders.cargo.v1"));
         assert!(source.contains("UPDATE SUMMARY"));
         assert_eq!(evaluated.recipe.source.name, "example");
         assert_eq!(evaluated.recipe.source.version, "1.2.3");

@@ -143,9 +143,9 @@ mod tests {
     use super::*;
     use crate::source_lock::{SOURCE_LOCK_FILE_NAME, SourceLock, encode_source_lock};
 
-    const RECIPE_SOURCE: &str = r#"let boulder = import! boulder.recipe.v1
-boulder.recipe (boulder.source {
-    name = "example",
+    const RECIPE_SOURCE: &str = r#"let boulder = import! boulder.package.v2
+boulder.mk_package (boulder.meta {
+    pname = "example",
     version = "1.2.3",
     release = 1,
     homepage = "https://example.invalid",

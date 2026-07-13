@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::{fmt, num::NonZeroU64};
 
-use moss::Dependency;
+use stone::relation::Dependency;
 
 use super::File;
 

@@ -248,6 +248,7 @@ let output = \name -> {
     paths = [],
     conflicts = [],
 }
+let output_with: OutputSpec -> OutputSpec = \value -> value
 
 let profile = \name -> {
     name,
@@ -347,7 +348,7 @@ let git = \url git_ref -> GitSource {
     scripts = \value -> value,
     hooks = \value -> value,
     output,
-    output_with = \value -> value,
+    output_with,
     profile,
     profile_with = \value -> value,
     options = \value -> value,

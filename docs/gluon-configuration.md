@@ -21,7 +21,7 @@ constructed only during that conversion.
 
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
-| Boulder recipe | `stone.glu` | `boulder.recipe.v1` |
+| Boulder package | `stone.glu` | `boulder.package.v2` and `boulder.builders.*.v1` |
 | Boulder macro policy | `bin/boulder/data/macros/**/*.glu` | `boulder.macros.v1` |
 | Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
 | Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
@@ -64,7 +64,7 @@ effect, thread, channel, and reference modules are explicitly denied.
 There are two import classes:
 
 1. Versioned in-memory modules supplied by OS Tools, such as
-   `boulder.recipe.v1` and `moss.system.v1`.
+   `boulder.package.v2` and `moss.system.v1`.
 2. Quoted relative modules beneath the explicit source root, for example
    `import! "./package-policy.glu"`.
 
@@ -96,7 +96,8 @@ or terminating the process.
 
 ## Typed and versioned ABIs
 
-The current configuration ABI version and each consumer ABI are version `1`.
+The shared configuration boundary is version `1`. The canonical Boulder
+package ABI is version `2`; the standard builder modules are version `1`.
 The embedded modules expose constructors, defaults, explicit option/boolean
 variants, and immutable records. Gluon-facing DTOs use only stable language
 shapes such as strings, integers, arrays, records, and explicit variants.
@@ -105,23 +106,29 @@ Record update syntax makes policy composition ordinary Gluon rather than a
 sidecar overlay format:
 
 ```gluon
-let boulder = import! boulder.recipe.v1
+let boulder = import! boulder.package.v2
 let add_runtime = import! "./package_policy.glu"
 
-let source = boulder.source {
-    name = "hello",
+let meta = boulder.meta {
+    pname = "hello",
     version = "1.0.0",
     release = 1,
     homepage = "https://example.invalid/hello",
     license = ["MPL-2.0"],
 }
 
-add_runtime (boulder.recipe source)
+{
+    outputs = [add_runtime (boulder.output "out")],
+    .. boulder.mk_package meta
+}
 ```
 
-`boulder.compose` provides typed append, prepend, and override operations for
-build phases, dependency arrays, packages, profiles, and subpackages. Patch
-records distinguish an omitted change from overriding an array with `[]`.
+Package factories are ordinary functions from an explicit dependency record to
+a concrete package value. `boulder.override_attrs` applies a total typed patch;
+patch records distinguish keeping an array from replacing it with `[]`.
+Standard CMake, Meson, Cargo, and Autotools modules declare their required
+tools structurally and lower to the transitional shell executor only after
+evaluation.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
@@ -198,7 +205,16 @@ boulder recipe check ./stone.glu
 
 The command prints the evaluation fingerprint on success. Parse and type errors
 identify the `.glu` source and span; semantic conversion errors identify a
-field path such as `source.release` or `upstreams[0].url`.
+field path such as `meta.release` or `sources[0].url`.
+
+Print the concrete normalized package declaration produced by the factory:
+
+```sh
+boulder recipe eval ./stone.glu
+```
+
+Boulder build, check, update, and evaluation all use `boulder.package.v2`.
+There is no automatic `boulder.recipe.v1` fallback or dual-source precedence.
 
 Create a skeletal recipe from one or more source archives:
 

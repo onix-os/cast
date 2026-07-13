@@ -363,16 +363,16 @@ mod tests {
 
     fn gluon_git_recipe(url: &str) -> String {
         format!(
-            r#"let boulder = import! boulder.recipe.v1
-let base = boulder.recipe (boulder.source {{
-    name = "example",
+            r#"let boulder = import! boulder.package.v2
+let base = boulder.mk_package (boulder.meta {{
+    pname = "example",
     version = "1.2.3",
     release = 1,
     homepage = "https://example.com",
     license = ["MPL-2.0"],
 }})
 {{
-    upstreams = [boulder.upstream.git "{url}" "main"],
+    sources = [boulder.source.git "{url}" "main"],
     .. base
 }}"#
         )

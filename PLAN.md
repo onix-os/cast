@@ -318,7 +318,7 @@ explicit, and no macro/profile fingerprint is discarded.
   model.
 - [x] Add imported-package, dependency-override, attribute-override, and error
   diagnostic examples.
-- [ ] Add an evaluation command that prints the concrete normalized
+- [x] Add an evaluation command that prints the concrete normalized
   `PackageSpec`.
 
 **Exit gate:** real fixtures are authored as package factories and Rust only

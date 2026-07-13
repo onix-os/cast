@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-let boulder = import! boulder.recipe.v1
-let base = boulder.recipe (boulder.source {
-    name = "example",
+let boulder = import! boulder.package.v2
+let base = boulder.mk_package (boulder.meta {
+    pname = "example",
     version = "1.2.3",
     release = 1,
     homepage = "https://example.com",
     license = ["MPL-2.0"],
 })
 {
-    upstreams = [
-        boulder.upstream.archive
+    sources = [
+        boulder.source.archive
             "https://example.com/source.tar.xz"
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        boulder.upstream.git "https://example.com/source.git" "main",
+        boulder.source.git "https://example.com/source.git" "main",
     ],
     .. base
 }

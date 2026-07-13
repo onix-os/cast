@@ -55,6 +55,14 @@ pub enum Subcommand {
         )]
         recipe: PathBuf,
     },
+    #[command(about = "Evaluate and print the concrete normalized package-v2 declaration")]
+    Eval {
+        #[arg(
+            default_value = "./stone.glu",
+            help = "Path to a package-v2 stone.glu file or recipe directory"
+        )]
+        recipe: PathBuf,
+    },
     #[command(about = "Suggest a release bump without rewriting authored Gluon")]
     Bump {
         #[arg(
@@ -137,6 +145,7 @@ fn parse_updated_source(s: &str) -> Result<UpdatedSource, String> {
 pub fn handle(command: Command, env: Env, _yes: bool, _verbose: bool) -> Result<(), Error> {
     match command.subcommand {
         Subcommand::Check { recipe } => check(recipe),
+        Subcommand::Eval { recipe } => eval(recipe),
         Subcommand::Bump { recipe, release } => bump(recipe, release),
         Subcommand::New { output, upstreams } => new(env, output, upstreams),
         Subcommand::Update {
@@ -160,6 +169,16 @@ fn check(path: PathBuf) -> Result<(), Error> {
     Ok(())
 }
 
+fn eval(path: PathBuf) -> Result<(), Error> {
+    let recipe = recipe::Recipe::load(path).map_err(Error::CheckRecipe)?;
+    println!("package-v2-evaluation {{");
+    println!("  recipe = {:?}", recipe.path.display().to_string());
+    println!("  fingerprint = {:?}", recipe.fingerprint.sha256);
+    println!("  declaration = {:#?}", recipe.declaration);
+    println!("}}");
+    Ok(())
+}
+
 fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
     let recipe = load_authored_gluon(&recipe)?;
     let previous = recipe.parsed.source.release;
@@ -177,7 +196,7 @@ fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
 
     require_manual_edit(
         &recipe.path,
-        vec![SuggestedChange::new("source.release", previous, proposed)],
+        vec![SuggestedChange::new("meta.release", previous, proposed)],
     )
 }
 
@@ -234,7 +253,7 @@ fn update(
     let mut changes = Vec::new();
     if proposed_version != recipe.parsed.source.version {
         changes.push(SuggestedChange::new(
-            "source.version",
+            "meta.version",
             &recipe.parsed.source.version,
             proposed_version,
         ));
@@ -247,7 +266,7 @@ fn update(
             .checked_add(1)
             .ok_or(Error::ReleaseOverflow)?;
         changes.push(SuggestedChange::new(
-            "source.release",
+            "meta.release",
             recipe.parsed.source.release,
             proposed_release,
         ));
@@ -266,19 +285,19 @@ fn update(
                 let new_hash = runtime::block_on(fetch_and_cache_upstream(&env, new_uri.clone(), &mpb))?;
                 if original.url != new_uri {
                     changes.push(SuggestedChange::new(
-                        format!("upstreams[{index}].url"),
+                        format!("sources[{index}].url"),
                         original.url.as_str(),
                         new_uri.as_str(),
                     ));
                 }
                 if *hash != new_hash {
-                    changes.push(SuggestedChange::new(format!("upstreams[{index}].hash"), hash, new_hash));
+                    changes.push(SuggestedChange::new(format!("sources[{index}].hash"), hash, new_hash));
                 }
             }
             (upstream::Props::Git { git_ref, .. }, UpdatedSource::Git(new_ref)) => {
                 if *git_ref != new_ref {
                     changes.push(SuggestedChange::new(
-                        format!("upstreams[{index}].git_ref"),
+                        format!("sources[{index}].git_ref"),
                         git_ref,
                         new_ref,
                     ));
@@ -342,7 +361,7 @@ fn load_authored_gluon(path: &Path) -> Result<recipe::Recipe, Error> {
 }
 
 fn require_manual_edit(path: &Path, changes: Vec<SuggestedChange>) -> Result<(), Error> {
-    let lock_refresh_required = changes.iter().any(|change| change.field.starts_with("upstreams["));
+    let lock_refresh_required = changes.iter().any(|change| change.field.starts_with("sources["));
     println!("suggested_authored_changes {{");
     println!("  recipe = {:?}", path.display().to_string());
     for change in changes {
@@ -552,11 +571,11 @@ pub enum Error {
 mod tests {
     use super::*;
 
-    const AUTHORED_EXPRESSION: &str = r#"let boulder = import! boulder.recipe.v1
+    const AUTHORED_EXPRESSION: &str = r#"let boulder = import! boulder.package.v2
 let release = 1
 let version = "1.2.3"
-boulder.recipe (boulder.source {
-    name = "example",
+boulder.mk_package (boulder.meta {
+    pname = "example",
     version,
     release,
     homepage = "https://example.com",
@@ -564,16 +583,16 @@ boulder.recipe (boulder.source {
 })
 "#;
 
-    const AUTHORED_WITH_ARCHIVE: &str = r#"let boulder = import! boulder.recipe.v1
-let base = boulder.recipe (boulder.source {
-    name = "example",
+    const AUTHORED_WITH_ARCHIVE: &str = r#"let boulder = import! boulder.package.v2
+let base = boulder.mk_package (boulder.meta {
+    pname = "example",
     version = "1.2.3",
     release = 1,
     homepage = "https://example.com",
     license = ["MPL-2.0"],
 })
 {
-    upstreams = [boulder.upstream.archive "https://example.com/source.tar.xz" "aaaaaaaa"],
+    sources = [boulder.source.archive "https://example.com/source.tar.xz" "aaaaaaaa"],
     .. base
 }
 "#;
@@ -593,6 +612,12 @@ let base = boulder.recipe (boulder.source {
         assert!(matches!(
             check.subcommand,
             Subcommand::Check { recipe } if recipe == Path::new("./stone.glu")
+        ));
+
+        let eval = Command::try_parse_from(["recipe", "eval"]).unwrap();
+        assert!(matches!(
+            eval.subcommand,
+            Subcommand::Eval { recipe } if recipe == Path::new("./stone.glu")
         ));
 
         let bump = Command::try_parse_from(["recipe", "bump"]).unwrap();

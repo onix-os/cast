@@ -10,7 +10,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use fs_err as fs;
 use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
-use stone_recipe::evaluate_gluon_with_inputs;
+use stone_recipe::package::{PackageSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
 
 use crate::{
@@ -25,6 +25,8 @@ pub struct Recipe {
     pub path: PathBuf,
     pub source: String,
     pub parsed: Parsed,
+    /// Concrete package-v2 declaration produced by the authored factory.
+    pub declaration: PackageSpec,
     pub source_lock: Option<SourceLock>,
     pub fingerprint: EvaluationFingerprint,
     pub build_time: DateTime<Utc>,
@@ -34,9 +36,10 @@ impl Recipe {
     /// Desired recipe value invariants are checked here
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
+        let (source, declaration, parsed, source_lock, fingerprint) =
+            load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
 
-        Self::from_loaded(path, source, parsed, source_lock, fingerprint)
+        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint)
     }
 
     /// Load only the authored expression, ignoring any generated source lock.
@@ -45,14 +48,15 @@ impl Recipe {
     /// state must not prevent Boulder from evaluating the authoritative source.
     pub(crate) fn load_authored(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
+        let (source, declaration, parsed, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
 
-        Self::from_loaded(path, source, parsed, source_lock, fingerprint)
+        Self::from_loaded(path, source, declaration, parsed, source_lock, fingerprint)
     }
 
     fn from_loaded(
         path: PathBuf,
         source: String,
+        declaration: PackageSpec,
         parsed: Parsed,
         source_lock: Option<SourceLock>,
         fingerprint: EvaluationFingerprint,
@@ -65,6 +69,7 @@ impl Recipe {
             path,
             source,
             parsed,
+            declaration,
             source_lock,
             fingerprint,
             build_time,
@@ -133,7 +138,7 @@ enum SourceLockPolicy {
 fn load_gluon(
     path: &Path,
     source_lock_policy: SourceLockPolicy,
-) -> Result<(String, Parsed, Option<SourceLock>, EvaluationFingerprint), Error> {
+) -> Result<(String, PackageSpec, Parsed, Option<SourceLock>, EvaluationFingerprint), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
@@ -176,6 +181,7 @@ fn load_gluon(
     }
     Ok((
         source.text().to_owned(),
+        evaluated.package,
         evaluated.recipe,
         source_lock,
         evaluated.fingerprint,
@@ -246,7 +252,7 @@ pub enum Error {
         source: Box<source_lock::ValidationError>,
     },
     #[error("evaluate Gluon recipe")]
-    EvaluateGluon(#[from] stone_recipe::RecipeEvaluationError),
+    EvaluateGluon(#[from] stone_recipe::package::PackageEvaluationError),
     #[error("invalid recipe")]
     Validation(#[from] stone_recipe::ValidationError),
 }
@@ -256,7 +262,7 @@ mod tests {
     use super::*;
 
     const SOURCE_SPEC: &str = r#"{
-    name = "example",
+    pname = "example",
     version = "1.2.3",
     release = 1,
     homepage = "https://example.com",
@@ -270,17 +276,17 @@ mod tests {
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
     fn gluon_recipe(source: &str) -> String {
-        format!("let boulder = import! boulder.recipe.v1\nboulder.recipe (boulder.source {source})")
+        format!("let boulder = import! boulder.package.v2\nboulder.mk_package (boulder.meta {source})")
     }
 
     fn gluon_recipe_with_upstreams() -> String {
         format!(
-            r#"let boulder = import! boulder.recipe.v1
-let base = boulder.recipe (boulder.source {SOURCE_SPEC})
+            r#"let boulder = import! boulder.package.v2
+let base = boulder.mk_package (boulder.meta {SOURCE_SPEC})
 {{
-    upstreams = [
-        boulder.upstream.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
-        boulder.upstream.git "{GIT_URL}" "{GIT_REF}",
+    sources = [
+        boulder.source.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
+        boulder.source.git "{GIT_URL}" "{GIT_REF}",
     ],
     .. base
 }}"#
@@ -347,7 +353,7 @@ let base = boulder.recipe (boulder.source {SOURCE_SPEC})
             fingerprint
                 .imported_modules
                 .iter()
-                .any(|module| module.logical_name == "boulder.recipe.v1")
+                .any(|module| module.logical_name == "boulder.package.v2")
         );
     }
 
@@ -358,9 +364,9 @@ let base = boulder.recipe (boulder.source {SOURCE_SPEC})
         fs::write(
             root.path().join("stone.glu"),
             r#"
-let boulder = import! boulder.recipe.v1
+let boulder = import! boulder.package.v2
 let source = import! "source.glu"
-boulder.recipe (boulder.source source)
+boulder.mk_package (boulder.meta source)
 "#,
         )
         .unwrap();
@@ -376,13 +382,7 @@ boulder.recipe (boulder.source source)
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
-            [
-                "boulder.recipe.v1",
-                "source.glu",
-                "std.array.prim",
-                "std.string.prim",
-                "std.types",
-            ]
+            ["boulder.package.v2", "source.glu", "std.array.prim", "std.types",]
         );
     }
 
@@ -392,9 +392,9 @@ boulder.recipe (boulder.source source)
         fs::write(
             root.path().join("stone.glu"),
             r#"
-let boulder = import! boulder.recipe.v1
-boulder.recipe (boulder.source {
-    name = "example",
+let boulder = import! boulder.package.v2
+boulder.mk_package (boulder.meta {
+    pname = "example",
     version = "1.2.3",
     release = 1,
     homepage = 42,
@@ -405,13 +405,29 @@ boulder.recipe (boulder.source {
         .unwrap();
 
         let error = Recipe::load(root.path()).unwrap_err();
-        let Error::EvaluateGluon(stone_recipe::RecipeEvaluationError::Evaluation(diagnostic)) = error else {
+        let Error::EvaluateGluon(stone_recipe::package::PackageEvaluationError::Evaluation(diagnostic)) = error else {
             panic!("unexpected error: {error}");
         };
 
         assert_eq!(diagnostic.category, gluon_config::DiagnosticCategory::Type);
         assert_eq!(diagnostic.source_name.as_deref(), Some("stone.glu"));
         assert!(diagnostic.span.is_some());
+    }
+
+    #[test]
+    fn legacy_v1_recipe_is_not_an_implicit_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("stone.glu"),
+            format!("let boulder = import! boulder.recipe.v1\nboulder.recipe (boulder.source {SOURCE_SPEC})"),
+        )
+        .unwrap();
+
+        let error = Recipe::load(root.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::EvaluateGluon(stone_recipe::package::PackageEvaluationError::Evaluation(_))
+        ));
     }
 
     #[test]
