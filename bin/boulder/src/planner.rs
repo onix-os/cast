@@ -16,7 +16,8 @@ use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolchain, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
     DerivationProvenance, DerivationValidationError, ExecutionPolicy, FilesystemPolicy, JobPlan, LockedIdentity,
     LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation,
-    PackageIdentity, Platform, RelationPlan, RepositorySnapshot, StepPlan, profile_aggregate_fingerprint,
+    PackageIdentity, Platform, RelationPlan, RepositorySnapshot, RootMaterializationMode, StepPlan,
+    profile_aggregate_fingerprint,
 };
 use thiserror::Error;
 
@@ -217,6 +218,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     ]);
     plan.layout = builder.paths.layout().clone();
     plan.execution = ExecutionPolicy {
+        root_materialization: RootMaterializationMode::LockedClosure,
         network: if builder.recipe.declaration.options.networking {
             NetworkMode::Enabled
         } else {

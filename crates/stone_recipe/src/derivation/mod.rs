@@ -33,7 +33,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 6;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 7;
 
 const DERIVATION_HASH_DOMAIN: &[u8] = b"os-tools-derivation-plan\0";
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"boulder-profile-fragments-v2\0";
@@ -996,6 +996,7 @@ impl BuilderLayout {
 /// Semantic execution choices visible to the build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionPolicy {
+    pub root_materialization: RootMaterializationMode,
     pub network: NetworkMode,
     pub filesystems: FilesystemPolicy,
     pub compiler_cache: bool,
@@ -1005,6 +1006,7 @@ pub struct ExecutionPolicy {
 impl Default for ExecutionPolicy {
     fn default() -> Self {
         Self {
+            root_materialization: RootMaterializationMode::LockedClosure,
             network: NetworkMode::Disabled,
             filesystems: FilesystemPolicy::default(),
             compiler_cache: false,
@@ -1015,6 +1017,9 @@ impl Default for ExecutionPolicy {
 
 impl ExecutionPolicy {
     fn validate(&self) -> Result<(), DerivationValidationError> {
+        if matches!(self.root_materialization, RootMaterializationMode::PackageManagerState) {
+            return Err(DerivationValidationError::PackageManagerRootMaterialization);
+        }
         if matches!(self.network, NetworkMode::Enabled) {
             return Err(DerivationValidationError::NetworkEnabled);
         }
@@ -1025,6 +1030,10 @@ impl ExecutionPolicy {
     }
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.variant(match self.root_materialization {
+            RootMaterializationMode::LockedClosure => 0,
+            RootMaterializationMode::PackageManagerState => 1,
+        });
         encoder.variant(match self.network {
             NetworkMode::Disabled => 0,
             NetworkMode::Enabled => 1,
@@ -1032,6 +1041,29 @@ impl ExecutionPolicy {
         self.filesystems.encode(encoder);
         encoder.bool(self.compiler_cache);
         encoder.u32(self.jobs);
+    }
+}
+
+/// How the build root is created from the package closure.
+///
+/// Frozen derivations permit only [`Self::LockedClosure`]: the executor may
+/// materialize the exact package IDs already present in [`BuildLock`] and the
+/// fixed build-root ABI, but may not consult package-manager state, compose a
+/// system model, resolve providers, or discover transaction triggers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootMaterializationMode {
+    LockedClosure,
+    /// Represented so validation can reject attempts to cross the freeze
+    /// boundary instead of silently selecting the stateful installation path.
+    PackageManagerState,
+}
+
+impl RootMaterializationMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LockedClosure => "locked-closure",
+            Self::PackageManagerState => "package-manager-state",
+        }
     }
 }
 
@@ -1545,6 +1577,8 @@ pub enum DerivationValidationError {
     ZeroSourceRelease,
     #[error("execution.jobs: value must be greater than zero")]
     ZeroJobs,
+    #[error("execution.root_materialization: package-manager state is not permitted in a frozen derivation")]
+    PackageManagerRootMaterialization,
     #[error("execution.network: enabled networking is not permitted in a frozen derivation")]
     NetworkEnabled,
     #[error("package.architecture: unsupported Stone artifact architecture {value:?}; expected one of {supported}")]
@@ -2115,6 +2149,7 @@ mod tests {
             zig_cache_dir: "/mason/zigcache".to_owned(),
         };
         plan.execution = ExecutionPolicy {
+            root_materialization: RootMaterializationMode::LockedClosure,
             network: NetworkMode::Disabled,
             filesystems: FilesystemPolicy::default(),
             compiler_cache: false,
@@ -2197,6 +2232,17 @@ mod tests {
         assert!(matches!(
             plan.validate(),
             Err(DerivationValidationError::NetworkEnabled)
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_package_manager_state_root_materialization() {
+        let mut plan = sample_plan();
+        plan.execution.root_materialization = RootMaterializationMode::PackageManagerState;
+
+        assert!(matches!(
+            plan.validate(),
+            Err(DerivationValidationError::PackageManagerRootMaterialization)
         ));
     }
 
@@ -2851,6 +2897,12 @@ mod tests {
                 "environment",
                 Box::new(|plan| {
                     plan.environment.insert("LANG".to_owned(), "C".to_owned());
+                }),
+            ),
+            (
+                "root-materialization",
+                Box::new(|plan| {
+                    plan.execution.root_materialization = RootMaterializationMode::PackageManagerState;
                 }),
             ),
             (

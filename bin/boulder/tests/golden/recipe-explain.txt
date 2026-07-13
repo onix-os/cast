@@ -1,6 +1,6 @@
 derivation_explain {
   schema {
-    derivation_plan = 6
+    derivation_plan = 7
     build_lock = 2
   }
   identity {
@@ -344,6 +344,7 @@ derivation_explain {
     zig_cache_dir = "/sandbox/cache/zig"
   }
   execution {
+    root_materialization = "locked-closure"
     network = "disabled"
     filesystems {
       proc = "none"
@@ -448,6 +449,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "ff3331d59c2944441e4ba750c6e4d32feb94946813bb533d068bb2260abd1a0d"
+    derivation_id = "30aac44fbb77eecc31bc8ed78e97259798b788e0cb77a1bfc7311dbbb9db72b0"
   }
 }

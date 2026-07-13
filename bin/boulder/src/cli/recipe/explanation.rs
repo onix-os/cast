@@ -346,6 +346,11 @@ impl Explanation<'_> {
         formatter.open(1, "execution");
         formatter.string(
             2,
+            "root_materialization",
+            self.plan.execution.root_materialization.as_str(),
+        );
+        formatter.string(
+            2,
             "network",
             match self.plan.execution.network {
                 NetworkMode::Disabled => "disabled",
@@ -689,7 +694,7 @@ mod tests {
             DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutionPolicy, JobPlan, LockedOutput,
             LockedOutputRef, LockedPackage, LockedRequest, OutputPlan, PackageIdentity, PhasePlan,
             PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
-            RepositorySnapshot, policy_composition_identity, profile_aggregate_fingerprint,
+            RepositorySnapshot, RootMaterializationMode, policy_composition_identity, profile_aggregate_fingerprint,
         },
     };
 
@@ -946,6 +951,7 @@ mod tests {
                 zig_cache_dir: "/sandbox/cache/zig".to_owned(),
             },
             execution: ExecutionPolicy {
+                root_materialization: RootMaterializationMode::LockedClosure,
                 network: NetworkMode::Disabled,
                 filesystems: Default::default(),
                 compiler_cache: true,

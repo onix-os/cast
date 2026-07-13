@@ -155,8 +155,12 @@ Deliberately unsupported:
 - Is validated before execution. Current validation covers schema versions,
   identities, locked closure references and cycles, source order and identity,
   unique phases/outputs/analyzers, output relations, guest paths, and explicit
-  concurrency, disabled networking, and the schema-v6 sandbox-filesystem
-  contract. An arbitrary explicit `Shell` escape cannot be statically proven
+  concurrency, disabled networking, schema-v7 locked-closure root
+  materialization, and the finite sandbox-filesystem contract. The locked
+  closure path copies only exact package IDs from `build.lock.glu`, creates the
+  fixed build-root ABI links, and never reads package-manager system intent,
+  composes a system snapshot, resolves providers, or discovers transaction or
+  system triggers. An arbitrary explicit `Shell` escape cannot be statically proven
   to use only declared tools, so every structural builder contract carries an
   explicit `required_tools` list; standard modules populate it automatically.
 - Is immutable after freezing. Execution can report observations such as
