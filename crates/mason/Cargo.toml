@@ -9,6 +9,9 @@ rust-version.workspace = true
 autobins = false
 
 [features]
+# This feature exposes only the harness-free cache-clean proof entry point.
+# Production consumers and the Cast binary never enable it.
+cache-clean-test-support = []
 # This feature exists only so Cargo can link the harness-free delegated
 # execution fixture below against Mason's existing contentful test machinery.
 # Production consumers and the Cast binary never enable it.
@@ -66,6 +69,12 @@ xz2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[test]]
+name = "cache_clean"
+path = "tests/cache_clean.rs"
+harness = false
+required-features = ["cache-clean-test-support"]
 
 [[test]]
 name = "delegated_execution_fixture"

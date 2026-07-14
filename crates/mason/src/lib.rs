@@ -30,7 +30,11 @@ pub mod source_lock;
 mod timing;
 mod upstream;
 
-#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+#[cfg(any(
+    test,
+    feature = "cache-clean-test-support",
+    feature = "delegated-fixture-test-support"
+))]
 pub(crate) fn private_tempdir() -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -38,6 +42,32 @@ pub(crate) fn private_tempdir() -> tempfile::TempDir {
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
         .expect("normalize private test directory");
     directory
+}
+
+/// Harness-free entry point for the descriptor-anchored cache-clean proof.
+///
+/// This API is deliberately unavailable unless Mason's narrowly scoped test
+/// feature is enabled. The standalone integration target uses it instead of
+/// libtest so the production container boundary can authenticate an exact
+/// single-task supervisor immediately before its fork-like clone.
+#[doc(hidden)]
+#[cfg(feature = "cache-clean-test-support")]
+pub mod cache_clean_test_support {
+    /// Prove cache cleaning preserves both its retained root and the target of
+    /// a symlink stored inside that root.
+    pub fn run() {
+        match std::env::var("CAST_CACHE_CLEAN_TEST_RUNNER") {
+            Ok(value) if value == "1" => {}
+            Ok(value) => panic!("CAST_CACHE_CLEAN_TEST_RUNNER must be exactly `1`, found {value:?}"),
+            Err(std::env::VarError::NotPresent) => {
+                panic!("CAST_CACHE_CLEAN_TEST_RUNNER must be set by the cache-clean test runner")
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                panic!("CAST_CACHE_CLEAN_TEST_RUNNER must be the UTF-8 value `1`")
+            }
+        }
+        crate::cli::run_harness_free_cache_clean_test();
+    }
 }
 
 /// Harness-free entry point for the delegated contentful execution fixture.

@@ -28,7 +28,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -74,6 +74,9 @@ fix:
 lint: binary-layout product-names config-formats
 	@echo "Running clippy..."
 	@$(CARGO) clippy --workspace -- --no-deps
+	@echo "Running clippy on the feature-gated harness-free cache-clean proof..."
+	@$(CARGO) clippy -p mason --features cache-clean-test-support \
+		--test cache_clean -- --no-deps
 	@echo "Running clippy on the feature-gated harness-free Mason fixture..."
 	@$(CARGO) clippy -p mason --features delegated-fixture-test-support \
 		--test delegated_execution_fixture -- --no-deps
@@ -97,9 +100,14 @@ product-names:
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
 # separately by harness-free container and delegated Mason integration targets.
-test: lint config-formats-test delegated-fixture-runner-test
+test: lint config-formats-test delegated-fixture-runner-test cache-clean-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
+
+cache-clean-test:
+	@echo "Running the harness-free descriptor-anchored cache-clean proof..."
+	@CAST_CACHE_CLEAN_TEST_RUNNER=1 $(CARGO) test -p mason \
+		--features cache-clean-test-support --test cache_clean
 
 examples:
 	@echo "Checking every Gluon package example through the public Cast CLI..."
@@ -218,6 +226,8 @@ fixtures-ci: execution-fixtures
 
 check:
 	@$(CARGO) check --workspace --all-targets
+	@$(CARGO) check -p mason --features cache-clean-test-support \
+		--test cache_clean
 	@$(CARGO) check -p mason --features delegated-fixture-test-support \
 		--test delegated_execution_fixture
 

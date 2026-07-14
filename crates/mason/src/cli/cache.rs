@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::{fs::File, io, os::unix::fs::PermissionsExt as _, path::Path};
 
 use clap::{Args, Parser};
 use container::Container;
@@ -64,48 +61,313 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
 }
 
 fn clean(env: Env, build_cache: bool, package_cache: bool) -> Result<(), Error> {
-    for (name, path) in selected_caches(&env, build_cache, package_cache) {
-        let tmpdir = tempfile::tempdir()?;
+    for cache in selected_caches(&env, build_cache, package_cache) {
+        // The path is only a name witness. The retained descriptor selected by
+        // Env remains the destructive authority even if the name is changed
+        // after this check.
+        crate::paths::require_workspace_root_path(cache.anchor, cache.path)?;
 
-        println!("Deleting {name} directory: {}", path.display());
+        let tmpdir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()?;
+        // A restrictive umask may remove owner bits requested at creation.
+        // Normalize only this fresh TempDir and propagate failures instead of
+        // panicking in a user-facing cache operation.
+        std::fs::set_permissions(tmpdir.path(), std::fs::Permissions::from_mode(0o700))?;
+        let remove_target = tmpdir.path().join("remove");
+        let (_remove_target, remove_target_anchor) =
+            crate::paths::prepare_private_workspace_root_pinned(&remove_target)?;
+        let container_root = crate::paths::pin_workspace_root(tmpdir.path())?;
 
-        Container::new(tmpdir.path())
-            .bind_rw(&path, Path::new("/remove"))
-            .run(|| util::par_remove_dir_all(Path::new("/remove")))?;
+        println!("Deleting {} directory: {}", cache.name, cache.path.display());
+
+        Container::new_anchored(tmpdir.path(), &container_root)?
+            .bind_rw_pinned(cache.anchor, cache.path, Path::new("/remove"))?
+            .run(|| util::par_remove_dir_contents(Path::new("/remove")))?;
+
+        // Keep the authenticated target inode pinned through activation and
+        // prove the public cache name still denotes the retained source after
+        // the destructive interval. The target descriptor also prevents an
+        // inode-number reuse from making a replaced mountpoint look unchanged.
+        drop(remove_target_anchor);
+        crate::paths::require_workspace_root_path(cache.anchor, cache.path)?;
     }
     Ok(())
 }
 
 fn size(env: Env, build_cache: bool, package_cache: bool) -> Result<(), Error> {
-    for (name, path) in selected_caches(&env, build_cache, package_cache) {
-        let size: u64 = WalkDir::new(&path)
+    for cache in selected_caches(&env, build_cache, package_cache) {
+        crate::paths::require_workspace_root_path(cache.anchor, cache.path)?;
+        let size: u64 = WalkDir::new(cache.path)
             .into_iter()
             .par_bridge()
             .filter_map(Result::ok)
             .filter_map(|e| e.metadata().ok())
             .map(|m| m.len())
             .sum();
-        println!("{name} ({}): {}", path.display(), humansize::format_size(size, BINARY));
+        crate::paths::require_workspace_root_path(cache.anchor, cache.path)?;
+        println!(
+            "{} ({}): {}",
+            cache.name,
+            cache.path.display(),
+            humansize::format_size(size, BINARY)
+        );
     }
     Ok(())
 }
 
-fn selected_caches(env: &Env, build_cache: bool, package_cache: bool) -> Vec<(&'static str, PathBuf)> {
+#[derive(Clone, Copy)]
+struct SelectedCache<'a> {
+    name: &'static str,
+    path: &'a Path,
+    anchor: &'a File,
+}
+
+fn selected_caches(env: &Env, build_cache: bool, package_cache: bool) -> Vec<SelectedCache<'_>> {
     let select_all = !build_cache && !package_cache;
     let mut v = Vec::new();
     if select_all || build_cache {
-        v.push(("build cache", env.cache_dir.to_owned()));
+        v.push(SelectedCache {
+            name: "build cache",
+            path: &env.cache_dir,
+            anchor: env.cache_dir_anchor.as_ref(),
+        });
     }
     if select_all || package_cache {
-        v.push(("package cache", env.forge_dir.to_owned()));
+        v.push(SelectedCache {
+            name: "package cache",
+            path: &env.forge_dir,
+            anchor: env.forge_dir_anchor.as_ref(),
+        });
     }
     v
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("container")]
+    #[error("cache container operation: {0}")]
     Container(#[from] container::Error),
-    #[error("io")]
+    #[error("cache filesystem operation: {0}")]
     Io(#[from] io::Error),
+}
+
+#[cfg(feature = "cache-clean-test-support")]
+pub(crate) fn run_harness_free_test() {
+    use std::{os::unix::fs::symlink, process};
+
+    assert_exact_main_task("harness-free cache-clean startup");
+
+    let root = crate::private_tempdir();
+    let forge = root.path().join("forge");
+    let env = Env::new(
+        Some(root.path().join("build")),
+        Some(root.path().join("config")),
+        Some(root.path().join("data")),
+        Some(forge.clone()),
+    )
+    .expect("prepare cache-clean environment");
+    std::fs::create_dir(forge.join("nested")).expect("create nested package-cache directory");
+    std::fs::write(forge.join("nested/file"), b"remove").expect("write package-cache child");
+    let outside = root.path().join("outside");
+    std::fs::create_dir(&outside).expect("create external directory");
+    std::fs::write(outside.join("keep"), b"keep outside").expect("write external witness");
+    symlink(&outside, forge.join("outside-link")).expect("create package-cache symlink");
+
+    // Cloning must retain the same directory capabilities rather than
+    // reopening pathnames or manufacturing a weaker optional authority.
+    let clean_env = env.clone();
+    match clean(clean_env, false, true) {
+        Ok(()) => {
+            assert!(forge.is_dir(), "cache clean must preserve its retained root");
+            assert!(
+                std::fs::read_dir(&forge)
+                    .expect("read cleaned package-cache root")
+                    .next()
+                    .is_none(),
+                "cache clean must remove every child without removing its root"
+            );
+            assert_eq!(
+                std::fs::read(outside.join("keep")).expect("read external witness after cache clean"),
+                b"keep outside",
+                "cache clean must not follow a symlink stored inside the retained root"
+            );
+        }
+        Err(Error::Container(error)) if explicit_container_capability_denial(&error) => {
+            eprintln!("SKIP cache clean success path: explicit container capability denial: {error}");
+            assert!(forge.is_dir(), "a denied cache clean must preserve its retained root");
+            assert_eq!(
+                std::fs::read(forge.join("nested/file")).expect("read retained cache child after denial"),
+                b"remove"
+            );
+            assert!(
+                std::fs::symlink_metadata(forge.join("outside-link"))
+                    .expect("inspect retained cache symlink after denial")
+                    .file_type()
+                    .is_symlink(),
+                "a denied cache clean must preserve the unprocessed symlink"
+            );
+            assert_eq!(
+                std::fs::read(outside.join("keep")).expect("read external witness after denial"),
+                b"keep outside"
+            );
+        }
+        Err(error) => panic!("cache clean success path failed: {error}"),
+    }
+
+    assert_exact_main_task("harness-free cache-clean completion");
+
+    fn assert_exact_main_task(context: &str) {
+        let task_directory = format!("/proc/{}/task", process::id());
+        let mut tasks = std::fs::read_dir(&task_directory)
+            .unwrap_or_else(|source| panic!("enumerate {task_directory}: {source}"))
+            .map(|entry| {
+                let entry = entry.unwrap_or_else(|source| panic!("read {task_directory} entry: {source}"));
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.parse::<u32>().ok())
+                    .unwrap_or_else(|| panic!("non-numeric task entry in {task_directory}"))
+            })
+            .collect::<Vec<_>>();
+        tasks.sort_unstable();
+        assert_eq!(tasks, [process::id()], "{context} was not an exact single-task process");
+    }
+
+    fn explicit_container_capability_denial(error: &container::Error) -> bool {
+        match error {
+            container::Error::CloneNamespaces { source } => matches!(
+                source,
+                nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS
+            ),
+            container::Error::Idmap { source } => {
+                source
+                    .to_string()
+                    .contains("needs at least one delegated subordinate GID")
+                    || capability_errno(source)
+            }
+            container::Error::Failure { message } => explicit_setup_capability_denial(message),
+            container::Error::Signaled { .. }
+            | container::Error::UnknownExit
+            | container::Error::CloneIntoCgroup { .. }
+            | container::Error::AtomicCgroupRequiresAnchoredRoot
+            | container::Error::InspectCgroupFilesystem { .. }
+            | container::Error::UnsafeCgroupRootFilesystem { .. }
+            | container::Error::UnsafeCgroupBindSource { .. }
+            | container::Error::UnsafeCgroupSysPolicy
+            | container::Error::CgroupLifecycle { .. }
+            | container::Error::ChildCleanup { .. }
+            | container::Error::ChildCleanupAfterFailure { .. }
+            | container::Error::CgroupCleanup { .. }
+            | container::Error::CgroupCleanupAfterFailure { .. }
+            | container::Error::Nix { .. } => false,
+        }
+    }
+
+    fn capability_errno(error: &(dyn std::error::Error + 'static)) -> bool {
+        if let Some(source) = error.downcast_ref::<io::Error>()
+            && (source.kind() == io::ErrorKind::PermissionDenied
+                || matches!(
+                    source.raw_os_error(),
+                    Some(code)
+                        if code == nix::libc::EPERM
+                            || code == nix::libc::EACCES
+                            || code == nix::libc::ENOSYS
+                ))
+        {
+            return true;
+        }
+        if let Some(source) = error.downcast_ref::<nix::errno::Errno>()
+            && matches!(
+                source,
+                nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS
+            )
+        {
+            return true;
+        }
+        error.source().is_some_and(capability_errno)
+    }
+
+    fn explicit_setup_capability_denial(message: &str) -> bool {
+        let operation = [
+            "clear inherited supplementary groups",
+            "mount ",
+            "clone descriptor-backed root mount",
+            "attach descriptor-backed root mount",
+            "pivot_root",
+            "sethostname",
+            "unmount old root",
+        ]
+        .iter()
+        .any(|prefix| message.starts_with(prefix));
+        let denial = [
+            ": EPERM: Operation not permitted",
+            ": EACCES: Permission denied",
+            ": ENOSYS: Function not implemented",
+        ]
+        .iter()
+        .any(|suffix| message.ends_with(suffix));
+        operation && denial
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    use super::*;
+
+    #[test]
+    fn package_cache_clean_rejects_post_environment_symlink_without_touching_either_directory() {
+        let root = crate::private_tempdir();
+        let forge = root.path().join("forge");
+        let env = Env::new(
+            Some(root.path().join("build")),
+            Some(root.path().join("config")),
+            Some(root.path().join("data")),
+            Some(forge.clone()),
+        )
+        .unwrap();
+        std::fs::write(forge.join("original"), b"keep original").unwrap();
+        let displaced = root.path().join("displaced-forge");
+        std::fs::rename(&forge, &displaced).unwrap();
+
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        std::fs::set_permissions(&unrelated, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(unrelated.join("keep"), b"keep unrelated").unwrap();
+        symlink(&unrelated, &forge).unwrap();
+
+        let error = clean(env, false, true).unwrap_err();
+
+        assert!(matches!(error, Error::Io(_)));
+        assert!(std::fs::symlink_metadata(&forge).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(displaced.join("original")).unwrap(), b"keep original");
+        assert_eq!(std::fs::read(unrelated.join("keep")).unwrap(), b"keep unrelated");
+    }
+
+    #[test]
+    fn package_cache_clean_rejects_post_environment_directory_replacement_without_touching_either_directory() {
+        let root = crate::private_tempdir();
+        let forge = root.path().join("forge");
+        let env = Env::new(
+            Some(root.path().join("build")),
+            Some(root.path().join("config")),
+            Some(root.path().join("data")),
+            Some(forge.clone()),
+        )
+        .unwrap();
+        std::fs::write(forge.join("original"), b"keep original").unwrap();
+        let displaced = root.path().join("displaced-forge");
+        std::fs::rename(&forge, &displaced).unwrap();
+
+        std::fs::create_dir(&forge).unwrap();
+        std::fs::set_permissions(&forge, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(forge.join("replacement"), b"keep replacement").unwrap();
+
+        let error = clean(env, false, true).unwrap_err();
+
+        assert!(matches!(error, Error::Io(_)));
+        assert_eq!(std::fs::read(displaced.join("original")).unwrap(), b"keep original");
+        assert_eq!(std::fs::read(forge.join("replacement")).unwrap(), b"keep replacement");
+    }
 }

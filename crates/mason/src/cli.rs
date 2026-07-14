@@ -110,6 +110,11 @@ pub fn dispatch_cache(matches: &ArgMatches, context: Context) -> Result<(), Erro
     cache::handle(cache::Command::from_arg_matches(matches)?, context.env).map_err(Into::into)
 }
 
+#[cfg(feature = "cache-clean-test-support")]
+pub(crate) fn run_harness_free_cache_clean_test() {
+    cache::run_harness_free_test();
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("invalid Cast command arguments")]
