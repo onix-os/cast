@@ -20,12 +20,15 @@ use std::sync::mpsc;
 use container::{
     Container, DevPolicy, Error, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy,
 };
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use nix::{errno::Errno, libc};
 
 fn main() {
     assert_exact_main_task("standalone startup");
     prove_parked_task_is_rejected();
     assert_exact_main_task("after parked-task rejection");
+    prove_nonwaitable_sigchld_dispositions_are_rejected();
+    assert_exact_main_task("after SIGCHLD-disposition rejection");
 
     let success_root = tempfile::tempdir().expect("create successful activation root");
     let success_anchor = open_path_directory(success_root.path());
@@ -56,6 +59,54 @@ fn main() {
         other => panic!("panicking legacy payload was not contained as a child failure: {other:?}"),
     }
     assert_exact_main_task("after contained payload panic");
+}
+
+fn prove_nonwaitable_sigchld_dispositions_are_rejected() {
+    extern "C" fn custom_sigchld_handler(_: libc::c_int) {}
+
+    for (case, action, expected) in [
+        (
+            "SIG_IGN",
+            SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty()),
+            "found SIG_IGN",
+        ),
+        (
+            "SA_NOCLDWAIT",
+            SigAction::new(SigHandler::SigDfl, SaFlags::SA_NOCLDWAIT, SigSet::empty()),
+            "without SA_NOCLDWAIT",
+        ),
+        (
+            "custom handler",
+            SigAction::new(
+                SigHandler::Handler(custom_sigchld_handler),
+                SaFlags::empty(),
+                SigSet::empty(),
+            ),
+            "found a custom handler",
+        ),
+    ] {
+        // SAFETY: each action is fully initialized. The standalone process is
+        // exactly single-tasked, and the prior action is restored immediately
+        // after the production pre-clone audit returns.
+        let previous = unsafe { sigaction(Signal::SIGCHLD, &action) }
+            .unwrap_or_else(|source| panic!("install isolated {case} SIGCHLD action: {source}"));
+        let root = tempfile::tempdir().expect("create SIGCHLD rejection activation root");
+        let anchor = open_path_directory(root.path());
+        let result = minimal_container(root.path(), &anchor).run::<io::Error>(|| Ok(()));
+        // SAFETY: previous was returned by sigaction for this exact signal.
+        unsafe { sigaction(Signal::SIGCHLD, &previous) }
+            .unwrap_or_else(|source| panic!("restore SIGCHLD after {case} rejection: {source}"));
+
+        match result {
+            Err(Error::Failure { message }) => assert!(
+                message.starts_with(
+                    "legacy clone requires a waitable SIGCHLD disposition before numeric child supervision:"
+                ) && message.contains(expected),
+                "unexpected production SIGCHLD diagnostic for {case}: {message}"
+            ),
+            other => panic!("legacy clone did not reject {case} before activation: {other:?}"),
+        }
+    }
 }
 
 fn prove_parked_task_is_rejected() {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::io::{self, Read as _, Write as _};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use std::sync::{
     Mutex, MutexGuard,
     atomic::{AtomicI32, Ordering},
 };
+use std::time::{Duration, Instant};
 
 use fs_err::{self as fs, PathExt as _};
 use nc::syscalls::syscall5;
@@ -30,7 +31,7 @@ use nix::sys::prctl::set_pdeathsig;
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, kill, sigaction};
 use nix::sys::signalfd::SigSet;
 use nix::sys::stat::{Mode, umask};
-use nix::sys::wait::{WaitStatus, waitpid};
+use nix::sys::wait::{Id as WaitId, WaitPidFlag, WaitStatus, waitid, waitpid};
 use nix::unistd::{
     Pid, close, fchdir, getegid, geteuid, getgid, getgroups, getuid, pivot_root, read, setgroups, sethostname,
     tcsetpgrp,
@@ -53,6 +54,8 @@ const MAX_CHILD_ERROR_BYTES: usize = 2048;
 const MAX_ERROR_SOURCE_DEPTH: usize = 16;
 const MAX_CONTROL_EINTR_RETRIES: usize = 3;
 const CLONE_STACK_BYTES: usize = 4 * 1024 * 1024;
+const PIDFD_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+const PIDFD_REAP_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Typed policy for pseudo-filesystems mounted while entering a container.
 ///
@@ -562,16 +565,17 @@ impl Container {
             })();
             match result {
                 Ok((Clone3Outcome::Parent { pid, pidfd }, _, mut signal_mask)) => {
+                    let child = ChildLifecycle::Pidfd { pid, pidfd };
                     if let Err(source) = signal_mask.restore() {
-                        abort_child(pid);
-                        Err(Error::CloneIntoCgroup {
+                        let primary = Error::CloneIntoCgroup {
                             source: io::Error::new(
                                 source.kind(),
                                 format!("restore supervisor signal mask after clone3: {source}"),
                             ),
-                        })
+                        };
+                        Err(child.cleanup_after_failure(primary))
                     } else {
-                        Ok((pid, Some(pidfd)))
+                        Ok(child)
                     }
                 }
                 Ok((Clone3Outcome::Child, inherited, mut signal_mask)) => {
@@ -627,6 +631,22 @@ impl Container {
                     }
                     signal_mask
                 };
+                #[cfg(not(test))]
+                let signal_mask = {
+                    let mut signal_mask = signal_mask;
+                    if let Err(source) = clone3::require_waitable_sigchld_disposition() {
+                        let message = match signal_mask.restore() {
+                            Ok(()) => format!(
+                                "legacy clone requires a waitable SIGCHLD disposition before numeric child supervision: {source}"
+                            ),
+                            Err(restore) => format!(
+                                "legacy clone requires a waitable SIGCHLD disposition before numeric child supervision: {source}; additionally failed to restore the supervisor signal mask: {restore}"
+                            ),
+                        };
+                        return Err(Error::Failure { message });
+                    }
+                    signal_mask
+                };
 
                 let mut child_signal_mask = Some(signal_mask);
                 let clone_result = {
@@ -666,7 +686,7 @@ impl Container {
                 })?;
                 let restore = signal_mask.restore();
                 match (clone_result, restore) {
-                    (Ok(pid), Ok(())) => Ok((pid, None)),
+                    (Ok(pid), Ok(())) => Ok(ChildLifecycle::Legacy { pid }),
                     (Err(source), Ok(())) => Err(Error::CloneNamespaces { source }),
                     (Ok(pid), Err(source)) => {
                         abort_child(pid);
@@ -683,8 +703,8 @@ impl Container {
             })()
         };
 
-        let (pid, pidfd) = match spawn {
-            Ok(spawned) => spawned,
+        let child = match spawn {
+            Ok(child) => child,
             Err(failure) => {
                 return Err(match cgroup_leaf.take() {
                     Some(leaf) => cleanup_unstarted_cgroup(failure, leaf),
@@ -694,39 +714,37 @@ impl Container {
         };
 
         if let Err(source) = sync.close_child_endpoint() {
-            abort_child(pid);
-            let failure = Err(Error::Nix { source });
+            let failure = Err(child.cleanup_after_failure(Error::Nix { source }));
             return match cgroup_leaf.take() {
                 Some(leaf) => finalize_started_cgroup(failure, leaf),
                 None => failure,
             };
         }
 
-        // Keep the pidfd live until every wait or abort path has reaped the
-        // exact child. Numeric PID reuse is therefore never part of cgroup
-        // activation authority.
-        let _pidfd = pidfd;
+        // Both activation paths need the numeric PID for the pre-release
+        // user-namespace map. The clone3 path also uses it for the exact
+        // cgroup-membership diagnostic, but routes every signal and wait
+        // exclusively through the retained pidfd. The legacy path remains
+        // numeric under its audited single-task and waitable-SIGCHLD contract.
+        let pid = child.pid();
         let result = (|| {
             // Every build receives the same one-identity credential namespace:
             // namespace root maps to the caller and no other IDs exist.
             if let Err(source) = idmap(pid) {
-                abort_child(pid);
-                return Err(Error::Idmap { source });
+                return Err(child.cleanup_after_failure(Error::Idmap { source }));
             }
 
             if let Some(leaf) = cgroup_leaf.as_ref() {
                 let expected_tgid = match u32::try_from(pid.as_raw()) {
                     Ok(tgid) => tgid,
                     Err(_) => {
-                        abort_child(pid);
-                        return Err(Error::Failure {
+                        return Err(child.cleanup_after_failure(Error::Failure {
                             message: format!("clone3 returned invalid child TGID {}", pid.as_raw()),
-                        });
+                        }));
                     }
                 };
                 if let Err(source) = leaf.require_sole_member(expected_tgid) {
-                    abort_child(pid);
-                    return Err(Error::CgroupLifecycle { source });
+                    return Err(child.cleanup_after_failure(Error::CgroupLifecycle { source }));
                 }
             }
 
@@ -737,8 +755,7 @@ impl Container {
                 match SignalOverride::install(Signal::SIGINT) {
                     Ok(override_) => Some(override_),
                     Err(source) => {
-                        abort_child(pid);
-                        return Err(Error::Nix { source });
+                        return Err(child.cleanup_after_failure(Error::Nix { source }));
                     }
                 }
             } else {
@@ -748,19 +765,16 @@ impl Container {
             match send_packet_no_signal(sync.supervisor_fd(), &[Message::Continue as u8]) {
                 Ok(1) => {}
                 Ok(_) => {
-                    abort_child(pid);
-                    return Err(Error::Nix { source: Errno::EIO });
+                    return Err(child.cleanup_after_failure(Error::Nix { source: Errno::EIO }));
                 }
                 Err(source) => {
-                    abort_child(pid);
-                    return Err(Error::Nix { source });
+                    return Err(child.cleanup_after_failure(Error::Nix { source }));
                 }
             }
-            let status = match wait_for_child(pid) {
+            let status = match child.wait() {
                 Ok(status) => status,
                 Err(source) => {
-                    abort_child(pid);
-                    return Err(Error::Nix { source });
+                    return Err(child.cleanup_after_failure(Error::Nix { source }));
                 }
             };
 
@@ -779,10 +793,7 @@ impl Container {
                 | WaitStatus::PtraceEvent(..)
                 | WaitStatus::PtraceSyscall(_)
                 | WaitStatus::Continued(_)
-                | WaitStatus::StillAlive => {
-                    abort_child(pid);
-                    Err(Error::UnknownExit)
-                }
+                | WaitStatus::StillAlive => Err(child.cleanup_after_failure(Error::UnknownExit)),
             }
         })();
 
@@ -931,7 +942,13 @@ fn cleanup_unstarted_cgroup(failure: Error, mut leaf: cgroup::CgroupLeaf) -> Err
 
 fn finalize_started_cgroup(result: Result<(), Error>, mut leaf: cgroup::CgroupLeaf) -> Result<(), Error> {
     match leaf.kill_and_remove(cgroup::DrainPolicy::default()) {
-        Ok(()) => result,
+        // cgroup.kill plus a successful drain proves that no task remains in
+        // the leaf. If an earlier exact-child cleanup timed out, make one more
+        // pidfd-only reap attempt before returning the structured failure.
+        Ok(()) => match result {
+            Ok(()) => Ok(()),
+            Err(failure) => failure.retry_child_cleanup_after_cgroup(),
+        },
         Err(cleanup) => Err(match result {
             Ok(()) => Error::CgroupCleanup {
                 cleanup,
@@ -2803,6 +2820,213 @@ impl Drop for SignalOverride {
     }
 }
 
+#[derive(Debug)]
+enum ChildLifecycle {
+    Legacy { pid: Pid },
+    Pidfd { pid: Pid, pidfd: OwnedFd },
+}
+
+impl ChildLifecycle {
+    fn pid(&self) -> Pid {
+        match self {
+            Self::Legacy { pid } | Self::Pidfd { pid, .. } => *pid,
+        }
+    }
+
+    fn wait(&self) -> Result<WaitStatus, Errno> {
+        match self {
+            Self::Legacy { pid } => wait_for_child(*pid),
+            Self::Pidfd { pidfd, .. } => wait_for_pidfd(pidfd.as_fd(), WaitPidFlag::WEXITED),
+        }
+    }
+
+    fn cleanup(self) -> Result<(), Error> {
+        match self {
+            Self::Legacy { pid } => {
+                abort_child(pid);
+                Ok(())
+            }
+            Self::Pidfd { pidfd, .. } => match cleanup_pidfd_child(pidfd) {
+                Ok(()) => Ok(()),
+                Err(failure) => Err(Error::ChildCleanup {
+                    cleanup: failure.cleanup,
+                    pidfd: Some(ChildPidfdQuarantine::new(failure.pidfd)),
+                }),
+            },
+        }
+    }
+
+    fn cleanup_after_failure(self, primary: Error) -> Error {
+        match self.cleanup() {
+            Ok(()) => primary,
+            Err(Error::ChildCleanup { cleanup, pidfd }) => Error::ChildCleanupAfterFailure {
+                primary: Box::new(primary),
+                cleanup,
+                pidfd,
+            },
+            Err(unexpected) => Error::ChildCleanupAfterFailure {
+                primary: Box::new(primary),
+                cleanup: io::Error::other(format!("unexpected exact-child cleanup error: {unexpected}")),
+                pidfd: None,
+            },
+        }
+    }
+}
+
+/// Exact clone3-child authority retained after cleanup could not prove reap.
+///
+/// Losing the last exact handle while the child may still be live or unreaped
+/// would turn a lifecycle failure into an unauthenticated numeric-PID problem.
+/// Drop therefore fails stop instead of closing the descriptor or starting a
+/// helper thread: a helper would permanently violate the exact single-task
+/// precondition for every later fork-like clone in this supervisor. Callers
+/// that can recover must borrow the descriptor or explicitly take ownership
+/// with [`Self::into_owned_fd`] before this guard is dropped.
+#[derive(Debug)]
+pub struct ChildPidfdQuarantine {
+    pidfd: Option<OwnedFd>,
+}
+
+impl ChildPidfdQuarantine {
+    fn new(pidfd: OwnedFd) -> Self {
+        Self { pidfd: Some(pidfd) }
+    }
+
+    pub fn into_owned_fd(mut self) -> OwnedFd {
+        self.pidfd.take().expect("pidfd quarantine must own its descriptor")
+    }
+}
+
+impl AsFd for ChildPidfdQuarantine {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.pidfd
+            .as_ref()
+            .expect("pidfd quarantine must own its descriptor")
+            .as_fd()
+    }
+}
+
+impl Drop for ChildPidfdQuarantine {
+    fn drop(&mut self) {
+        if self.pidfd.is_some() {
+            const MESSAGE: &[u8] =
+                b"fatal: dropping unrecovered exact-child pidfd authority; refusing to continue supervisor\n";
+            // SAFETY: MESSAGE is a live immutable byte slice for the complete
+            // write. A diagnostic failure is deliberately ignored because the
+            // immediately following abort is the authoritative fail-stop.
+            unsafe {
+                nix::libc::write(nix::libc::STDERR_FILENO, MESSAGE.as_ptr().cast(), MESSAGE.len());
+            }
+            std::process::abort();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PidfdCleanupFailure {
+    cleanup: io::Error,
+    pidfd: OwnedFd,
+}
+
+fn send_pidfd_signal(pidfd: BorrowedFd<'_>, signal: Signal) -> Result<(), Errno> {
+    let mut interrupted = 0;
+    loop {
+        // SAFETY: pidfd is a live borrowed descriptor, a null siginfo requests
+        // ordinary process-directed signal semantics, and flags must be zero.
+        let result = unsafe {
+            syscall(
+                nix::libc::SYS_pidfd_send_signal,
+                pidfd.as_raw_fd(),
+                signal as nix::libc::c_int,
+                std::ptr::null::<nix::libc::siginfo_t>(),
+                0_u32,
+            )
+        };
+        match Errno::result(result) {
+            Err(Errno::EINTR) if interrupted < MAX_CONTROL_EINTR_RETRIES => interrupted += 1,
+            Ok(_) => return Ok(()),
+            Err(source) => return Err(source),
+        }
+    }
+}
+
+fn wait_for_pidfd(pidfd: BorrowedFd<'_>, flags: WaitPidFlag) -> Result<WaitStatus, Errno> {
+    let mut interrupted = 0;
+    loop {
+        match waitid(WaitId::PIDFd(pidfd), flags) {
+            Err(Errno::EINTR) if interrupted < MAX_CONTROL_EINTR_RETRIES => interrupted += 1,
+            result => return result,
+        }
+    }
+}
+
+fn cleanup_pidfd_child(pidfd: OwnedFd) -> Result<(), PidfdCleanupFailure> {
+    let signal = send_pidfd_signal(pidfd.as_fd(), Signal::SIGKILL);
+    if signal.is_ok() {
+        return wait_for_pidfd_reap(pidfd.as_fd(), PIDFD_REAP_TIMEOUT)
+            .map_or_else(|cleanup| Err(PidfdCleanupFailure { cleanup, pidfd }), |_| Ok(()));
+    }
+
+    // Do not block when the authoritative signal operation failed: the exact
+    // child may still be parked on the release socket. One nonblocking pidfd
+    // wait may nevertheless prove that it exited independently.
+    let signal = signal.unwrap_err();
+    match wait_for_pidfd(pidfd.as_fd(), WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
+        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => Ok(()),
+        Ok(status) => Err(PidfdCleanupFailure {
+            cleanup: io::Error::other(format!(
+                "pidfd_send_signal(SIGKILL) failed: {signal}; waitid(P_PIDFD, WNOHANG) did not prove exact child termination: {status:?}"
+            )),
+            pidfd,
+        }),
+        // Linux defines pidfd_send_signal(ESRCH) to mean that the exact target
+        // has terminated and already been waited on. The matching P_PIDFD
+        // ECHILD result confirms that no waitable child remains. No other error
+        // pair is accepted: in particular, an ordinary or closed descriptor
+        // must remain a structured cleanup failure rather than impersonating a
+        // completed pidfd lifecycle.
+        Err(Errno::ECHILD) if signal == Errno::ESRCH => Ok(()),
+        Err(wait) => Err(PidfdCleanupFailure {
+            cleanup: io::Error::new(
+                io::Error::from_raw_os_error(wait as i32).kind(),
+                format!("pidfd_send_signal(SIGKILL) failed: {signal}; waitid(P_PIDFD, WNOHANG) failed: {wait}"),
+            ),
+            pidfd,
+        }),
+    }
+}
+
+fn wait_for_pidfd_reap(pidfd: BorrowedFd<'_>, timeout: Duration) -> io::Result<WaitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match wait_for_pidfd(pidfd, WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
+            Ok(status @ (WaitStatus::Exited(..) | WaitStatus::Signaled(..))) => return Ok(status),
+            Ok(WaitStatus::StillAlive) => {}
+            Ok(status) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("waitid(P_PIDFD, WNOHANG) returned nonterminal child status {status:?}"),
+                ));
+            }
+            Err(source) => {
+                return Err(io::Error::new(
+                    io::Error::from_raw_os_error(source as i32).kind(),
+                    format!("waitid(P_PIDFD, WNOHANG) while reaping SIGKILLed child: {source}"),
+                ));
+            }
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("waitid(P_PIDFD, WNOHANG) did not reap SIGKILLed child within {timeout:?}"),
+            ));
+        }
+        std::thread::sleep(PIDFD_REAP_POLL_INTERVAL.min(deadline.duration_since(now)));
+    }
+}
+
 fn wait_for_child(pid: Pid) -> Result<WaitStatus, nix::Error> {
     loop {
         match waitpid(pid, None) {
@@ -3200,6 +3424,17 @@ pub enum Error {
     UnsafeCgroupSysPolicy,
     #[snafu(display("authenticate derivation cgroup lifecycle"))]
     CgroupLifecycle { source: cgroup::CgroupError },
+    #[snafu(display("failed to prove exact clone3 child cleanup: {cleanup}"))]
+    ChildCleanup {
+        cleanup: io::Error,
+        pidfd: Option<ChildPidfdQuarantine>,
+    },
+    #[snafu(display("{primary}; additionally failed to prove exact clone3 child cleanup: {cleanup}"))]
+    ChildCleanupAfterFailure {
+        primary: Box<Error>,
+        cleanup: io::Error,
+        pidfd: Option<ChildPidfdQuarantine>,
+    },
     #[snafu(display("remove derivation cgroup after execution: {cleanup}"))]
     CgroupCleanup {
         cleanup: cgroup::CgroupError,
@@ -3217,6 +3452,49 @@ pub enum Error {
 }
 
 impl Error {
+    fn retry_child_cleanup_after_cgroup(self) -> Result<(), Self> {
+        match self {
+            Self::ChildCleanup {
+                cleanup,
+                pidfd: Some(pidfd),
+            } => match cleanup_pidfd_child(pidfd.into_owned_fd()) {
+                Ok(()) => Ok(()),
+                Err(failure) => Err(Self::ChildCleanup {
+                    cleanup: io::Error::other(format!(
+                        "{cleanup}; retry after successful cgroup drain failed: {}",
+                        failure.cleanup
+                    )),
+                    pidfd: Some(ChildPidfdQuarantine::new(failure.pidfd)),
+                }),
+            },
+            Self::ChildCleanupAfterFailure {
+                primary,
+                cleanup,
+                pidfd: Some(pidfd),
+            } => match cleanup_pidfd_child(pidfd.into_owned_fd()) {
+                Ok(()) => Err(*primary),
+                Err(failure) => Err(Self::ChildCleanupAfterFailure {
+                    primary,
+                    cleanup: io::Error::other(format!(
+                        "{cleanup}; retry after successful cgroup drain failed: {}",
+                        failure.cleanup
+                    )),
+                    pidfd: Some(ChildPidfdQuarantine::new(failure.pidfd)),
+                }),
+            },
+            failure => Err(failure),
+        }
+    }
+
+    /// Take the retained pidfd quarantine after exact-child cleanup failure.
+    pub fn take_child_pidfd(&mut self) -> Option<ChildPidfdQuarantine> {
+        match self {
+            Self::ChildCleanup { pidfd, .. } | Self::ChildCleanupAfterFailure { pidfd, .. } => pidfd.take(),
+            Self::CgroupCleanupAfterFailure { failure, .. } => failure.take_child_pidfd(),
+            _ => None,
+        }
+    }
+
     /// Take the authenticated cgroup cleanup capability retained by a failed
     /// teardown. Callers that continue running after this error must retry or
     /// quarantine it rather than silently dropping authority to the leaf.
@@ -3409,9 +3687,12 @@ enum Message {
 mod tests {
     use std::fmt;
     use std::io::{self, Read as _};
-    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
+    use std::os::unix::process::ExitStatusExt as _;
     use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
 
     use fs_err as fs;
     use nix::errno::Errno;
@@ -3422,19 +3703,20 @@ mod tests {
     use nix::unistd::{mkfifo, read};
 
     use super::{
-        AnchoredMountTargetKind, Bind, BindSource, BlockedSignalMask, CLONE_STACK_BYTES, CapabilityData, CloneStack,
-        Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
-        MAX_LINUX_CAPABILITY_NUMBER, MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT,
-        PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy,
-        PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TmpPolicy,
-        capability_is_set, checked_prctl_value, close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat,
-        duplicate_cloexec, format_error, namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target,
+        AnchoredMountTargetKind, Bind, BindSource, BlockedSignalMask, CLONE_STACK_BYTES, CapabilityData,
+        ChildLifecycle, ChildPidfdQuarantine, CloneStack, Container, ContainerError, DevPolicy,
+        Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER,
+        MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
+        PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
+        RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TmpPolicy, capability_is_set, checked_prctl_value,
+        cleanup_pidfd_child, close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec,
+        format_error, namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target,
         open_anchored_resolver_target, pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions,
         read_capabilities, read_child_error, reopen_pinned_readonly, require_atomic_cgroup_bind_policy,
         require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
-        send_packet_no_signal, set_mount_access, standard_descriptor_is_unsafe, supported_capability_numbers,
-        validate_anchored_mount_topology, validate_minimal_device_source, validate_payload_credentials,
-        validate_resolver_target,
+        send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
+        supported_capability_numbers, validate_anchored_mount_topology, validate_minimal_device_source,
+        validate_payload_credentials, validate_resolver_target, wait_for_pidfd, wait_for_pidfd_reap,
     };
 
     fn open_path_directory(path: &Path) -> OwnedFd {
@@ -3451,6 +3733,17 @@ mod tests {
     fn open_path_file(path: &Path) -> OwnedFd {
         let descriptor = open(path, OFlag::O_PATH | OFlag::O_CLOEXEC, Mode::empty()).unwrap();
         // SAFETY: successful open returned a fresh owned descriptor.
+        unsafe { OwnedFd::from_raw_fd(descriptor) }
+    }
+
+    fn open_test_pidfd(pid: nix::unistd::Pid) -> OwnedFd {
+        // SAFETY: pidfd_open receives one live child PID and zero reserved
+        // flags. This test helper does not participate in production clone3,
+        // which receives its pidfd atomically from CLONE_PIDFD.
+        let descriptor = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, pid.as_raw(), 0_u32) };
+        assert!(descriptor >= 0, "pidfd_open test child: {}", io::Error::last_os_error());
+        let descriptor = i32::try_from(descriptor).expect("pidfd fits RawFd");
+        // SAFETY: successful pidfd_open returned one fresh descriptor.
         unsafe { OwnedFd::from_raw_fd(descriptor) }
     }
 
@@ -4773,6 +5066,209 @@ mod tests {
             read_child_error(sync.supervisor_fd()).unwrap().as_bytes(),
             diagnostic.as_slice()
         );
+    }
+
+    #[test]
+    fn pidfd_wait_and_signal_preserve_exact_terminal_statuses() {
+        let exit_child = Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 0.05; exit 23"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let exit_pid = nix::unistd::Pid::from_raw(i32::try_from(exit_child.id()).unwrap());
+        let exit_pidfd = open_test_pidfd(exit_pid);
+        drop(exit_child);
+        assert_eq!(
+            wait_for_pidfd(exit_pidfd.as_fd(), nix::sys::wait::WaitPidFlag::WEXITED).unwrap(),
+            nix::sys::wait::WaitStatus::Exited(exit_pid, 23)
+        );
+
+        let signal_child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let signal_pid = nix::unistd::Pid::from_raw(i32::try_from(signal_child.id()).unwrap());
+        let signal_pidfd = open_test_pidfd(signal_pid);
+        drop(signal_child);
+        send_pidfd_signal(signal_pidfd.as_fd(), Signal::SIGKILL).unwrap();
+        assert_eq!(
+            wait_for_pidfd(signal_pidfd.as_fd(), nix::sys::wait::WaitPidFlag::WEXITED).unwrap(),
+            nix::sys::wait::WaitStatus::Signaled(signal_pid, Signal::SIGKILL, false)
+        );
+    }
+
+    #[test]
+    fn valid_pidfd_cleanup_kills_and_reaps_without_numeric_wait() {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+        let pidfd = open_test_pidfd(pid);
+        drop(child);
+
+        ChildLifecycle::Pidfd { pid, pidfd }.cleanup().unwrap();
+        assert_eq!(nix::sys::wait::waitpid(pid, None), Err(Errno::ECHILD));
+    }
+
+    #[test]
+    fn pidfd_reap_deadline_is_finite_and_leaves_authority_recoverable() {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+        let pidfd = open_test_pidfd(pid);
+        drop(child);
+
+        let error = wait_for_pidfd_reap(pidfd.as_fd(), Duration::ZERO).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(fcntl(pidfd.as_raw_fd(), FcntlArg::F_GETFD).is_ok());
+        ChildLifecycle::Pidfd { pid, pidfd }.cleanup().unwrap();
+    }
+
+    #[test]
+    fn successful_cgroup_drain_retry_reaps_by_pidfd_and_restores_primary_failure() {
+        let child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+        let pidfd = open_test_pidfd(pid);
+        drop(child);
+
+        let failure = ContainerRunError::ChildCleanupAfterFailure {
+            primary: Box::new(ContainerRunError::UnknownExit),
+            cleanup: io::Error::new(io::ErrorKind::TimedOut, "initial exact-child cleanup timed out"),
+            pidfd: Some(ChildPidfdQuarantine::new(pidfd)),
+        };
+        assert!(matches!(
+            failure.retry_child_cleanup_after_cgroup(),
+            Err(ContainerRunError::UnknownExit)
+        ));
+        assert_eq!(nix::sys::wait::waitpid(pid, None), Err(Errno::ECHILD));
+    }
+
+    #[test]
+    fn already_reaped_pidfd_cleanup_accepts_only_the_authoritative_terminal_pair() {
+        let mut child = Command::new("/bin/true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+        let pidfd = open_test_pidfd(pid);
+        assert!(child.wait().unwrap().success());
+
+        // The waited-on target makes pidfd_send_signal return ESRCH and the
+        // matching P_PIDFD wait return ECHILD. That exact pair proves that the
+        // pidfd target terminated and no waitable child remains.
+        assert_eq!(send_pidfd_signal(pidfd.as_fd(), Signal::SIGKILL), Err(Errno::ESRCH));
+        assert_eq!(
+            wait_for_pidfd(pidfd.as_fd(), nix::sys::wait::WaitPidFlag::WEXITED),
+            Err(Errno::ECHILD)
+        );
+        cleanup_pidfd_child(pidfd).unwrap();
+        assert_eq!(nix::sys::wait::waitpid(pid, None), Err(Errno::ECHILD));
+    }
+
+    #[test]
+    fn dropping_unrecovered_pidfd_authority_aborts_an_isolated_process() {
+        const CHILD_ENV: &str = "CONTAINER_PIDFD_FAIL_STOP_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::dropping_unrecovered_pidfd_authority_aborts_an_isolated_process",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_ENV, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.signal(),
+                Some(nix::libc::SIGABRT),
+                "dropping exact-child authority did not abort: {}; stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                output
+                    .stderr
+                    .windows(b"dropping unrecovered exact-child pidfd authority".len())
+                    .any(|window| window == b"dropping unrecovered exact-child pidfd authority"),
+                "fail-stop diagnostic missing from stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        // Reap a real child first so the subprocess leaves no orphan when Drop
+        // intentionally aborts. The still-open descriptor is nevertheless a
+        // real pidfd and exercises the exact fail-stop ownership boundary.
+        let mut child = Command::new("/bin/true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+        let pidfd = open_test_pidfd(pid);
+        assert!(child.wait().unwrap().success());
+        drop(ChildPidfdQuarantine::new(pidfd));
+        panic!("dropping unrecovered pidfd authority returned after fail-stop");
+    }
+
+    #[test]
+    fn invalid_pidfd_cleanup_never_falls_back_and_retains_authority() {
+        let ordinary = open("/dev/null", OFlag::O_RDONLY | OFlag::O_CLOEXEC, Mode::empty()).unwrap();
+        // SAFETY: open returned one fresh descriptor.
+        let ordinary = unsafe { OwnedFd::from_raw_fd(ordinary) };
+        let retained_raw = ordinary.as_raw_fd();
+        let child = ChildLifecycle::Pidfd {
+            pid: nix::unistd::Pid::from_raw(1),
+            pidfd: ordinary,
+        };
+
+        let mut failure = child.cleanup_after_failure(ContainerRunError::UnknownExit);
+        match &failure {
+            ContainerRunError::ChildCleanupAfterFailure {
+                primary,
+                cleanup,
+                pidfd,
+            } => {
+                assert!(matches!(primary.as_ref(), ContainerRunError::UnknownExit));
+                assert!(cleanup.to_string().contains("pidfd_send_signal(SIGKILL) failed"));
+                assert!(cleanup.to_string().contains("waitid(P_PIDFD, WNOHANG) failed"));
+                assert_eq!(pidfd.as_ref().unwrap().as_fd().as_raw_fd(), retained_raw);
+            }
+            other => panic!("invalid pidfd did not retain structured cleanup authority: {other:?}"),
+        }
+
+        let retained = failure.take_child_pidfd().unwrap();
+        assert_eq!(retained.as_fd().as_raw_fd(), retained_raw);
+        assert!(fcntl(retained.as_fd().as_raw_fd(), FcntlArg::F_GETFD).is_ok());
+        assert!(failure.take_child_pidfd().is_none());
+        drop(retained.into_owned_fd());
     }
 
     #[test]

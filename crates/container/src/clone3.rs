@@ -92,11 +92,12 @@ pub(crate) enum Clone3Outcome {
 ///
 /// The primitive refuses to call `clone3` unless an authenticated, pinned
 /// procfs walk through `/proc/<getpid>/task` observes the caller as the
-/// process's exact sole task. It never trusts procfs magic links such as
-/// `/proc/self`. The caller must block every catchable signal before entering
-/// this function and retain that mask through the returned child panic
-/// boundary, so a signal handler cannot create a task between the audit and
-/// syscall.
+/// process's exact sole task. It then requires the blocked caller to retain the
+/// default, waitable SIGCHLD disposition before entering the syscall. It never
+/// trusts procfs magic links such as `/proc/self`. The caller must block every
+/// catchable signal before entering this function and retain that mask through
+/// the returned child panic boundary, so a signal handler cannot create a task
+/// or reap the child between the audits and syscall.
 ///
 /// This audit is an operational Cast-supervisor guard, not a kernel-atomic
 /// proof against hostile thread churn: procfs enumeration and `clone3` are
@@ -128,6 +129,7 @@ pub(crate) unsafe fn clone3_into_cgroup(namespace_flags: u64, cgroup: BorrowedFd
     // thread-creation path here; procfs itself cannot make that guarantee
     // atomic against hostile task churn.
     require_single_threaded_process()?;
+    require_waitable_sigchld_disposition()?;
 
     let mut pidfd = -1_i32;
     let args = clone_args(namespace_flags, cgroup_fd, &mut pidfd);
@@ -162,6 +164,44 @@ pub(crate) fn require_single_threaded_process() -> io::Result<()> {
     let current = current_task_id()?;
     let tasks = authenticated_current_process_tasks()?;
     require_single_task(current, tasks.as_slice())
+}
+
+/// Require a SIGCHLD disposition that preserves the parent's exclusive wait.
+///
+/// The caller has already proved that it is the process's sole task and must
+/// still have every catchable signal blocked. Under those conditions this
+/// read-only `sigaction` query cannot race a cooperating handler or thread.
+/// Explicit SIG_IGN, SA_NOCLDWAIT, and custom handlers are rejected because
+/// they can auto-reap or synchronously reap the clone child before numeric
+/// pre-release `/proc/<pid>` and cgroup membership diagnostics complete.
+pub(super) fn require_waitable_sigchld_disposition() -> io::Result<()> {
+    // SAFETY: a null action pointer requests a read-only query and `current` is
+    // a fully initialized output object after a successful call.
+    let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut current) } == -1 {
+        let source = io::Error::last_os_error();
+        return Err(io::Error::new(
+            source.kind(),
+            format!("inspect SIGCHLD disposition before fork-like clone: {source}"),
+        ));
+    }
+
+    if current.sa_sigaction != libc::SIG_DFL {
+        let disposition = if current.sa_sigaction == libc::SIG_IGN {
+            "SIG_IGN"
+        } else {
+            "a custom handler"
+        };
+        return Err(io::Error::other(format!(
+            "fork-like clone requires waitable SIGCHLD disposition SIG_DFL; found {disposition}"
+        )));
+    }
+    if current.sa_flags & libc::SA_NOCLDWAIT != 0 {
+        return Err(io::Error::other(
+            "fork-like clone requires waitable SIGCHLD disposition without SA_NOCLDWAIT",
+        ));
+    }
+    Ok(())
 }
 
 fn current_task_id() -> io::Result<i32> {
@@ -519,11 +559,16 @@ fn get_descriptor_flags(descriptor: i32) -> io::Result<i32> {
     }
 }
 
-/// Kill and reap a child after a post-success kernel-contract failure.
+/// Kill and reap a child before pidfd authority has been validated and exposed.
 ///
-/// A successfully returned child remains our unreaped child, so its numeric
-/// PID cannot be recycled before this wait completes. This makes kill+waitpid
-/// safe even though the descriptor being rejected is not trusted as a pidfd.
+/// This emergency path is confined to `finish_parent`: `clone3` reported a
+/// child, but the CLONE_PIDFD output itself is missing, malformed, unusable, or
+/// violates its close-on-exec contract, so no pidfd authority can safely be
+/// returned to the caller. The child remains our unreaped child under the
+/// required waitable SIGCHLD disposition, so its numeric PID cannot be recycled
+/// before this wait completes. Once `finish_parent` returns a validated pidfd,
+/// every signal and wait in the normal lifecycle is pidfd-only and this helper
+/// is unreachable.
 fn reject_spawned_child(pid: libc::pid_t, source: io::Error) -> io::Error {
     match kill_and_reap(pid) {
         Ok(()) => source,
@@ -556,8 +601,9 @@ fn kill_and_reap(pid: libc::pid_t) -> io::Result<()> {
             let source = io::Error::last_os_error();
             match source.raw_os_error() {
                 Some(libc::EINTR) => continue,
-                // A SIGCHLD handler may have reaped the child concurrently;
-                // either way, no zombie or live child remains ours.
+                // The audited SIG_DFL/no-SA_NOCLDWAIT contract should make
+                // this unreachable. If the kernel nevertheless reports
+                // ECHILD, no waitable child remains ours.
                 Some(libc::ECHILD) => return Ok(()),
                 _ => return Err(source),
             }
@@ -572,8 +618,11 @@ fn kill_and_reap(pid: libc::pid_t) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, offset_of, size_of};
+    use std::process::{Command, Stdio};
     use std::sync::mpsc;
     use std::thread;
+
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 
     use super::*;
 
@@ -683,6 +732,62 @@ mod tests {
         assert!(require_single_task(42, &[]).is_err());
         assert!(require_single_task(42, &[41]).is_err());
         assert!(require_single_task(42, &[42, 43]).is_err());
+    }
+
+    #[test]
+    fn clone3_rejects_nonwaitable_sigchld_dispositions_in_isolated_processes() {
+        const CHILD_ENV: &str = "CONTAINER_CLONE3_SIGCHLD_DISPOSITION_TEST";
+        const TEST_NAME: &str = "clone3::tests::clone3_rejects_nonwaitable_sigchld_dispositions_in_isolated_processes";
+
+        let Some(case) = std::env::var_os(CHILD_ENV) else {
+            for case in ["default", "sig_ign", "no_cld_wait", "custom_handler"] {
+                let output = Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+                    .env(CHILD_ENV, case)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "isolated SIGCHLD disposition case {case:?} failed: {}; stderr={}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
+
+        extern "C" fn custom_sigchld_handler(_: libc::c_int) {}
+
+        let case = case.to_str().expect("test case is UTF-8");
+        let action = match case {
+            "default" => SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty()),
+            "sig_ign" => SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty()),
+            "no_cld_wait" => SigAction::new(SigHandler::SigDfl, SaFlags::SA_NOCLDWAIT, SigSet::empty()),
+            "custom_handler" => SigAction::new(
+                SigHandler::Handler(custom_sigchld_handler),
+                SaFlags::empty(),
+                SigSet::empty(),
+            ),
+            other => panic!("unknown isolated SIGCHLD test case {other:?}"),
+        };
+        // SAFETY: this exact-test subprocess installs one valid action and exits
+        // immediately after the read-only disposition audit.
+        unsafe { sigaction(Signal::SIGCHLD, &action) }.unwrap();
+
+        if case == "default" {
+            require_waitable_sigchld_disposition().unwrap();
+            return;
+        }
+        let error = require_waitable_sigchld_disposition().unwrap_err();
+        match case {
+            "sig_ign" => assert!(error.to_string().contains("found SIG_IGN")),
+            "no_cld_wait" => assert!(error.to_string().contains("without SA_NOCLDWAIT")),
+            "custom_handler" => assert!(error.to_string().contains("found a custom handler")),
+            _ => unreachable!(),
+        }
     }
 
     #[test]

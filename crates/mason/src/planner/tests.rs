@@ -914,13 +914,6 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
         };
     }
 
-    // `thiserror` may make a transparent wrapper's concrete inner error
-    // unavailable to `downcast_ref`, but its exact display remains in the
-    // source chain. Accept only known setup labels, never `run: ...` payload
-    // failures.
-    if setup_capability_denial(&error.to_string()) {
-        return true;
-    }
     if let Some(error) = error.downcast_ref::<::container::Error>() {
         return match error {
             ::container::Error::CloneNamespaces { source } => matches!(
@@ -938,6 +931,8 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
             // teardown failures are lifecycle violations, not evidence that
             // the host merely lacks an optional execution capability.
             ::container::Error::CgroupLifecycle { .. }
+            | ::container::Error::ChildCleanup { .. }
+            | ::container::Error::ChildCleanupAfterFailure { .. }
             | ::container::Error::CgroupCleanup { .. }
             | ::container::Error::CgroupCleanupAfterFailure { .. }
             | ::container::Error::AtomicCgroupRequiresAnchoredRoot
@@ -957,6 +952,15 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
             ::container::Error::Failure { message } => setup_capability_denial(message),
             ::container::Error::Signaled { .. } | ::container::Error::UnknownExit => false,
         };
+    }
+
+    // `thiserror` may make a transparent wrapper's concrete inner error
+    // unavailable to `downcast_ref`, but its exact display remains in the
+    // source chain. Accept only known setup labels, never `run: ...` payload
+    // failures. Typed lifecycle errors above take precedence so cleanup text
+    // can never turn a post-clone violation into an optional-capability skip.
+    if setup_capability_denial(&error.to_string()) {
+        return true;
     }
     error.source().is_some_and(container_capability_unavailable)
 }
@@ -1264,6 +1268,24 @@ fn frozen_execution_capability_skip_never_hides_payload_or_ambiguous_nix_failure
         source: nix::errno::Errno::EPERM,
     });
     assert!(!container_capability_unavailable(&ambiguous));
+
+    let child_cleanup = crate::container::Error::Container(::container::Error::ChildCleanup {
+        cleanup: std::io::Error::other("EPERM: Operation not permitted"),
+        pidfd: None,
+    });
+    assert!(!container_capability_unavailable(&child_cleanup));
+
+    // Even a setup-shaped primary plus a permission-shaped cleanup diagnostic
+    // remains a typed post-clone lifecycle violation. The display-string
+    // fallback must never override that typed classification.
+    let child_cleanup_after_setup = crate::container::Error::Container(::container::Error::ChildCleanupAfterFailure {
+        primary: Box::new(::container::Error::Failure {
+            message: "mount /work: EIO: Input/output error".to_owned(),
+        }),
+        cleanup: std::io::Error::other("EPERM: Operation not permitted"),
+        pidfd: None,
+    });
+    assert!(!container_capability_unavailable(&child_cleanup_after_setup));
 }
 
 #[test]
