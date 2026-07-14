@@ -51,7 +51,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 23] = [
+const PACKAGE_EXAMPLES: [&str; 29] = [
     "autotools",
     "binary-release",
     "cargo",
@@ -62,8 +62,11 @@ const PACKAGE_EXAMPLES: [&str; 23] = [
     "dependency-roles",
     "desktop-application",
     "factory-override",
+    "firmware-bundle",
     "font-family",
+    "generated-schema-library",
     "hooks",
+    "manual-compiler-pipeline",
     "meson",
     "meta-package",
     "minimal",
@@ -72,9 +75,12 @@ const PACKAGE_EXAMPLES: [&str; 23] = [
     "output-tool-wrapper",
     "patch-series",
     "pgo-workload",
+    "platform-factory",
     "profiles-emul32",
+    "python-module",
     "realistic-daemon",
     "split-outputs",
+    "system-integration-assets",
 ];
 const EXECUTION_FIXTURES: [&str; 9] = [
     "autotools",

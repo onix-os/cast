@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+install -Dm644 integration/device-broker.service "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/device-broker.service"
+install -Dm644 integration/device-broker.sysusers "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/sysusers.d/device-broker.conf"
+install -Dm644 integration/device-broker.tmpfiles "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/device-broker.conf"
+install -Dm644 integration/70-device-broker.rules "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/udev/rules.d/70-device-broker.rules"
+install -Dm644 integration/io.example.DeviceBroker.rules "${CAST_INSTALL_ROOT}${CAST_DATADIR}/polkit-1/rules.d/io.example.DeviceBroker.rules"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Device broker operating-system integration",
+    description = b.optional.set "Service, identity, volatile-state, device-access, and authorization declarations for device-broker.",
+    runtime_inputs = [
+        b.dep.package "device-broker",
+        b.dep.package "polkit",
+        b.dep.package "systemd",
+    ],
+    paths = [
+        b.path.any "/usr/lib/systemd/system/device-broker.service",
+        b.path.any "/usr/lib/sysusers.d/device-broker.conf",
+        b.path.any "/usr/lib/tmpfiles.d/device-broker.conf",
+        b.path.any "/usr/lib/udev/rules.d/70-device-broker.rules",
+        b.path.any "/usr/share/polkit-1/rules.d/io.example.DeviceBroker.rules",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "device-broker-integration",
+    version = "1.4.0",
+    release = 2,
+    homepage = "https://example.invalid/device-broker",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [b.dep.binary "install"],
+    outputs = [root],
+    sources = [
+        b.source.archive
+            "https://example.invalid/device-broker-integration-1.4.0.tar.xz"
+            "9abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345678",
+    ],
+    architectures = ["native"],
+    .. base
+}

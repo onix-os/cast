@@ -26,13 +26,13 @@ let base = b.mk_package (b.meta {
         b.dep.pkgconfig32 "zlib",
         b.dep.soname "libz.so.1",
         b.dep.python "setuptools",
-        b.dep.interpreter "python3",
+        b.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)",
     ],
     check_inputs = [b.dep.binary "bats"],
     outputs = b.outputs.with_root base.meta.pname {
         runtime_inputs = [
             b.dep.soname "libc.so.6",
-            b.dep.interpreter "sh",
+            b.dep.binary "sh",
         ],
         .. b.output "out"
     },

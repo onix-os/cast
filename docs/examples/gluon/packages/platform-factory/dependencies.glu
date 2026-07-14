@@ -1,0 +1,10 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+{
+    code_generator = b.dep.binary "protocol-compiler",
+    compression = b.dep.pkgconfig "zlib",
+    crypto = b.dep.pkgconfig "openssl",
+}

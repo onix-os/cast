@@ -85,14 +85,18 @@ Use typed dependency constructors rather than provider strings:
 b.dep.package "zlib"
 b.dep.output (b.package_ref "llvm") "clang"
 b.dep.binary "cmake"
-b.dep.system_binary "sh"
+b.dep.system_binary "ldconfig"
 b.dep.pkgconfig "openssl"
 b.dep.pkgconfig32 "zlib"
 b.dep.soname "libz.so.1"
 b.dep.cmake "Qt6"
 b.dep.python "setuptools"
-b.dep.interpreter "/usr/bin/python3"
+b.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)"
 ```
+
+`interpreter` is the exact architecture-qualified ELF `PT_INTERP` loader
+capability emitted by package analysis. Script runtimes such as `python3`,
+`bash`, and `sh` are executable capabilities and use `b.dep.binary` instead.
 
 Put them in the field matching their purpose:
 
