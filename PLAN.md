@@ -558,9 +558,11 @@ that evidence.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution.
-- [x] Before entering the container, require every frozen executable binding to
-  resolve to the declared regular executable inside the materialized package
-  root. Provider metadata without its promised executable must fail closed.
+- [x] Before entering the container, require every frozen executable binding's
+  entry point to belong to its declared provider and resolve to a regular
+  executable through uniquely owned symlink hops inside the exact frozen
+  closure. Missing or ambiguous handoffs and provider metadata without its
+  promised entry point fail closed.
 - [ ] Actually configure, compile, check, install, analyze, package, and publish
   at least one hermetic fixture for each standard builder: CMake, Meson, Cargo,
   and Autotools. Also execute one honest custom-step fixture and one native

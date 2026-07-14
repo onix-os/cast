@@ -2345,8 +2345,13 @@ where
     let mut expected = BTreeMap::<(package::Id, PathBuf), ExpectedFrozenExecutable>::new();
     for binding in &bindings {
         require_frozen_executable_deadline(deadline)?;
-        let layouts = provider_layouts.get(&binding.package);
-        let executable = resolve_frozen_executable_layout(binding, layouts, &directory_redirects, deadline)?;
+        let executable = resolve_frozen_executable_layout(
+            binding,
+            &provider_layouts,
+            &path_providers,
+            &directory_redirects,
+            deadline,
+        )?;
         expected.insert((binding.package.clone(), binding.path.clone()), executable);
     }
 
@@ -2442,11 +2447,18 @@ where
 
 fn resolve_frozen_executable_layout(
     binding: &FrozenExecutableBinding,
-    layouts: Option<&BTreeMap<PathBuf, FrozenExecutableLayout>>,
+    provider_layouts: &BTreeMap<package::Id, BTreeMap<PathBuf, FrozenExecutableLayout>>,
+    path_providers: &BTreeMap<PathBuf, BTreeSet<package::Id>>,
     directory_redirects: &BTreeMap<PathBuf, PathBuf>,
     deadline: Instant,
 ) -> Result<ExpectedFrozenExecutable, Error> {
     let mut current = binding.path.clone();
+    // Capability resolution pins the owner of the declared entry point.  A
+    // symlink may intentionally hand off to another package in the exact
+    // frozen closure (for example `cp -> gnu-cp`), but every later hop must
+    // have one unambiguous owner.  We never resolve through the host or choose
+    // a provider by iteration order.
+    let mut provider = binding.package.clone();
     let mut visited = BTreeSet::new();
     let mut symlinks = Vec::new();
     loop {
@@ -2458,7 +2470,10 @@ fn resolve_frozen_executable_layout(
                 path: current,
             });
         }
-        let Some(layout) = layouts.and_then(|layouts| layouts.get(&current)) else {
+        let Some(layout) = provider_layouts
+            .get(&provider)
+            .and_then(|layouts| layouts.get(&current))
+        else {
             if symlinks.is_empty() {
                 return Err(Error::MissingFrozenExecutableLayout {
                     package: binding.package.clone(),
@@ -2475,7 +2490,7 @@ fn resolve_frozen_executable_layout(
             FrozenExecutableLayout::Regular { digest, mode } => {
                 if mode & nix::libc::S_IFMT != nix::libc::S_IFREG || mode & 0o111 == 0 {
                     return Err(Error::FrozenExecutableLayoutNotExecutable {
-                        package: binding.package.clone(),
+                        package: provider,
                         path: current,
                         mode: *mode,
                     });
@@ -2497,28 +2512,61 @@ fn resolve_frozen_executable_layout(
                 }
                 if mode & nix::libc::S_IFMT != nix::libc::S_IFLNK || mode & 0o7777 != 0o777 {
                     return Err(Error::FrozenExecutableLayoutNotRegular {
-                        package: binding.package.clone(),
+                        package: provider,
                         path: current,
                     });
                 }
                 let next = resolve_frozen_symlink_target(&current, target).ok_or_else(|| {
                     Error::InvalidFrozenExecutableSymlinkTarget {
-                        package: binding.package.clone(),
+                        package: provider.clone(),
                         path: current.clone(),
                         target: target.clone(),
                     }
                 })?;
                 symlinks.push(ExpectedFrozenSymlink {
-                    package: binding.package.clone(),
+                    package: provider,
                     path: current,
                     target: target.clone(),
                     mode: *mode,
                 });
                 current = next;
+                let providers =
+                    path_providers
+                        .get(&current)
+                        .ok_or_else(|| Error::MissingFrozenExecutableSymlinkTarget {
+                            package: binding.package.clone(),
+                            binding: binding.path.clone(),
+                            target: current.clone(),
+                        })?;
+                if providers.is_empty() {
+                    return Err(Error::MissingFrozenExecutableSymlinkTarget {
+                        package: binding.package.clone(),
+                        binding: binding.path.clone(),
+                        target: current,
+                    });
+                }
+                if providers.len() > 1 {
+                    return Err(Error::AmbiguousFrozenExecutableSymlinkTarget {
+                        package: binding.package.clone(),
+                        binding: binding.path.clone(),
+                        target: current,
+                        providers: providers.iter().cloned().collect(),
+                    });
+                }
+                provider =
+                    providers
+                        .iter()
+                        .next()
+                        .cloned()
+                        .ok_or_else(|| Error::MissingFrozenExecutableSymlinkTarget {
+                            package: binding.package.clone(),
+                            binding: binding.path.clone(),
+                            target: current.clone(),
+                        })?;
             }
             FrozenExecutableLayout::Directory { .. } | FrozenExecutableLayout::Other => {
                 return Err(Error::FrozenExecutableLayoutNotRegular {
-                    package: binding.package.clone(),
+                    package: provider,
                     path: current,
                 });
             }
@@ -6369,12 +6417,21 @@ pub enum Error {
     #[error("frozen executable provider {package} has no regular layout entry at {path:?}")]
     MissingFrozenExecutableLayout { package: package::Id, path: PathBuf },
     #[error(
-        "frozen executable provider {package} binding {binding:?} resolves to {target:?}, which is absent from that same package"
+        "frozen executable provider {package} binding {binding:?} resolves to {target:?}, which has no provider in the exact frozen closure"
     )]
     MissingFrozenExecutableSymlinkTarget {
         package: package::Id,
         binding: PathBuf,
         target: PathBuf,
+    },
+    #[error(
+        "frozen executable provider {package} binding {binding:?} resolves to ambiguous target {target:?} from providers {providers:?}"
+    )]
+    AmbiguousFrozenExecutableSymlinkTarget {
+        package: package::Id,
+        binding: PathBuf,
+        target: PathBuf,
+        providers: Vec<package::Id>,
     },
     #[error("frozen executable provider {package} names a non-regular layout entry at {path:?}")]
     FrozenExecutableLayoutNotRegular { package: package::Id, path: PathBuf },
@@ -8219,13 +8276,16 @@ let cast = import! cast.system.v1
             },
         )]);
         let binding = FrozenExecutableBinding {
-            package,
+            package: package.clone(),
             path: logical_tool.clone(),
         };
+        let provider_layouts = BTreeMap::from([(package.clone(), layouts)]);
+        let path_providers = BTreeMap::from([(logical_tool.clone(), BTreeSet::from([package]))]);
         assert!(matches!(
             resolve_frozen_executable_layout(
                 &binding,
-                Some(&layouts),
+                &provider_layouts,
+                &path_providers,
                 &redirects,
                 Instant::now() + Duration::from_secs(1),
             ),
@@ -8261,6 +8321,90 @@ let cast = import! cast.system.v1
     }
 
     #[test]
+    fn frozen_executable_symlink_handoff_requires_one_closure_provider() {
+        let entry_provider = package::Id::from("entry-provider");
+        let target_provider = package::Id::from("target-provider");
+        let duplicate_provider = package::Id::from("duplicate-provider");
+        let entry = PathBuf::from("/usr/bin/tool");
+        let target = PathBuf::from("/usr/bin/tool-real");
+        let binding = FrozenExecutableBinding {
+            package: entry_provider.clone(),
+            path: entry.clone(),
+        };
+        let provider_layouts = BTreeMap::from([
+            (
+                entry_provider.clone(),
+                BTreeMap::from([(
+                    entry.clone(),
+                    FrozenExecutableLayout::Symlink {
+                        target: "tool-real".to_owned(),
+                        mode: nix::libc::S_IFLNK | 0o777,
+                    },
+                )]),
+            ),
+            (
+                target_provider.clone(),
+                BTreeMap::from([(
+                    target.clone(),
+                    FrozenExecutableLayout::Regular {
+                        digest: 7,
+                        mode: nix::libc::S_IFREG | 0o755,
+                    },
+                )]),
+            ),
+        ]);
+        let mut path_providers = BTreeMap::from([
+            (entry.clone(), BTreeSet::from([entry_provider.clone()])),
+            (target.clone(), BTreeSet::from([target_provider.clone()])),
+        ]);
+        let redirects = BTreeMap::new();
+        let deadline = Instant::now() + Duration::from_secs(1);
+
+        let expected =
+            resolve_frozen_executable_layout(&binding, &provider_layouts, &path_providers, &redirects, deadline)
+                .unwrap();
+        assert_eq!(expected.resolved_path, target);
+        assert_eq!(expected.symlinks.len(), 1);
+        assert_eq!(expected.symlinks[0].package, entry_provider);
+
+        path_providers.remove(&target);
+        assert!(matches!(
+            resolve_frozen_executable_layout(
+                &binding,
+                &provider_layouts,
+                &path_providers,
+                &redirects,
+                deadline,
+            ),
+            Err(Error::MissingFrozenExecutableSymlinkTarget { package, binding: path, target: missing })
+                if package == binding.package && path == binding.path && missing == target
+        ));
+
+        path_providers.insert(
+            target.clone(),
+            BTreeSet::from([target_provider.clone(), duplicate_provider.clone()]),
+        );
+        assert!(matches!(
+            resolve_frozen_executable_layout(
+                &binding,
+                &provider_layouts,
+                &path_providers,
+                &redirects,
+                deadline,
+            ),
+            Err(Error::AmbiguousFrozenExecutableSymlinkTarget {
+                package,
+                binding: path,
+                target: ambiguous,
+                providers,
+            }) if package == binding.package
+                && path == binding.path
+                && ambiguous == target
+                && providers == vec![duplicate_provider, target_provider]
+        ));
+    }
+
+    #[test]
     fn frozen_executable_symlink_chain_accepts_n_and_rejects_n_plus_one() {
         let binding = FrozenExecutableBinding {
             package: package::Id::from("symlink-chain-provider"),
@@ -8286,7 +8430,15 @@ let cast = import! cast.system.v1
         );
         let redirects = BTreeMap::new();
         let deadline = Instant::now() + Duration::from_secs(1);
-        let expected = resolve_frozen_executable_layout(&binding, Some(&layouts), &redirects, deadline).unwrap();
+        let provider_layouts = BTreeMap::from([(binding.package.clone(), layouts.clone())]);
+        let path_providers = layouts
+            .keys()
+            .cloned()
+            .map(|path| (path, BTreeSet::from([binding.package.clone()])))
+            .collect();
+        let expected =
+            resolve_frozen_executable_layout(&binding, &provider_layouts, &path_providers, &redirects, deadline)
+                .unwrap();
         assert_eq!(expected.symlinks.len(), MAX_FROZEN_EXECUTABLE_SYMLINKS);
         assert_eq!(expected.resolved_path, final_path);
 
@@ -8304,8 +8456,20 @@ let cast = import! cast.system.v1
                 mode: nix::libc::S_IFREG | 0o755,
             },
         );
+        let provider_layouts = BTreeMap::from([(binding.package.clone(), layouts.clone())]);
+        let path_providers = layouts
+            .keys()
+            .cloned()
+            .map(|path| (path, BTreeSet::from([binding.package.clone()])))
+            .collect();
         assert!(matches!(
-            resolve_frozen_executable_layout(&binding, Some(&layouts), &redirects, deadline),
+            resolve_frozen_executable_layout(
+                &binding,
+                &provider_layouts,
+                &path_providers,
+                &redirects,
+                deadline,
+            ),
             Err(Error::FrozenExecutableSymlinkLimit { package, path, limit })
                 if package == binding.package
                     && path == binding.path
@@ -8937,13 +9101,11 @@ let cast = import! cast.system.v1
             package: first.clone(),
             path: PathBuf::from("/usr/bin/cross-tool"),
         };
-        assert!(matches!(
-            client.require_frozen_executables(&packages, &[cross_provider_symlink]),
-            Err(Error::MissingFrozenExecutableSymlinkTarget { package, binding, target })
-                if package == first
-                    && binding == Path::new("/usr/bin/cross-tool")
-                    && target == Path::new("/usr/bin/other-tool")
-        ));
+        let cross_provider_guard = client
+            .require_frozen_executables(&packages, std::slice::from_ref(&cross_provider_symlink))
+            .unwrap();
+        cross_provider_guard.revalidate().unwrap();
+        drop(cross_provider_guard);
 
         let cyclic_symlink = FrozenExecutableBinding {
             package: first.clone(),

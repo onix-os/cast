@@ -105,6 +105,13 @@ The shared `stone::relation` model is the canonical parser and representation
 used by Cast and package conversion. Local output references are
 validated before planning, including missing outputs and cycles.
 
+A binary capability may be implemented by a package-owned symlink whose
+target is supplied by another package in the same frozen closure. Cast pins
+the declared entry-point provider, follows each lexical `/usr` symlink only
+through the frozen layout index, and requires exactly one provider for every
+handoff. Missing or ambiguous targets fail before the build container starts;
+the host filesystem is never used to complete the chain.
+
 ## Standard builders
 
 Import one standard builder module and start from its `defaults` record when
