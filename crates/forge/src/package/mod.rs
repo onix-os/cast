@@ -16,13 +16,12 @@ pub mod render;
 /// to Cast's system-metadata namespace.
 ///
 /// Stone layout targets omit the leading `/usr/`. Packages must never own the
-/// state marker, its atomic-publication temporary, or the permanent
-/// tree-identity marker, nor anything beneath either marker if a future
-/// representation turns one into a directory. This predicate deliberately
-/// reserves only those exact first components; similar package names remain
-/// available.
+/// state or tree-identity markers, their atomic-publication temporaries, nor
+/// anything beneath any marker if a future representation turns one into a
+/// directory. This predicate deliberately reserves only those exact first
+/// components; similar package names remain available.
 pub fn is_reserved_usr_layout_target(target: &str) -> bool {
-    [".cast-state-id.tmp", ".cast-tree-id", ".stateID"]
+    [".cast-state-id.tmp", ".cast-tree-id", ".cast-tree-id.tmp", ".stateID"]
         .into_iter()
         .any(|reserved| {
             target == reserved
@@ -199,6 +198,8 @@ mod tests {
             ".cast-tree-id",
             ".cast-tree-id/child",
             ".cast-tree-id/nested/child",
+            ".cast-tree-id.tmp",
+            ".cast-tree-id.tmp/child",
             ".stateID",
             ".stateID/child",
             ".stateID/nested/child",
@@ -212,6 +213,8 @@ mod tests {
             ".cast-tree",
             ".cast-tree-id-old",
             ".cast-tree-id.old/child",
+            ".cast-tree-id.tmp-old",
+            ".cast-tree-id.tmp.old/child",
             ".state",
             ".stateID-old",
             ".stateID.old/child",

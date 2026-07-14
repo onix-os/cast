@@ -35,4 +35,9 @@ pub(crate) mod test_support;
 // on-disk contract independently testable before it can affect `/usr`.
 #[allow(dead_code)]
 pub(crate) mod transition_journal;
+// Durable tree identity lands before the transition coordinator consumes it.
+// Keeping the creation and recovery APIs isolated makes the no-mint recovery
+// contract independently testable.
+#[allow(dead_code)]
+pub(crate) mod tree_marker;
 pub mod util;

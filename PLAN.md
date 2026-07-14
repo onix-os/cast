@@ -635,6 +635,17 @@ and instant rollback mechanism; it hardens their failure semantics.
   witnesses. Require candidate and previous to have distinct tokens and
   filesystem objects on the same exchange-capable mount, keep all descriptors
   close-on-exec, and fsync every changed parent before recording completion.
+- [x] Land the descriptor-relative `/usr/.cast-tree-id` primitive independently
+  of coordinator integration. Its fixed v1 frame is bounded, checksummed, and
+  locked by an exact golden; pre-journal publication uses an anonymous
+  same-filesystem `O_TMPFILE`, full file syncs, identity-bound no-replace
+  linking through authenticated procfs, directory sync, and retained inode
+  revalidation. Canonical markers are exact owner-owned single-link 0444
+  files; package ownership of both durable and temporary names is forbidden;
+  and filesystems without linkable `O_TMPFILE` support fail closed without a
+  named pathname fallback. The recovery API is structurally read-only: a
+  missing, malformed, mismatched, replaced, or temporary marker fails without
+  minting or repair.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree

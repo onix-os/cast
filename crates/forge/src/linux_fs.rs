@@ -44,6 +44,107 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
         ));
     }
 
+    let (descriptors, descriptor, expected) = authenticated_descriptor_name(file)?;
+    loop {
+        // SAFETY: the directory is authenticated procfs, the component is the
+        // live target descriptor's canonical decimal number, and flags=0
+        // deliberately follows that procfs magic link to the pinned inode.
+        if unsafe { nix::libc::fchmodat(descriptors.as_raw_fd(), descriptor.as_ptr(), mode, 0) } == 0 {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
+    }
+
+    let metadata = file.metadata()?;
+    let actual = inode_identity(&metadata);
+    require_same_inode(expected, actual)?;
+    let actual_mode = metadata.permissions().mode() & 0o7777;
+    if actual_mode != mode {
+        return Err(io::Error::other(format!(
+            "retained filesystem capability has mode {actual_mode:04o} after chmod, expected {mode:04o}"
+        )));
+    }
+    let post_alias = open_descriptor_alias(&descriptors, &descriptor)?;
+    require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
+    Ok(())
+}
+
+/// Give an unnamed retained inode one no-replace name in an authenticated
+/// target directory.
+///
+/// `linkat(AT_EMPTY_PATH)` requires `CAP_DAC_READ_SEARCH` even for the owner.
+/// Following the exact descriptor name below this task's authenticated procfs
+/// fd table is the documented unprivileged `O_TMPFILE` publication path. The
+/// source alias and resulting target are both bound back to the retained inode.
+pub(crate) fn link_path_descriptor_noreplace(
+    file: &std::fs::File,
+    target_directory: &std::fs::File,
+    target_name: &CStr,
+) -> io::Result<()> {
+    if target_name.to_bytes().is_empty()
+        || target_name.to_bytes().contains(&b'/')
+        || matches!(target_name.to_bytes(), b"." | b"..")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "descriptor link target must be one nonempty component",
+        ));
+    }
+    let source_metadata = file.metadata()?;
+    if !source_metadata.file_type().is_file() || source_metadata.nlink() != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "descriptor link source must be one unnamed regular inode",
+        ));
+    }
+
+    let (descriptors, descriptor, expected) = authenticated_descriptor_name(file)?;
+    loop {
+        // SAFETY: both directory descriptors and names remain live. The source
+        // parent is an authenticated procfs fd table and AT_SYMLINK_FOLLOW is
+        // intentional: it follows only the proven descriptor magic link.
+        if unsafe {
+            nix::libc::linkat(
+                descriptors.as_raw_fd(),
+                descriptor.as_ptr(),
+                target_directory.as_raw_fd(),
+                target_name.as_ptr(),
+                nix::libc::AT_SYMLINK_FOLLOW,
+            )
+        } == 0
+        {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
+    }
+
+    let linked_metadata = file.metadata()?;
+    require_same_inode(expected, inode_identity(&linked_metadata))?;
+    if linked_metadata.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "descriptor link source has {} names after publication, expected exactly one",
+            linked_metadata.nlink()
+        )));
+    }
+    let post_alias = open_descriptor_alias(&descriptors, &descriptor)?;
+    require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
+    let target = openat2_file(
+        target_directory.as_raw_fd(),
+        target_name,
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        controlled_resolution(),
+    )?;
+    require_same_inode(expected, inode_identity(&target.metadata()?))
+}
+
+fn authenticated_descriptor_name(file: &std::fs::File) -> io::Result<(std::fs::File, CString, InodeIdentity)> {
     let expected = inode_identity(&file.metadata()?);
     let proc = openat2_file(
         nix::libc::AT_FDCWD,
@@ -97,31 +198,7 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
     let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
     let alias = open_descriptor_alias(&descriptors, &descriptor)?;
     require_same_inode(expected, inode_identity(&alias.metadata()?))?;
-    loop {
-        // SAFETY: the directory is authenticated procfs, the component is the
-        // live target descriptor's canonical decimal number, and flags=0
-        // deliberately follows that procfs magic link to the pinned inode.
-        if unsafe { nix::libc::fchmodat(descriptors.as_raw_fd(), descriptor.as_ptr(), mode, 0) } == 0 {
-            break;
-        }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
-
-    let metadata = file.metadata()?;
-    let actual = inode_identity(&metadata);
-    require_same_inode(expected, actual)?;
-    let actual_mode = metadata.permissions().mode() & 0o7777;
-    if actual_mode != mode {
-        return Err(io::Error::other(format!(
-            "retained filesystem capability has mode {actual_mode:04o} after chmod, expected {mode:04o}"
-        )));
-    }
-    let post_alias = open_descriptor_alias(&descriptors, &descriptor)?;
-    require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
-    Ok(())
+    Ok((descriptors, descriptor, expected))
 }
 
 /// Reject an inheritable POSIX default ACL on an authenticated readable
@@ -404,7 +481,19 @@ fn require_procfs(file: &std::fs::File, path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn openat2_file(dirfd: RawFd, path: &CStr, flags: i32, mode: u32, resolve: u64) -> io::Result<std::fs::File> {
+/// Open one path through Linux 5.6 `openat2(2)` and return ownership of the
+/// resulting descriptor.
+///
+/// Callers must choose an explicit resolution policy. Keeping the syscall in
+/// one place prevents security-sensitive metadata stores from quietly falling
+/// back to pathname traversal when `openat2` is unavailable.
+pub(crate) fn openat2_file(
+    dirfd: RawFd,
+    path: &CStr,
+    flags: i32,
+    mode: u32,
+    resolve: u64,
+) -> io::Result<std::fs::File> {
     // SAFETY: zero is valid for every public open_how field.
     let mut how: nix::libc::open_how = unsafe { zeroed() };
     how.flags = u64::from(flags as u32);
@@ -437,7 +526,9 @@ fn openat2_file(dirfd: RawFd, path: &CStr, flags: i32, mode: u32, resolve: u64) 
     Ok(std::fs::File::from(descriptor))
 }
 
-fn controlled_resolution() -> u64 {
+/// Descriptor-relative resolution which cannot escape the retained directory,
+/// follow links, or cross onto another mount.
+pub(crate) fn controlled_resolution() -> u64 {
     (nix::libc::RESOLVE_BENEATH
         | nix::libc::RESOLVE_NO_MAGICLINKS
         | nix::libc::RESOLVE_NO_SYMLINKS
@@ -447,6 +538,7 @@ fn controlled_resolution() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::{
+        io::Write as _,
         os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
         process::Command,
     };
@@ -518,6 +610,51 @@ mod tests {
         let after = retained.metadata().unwrap();
         assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
         assert_eq!(after.permissions().mode() & 0o7777, 0o700);
+    }
+
+    #[test]
+    fn authenticated_procfs_links_an_unnamed_inode_without_privilege() {
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = std::fs::File::open(temporary.path()).unwrap();
+        let anonymous = openat2_file(
+            directory.as_raw_fd(),
+            c".",
+            nix::libc::O_TMPFILE | nix::libc::O_RDWR | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0o600,
+            controlled_resolution(),
+        )
+        .unwrap();
+        let before = anonymous.metadata().unwrap();
+        assert_eq!(before.nlink(), 0);
+        (&anonymous).write_all(b"retained inode").unwrap();
+        anonymous.sync_all().unwrap();
+
+        link_path_descriptor_noreplace(&anonymous, &directory, c"published").unwrap();
+
+        let after = anonymous.metadata().unwrap();
+        let named = std::fs::metadata(temporary.path().join("published")).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!((named.dev(), named.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.nlink(), 1);
+        assert_eq!(
+            std::fs::read(temporary.path().join("published")).unwrap(),
+            b"retained inode"
+        );
+        let competing = openat2_file(
+            directory.as_raw_fd(),
+            c".",
+            nix::libc::O_TMPFILE | nix::libc::O_RDWR | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0o600,
+            controlled_resolution(),
+        )
+        .unwrap();
+        assert_eq!(
+            link_path_descriptor_noreplace(&competing, &directory, c"published")
+                .unwrap_err()
+                .raw_os_error(),
+            Some(nix::libc::EEXIST)
+        );
     }
 
     #[test]

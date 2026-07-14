@@ -8403,7 +8403,12 @@ mod tests {
                 }) if rejected_package == package && rejected_target == absolute
             ));
 
-            for reserved in [".cast-state-id.tmp", ".cast-tree-id", ".stateID/forged-child"] {
+            for reserved in [
+                ".cast-state-id.tmp",
+                ".cast-tree-id",
+                ".cast-tree-id.tmp",
+                ".stateID/forged-child",
+            ] {
                 let invalid = test_stone_layout(kind, reserved);
                 assert!(matches!(
                     require_usr_relative_stone_layout(&package, &invalid),
@@ -8484,6 +8489,7 @@ mod tests {
             ".hidden",
             ".cast-state-id.tmp-old",
             ".cast-tree-id-old",
+            ".cast-tree-id.tmp-old",
             ".stateID.old/child",
             "share/Grüße/工具",
             "usr/bin/nested",
@@ -11400,7 +11406,12 @@ let cast = import! cast.system.v1
 
     #[test]
     fn direct_database_frozen_consumer_rejects_reserved_targets_before_destination_mutation() {
-        for target in [".cast-state-id.tmp", ".cast-tree-id", ".stateID/forged-child"] {
+        for target in [
+            ".cast-state-id.tmp",
+            ".cast-tree-id",
+            ".cast-tree-id.tmp",
+            ".stateID/forged-child",
+        ] {
             let layout = StonePayloadLayoutRecord {
                 uid: 0,
                 gid: 0,
