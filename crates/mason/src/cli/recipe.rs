@@ -598,6 +598,8 @@ impl From<planner::Error> for Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
     use super::*;
 
     const AUTHORED_EXPRESSION: &str = r#"let cast = import! cast.package.v3
@@ -629,12 +631,14 @@ let base = cast.mk_package (cast.meta {
 "#;
 
     fn environment(root: &Path) -> Env {
-        Env {
-            cache_dir: root.join("cache"),
-            data_dir: root.join("data"),
-            forge_dir: root.join("forge"),
-            config: config::Manager::custom(root),
-        }
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        Env::new(
+            Some(root.join("cache")),
+            Some(root.to_owned()),
+            Some(root.join("data")),
+            Some(root.join("forge")),
+        )
+        .unwrap()
     }
 
     #[test]

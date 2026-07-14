@@ -2,19 +2,29 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
+    fs::File,
     io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use forge::util;
 use nix::NixPath;
 use thiserror::Error;
 
+#[derive(Debug, Clone)]
 pub struct Env {
     pub cache_dir: PathBuf,
     pub data_dir: PathBuf,
     pub forge_dir: PathBuf,
     pub config: config::Manager,
+    /// Exact cache roots selected during environment construction.
+    ///
+    /// These remain private so an `Env` cannot be fabricated with pathnames
+    /// that have no matching authority. `Arc<File>` keeps cloning cheap while
+    /// every clone retains the same kernel-pinned directory identity.
+    pub(crate) cache_dir_anchor: Arc<File>,
+    pub(crate) forge_dir_anchor: Arc<File>,
 }
 
 impl Env {
@@ -38,19 +48,22 @@ impl Env {
         let data_dir = resolve_data_dir(is_root, data_dir)?;
         let forge_dir = resolve_forge_root(is_root, forge_root)?;
 
-        // Frozen build workspaces sit below this dedicated root. Bootstrap it
-        // through a descriptor and normalize only safe/new directories so an
-        // ambient umask cannot create a group-writable workspace and an
-        // existing unsafe cache cannot be silently "repaired" in place.
-        let cache_dir = crate::paths::prepare_private_workspace_root(&cache_dir)?;
+        // Frozen build workspaces sit below a Mason-owned private cache root,
+        // so safe existing cache roots are normalized to exact mode 0700.
+        // Mason owns only creation of Forge's isolated resolution root: an
+        // existing Forge root is left byte-for-byte and mode-for-mode unchanged
+        // for Forge's broader root-owned/read-only policy to validate later.
+        let (cache_dir, cache_dir_anchor) = crate::paths::prepare_private_workspace_root_pinned(&cache_dir)?;
+        let (forge_dir, forge_dir_anchor) = crate::paths::prepare_missing_private_workspace_root_pinned(&forge_dir)?;
         util::ensure_dir_exists(&data_dir)?;
-        util::ensure_dir_exists(&forge_dir)?;
 
         Ok(Self {
             config,
             cache_dir,
             data_dir,
             forge_dir,
+            cache_dir_anchor: Arc::new(cache_dir_anchor),
+            forge_dir_anchor: Arc::new(forge_dir_anchor),
         })
     }
 }
@@ -122,6 +135,7 @@ mod test {
     use super::*;
 
     const UMASK_CHILD: &str = "CAST_PRIVATE_CACHE_UMASK_CHILD";
+    const FORGE_UMASK_CHILD: &str = "CAST_PRIVATE_FORGE_UMASK_CHILD";
 
     #[test]
     fn reject_forge_system_root() {
@@ -136,13 +150,13 @@ mod test {
     }
 
     #[test]
-    fn dedicated_build_cache_root_is_exact_private_under_umask_0002() {
+    fn dedicated_build_cache_root_is_exact_private_under_umask_0777() {
         if let Some(path) = std::env::var_os(UMASK_CHILD) {
             // This branch runs in an isolated test subprocess because umask is
             // process-global and changing it in the parallel test runner would
             // make unrelated filesystem tests nondeterministic.
             // SAFETY: the subprocess performs no concurrent setup before exit.
-            unsafe { nix::libc::umask(0o002) };
+            unsafe { nix::libc::umask(0o777) };
             let root = crate::paths::prepare_private_workspace_root(Path::new(&path)).unwrap();
             assert_eq!(std::fs::metadata(root).unwrap().permissions().mode() & 0o7777, 0o700);
             return;
@@ -153,7 +167,7 @@ mod test {
         let root = temporary.path().join("cast/build");
         let output = Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
-            .arg("env::test::dedicated_build_cache_root_is_exact_private_under_umask_0002")
+            .arg("env::test::dedicated_build_cache_root_is_exact_private_under_umask_0777")
             .arg("--nocapture")
             .env(UMASK_CHILD, &root)
             .output()
@@ -189,5 +203,91 @@ mod test {
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert!(!leaf.exists());
         assert_eq!(std::fs::metadata(parent).unwrap().permissions().mode() & 0o7777, 0o770);
+    }
+
+    #[test]
+    fn env_prepares_missing_forge_root_as_private_under_umask_0777() {
+        if let Some(path) = std::env::var_os(FORGE_UMASK_CHILD) {
+            // umask is process-global, so exercise Env in one isolated exact
+            // test process and exit without running concurrent setup.
+            // SAFETY: this child runs only this test branch.
+            unsafe { nix::libc::umask(0o777) };
+            let parent = PathBuf::from(path);
+            let env = Env::new(
+                Some(parent.join("build")),
+                Some(parent.join("config")),
+                Some(parent.join("data")),
+                Some(parent.join("forge")),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::metadata(&env.forge_dir).unwrap().permissions().mode() & 0o7777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(&env.cache_dir).unwrap().permissions().mode() & 0o7777,
+                0o700
+            );
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("env::test::env_prepares_missing_forge_root_as_private_under_umask_0777")
+            .arg("--nocapture")
+            .env(FORGE_UMASK_CHILD, temporary.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::metadata(temporary.path().join("forge"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(temporary.path().join("build"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn env_leaves_existing_forge_root_completely_unchanged() {
+        use std::os::unix::fs::MetadataExt;
+
+        for mode in [0o755, 0o555] {
+            let temporary = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let forge = temporary.path().join("forge");
+            std::fs::create_dir(&forge).unwrap();
+            std::fs::set_permissions(&forge, std::fs::Permissions::from_mode(mode)).unwrap();
+            let before = std::fs::symlink_metadata(&forge).unwrap();
+
+            let env = Env::new(
+                Some(temporary.path().join("build")),
+                Some(temporary.path().join("config")),
+                Some(temporary.path().join("data")),
+                Some(forge.clone()),
+            )
+            .unwrap();
+
+            let after = std::fs::symlink_metadata(&forge).unwrap();
+            assert_eq!(env.forge_dir, forge);
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+            assert_eq!(after.permissions().mode() & 0o7777, mode);
+        }
     }
 }

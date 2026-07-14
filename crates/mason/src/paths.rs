@@ -25,7 +25,7 @@ use fs_err::File;
 use nix::fcntl::{FlockArg, flock};
 use stone_recipe::derivation::{BuilderLayout, DerivationPlan};
 
-use crate::Recipe;
+use crate::{Recipe, linux_fs::chmod_path_descriptor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Id {
@@ -632,7 +632,79 @@ fn require_controlled_lock_file(file: &StdFile, root: &std::fs::Metadata, path: 
 /// missing descendant is then created through that descriptor. Existing
 /// shared-writable components fail before any chmod; only an already-safe leaf
 /// or a directory created by this call is normalized to exact mode 0700.
+#[cfg(test)]
 pub(crate) fn prepare_private_workspace_root(path: &Path) -> io::Result<PathBuf> {
+    prepare_private_workspace_root_pinned(path).map(|(path, _anchor)| path)
+}
+
+/// Establish and retain one exact owner-private workspace root.
+///
+/// Keeping the descriptor returned by this operation lets a later destructive
+/// caller prove that the pathname still denotes the root selected here rather
+/// than merely pinning whichever directory happens to occupy the name later.
+pub(crate) fn prepare_private_workspace_root_pinned(path: &Path) -> io::Result<(PathBuf, StdFile)> {
+    prepare_private_workspace_root_with_policy_pinned(path, WorkspaceRootLeafPolicy::NormalizeExisting)
+}
+
+/// Create a missing owner-private workspace root without changing an existing
+/// final entry.
+///
+/// Forge applies its own broader installation-root policy: for example, a
+/// safe read-only root or a root owned by uid 0 may be valid. Mason therefore
+/// owns only creation here. A final entry that exists before this call, or
+/// wins the final `mkdirat` race, must still pin as a real directory without
+/// symlinks, but its inode and mode are left for Forge to validate unchanged.
+#[cfg(test)]
+pub(crate) fn prepare_missing_private_workspace_root(path: &Path) -> io::Result<PathBuf> {
+    prepare_missing_private_workspace_root_pinned(path).map(|(path, _anchor)| path)
+}
+
+/// Create a missing Forge root and retain the exact selected directory.
+///
+/// Existing roots remain mode-for-mode unchanged so Forge can apply its wider
+/// root-owned/read-only policy. The retained `O_PATH` descriptor is valid for
+/// those roots even when Mason cannot open them for reading or writing.
+pub(crate) fn prepare_missing_private_workspace_root_pinned(path: &Path) -> io::Result<(PathBuf, StdFile)> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    match std::fs::symlink_metadata(&absolute) {
+        Ok(_) => {
+            let anchor = pin_workspace_root(&absolute)?;
+            return Ok((absolute, anchor));
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(source),
+    }
+
+    prepare_private_workspace_root_with_policy_pinned(&absolute, WorkspaceRootLeafPolicy::PreserveExisting)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkspaceRootLeafPolicy {
+    NormalizeExisting,
+    PreserveExisting,
+}
+
+enum EnsuredPrivateDirectory {
+    Controlled(StdFile),
+    ExistingLeaf(StdFile),
+}
+
+#[cfg(test)]
+fn prepare_private_workspace_root_with_policy(
+    path: &Path,
+    leaf_policy: WorkspaceRootLeafPolicy,
+) -> io::Result<PathBuf> {
+    prepare_private_workspace_root_with_policy_pinned(path, leaf_policy).map(|(path, _anchor)| path)
+}
+
+fn prepare_private_workspace_root_with_policy_pinned(
+    path: &Path,
+    leaf_policy: WorkspaceRootLeafPolicy,
+) -> io::Result<(PathBuf, StdFile)> {
     let absolute = if path.is_absolute() {
         path.to_owned()
     } else {
@@ -680,11 +752,21 @@ pub(crate) fn prepare_private_workspace_root(path: &Path) -> io::Result<PathBuf>
     missing.reverse();
     let relative = missing.iter().collect::<PathBuf>();
     let root_path = ancestor.join(&relative);
-    let root = ensure_private_directory_at(&anchor, &relative, &root_path)?;
-    require_controlled_directory(&root, &root_path, true)?;
-    let reopened = open_directory_nofollow(&root_path)?;
-    require_same_directory(&root, &reopened, &root_path)?;
-    Ok(root_path)
+    let root = match ensure_private_directory_at_with_policy(&anchor, &relative, &root_path, leaf_policy)? {
+        EnsuredPrivateDirectory::Controlled(root) => {
+            require_controlled_directory(&root, &root_path, true)?;
+            let reopened = open_directory_nofollow(&root_path)?;
+            require_same_directory(&root, &reopened, &root_path)?;
+            root
+        }
+        EnsuredPrivateDirectory::ExistingLeaf(root) => {
+            debug_assert_eq!(leaf_policy, WorkspaceRootLeafPolicy::PreserveExisting);
+            let reopened = pin_workspace_root(&root_path)?;
+            require_same_directory(&root, &reopened, &root_path)?;
+            root
+        }
+    };
+    Ok((root_path, root))
 }
 
 fn private_host_relative(root: &Path, path: &Path) -> io::Result<PathBuf> {
@@ -710,6 +792,21 @@ fn private_host_relative(root: &Path, path: &Path) -> io::Result<PathBuf> {
 }
 
 fn ensure_private_directory_at(root: &StdFile, relative: &Path, display: &Path) -> io::Result<StdFile> {
+    match ensure_private_directory_at_with_policy(root, relative, display, WorkspaceRootLeafPolicy::NormalizeExisting)?
+    {
+        EnsuredPrivateDirectory::Controlled(directory) => Ok(directory),
+        EnsuredPrivateDirectory::ExistingLeaf(_) => {
+            unreachable!("normalizing private-directory traversal cannot preserve an existing leaf")
+        }
+    }
+}
+
+fn ensure_private_directory_at_with_policy(
+    root: &StdFile,
+    relative: &Path,
+    display: &Path,
+    leaf_policy: WorkspaceRootLeafPolicy,
+) -> io::Result<EnsuredPrivateDirectory> {
     let root_metadata = root.metadata()?;
     let mut current = root.try_clone()?;
     let mut traversed = PathBuf::new();
@@ -722,24 +819,32 @@ fn ensure_private_directory_at(root: &StdFile, relative: &Path, display: &Path) 
         traversed.push(name);
         let name = CString::new(name.as_bytes())
             .map_err(|_| invalid_binding(format!("private host path contains NUL: {display:?}")))?;
-        let mut created = false;
+        let leaf = index + 1 == component_count;
+
+        if leaf && leaf_policy == WorkspaceRootLeafPolicy::PreserveExisting {
+            if !mkdir_private_directory_at(&current, &name, &traversed)? {
+                let existing = open_path_child(&current, &name).map_err(|source| {
+                    io::Error::new(
+                        source.kind(),
+                        format!("pin existing private host leaf {traversed:?}: {source}"),
+                    )
+                })?;
+                require_workspace_root_directory(&existing, display)?;
+                return Ok(EnsuredPrivateDirectory::ExistingLeaf(existing));
+            }
+            current = recover_created_private_directory(&root_metadata, &current, &name, &traversed, display)?;
+            continue;
+        }
+
         let mut next = open_private_child(&current, &name);
         if next
             .as_ref()
             .is_err_and(|source| source.kind() == io::ErrorKind::NotFound)
         {
-            // SAFETY: `current` and `name` remain live. mkdirat interprets one
-            // validated normal component relative to the authenticated parent.
-            if unsafe { nix::libc::mkdirat(current.as_raw_fd(), name.as_ptr(), 0o700) } == -1 {
-                let source = io::Error::last_os_error();
-                if source.kind() != io::ErrorKind::AlreadyExists {
-                    return Err(io::Error::new(
-                        source.kind(),
-                        format!("create private host directory {traversed:?}: {source}"),
-                    ));
-                }
-            } else {
-                created = true;
+            let created = mkdir_private_directory_at(&current, &name, &traversed)?;
+            if created {
+                current = recover_created_private_directory(&root_metadata, &current, &name, &traversed, display)?;
+                continue;
             }
             next = open_private_child(&current, &name);
         }
@@ -754,14 +859,91 @@ fn ensure_private_directory_at(root: &StdFile, relative: &Path, display: &Path) 
         require_same_device(&root_metadata, &next, display)?;
         require_controlled_directory(&next, display, false)?;
 
-        let leaf = index + 1 == component_count;
-        if created || leaf {
+        if leaf {
             next.set_permissions(std::fs::Permissions::from_mode(0o700))?;
             require_controlled_directory(&next, display, true)?;
         }
         current = next;
     }
-    Ok(current)
+    Ok(EnsuredPrivateDirectory::Controlled(current))
+}
+
+fn mkdir_private_directory_at(parent: &StdFile, name: &CStr, display: &Path) -> io::Result<bool> {
+    loop {
+        // SAFETY: `parent` and `name` remain live. mkdirat interprets one
+        // validated normal component relative to the authenticated parent.
+        if unsafe { nix::libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } == 0 {
+            return Ok(true);
+        }
+        let source = io::Error::last_os_error();
+        match source.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::AlreadyExists => return Ok(false),
+            _ => {
+                return Err(io::Error::new(
+                    source.kind(),
+                    format!("create private host directory {display:?}: {source}"),
+                ));
+            }
+        }
+    }
+}
+
+fn recover_created_private_directory(
+    root_metadata: &std::fs::Metadata,
+    parent: &StdFile,
+    name: &CStr,
+    traversed: &Path,
+    display: &Path,
+) -> io::Result<StdFile> {
+    let pinned = open_path_child(parent, name).map_err(|source| {
+        io::Error::new(
+            source.kind(),
+            format!("pin newly-created private host directory {traversed:?}: {source}"),
+        )
+    })?;
+    require_same_device(root_metadata, &pinned, display)?;
+    require_created_private_directory(&pinned, traversed)?;
+    chmod_path_descriptor(&pinned, 0o700)?;
+
+    let directory = open_private_child(parent, name).map_err(|source| {
+        io::Error::new(
+            source.kind(),
+            format!("reopen newly-created private host directory {traversed:?}: {source}"),
+        )
+    })?;
+    require_same_device(root_metadata, &directory, display)?;
+    require_same_directory(&pinned, &directory, display)?;
+    require_controlled_directory(&directory, display, true)?;
+    Ok(directory)
+}
+
+fn require_created_private_directory(directory: &StdFile, path: &Path) -> io::Result<()> {
+    let metadata = directory.metadata()?;
+    // SAFETY: geteuid has no preconditions and does not mutate process state.
+    let owner = unsafe { nix::libc::geteuid() };
+    let mode = metadata.mode() & 0o7777;
+    if !metadata.file_type().is_dir() || metadata.uid() != owner || mode & !0o700 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "new private host directory is not a safe owner-only residue: {path:?} (uid={}, mode={mode:#06o})",
+                metadata.uid()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn require_workspace_root_directory(directory: &StdFile, path: &Path) -> io::Result<()> {
+    if directory.metadata()?.file_type().is_dir() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("workspace root is not a directory and will not be followed: {path:?}"),
+        ))
+    }
 }
 
 fn private_parent_and_leaf(
@@ -888,25 +1070,6 @@ fn open_path_child(parent: &StdFile, name: &CStr) -> io::Result<StdFile> {
         .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {result}")))?;
     // SAFETY: successful openat2 returned one fresh owned descriptor.
     Ok(unsafe { StdFile::from_raw_fd(descriptor) })
-}
-
-fn chmod_path_descriptor(file: &StdFile, mode: u32) -> io::Result<()> {
-    // fchmod rejects O_PATH descriptors. Linux fchmodat2 with AT_EMPTY_PATH
-    // changes the exact pinned object without another pathname lookup.
-    // SAFETY: file is live and the empty C string is valid for AT_EMPTY_PATH.
-    let result = unsafe {
-        nix::libc::syscall(
-            nix::libc::SYS_fchmodat2,
-            file.as_raw_fd(),
-            c"".as_ptr(),
-            mode,
-            nix::libc::AT_EMPTY_PATH,
-        )
-    };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 fn rename_noreplace(parent: &StdFile, from: &CStr, to: &CStr, display: &Path) -> io::Result<()> {
@@ -1128,6 +1291,66 @@ fn open_directory_nofollow(path: &Path) -> io::Result<StdFile> {
         .open(path)
 }
 
+/// Pin one workspace root without following any symlink in its pathname.
+///
+/// The returned `O_PATH` descriptor is suitable for descriptor-backed
+/// container binds. No ownership or mode policy is imposed here because Forge
+/// intentionally accepts safe root-owned and read-only resolver roots.
+pub(crate) fn pin_workspace_root(path: &Path) -> io::Result<StdFile> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let encoded = CString::new(absolute.as_os_str().as_bytes())
+        .map_err(|_| invalid_binding(format!("workspace root contains NUL: {absolute:?}")))?;
+    // SAFETY: an all-zero open_how is valid before its public fields are set.
+    let mut how: nix::libc::open_how = unsafe { zeroed() };
+    how.flags =
+        u64::from((nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC) as u32);
+    how.resolve = (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64;
+    let descriptor = loop {
+        // SAFETY: the encoded pathname and open_how remain live. Success
+        // returns one fresh descriptor owned below.
+        let descriptor = unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_openat2,
+                nix::libc::AT_FDCWD,
+                encoded.as_ptr(),
+                &how,
+                size_of::<nix::libc::open_how>(),
+            )
+        };
+        if descriptor != -1 {
+            break descriptor;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(io::Error::new(
+                source.kind(),
+                format!("pin workspace root without symlinks {absolute:?}: {source}"),
+            ));
+        }
+    };
+    let descriptor = RawFd::try_from(descriptor)
+        .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
+    // SAFETY: successful openat2 returned one fresh owned descriptor.
+    let directory = unsafe { StdFile::from_raw_fd(descriptor) };
+    require_workspace_root_directory(&directory, &absolute)?;
+    Ok(directory)
+}
+
+/// Prove that a mutable workspace pathname still names one retained root.
+///
+/// The newly opened descriptor is used only as a name witness. Callers must
+/// continue using `expected` as their authority so a substitution after this
+/// check can never redirect a destructive operation to the replacement.
+pub(crate) fn require_workspace_root_path(expected: &StdFile, path: &Path) -> io::Result<()> {
+    require_workspace_root_directory(expected, path)?;
+    let reopened = pin_workspace_root(path)?;
+    require_same_directory(expected, &reopened, path)
+}
+
 fn open_private_child(parent: &StdFile, name: &CStr) -> io::Result<StdFile> {
     // SAFETY: an all-zero open_how is valid before its public fields are set.
     let mut how: nix::libc::open_how = unsafe { zeroed() };
@@ -1209,7 +1432,7 @@ fn require_same_directory(expected: &StdFile, found: &StdFile, path: &Path) -> i
 mod tests {
     use std::{
         ffi::OsStr,
-        os::unix::fs::{PermissionsExt, symlink},
+        os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     };
 
     use super::*;
@@ -1222,6 +1445,78 @@ mod tests {
         let output = root.path().join("output");
         util::ensure_dir_exists(&output).unwrap();
         Paths::new(&recipe, plan.layout.clone(), root.path(), output).unwrap()
+    }
+
+    #[test]
+    fn preserve_existing_workspace_leaf_policy_pins_without_chmodding_directory_race_winner() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let forge = root.path().join("forge");
+        std::fs::create_dir(&forge).unwrap();
+        std::fs::set_permissions(&forge, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let before = std::fs::symlink_metadata(&forge).unwrap();
+
+        let prepared =
+            prepare_private_workspace_root_with_policy(&forge, WorkspaceRootLeafPolicy::PreserveExisting).unwrap();
+
+        let after = std::fs::symlink_metadata(&forge).unwrap();
+        assert_eq!(prepared, forge);
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.permissions().mode() & 0o7777, 0o555);
+    }
+
+    #[test]
+    fn missing_workspace_root_rejects_existing_symlink_without_touching_target() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let target = root.path().join("unrelated");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("keep"), b"untouched").unwrap();
+        let target_before = std::fs::symlink_metadata(&target).unwrap();
+        let forge = root.path().join("forge");
+        symlink(&target, &forge).unwrap();
+
+        let error = prepare_missing_private_workspace_root(&forge).unwrap_err();
+
+        assert_ne!(error.kind(), io::ErrorKind::NotFound);
+        assert!(std::fs::symlink_metadata(&forge).unwrap().file_type().is_symlink());
+        let target_after = std::fs::symlink_metadata(&target).unwrap();
+        assert_eq!(
+            (target_after.dev(), target_after.ino()),
+            (target_before.dev(), target_before.ino())
+        );
+        assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn preserve_existing_workspace_leaf_policy_rejects_non_directory_race_winners_unchanged() {
+        for kind in ["symlink", "file"] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let target = root.path().join("unrelated");
+            std::fs::create_dir(&target).unwrap();
+            std::fs::write(target.join("keep"), b"untouched").unwrap();
+            let forge = root.path().join("forge");
+            match kind {
+                "symlink" => symlink(&target, &forge).unwrap(),
+                "file" => std::fs::write(&forge, b"not a directory").unwrap(),
+                _ => unreachable!(),
+            }
+            let before = std::fs::symlink_metadata(&forge).unwrap();
+
+            let error = prepare_private_workspace_root_with_policy(&forge, WorkspaceRootLeafPolicy::PreserveExisting)
+                .unwrap_err();
+
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{kind}");
+            let after = std::fs::symlink_metadata(&forge).unwrap();
+            assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()), "{kind}");
+            assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"untouched", "{kind}");
+            if kind == "file" {
+                assert_eq!(std::fs::read(&forge).unwrap(), b"not a directory");
+            } else {
+                assert_eq!(std::fs::read_link(&forge).unwrap(), target);
+            }
+        }
     }
 
     #[test]

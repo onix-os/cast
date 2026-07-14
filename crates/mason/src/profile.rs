@@ -694,7 +694,10 @@ impl From<config::SaveGluonError> for Error {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::{
+        os::unix::fs::PermissionsExt as _,
+        path::{Path, PathBuf},
+    };
 
     use config::{LoadGluonError, SaveGluonError};
     use fs_err as fs;
@@ -735,12 +738,14 @@ mod tests {
     }
 
     fn environment(config_root: &Path) -> Env {
-        Env {
-            cache_dir: config_root.join("cache"),
-            data_dir: config_root.join("data"),
-            forge_dir: config_root.join("forge"),
-            config: config::Manager::custom(config_root),
-        }
+        fs::set_permissions(config_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        Env::new(
+            Some(config_root.join("cache")),
+            Some(config_root.to_owned()),
+            Some(config_root.join("data")),
+            Some(config_root.join("forge")),
+        )
+        .unwrap()
     }
 
     fn single_profile(body: &str) -> String {
