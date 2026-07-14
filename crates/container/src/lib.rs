@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::io;
-use std::os::fd::AsRawFd;
+use std::io::{self, Read as _, Write as _};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::ptr::addr_of_mut;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::ptr::NonNull;
+use std::sync::{
+    Mutex, MutexGuard,
+    atomic::{AtomicI32, Ordering},
+};
 
 use fs_err::{self as fs, PathExt as _};
 use nc::syscalls::syscall5;
@@ -29,7 +33,7 @@ use nix::sys::signalfd::SigSet;
 use nix::sys::stat::{Mode, umask};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{
-    Pid, close, getegid, geteuid, getgid, getgroups, getuid, pipe2, pivot_root, read, setgroups, sethostname,
+    Pid, close, fchdir, getegid, geteuid, getgid, getgroups, getuid, pipe2, pivot_root, read, setgroups, sethostname,
     tcsetpgrp, write,
 };
 use snafu::{ResultExt, Snafu};
@@ -37,6 +41,15 @@ use snafu::{ResultExt, Snafu};
 use self::idmap::idmap;
 
 mod idmap;
+
+// linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
+const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
+// Smaller than Linux PIPE_BUF, so the child's single nonblocking write is
+// atomic whenever the synchronization pipe has room.
+const MAX_CHILD_ERROR_BYTES: usize = 2048;
+const MAX_ERROR_SOURCE_DEPTH: usize = 16;
+const MAX_CONTROL_EINTR_RETRIES: usize = 3;
+const CLONE_STACK_BYTES: usize = 4 * 1024 * 1024;
 
 /// Typed policy for pseudo-filesystems mounted while entering a container.
 ///
@@ -105,13 +118,15 @@ pub enum LoopbackPolicy {
 /// Access policy for the container's root filesystem.
 ///
 /// A read-only root is applied recursively after every bind has been mounted.
-/// Only mounts declared with [`Container::bind_rw`] are then made writable
-/// again. That exception applies to the exact bind mount, not to nested mounts;
-/// each writable nested mount must be declared separately. This keeps
-/// undeclared paths, including package-manager content and dependency trees,
-/// immutable to the payload. Read-only setup also removes mount-administration
-/// capability before the payload runs; pseudo-filesystems remain governed by
-/// [`PseudoFilesystemPolicy`].
+/// Only mounts declared through the applicable writable-bind API are then made
+/// writable again. Anchored callers use [`Container::bind_rw_from_root`] or
+/// [`Container::bind_rw_pinned`]; legacy pathname containers use
+/// [`Container::bind_rw`]. That exception applies to the exact bind mount, not
+/// to nested mounts; each writable nested mount must be declared separately.
+/// This keeps undeclared paths, including package-manager content and
+/// dependency trees, immutable to the payload. Read-only setup also removes
+/// mount-administration capability before the payload runs; pseudo-filesystems
+/// remain governed by [`PseudoFilesystemPolicy`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RootFilesystemPolicy {
     ReadOnly,
@@ -121,6 +136,7 @@ pub enum RootFilesystemPolicy {
 
 pub struct Container {
     root: PathBuf,
+    root_anchor: Option<OwnedFd>,
     work_dir: Option<PathBuf>,
     binds: Vec<Bind>,
     networking: bool,
@@ -131,11 +147,70 @@ pub struct Container {
     root_filesystem: RootFilesystemPolicy,
 }
 
+fn duplicate_root_anchor(anchor: RawFd) -> io::Result<OwnedFd> {
+    let duplicated = duplicate_cloexec(anchor)?;
+
+    // F_DUPFD_CLOEXEC preserves the open-file status flags. Requiring O_PATH
+    // makes descriptor-based open_tree activation an explicit API contract,
+    // rather than silently accepting a descriptor with different semantics.
+    // SAFETY: `duplicated` is live for the duration of each fcntl call.
+    let status_flags = unsafe { nix::libc::fcntl(duplicated.as_raw_fd(), nix::libc::F_GETFL) };
+    if status_flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if status_flags & nix::libc::O_PATH != nix::libc::O_PATH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "anchored container root descriptor must be opened with O_PATH",
+        ));
+    }
+
+    // SAFETY: zero is valid initialization for stat and the descriptor and
+    // output pointer remain live for the call.
+    let mut stat: nix::libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::fstat(duplicated.as_raw_fd(), &mut stat) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFDIR {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "anchored container root descriptor must reference a directory",
+        ));
+    }
+
+    // The kernel promises this for F_DUPFD_CLOEXEC; retaining the check makes
+    // descriptor inheritance fail closed even on an unexpected platform ABI.
+    // SAFETY: `duplicated` is live for the fcntl call.
+    let descriptor_flags = unsafe { nix::libc::fcntl(duplicated.as_raw_fd(), nix::libc::F_GETFD) };
+    if descriptor_flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if descriptor_flags & nix::libc::FD_CLOEXEC == 0 {
+        return Err(io::Error::other(
+            "anchored container root descriptor duplicate is not close-on-exec",
+        ));
+    }
+
+    Ok(duplicated)
+}
+
+fn duplicate_cloexec(fd: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: F_DUPFD_CLOEXEC does not borrow through `fd` after the call and
+    // returns a fresh descriptor on success.
+    let duplicated = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicated == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful F_DUPFD_CLOEXEC returned a fresh owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
+}
+
 impl Container {
     /// Create a new Container using the default options
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
+            root_anchor: None,
             work_dir: None,
             binds: vec![],
             networking: false,
@@ -145,6 +220,30 @@ impl Container {
             loopback: LoopbackPolicy::default(),
             root_filesystem: RootFilesystemPolicy::default(),
         }
+    }
+
+    /// Create a container whose root is pinned by an already authenticated
+    /// directory descriptor.
+    ///
+    /// `label` is retained only for diagnostics. Container activation clones
+    /// and attaches the mount referenced by `anchor` through descriptor-empty
+    /// paths; it never resolves `label`. The descriptor is duplicated
+    /// immediately, so the caller may close its copy after this function
+    /// returns.
+    pub fn new_anchored(label: impl Into<PathBuf>, anchor: &impl AsRawFd) -> io::Result<Self> {
+        let root_anchor = duplicate_root_anchor(anchor.as_raw_fd())?;
+        Ok(Self {
+            root: label.into(),
+            root_anchor: Some(root_anchor),
+            work_dir: None,
+            binds: vec![],
+            networking: false,
+            hostname: None,
+            ignore_host_sigint: false,
+            pseudo_filesystems: PseudoFilesystemPolicy::default(),
+            loopback: LoopbackPolicy::default(),
+            root_filesystem: RootFilesystemPolicy::default(),
+        })
     }
 
     /// Override the working directory
@@ -158,7 +257,7 @@ impl Container {
     /// Create a read-write bind mount
     pub fn bind_rw(mut self, host: impl Into<PathBuf>, guest: impl Into<PathBuf>) -> Self {
         self.binds.push(Bind {
-            source: host.into(),
+            source: BindSource::Path(host.into()),
             target: guest.into(),
             read_only: false,
         });
@@ -168,7 +267,7 @@ impl Container {
     /// Create a read-only bind mount
     pub fn bind_ro(mut self, host: impl Into<PathBuf>, guest: impl Into<PathBuf>) -> Self {
         self.binds.push(Bind {
-            source: host.into(),
+            source: BindSource::Path(host.into()),
             target: guest.into(),
             read_only: true,
         });
@@ -181,13 +280,90 @@ impl Container {
 
         if source.exists() {
             self.binds.push(Bind {
-                source,
+                source: BindSource::Path(source),
                 target: guest.into(),
                 read_only: true,
             });
         }
 
         self
+    }
+
+    /// Expose a writable subtree of the authenticated root as an exact
+    /// writable bind mount.
+    ///
+    /// The source is resolved beneath the retained root descriptor, never
+    /// through the diagnostic root pathname. This is the correct operation for
+    /// a writable install directory that otherwise lives inside a recursively
+    /// read-only frozen root. Both source and guest paths must be absolute.
+    pub fn bind_rw_from_root(mut self, source: impl Into<PathBuf>, guest: impl Into<PathBuf>) -> io::Result<Self> {
+        if self.root_anchor.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "root-relative binds require an anchored container",
+            ));
+        }
+        let source = normalized_anchored_mount_target(&source.into()).map_err(container_error_to_invalid_input)?;
+        let guest = guest.into();
+        normalized_anchored_mount_target(&guest).map_err(container_error_to_invalid_input)?;
+        self.binds.push(Bind {
+            source: BindSource::RootRelative(source),
+            target: guest,
+            read_only: false,
+        });
+        Ok(self)
+    }
+
+    /// Add a read-write bind whose source object is already descriptor-pinned.
+    ///
+    /// The descriptor is duplicated immediately. Anchored containers reject
+    /// ordinary pathname binds at execution time, so external build, artifact,
+    /// and cache directories must be opened by the supervising runtime and
+    /// supplied through this API. The guest path must be absolute.
+    pub fn bind_rw_pinned(
+        self,
+        source: &impl AsRawFd,
+        source_label: impl Into<PathBuf>,
+        guest: impl Into<PathBuf>,
+    ) -> io::Result<Self> {
+        self.bind_pinned(source, source_label.into(), guest.into(), false)
+    }
+
+    /// Add a read-only bind whose source object is already descriptor-pinned.
+    pub fn bind_ro_pinned(
+        self,
+        source: &impl AsRawFd,
+        source_label: impl Into<PathBuf>,
+        guest: impl Into<PathBuf>,
+    ) -> io::Result<Self> {
+        self.bind_pinned(source, source_label.into(), guest.into(), true)
+    }
+
+    fn bind_pinned(
+        mut self,
+        source: &impl AsRawFd,
+        source_label: PathBuf,
+        guest: PathBuf,
+        read_only: bool,
+    ) -> io::Result<Self> {
+        if self.root_anchor.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "descriptor-pinned binds require an anchored container",
+            ));
+        }
+        normalized_anchored_mount_target(&guest).map_err(container_error_to_invalid_input)?;
+        let source = duplicate_cloexec(source.as_raw_fd())?;
+        descriptor_target_kind(source.as_raw_fd(), &source_label).map_err(container_error_to_invalid_input)?;
+        self.binds.push(Bind {
+            source: BindSource::Pinned {
+                descriptor: source,
+                label: source_label,
+            },
+            target: guest,
+            read_only,
+        });
+        Ok(self)
     }
 
     /// Configure networking availability
@@ -242,11 +418,28 @@ impl Container {
     }
 
     /// Run `f` as a container process payload
-    pub fn run<E>(self, mut f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
+    pub fn run<E>(mut self, mut f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
-        static mut STACK: [u8; 4 * 1024 * 1024] = [0u8; 4 * 1024 * 1024];
+        // Pin every anchored bind source in the supervising process. The
+        // child later clones mounts from these descriptors through an empty
+        // path, so neither a pathname substitution after `run` starts nor a
+        // cwd change during setup can redirect a declared source.
+        let mut anchored_bind_sources = if let Some(root_anchor) = &self.root_anchor {
+            pin_anchored_bind_sources(root_anchor.as_raw_fd(), &self.binds).map_err(|error| Error::Failure {
+                message: format_error(error),
+            })?
+        } else {
+            Vec::new()
+        };
+
+        // Each invocation owns its clone stack until the child is reaped.
+        // A shared static stack lets concurrent container activations corrupt
+        // each other's clone frames before either child has copied them.
+        let mut stack = CloneStack::new().map_err(|source| Error::Failure {
+            message: format!("allocate guarded clone stack: {source}"),
+        })?;
 
         // Pipe to synchronize parent & child. Both ends must be close-on-exec:
         // the child retains the write end while running the Rust payload so it
@@ -257,27 +450,27 @@ impl Container {
 
         let flags = namespace_flags(self.networking);
 
-        let clone_cb = Box::new(|| match enter(&self, child_sync, &mut f) {
-            Ok(_) => 0,
-            // Write error back to parent process
-            Err(error) => {
-                let error = format_error(error);
-                let mut pos = 0;
+        let clone_cb = Box::new(
+            || match enter(&mut self, &mut anchored_bind_sources, child_sync, &mut f) {
+                Ok(_) => 0,
+                // Write error back to parent process
+                Err(error) => {
+                    let error = format_error(error);
+                    for _ in 0..3 {
+                        match write(child_sync.1, error.as_bytes()) {
+                            Ok(_) => break,
+                            Err(Errno::EINTR) => continue,
+                            Err(_) => break,
+                        }
+                    }
 
-                while pos < error.len() {
-                    let Ok(len) = write(child_sync.1, &error.as_bytes()[pos..]) else {
-                        break;
-                    };
+                    let _ = close(child_sync.1);
 
-                    pos += len;
+                    1
                 }
-
-                let _ = close(child_sync.1);
-
-                1
-            }
-        });
-        let pid = unsafe { clone(clone_cb, &mut *addr_of_mut!(STACK), flags, Some(SIGCHLD)) }.context(NixSnafu)?;
+            },
+        );
+        let pid = unsafe { clone(clone_cb, stack.as_mut_slice(), flags, Some(SIGCHLD)) }.context(NixSnafu)?;
 
         // Every build receives the same one-identity credential namespace:
         // namespace root maps to the caller and no other IDs exist.
@@ -285,6 +478,21 @@ impl Container {
             abort_child(pid);
             return Err(Error::Idmap { source });
         }
+
+        // Signal dispositions are process-global. Serialize the override and
+        // install it before releasing the child, then restore the exact prior
+        // action on every path through the RAII guard.
+        let mut sigint_override = if self.ignore_host_sigint {
+            match SignalOverride::install(Signal::SIGINT) {
+                Ok(override_) => Some(override_),
+                Err(source) => {
+                    abort_child(pid);
+                    return Err(Error::Nix { source });
+                }
+            }
+        } else {
+            None
+        };
 
         // Allow child to continue
         match write(sync.write_fd(), &[Message::Continue as u8]) {
@@ -304,35 +512,22 @@ impl Container {
         // retain the error and supervise the child to completion first.
         let close_write_error = sync.close_write().err();
 
-        if self.ignore_host_sigint
-            && let Err(source) = ignore_sigint()
-        {
-            abort_child(pid);
-            return Err(Error::Nix { source });
-        }
+        let status = match wait_for_child(pid) {
+            Ok(status) => status,
+            Err(source) => {
+                abort_child(pid);
+                return Err(Error::Nix { source });
+            }
+        };
 
-        let status = wait_for_child(pid).context(NixSnafu)?;
-
-        if self.ignore_host_sigint {
-            default_sigint().context(NixSnafu)?;
+        if let Some(override_) = sigint_override.take() {
+            override_.restore().context(NixSnafu)?;
         }
 
         let result = match status {
             WaitStatus::Exited(_, 0) => Ok(()),
             WaitStatus::Exited(..) => {
-                let mut error = String::new();
-                let mut buffer = [0u8; 1024];
-
-                loop {
-                    let len = read(sync.read_fd(), &mut buffer).context(NixSnafu)?;
-
-                    if len == 0 {
-                        break;
-                    }
-
-                    error.push_str(String::from_utf8_lossy(&buffer[..len]).as_ref());
-                }
-
+                let error = read_child_error(sync.read_fd()).context(NixSnafu)?;
                 Err(Error::Failure { message: error })
             }
             WaitStatus::Signaled(_, signal, _) => Err(Error::Signaled { signal }),
@@ -353,6 +548,36 @@ impl Container {
     }
 }
 
+fn read_child_error(fd: RawFd) -> Result<String, Errno> {
+    // The child has already been reaped, so its one bounded atomic write is
+    // complete. A raw-forked descendant could nevertheless retain a copy of
+    // the close-on-exec writer without executing; nonblocking reads ensure
+    // such a leaked writer cannot hold supervision open forever.
+    set_fd_nonblocking(fd)?;
+
+    let mut bytes = Vec::with_capacity(MAX_CHILD_ERROR_BYTES);
+    let mut buffer = [0_u8; 512];
+    let mut interrupted = 0;
+    while bytes.len() < MAX_CHILD_ERROR_BYTES {
+        let remaining = MAX_CHILD_ERROR_BYTES - bytes.len();
+        let chunk = remaining.min(buffer.len());
+        let len = match read(fd, &mut buffer[..chunk]) {
+            Err(Errno::EINTR) if interrupted < MAX_CONTROL_EINTR_RETRIES => {
+                interrupted += 1;
+                continue;
+            }
+            Err(Errno::EAGAIN) => break,
+            result => result?,
+        };
+        interrupted = 0;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn namespace_flags(networking: bool) -> CloneFlags {
     let mut flags = CloneFlags::CLONE_NEWNS
         | CloneFlags::CLONE_NEWPID
@@ -366,10 +591,16 @@ fn namespace_flags(networking: bool) -> CloneFlags {
 }
 
 /// Reenter the container
-fn enter<E>(container: &Container, sync: (i32, i32), mut f: impl FnMut() -> Result<(), E>) -> Result<(), ContainerError>
+fn enter<E>(
+    container: &mut Container,
+    anchored_bind_sources: &mut Vec<PinnedAnchoredBindSource>,
+    sync: (i32, i32),
+    mut f: impl FnMut() -> Result<(), E>,
+) -> Result<(), ContainerError>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
+    let anchored = container.root_anchor.is_some();
     // Ensure process is cleaned up if parent dies
     set_pdeathsig(Signal::SIGKILL).context(SetPDeathSigSnafu)?;
 
@@ -390,9 +621,24 @@ where
     // namespace-visible identity is the fixed root credential contract.
     isolate_payload_credentials()?;
 
-    setup(container)?;
+    setup(container, anchored_bind_sources)?;
 
-    if matches!(container.root_filesystem, RootFilesystemPolicy::ReadOnly) {
+    // Root and bind-source descriptors are setup capabilities, not payload
+    // capabilities. The clone child has a private descriptor table, so
+    // dropping its copies leaves the supervising parent's copies intact while
+    // ensuring Rust payload code cannot inspect authenticated host objects.
+    anchored_bind_sources.clear();
+    drop(container.root_anchor.take());
+    // Descriptor-pinned bind handles stored by Container are setup-only too.
+    // Clearing the child copy does not affect the supervising parent's
+    // copy-on-write Container value.
+    container.binds.clear();
+
+    if anchored {
+        sanitize_anchored_payload_fds(sync.1)?;
+    }
+
+    if anchored || matches!(container.root_filesystem, RootFilesystemPolicy::ReadOnly) {
         drop_mount_administration()?;
     }
 
@@ -403,6 +649,27 @@ where
         let _ = close(sync.1);
     }
     result
+}
+
+fn sanitize_anchored_payload_fds(error_writer: RawFd) -> Result<(), ContainerError> {
+    if error_writer < 3 {
+        return InvalidPayloadErrorDescriptorSnafu { fd: error_writer }.fail();
+    }
+    close_range(3, error_writer as u32 - 1)?;
+    close_range(error_writer as u32 + 1, u32::MAX)
+}
+
+fn close_range(first: u32, last: u32) -> Result<(), ContainerError> {
+    if first > last {
+        return Ok(());
+    }
+    // SAFETY: close_range takes scalar arguments only. This child has a private
+    // descriptor table because CLONE_FILES is not requested.
+    let result = unsafe { syscall(nix::libc::SYS_close_range, first, last, 0_u32) };
+    if result == -1 {
+        return Err(Errno::last()).context(SanitizePayloadDescriptorsSnafu);
+    }
+    Ok(())
 }
 
 fn isolate_payload_credentials() -> Result<(), ContainerError> {
@@ -539,8 +806,8 @@ fn checked_prctl_value(result: nix::libc::c_int) -> Result<nix::libc::c_int, Err
 }
 
 /// Setup the container
-fn setup(container: &Container) -> Result<(), ContainerError> {
-    if container.networking {
+fn setup(container: &Container, anchored_bind_sources: &[PinnedAnchoredBindSource]) -> Result<(), ContainerError> {
+    if container.networking && container.root_anchor.is_none() {
         setup_networking(&container.root)?;
     }
 
@@ -548,12 +815,23 @@ fn setup(container: &Container) -> Result<(), ContainerError> {
         setup_localhost()?;
     }
 
-    pivot(
-        &container.root,
-        &container.binds,
-        container.pseudo_filesystems,
-        container.root_filesystem,
-    )?;
+    if let Some(anchor) = &container.root_anchor {
+        pivot_anchored(
+            &container.root,
+            anchor.as_raw_fd(),
+            anchored_bind_sources,
+            container.networking,
+            container.pseudo_filesystems,
+            container.root_filesystem,
+        )?;
+    } else {
+        pivot(
+            &container.root,
+            &container.binds,
+            container.pseudo_filesystems,
+            container.root_filesystem,
+        )?;
+    }
 
     if let Some(hostname) = &container.hostname {
         sethostname(hostname).context(SetHostnameSnafu)?;
@@ -573,27 +851,497 @@ fn pivot(
     pseudo_filesystems: PseudoFilesystemPolicy,
     root_filesystem: RootFilesystemPolicy,
 ) -> Result<(), ContainerError> {
+    add_mount(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE)?;
+    add_mount(Some(root), root, None, MsFlags::MS_BIND)?;
+
+    pivot_mounted_root(root, binds, pseudo_filesystems, root_filesystem)
+}
+
+/// Clone and attach the exact mount referenced by `anchor`, then pivot through
+/// the retained mount descriptor. `label` is diagnostic-only: even if another
+/// process removes or replaces it, both sides of activation remain anchored by
+/// descriptor-empty paths.
+fn pivot_anchored(
+    label: &Path,
+    anchor: RawFd,
+    bind_sources: &[PinnedAnchoredBindSource],
+    networking: bool,
+    pseudo_filesystems: PseudoFilesystemPolicy,
+    root_filesystem: RootFilesystemPolicy,
+) -> Result<(), ContainerError> {
+    add_mount(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE)?;
+
+    // Prepare every source as a detached mount before entering the root. This
+    // does not modify the authenticated tree and ensures later setup never
+    // reopens a source pathname.
+    let mut prepared_mounts = prepare_anchored_binds(bind_sources)?;
+    if networking {
+        prepared_mounts.push(prepare_anchored_resolver_mount()?);
+    }
+    for decision in pseudo_mount_decisions(pseudo_filesystems) {
+        prepared_mounts.push(prepare_anchored_pseudo_mount(decision)?);
+    }
+    validate_anchored_mount_topology(&prepared_mounts)?;
+
+    let root_mount = clone_anchored_root(label, anchor)?;
+    attach_anchored_root(label, anchor, &root_mount)?;
+    fchdir(root_mount.as_raw_fd()).with_context(|_| ActivateAnchoredRootSnafu {
+        label: label.to_owned(),
+        operation: "enter attached root mount",
+    })?;
+
+    // Pin every target against the untouched cloned root before the first
+    // submount is attached. Earlier mounts can therefore never provide a later
+    // target, even if a caller accidentally declares overlapping paths.
+    let ready_mounts = pin_anchored_mount_targets(root_mount.as_raw_fd(), prepared_mounts)?;
+
+    if matches!(root_filesystem, RootFilesystemPolicy::ReadOnly) {
+        set_mount_access_fd(root_mount.as_raw_fd(), true, true).with_context(|_| MountSnafu {
+            target: label.to_owned(),
+        })?;
+    }
+    for prepared in &ready_mounts {
+        attach_ready_anchored_mount(prepared)?;
+    }
+
+    let root = Path::new(".");
+    // The same-path pivot idiom stacks the old namespace root over the new
+    // descriptor-mounted root without creating a put_old directory in the
+    // authenticated backing tree. cwd denotes the old root immediately after
+    // pivot_root; detach it before entering the new `/`.
+    pivot_root(root, root).context(PivotRootSnafu)?;
+    umount2(root, MntFlags::MNT_DETACH).context(UnmountOldRootSnafu)?;
+    set_current_dir("/")?;
+    umask(Mode::S_IWGRP | Mode::S_IWOTH);
+    Ok(())
+}
+
+fn clone_anchored_root(label: &Path, anchor: RawFd) -> Result<OwnedFd, ContainerError> {
+    // SAFETY: `anchor` is the live duplicate owned by Container and an empty
+    // path is explicitly admitted by AT_EMPTY_PATH. A successful call returns
+    // a fresh detached mount descriptor.
+    let descriptor = unsafe {
+        open_tree(
+            anchor,
+            Path::new(""),
+            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32 | AT_RECURSIVE as u32,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .with_context(|_| ActivateAnchoredRootSnafu {
+        label: label.to_owned(),
+        operation: "clone descriptor-backed root mount",
+    })?;
+    // SAFETY: successful open_tree returned a fresh owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn attach_anchored_root(label: &Path, anchor: RawFd, root_mount: &OwnedFd) -> Result<(), ContainerError> {
+    // SAFETY: root_mount is a live detached mount descriptor, anchor is the
+    // duplicated O_PATH directory descriptor, and both remain owned until
+    // after pivot_root. The flags explicitly admit both empty paths.
+    unsafe {
+        move_mount(
+            root_mount.as_raw_fd(),
+            Path::new(""),
+            anchor,
+            Path::new(""),
+            MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .with_context(|_| ActivateAnchoredRootSnafu {
+        label: label.to_owned(),
+        operation: "attach descriptor-backed root mount",
+    })
+    .map(|_| ())
+}
+
+// Linux PATH_MAX includes the terminating NUL byte.
+const MAX_ANCHORED_MOUNT_TARGET_BYTES: usize = 4095;
+const MAX_ANCHORED_MOUNT_TARGET_COMPONENTS: usize = 256;
+const MAX_ANCHORED_MOUNT_COMPONENT_BYTES: usize = 255;
+const MAX_ANCHORED_MOUNTS: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnchoredMountTargetKind {
+    Directory,
+    RegularFile,
+}
+
+struct PreparedAnchoredMount {
+    source_mount: OwnedFd,
+    target: PathBuf,
+    target_kind: AnchoredMountTargetKind,
+}
+
+struct ReadyAnchoredMount {
+    source_mount: OwnedFd,
+    target: PathBuf,
+    target_descriptor: OwnedFd,
+}
+
+struct PinnedAnchoredBindSource {
+    source: OwnedFd,
+    source_label: PathBuf,
+    target: PathBuf,
+    target_kind: AnchoredMountTargetKind,
+    read_only: bool,
+}
+
+fn pin_anchored_bind_sources(root: RawFd, binds: &[Bind]) -> Result<Vec<PinnedAnchoredBindSource>, ContainerError> {
+    if binds.len() > MAX_ANCHORED_MOUNTS {
+        return Err(ContainerError::TooManyAnchoredMounts {
+            actual: binds.len(),
+            limit: MAX_ANCHORED_MOUNTS,
+        });
+    }
+    binds
+        .iter()
+        .map(|bind| {
+            let (source, source_label) = match &bind.source {
+                BindSource::Path(path) => {
+                    return Err(ContainerError::UnpinnedAnchoredMountSource { path: path.clone() });
+                }
+                BindSource::RootRelative(path) => {
+                    let source = openat2_anchored(
+                        root,
+                        path,
+                        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+                        0,
+                        nix::libc::RESOLVE_BENEATH
+                            | nix::libc::RESOLVE_NO_XDEV
+                            | nix::libc::RESOLVE_NO_MAGICLINKS
+                            | nix::libc::RESOLVE_NO_SYMLINKS,
+                    )
+                    .map_err(|source| ContainerError::OpenAnchoredMountSource {
+                        path: path.clone(),
+                        source,
+                    })?;
+                    (source, path.clone())
+                }
+                BindSource::Pinned { descriptor, label } => {
+                    let source = duplicate_cloexec(descriptor.as_raw_fd()).map_err(|source| {
+                        ContainerError::OpenAnchoredMountSource {
+                            path: label.clone(),
+                            source,
+                        }
+                    })?;
+                    (source, label.clone())
+                }
+            };
+            let target_kind = descriptor_target_kind(source.as_raw_fd(), &source_label)?;
+            Ok(PinnedAnchoredBindSource {
+                source,
+                source_label,
+                target: normalized_anchored_mount_target(&bind.target)?,
+                target_kind,
+                read_only: bind.read_only,
+            })
+        })
+        .collect()
+}
+
+fn prepare_anchored_binds(
+    bind_sources: &[PinnedAnchoredBindSource],
+) -> Result<Vec<PreparedAnchoredMount>, ContainerError> {
+    bind_sources
+        .iter()
+        .map(|bind| {
+            let flags = OPEN_TREE_CLONE
+                | OPEN_TREE_CLOEXEC
+                | AT_EMPTY_PATH as u32
+                | if matches!(bind.target_kind, AnchoredMountTargetKind::Directory) {
+                    AT_RECURSIVE as u32
+                } else {
+                    0
+                };
+            // SAFETY: source is the live O_PATH descriptor pinned before
+            // clone(2), the empty path is admitted explicitly, and a
+            // successful open_tree returns a fresh detached mount descriptor.
+            let descriptor = unsafe { open_tree(bind.source.as_raw_fd(), Path::new(""), flags) }
+                .map_err(Errno::from_i32)
+                .with_context(|_| MountSnafu {
+                    target: bind.source_label.clone(),
+                })?;
+            // SAFETY: successful open_tree returned a fresh owned descriptor.
+            let source_mount = unsafe { OwnedFd::from_raw_fd(descriptor) };
+            if bind.read_only {
+                set_mount_access_fd(
+                    source_mount.as_raw_fd(),
+                    true,
+                    matches!(bind.target_kind, AnchoredMountTargetKind::Directory),
+                )
+                .with_context(|_| MountSnafu {
+                    target: bind.source_label.clone(),
+                })?;
+            }
+            Ok(PreparedAnchoredMount {
+                source_mount,
+                target: bind.target.clone(),
+                target_kind: bind.target_kind,
+            })
+        })
+        .collect()
+}
+
+fn descriptor_target_kind(fd: RawFd, label: &Path) -> Result<AnchoredMountTargetKind, ContainerError> {
+    let stat = descriptor_stat(fd).context(FsErrSnafu)?;
+    match stat.st_mode & nix::libc::S_IFMT {
+        nix::libc::S_IFDIR => Ok(AnchoredMountTargetKind::Directory),
+        nix::libc::S_IFREG => Ok(AnchoredMountTargetKind::RegularFile),
+        mode => Err(ContainerError::UnsupportedAnchoredMountSource {
+            path: label.to_owned(),
+            mode,
+        }),
+    }
+}
+
+fn normalized_anchored_mount_target(target: &Path) -> Result<PathBuf, ContainerError> {
+    let bytes = target.as_os_str().as_bytes();
+    if !target.is_absolute() || bytes.is_empty() || bytes.len() > MAX_ANCHORED_MOUNT_TARGET_BYTES || bytes.contains(&0)
+    {
+        return Err(ContainerError::InvalidAnchoredMountTarget {
+            path: target.to_owned(),
+        });
+    }
+    if bytes
+        .split(|byte| *byte == b'/')
+        .any(|component| component == b"." || component == b"..")
+    {
+        return Err(ContainerError::InvalidAnchoredMountTarget {
+            path: target.to_owned(),
+        });
+    }
+    let mut normalized = PathBuf::new();
+    let mut components = 0usize;
+    for component in target.components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(component) => {
+                components = components.saturating_add(1);
+                if components > MAX_ANCHORED_MOUNT_TARGET_COMPONENTS
+                    || component.as_bytes().len() > MAX_ANCHORED_MOUNT_COMPONENT_BYTES
+                {
+                    return Err(ContainerError::InvalidAnchoredMountTarget {
+                        path: target.to_owned(),
+                    });
+                }
+                normalized.push(component);
+            }
+            std::path::Component::CurDir | std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                return Err(ContainerError::InvalidAnchoredMountTarget {
+                    path: target.to_owned(),
+                });
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(ContainerError::InvalidAnchoredMountTarget {
+            path: target.to_owned(),
+        });
+    }
+    Ok(normalized)
+}
+
+fn validate_anchored_mount_topology(mounts: &[PreparedAnchoredMount]) -> Result<(), ContainerError> {
+    if mounts.len() > MAX_ANCHORED_MOUNTS {
+        return Err(ContainerError::TooManyAnchoredMounts {
+            actual: mounts.len(),
+            limit: MAX_ANCHORED_MOUNTS,
+        });
+    }
+    for (index, mount) in mounts.iter().enumerate() {
+        for other in &mounts[index + 1..] {
+            if mount.target == other.target
+                || mount.target.starts_with(&other.target)
+                || other.target.starts_with(&mount.target)
+            {
+                return Err(ContainerError::OverlappingAnchoredMountTargets {
+                    first: mount.target.clone(),
+                    second: other.target.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn pin_anchored_mount_targets(
+    root: RawFd,
+    mounts: Vec<PreparedAnchoredMount>,
+) -> Result<Vec<ReadyAnchoredMount>, ContainerError> {
+    mounts
+        .into_iter()
+        .map(|mount| {
+            let target_descriptor = open_anchored_mount_target(root, &mount.target, mount.target_kind)?;
+            Ok(ReadyAnchoredMount {
+                source_mount: mount.source_mount,
+                target: mount.target,
+                target_descriptor,
+            })
+        })
+        .collect()
+}
+
+fn attach_ready_anchored_mount(prepared: &ReadyAnchoredMount) -> Result<(), ContainerError> {
+    move_mount_empty(
+        prepared.source_mount.as_raw_fd(),
+        prepared.target_descriptor.as_raw_fd(),
+    )
+    .with_context(|_| MountSnafu {
+        target: prepared.target.clone(),
+    })
+}
+
+fn open_anchored_mount_target(
+    root: RawFd,
+    target: &Path,
+    kind: AnchoredMountTargetKind,
+) -> Result<OwnedFd, ContainerError> {
+    let flags = nix::libc::O_PATH
+        | nix::libc::O_CLOEXEC
+        | nix::libc::O_NOFOLLOW
+        | if matches!(kind, AnchoredMountTargetKind::Directory) {
+            nix::libc::O_DIRECTORY
+        } else {
+            0
+        };
+    let descriptor = openat2_anchored(
+        root,
+        target,
+        flags,
+        0,
+        nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_XDEV
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_SYMLINKS,
+    )
+    .map_err(|source| ContainerError::OpenAnchoredMountTarget {
+        path: target.to_owned(),
+        source,
+    })?;
+    let stat = descriptor_stat(descriptor.as_raw_fd()).map_err(|source| ContainerError::OpenAnchoredMountTarget {
+        path: target.to_owned(),
+        source,
+    })?;
+    let actual = match stat.st_mode & nix::libc::S_IFMT {
+        nix::libc::S_IFDIR => AnchoredMountTargetKind::Directory,
+        nix::libc::S_IFREG => AnchoredMountTargetKind::RegularFile,
+        mode => {
+            return Err(ContainerError::UnsafeAnchoredMountTarget {
+                path: target.to_owned(),
+                mode,
+            });
+        }
+    };
+    if actual != kind {
+        return Err(ContainerError::AnchoredMountTargetType {
+            path: target.to_owned(),
+            expected: kind,
+            actual,
+        });
+    }
+    Ok(descriptor)
+}
+
+fn move_mount_empty(source: RawFd, target: RawFd) -> Result<(), Errno> {
+    // SAFETY: both descriptors are live mount/source target references and the
+    // explicit flags admit both empty paths.
+    unsafe {
+        move_mount(
+            source,
+            Path::new(""),
+            target,
+            Path::new(""),
+            MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .map(|_| ())
+}
+
+fn descriptor_stat(fd: RawFd) -> io::Result<nix::libc::stat> {
+    // SAFETY: zero is valid initialization for stat, fd is live, and the
+    // output object remains exclusively borrowed for the call.
+    let mut stat: nix::libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::fstat(fd, &mut stat) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(stat)
+}
+
+fn openat2_anchored(
+    parent: RawFd,
+    path: &Path,
+    flags: nix::libc::c_int,
+    mode: nix::libc::mode_t,
+    resolve: u64,
+) -> io::Result<OwnedFd> {
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    // SAFETY: zero is valid for every open_how field.
+    let mut how: nix::libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = u64::from(flags as u32);
+    how.mode = u64::from(mode);
+    how.resolve = resolve;
+    // SAFETY: every pointer remains live for the call and a successful syscall
+    // returns a fresh descriptor.
+    let descriptor = unsafe {
+        syscall(
+            nix::libc::SYS_openat2,
+            parent,
+            path.as_ptr(),
+            &how,
+            size_of::<nix::libc::open_how>(),
+        )
+    };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let descriptor = RawFd::try_from(descriptor)
+        .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
+    // SAFETY: successful openat2 returned a fresh owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+}
+
+fn canonical_bind_sources(binds: &[Bind]) -> Result<Vec<PathBuf>, ContainerError> {
+    binds
+        .iter()
+        .map(|bind| match &bind.source {
+            BindSource::Path(path) => path.fs_err_canonicalize().context(FsErrSnafu),
+            BindSource::RootRelative(path) | BindSource::Pinned { label: path, .. } => {
+                Err(ContainerError::AnchoredBindOnPathContainer { path: path.clone() })
+            }
+        })
+        .collect()
+}
+
+fn pivot_mounted_root(
+    root: &Path,
+    binds: &[Bind],
+    pseudo_filesystems: PseudoFilesystemPolicy,
+    root_filesystem: RootFilesystemPolicy,
+) -> Result<(), ContainerError> {
+    let sources = canonical_bind_sources(binds)?;
+    pivot_mounted_root_with_sources(root, binds, &sources, pseudo_filesystems, root_filesystem)
+}
+
+fn pivot_mounted_root_with_sources(
+    root: &Path,
+    binds: &[Bind],
+    sources: &[PathBuf],
+    pseudo_filesystems: PseudoFilesystemPolicy,
+    root_filesystem: RootFilesystemPolicy,
+) -> Result<(), ContainerError> {
     const OLD_PATH: &str = "old_root";
 
     let old_root = root.join(OLD_PATH);
 
-    add_mount(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE)?;
-    add_mount(Some(root), root, None, MsFlags::MS_BIND)?;
-
-    for bind in binds {
-        let source = bind.source.fs_err_canonicalize().context(FsErrSnafu)?;
-        let target = root.join(bind.target.strip_prefix("/").unwrap_or(&bind.target));
-
-        bind_mount(&source, &target, bind.read_only)?;
-    }
+    mount_binds(root, binds, sources)?;
 
     ensure_directory(&old_root)?;
-    for decision in root_mount_decisions(root, binds, root_filesystem) {
-        match decision {
-            RootMountDecision::ReadOnlyRecursive(target) => set_mount_access(&target, true, true)?,
-            RootMountDecision::ReadWriteExact(target) => set_mount_access(&target, false, false)?,
-        }
-    }
+    apply_root_mount_policy(root, binds, root_filesystem)?;
     pivot_root(root, &old_root).context(PivotRootSnafu)?;
 
     set_current_dir("/")?;
@@ -609,6 +1357,28 @@ fn pivot(
 
     umask(Mode::S_IWGRP | Mode::S_IWOTH);
 
+    Ok(())
+}
+
+fn mount_binds(root: &Path, binds: &[Bind], sources: &[PathBuf]) -> Result<(), ContainerError> {
+    for (bind, source) in binds.iter().zip(sources) {
+        let target = root.join(bind.target.strip_prefix("/").unwrap_or(&bind.target));
+        bind_mount(source, &target, bind.read_only)?;
+    }
+    Ok(())
+}
+
+fn apply_root_mount_policy(
+    root: &Path,
+    binds: &[Bind],
+    root_filesystem: RootFilesystemPolicy,
+) -> Result<(), ContainerError> {
+    for decision in root_mount_decisions(root, binds, root_filesystem) {
+        match decision {
+            RootMountDecision::ReadOnlyRecursive(target) => set_mount_access(&target, true, true)?,
+            RootMountDecision::ReadWriteExact(target) => set_mount_access(&target, false, false)?,
+        }
+    }
     Ok(())
 }
 
@@ -687,6 +1457,184 @@ fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) -> Result<(
     }
 }
 
+/// Prepare a pseudo-filesystem as a detached mount. Target descriptors are
+/// opened later, as one batch against the untouched authenticated root.
+fn prepare_anchored_pseudo_mount(decision: PseudoMountDecision) -> Result<PreparedAnchoredMount, ContainerError> {
+    let (source_mount, target) = match decision {
+        PseudoMountDecision::Proc { read_only } => {
+            let source = detached_filesystem_mount(c"proc", read_only, Path::new("proc"))?;
+            (source, PathBuf::from("proc"))
+        }
+        PseudoMountDecision::EmptyTmp => {
+            let source = detached_filesystem_mount(c"tmpfs", false, Path::new("tmp"))?;
+            (source, PathBuf::from("tmp"))
+        }
+        PseudoMountDecision::HostSys { read_only } => {
+            let source = detached_host_mount(Path::new("/sys"), read_only)?;
+            (source, PathBuf::from("sys"))
+        }
+        PseudoMountDecision::HostDev { read_only } => {
+            let source = detached_host_mount(Path::new("/dev"), read_only)?;
+            (source, PathBuf::from("dev"))
+        }
+        PseudoMountDecision::MinimalDev => (prepare_anchored_minimal_dev()?, PathBuf::from("dev")),
+    };
+    Ok(PreparedAnchoredMount {
+        source_mount,
+        target,
+        target_kind: AnchoredMountTargetKind::Directory,
+    })
+}
+
+fn detached_filesystem_mount(
+    filesystem: &std::ffi::CStr,
+    read_only: bool,
+    label: &Path,
+) -> Result<OwnedFd, ContainerError> {
+    const FSOPEN_CLOEXEC: nix::libc::c_uint = 0x0000_0001;
+    const FSCONFIG_CMD_CREATE: nix::libc::c_uint = 6;
+    const FSMOUNT_CLOEXEC: nix::libc::c_uint = 0x0000_0001;
+
+    // SAFETY: filesystem is NUL terminated and successful fsopen returns a
+    // fresh context descriptor.
+    let context = unsafe { syscall(nix::libc::SYS_fsopen, filesystem.as_ptr(), FSOPEN_CLOEXEC) };
+    if context == -1 {
+        return Err(Errno::last()).context(MountSnafu {
+            target: label.to_owned(),
+        });
+    }
+    let context =
+        RawFd::try_from(context).map_err(|_| ContainerError::InvalidMountDescriptor { operation: "fsopen" })?;
+    // SAFETY: successful fsopen returned a fresh owned descriptor.
+    let context = unsafe { OwnedFd::from_raw_fd(context) };
+
+    // SAFETY: CREATE accepts null key/value and borrows only the live context.
+    let configured = unsafe {
+        syscall(
+            nix::libc::SYS_fsconfig,
+            context.as_raw_fd(),
+            FSCONFIG_CMD_CREATE,
+            std::ptr::null::<nix::libc::c_char>(),
+            std::ptr::null::<nix::libc::c_void>(),
+            0,
+        )
+    };
+    if configured == -1 {
+        return Err(Errno::last()).context(MountSnafu {
+            target: label.to_owned(),
+        });
+    }
+
+    // SAFETY: the configured context is live and successful fsmount returns a
+    // fresh detached mount descriptor.
+    let mount = unsafe { syscall(nix::libc::SYS_fsmount, context.as_raw_fd(), FSMOUNT_CLOEXEC, 0) };
+    if mount == -1 {
+        return Err(Errno::last()).context(MountSnafu {
+            target: label.to_owned(),
+        });
+    }
+    let mount = RawFd::try_from(mount).map_err(|_| ContainerError::InvalidMountDescriptor { operation: "fsmount" })?;
+    // SAFETY: successful fsmount returned a fresh owned descriptor.
+    let mount = unsafe { OwnedFd::from_raw_fd(mount) };
+    if read_only {
+        set_mount_access_fd(mount.as_raw_fd(), true, true).with_context(|_| MountSnafu {
+            target: label.to_owned(),
+        })?;
+    }
+    Ok(mount)
+}
+
+fn detached_host_mount(source: &Path, read_only: bool) -> Result<OwnedFd, ContainerError> {
+    // SAFETY: source remains live for the call and successful open_tree returns
+    // a fresh detached recursive mount descriptor.
+    let mount = unsafe {
+        open_tree(
+            AT_FDCWD,
+            source,
+            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_RECURSIVE as u32,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .with_context(|_| MountSnafu {
+        target: source.to_owned(),
+    })?;
+    // SAFETY: successful open_tree returned a fresh owned descriptor.
+    let mount = unsafe { OwnedFd::from_raw_fd(mount) };
+    if read_only {
+        set_mount_access_fd(mount.as_raw_fd(), true, true).with_context(|_| MountSnafu {
+            target: source.to_owned(),
+        })?;
+    }
+    Ok(mount)
+}
+
+fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
+    let dev_mount = detached_filesystem_mount(c"tmpfs", false, Path::new("dev"))?;
+    for device in MINIMAL_DEV_NODES {
+        let name = std::ffi::CString::new(*device).expect("fixed device names contain no NUL");
+        let placeholder = openat_anchored(
+            dev_mount.as_raw_fd(),
+            &name,
+            nix::libc::O_WRONLY | nix::libc::O_CREAT | nix::libc::O_EXCL | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
+            0o600,
+        )
+        .map_err(|source| ContainerError::OpenAnchoredMountTarget {
+            path: PathBuf::from("dev").join(device),
+            source,
+        })?;
+        // SAFETY: placeholder is a live regular file descriptor.
+        if unsafe { nix::libc::fchmod(placeholder.as_raw_fd(), 0o600) } == -1 {
+            return Err(Errno::last()).context(MountSnafu {
+                target: PathBuf::from("dev").join(device),
+            });
+        }
+
+        let host_device = Path::new("/dev").join(device);
+        // SAFETY: host_device remains live and successful open_tree returns a
+        // fresh detached bind mount descriptor without opening device data.
+        let device_mount = unsafe { open_tree(AT_FDCWD, &host_device, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC) }
+            .map_err(Errno::from_i32)
+            .with_context(|_| MountSnafu {
+                target: host_device.clone(),
+            })?;
+        // SAFETY: successful open_tree returned a fresh owned descriptor.
+        let device_mount = unsafe { OwnedFd::from_raw_fd(device_mount) };
+        validate_minimal_device_source(device_mount.as_raw_fd(), &host_device)?;
+        set_mount_access_fd(device_mount.as_raw_fd(), true, false).with_context(|_| MountSnafu {
+            target: PathBuf::from("dev").join(device),
+        })?;
+        let target = openat2_anchored(
+            dev_mount.as_raw_fd(),
+            Path::new(device),
+            nix::libc::O_PATH | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
+            0,
+            nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_XDEV
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_SYMLINKS,
+        )
+        .with_context(|_| OpenAnchoredMountTargetSnafu {
+            path: PathBuf::from("dev").join(device),
+        })?;
+        move_mount_empty(device_mount.as_raw_fd(), target.as_raw_fd()).with_context(|_| MountSnafu {
+            target: PathBuf::from("dev").join(device),
+        })?;
+    }
+    Ok(dev_mount)
+}
+
+fn validate_minimal_device_source(fd: RawFd, label: &Path) -> Result<(), ContainerError> {
+    let stat = descriptor_stat(fd).context(FsErrSnafu)?;
+    let mode = stat.st_mode & nix::libc::S_IFMT;
+    if mode != nix::libc::S_IFCHR {
+        return Err(ContainerError::UnsupportedAnchoredMountSource {
+            path: label.to_owned(),
+            mode,
+        });
+    }
+    Ok(())
+}
+
 fn mount_host_tree(old_path: &str, name: &str, read_only: bool) -> Result<(), ContainerError> {
     let source = Path::new("/").join(old_path).join(name);
     let target = Path::new(name);
@@ -722,42 +1670,324 @@ fn bind_minimal_device(old_path: &str, device: &str) -> Result<(), ContainerErro
 }
 
 fn set_mount_access(target: &Path, read_only: bool, recursive: bool) -> Result<(), ContainerError> {
-    unsafe {
-        let inner = || {
-            let fd = open_tree(AT_FDCWD, target, OPEN_TREE_CLOEXEC).map_err(Errno::from_i32)?;
-            let attr = mount_attr_t {
-                attr_set: if read_only { MOUNT_ATTR_RDONLY as u64 } else { 0 },
-                attr_clr: if read_only { 0 } else { MOUNT_ATTR_RDONLY as u64 },
-                program: 0,
-                userns_fd: 0,
-            };
-            let flags = AT_EMPTY_PATH as usize | if recursive { AT_RECURSIVE as usize } else { 0 };
-            let result = syscall5(
-                SYS_MOUNT_SETATTR,
-                fd as usize,
-                c"".as_ptr() as usize,
-                flags,
-                &attr as *const mount_attr_t as usize,
-                size_of::<mount_attr_t>(),
-            )
-            .map_err(Errno::from_i32);
-            let close_result = close(fd);
-
-            result?;
-            close_result?;
-            Ok(())
-        };
-
-        inner().context(MountSnafu {
+    // SAFETY: target remains live for the call and successful open_tree
+    // returns a fresh descriptor.
+    let fd = unsafe { open_tree(AT_FDCWD, target, OPEN_TREE_CLOEXEC) }
+        .map_err(Errno::from_i32)
+        .with_context(|_| MountSnafu {
             target: target.to_owned(),
-        })
+        })?;
+    // SAFETY: successful open_tree returned a fresh owned descriptor.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    set_mount_access_fd(fd.as_raw_fd(), read_only, recursive).with_context(|_| MountSnafu {
+        target: target.to_owned(),
+    })
+}
+
+fn set_mount_access_fd(fd: RawFd, read_only: bool, recursive: bool) -> Result<(), Errno> {
+    let attr = mount_attr_t {
+        attr_set: if read_only { MOUNT_ATTR_RDONLY as u64 } else { 0 },
+        attr_clr: if read_only { 0 } else { MOUNT_ATTR_RDONLY as u64 },
+        program: 0,
+        userns_fd: 0,
+    };
+    let flags = AT_EMPTY_PATH as usize | if recursive { AT_RECURSIVE as usize } else { 0 };
+    // SAFETY: fd is live, empty path is admitted by AT_EMPTY_PATH, and attr is
+    // initialized and borrowed only for the syscall.
+    unsafe {
+        syscall5(
+            SYS_MOUNT_SETATTR,
+            fd as usize,
+            c"".as_ptr() as usize,
+            flags,
+            &attr as *const mount_attr_t as usize,
+            size_of::<mount_attr_t>(),
+        )
     }
+    .map_err(Errno::from_i32)
+    .map(|_| ())
 }
 
 fn setup_networking(root: &Path) -> Result<(), ContainerError> {
     ensure_directory(root.join("etc"))?;
     fs::copy("/etc/resolv.conf", root.join("etc/resolv.conf")).context(FsErrSnafu)?;
     Ok(())
+}
+
+/// Prepare resolver configuration without consulting the mutable root label.
+/// Bounded, stable resolver bytes are copied into a sealed memfd and exposed as
+/// a read-only detached file mount. Its target is pinned later together with
+/// every other mount target, before the cloned root is modified.
+fn prepare_anchored_resolver_mount() -> Result<PreparedAnchoredMount, ContainerError> {
+    let resolver = read_host_resolver_bounded()?;
+    Ok(PreparedAnchoredMount {
+        source_mount: detached_resolver_mount(&resolver)?,
+        target: PathBuf::from("etc/resolv.conf"),
+        target_kind: AnchoredMountTargetKind::RegularFile,
+    })
+}
+
+const MAX_RESOLVER_BYTES: usize = 64 * 1024;
+const RESOLVER_MODE: nix::libc::mode_t = 0o644;
+
+#[cfg(test)]
+fn open_anchored_resolver_target(anchor: RawFd) -> Result<OwnedFd, ContainerError> {
+    let path = Path::new("etc/resolv.conf");
+    let target = openat2_anchored(
+        anchor,
+        path,
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_XDEV
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_SYMLINKS,
+    )
+    .map_err(|source| ContainerError::OpenAnchoredMountTarget {
+        path: path.to_owned(),
+        source,
+    })?;
+    validate_resolver_target(target.as_raw_fd(), path)?;
+    Ok(target)
+}
+
+#[cfg(test)]
+fn validate_resolver_target(fd: RawFd, path: &Path) -> Result<(), ContainerError> {
+    let stat = descriptor_stat(fd).map_err(|source| ContainerError::OpenAnchoredMountTarget {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mode = stat.st_mode & nix::libc::S_IFMT;
+    if mode != nix::libc::S_IFREG {
+        return Err(ContainerError::UnsafeResolverTarget {
+            path: path.to_owned(),
+            mode,
+            links: stat.st_nlink as u64,
+        });
+    }
+    Ok(())
+}
+
+const MAX_RESOLVER_STABILITY_ATTEMPTS: usize = 3;
+
+fn read_host_resolver_bounded() -> Result<Vec<u8>, ContainerError> {
+    for _ in 0..MAX_RESOLVER_STABILITY_ATTEMPTS {
+        match read_host_resolver_bounded_once() {
+            Err(ContainerError::ResolverSourceChanged) => {}
+            result => return result,
+        }
+    }
+    Err(ContainerError::ResolverSourceChanged)
+}
+
+fn read_host_resolver_bounded_once() -> Result<Vec<u8>, ContainerError> {
+    // O_PATH pins the object without opening FIFO/device data. Only after its
+    // structure is proven to be a regular file do we reopen this exact
+    // descriptor through procfs with O_NONBLOCK for bounded reading.
+    let pinned = openat_anchored(
+        AT_FDCWD,
+        c"/etc/resolv.conf",
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC,
+        0,
+    )
+    .context(ConfigureAnchoredNetworkingSnafu {
+        operation: "pin host resolver source",
+    })?;
+    let pinned_stat = validate_resolver_source(pinned.as_raw_fd())?;
+    let mut reader = reopen_pinned_readonly(pinned.as_raw_fd()).context(ConfigureAnchoredNetworkingSnafu {
+        operation: "open pinned host resolver source for bounded reading",
+    })?;
+    let reader_stat = validate_resolver_source(reader.as_raw_fd())?;
+    if reader_stat.st_dev != pinned_stat.st_dev || reader_stat.st_ino != pinned_stat.st_ino {
+        return Err(ContainerError::ResolverSourceChanged);
+    }
+
+    let mut resolver = Vec::with_capacity((pinned_stat.st_size as usize).min(MAX_RESOLVER_BYTES));
+    (&mut reader)
+        .take((MAX_RESOLVER_BYTES + 1) as u64)
+        .read_to_end(&mut resolver)
+        .context(ConfigureAnchoredNetworkingSnafu {
+            operation: "read bounded host resolver source",
+        })?;
+    if resolver.len() > MAX_RESOLVER_BYTES {
+        return Err(ContainerError::ResolverSourceTooLarge {
+            actual: resolver.len() as u64,
+            limit: MAX_RESOLVER_BYTES as u64,
+        });
+    }
+    let final_reader = validate_resolver_source(reader.as_raw_fd())?;
+    let final_pinned = validate_resolver_source(pinned.as_raw_fd())?;
+    if !resolver_stat_stable(&pinned_stat, &reader_stat)
+        || !resolver_stat_stable(&reader_stat, &final_reader)
+        || !resolver_stat_stable(&final_reader, &final_pinned)
+    {
+        return Err(ContainerError::ResolverSourceChanged);
+    }
+    Ok(resolver)
+}
+
+fn resolver_stat_stable(first: &nix::libc::stat, second: &nix::libc::stat) -> bool {
+    first.st_dev == second.st_dev
+        && first.st_ino == second.st_ino
+        && first.st_size == second.st_size
+        && first.st_mtime == second.st_mtime
+        && first.st_mtime_nsec == second.st_mtime_nsec
+        && first.st_ctime == second.st_ctime
+        && first.st_ctime_nsec == second.st_ctime_nsec
+}
+
+fn validate_resolver_source(fd: RawFd) -> Result<nix::libc::stat, ContainerError> {
+    let stat = descriptor_stat(fd).context(ConfigureAnchoredNetworkingSnafu {
+        operation: "inspect host resolver source",
+    })?;
+    let mode = stat.st_mode & nix::libc::S_IFMT;
+    let size = u64::try_from(stat.st_size).unwrap_or(u64::MAX);
+    if mode != nix::libc::S_IFREG {
+        return Err(ContainerError::UnsafeResolverSource {
+            mode,
+            links: stat.st_nlink as u64,
+        });
+    }
+    if size > MAX_RESOLVER_BYTES as u64 {
+        return Err(ContainerError::ResolverSourceTooLarge {
+            actual: size,
+            limit: MAX_RESOLVER_BYTES as u64,
+        });
+    }
+    Ok(stat)
+}
+
+fn reopen_pinned_readonly(fd: RawFd) -> io::Result<fs::File> {
+    let diagnostic_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let path = std::ffi::CString::new(diagnostic_path.as_os_str().as_bytes())
+        .expect("decimal descriptor path cannot contain NUL");
+    let descriptor = openat_anchored(
+        AT_FDCWD,
+        &path,
+        nix::libc::O_RDONLY | nix::libc::O_NONBLOCK | nix::libc::O_CLOEXEC,
+        0,
+    )?;
+    Ok(fs::File::from_parts(descriptor.into(), diagnostic_path))
+}
+
+fn detached_resolver_mount(resolver: &[u8]) -> Result<OwnedFd, ContainerError> {
+    let file = sealed_resolver_file(resolver)?;
+
+    // SAFETY: file is live, AT_EMPTY_PATH admits the empty path, and success
+    // returns a fresh detached file-mount descriptor.
+    let mount = unsafe {
+        open_tree(
+            file.as_raw_fd(),
+            Path::new(""),
+            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .map_err(errno_to_io)
+    .context(ConfigureAnchoredNetworkingSnafu {
+        operation: "clone sealed resolver mount",
+    })?;
+    // SAFETY: successful open_tree returned a fresh owned descriptor.
+    let mount = unsafe { OwnedFd::from_raw_fd(mount) };
+    set_mount_access_fd(mount.as_raw_fd(), true, false)
+        .map_err(errno_to_io)
+        .context(ConfigureAnchoredNetworkingSnafu {
+            operation: "make sealed resolver mount read-only",
+        })?;
+    Ok(mount)
+}
+
+fn sealed_resolver_file(resolver: &[u8]) -> Result<fs::File, ContainerError> {
+    if resolver.len() > MAX_RESOLVER_BYTES {
+        return Err(ContainerError::ResolverSourceTooLarge {
+            actual: resolver.len() as u64,
+            limit: MAX_RESOLVER_BYTES as u64,
+        });
+    }
+    // SAFETY: the name is static and NUL terminated; success returns a fresh
+    // descriptor transferred exactly once to OwnedFd.
+    let descriptor = unsafe {
+        nix::libc::memfd_create(
+            c"container-resolv.conf".as_ptr(),
+            nix::libc::MFD_ALLOW_SEALING | nix::libc::MFD_CLOEXEC,
+        )
+    };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error()).context(ConfigureAnchoredNetworkingSnafu {
+            operation: "create sealed resolver file",
+        });
+    }
+    // SAFETY: memfd_create returned a fresh owned descriptor.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let mut file = fs::File::from_parts(descriptor.into(), "sealed resolv.conf");
+    file.write_all(resolver).context(ConfigureAnchoredNetworkingSnafu {
+        operation: "write sealed resolver file",
+    })?;
+    // SAFETY: file is a live memfd and mode contains only permission bits.
+    if unsafe { nix::libc::fchmod(file.as_raw_fd(), RESOLVER_MODE) } == -1 {
+        return Err(io::Error::last_os_error()).context(ConfigureAnchoredNetworkingSnafu {
+            operation: "set deterministic resolver mode",
+        });
+    }
+    file.sync_all().context(ConfigureAnchoredNetworkingSnafu {
+        operation: "sync sealed resolver file",
+    })?;
+    let required_seals =
+        nix::libc::F_SEAL_WRITE | nix::libc::F_SEAL_GROW | nix::libc::F_SEAL_SHRINK | nix::libc::F_SEAL_SEAL;
+    // SAFETY: file is a live sealable memfd and the variadic argument is the
+    // documented seal bitmask.
+    if unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_ADD_SEALS, required_seals) } == -1 {
+        return Err(io::Error::last_os_error()).context(ConfigureAnchoredNetworkingSnafu {
+            operation: "seal resolver file",
+        });
+    }
+    // SAFETY: file remains live and F_GET_SEALS has no variadic argument.
+    let actual_seals = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GET_SEALS) };
+    if actual_seals == -1 {
+        return Err(io::Error::last_os_error()).context(ConfigureAnchoredNetworkingSnafu {
+            operation: "verify resolver file seals",
+        });
+    }
+    let stat = descriptor_stat(file.as_raw_fd()).context(ConfigureAnchoredNetworkingSnafu {
+        operation: "verify sealed resolver file metadata",
+    })?;
+    let kind = stat.st_mode & nix::libc::S_IFMT;
+    let mode = stat.st_mode & 0o777;
+    let size = u64::try_from(stat.st_size).unwrap_or(u64::MAX);
+    if kind != nix::libc::S_IFREG
+        || mode != RESOLVER_MODE
+        || size != resolver.len() as u64
+        || actual_seals & required_seals != required_seals
+    {
+        return Err(ContainerError::InvalidSealedResolver {
+            kind,
+            mode,
+            size,
+            expected_size: resolver.len() as u64,
+            seals: actual_seals,
+        });
+    }
+    Ok(file)
+}
+
+fn errno_to_io(error: Errno) -> io::Error {
+    io::Error::from_raw_os_error(error as i32)
+}
+
+fn openat_anchored(
+    parent: RawFd,
+    name: &std::ffi::CStr,
+    flags: nix::libc::c_int,
+    mode: nix::libc::mode_t,
+) -> io::Result<OwnedFd> {
+    // SAFETY: parent and name remain live for the call and a successful openat
+    // returns a fresh descriptor transferred exactly once to OwnedFd.
+    let descriptor = unsafe { nix::libc::openat(parent, name.as_ptr(), flags, mode) };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful openat returned a fresh owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
 }
 
 fn setup_localhost() -> Result<(), ContainerError> {
@@ -871,16 +2101,49 @@ fn set_current_dir(path: impl AsRef<Path>) -> Result<(), ContainerError> {
     std::env::set_current_dir(path).with_context(|_| SetCurrentDirSnafu { path: path.to_owned() })
 }
 
-fn ignore_sigint() -> Result<(), nix::Error> {
-    let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-    unsafe { sigaction(Signal::SIGINT, &action)? };
-    Ok(())
+static SIGNAL_OVERRIDE_LOCK: Mutex<()> = Mutex::new(());
+
+struct SignalOverride {
+    signal: Signal,
+    previous: SigAction,
+    restored: bool,
+    _serial: MutexGuard<'static, ()>,
 }
 
-fn default_sigint() -> Result<(), nix::Error> {
-    let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
-    unsafe { sigaction(Signal::SIGINT, &action)? };
-    Ok(())
+impl SignalOverride {
+    fn install(signal: Signal) -> Result<Self, nix::Error> {
+        let serial = SIGNAL_OVERRIDE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        // SAFETY: action is fully initialized and signal is validated by nix.
+        let previous = unsafe { sigaction(signal, &action)? };
+        Ok(Self {
+            signal,
+            previous,
+            restored: false,
+            _serial: serial,
+        })
+    }
+
+    fn restore(mut self) -> Result<(), nix::Error> {
+        // SAFETY: previous was returned by sigaction for this exact signal.
+        unsafe { sigaction(self.signal, &self.previous)? };
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for SignalOverride {
+    fn drop(&mut self) {
+        if !self.restored {
+            // Best-effort restoration during early return or unwinding. The
+            // explicit success path reports restoration failure.
+            unsafe {
+                let _ = sigaction(self.signal, &self.previous);
+            }
+        }
+    }
 }
 
 fn wait_for_child(pid: Pid) -> Result<WaitStatus, nix::Error> {
@@ -938,18 +2201,149 @@ pub fn forward_sigint(pid: Pid) -> Result<(), nix::Error> {
 }
 
 fn format_error(error: impl std::error::Error) -> String {
-    let sources = sources(&error);
-    sources.join(": ")
+    let mut output = String::new();
+    let mut current: Option<&dyn std::error::Error> = Some(&error);
+    for depth in 0..MAX_ERROR_SOURCE_DEPTH {
+        let Some(source) = current else {
+            break;
+        };
+        if depth != 0 && !push_bounded_error_text(&mut output, ": ") {
+            break;
+        }
+        let rendered = {
+            let mut writer = BoundedErrorWriter { output: &mut output };
+            std::fmt::write(&mut writer, format_args!("{source}"))
+        };
+        if rendered.is_err() {
+            break;
+        }
+        current = source.source();
+    }
+    if current.is_some() {
+        let _ = push_bounded_error_text(&mut output, " [truncated]");
+    }
+    output
 }
 
-fn sources(error: &dyn std::error::Error) -> Vec<String> {
-    let mut sources = vec![error.to_string()];
-    let mut source = error.source();
-    while let Some(error) = source.take() {
-        sources.push(error.to_string());
-        source = error.source();
+struct BoundedErrorWriter<'a> {
+    output: &'a mut String,
+}
+
+impl std::fmt::Write for BoundedErrorWriter<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if push_bounded_error_text(self.output, text) {
+            Ok(())
+        } else {
+            Err(std::fmt::Error)
+        }
     }
-    sources
+}
+
+fn push_bounded_error_text(output: &mut String, text: &str) -> bool {
+    let remaining = MAX_CHILD_ERROR_BYTES.saturating_sub(output.len());
+    if text.len() <= remaining {
+        output.push_str(text);
+        return true;
+    }
+    let mut end = remaining.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    output.push_str(&text[..end]);
+    false
+}
+
+/// Per-run clone stack with a protected low-address guard page. Linux clone
+/// starts at the high end of the supplied slice and grows downward, so stack
+/// exhaustion faults instead of corrupting an adjacent allocator object.
+struct CloneStack {
+    mapping: NonNull<nix::libc::c_void>,
+    mapping_len: usize,
+    page_size: usize,
+}
+
+impl CloneStack {
+    fn new() -> io::Result<Self> {
+        // SAFETY: sysconf has no pointer arguments.
+        let page_size = unsafe { nix::libc::sysconf(nix::libc::_SC_PAGESIZE) };
+        let page_size = usize::try_from(page_size)
+            .ok()
+            .filter(|size| size.is_power_of_two())
+            .ok_or_else(|| io::Error::other("kernel returned an invalid page size"))?;
+        let mapping_len = CLONE_STACK_BYTES
+            .checked_add(page_size)
+            .ok_or_else(|| io::Error::other("clone stack mapping length overflow"))?;
+        // SAFETY: anonymous mapping uses no input pointer or file descriptor.
+        let mapping = unsafe {
+            nix::libc::mmap(
+                std::ptr::null_mut(),
+                mapping_len,
+                nix::libc::PROT_NONE,
+                nix::libc::MAP_PRIVATE | nix::libc::MAP_ANONYMOUS | nix::libc::MAP_STACK,
+                -1,
+                0,
+            )
+        };
+        if mapping == nix::libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+        let Some(mapping) = NonNull::new(mapping) else {
+            // A null mapping is legal only on hosts that permit mapping page
+            // zero, but NonNull is part of this type's safety invariant.
+            // SAFETY: mmap returned this exact live mapping and length.
+            unsafe {
+                nix::libc::munmap(mapping, mapping_len);
+            }
+            return Err(io::Error::other("clone stack mapping unexpectedly starts at null"));
+        };
+        // SAFETY: the mapping is page aligned and the selected range excludes
+        // exactly the first guard page.
+        let usable = unsafe { mapping.as_ptr().cast::<u8>().add(page_size).cast() };
+        if unsafe { nix::libc::mprotect(usable, CLONE_STACK_BYTES, nix::libc::PROT_READ | nix::libc::PROT_WRITE) } == -1
+        {
+            let source = io::Error::last_os_error();
+            // SAFETY: mapping and length came from the successful mmap above.
+            unsafe {
+                nix::libc::munmap(mapping.as_ptr(), mapping_len);
+            }
+            return Err(source);
+        }
+        Ok(Self {
+            mapping,
+            mapping_len,
+            page_size,
+        })
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: the usable range was made read-write, is wholly owned by this
+        // value, and remains mapped until Drop after the child is reaped.
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                self.mapping.as_ptr().cast::<u8>().add(self.page_size),
+                CLONE_STACK_BYTES,
+            )
+        }
+    }
+
+    #[cfg(test)]
+    fn guard_address(&self) -> usize {
+        self.mapping.as_ptr() as usize
+    }
+
+    #[cfg(test)]
+    fn usable_address(&self) -> usize {
+        self.guard_address() + self.page_size
+    }
+}
+
+impl Drop for CloneStack {
+    fn drop(&mut self) {
+        // SAFETY: this value owns the complete live mapping.
+        unsafe {
+            nix::libc::munmap(self.mapping.as_ptr(), self.mapping_len);
+        }
+    }
 }
 
 /// Parent-owned synchronization descriptors. The child receives raw copies
@@ -962,7 +2356,26 @@ struct SyncPipe {
 
 impl SyncPipe {
     fn new() -> Result<Self, Error> {
-        let (read, write) = pipe2(OFlag::O_CLOEXEC).context(NixSnafu)?;
+        let (raw_read, raw_write) = pipe2(OFlag::O_CLOEXEC).context(NixSnafu)?;
+        let read = match rehome_sync_fd(raw_read) {
+            Ok(fd) => fd,
+            Err(source) => {
+                let _ = close(raw_write);
+                return Err(Error::Nix { source });
+            }
+        };
+        let write = match rehome_sync_fd(raw_write) {
+            Ok(fd) => fd,
+            Err(source) => {
+                let _ = close(read);
+                return Err(Error::Nix { source });
+            }
+        };
+        if let Err(source) = set_fd_nonblocking(write) {
+            let _ = close(read);
+            let _ = close(write);
+            return Err(Error::Nix { source });
+        }
         Ok(Self {
             read: Some(read),
             write: Some(write),
@@ -987,6 +2400,38 @@ impl SyncPipe {
     }
 }
 
+fn rehome_sync_fd(fd: RawFd) -> Result<RawFd, Errno> {
+    if fd >= 3 {
+        return Ok(fd);
+    }
+    // SAFETY: the source descriptor is live and success returns a new
+    // close-on-exec descriptor numbered at least three.
+    let duplicated = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicated == -1 {
+        let source = Errno::last();
+        let _ = close(fd);
+        return Err(source);
+    }
+    if let Err(source) = close(fd) {
+        let _ = close(duplicated);
+        return Err(source);
+    }
+    Ok(duplicated)
+}
+
+fn set_fd_nonblocking(fd: RawFd) -> Result<(), Errno> {
+    // SAFETY: fd is live for both fcntl calls.
+    let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
+    if flags == -1 {
+        return Err(Errno::last());
+    }
+    // SAFETY: F_SETFL updates only status flags on the same live descriptor.
+    if unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFL, flags | nix::libc::O_NONBLOCK) } == -1 {
+        return Err(Errno::last());
+    }
+    Ok(())
+}
+
 impl Drop for SyncPipe {
     fn drop(&mut self) {
         if let Some(fd) = self.read.take() {
@@ -999,9 +2444,22 @@ impl Drop for SyncPipe {
 }
 
 struct Bind {
-    source: PathBuf,
+    source: BindSource,
     target: PathBuf,
     read_only: bool,
+}
+
+enum BindSource {
+    /// Legacy pathname bind. Deliberately rejected by anchored execution.
+    Path(PathBuf),
+    /// Normalized path resolved beneath the authenticated root descriptor.
+    RootRelative(PathBuf),
+    /// Descriptor selected by the supervising runtime before activation.
+    Pinned { descriptor: OwnedFd, label: PathBuf },
+}
+
+fn container_error_to_invalid_input(error: ContainerError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, format_error(error))
 }
 
 #[derive(Debug, Snafu)]
@@ -1055,8 +2513,81 @@ enum ContainerError {
     DropMountAdministration { source: nix::Error },
     #[snafu(display("payload retained mount-administration capability"))]
     PayloadRetainsMountAdministration,
+    #[snafu(display("sanitize anchored payload descriptors"))]
+    SanitizePayloadDescriptors { source: nix::Error },
+    #[snafu(display("payload error descriptor {fd} overlaps standard I/O"))]
+    InvalidPayloadErrorDescriptor { fd: RawFd },
     #[snafu(display("sethostname"))]
     SetHostname { source: nix::Error },
+    #[snafu(display("{operation} for anchored root {}", label.display()))]
+    ActivateAnchoredRoot {
+        operation: &'static str,
+        label: PathBuf,
+        source: nix::Error,
+    },
+    #[snafu(display("{operation} through anchored root descriptor"))]
+    ConfigureAnchoredNetworking { operation: &'static str, source: io::Error },
+    #[snafu(display("unsafe host resolver source with mode {mode:o} and {links} links"))]
+    UnsafeResolverSource { mode: nix::libc::mode_t, links: u64 },
+    #[snafu(display("host resolver source is {actual} bytes; limit is {limit}"))]
+    ResolverSourceTooLarge { actual: u64, limit: u64 },
+    #[snafu(display("host resolver source changed while its bounded snapshot was read"))]
+    ResolverSourceChanged,
+    #[snafu(display(
+        "sealed resolver has kind {kind:o}, mode {mode:o}, size {size} (expected {expected_size}), and seals {seals:#x}"
+    ))]
+    InvalidSealedResolver {
+        kind: nix::libc::mode_t,
+        mode: nix::libc::mode_t,
+        size: u64,
+        expected_size: u64,
+        seals: nix::libc::c_int,
+    },
+    #[snafu(display(
+        "unsafe anchored resolver target {} with mode {mode:o} and {links} links",
+        path.display()
+    ))]
+    UnsafeResolverTarget {
+        path: PathBuf,
+        mode: nix::libc::mode_t,
+        links: u64,
+    },
+    #[snafu(display("open anchored mount source {}", path.display()))]
+    OpenAnchoredMountSource { path: PathBuf, source: io::Error },
+    #[snafu(display(
+        "anchored container rejects pathname bind source {}; use a descriptor-pinned or root-relative bind",
+        path.display()
+    ))]
+    UnpinnedAnchoredMountSource { path: PathBuf },
+    #[snafu(display("anchored bind source {} cannot be used by a pathname container", path.display()))]
+    AnchoredBindOnPathContainer { path: PathBuf },
+    #[snafu(display("unsupported anchored mount source {} with mode {mode:o}", path.display()))]
+    UnsupportedAnchoredMountSource { path: PathBuf, mode: nix::libc::mode_t },
+    #[snafu(display("anchored container declares {actual} mounts; limit is {limit}"))]
+    TooManyAnchoredMounts { actual: usize, limit: usize },
+    #[snafu(display(
+        "anchored mount targets {} and {} overlap",
+        first.display(),
+        second.display()
+    ))]
+    OverlappingAnchoredMountTargets { first: PathBuf, second: PathBuf },
+    #[snafu(display("invalid anchored mount target {}", path.display()))]
+    InvalidAnchoredMountTarget { path: PathBuf },
+    #[snafu(display("open anchored mount target {}", path.display()))]
+    OpenAnchoredMountTarget { path: PathBuf, source: io::Error },
+    #[snafu(display("unsafe anchored mount target {} with mode {mode:o}", path.display()))]
+    UnsafeAnchoredMountTarget { path: PathBuf, mode: nix::libc::mode_t },
+    #[snafu(display(
+        "anchored mount target {} has type {actual:?}, expected {expected:?}",
+        path.display()
+    ))]
+    AnchoredMountTargetType {
+        path: PathBuf,
+        expected: AnchoredMountTargetKind,
+        actual: AnchoredMountTargetKind,
+    },
+    #[snafu(display("{operation} returned an invalid mount descriptor"))]
+    InvalidMountDescriptor { operation: &'static str },
     #[snafu(display("pivot_root"))]
     PivotRoot { source: nix::Error },
     #[snafu(display("unmount old root"))]
@@ -1074,23 +2605,439 @@ enum Message {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::os::unix::fs::FileTypeExt as _;
+    use std::fmt;
+    use std::io::{self, Read as _};
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
     use std::os::unix::net::UnixListener;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use fs_err as fs;
     use nix::errno::Errno;
-    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+    use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl, open};
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, sigaction};
+    use nix::sys::signalfd::SigSet;
+    use nix::sys::stat::Mode;
+    use nix::unistd::mkfifo;
 
     use super::{
-        CAP_SYS_ADMIN, CapabilityData, Container, ContainerError, DevPolicy, Error as ContainerRunError,
-        LoopbackPolicy, MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, ProcPolicy,
-        PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SyncPipe, SysPolicy,
-        TmpPolicy, capability_is_set, checked_prctl_value, clear_capability, namespace_flags, prctl,
-        prepare_bind_target, pseudo_mount_decisions, read_capabilities, root_mount_decisions, set_mount_access,
-        validate_payload_credentials,
+        AnchoredMountTargetKind, Bind, BindSource, CAP_SYS_ADMIN, CLONE_STACK_BYTES, CapabilityData, CloneStack,
+        Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
+        MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy,
+        PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncPipe,
+        SysPolicy, TmpPolicy, capability_is_set, checked_prctl_value, clear_capability, descriptor_stat,
+        duplicate_cloexec, format_error, namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target,
+        open_anchored_resolver_target, pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions,
+        read_capabilities, read_child_error, reopen_pinned_readonly, resolver_stat_stable, root_mount_decisions,
+        sealed_resolver_file, set_mount_access, validate_anchored_mount_topology, validate_minimal_device_source,
+        validate_payload_credentials, validate_resolver_target,
     };
+
+    fn open_path_directory(path: &Path) -> OwnedFd {
+        let descriptor = open(
+            path,
+            OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+        // SAFETY: successful open returned a fresh owned descriptor.
+        unsafe { OwnedFd::from_raw_fd(descriptor) }
+    }
+
+    fn open_path_file(path: &Path) -> OwnedFd {
+        let descriptor = open(path, OFlag::O_PATH | OFlag::O_CLOEXEC, Mode::empty()).unwrap();
+        // SAFETY: successful open returned a fresh owned descriptor.
+        unsafe { OwnedFd::from_raw_fd(descriptor) }
+    }
+
+    #[test]
+    fn anchored_constructor_owns_a_cloexec_opath_directory_duplicate() {
+        let root = tempfile::tempdir().unwrap();
+        let anchor = open_path_directory(root.path());
+        let caller_descriptor = anchor.as_raw_fd();
+        let container = Container::new_anchored("diagnostic-root", &anchor).unwrap();
+        let retained = container.root_anchor.as_ref().unwrap().as_raw_fd();
+
+        assert_ne!(retained, caller_descriptor);
+        assert_eq!(container.root, Path::new("diagnostic-root"));
+        let status = fcntl(retained, FcntlArg::F_GETFL).unwrap();
+        assert_eq!(status & nix::libc::O_PATH, nix::libc::O_PATH);
+        let descriptor = FdFlag::from_bits_truncate(fcntl(retained, FcntlArg::F_GETFD).unwrap());
+        assert!(descriptor.contains(FdFlag::FD_CLOEXEC));
+
+        drop(anchor);
+        assert!(fcntl(retained, FcntlArg::F_GETFD).is_ok());
+    }
+
+    #[test]
+    fn anchored_constructor_rejects_every_non_opath_or_non_directory_descriptor() {
+        let root = tempfile::tempdir().unwrap();
+        let ordinary_directory = std::fs::File::open(root.path()).unwrap();
+        let error = Container::new_anchored(root.path(), &ordinary_directory).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "anchored container root descriptor must be opened with O_PATH"
+        );
+
+        let regular_path = root.path().join("regular");
+        fs::write(&regular_path, b"not a directory").unwrap();
+        let ordinary_file = open_path_file(&regular_path);
+        let error = Container::new_anchored(root.path(), &ordinary_file).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "anchored container root descriptor must reference a directory"
+        );
+
+        struct InvalidDescriptor;
+        impl std::os::fd::AsRawFd for InvalidDescriptor {
+            fn as_raw_fd(&self) -> std::os::fd::RawFd {
+                -1
+            }
+        }
+        let error = Container::new_anchored(root.path(), &InvalidDescriptor).err().unwrap();
+        assert_eq!(error.raw_os_error(), Some(nix::libc::EBADF));
+    }
+
+    #[test]
+    fn anchored_bind_source_is_pinned_before_clone_and_survives_path_substitution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let pinned_name = temporary.path().join("pinned-source");
+        fs::write(&source, b"authenticated source").unwrap();
+        let expected = fs::metadata(&source).unwrap();
+
+        let root_anchor = open_path_directory(temporary.path());
+        let pinned = pin_anchored_bind_sources(
+            root_anchor.as_raw_fd(),
+            &[Bind {
+                source: BindSource::RootRelative(PathBuf::from("source")),
+                target: PathBuf::from("/payload/source"),
+                read_only: true,
+            }],
+        )
+        .unwrap();
+
+        // This is the adversarial checkpoint: after the supervising process
+        // has pinned the source but before the child clones its mount, replace
+        // the complete pathname with a different object.
+        fs::rename(&source, &pinned_name).unwrap();
+        fs::write(&source, b"replacement source").unwrap();
+
+        let retained = descriptor_stat(pinned[0].source.as_raw_fd()).unwrap();
+        assert_eq!(retained.st_dev as u64, expected.dev());
+        assert_eq!(retained.st_ino as u64, expected.ino());
+        let mut retained_reader = reopen_pinned_readonly(pinned[0].source.as_raw_fd()).unwrap();
+        let mut retained_bytes = Vec::new();
+        retained_reader.read_to_end(&mut retained_bytes).unwrap();
+        assert_eq!(retained_bytes, b"authenticated source");
+        assert_eq!(fs::read(&source).unwrap(), b"replacement source");
+        assert_eq!(pinned[0].target, Path::new("payload/source"));
+    }
+
+    #[test]
+    fn anchored_mount_targets_must_preexist_and_reject_symlink_traversal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("target"), b"outside witness").unwrap();
+        let anchor = open_path_directory(&root);
+
+        let missing = open_anchored_mount_target(
+            anchor.as_raw_fd(),
+            Path::new("missing"),
+            AnchoredMountTargetKind::RegularFile,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            missing,
+            ContainerError::OpenAnchoredMountTarget { source, .. }
+                if source.raw_os_error() == Some(nix::libc::ENOENT)
+        ));
+        assert!(
+            !root.join("missing").exists(),
+            "target resolution must never create mountpoints"
+        );
+
+        std::os::unix::fs::symlink(&outside, root.join("redirect")).unwrap();
+        let redirected = open_anchored_mount_target(
+            anchor.as_raw_fd(),
+            Path::new("redirect/target"),
+            AnchoredMountTargetKind::RegularFile,
+        )
+        .unwrap_err();
+        assert!(matches!(redirected, ContainerError::OpenAnchoredMountTarget { .. }));
+        assert_eq!(fs::read(outside.join("target")).unwrap(), b"outside witness");
+
+        let host_root = open_path_directory(Path::new("/"));
+        let nested_mount = open_anchored_mount_target(
+            host_root.as_raw_fd(),
+            Path::new("proc/self"),
+            AnchoredMountTargetKind::Directory,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            nested_mount,
+            ContainerError::OpenAnchoredMountTarget { source, .. }
+                if source.raw_os_error() == Some(nix::libc::EXDEV)
+        ));
+    }
+
+    #[test]
+    fn anchored_mount_target_normalization_rejects_escape_and_root_aliases() {
+        for invalid in [
+            "",
+            "/",
+            ".",
+            "relative",
+            "../escape",
+            "/safe/../escape",
+            "/safe/./target",
+        ] {
+            assert!(
+                normalized_anchored_mount_target(Path::new(invalid)).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+        assert_eq!(
+            normalized_anchored_mount_target(Path::new("/safe/target")).unwrap(),
+            Path::new("safe/target")
+        );
+
+        let mut maximal_components = std::iter::repeat_n("a".repeat(255), 15).collect::<Vec<_>>();
+        maximal_components.push("b".repeat(254));
+        let maximal = format!("/{}", maximal_components.join("/"));
+        assert_eq!(maximal.len(), 4095);
+        assert!(normalized_anchored_mount_target(Path::new(&maximal)).is_ok());
+        assert!(normalized_anchored_mount_target(Path::new(&format!("{maximal}x"))).is_err());
+    }
+
+    #[test]
+    fn anchored_mount_topology_rejects_duplicate_and_nested_targets() {
+        let source = tempfile::tempdir().unwrap();
+        let mounts = |first: &str, second: &str| {
+            vec![
+                PreparedAnchoredMount {
+                    source_mount: open_path_directory(source.path()),
+                    target: PathBuf::from(first),
+                    target_kind: AnchoredMountTargetKind::Directory,
+                },
+                PreparedAnchoredMount {
+                    source_mount: open_path_directory(source.path()),
+                    target: PathBuf::from(second),
+                    target_kind: AnchoredMountTargetKind::Directory,
+                },
+            ]
+        };
+
+        for (first, second) in [("work", "work"), ("work", "work/cache"), ("work/cache", "work")] {
+            assert!(matches!(
+                validate_anchored_mount_topology(&mounts(first, second)),
+                Err(ContainerError::OverlappingAnchoredMountTargets { .. })
+            ));
+        }
+        validate_anchored_mount_topology(&mounts("work", "cache")).unwrap();
+    }
+
+    #[test]
+    fn anchored_execution_rejects_pathname_and_special_file_bind_sources_before_clone() {
+        let root = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let anchor = open_path_directory(root.path());
+        let path_error = pin_anchored_bind_sources(
+            anchor.as_raw_fd(),
+            &[Bind {
+                source: BindSource::Path(source.path().to_owned()),
+                target: PathBuf::from("work"),
+                read_only: false,
+            }],
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(path_error, ContainerError::UnpinnedAnchoredMountSource { .. }));
+
+        let socket_path = source.path().join("socket");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+        let socket = open_path_file(&socket_path);
+        let error = Container::new_anchored(root.path(), &anchor)
+            .unwrap()
+            .bind_rw_pinned(&socket, &socket_path, "/work")
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("unsupported anchored mount source"));
+    }
+
+    #[test]
+    fn anchored_bind_apis_require_absolute_source_and_guest_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let anchor = open_path_directory(root.path());
+        let pinned = open_path_directory(source.path());
+
+        for result in [
+            Container::new_anchored(root.path(), &anchor)
+                .unwrap()
+                .bind_rw_from_root("install", "/install"),
+            Container::new_anchored(root.path(), &anchor)
+                .unwrap()
+                .bind_rw_from_root("/install", "install"),
+            Container::new_anchored(root.path(), &anchor)
+                .unwrap()
+                .bind_rw_pinned(&pinned, source.path(), "work"),
+        ] {
+            let error = result.err().expect("relative anchored path must fail");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("invalid anchored mount target"));
+        }
+    }
+
+    #[test]
+    fn sealed_resolver_file_has_exact_metadata_seals_and_cleanup() {
+        let file = sealed_resolver_file(b"nameserver 192.0.2.1\n").unwrap();
+        let fd = file.as_raw_fd();
+        let stat = descriptor_stat(fd).unwrap();
+        assert_eq!(stat.st_mode & nix::libc::S_IFMT, nix::libc::S_IFREG);
+        assert_eq!(stat.st_mode & 0o777, 0o644);
+        assert_eq!(stat.st_size, b"nameserver 192.0.2.1\n".len() as i64);
+        // SAFETY: fd is a live memfd and F_GET_SEALS takes no third argument.
+        let seals = unsafe { nix::libc::fcntl(fd, nix::libc::F_GET_SEALS) };
+        let required =
+            nix::libc::F_SEAL_WRITE | nix::libc::F_SEAL_GROW | nix::libc::F_SEAL_SHRINK | nix::libc::F_SEAL_SEAL;
+        assert_eq!(seals & required, required);
+        let mutation = b"mutation";
+        // SAFETY: mutation is live for the write and fd denotes the sealed
+        // memfd. The syscall must reject the write without reading elsewhere.
+        assert_eq!(
+            unsafe { nix::libc::write(fd, mutation.as_ptr().cast(), mutation.len()) },
+            -1
+        );
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(nix::libc::EPERM));
+        drop(file);
+        assert_eq!(fcntl(fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+    }
+
+    #[test]
+    fn resolver_stability_witness_detects_content_metadata_change() {
+        let temporary = tempfile::NamedTempFile::new().unwrap();
+        fs::write(temporary.path(), b"first").unwrap();
+        let file = fs::File::open(temporary.path()).unwrap();
+        let before = descriptor_stat(file.as_raw_fd()).unwrap();
+        let same = descriptor_stat(file.as_raw_fd()).unwrap();
+        assert!(resolver_stat_stable(&before, &same));
+        fs::write(temporary.path(), b"different-size").unwrap();
+        let after = descriptor_stat(file.as_raw_fd()).unwrap();
+        assert!(!resolver_stat_stable(&before, &after));
+    }
+
+    #[test]
+    fn error_transport_format_is_bounded_even_for_cyclic_and_huge_sources() {
+        #[derive(Debug)]
+        struct CyclicHugeError;
+        impl fmt::Display for CyclicHugeError {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                for _ in 0..(MAX_CHILD_ERROR_BYTES * 4) {
+                    formatter.write_str("x")?;
+                }
+                Ok(())
+            }
+        }
+        impl std::error::Error for CyclicHugeError {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(self)
+            }
+        }
+
+        let rendered = format_error(CyclicHugeError);
+        assert_eq!(rendered.len(), MAX_CHILD_ERROR_BYTES);
+        assert!(rendered.bytes().all(|byte| byte == b'x'));
+    }
+
+    #[test]
+    fn child_error_read_does_not_wait_for_a_leaked_descendant_writer() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let mut sync = SyncPipe::new().unwrap();
+        let leaked_writer = duplicate_cloexec(sync.write_fd()).unwrap();
+        nix::unistd::write(sync.write_fd(), b"bounded child error").unwrap();
+        sync.close_write().unwrap();
+        let read_fd = sync.read.take().unwrap();
+        drop(sync);
+
+        let (result_tx, result_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let result = read_child_error(read_fd);
+            let _ = nix::unistd::close(read_fd);
+            result_tx.send(result).unwrap();
+        });
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("a leaked writer must not block bounded error supervision")
+            .unwrap();
+        assert_eq!(result, "bounded child error");
+        drop(leaked_writer);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn anchored_resolver_target_uses_the_descriptor_not_the_replaced_label() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let pinned = temporary.path().join("pinned");
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(root.join("etc/resolv.conf"), b"authenticated placeholder").unwrap();
+        let anchor = open_path_directory(&root);
+        fs::rename(&root, &pinned).unwrap();
+        fs::create_dir_all(root.join("etc")).unwrap();
+        fs::write(root.join("etc/resolv.conf"), b"replacement").unwrap();
+
+        let target = open_anchored_resolver_target(anchor.as_raw_fd()).unwrap();
+        let target_stat = descriptor_stat(target.as_raw_fd()).unwrap();
+        let expected = fs::metadata(pinned.join("etc/resolv.conf")).unwrap();
+
+        assert_eq!(target_stat.st_dev as u64, expected.dev());
+        assert_eq!(target_stat.st_ino as u64, expected.ino());
+        assert_eq!(
+            fs::read(pinned.join("etc/resolv.conf")).unwrap(),
+            b"authenticated placeholder"
+        );
+        assert_eq!(fs::read(root.join("etc/resolv.conf")).unwrap(), b"replacement");
+    }
+
+    #[test]
+    fn anchored_resolver_rejects_fifo_and_device_targets_without_opening_data() {
+        let fifo_root = tempfile::tempdir().unwrap();
+        fs::create_dir(fifo_root.path().join("etc")).unwrap();
+        mkfifo(&fifo_root.path().join("etc/resolv.conf"), Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+        let fifo_anchor = open_path_directory(fifo_root.path());
+        assert!(matches!(
+            open_anchored_resolver_target(fifo_anchor.as_raw_fd()),
+            Err(ContainerError::UnsafeResolverTarget { mode, .. }) if mode == nix::libc::S_IFIFO
+        ));
+
+        let device = open_path_file(Path::new("/dev/null"));
+        assert!(matches!(
+            validate_resolver_target(device.as_raw_fd(), Path::new("etc/resolv.conf")),
+            Err(ContainerError::UnsafeResolverTarget { mode, .. }) if mode == nix::libc::S_IFCHR
+        ));
+
+        let hardlink_root = tempfile::tempdir().unwrap();
+        fs::create_dir(hardlink_root.path().join("etc")).unwrap();
+        let target = hardlink_root.path().join("etc/resolv.conf");
+        let alias = hardlink_root.path().join("resolver-alias");
+        fs::write(&target, b"do not mutate").unwrap();
+        fs::hard_link(&target, &alias).unwrap();
+        let hardlink_anchor = open_path_directory(hardlink_root.path());
+        let hardlink_descriptor = open_anchored_resolver_target(hardlink_anchor.as_raw_fd()).unwrap();
+        let hardlink_stat = descriptor_stat(hardlink_descriptor.as_raw_fd()).unwrap();
+        assert_eq!(hardlink_stat.st_nlink, 2);
+        assert_eq!(fs::read(&target).unwrap(), b"do not mutate");
+        assert_eq!(fs::read(&alias).unwrap(), b"do not mutate");
+    }
 
     #[test]
     fn default_policy_preserves_historical_mounts() {
@@ -1271,6 +3218,328 @@ mod tests {
         }
     }
 
+    #[test]
+    fn anchored_root_path_substitution_cannot_redirect_payload() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let pinned = temporary.path().join("pinned-root");
+        let replacement = temporary.path().join("replacement-root");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("etc")).unwrap();
+        fs::write(root.join("etc/resolv.conf"), b"verified placeholder").unwrap();
+        fs::write(root.join("identity"), b"descriptor-root").unwrap();
+
+        let anchor = open_path_directory(&root);
+        let caller_anchor_descriptor = anchor.as_raw_fd();
+        let sentinel = open_path_file(Path::new("/dev/null"));
+        let sentinel_descriptor = sentinel.as_raw_fd();
+        let container = Container::new_anchored(&root, &anchor)
+            .unwrap()
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .networking(true);
+        let child_anchor_descriptor = container.root_anchor.as_ref().unwrap().as_raw_fd();
+
+        // Substitute the complete label after construction. The O_PATH
+        // duplicate retained by Container still denotes the renamed tree. A
+        // symlink is deliberately stronger than an ordinary directory swap:
+        // descriptor-only attachment must not resolve the label at all.
+        fs::rename(&root, &pinned).unwrap();
+        fs::create_dir(&replacement).unwrap();
+        fs::write(replacement.join("identity"), b"replacement-root").unwrap();
+        std::os::unix::fs::symlink(&replacement, &root).unwrap();
+
+        let result = container.run::<io::Error>(|| {
+            for (name, fd) in [
+                ("container root duplicate", child_anchor_descriptor),
+                ("caller root anchor", caller_anchor_descriptor),
+                ("unrelated sentinel", sentinel_descriptor),
+            ] {
+                if fcntl(fd, FcntlArg::F_GETFD) != Err(Errno::EBADF) {
+                    return Err(io::Error::other(format!("{name} descriptor {fd} leaked into payload")));
+                }
+            }
+            let identity = fs::read("/identity")?;
+            if identity != b"descriptor-root" {
+                return Err(io::Error::other(format!(
+                    "payload entered substituted root: {}",
+                    String::from_utf8_lossy(&identity)
+                )));
+            }
+            let resolver = fs::metadata("/etc/resolv.conf")?;
+            if !resolver.is_file() || resolver.permissions().mode() & 0o777 != 0o644 {
+                return Err(io::Error::other(format!(
+                    "resolver mount has nondeterministic type/mode {:o}",
+                    resolver.permissions().mode()
+                )));
+            }
+            require_errno(
+                fs::write("/etc/resolv.conf", b"payload mutation"),
+                Errno::EROFS,
+                "mutate sealed resolver mount",
+            )?;
+            fs::write("/payload-witness", b"anchored")
+        });
+
+        match result {
+            Ok(()) => {
+                assert!(fcntl(caller_anchor_descriptor, FcntlArg::F_GETFD).is_ok());
+                assert!(fcntl(sentinel_descriptor, FcntlArg::F_GETFD).is_ok());
+                assert_eq!(fs::read(pinned.join("payload-witness")).unwrap(), b"anchored");
+                assert!(!root.join("payload-witness").exists());
+                assert_eq!(fs::read(root.join("identity")).unwrap(), b"replacement-root");
+                assert_eq!(
+                    fs::read(pinned.join("etc/resolv.conf")).unwrap(),
+                    b"verified placeholder",
+                    "resolver publication must not mutate the authenticated backing tree"
+                );
+                assert!(
+                    !pinned.join("old_root").exists(),
+                    "anchored pivot must not create put_old inside the authenticated backing tree"
+                );
+            }
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, &root);
+                if let Some(classification) = classification
+                    && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
+                        != Some(std::ffi::OsStr::new("1"))
+                {
+                    eprintln!(
+                        "SKIP anchored-root substitution test: required host capability unavailable: {classification}: {error}"
+                    );
+                    return;
+                }
+                panic!("anchored-root substitution test failed: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn anchored_root_relative_install_is_exact_writable_exception_after_label_substitution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let authenticated = temporary.path().join("authenticated-root");
+        let external_work = temporary.path().join("external-work");
+        fs::create_dir_all(root.join("install")).unwrap();
+        fs::create_dir(root.join("work")).unwrap();
+        fs::create_dir(root.join("locked")).unwrap();
+        fs::write(root.join("locked/input"), b"immutable").unwrap();
+        fs::create_dir(&external_work).unwrap();
+
+        let anchor = open_path_directory(&root);
+        let work = open_path_directory(&external_work);
+        let container = Container::new_anchored(&root, &anchor)
+            .unwrap()
+            .bind_rw_from_root("/install", "/install")
+            .unwrap()
+            .bind_rw_pinned(&work, &external_work, "/work")
+            .unwrap()
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault);
+
+        fs::rename(&root, &authenticated).unwrap();
+        fs::create_dir_all(root.join("install")).unwrap();
+        fs::write(root.join("install/replacement"), b"must stay hidden").unwrap();
+
+        let result = container.run::<io::Error>(|| {
+            fs::write("/install/result", b"authenticated install")?;
+            fs::write("/work/result", b"external work")?;
+            require_errno(
+                fs::write("/locked/mutation", b"rejected"),
+                Errno::EROFS,
+                "mutate undeclared anchored root path",
+            )?;
+            require_mount_administration_absent()
+        });
+
+        match result {
+            Ok(()) => {
+                assert_eq!(
+                    fs::read(authenticated.join("install/result")).unwrap(),
+                    b"authenticated install"
+                );
+                assert!(!root.join("install/result").exists());
+                assert_eq!(fs::read(root.join("install/replacement")).unwrap(), b"must stay hidden");
+                assert_eq!(fs::read(external_work.join("result")).unwrap(), b"external work");
+                assert!(!authenticated.join("locked/mutation").exists());
+            }
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, &root);
+                if let Some(classification) = classification
+                    && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
+                        != Some(std::ffi::OsStr::new("1"))
+                {
+                    eprintln!(
+                        "SKIP anchored install-bind test: required host capability unavailable: {classification}: {error}"
+                    );
+                    return;
+                }
+                panic!("anchored install-bind test failed: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn anchored_payload_error_transport_is_bounded_and_completes() {
+        let root = tempfile::tempdir().unwrap();
+        let anchor = open_path_directory(root.path());
+        let container = Container::new_anchored(root.path(), &anchor)
+            .unwrap()
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault);
+        let result = container.run::<io::Error>(|| Err(io::Error::other("x".repeat(1024 * 1024))));
+
+        match result {
+            Err(ContainerRunError::Failure { message }) if message.starts_with("run: ") => {
+                assert_eq!(message.len(), MAX_CHILD_ERROR_BYTES);
+            }
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, root.path());
+                if let Some(classification) = classification
+                    && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
+                        != Some(std::ffi::OsStr::new("1"))
+                {
+                    eprintln!(
+                        "SKIP anchored bounded-error test: required host capability unavailable: {classification}: {error}"
+                    );
+                    return;
+                }
+                panic!("anchored bounded-error test failed: {error}");
+            }
+            Ok(()) => panic!("anchored payload unexpectedly accepted an error"),
+        }
+    }
+
+    #[test]
+    fn anchored_root_clone_preserves_nested_mount_identity() {
+        const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+
+        let anchor = open_path_directory(Path::new("/"));
+        let label = PathBuf::from("/diagnostic-only/host-root");
+        let container = Container::new_anchored(&label, &anchor)
+            .unwrap()
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault);
+        drop(anchor);
+
+        let result = container.run::<io::Error>(|| {
+            let _ = fs::read("/proc/self/stat")?;
+            // SAFETY: the path is static and NUL terminated; statfs points to
+            // a fully initialized output object for the duration of the call.
+            let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
+            if unsafe { nix::libc::statfs(c"/proc".as_ptr(), &mut stat) } == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if stat.f_type != PROC_SUPER_MAGIC {
+                return Err(io::Error::other(format!(
+                    "nested /proc mount identity was lost: filesystem magic={:#x}",
+                    stat.f_type
+                )));
+            }
+            Ok(())
+        });
+
+        match result {
+            Ok(()) => {}
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, &label);
+                if let Some(classification) = classification
+                    && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
+                        != Some(std::ffi::OsStr::new("1"))
+                {
+                    eprintln!(
+                        "SKIP anchored nested-mount test: required host capability unavailable: {classification}: {error}"
+                    );
+                    return;
+                }
+                panic!("anchored nested-mount test failed: {error}");
+            }
+        }
+    }
+
+    fn classify_anchored_activation_unavailable(error: &ContainerRunError, label: &Path) -> Option<&'static str> {
+        if host_denied_user_namespace_setup(error) {
+            return Some("user-namespace setup denied");
+        }
+        let ContainerRunError::Failure { message } = error else {
+            return None;
+        };
+        let permission_denied = "EPERM: Operation not permitted";
+        let syscall_missing = "ENOSYS: Function not implemented";
+        if message == &format!("mount /: {permission_denied}") {
+            return Some("private mount namespace denied");
+        }
+        if message.starts_with("clone sealed resolver mount through anchored root descriptor:")
+            && (message.contains("Operation not permitted") || message.contains("Function not implemented"))
+        {
+            return Some("detached resolver mounts unavailable");
+        }
+        if message.starts_with("make sealed resolver mount read-only through anchored root descriptor:")
+            && (message.contains("Operation not permitted") || message.contains("Function not implemented"))
+        {
+            return Some("resolver mount attributes unavailable");
+        }
+        if message.starts_with("attach sealed resolver mount through anchored root descriptor:")
+            && (message.contains("Operation not permitted") || message.contains("Function not implemented"))
+        {
+            return Some("resolver mount attachment unavailable");
+        }
+        if message
+            == &format!(
+                "clone descriptor-backed root mount for anchored root {}: {permission_denied}",
+                label.display()
+            )
+        {
+            return Some("open_tree denied");
+        }
+        if message
+            == &format!(
+                "clone descriptor-backed root mount for anchored root {}: {syscall_missing}",
+                label.display()
+            )
+        {
+            return Some("open_tree unavailable");
+        }
+        if message
+            == &format!(
+                "attach descriptor-backed root mount for anchored root {}: {permission_denied}",
+                label.display()
+            )
+        {
+            return Some("move_mount denied");
+        }
+        if message
+            == &format!(
+                "attach descriptor-backed root mount for anchored root {}: {syscall_missing}",
+                label.display()
+            )
+        {
+            return Some("move_mount unavailable");
+        }
+        None
+    }
+
     fn require_errno<T>(result: io::Result<T>, expected: Errno, operation: &str) -> io::Result<()> {
         match result {
             Err(error) if error.raw_os_error() == Some(expected as i32) => Ok(()),
@@ -1360,20 +3629,115 @@ mod tests {
     }
 
     #[test]
+    fn minimal_dev_accepts_only_character_device_sources() {
+        let device = open_path_file(Path::new("/dev/null"));
+        validate_minimal_device_source(device.as_raw_fd(), Path::new("/dev/null")).unwrap();
+
+        let regular = tempfile::NamedTempFile::new().unwrap();
+        let regular = open_path_file(regular.path());
+        assert!(matches!(
+            validate_minimal_device_source(regular.as_raw_fd(), Path::new("regular")),
+            Err(ContainerError::UnsupportedAnchoredMountSource { mode, .. }) if mode == nix::libc::S_IFREG
+        ));
+    }
+
+    #[test]
     fn synchronization_pipe_is_close_on_exec() {
         let mut sync = SyncPipe::new().unwrap();
         let read_fd = sync.read_fd();
         let write_fd = sync.write_fd();
 
+        assert!(read_fd >= 3);
+        assert!(write_fd >= 3);
         for fd in [read_fd, write_fd] {
             let flags = FdFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFD).unwrap());
             assert!(flags.contains(FdFlag::FD_CLOEXEC));
         }
+        let write_status = OFlag::from_bits_truncate(fcntl(write_fd, FcntlArg::F_GETFL).unwrap());
+        assert!(write_status.contains(OFlag::O_NONBLOCK));
 
         sync.close_write().unwrap();
         assert_eq!(fcntl(write_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
         drop(sync);
         assert_eq!(fcntl(read_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+    }
+
+    #[test]
+    fn clone_stack_has_a_non_accessible_guard_and_read_write_usable_mapping() {
+        fn permissions(address: usize) -> Option<String> {
+            let maps = fs::read_to_string("/proc/self/maps").ok()?;
+            maps.lines().find_map(|line| {
+                let mut fields = line.split_whitespace();
+                let mut range = fields.next()?.split('-');
+                let start = usize::from_str_radix(range.next()?, 16).ok()?;
+                let end = usize::from_str_radix(range.next()?, 16).ok()?;
+                let permissions = fields.next()?;
+                (start <= address && address < end).then(|| permissions.to_owned())
+            })
+        }
+
+        let mut stack = CloneStack::new().unwrap();
+        let guard = stack.guard_address();
+        let usable = stack.usable_address();
+        assert_eq!(permissions(guard).as_deref(), Some("---p"));
+        assert_eq!(permissions(usable).as_deref(), Some("rw-p"));
+        let slice = stack.as_mut_slice();
+        assert_eq!(slice.len(), CLONE_STACK_BYTES);
+        assert_eq!(slice.as_ptr() as usize, usable);
+        slice[0] = 1;
+        slice[CLONE_STACK_BYTES - 1] = 2;
+    }
+
+    #[test]
+    fn signal_override_restores_the_exact_previous_action() {
+        extern "C" fn custom_handler(_: i32) {}
+
+        let signal = Signal::SIGUSR2;
+        let mut mask = SigSet::empty();
+        mask.add(Signal::SIGUSR1);
+        let custom = SigAction::new(SigHandler::Handler(custom_handler), SaFlags::SA_RESTART, mask);
+        // SAFETY: custom is initialized and signal is valid. The original is
+        // restored before this test returns.
+        let original = unsafe { sigaction(signal, &custom).unwrap() };
+        SignalOverride::install(signal).unwrap().restore().unwrap();
+        // Install the original action while retrieving the action restored by
+        // SignalOverride, so the test leaves process state unchanged.
+        let restored = unsafe { sigaction(signal, &original).unwrap() };
+        assert_eq!(restored.handler(), SigHandler::Handler(custom_handler));
+        assert!(restored.flags().contains(SaFlags::SA_RESTART));
+        assert!(restored.mask().contains(Signal::SIGUSR1));
+    }
+
+    #[test]
+    fn signal_overrides_are_serialized_across_concurrent_runs() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (first_installed_tx, first_installed_rx) = mpsc::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let first = std::thread::spawn(move || {
+            let override_ = SignalOverride::install(Signal::SIGWINCH).unwrap();
+            first_installed_tx.send(()).unwrap();
+            release_first_rx.recv().unwrap();
+            override_.restore().unwrap();
+        });
+        first_installed_rx.recv().unwrap();
+
+        let (second_attempting_tx, second_attempting_rx) = mpsc::channel();
+        let (second_installed_tx, second_installed_rx) = mpsc::channel();
+        let second = std::thread::spawn(move || {
+            second_attempting_tx.send(()).unwrap();
+            let override_ = SignalOverride::install(Signal::SIGURG).unwrap();
+            second_installed_tx.send(()).unwrap();
+            override_.restore().unwrap();
+        });
+        second_attempting_rx.recv().unwrap();
+        assert!(second_installed_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        release_first_tx.send(()).unwrap();
+        second_installed_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
     }
 
     #[test]
