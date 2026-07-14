@@ -23,8 +23,12 @@ use fs_err as fs;
 use sha2::{Digest, Sha256};
 use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
 use stone_recipe::{
-    UpstreamSpec,
-    derivation::{FilesystemPolicy, InputOrigin, NetworkMode, encode_build_lock},
+    TuningSpec, UpstreamSpec,
+    derivation::{
+        DerivationPlan, FilesystemPolicy, InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
+        encode_build_lock,
+    },
+    package::{DependencySpec, PackageSpec, StepSpec},
 };
 use tempfile::TempDir;
 use url::Url;
@@ -1069,18 +1073,317 @@ fn identical_explicit_inputs_produce_identical_plans_and_locks() {
     assert_eq!(fs::read(&repeated.lock_path).unwrap(), first_lock);
 }
 
+fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
+    dependencies
+        .iter()
+        .map(|dependency| dependency.dependency().unwrap().to_name())
+        .collect()
+}
+
+fn assert_locked_request_origin(plan: &DerivationPlan, request: &str, expected: InputOrigin) {
+    let locked = plan
+        .build_lock
+        .requests
+        .iter()
+        .find(|locked| locked.request == request)
+        .unwrap_or_else(|| panic!("{}: missing frozen request {request}", plan.package.name));
+    assert_eq!(
+        locked.origins,
+        [expected],
+        "{}: {request} reached the frozen closure through an unexpected semantic role",
+        plan.package.name
+    );
+}
+
+fn assert_x86_64_platform(plan: &DerivationPlan) {
+    let expected = ("x86_64", "aerynos", "linux", "gnu");
+    for (name, platform) in [
+        ("build", &plan.build_lock.build_platform),
+        ("host", &plan.build_lock.host_platform),
+        ("target", &plan.build_lock.target_platform),
+    ] {
+        assert_eq!(
+            (
+                platform.architecture.as_str(),
+                platform.vendor.as_str(),
+                platform.operating_system.as_str(),
+                platform.abi.as_str(),
+            ),
+            expected,
+            "{}: {name} platform changed",
+            plan.package.name
+        );
+    }
+    assert_eq!(plan.package.architecture, "x86_64");
+}
+
+fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
+    match name {
+        "factory-override" => assert_factory_override_semantics(declaration, plan),
+        "platform-factory" => assert_platform_factory_semantics(declaration, plan),
+        _ => {}
+    }
+}
+
+fn assert_factory_override_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "override-client");
+    assert_eq!(
+        dependency_names(&declaration.build_inputs),
+        ["pkgconfig(zlib)", "pkgconfig(libressl)"],
+        "the explicit TLS argument must replace the factory's OpenSSL default"
+    );
+    assert_eq!(
+        declaration
+            .outputs
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "out",
+            "docs",
+            "devel",
+            "dbginfo",
+            "libs",
+            "32bit",
+            "32bit-devel",
+            "32bit-dbginfo",
+            "demos",
+            "tools",
+        ],
+        "the output patch must append tools without disturbing the base output order"
+    );
+    let tools = declaration.outputs.last().expect("factory override appends tools");
+    assert!(
+        matches!(
+            tools.runtime_inputs.as_slice(),
+            [DependencySpec::Output(output)]
+                if output.package.name == "override-client" && output.output == "out"
+        ),
+        "the appended tools output must depend on the package's exact root output"
+    );
+    assert_eq!(declaration.architectures, ["x86_64"]);
+    assert_eq!(
+        declaration.builder.phases.setup.steps,
+        [StepSpec::CMakeConfigure {
+            flags: vec!["-DUSE_SYSTEM_LIBRARIES=ON".to_owned()],
+        }]
+    );
+    assert_eq!(
+        plan.manifest_build_inputs
+            .iter()
+            .map(|dependency| dependency.canonical_name())
+            .collect::<Vec<_>>(),
+        ["binary(ninja)", "pkgconfig(zlib)", "pkgconfig(libressl)"]
+    );
+    let frozen_tools = plan
+        .outputs
+        .iter()
+        .find(|output| output.name == "tools")
+        .expect("the appended tools output reaches the frozen plan");
+    assert!(matches!(
+        frozen_tools.runtime_inputs.as_slice(),
+        [OutputRelation::Planned { output }] if output == "out"
+    ));
+    assert_locked_request_origin(
+        plan,
+        "pkgconfig(zlib)",
+        InputOrigin::Build {
+            selection: PackageInputSelection::Package,
+            index: 0,
+        },
+    );
+    assert_locked_request_origin(
+        plan,
+        "pkgconfig(libressl)",
+        InputOrigin::Build {
+            selection: PackageInputSelection::Package,
+            index: 1,
+        },
+    );
+    assert!(
+        plan.build_lock
+            .requests
+            .iter()
+            .all(|request| request.request != "pkgconfig(openssl)"),
+        "the replaced OpenSSL default must not leak into the frozen closure"
+    );
+    assert_x86_64_platform(plan);
+}
+
+fn assert_platform_factory_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "relay-engine");
+    assert_eq!(
+        dependency_names(&declaration.native_build_inputs),
+        ["binary(protocol-compiler)"]
+    );
+    assert_eq!(
+        dependency_names(&declaration.build_inputs),
+        ["pkgconfig(zlib)", "pkgconfig(openssl)", "pkgconfig(liburing)"],
+        "the selected platform must supply liburing after the reusable dependencies"
+    );
+    assert_eq!(declaration.architectures, ["x86_64"]);
+    assert_eq!(
+        declaration.builder.phases.setup.steps,
+        [StepSpec::CMakeConfigure {
+            flags: vec![
+                "-DENABLE_PORTABLE_DISPATCH=ON".to_owned(),
+                "-DENABLE_SERVER=OFF".to_owned(),
+                "-DUSE_IO_URING=ON".to_owned(),
+            ],
+        }]
+    );
+    assert_eq!(declaration.builder.phases.check.steps, [StepSpec::CMakeTest]);
+    assert_eq!(
+        declaration
+            .tuning
+            .iter()
+            .map(|tuning| (tuning.key.as_str(), &tuning.value))
+            .collect::<Vec<_>>(),
+        [
+            ("harden", &TuningSpec::Enable),
+            (
+                "lto",
+                &TuningSpec::Config {
+                    value: "thin".to_owned(),
+                },
+            ),
+            (
+                "optimize",
+                &TuningSpec::Config {
+                    value: "speed".to_owned(),
+                },
+            ),
+        ]
+    );
+    assert_eq!(
+        plan.manifest_build_inputs
+            .iter()
+            .map(|dependency| dependency.canonical_name())
+            .collect::<Vec<_>>(),
+        [
+            "binary(ninja)",
+            "binary(protocol-compiler)",
+            "pkgconfig(zlib)",
+            "pkgconfig(openssl)",
+            "pkgconfig(liburing)",
+        ]
+    );
+    for (request, origin) in [
+        (
+            "binary(protocol-compiler)",
+            InputOrigin::NativeBuild {
+                selection: PackageInputSelection::Package,
+                index: 0,
+            },
+        ),
+        (
+            "pkgconfig(zlib)",
+            InputOrigin::Build {
+                selection: PackageInputSelection::Package,
+                index: 0,
+            },
+        ),
+        (
+            "pkgconfig(openssl)",
+            InputOrigin::Build {
+                selection: PackageInputSelection::Package,
+                index: 1,
+            },
+        ),
+        (
+            "pkgconfig(liburing)",
+            InputOrigin::Build {
+                selection: PackageInputSelection::Package,
+                index: 2,
+            },
+        ),
+    ] {
+        assert_locked_request_origin(plan, request, origin);
+    }
+    assert_x86_64_platform(plan);
+}
+
+fn assert_factory_override_changes_frozen_identity(matrix: &PackageExampleMatrix) {
+    let example = matrix
+        .examples
+        .iter()
+        .find(|example| example.name == "factory-override")
+        .expect("the explicit example inventory contains factory-override");
+    let original = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir)
+        .expect("reuse the original factory-override build lock");
+    let original_source = fs::read_to_string(&example.recipe_path).unwrap();
+    const OVERRIDE: &str = "b.dep.pkgconfig \"libressl\"";
+    const CHANGED_OVERRIDE: &str = "b.dep.pkgconfig \"openssl\"";
+    assert_eq!(
+        original_source.matches(OVERRIDE).count(),
+        1,
+        "the fingerprint proof must mutate exactly one explicit factory argument"
+    );
+    let changed_source = original_source.replacen(OVERRIDE, CHANGED_OVERRIDE, 1);
+    fs::write(&example.recipe_path, changed_source).unwrap();
+
+    let changed_evaluation = matrix.builder(example);
+    assert_eq!(
+        dependency_names(&changed_evaluation.recipe.declaration.build_inputs),
+        ["pkgconfig(zlib)", "pkgconfig(openssl)"]
+    );
+    let changed = plan_for_build(matrix.env(), matrix.request(example, true), &matrix.output_dir)
+        .expect("freeze the changed factory override");
+
+    assert_eq!(changed.lock_outcome, Some(WriteOutcome::Written));
+    assert_eq!(changed.plan.provenance.recipe, changed_evaluation.recipe.fingerprint);
+    assert_ne!(
+        original.plan.provenance.recipe.sha256, changed.plan.provenance.recipe.sha256,
+        "changing a factory argument must invalidate the complete evaluation fingerprint"
+    );
+    assert_ne!(
+        original.plan.canonical_bytes(),
+        changed.plan.canonical_bytes(),
+        "changing a factory argument must change the frozen plan"
+    );
+    assert_ne!(
+        original.plan.derivation_id(),
+        changed.plan.derivation_id(),
+        "changing a factory argument must change derivation identity"
+    );
+    assert_locked_request_origin(
+        &changed.plan,
+        "pkgconfig(openssl)",
+        InputOrigin::Build {
+            selection: PackageInputSelection::Package,
+            index: 1,
+        },
+    );
+    assert!(
+        changed
+            .plan
+            .build_lock
+            .requests
+            .iter()
+            .all(|request| request.request != "pkgconfig(libressl)"),
+        "the old override must not survive in the changed frozen closure"
+    );
+}
+
 #[test]
 fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks() {
     let matrix = PackageExampleMatrix::new();
     let repository_uri = Url::from_file_path(&matrix.repository_index).unwrap().to_string();
 
     for example in &matrix.examples {
+        let evaluated = matrix.builder(example);
         let first = plan_for_build(matrix.env(), matrix.request(example, true), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{}: freeze example plan: {error:#}", example.name));
         first
             .plan
             .validate()
             .unwrap_or_else(|error| panic!("{}: validate frozen example plan: {error:#}", example.name));
+        assert_eq!(
+            first.plan.provenance.recipe, evaluated.recipe.fingerprint,
+            "{}: the frozen plan must retain the exact public recipe evaluation fingerprint",
+            example.name
+        );
+        assert_documented_factory_semantics(&example.name, &evaluated.recipe.declaration, &first.plan);
         assert_eq!(
             first.lock_outcome,
             Some(WriteOutcome::Written),
@@ -1165,6 +1468,8 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
             example.name
         );
     }
+
+    assert_factory_override_changes_frozen_identity(&matrix);
 }
 
 #[test]
