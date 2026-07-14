@@ -14,11 +14,18 @@ LICENSE_DIR ?= $(TOP_DIR)/target/license-list-data
 EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 REQUIRE_EXECUTION ?= 0
+FIXTURE ?= all
+EXECUTION_FIXTURE_NAMES := autotools cargo cargo-vendored cmake custom daemon-generated hooks-patch meson split
+VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
+# Capture the literal command-line value once. A recursive make variable such
+# as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
+FIXTURE_SELECTION := $(strip $(value FIXTURE))
+VALID_FIXTURE_SELECTION := $(if $(word 2,$(FIXTURE_SELECTION)),,$(filter $(VALID_EXECUTION_FIXTURES),$(FIXTURE_SELECTION)))
 BOOTSTRAP_TMP_DIR := $(TOP_DIR)/target/bootstrap-fixtures/tmp
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -152,6 +159,9 @@ bootstrap-fixtures-tmp:
 	chmod 700 "$$tmpdir"; \
 	[[ "$$(stat -c '%a' "$$tmpdir")" == 700 ]]
 
+bootstrap-fixture-selection:
+	@$(if $(VALID_FIXTURE_SELECTION),:,$(error FIXTURE must be exactly 'all' or one of: $(EXECUTION_FIXTURE_NAMES)))
+
 bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
 	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
@@ -162,7 +172,7 @@ bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
 		--ignored --exact --nocapture
 
-bootstrap-fixtures-offline: bootstrap-fixtures-tmp
+bootstrap-fixtures-offline: bootstrap-fixture-selection bootstrap-fixtures-tmp
 	@echo "Requiring the complete verified bootstrap store; this lane performs no downloads..."
 	@echo "Materializing the complete closure as a production-format offline root mirror..."
 	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
@@ -172,21 +182,21 @@ bootstrap-fixtures-offline: bootstrap-fixtures-tmp
 	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
 		--ignored --exact --nocapture
-	@echo "Building, packaging, and reproducing all nine fixtures from the contentful closure..."
+	@echo "Building, packaging, and reproducing fixture selection '$(FIXTURE_SELECTION)' from the contentful closure..."
 	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --list | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure: test'
-	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
+	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) CAST_EXECUTION_FIXTURE="$(FIXTURE_SELECTION)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --nocapture
 
-bootstrap-fixtures: bootstrap-fixtures-prepare
-	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=$(REQUIRE_EXECUTION)
+bootstrap-fixtures: bootstrap-fixture-selection bootstrap-fixtures-prepare
+	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) FIXTURE=$(FIXTURE_SELECTION)
 
 fixtures-ci: execution-fixtures
 	@$(MAKE) --no-print-directory bootstrap-fixtures-prepare
-	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=1
+	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=1 FIXTURE=all
 
 check:
 	@$(CARGO) check --workspace --all-targets
@@ -244,7 +254,8 @@ help:
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"
 	@echo "  bootstrap-fixtures-prepare  Fetch and verify the pinned 107-package Stone closure"
-	@echo "  bootstrap-fixtures-offline  Build all nine fixtures twice without downloading"
+	@echo "  bootstrap-fixtures-offline  Build selected fixtures twice without downloading"
+	@echo "                    Set FIXTURE=all (default) or one of the nine fixture names"
 	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"
 	@echo "  fixtures-ci    Required-capability nine-fixture execution and reproduction gate"
 	@echo "  fixture-sources  Rebuild deterministic offline execution-source archives"

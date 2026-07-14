@@ -25,7 +25,7 @@ use super::{
 #[path = "bootstrap/bundle.rs"]
 mod bundle;
 
-const BOOTSTRAP_SCHEMA_VERSION: i64 = 1;
+const BOOTSTRAP_SCHEMA_VERSION: i64 = 2;
 const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -41,6 +41,57 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 9] = [
     "meson",
     "split",
 ];
+const EXECUTION_FIXTURE_SELECTOR_ENV: &str = "CAST_EXECUTION_FIXTURE";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionFixtureSelection {
+    All,
+    One(&'static str),
+}
+
+impl ExecutionFixtureSelection {
+    fn includes(self, fixture: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::One(selected) => selected == fixture,
+        }
+    }
+
+    fn expected_count(self) -> usize {
+        match self {
+            Self::All => REQUIRED_EXECUTION_FIXTURES.len(),
+            Self::One(_) => 1,
+        }
+    }
+}
+
+fn parse_execution_fixture_selection(value: Option<&str>) -> Result<ExecutionFixtureSelection, String> {
+    let value = value.unwrap_or("all");
+    if value == "all" {
+        return Ok(ExecutionFixtureSelection::All);
+    }
+    if let Some(fixture) = REQUIRED_EXECUTION_FIXTURES
+        .iter()
+        .copied()
+        .find(|fixture| *fixture == value)
+    {
+        return Ok(ExecutionFixtureSelection::One(fixture));
+    }
+    Err(format!(
+        "{EXECUTION_FIXTURE_SELECTOR_ENV} must be `all` or exactly one of {}; got {value:?}",
+        REQUIRED_EXECUTION_FIXTURES.join(", ")
+    ))
+}
+
+fn execution_fixture_selection_from_env() -> Result<ExecutionFixtureSelection, String> {
+    let Some(value) = std::env::var_os(EXECUTION_FIXTURE_SELECTOR_ENV) else {
+        return parse_execution_fixture_selection(None);
+    };
+    let value = value.to_str().ok_or_else(|| {
+        format!("{EXECUTION_FIXTURE_SELECTOR_ENV} must contain valid UTF-8 and name exactly one fixture or `all`")
+    })?;
+    parse_execution_fixture_selection(Some(value))
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum FrozenStepShape {
@@ -233,8 +284,14 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
 struct BootstrapClosure {
     schema_version: i64,
     repository: RepositoryPin,
-    fixtures: Vec<String>,
+    fixtures: Vec<FixtureClosure>,
     packages: PackageSet,
+}
+
+#[derive(Debug, Clone, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct FixtureClosure {
+    name: String,
+    package_ids: Vec<String>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -256,6 +313,44 @@ struct IndexPin {
 struct PackageSet {
     total_download_bytes: i64,
     sha256: Vec<String>,
+}
+
+fn validate_fixture_closure_coverage(fixtures: &[FixtureClosure], package_ids: &[String]) -> Result<(), String> {
+    let names = fixtures.iter().map(|fixture| fixture.name.as_str()).collect::<Vec<_>>();
+    if names != REQUIRED_EXECUTION_FIXTURES {
+        return Err(format!(
+            "fixture closures must cover the canonical execution matrix exactly once and in order; got {names:?}"
+        ));
+    }
+
+    let available = package_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let mut covered = BTreeSet::new();
+    for fixture in fixtures {
+        if fixture.package_ids.is_empty() {
+            return Err(format!("{}: package closure is empty", fixture.name));
+        }
+        if !fixture.package_ids.is_sorted() {
+            return Err(format!("{}: package closure is not sorted", fixture.name));
+        }
+        let exact = fixture.package_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if exact.len() != fixture.package_ids.len() {
+            return Err(format!("{}: package closure repeats a package ID", fixture.name));
+        }
+        if let Some(unknown) = exact.difference(&available).next() {
+            return Err(format!(
+                "{}: package closure references {unknown}, which is absent from the pinned aggregate closure",
+                fixture.name
+            ));
+        }
+        covered.extend(exact);
+    }
+    if covered != available {
+        let uncovered = available.difference(&covered).copied().collect::<Vec<_>>();
+        return Err(format!(
+            "aggregate closure contains package IDs unused by every execution fixture: {uncovered:?}"
+        ));
+    }
+    Ok(())
 }
 
 fn bootstrap_root() -> PathBuf {
@@ -433,10 +528,8 @@ fn package_file_matches(path: &Path, expected_hash: &str, expected_size: u64) ->
 fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     let closure = load_bootstrap_closure();
     assert_eq!(closure.schema_version, BOOTSTRAP_SCHEMA_VERSION);
-    assert_eq!(
-        closure.fixtures.iter().map(String::as_str).collect::<Vec<_>>(),
-        EXECUTION_FIXTURES
-    );
+    validate_fixture_closure_coverage(&closure.fixtures, &closure.packages.sha256)
+        .unwrap_or_else(|error| panic!("invalid per-fixture bootstrap closure: {error}"));
     assert_eq!(
         index_url(&closure.repository).as_str(),
         "https://cdn.aerynos.dev/main/history/1783706384/x86_64/stone.index"
@@ -468,6 +561,11 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
         closure.packages.sha256.len(),
         "bootstrap package identities must be unique"
     );
+    for fixture in &closure.fixtures {
+        for package_id in &fixture.package_ids {
+            validate_sha256(package_id, &format!("{} package ID", fixture.name));
+        }
+    }
 
     let mut names = BTreeSet::new();
     let total_download_bytes = closure
@@ -730,12 +828,14 @@ fn contentful_bootstrap_materializes_a_complete_offline_root_mirror() {
 #[test]
 #[ignore = "requires make bootstrap-fixtures and unprivileged user/mount namespaces"]
 fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure() {
+    let selection = execution_fixture_selection_from_env()
+        .unwrap_or_else(|error| panic!("invalid execution-fixture selector: {error}"));
     let (closure, indexed) = validated_bootstrap();
     let matrix = BootstrapPlanningMatrix::new(&closure);
     matrix.materialize_package_pool(&closure, &indexed);
     let mut executed = 0usize;
 
-    for (name, recipe) in &matrix.recipes {
+    for (name, recipe) in matrix.recipes.iter().filter(|(name, _)| selection.includes(name)) {
         let first = plan_for_build(matrix.env(), matrix.request(recipe, true), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: plan contentful execution: {error:#}"));
         assert_execution_fixture_topology(name, &first.plan);
@@ -751,7 +851,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
                     && executed == 0 =>
             {
                 eprintln!(
-                    "skipping all contentful execution fixtures: this host cannot create the required user/mount namespaces: {}",
+                    "skipping selected contentful execution fixture(s): this host cannot create the required user/mount namespaces: {}",
                     error_chain(error.as_ref())
                 );
                 return;
@@ -803,13 +903,23 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
         assert_eq!(preserved, published, "{name}: published generation changed");
     }
 
-    assert_eq!(executed, REQUIRED_EXECUTION_FIXTURES.len());
+    assert_eq!(executed, selection.expected_count());
 }
 
 #[test]
 fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
     let (closure, indexed) = validated_bootstrap();
     let expected_packages = closure.packages.sha256.iter().cloned().collect::<BTreeSet<_>>();
+    let expected_fixture_packages = closure
+        .fixtures
+        .iter()
+        .map(|fixture| {
+            (
+                fixture.name.as_str(),
+                fixture.package_ids.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let matrix = BootstrapPlanningMatrix::new(&closure);
     let mut resolved_packages = BTreeSet::new();
 
@@ -836,6 +946,18 @@ fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
                 .iter()
                 .all(|package| package.repository == "bootstrap" && !package.name.starts_with("planner-provider-")),
             "{name}: a synthetic metadata-only provider entered the real closure"
+        );
+        let fixture_packages = first
+            .plan
+            .build_lock
+            .packages
+            .iter()
+            .map(|package| package.package_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fixture_packages,
+            expected_fixture_packages[name.as_str()],
+            "{name}: resolved package closure drifted from its exact declarative pin"
         );
         resolved_packages.extend(
             first
@@ -935,4 +1057,62 @@ fn fetch_pinned_bootstrap_package_files() {
 #[test]
 fn pinned_bootstrap_manifest_is_bounded_and_index_authoritative() {
     let _ = validated_bootstrap();
+}
+
+#[test]
+fn execution_fixture_selector_accepts_all_and_defaults_to_all() {
+    assert_eq!(
+        parse_execution_fixture_selection(None),
+        Ok(ExecutionFixtureSelection::All)
+    );
+    assert_eq!(
+        parse_execution_fixture_selection(Some("all")),
+        Ok(ExecutionFixtureSelection::All)
+    );
+}
+
+#[test]
+fn execution_fixture_selector_accepts_each_single_fixture_exactly() {
+    for selected in REQUIRED_EXECUTION_FIXTURES {
+        let selection = parse_execution_fixture_selection(Some(selected)).unwrap();
+        assert_eq!(selection, ExecutionFixtureSelection::One(selected));
+        assert_eq!(selection.expected_count(), 1);
+        for fixture in REQUIRED_EXECUTION_FIXTURES {
+            assert_eq!(selection.includes(fixture), fixture == selected);
+        }
+    }
+}
+
+#[test]
+fn execution_fixture_selector_rejects_every_noncanonical_value() {
+    for invalid in ["", "ALL", "cmake ", "not-a-fixture", "autotools,cargo"] {
+        let error = parse_execution_fixture_selection(Some(invalid)).unwrap_err();
+        assert!(error.contains(EXECUTION_FIXTURE_SELECTOR_ENV));
+        assert!(error.contains(&format!("{invalid:?}")));
+    }
+}
+
+#[test]
+fn fixture_closure_coverage_is_exact_and_fail_closed() {
+    let package_ids = vec!["00".repeat(32), "11".repeat(32)];
+    let fixtures = REQUIRED_EXECUTION_FIXTURES
+        .iter()
+        .map(|name| FixtureClosure {
+            name: (*name).to_owned(),
+            package_ids: package_ids.clone(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(validate_fixture_closure_coverage(&fixtures, &package_ids), Ok(()));
+
+    let mut missing = fixtures.clone();
+    missing.pop();
+    assert!(validate_fixture_closure_coverage(&missing, &package_ids).is_err());
+
+    let mut duplicate = fixtures.clone();
+    duplicate[0].package_ids.push(package_ids[1].clone());
+    assert!(validate_fixture_closure_coverage(&duplicate, &package_ids).is_err());
+
+    let mut unknown = fixtures;
+    unknown[0].package_ids.push("ff".repeat(32));
+    assert!(validate_fixture_closure_coverage(&unknown, &package_ids).is_err());
 }

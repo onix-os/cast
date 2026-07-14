@@ -71,19 +71,26 @@ Zstandard command-line encoders.
 ```sh
 make execution-fixtures
 make bootstrap-fixtures
+make bootstrap-fixtures FIXTURE=cmake
 make fixtures-ci
 ```
 
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source archives, validates the pinned Stone index and closure declaration, and
-proves that all nine recipes resolve to that exact closure. `make
+proves that each recipe resolves to its own exact, sorted package-ID closure
+and that their union is the aggregate bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,
-package, and reproduce every fixture. It may skip execution when the host
+package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
+one of `autotools`, `cargo`, `cargo-vendored`, `cmake`, `custom`,
+`daemon-generated`, `hooks-patch`, `meson`, or `split`; `FIXTURE=all` is the
+default, and any other value is rejected before execution. The selector also
+works with `make bootstrap-fixtures-offline` when the package store has already
+been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
-bundle reproduction succeeded. `make fixtures-ci` runs both lanes and always
-requires execution.
+bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
+selection, runs all nine, and always requires execution.
 
 Execution requires Linux user and mount namespaces. For an unprivileged caller,
 the current mapper specifically requires `/usr/bin/newgidmap` and at least one
