@@ -19,6 +19,7 @@ use std::{
 };
 
 const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+const POSIX_DEFAULT_ACL_XATTR: &CStr = c"system.posix_acl_default";
 const MAX_DECIMAL_PID_BYTES: usize = 16;
 const MAX_THREAD_SELF_BYTES: usize = MAX_DECIMAL_PID_BYTES * 2 + 6;
 
@@ -121,6 +122,44 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
     let post_alias = open_descriptor_alias(&descriptors, &descriptor)?;
     require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
     Ok(())
+}
+
+/// Reject an inheritable POSIX default ACL on an authenticated readable
+/// directory descriptor.
+///
+/// Access-ACL write authority is represented by the group-class mode mask,
+/// but a default ACL is not. Admitting one would let later children inherit
+/// authority that an otherwise-safe directory mode does not reveal.
+pub(crate) fn require_no_default_acl(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    loop {
+        // SAFETY: `file` and the static xattr name remain live. A null value
+        // with size zero is the documented existence/size query and does not
+        // copy attribute bytes into userspace.
+        let result = unsafe {
+            nix::libc::fgetxattr(
+                file.as_raw_fd(),
+                POSIX_DEFAULT_ACL_XATTR.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if result >= 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "capability directory carries an inheritable POSIX default ACL: {}",
+                    path.display()
+                ),
+            ));
+        }
+
+        let source = io::Error::last_os_error();
+        match source.raw_os_error() {
+            Some(nix::libc::EINTR) => {}
+            Some(nix::libc::ENODATA) | Some(nix::libc::EOPNOTSUPP) => return Ok(()),
+            _ => return Err(source),
+        }
+    }
 }
 
 /// Pin and normalize one freshly-created directory without chmodding its

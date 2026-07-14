@@ -16,17 +16,20 @@ pub mod render;
 /// to Cast's system-metadata namespace.
 ///
 /// Stone layout targets omit the leading `/usr/`. Packages must never own the
-/// state marker or the permanent tree-identity marker, nor anything beneath
-/// either marker if a future representation turns one into a directory. This
-/// predicate deliberately reserves only those exact first components; similar
-/// package names remain available.
+/// state marker, its atomic-publication temporary, or the permanent
+/// tree-identity marker, nor anything beneath either marker if a future
+/// representation turns one into a directory. This predicate deliberately
+/// reserves only those exact first components; similar package names remain
+/// available.
 pub fn is_reserved_usr_layout_target(target: &str) -> bool {
-    [".cast-tree-id", ".stateID"].into_iter().any(|reserved| {
-        target == reserved
-            || target
-                .strip_prefix(reserved)
-                .is_some_and(|remainder| remainder.starts_with('/'))
-    })
+    [".cast-state-id.tmp", ".cast-tree-id", ".stateID"]
+        .into_iter()
+        .any(|reserved| {
+            target == reserved
+                || target
+                    .strip_prefix(reserved)
+                    .is_some_and(|remainder| remainder.starts_with('/'))
+        })
 }
 
 /// Unique ID of a [`Package`]
@@ -191,6 +194,8 @@ mod tests {
     #[test]
     fn system_metadata_reservation_is_exact_and_descendant_aware() {
         for target in [
+            ".cast-state-id.tmp",
+            ".cast-state-id.tmp/child",
             ".cast-tree-id",
             ".cast-tree-id/child",
             ".cast-tree-id/nested/child",
@@ -202,6 +207,8 @@ mod tests {
         }
 
         for target in [
+            ".cast-state-id.tmp-old",
+            ".cast-state-id.tmp.old/child",
             ".cast-tree",
             ".cast-tree-id-old",
             ".cast-tree-id.old/child",

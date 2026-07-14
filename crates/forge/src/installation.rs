@@ -25,7 +25,7 @@ use thiserror::Error;
 use tui::Styled;
 
 use crate::{
-    linux_fs::chmod_path_descriptor,
+    linux_fs::{chmod_path_descriptor, require_no_default_acl},
     state,
     system_model::{self, LoadedSystemModel},
 };
@@ -514,7 +514,6 @@ const CAST_DIRECTORY_NAME: &CStr = c".cast";
 const LOCKFILE_NAME: &CStr = c".cast-lockfile";
 const CACHEDIR_TAG_MODE: u32 = 0o644;
 const CACHEDIR_TAG_TEMPORARY_MODE: u32 = 0o600;
-const POSIX_DEFAULT_ACL_XATTR: &CStr = c"system.posix_acl_default";
 const CACHEDIR_TAG_NAME: &CStr = c"CACHEDIR.TAG";
 const CACHEDIR_TAG_TEMPORARY_NAME: &CStr = c".CACHEDIR.TAG.cast-tmp";
 const CACHEDIR_TAG_CONTENTS: &[u8] = br#"Signature: 8a477f597d28d172789f06886806bc55
@@ -725,38 +724,6 @@ fn require_controlled_directory_metadata(
         ));
     }
     Ok(())
-}
-
-fn require_no_default_acl(file: &std::fs::File, path: &Path) -> io::Result<()> {
-    loop {
-        // SAFETY: `file` and the static xattr name remain live. A null value
-        // with size zero is the documented existence/size query and does not
-        // copy attribute bytes into userspace.
-        let result = unsafe {
-            nix::libc::fgetxattr(
-                file.as_raw_fd(),
-                POSIX_DEFAULT_ACL_XATTR.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if result >= 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "capability directory carries an inheritable POSIX default ACL: {}",
-                    path.display()
-                ),
-            ));
-        }
-
-        let source = io::Error::last_os_error();
-        match source.raw_os_error() {
-            Some(nix::libc::EINTR) => {}
-            Some(nix::libc::ENODATA) | Some(nix::libc::EOPNOTSUPP) => return Ok(()),
-            _ => return Err(source),
-        }
-    }
 }
 
 fn require_same_directory(first: &std::fs::File, second: &std::fs::File, path: &Path) -> io::Result<()> {
@@ -1427,7 +1394,7 @@ mod tests {
         let result = unsafe {
             nix::libc::fsetxattr(
                 directory.as_raw_fd(),
-                POSIX_DEFAULT_ACL_XATTR.as_ptr(),
+                c"system.posix_acl_default".as_ptr(),
                 ACL.as_ptr().cast(),
                 ACL.len(),
                 0,
