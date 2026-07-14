@@ -12,6 +12,11 @@
 //! crate's future `clone3(CLONE_INTO_CGROUP)` integration, and tears the leaf
 //! down without following symlinks. Mason must later arrange the delegation;
 //! the container crate must place the child atomically before releasing it.
+//! systemd may initially leave the delegated root's
+//! `cgroup.subtree_control` empty. Cast authenticates the complete
+//! supervisor-only topology first, enables only its missing `cpu`, `memory`,
+//! and `pids` controllers through the pinned descriptor, and requires an exact
+//! effective-set readback before the root capability can escape `open`.
 //!
 //! Root authority is linear. [`DelegatedCgroupRoot::create_leaf`] consumes the
 //! authenticated root and moves its sole descriptor into either the live leaf
@@ -482,6 +487,29 @@ struct DelegationAuthority {
 }
 
 impl DelegationAuthority {
+    /// Authenticate the complete supervisor-only topology without requiring
+    /// the delegated controllers to have been enabled yet.
+    ///
+    /// A systemd `Delegate=` + `DelegateSubgroup=` unit may leave every
+    /// controller disabled in the delegated root. This probe is therefore
+    /// used only during initial acquisition, before Cast performs its one
+    /// idempotent mutation. It must remain otherwise identical to steady-state
+    /// baseline probe so controller activation can never precede topology
+    /// authentication.
+    fn probe_pre_enable_baseline(&self) -> Result<BTreeSet<String>> {
+        match &self.topology {
+            DelegationTopology::Systemd(supervisor) => {
+                let enabled = probe_root_authority_pre_enable(&self.directory, &self.label)?;
+                require_descendant_topology(&self.directory, &self.label, 1, false)?;
+                probe_supervisor(&self.directory, &self.label, supervisor)?;
+                require_descendant_topology(&self.directory, &self.label, 1, false)?;
+                Ok(enabled)
+            }
+            #[cfg(test)]
+            DelegationTopology::Simulated => Ok(BTreeSet::new()),
+        }
+    }
+
     fn probe_baseline(&self) -> Result<()> {
         match &self.topology {
             DelegationTopology::Systemd(supervisor) => {
@@ -597,15 +625,26 @@ impl DelegatedCgroupRoot {
         require_directory(&directory, &label)?;
         require_cgroup2(&directory, &label)?;
 
-        probe_root_authority(&directory, &label)?;
+        // A correct systemd `Delegate=` + `DelegateSubgroup=` unit may start
+        // with an empty `cgroup.subtree_control`. Authenticate the root and
+        // exact supervisor topology before Cast enables anything in it.
+        probe_root_authority_pre_enable(&directory, &label)?;
+        require_descendant_topology(&directory, &label, 1, false)?;
         let supervisor = capture_supervisor(&directory, &label)?;
-        let root = Self {
-            authority: DelegationAuthority {
-                directory,
-                label,
-                topology: DelegationTopology::Systemd(supervisor),
-            },
+        require_descendant_topology(&directory, &label, 1, false)?;
+        let authority = DelegationAuthority {
+            directory,
+            label,
+            topology: DelegationTopology::Systemd(supervisor),
         };
+
+        // Repeat the complete pre-mutation authentication through the stored
+        // identity witness. Only the exact missing required controllers are
+        // then enabled through the pinned root descriptor. A subsequent
+        // steady-state probe verifies both effective controls and topology.
+        let enabled = authority.probe_pre_enable_baseline()?;
+        enable_required_controllers(&authority.directory, &authority.label, &enabled)?;
+        let root = Self { authority };
         root.probe()?;
         Ok(root)
     }
@@ -1408,6 +1447,15 @@ fn capture_supervisor(root: &OwnedFd, root_label: &Path) -> Result<SupervisorAut
 }
 
 fn probe_root_authority(directory: &OwnedFd, label: &Path) -> Result<()> {
+    let enabled = probe_root_authority_pre_enable(directory, label)?;
+    require_controllers(&enabled, &label.join("cgroup.subtree_control"))
+}
+
+/// Authenticate every delegated-root invariant except the initially-empty
+/// enabled-controller set, returning that set to the one-time activation
+/// path. No caller may mutate `cgroup.subtree_control` until the surrounding
+/// supervisor topology has also been authenticated.
+fn probe_root_authority_pre_enable(directory: &OwnedFd, label: &Path) -> Result<BTreeSet<String>> {
     require_directory(directory, label)?;
     require_cgroup2(directory, label)?;
     // Recheck owner/mode and reassert the same open-file-description lock on
@@ -1418,7 +1466,6 @@ fn probe_root_authority(directory: &OwnedFd, label: &Path) -> Result<()> {
     let available = read_word_set(directory, c"cgroup.controllers", label)?;
     require_controllers(&available, &label.join("cgroup.controllers"))?;
     let enabled = read_word_set(directory, c"cgroup.subtree_control", label)?;
-    require_controllers(&enabled, &label.join("cgroup.subtree_control"))?;
 
     let members = read_pid_list(directory, c"cgroup.procs", label)?;
     if let Some(pid) = members.first() {
@@ -1439,7 +1486,8 @@ fn probe_root_authority(directory: &OwnedFd, label: &Path) -> Result<()> {
         c"cgroup.subtree_control",
         label,
     )?);
-    require_populated_unfrozen_delegation(read_events(directory, label)?, &label.join("cgroup.events"))
+    require_populated_unfrozen_delegation(read_events(directory, label)?, &label.join("cgroup.events"))?;
+    Ok(enabled)
 }
 
 fn probe_supervisor(root: &OwnedFd, root_label: &Path, expected: &SupervisorAuthority) -> Result<()> {
@@ -1736,6 +1784,70 @@ fn require_controllers(controllers: &BTreeSet<String>, path: &Path) -> Result<()
     }
 }
 
+fn missing_required_controllers(enabled: &BTreeSet<String>) -> Vec<&'static str> {
+    REQUIRED_CONTROLLERS
+        .iter()
+        .copied()
+        .filter(|controller| !enabled.contains(*controller))
+        .collect()
+}
+
+fn controller_enable_request(enabled: &BTreeSet<String>) -> Option<String> {
+    let missing = missing_required_controllers(enabled);
+    (!missing.is_empty()).then(|| {
+        missing
+            .into_iter()
+            .map(|controller| format!("+{controller}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
+}
+
+fn canonical_controller_set(controllers: &BTreeSet<String>) -> String {
+    controllers.iter().map(String::as_str).collect::<Vec<_>>().join(" ")
+}
+
+fn require_exact_controller_set(found: &BTreeSet<String>, expected: &BTreeSet<String>, path: &Path) -> Result<()> {
+    if found == expected {
+        Ok(())
+    } else {
+        Err(CgroupError::ControlVerification {
+            path: path.to_owned(),
+            expected: canonical_controller_set(expected),
+            found: canonical_controller_set(found),
+        })
+    }
+}
+
+/// Enable only the required controllers absent from the authenticated
+/// pre-mutation set, then require an exact effective-set readback. Existing
+/// delegated controllers are preserved, but an unexpected controller change
+/// during the mutation fails closed rather than being silently accepted.
+fn enable_required_controllers_with(
+    enabled: &BTreeSet<String>,
+    path: &Path,
+    write: &mut dyn FnMut(&[u8]) -> Result<()>,
+    readback: &mut dyn FnMut() -> Result<BTreeSet<String>>,
+) -> Result<()> {
+    let mut expected = enabled.clone();
+    expected.extend(missing_required_controllers(enabled).into_iter().map(str::to_owned));
+    if let Some(request) = controller_enable_request(enabled) {
+        write(request.as_bytes())?;
+    }
+    let found = readback()?;
+    require_exact_controller_set(&found, &expected, path)
+}
+
+fn enable_required_controllers(directory: &OwnedFd, label: &Path, enabled: &BTreeSet<String>) -> Result<()> {
+    let path = label.join("cgroup.subtree_control");
+    enable_required_controllers_with(
+        enabled,
+        &path,
+        &mut |request| write_control(directory, c"cgroup.subtree_control", request, label),
+        &mut || read_word_set(directory, c"cgroup.subtree_control", label),
+    )
+}
+
 fn require_empty_unfrozen_delegation(events: CgroupEvents, path: &Path) -> Result<()> {
     if events.frozen() {
         Err(CgroupError::DelegationFrozen { path: path.to_owned() })
@@ -1935,26 +2047,37 @@ fn write_control(directory: &OwnedFd, name: &CStr, value: &[u8], label: &Path) -
         libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_TRUNC,
         label,
     )?;
+    write_exact_control_value(&path, value, &mut |bytes| {
+        // SAFETY: descriptor and bytes remain live for this single write.
+        let written = unsafe { libc::write(descriptor.as_raw_fd(), bytes.as_ptr().cast(), bytes.len()) };
+        if written == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            usize::try_from(written).map_err(|_| io::Error::other("write returned an invalid length"))
+        }
+    })
+}
+
+fn write_exact_control_value(
+    path: &Path,
+    value: &[u8],
+    write: &mut dyn FnMut(&[u8]) -> io::Result<usize>,
+) -> Result<()> {
     let mut retries = 0;
     loop {
-        // SAFETY: descriptor and value remain live for this single write.
-        let written = unsafe { libc::write(descriptor.as_raw_fd(), value.as_ptr().cast(), value.len()) };
-        if written == -1 {
-            let source = io::Error::last_os_error();
-            if source.kind() == io::ErrorKind::Interrupted && retries < MAX_WRITE_EINTR_RETRIES {
-                retries += 1;
-                continue;
+        let written = match write(value) {
+            Ok(written) => written,
+            Err(source) => {
+                if source.kind() == io::ErrorKind::Interrupted && retries < MAX_WRITE_EINTR_RETRIES {
+                    retries += 1;
+                    continue;
+                }
+                return Err(descriptor_error("write cgroup control", path, source));
             }
-            return Err(descriptor_error("write cgroup control", &path, source));
-        }
-        let written = usize::try_from(written).map_err(|_| CgroupError::ShortControlWrite {
-            path: path.clone(),
-            expected: value.len(),
-            written: 0,
-        })?;
+        };
         if written != value.len() {
             return Err(CgroupError::ShortControlWrite {
-                path,
+                path: path.to_owned(),
                 expected: value.len(),
                 written,
             });
@@ -2435,6 +2558,109 @@ mod tests {
                 }) if expected_descendants == expected && found == descendants && dying_descendants == dying
             ));
         }
+    }
+
+    #[test]
+    fn required_controller_sets_accept_exact_n_and_n_plus_one() {
+        let exact = ["cpu", "memory", "pids"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let plus_one = ["cpu", "io", "memory", "pids"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let missing_one = ["cpu", "pids"].into_iter().map(str::to_owned).collect::<BTreeSet<_>>();
+        let path = Path::new("cgroup.controllers");
+
+        require_controllers(&exact, path).unwrap();
+        require_controllers(&plus_one, path).unwrap();
+        assert_eq!(controller_enable_request(&exact), None);
+        assert_eq!(controller_enable_request(&plus_one), None);
+        assert!(matches!(
+            require_controllers(&missing_one, path),
+            Err(CgroupError::MissingControllers { missing, .. }) if missing == "memory"
+        ));
+    }
+
+    #[test]
+    fn controller_enable_requests_are_canonical_and_only_name_missing_requirements() {
+        for (enabled, expected) in [
+            (&[][..], Some("+cpu +memory +pids")),
+            (&["cpu"][..], Some("+memory +pids")),
+            (&["memory", "pids"][..], Some("+cpu")),
+            (&["cpu", "memory", "pids"][..], None),
+            (&["io"][..], Some("+cpu +memory +pids")),
+        ] {
+            let enabled = enabled.iter().copied().map(str::to_owned).collect::<BTreeSet<_>>();
+            assert_eq!(controller_enable_request(&enabled).as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn already_enabled_controller_set_performs_no_write_and_is_still_verified() {
+        let enabled = ["cpu", "memory", "pids"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let mut writes = 0;
+        let mut readbacks = 0;
+
+        enable_required_controllers_with(
+            &enabled,
+            Path::new("cgroup.subtree_control"),
+            &mut |_| {
+                writes += 1;
+                Ok(())
+            },
+            &mut || {
+                readbacks += 1;
+                Ok(enabled.clone())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(writes, 0);
+        assert_eq!(readbacks, 1);
+    }
+
+    #[test]
+    fn controller_enablement_fails_closed_on_short_write_or_readback_mismatch() {
+        let path = Path::new("cgroup.subtree_control");
+        let request = b"+cpu +memory +pids";
+        assert!(matches!(
+            write_exact_control_value(path, request, &mut |_| Ok(request.len() - 1)),
+            Err(CgroupError::ShortControlWrite {
+                expected,
+                written,
+                ..
+            }) if expected == request.len() && written == request.len() - 1
+        ));
+
+        let enabled = BTreeSet::new();
+        let mut written = Vec::new();
+        let readback = ["cpu", "memory"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let result = enable_required_controllers_with(
+            &enabled,
+            path,
+            &mut |value| {
+                written.extend_from_slice(value);
+                Ok(())
+            },
+            &mut || Ok(readback.clone()),
+        );
+        assert_eq!(written, request);
+        assert!(matches!(
+            result,
+            Err(CgroupError::ControlVerification {
+                expected,
+                found,
+                ..
+            }) if expected == "cpu memory pids" && found == "cpu memory"
+        ));
     }
 
     #[test]
