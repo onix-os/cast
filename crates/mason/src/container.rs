@@ -19,7 +19,7 @@ use std::{
 
 use container::{
     Container, DevPolicy, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy,
-    TmpPolicy,
+    TmpPolicy, TmpfsLimits,
 };
 use stone_recipe::derivation::{
     BuilderLayout, DerivationPlan, DevFilesystem, ExecutionCredentials, FilesystemPolicy, NetworkMode, SysFilesystem,
@@ -46,6 +46,12 @@ const FROZEN_CGROUP_MEMORY_GIB: u64 = 32;
 const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const FROZEN_CGROUP_SWAP_MAX: u64 = 0;
 const FROZEN_CGROUP_CPU_PERIOD_MICROS: u64 = 100_000;
+const FROZEN_TMPFS_SIZE_BYTES: u64 = 16 * BYTES_PER_GIB;
+const FROZEN_TMPFS_INODES: u64 = 1_048_576;
+const FROZEN_TMPFS_LIMITS: TmpfsLimits = match TmpfsLimits::new(FROZEN_TMPFS_SIZE_BYTES, FROZEN_TMPFS_INODES) {
+    Ok(limits) => limits,
+    Err(_) => panic!("frozen tmpfs limits are non-zero"),
+};
 
 pub fn exec<E>(paths: &Paths, networking: bool, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
 where
@@ -262,7 +268,7 @@ fn frozen_pseudo_filesystems(filesystems: FilesystemPolicy) -> PseudoFilesystemP
     PseudoFilesystemPolicy {
         proc: ProcPolicy::None,
         tmp: match filesystems.tmp {
-            TmpFilesystem::Empty => TmpPolicy::Empty,
+            TmpFilesystem::Empty => TmpPolicy::Bounded(FROZEN_TMPFS_LIMITS),
         },
         sys: match filesystems.sys {
             SysFilesystem::None => SysPolicy::None,
@@ -1362,7 +1368,9 @@ mod tests {
 
         let mapped = frozen_pseudo_filesystems(frozen);
         assert_eq!(mapped.proc, ProcPolicy::None);
-        assert_eq!(mapped.tmp, TmpPolicy::Empty);
+        assert_eq!(mapped.tmp, TmpPolicy::Bounded(FROZEN_TMPFS_LIMITS));
+        assert_eq!(FROZEN_TMPFS_LIMITS.size_bytes(), 16 * BYTES_PER_GIB);
+        assert_eq!(FROZEN_TMPFS_LIMITS.inodes(), 1_048_576);
         assert_eq!(mapped.sys, SysPolicy::None);
         assert_eq!(mapped.dev, DevPolicy::None);
         assert_ne!(mapped, PseudoFilesystemPolicy::default());
@@ -1374,7 +1382,7 @@ mod tests {
         let mapped = frozen_pseudo_filesystems(FilesystemPolicy::default());
 
         assert_eq!(mapped.proc, ProcPolicy::None);
-        assert_eq!(mapped.tmp, TmpPolicy::Empty);
+        assert_eq!(mapped.tmp, TmpPolicy::Bounded(FROZEN_TMPFS_LIMITS));
         assert_eq!(mapped.sys, SysPolicy::None);
         assert_eq!(mapped.dev, DevPolicy::Minimal);
         assert_eq!(::container::MINIMAL_DEV_NODES, ["null", "zero", "full"]);

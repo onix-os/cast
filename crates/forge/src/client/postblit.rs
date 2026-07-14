@@ -18,13 +18,33 @@ use std::{
 
 use crate::Installation;
 use config::{DecodedGluon, GluonCodec, GluonCodecError};
-use container::Container;
+use container::{
+    Container, DevPolicy, ProcPolicy, PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy, TmpPolicy, TmpfsLimits,
+};
 use gluon_config::{Evaluator, Source};
 use itertools::Itertools;
 use thiserror::Error;
 use triggers::format::{CompiledHandler, Handler, Trigger};
 
 use super::PendingFile;
+
+/// Transaction triggers may inspect process state and use the conventional
+/// null devices, but they do not need the host device or sysfs trees. Keep the
+/// scratch directory private to each container invocation.
+const TRANSACTION_TMPFS_SIZE_BYTES: u64 = 256 * 1024 * 1024;
+const TRANSACTION_TMPFS_INODES: u64 = 65_536;
+const TRANSACTION_TMPFS_LIMITS: TmpfsLimits =
+    match TmpfsLimits::new(TRANSACTION_TMPFS_SIZE_BYTES, TRANSACTION_TMPFS_INODES) {
+        Ok(limits) => limits,
+        Err(_) => panic!("transaction tmpfs limits are non-zero"),
+    };
+const TRANSACTION_PSEUDO_FILESYSTEMS: PseudoFilesystemPolicy = PseudoFilesystemPolicy {
+    proc: ProcPolicy::ReadOnly,
+    tmp: TmpPolicy::Bounded(TRANSACTION_TMPFS_LIMITS),
+    sys: SysPolicy::None,
+    dev: DevPolicy::Minimal,
+};
+const TRANSACTION_ROOT_FILESYSTEM: RootFilesystemPolicy = RootFilesystemPolicy::ReadOnly;
 
 /// Transaction trigger wrapper
 /// These are loaded from `/usr/share/cast/triggers/tx.d/*.glu`
@@ -218,6 +238,8 @@ impl TriggerRunner<'_> {
                 // TODO: Add caching support via /var/
                 let isolation = Container::new(install.isolation_dir())
                     .networking(false)
+                    .root_filesystem(TRANSACTION_ROOT_FILESYSTEM)
+                    .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS)
                     .bind_ro(self.scope.host_path("etc"), "/etc")
                     .bind_rw(self.scope.guest_path("usr"), "/usr")
                     .work_dir("/");
@@ -463,6 +485,22 @@ mod tests {
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
     use super::*;
+
+    #[test]
+    fn transaction_trigger_sandbox_is_read_only_with_minimal_kernel_views() {
+        assert_eq!(TRANSACTION_ROOT_FILESYSTEM, RootFilesystemPolicy::ReadOnly);
+        assert_eq!(TRANSACTION_TMPFS_LIMITS.size_bytes(), 256 * 1024 * 1024);
+        assert_eq!(TRANSACTION_TMPFS_LIMITS.inodes(), 65_536);
+        assert_eq!(
+            TRANSACTION_PSEUDO_FILESYSTEMS,
+            PseudoFilesystemPolicy {
+                proc: ProcPolicy::ReadOnly,
+                tmp: TmpPolicy::Bounded(TRANSACTION_TMPFS_LIMITS),
+                sys: SysPolicy::None,
+                dev: DevPolicy::Minimal,
+            }
+        );
+    }
 
     #[test]
     fn packaged_transaction_triggers_load_from_gluon_fragments() {

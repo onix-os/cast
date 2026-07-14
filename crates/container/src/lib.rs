@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::io::{self, Read as _, Write as _};
+use std::num::NonZeroU64;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::io::RawFd;
@@ -84,6 +85,65 @@ pub enum TmpPolicy {
     /// Mount a fresh, empty tmpfs at `/tmp`.
     #[default]
     Empty,
+    /// Mount a fresh tmpfs with exact finite byte and inode ceilings.
+    ///
+    /// Unlike [`TmpPolicy::Empty`], this policy never falls back to an
+    /// unbounded mount if either option is unsupported by the host kernel.
+    Bounded(TmpfsLimits),
+}
+
+/// Exact finite resource ceilings for a tmpfs mounted at `/tmp`.
+///
+/// Both values are non-zero by construction. The byte value is passed to the
+/// kernel as `size`, and the inode value as `nr_inodes`, without scaling or
+/// rounding in userspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TmpfsLimits {
+    size_bytes: NonZeroU64,
+    inodes: NonZeroU64,
+}
+
+impl TmpfsLimits {
+    pub const fn new(size_bytes: u64, inodes: u64) -> Result<Self, TmpfsLimitsError> {
+        let Some(size_bytes) = NonZeroU64::new(size_bytes) else {
+            return Err(TmpfsLimitsError::ZeroCeiling { field: "size bytes" });
+        };
+        let Some(inodes) = NonZeroU64::new(inodes) else {
+            return Err(TmpfsLimitsError::ZeroCeiling { field: "inodes" });
+        };
+        Ok(Self { size_bytes, inodes })
+    }
+
+    pub const fn size_bytes(self) -> u64 {
+        self.size_bytes.get()
+    }
+
+    pub const fn inodes(self) -> u64 {
+        self.inodes.get()
+    }
+
+    fn mount_options(self) -> String {
+        format!("size={},nr_inodes={}", self.size_bytes, self.inodes)
+    }
+
+    fn fsconfig_options(self) -> [(&'static std::ffi::CStr, std::ffi::CString); 2] {
+        [
+            (
+                c"size",
+                std::ffi::CString::new(self.size_bytes.to_string()).expect("u64 decimal contains no NUL"),
+            ),
+            (
+                c"nr_inodes",
+                std::ffi::CString::new(self.inodes.to_string()).expect("u64 decimal contains no NUL"),
+            ),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Snafu)]
+pub enum TmpfsLimitsError {
+    #[snafu(display("tmpfs {field} ceiling must be non-zero"))]
+    ZeroCeiling { field: &'static str },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1876,16 +1936,22 @@ fn pivot_mounted_root_with_sources(
     const OLD_PATH: &str = "old_root";
 
     let old_root = root.join(OLD_PATH);
+    let pseudo_mounts = pseudo_mount_decisions(pseudo_filesystems);
 
-    mount_binds(root, binds, sources)?;
-
+    // A read-only root cannot acquire missing mountpoint directories after
+    // its recursive mount policy is applied. Prepare every setup-owned target
+    // in the backing root first; pseudo-filesystem mounts are attached only
+    // after pivot, so payload-visible contents still come exclusively from
+    // the selected policy.
     ensure_directory(&old_root)?;
+    prepare_pseudo_mount_targets(root, &pseudo_mounts)?;
+    mount_binds(root, binds, sources)?;
     apply_root_mount_policy(root, binds, root_filesystem)?;
     pivot_root(root, &old_root).context(PivotRootSnafu)?;
 
     set_current_dir("/")?;
 
-    for decision in pseudo_mount_decisions(pseudo_filesystems) {
+    for decision in pseudo_mounts {
         apply_pseudo_mount(decision, OLD_PATH)?;
     }
 
@@ -1896,6 +1962,19 @@ fn pivot_mounted_root_with_sources(
 
     umask(Mode::S_IWGRP | Mode::S_IWOTH);
 
+    Ok(())
+}
+
+fn prepare_pseudo_mount_targets(root: &Path, decisions: &[PseudoMountDecision]) -> Result<(), ContainerError> {
+    for decision in decisions {
+        let target = match decision {
+            PseudoMountDecision::Proc { .. } => "proc",
+            PseudoMountDecision::Tmp { .. } => "tmp",
+            PseudoMountDecision::HostSys { .. } => "sys",
+            PseudoMountDecision::HostDev { .. } | PseudoMountDecision::MinimalDevReadOnly => "dev",
+        };
+        ensure_directory(root.join(target))?;
+    }
     Ok(())
 }
 
@@ -1942,10 +2021,10 @@ fn root_mount_decisions(root: &Path, binds: &[Bind], policy: RootFilesystemPolic
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PseudoMountDecision {
     Proc { read_only: bool },
-    EmptyTmp,
+    Tmp { limits: Option<TmpfsLimits> },
     HostSys { read_only: bool },
     HostDev { read_only: bool },
-    MinimalDev,
+    MinimalDevReadOnly,
 }
 
 fn pseudo_mount_decisions(policy: PseudoFilesystemPolicy) -> Vec<PseudoMountDecision> {
@@ -1955,8 +2034,10 @@ fn pseudo_mount_decisions(policy: PseudoFilesystemPolicy) -> Vec<PseudoMountDeci
         ProcPolicy::ReadOnly => decisions.push(PseudoMountDecision::Proc { read_only: true }),
         ProcPolicy::ReadWrite => decisions.push(PseudoMountDecision::Proc { read_only: false }),
     }
-    if matches!(policy.tmp, TmpPolicy::Empty) {
-        decisions.push(PseudoMountDecision::EmptyTmp);
+    match policy.tmp {
+        TmpPolicy::Disabled => {}
+        TmpPolicy::Empty => decisions.push(PseudoMountDecision::Tmp { limits: None }),
+        TmpPolicy::Bounded(limits) => decisions.push(PseudoMountDecision::Tmp { limits: Some(limits) }),
     }
     match policy.sys {
         SysPolicy::None => {}
@@ -1967,7 +2048,7 @@ fn pseudo_mount_decisions(policy: PseudoFilesystemPolicy) -> Vec<PseudoMountDeci
         DevPolicy::None => {}
         DevPolicy::HostReadOnly => decisions.push(PseudoMountDecision::HostDev { read_only: true }),
         DevPolicy::HostReadWrite => decisions.push(PseudoMountDecision::HostDev { read_only: false }),
-        DevPolicy::Minimal => decisions.push(PseudoMountDecision::MinimalDev),
+        DevPolicy::Minimal => decisions.push(PseudoMountDecision::MinimalDevReadOnly),
     }
     decisions
 }
@@ -1984,15 +2065,34 @@ fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) -> Result<(
                 MsFlags::empty()
             },
         ),
-        PseudoMountDecision::EmptyTmp => add_mount(
-            Some(Path::new("tmpfs")),
-            Path::new("tmp"),
-            Some("tmpfs"),
-            MsFlags::empty(),
-        ),
+        PseudoMountDecision::Tmp { limits } => {
+            let options = limits.map(TmpfsLimits::mount_options);
+            add_mount_with_data(
+                Some(Path::new("tmpfs")),
+                Path::new("tmp"),
+                Some("tmpfs"),
+                MsFlags::empty(),
+                options.as_deref(),
+            )?;
+            if let Some(limits) = limits {
+                let target = Path::new("tmp");
+                let descriptor = openat_anchored(
+                    AT_FDCWD,
+                    c"tmp",
+                    nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
+                    0,
+                )
+                .map_err(|source| ContainerError::InspectTmpfs {
+                    target: target.to_owned(),
+                    source,
+                })?;
+                verify_tmpfs_limits(descriptor.as_raw_fd(), target, limits)?;
+            }
+            Ok(())
+        }
         PseudoMountDecision::HostSys { read_only } => mount_host_tree(old_path, "sys", read_only),
         PseudoMountDecision::HostDev { read_only } => mount_host_tree(old_path, "dev", read_only),
-        PseudoMountDecision::MinimalDev => mount_minimal_dev(old_path),
+        PseudoMountDecision::MinimalDevReadOnly => mount_minimal_dev(old_path),
     }
 }
 
@@ -2001,11 +2101,11 @@ fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) -> Result<(
 fn prepare_anchored_pseudo_mount(decision: PseudoMountDecision) -> Result<PreparedAnchoredMount, ContainerError> {
     let (source_mount, target) = match decision {
         PseudoMountDecision::Proc { read_only } => {
-            let source = detached_filesystem_mount(c"proc", read_only, Path::new("proc"))?;
+            let source = detached_filesystem_mount(c"proc", read_only, Path::new("proc"), &[])?;
             (source, PathBuf::from("proc"))
         }
-        PseudoMountDecision::EmptyTmp => {
-            let source = detached_filesystem_mount(c"tmpfs", false, Path::new("tmp"))?;
+        PseudoMountDecision::Tmp { limits } => {
+            let source = detached_tmpfs_mount(limits, Path::new("tmp"))?;
             (source, PathBuf::from("tmp"))
         }
         PseudoMountDecision::HostSys { read_only } => {
@@ -2016,7 +2116,7 @@ fn prepare_anchored_pseudo_mount(decision: PseudoMountDecision) -> Result<Prepar
             let source = detached_host_mount(Path::new("/dev"), read_only)?;
             (source, PathBuf::from("dev"))
         }
-        PseudoMountDecision::MinimalDev => (prepare_anchored_minimal_dev()?, PathBuf::from("dev")),
+        PseudoMountDecision::MinimalDevReadOnly => (prepare_anchored_minimal_dev()?, PathBuf::from("dev")),
     };
     Ok(PreparedAnchoredMount {
         source_mount,
@@ -2029,8 +2129,10 @@ fn detached_filesystem_mount(
     filesystem: &std::ffi::CStr,
     read_only: bool,
     label: &Path,
+    parameters: &[(&std::ffi::CStr, &std::ffi::CStr)],
 ) -> Result<OwnedFd, ContainerError> {
     const FSOPEN_CLOEXEC: nix::libc::c_uint = 0x0000_0001;
+    const FSCONFIG_SET_STRING: nix::libc::c_uint = 1;
     const FSCONFIG_CMD_CREATE: nix::libc::c_uint = 6;
     const FSMOUNT_CLOEXEC: nix::libc::c_uint = 0x0000_0001;
 
@@ -2046,6 +2148,26 @@ fn detached_filesystem_mount(
         RawFd::try_from(context).map_err(|_| ContainerError::InvalidMountDescriptor { operation: "fsopen" })?;
     // SAFETY: successful fsopen returned a fresh owned descriptor.
     let context = unsafe { OwnedFd::from_raw_fd(context) };
+
+    for &(key, value) in parameters {
+        // SAFETY: key and value are both NUL-terminated strings and the live
+        // filesystem context borrows them only for this call.
+        let configured = unsafe {
+            syscall(
+                nix::libc::SYS_fsconfig,
+                context.as_raw_fd(),
+                FSCONFIG_SET_STRING,
+                key.as_ptr(),
+                value.as_ptr(),
+                0,
+            )
+        };
+        if configured == -1 {
+            return Err(Errno::last()).context(MountSnafu {
+                target: label.to_owned(),
+            });
+        }
+    }
 
     // SAFETY: CREATE accepts null key/value and borrows only the live context.
     let configured = unsafe {
@@ -2083,6 +2205,87 @@ fn detached_filesystem_mount(
     Ok(mount)
 }
 
+fn detached_tmpfs_mount(limits: Option<TmpfsLimits>, label: &Path) -> Result<OwnedFd, ContainerError> {
+    let mount = if let Some(limits) = limits {
+        let options = limits.fsconfig_options();
+        let parameters = [
+            (options[0].0, options[0].1.as_c_str()),
+            (options[1].0, options[1].1.as_c_str()),
+        ];
+        detached_filesystem_mount(c"tmpfs", false, label, &parameters)?
+    } else {
+        detached_filesystem_mount(c"tmpfs", false, label, &[])?
+    };
+    if let Some(limits) = limits {
+        verify_tmpfs_limits(mount.as_raw_fd(), label, limits)?;
+    }
+    Ok(mount)
+}
+
+const TMPFS_MAGIC: nix::libc::c_long = 0x0102_1994;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TmpfsLimitReadback {
+    filesystem: nix::libc::c_long,
+    block_size: nix::libc::c_long,
+    blocks: u64,
+    inodes: u64,
+}
+
+fn verify_tmpfs_limits(fd: RawFd, label: &Path, expected: TmpfsLimits) -> Result<(), ContainerError> {
+    // SAFETY: zero is valid initialization for statfs, fd is live, and the
+    // output remains exclusively borrowed for the syscall.
+    let mut observed: nix::libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::fstatfs(fd, &mut observed) } == -1 {
+        return Err(Errno::last()).context(MountSnafu {
+            target: label.to_owned(),
+        });
+    }
+    validate_tmpfs_limit_readback(
+        label,
+        expected,
+        TmpfsLimitReadback {
+            filesystem: observed.f_type,
+            block_size: observed.f_bsize,
+            blocks: observed.f_blocks,
+            inodes: observed.f_files,
+        },
+    )
+}
+
+fn validate_tmpfs_limit_readback(
+    label: &Path,
+    expected: TmpfsLimits,
+    observed: TmpfsLimitReadback,
+) -> Result<(), ContainerError> {
+    if observed.filesystem != TMPFS_MAGIC {
+        return Err(ContainerError::UnexpectedTmpfsFilesystem {
+            target: label.to_owned(),
+            filesystem: observed.filesystem,
+        });
+    }
+    let block_size = u64::try_from(observed.block_size).map_err(|_| ContainerError::InvalidTmpfsLimitReadback {
+        target: label.to_owned(),
+    })?;
+    let size_bytes =
+        block_size
+            .checked_mul(observed.blocks)
+            .ok_or_else(|| ContainerError::InvalidTmpfsLimitReadback {
+                target: label.to_owned(),
+            })?;
+    let inodes = observed.inodes;
+    if size_bytes != expected.size_bytes() || inodes != expected.inodes() {
+        return Err(ContainerError::TmpfsLimitsNormalized {
+            target: label.to_owned(),
+            expected_size_bytes: expected.size_bytes(),
+            observed_size_bytes: size_bytes,
+            expected_inodes: expected.inodes(),
+            observed_inodes: inodes,
+        });
+    }
+    Ok(())
+}
+
 fn detached_host_mount(source: &Path, read_only: bool) -> Result<OwnedFd, ContainerError> {
     // SAFETY: source remains live for the call and successful open_tree returns
     // a fresh detached recursive mount descriptor.
@@ -2108,7 +2311,7 @@ fn detached_host_mount(source: &Path, read_only: bool) -> Result<OwnedFd, Contai
 }
 
 fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
-    let dev_mount = detached_filesystem_mount(c"tmpfs", false, Path::new("dev"))?;
+    let dev_mount = detached_filesystem_mount(c"tmpfs", false, Path::new("dev"), &[])?;
     for &(device, expected_major, expected_minor) in MINIMAL_DEV_IDENTITIES {
         let name = std::ffi::CString::new(device).expect("fixed device names contain no NUL");
         let placeholder = openat_anchored(
@@ -2159,6 +2362,12 @@ fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
             target: PathBuf::from("dev").join(device),
         })?;
     }
+    // The tmpfs is setup scratch, not payload scratch. Seal the complete tree
+    // only after all three authenticated device mounts have been attached, so
+    // the payload cannot add, remove, or rename entries beneath `/dev`.
+    set_mount_access_fd(dev_mount.as_raw_fd(), true, true).with_context(|_| MountSnafu {
+        target: PathBuf::from("dev"),
+    })?;
     Ok(dev_mount)
 }
 
@@ -2215,6 +2424,7 @@ fn mount_minimal_dev(old_path: &str) -> Result<(), ContainerError> {
     for &(device, expected_major, expected_minor) in MINIMAL_DEV_IDENTITIES {
         bind_minimal_device(old_path, device, expected_major, expected_minor)?;
     }
+    set_mount_access(Path::new("dev"), true, true)?;
     Ok(())
 }
 
@@ -2685,16 +2895,19 @@ fn add_mount<T: AsRef<Path>>(
     fs_type: Option<&str>,
     flags: MsFlags,
 ) -> Result<(), ContainerError> {
+    add_mount_with_data(source, target, fs_type, flags, None)
+}
+
+fn add_mount_with_data<T: AsRef<Path>>(
+    source: Option<T>,
+    target: T,
+    fs_type: Option<&str>,
+    flags: MsFlags,
+    data: Option<&str>,
+) -> Result<(), ContainerError> {
     let target = target.as_ref();
     ensure_directory(target)?;
-    mount(
-        source.as_ref().map(AsRef::as_ref),
-        target,
-        fs_type,
-        flags,
-        Option::<&str>::None,
-    )
-    .context(MountSnafu {
+    mount(source.as_ref().map(AsRef::as_ref), target, fs_type, flags, data).context(MountSnafu {
         target: target.to_owned(),
     })?;
     Ok(())
@@ -3668,6 +3881,29 @@ enum ContainerError {
     },
     #[snafu(display("{operation} returned an invalid mount descriptor"))]
     InvalidMountDescriptor { operation: &'static str },
+    #[snafu(display("inspect tmpfs mount at {}", target.display()))]
+    InspectTmpfs { target: PathBuf, source: io::Error },
+    #[snafu(display(
+        "mount at {} has filesystem magic {filesystem:#x}, expected tmpfs",
+        target.display()
+    ))]
+    UnexpectedTmpfsFilesystem {
+        target: PathBuf,
+        filesystem: nix::libc::c_long,
+    },
+    #[snafu(display("tmpfs limit readback at {} overflowed its u64 representation", target.display()))]
+    InvalidTmpfsLimitReadback { target: PathBuf },
+    #[snafu(display(
+        "tmpfs at {} normalized declared limits: size {expected_size_bytes} -> {observed_size_bytes} bytes, inodes {expected_inodes} -> {observed_inodes}",
+        target.display()
+    ))]
+    TmpfsLimitsNormalized {
+        target: PathBuf,
+        expected_size_bytes: u64,
+        observed_size_bytes: u64,
+        expected_inodes: u64,
+        observed_inodes: u64,
+    },
     #[snafu(display("pivot_root"))]
     PivotRoot { source: nix::Error },
     #[snafu(display("unmount old root"))]
@@ -3686,7 +3922,7 @@ enum Message {
 #[cfg(test)]
 mod tests {
     use std::fmt;
-    use std::io::{self, Read as _};
+    use std::io::{self, Read as _, Write as _};
     use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
     use std::os::unix::process::ExitStatusExt as _;
@@ -3708,15 +3944,17 @@ mod tests {
         Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER,
         MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
         PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
-        RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TmpPolicy, capability_is_set, checked_prctl_value,
-        cleanup_pidfd_child, close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec,
-        format_error, namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target,
-        open_anchored_resolver_target, pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions,
+        RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback,
+        TmpfsLimits, TmpfsLimitsError, capability_is_set, checked_prctl_value, cleanup_pidfd_child,
+        close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, format_error,
+        namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
+        pin_anchored_bind_sources, prctl, prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions,
         read_capabilities, read_child_error, reopen_pinned_readonly, require_atomic_cgroup_bind_policy,
         require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
         send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
         supported_capability_numbers, validate_anchored_mount_topology, validate_minimal_device_source,
-        validate_payload_credentials, validate_resolver_target, wait_for_pidfd, wait_for_pidfd_reap,
+        validate_payload_credentials, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
+        wait_for_pidfd, wait_for_pidfd_reap,
     };
 
     fn open_path_directory(path: &Path) -> OwnedFd {
@@ -4147,11 +4385,183 @@ mod tests {
             pseudo_mount_decisions(PseudoFilesystemPolicy::default()),
             vec![
                 PseudoMountDecision::Proc { read_only: false },
-                PseudoMountDecision::EmptyTmp,
+                PseudoMountDecision::Tmp { limits: None },
                 PseudoMountDecision::HostSys { read_only: false },
                 PseudoMountDecision::HostDev { read_only: false },
             ]
         );
+    }
+
+    #[test]
+    fn bounded_tmpfs_limits_reject_each_zero_ceiling() {
+        assert!(matches!(
+            TmpfsLimits::new(0, 1),
+            Err(TmpfsLimitsError::ZeroCeiling { field: "size bytes" })
+        ));
+        assert!(matches!(
+            TmpfsLimits::new(1, 0),
+            Err(TmpfsLimitsError::ZeroCeiling { field: "inodes" })
+        ));
+        assert!(matches!(
+            TmpfsLimits::new(0, 0),
+            Err(TmpfsLimitsError::ZeroCeiling { field: "size bytes" })
+        ));
+    }
+
+    #[test]
+    fn bounded_tmpfs_emits_exact_mount_and_fsconfig_values() {
+        for (size_bytes, inodes) in [(4_096, 63), (4_097, 64), (u64::MAX, u64::MAX)] {
+            let limits = TmpfsLimits::new(size_bytes, inodes).unwrap();
+            assert_eq!(limits.size_bytes(), size_bytes);
+            assert_eq!(limits.inodes(), inodes);
+            assert_eq!(limits.mount_options(), format!("size={size_bytes},nr_inodes={inodes}"));
+            let options = limits.fsconfig_options();
+            assert_eq!(options[0].0, c"size");
+            assert_eq!(options[0].1.to_bytes(), size_bytes.to_string().as_bytes());
+            assert_eq!(options[1].0, c"nr_inodes");
+            assert_eq!(options[1].1.to_bytes(), inodes.to_string().as_bytes());
+            assert_eq!(
+                pseudo_mount_decisions(PseudoFilesystemPolicy {
+                    proc: ProcPolicy::None,
+                    tmp: TmpPolicy::Bounded(limits),
+                    sys: SysPolicy::None,
+                    dev: DevPolicy::None,
+                }),
+                vec![PseudoMountDecision::Tmp { limits: Some(limits) }]
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_tmpfs_verification_reports_fstatfs_failure() {
+        let label = Path::new("/diagnostic/tmp");
+        let limits = TmpfsLimits::new(4_096, 8).unwrap();
+        let error = verify_tmpfs_limits(-1, label, limits).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ContainerError::Mount { source, target }
+                if source == Errno::EBADF && target == label
+        ));
+    }
+
+    #[test]
+    fn bounded_tmpfs_readback_rejects_wrong_filesystem_magic() {
+        let label = Path::new("/diagnostic/tmp");
+        let limits = TmpfsLimits::new(4_096, 8).unwrap();
+        let error = validate_tmpfs_limit_readback(
+            label,
+            limits,
+            TmpfsLimitReadback {
+                filesystem: TMPFS_MAGIC + 1,
+                block_size: 4_096,
+                blocks: 1,
+                inodes: 8,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ContainerError::UnexpectedTmpfsFilesystem { target, filesystem }
+                if target == label && filesystem == TMPFS_MAGIC + 1
+        ));
+    }
+
+    #[test]
+    fn bounded_tmpfs_readback_rejects_representation_and_multiplication_overflow() {
+        let label = Path::new("/diagnostic/tmp");
+        let limits = TmpfsLimits::new(4_096, 8).unwrap();
+        for observed in [
+            TmpfsLimitReadback {
+                filesystem: TMPFS_MAGIC,
+                block_size: -1,
+                blocks: 1,
+                inodes: 8,
+            },
+            TmpfsLimitReadback {
+                filesystem: TMPFS_MAGIC,
+                block_size: nix::libc::c_long::MAX,
+                blocks: u64::MAX,
+                inodes: 8,
+            },
+        ] {
+            assert!(matches!(
+                validate_tmpfs_limit_readback(label, limits, observed),
+                Err(ContainerError::InvalidTmpfsLimitReadback { target }) if target == label
+            ));
+        }
+    }
+
+    #[test]
+    fn bounded_tmpfs_readback_reports_size_and_inode_normalization_exactly() {
+        let label = Path::new("/diagnostic/tmp");
+        let limits = TmpfsLimits::new(4_096, 8).unwrap();
+
+        for (observed, expected_error) in [
+            (
+                TmpfsLimitReadback {
+                    filesystem: TMPFS_MAGIC,
+                    block_size: 4_096,
+                    blocks: 2,
+                    inodes: 8,
+                },
+                (8_192, 8),
+            ),
+            (
+                TmpfsLimitReadback {
+                    filesystem: TMPFS_MAGIC,
+                    block_size: 4_096,
+                    blocks: 1,
+                    inodes: 9,
+                },
+                (4_096, 9),
+            ),
+        ] {
+            let error = validate_tmpfs_limit_readback(label, limits, observed).unwrap_err();
+            assert!(matches!(
+                error,
+                ContainerError::TmpfsLimitsNormalized {
+                    target,
+                    expected_size_bytes: 4_096,
+                    observed_size_bytes,
+                    expected_inodes: 8,
+                    observed_inodes,
+                } if target == label
+                    && observed_size_bytes == expected_error.0
+                    && observed_inodes == expected_error.1
+            ));
+        }
+
+        validate_tmpfs_limit_readback(
+            label,
+            limits,
+            TmpfsLimitReadback {
+                filesystem: TMPFS_MAGIC,
+                block_size: 4_096,
+                blocks: 1,
+                inodes: 8,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn pseudo_mount_targets_are_prepared_before_a_root_can_be_sealed() {
+        let root = tempfile::tempdir().unwrap();
+        let limits = TmpfsLimits::new(4_096, 8).unwrap();
+        let decisions = pseudo_mount_decisions(PseudoFilesystemPolicy {
+            proc: ProcPolicy::ReadOnly,
+            tmp: TmpPolicy::Bounded(limits),
+            sys: SysPolicy::HostReadOnly,
+            dev: DevPolicy::Minimal,
+        });
+
+        prepare_pseudo_mount_targets(root.path(), &decisions).unwrap();
+
+        for target in ["proc", "tmp", "sys", "dev"] {
+            assert!(root.path().join(target).is_dir(), "missing prepared /{target}");
+        }
     }
 
     #[test]
@@ -4236,7 +4646,7 @@ mod tests {
             vec![
                 PseudoMountDecision::Proc { read_only: true },
                 PseudoMountDecision::HostSys { read_only: true },
-                PseudoMountDecision::MinimalDev,
+                PseudoMountDecision::MinimalDevReadOnly,
             ]
         );
     }
@@ -4300,6 +4710,213 @@ mod tests {
         assert!(standard_descriptor_is_unsafe(nix::libc::S_IFREG, nix::libc::O_PATH));
         assert!(!standard_descriptor_is_unsafe(nix::libc::S_IFREG, nix::libc::O_RDONLY));
         assert!(!standard_descriptor_is_unsafe(nix::libc::S_IFIFO, nix::libc::O_WRONLY));
+    }
+
+    #[test]
+    fn activation_capability_skip_honors_the_exact_strict_override() {
+        assert!(activation_capability_skip_allowed(None));
+        assert!(activation_capability_skip_allowed(Some(std::ffi::OsStr::new("0"))));
+        assert!(activation_capability_skip_allowed(Some(std::ffi::OsStr::new("true"))));
+        assert!(!activation_capability_skip_allowed(Some(std::ffi::OsStr::new("1"))));
+    }
+
+    #[test]
+    fn bounded_tmpfs_on_a_read_only_root_enforces_exact_byte_and_inode_ceilings() {
+        let page_size = unsafe { nix::libc::sysconf(nix::libc::_SC_PAGESIZE) };
+        assert!(page_size > 0);
+        let size_bytes = u64::try_from(page_size).unwrap() * 3;
+        let inode_limit = 8;
+        let limits = TmpfsLimits::new(size_bytes, inode_limit).unwrap();
+        let root = tempfile::tempdir().unwrap();
+
+        // Deliberately leave /tmp absent: setup must prepare the mountpoint
+        // before recursively sealing this root read-only.
+        let result = Container::new(root.path())
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Bounded(limits),
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .run::<io::Error>(move || exercise_bounded_tmpfs(size_bytes, inode_limit));
+
+        match result {
+            Ok(()) => {
+                assert!(root.path().join("tmp").is_dir());
+                assert_eq!(std::fs::read_dir(root.path().join("tmp")).unwrap().count(), 0);
+            }
+            Err(error) => {
+                let classification = classify_bounded_tmpfs_activation_unavailable(&error, root.path());
+                if skip_activation_capability_denial("live bounded-tmpfs test", classification, &error) {
+                    return;
+                }
+                panic!("live bounded-tmpfs test failed: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn anchored_bounded_tmpfs_enforces_the_same_exact_ceilings() {
+        let page_size = unsafe { nix::libc::sysconf(nix::libc::_SC_PAGESIZE) };
+        assert!(page_size > 0);
+        let size_bytes = u64::try_from(page_size).unwrap() * 3;
+        let inode_limit = 8;
+        let limits = TmpfsLimits::new(size_bytes, inode_limit).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("tmp")).unwrap();
+        let anchor = open_path_directory(root.path());
+
+        let result = Container::new_anchored(root.path(), &anchor)
+            .unwrap()
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Bounded(limits),
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .run::<io::Error>(move || exercise_bounded_tmpfs(size_bytes, inode_limit));
+
+        match result {
+            Ok(()) => assert_eq!(std::fs::read_dir(root.path().join("tmp")).unwrap().count(), 0),
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, root.path())
+                    .or_else(|| classify_bounded_tmpfs_activation_unavailable(&error, root.path()));
+                if skip_activation_capability_denial("live anchored bounded-tmpfs test", classification, &error) {
+                    return;
+                }
+                panic!("live anchored bounded-tmpfs test failed: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn non_page_aligned_bounded_tmpfs_is_rejected_on_path_activation() {
+        let page_size = unsafe { nix::libc::sysconf(nix::libc::_SC_PAGESIZE) };
+        assert!(page_size > 0);
+        let page_size = u64::try_from(page_size).unwrap();
+        let requested_size = page_size + 1;
+        let inode_limit = 8;
+        let limits = TmpfsLimits::new(requested_size, inode_limit).unwrap();
+        let root = tempfile::tempdir().unwrap();
+
+        let result = Container::new(root.path())
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Bounded(limits),
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .run::<io::Error>(|| Ok(()));
+
+        assert_live_tmpfs_normalization_rejected(
+            result,
+            root.path(),
+            requested_size,
+            page_size * 2,
+            inode_limit,
+            false,
+            "live path tmpfs-normalization test",
+        );
+    }
+
+    #[test]
+    fn non_page_aligned_bounded_tmpfs_is_rejected_on_anchored_activation() {
+        let page_size = unsafe { nix::libc::sysconf(nix::libc::_SC_PAGESIZE) };
+        assert!(page_size > 0);
+        let page_size = u64::try_from(page_size).unwrap();
+        let requested_size = page_size + 1;
+        let inode_limit = 8;
+        let limits = TmpfsLimits::new(requested_size, inode_limit).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("tmp")).unwrap();
+        let anchor = open_path_directory(root.path());
+
+        let result = Container::new_anchored(root.path(), &anchor)
+            .unwrap()
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Bounded(limits),
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .run::<io::Error>(|| Ok(()));
+
+        assert_live_tmpfs_normalization_rejected(
+            result,
+            root.path(),
+            requested_size,
+            page_size * 2,
+            inode_limit,
+            true,
+            "live anchored tmpfs-normalization test",
+        );
+    }
+
+    #[test]
+    fn minimal_dev_is_read_only_and_exact_on_the_path_activation() {
+        let root = tempfile::tempdir().unwrap();
+        let result = Container::new(root.path())
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::Minimal,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .run::<io::Error>(exercise_read_only_minimal_dev);
+
+        match result {
+            Ok(()) => {
+                assert!(root.path().join("dev").is_dir());
+                assert_eq!(std::fs::read_dir(root.path().join("dev")).unwrap().count(), 0);
+            }
+            Err(error) => {
+                let classification = classify_minimal_dev_activation_unavailable(&error, root.path());
+                if skip_activation_capability_denial("live path minimal-dev test", classification, &error) {
+                    return;
+                }
+                panic!("live path minimal-dev test failed: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn minimal_dev_is_read_only_and_exact_on_anchored_activation() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("dev")).unwrap();
+        let anchor = open_path_directory(root.path());
+        let result = Container::new_anchored(root.path(), &anchor)
+            .unwrap()
+            .root_filesystem(RootFilesystemPolicy::ReadOnly)
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::Minimal,
+            })
+            .loopback(LoopbackPolicy::KernelDefault)
+            .run::<io::Error>(exercise_read_only_minimal_dev);
+
+        match result {
+            Ok(()) => assert_eq!(std::fs::read_dir(root.path().join("dev")).unwrap().count(), 0),
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, root.path())
+                    .or_else(|| classify_minimal_dev_activation_unavailable(&error, root.path()));
+                if skip_activation_capability_denial("live anchored minimal-dev test", classification, &error) {
+                    return;
+                }
+                panic!("live anchored minimal-dev test failed: {error}");
+            }
+        }
     }
 
     #[test]
@@ -4701,6 +5318,51 @@ mod tests {
         }
     }
 
+    fn skip_activation_capability_denial(test: &str, classification: Option<&str>, error: &ContainerRunError) -> bool {
+        let Some(classification) = classification else {
+            return false;
+        };
+        if !activation_capability_skip_allowed(std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()) {
+            return false;
+        }
+        eprintln!("SKIP {test}: required host capability unavailable: {classification}: {error}");
+        true
+    }
+
+    fn activation_capability_skip_allowed(required: Option<&std::ffi::OsStr>) -> bool {
+        required != Some(std::ffi::OsStr::new("1"))
+    }
+
+    fn assert_live_tmpfs_normalization_rejected(
+        result: Result<(), ContainerRunError>,
+        root: &Path,
+        requested_size: u64,
+        normalized_size: u64,
+        inode_limit: u64,
+        anchored: bool,
+        test: &str,
+    ) {
+        let expected = format!(
+            "tmpfs at tmp normalized declared limits: size {requested_size} -> {normalized_size} bytes, inodes {inode_limit} -> {inode_limit}"
+        );
+        match result {
+            Err(ContainerRunError::Failure { message }) if message == expected => {}
+            Err(error) => {
+                let classification = if anchored {
+                    classify_anchored_activation_unavailable(&error, root)
+                } else {
+                    None
+                }
+                .or_else(|| classify_bounded_tmpfs_activation_unavailable(&error, root));
+                if skip_activation_capability_denial(test, classification, &error) {
+                    return;
+                }
+                panic!("{test} failed: {error}");
+            }
+            Ok(()) => panic!("{test} accepted a tmpfs limit the kernel must normalize"),
+        }
+    }
+
     fn classify_anchored_activation_unavailable(error: &ContainerRunError, label: &Path) -> Option<&'static str> {
         if host_denied_user_namespace_setup(error) {
             return Some("user-namespace setup denied");
@@ -4763,6 +5425,58 @@ mod tests {
         None
     }
 
+    fn classify_bounded_tmpfs_activation_unavailable(error: &ContainerRunError, root: &Path) -> Option<&'static str> {
+        if host_denied_user_namespace_setup(error) {
+            return Some("user-namespace setup denied");
+        }
+        let ContainerRunError::Failure { message } = error else {
+            return None;
+        };
+        for denied in [
+            "EPERM: Operation not permitted",
+            "EACCES: Permission denied",
+            "ENOSYS: Function not implemented",
+        ] {
+            if message == &format!("mount /: {denied}") {
+                return Some("private mount namespace unavailable");
+            }
+            if message == &format!("mount {}: {denied}", root.display()) {
+                return Some("recursive read-only mount attributes unavailable");
+            }
+            if message == &format!("mount tmp: {denied}") {
+                return Some("bounded tmpfs mount unavailable");
+            }
+        }
+        None
+    }
+
+    fn classify_minimal_dev_activation_unavailable(error: &ContainerRunError, root: &Path) -> Option<&'static str> {
+        if let Some(classification) = classify_bounded_tmpfs_activation_unavailable(error, root) {
+            return Some(classification);
+        }
+        let ContainerRunError::Failure { message } = error else {
+            return None;
+        };
+        for denied in [
+            "EPERM: Operation not permitted",
+            "EACCES: Permission denied",
+            "ENOSYS: Function not implemented",
+        ] {
+            if message == &format!("mount dev: {denied}") {
+                return Some("minimal device tmpfs or mount attributes unavailable");
+            }
+            for device in MINIMAL_DEV_NODES {
+                if message == &format!("mount /dev/{device}: {denied}")
+                    || message == &format!("mount /old_root/dev/{device}: {denied}")
+                    || message == &format!("open anchored mount source /old_root/dev/{device}: {denied}")
+                {
+                    return Some("authenticated minimal device bind unavailable");
+                }
+            }
+        }
+        None
+    }
+
     fn require_errno<T>(result: io::Result<T>, expected: Errno, operation: &str) -> io::Result<()> {
         match result {
             Err(error) if error.raw_os_error() == Some(expected as i32) => Ok(()),
@@ -4773,6 +5487,101 @@ mod tests {
                 "{operation} unexpectedly succeeded, expected {expected}"
             ))),
         }
+    }
+
+    fn exercise_bounded_tmpfs(size_bytes: u64, inode_limit: u64) -> io::Result<()> {
+        let tmp = std::fs::File::open("/tmp")?;
+        let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { nix::libc::fstatfs(tmp.as_raw_fd(), &mut stat) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        let observed_size = u64::try_from(stat.f_bsize)
+            .ok()
+            .and_then(|block_size| block_size.checked_mul(stat.f_blocks))
+            .ok_or_else(|| io::Error::other("tmpfs byte readback overflow"))?;
+        if observed_size != size_bytes || stat.f_files != inode_limit {
+            return Err(io::Error::other(format!(
+                "tmpfs readback mismatch: size={observed_size}, inodes={}",
+                stat.f_files
+            )));
+        }
+
+        let available_inodes = stat.f_ffree;
+        if available_inodes == 0 || available_inodes >= inode_limit {
+            return Err(io::Error::other(format!(
+                "unexpected available tmpfs inode count {available_inodes} of {inode_limit}"
+            )));
+        }
+        for index in 0..available_inodes {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(format!("/tmp/inode-{index}"))?;
+        }
+        require_errno(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open("/tmp/inode-over-limit"),
+            Errno::ENOSPC,
+            "allocate tmpfs inode N+1",
+        )?;
+        for index in 0..available_inodes {
+            std::fs::remove_file(format!("/tmp/inode-{index}"))?;
+        }
+
+        let mut bytes = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open("/tmp/byte-limit")?;
+        bytes.write_all(&vec![0_u8; usize::try_from(size_bytes).unwrap()])?;
+        if bytes.metadata()?.len() != size_bytes {
+            return Err(io::Error::other("tmpfs accepted fewer than N declared bytes"));
+        }
+        require_errno(bytes.write_all(&[1]), Errno::ENOSPC, "allocate tmpfs byte N+1")
+    }
+
+    fn exercise_read_only_minimal_dev() -> io::Result<()> {
+        let mut actual = std::fs::read_dir("/dev")?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
+        actual.sort();
+        let mut expected = MINIMAL_DEV_NODES
+            .iter()
+            .map(|name| std::ffi::OsString::from(*name))
+            .collect::<Vec<_>>();
+        expected.sort();
+        if actual != expected {
+            return Err(io::Error::other(format!(
+                "minimal /dev entries differ: expected {expected:?}, found {actual:?}"
+            )));
+        }
+
+        require_errno(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open("/dev/extra"),
+            Errno::EROFS,
+            "create undeclared minimal /dev entry",
+        )?;
+
+        let mut null = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null")?;
+        null.write_all(b"discarded")?;
+        let mut byte = [0_u8; 1];
+        if null.read(&mut byte)? != 0 {
+            return Err(io::Error::other("/dev/null did not return EOF"));
+        }
+
+        let mut zero = std::fs::File::open("/dev/zero")?;
+        let mut zeros = [1_u8; 16];
+        zero.read_exact(&mut zeros)?;
+        if zeros != [0_u8; 16] {
+            return Err(io::Error::other("/dev/zero returned non-zero bytes"));
+        }
+
+        let mut full = std::fs::OpenOptions::new().write(true).open("/dev/full")?;
+        require_errno(full.write_all(&[1]), Errno::ENOSPC, "write /dev/full")
     }
 
     fn require_payload_security_boundary() -> io::Result<()> {

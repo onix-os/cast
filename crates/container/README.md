@@ -40,10 +40,21 @@ an empty tmpfs at `/tmp`, and writable recursive host views of `/sys` and
 `/dev`.
 
 Callers can disable individual mounts, make proc or the host trees read-only,
-or choose `DevPolicy::Minimal`. Minimal device policy creates a fresh tmpfs at
-`/dev` and exposes exactly the read-only `null`, `zero`, and `full` nodes. It
-does not conditionally add devices from host state and never exposes the full
-host `/dev` tree.
+or select a finite `/tmp` with
+`TmpPolicy::Bounded(TmpfsLimits::new(size_bytes, inodes)?)`. Both ceilings
+must be non-zero. Container setup passes the exact values as the tmpfs `size`
+and `nr_inodes` options on both pathname and descriptor-anchored activation,
+then reads them back from the mounted filesystem. A rejected or normalized
+limit aborts activation; bounded policy never retries with an unbounded tmpfs.
+Pseudo-filesystem mountpoints are prepared before a pathname root is made
+read-only.
+
+`DevPolicy::Minimal` creates a fresh tmpfs at `/dev` and exposes exactly the
+read-only `null`, `zero`, and `full` nodes. Once those authenticated binds are
+attached, the complete `/dev` mount tree is made recursively read-only, so the
+payload cannot add, remove, or rename entries. The policy does not
+conditionally add devices from host state and never exposes the full host
+`/dev` tree.
 
 `Container::loopback` separately controls loopback setup. Its compatibility
 default invokes `/usr/sbin/ip` when that host utility exists. Deterministic
