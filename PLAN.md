@@ -592,6 +592,77 @@ perform real offline builds using only their frozen Stone closure; decoded
 outputs and repeated bundles are byte-identical; and the required-capability
 lane passes on its supported Linux CI host.
 
+### Phase 11: Make state activation crash-recoverable
+
+An atomic `/usr` exchange prevents a partially visible switch, but it does not
+by itself explain an interrupted transaction after reboot. Stateful activation
+must therefore persist intent before every irreversible effect, authenticate
+the exact filesystem trees involved, and recover from durable evidence rather
+than from in-memory flags or mutable pathnames. This work preserves the
+existing Stone state model, merged-/usr layout, container-trigger boundary,
+and instant rollback mechanism; it hardens their failure semantics.
+
+- [x] Give each fresh-state database row a unique, canonical transition ID and
+  provide exact `(state ID, transition ID)` lookup, clear, and removal
+  operations. Allocation and its package selections commit in one SQLite
+  transaction.
+- [x] Publish the five merged-/usr root links without replacing foreign names.
+  Anchor inspection to the opened root, accept only the exact raw-byte symlink
+  targets, retain inode witnesses through the directory fsync, and reject
+  final-name, staging-name, and root-replacement races.
+- [ ] Land a versioned, bounded, checksummed transition-journal codec and an
+  owner-private descriptor-relative store. Canonical creation, advancement,
+  and deletion must be conditional, process- and thread-serialized, atomic,
+  fsync-ordered, crash-reopenable, and locked by an exact full-frame v1 golden
+  fixture. Linux 5.6 remains the runtime floor; restrictive-umask repair may
+  use only an authenticated procfs alias to the retained descriptor.
+- [ ] Open mutable system clients in recovery order: installation lock,
+  databases, journal lock, journal reconciliation, orphan-token audit, strict
+  live-state discovery, then repositories and the active registry. Frozen
+  clients skip system recovery. Read-only clients must take a shared,
+  non-mutating snapshot lock and fail closed on any unresolved journal.
+- [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
+  with one retained capability namespace. Resolve beneath authenticated
+  directory descriptors without symlink, magic-link, or mount traversal;
+  identify every `/usr` tree by device, inode, and mount ID; keep all
+  descriptors close-on-exec; and fsync every changed parent before recording
+  completion.
+- [ ] Establish a durable pre-journal baseline. With no journal and no orphan
+  transition row, clean only bounded authenticated scratch, materialize and
+  recursively sync the candidate, synthesize and sync an empty live `/usr`
+  only when genuinely absent, classify managed, corrupt, empty, and unmanaged
+  previous trees from strict evidence, and preflight every root ABI name.
+- [ ] Drive new-state creation, archived-state activation, and active-state
+  reblits through the same journal coordinator. Persist each intent before DB
+  allocation, candidate decoration, trigger execution, `/usr` exchange,
+  previous-state archive, boot synchronization, commit cleanup, or rollback;
+  persist completion only after the effect and its durability and identity
+  proofs succeed.
+- [ ] Reconcile startup using exact phase-specific namespace and database
+  evidence. Every pre-commit phase rolls back except a durably completed boot
+  synchronization; `CommitDecided` and later roll forward. Resume rollback in
+  its persisted order, never delete a fresh DB row before preserving its
+  candidate, never guess through a foreign occupant, and retain an
+  undeletable `BootRepairUnverified` record when boot side effects cannot be
+  proved repaired.
+- [ ] Add database ownership probes that distinguish matching, cleared,
+  missing, and foreign transition rows, plus a bounded global orphan-token
+  audit. Journal absence with any non-null transition token is corruption, not
+  permission to start another transaction.
+- [ ] Add deterministic process-kill and fault-injection coverage at every
+  journal fsync, database mutation, rename/exchange, trigger boundary, archive,
+  quarantine, and boot boundary. Reopening after each injected interruption
+  must converge to exactly one authenticated live tree and one terminal
+  outcome without deleting or overwriting a foreign entry.
+
+**Exit gate:** after a kill or power-loss-equivalent interruption at every
+persisted boundary, reopening Cast either completes the committed transition,
+restores the exact previous `/usr` and preserves the candidate, or stops on a
+structured manual-recovery record. It never starts a second transition while
+the first is unresolved, never infers success from a pathname alone, and never
+weakens atomic updates, state separation, merged-/usr compliance, container
+trigger isolation, or fast rollback.
+
 ## Validation gates
 
 Every phase must add focused tests and finish with the relevant Make targets.
