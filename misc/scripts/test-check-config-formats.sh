@@ -241,6 +241,16 @@ pass_content_case \
     'README.md' \
     'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is'
 
+pass_content_case \
+    'exact README compatibility-scope clarification is an audit exception' \
+    'README.md' \
+    'That break is specifically with the inherited YAML/KDL configuration paths. Nix'
+
+pass_content_case \
+    'exact acknowledgment migration statement is an audit exception' \
+    'ACKNOWLEDGMENTS.md' \
+    'origin. Onix is taking responsibility for replacing the inherited YAML/KDL'
+
 fail_content_case \
     'README is not a whole-file exception' \
     'README.md:1: Recipes may use YAML compatibility loaders.' \
