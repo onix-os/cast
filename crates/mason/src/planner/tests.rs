@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 #![cfg_attr(
     all(feature = "delegated-fixture-test-support", not(test)),
     allow(dead_code, unused_imports)
@@ -55,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 30] = [
+const PACKAGE_EXAMPLES: [&str; 33] = [
     "autotools",
     "binary-release",
     "cargo",
@@ -69,6 +66,8 @@ const PACKAGE_EXAMPLES: [&str; 30] = [
     "firmware-bundle",
     "font-family",
     "generated-schema-library",
+    "gettext-catalogs",
+    "go-module",
     "hooks",
     "manual-compiler-pipeline",
     "meson",
@@ -86,6 +85,7 @@ const PACKAGE_EXAMPLES: [&str; 30] = [
     "realistic-daemon",
     "split-outputs",
     "system-integration-assets",
+    "zig-project",
 ];
 const EXECUTION_FIXTURES: [&str; 10] = [
     "autotools",
@@ -1143,10 +1143,97 @@ fn assert_x86_64_platform(plan: &DerivationPlan) {
 fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
     match name {
         "factory-override" => assert_factory_override_semantics(declaration, plan),
+        "gettext-catalogs" => assert_gettext_catalog_semantics(declaration, plan),
+        "go-module" => assert_go_module_semantics(declaration, plan),
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
+        "zig-project" => assert_zig_project_semantics(declaration, plan),
         _ => {}
     }
+}
+
+fn assert_gettext_catalog_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "orbit-catalogs");
+    assert_eq!(
+        dependency_names(&declaration.builder.required_tools),
+        ["binary(mkdir)", "binary(msgfmt)", "binary(install)"]
+    );
+    assert_eq!(declaration.builder.phases.build.steps.len(), 2);
+    assert_eq!(declaration.builder.phases.check.steps.len(), 2);
+    assert_eq!(declaration.outputs.len(), 2);
+    assert!(declaration.outputs[0].paths.iter().any(|path| {
+        matches!(path, stone_recipe::PathSpec::Any { path } if path == "/usr/share/locale/*/LC_MESSAGES/orbit.mo")
+    }));
+    assert!(matches!(declaration.sources.as_slice(), [UpstreamSpec::Archive { .. }]));
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
+}
+
+fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "go-glyph");
+    assert_eq!(
+        dependency_names(&declaration.builder.required_tools),
+        ["binary(mkdir)", "binary(go)", "binary(install)"]
+    );
+    let [StepSpec::Shell { script: build, .. }] = declaration.builder.phases.build.steps.as_slice() else {
+        panic!("go-module must retain one explicit shell build step");
+    };
+    for required in [
+        "GOPROXY=off",
+        "GOSUMDB=off",
+        "-mod=vendor",
+        "-trimpath",
+        "-buildvcs=false",
+    ] {
+        assert!(
+            build.contains(required),
+            "go-module build lost offline/reproducible setting {required}"
+        );
+    }
+    let [StepSpec::Shell { script: check, .. }] = declaration.builder.phases.check.steps.as_slice() else {
+        panic!("go-module must retain one explicit shell check step");
+    };
+    for required in ["GOPROXY=off", "GOSUMDB=off", "-mod=vendor", "-trimpath"] {
+        assert!(
+            check.contains(required),
+            "go-module check lost offline/reproducible setting {required}"
+        );
+    }
+    assert!(!declaration.options.networking);
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
+}
+
+fn assert_zig_project_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "zig-vector");
+    assert_eq!(dependency_names(&declaration.builder.required_tools), ["binary(zig)"]);
+    for phase in [
+        &declaration.builder.phases.build,
+        &declaration.builder.phases.check,
+        &declaration.builder.phases.install,
+    ] {
+        let [StepSpec::Shell { script, .. }] = phase.steps.as_slice() else {
+            panic!("zig-project phases must remain explicit shell steps");
+        };
+        assert!(script.contains("ZIG_GLOBAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-global-cache\""));
+        assert!(script.contains("ZIG_LOCAL_CACHE_DIR=\"${CAST_BUILD_ROOT}/zig-local-cache\""));
+    }
+    let root = declaration.outputs.iter().find(|output| output.name == "out").unwrap();
+    let development = declaration
+        .outputs
+        .iter()
+        .find(|output| output.name == "devel")
+        .unwrap();
+    for output in [root, development] {
+        assert!(matches!(
+            output.runtime_inputs.as_slice(),
+            [DependencySpec::Output(reference)]
+                if reference.package.name == "zig-vector" && reference.output == "libs"
+        ));
+    }
+    assert!(!declaration.options.networking);
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
 }
 
 fn assert_factory_override_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {

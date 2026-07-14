@@ -1,7 +1,3 @@
-<!--
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
--->
 
 # Gluon package examples
 
@@ -17,10 +13,13 @@ needed by a declarative userspace.
 | [`cmake`](packages/cmake/stone.glu) | CMake flags, checks, and typed build dependencies. |
 | [`meson`](packages/meson/stone.glu) | Meson configuration and pkg-config dependencies. |
 | [`cargo`](packages/cargo/stone.glu) | An offline Cargo build with features and explicit binaries. |
+| [`go-module`](packages/go-module/stone.glu) | An offline vendored Go module with disabled network resolution, isolated caches, tests, and split documentation. |
+| [`zig-project`](packages/zig-project/stone.glu) | A vendored Zig project with phase-local caches, tests, and runtime/development output relations. |
 | [`python-module`](packages/python-module/stone.glu) | An offline Python wheel build with separate runtime executable, module, and test dependencies. |
 | [`autotools`](packages/autotools/stone.glu) | Autotools flags, tests, and architecture selection. |
 | [`desktop-application`](packages/desktop-application/stone.glu) | Desktop metadata, activation assets, runtime relations, and validation hooks. |
 | [`font-family`](packages/font-family/stone.glu) | A data-only package with explicit font and documentation outputs. |
+| [`gettext-catalogs`](packages/gettext-catalogs/stone.glu) | Architecture-independent message catalogs compiled and checked by an explicit native tool closure. |
 | [`firmware-bundle`](packages/firmware-bundle/stone.glu) | Architecture-independent firmware, device metadata, and license data installed without compilation. |
 | [`conditionals`](packages/conditionals/stone.glu) | A pure package function driven by typed feature values. |
 | [`factory-override`](packages/factory-override/stone.glu) | Dependency-argument overrides followed by a typed attribute patch. |

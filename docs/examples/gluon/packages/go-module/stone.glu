@@ -1,0 +1,82 @@
+
+let b = import! cast.package.v3
+
+let go = b.program.binary "go"
+
+// The source archive contains go.mod, go.sum, and a complete vendor tree.
+// Every Go invocation explicitly disables network-backed module resolution and
+// keeps both writable caches inside the frozen build root.
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+        b.step.shell r#"test -f go.mod
+test -f go.sum
+test -d vendor"#,
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [go],
+            script = r#"GOCACHE="${CAST_BUILD_ROOT}/go-cache" \
+GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache" \
+GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
+go build -mod=vendor -trimpath -buildvcs=false -o build/glyph ./cmd/glyph"#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [go],
+            script = r#"GOCACHE="${CAST_BUILD_ROOT}/go-cache" \
+GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache" \
+GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
+go test -mod=vendor -trimpath ./..."#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 build/glyph "${CAST_INSTALL_ROOT}${CAST_BINDIR}/glyph"
+install -Dm644 README.md "${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/go-glyph/README.md""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Offline-built glyph inspection tool",
+    paths = [b.path.exe "/usr/bin/glyph"],
+    .. b.output "out"
+}
+
+let docs = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Documentation for go-glyph",
+    paths = [b.path.any "/usr/share/doc/go-glyph"],
+    .. b.output "docs"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "go-glyph",
+    version = "1.4.2",
+    release = 1,
+    homepage = "https://example.invalid/go-glyph",
+    license = ["BSD-3-Clause"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "go",
+        b.dep.binary "install",
+    ],
+    outputs = [root, docs],
+    sources = [
+        b.source.archive
+            "https://example.invalid/go-glyph-1.4.2-vendored.tar.zst"
+            "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+    ],
+    architectures = ["native"],
+    .. base
+}

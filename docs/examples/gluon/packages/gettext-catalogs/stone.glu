@@ -1,0 +1,81 @@
+
+let b = import! cast.package.v3
+
+let msgfmt = b.program.binary "msgfmt"
+
+// Locale compilation is data production, but it still has a declared native
+// tool closure and an explicit check phase. No host gettext executable is
+// discovered through PATH outside the frozen dependency graph.
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build/fr/LC_MESSAGES"],
+        b.step.run (b.program.binary "mkdir") ["-p", "build/de/LC_MESSAGES"],
+    ],
+    build = b.phase [
+        b.step.run msgfmt [
+            "--check-format",
+            "--check-header",
+            "-o",
+            "build/fr/LC_MESSAGES/orbit.mo",
+            "po/fr.po",
+        ],
+        b.step.run msgfmt [
+            "--check-format",
+            "--check-header",
+            "-o",
+            "build/de/LC_MESSAGES/orbit.mo",
+            "po/de.po",
+        ],
+    ],
+    check = b.phase [
+        b.step.run msgfmt ["--check-format", "--check-header", "-o", "build/check-fr.mo", "po/fr.po"],
+        b.step.run msgfmt ["--check-format", "--check-header", "-o", "build/check-de.mo", "po/de.po"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm644 build/fr/LC_MESSAGES/orbit.mo "${CAST_INSTALL_ROOT}${CAST_DATADIR}/locale/fr/LC_MESSAGES/orbit.mo"
+install -Dm644 build/de/LC_MESSAGES/orbit.mo "${CAST_INSTALL_ROOT}${CAST_DATADIR}/locale/de/LC_MESSAGES/orbit.mo"
+install -Dm644 COPYING "${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/orbit-catalogs/COPYING""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let catalogs = b.output_with {
+    summary = b.optional.set "French and German message catalogs for Orbit",
+    paths = [b.path.any "/usr/share/locale/*/LC_MESSAGES/orbit.mo"],
+    .. b.output "out"
+}
+
+let docs = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "License text for Orbit translations",
+    paths = [b.path.any "/usr/share/doc/orbit-catalogs"],
+    .. b.output "docs"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "orbit-catalogs",
+    version = "2026.07",
+    release = 1,
+    homepage = "https://example.invalid/orbit/translations",
+    license = ["GPL-3.0-or-later"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "msgfmt",
+        b.dep.binary "install",
+    ],
+    outputs = [catalogs, docs],
+    sources = [
+        b.source.archive
+            "https://example.invalid/orbit-catalogs-2026.07.tar.xz"
+            "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+    ],
+    architectures = ["native"],
+    .. base
+}
