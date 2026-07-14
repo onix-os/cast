@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use forge::package::Meta;
+use forge::package::{Meta, is_reserved_usr_layout_target};
 use fs_err::File;
 use itertools::Itertools;
 use nix::{errno::Errno, libc};
@@ -1876,8 +1876,16 @@ fn verify_unique_layout_targets(packages: &[Package<'_>]) -> Result<(), Error> {
                 path: info.path.clone(),
                 source,
             })?;
+            let target = info.layout.file.target().trim_start_matches('/');
+            if is_reserved_usr_layout_target(target) {
+                return Err(Error::ReservedLayoutTarget {
+                    target: format!("/usr/{target}"),
+                    package: package.name.to_owned(),
+                    path: info.path.clone(),
+                });
+            }
             targets.push((
-                info.layout.file.target().trim_start_matches('/'),
+                target,
                 package.name,
                 &info.path,
                 matches!(info.layout.file, stone::StonePayloadLayoutFile::Directory(_)),
@@ -2434,6 +2442,103 @@ mod verification_tests {
     }
 
     #[test]
+    fn reserved_system_metadata_target_is_rejected_before_artifact_sink_creation() {
+        let input = tempfile::tempdir().unwrap();
+        let reserved_path = input.path().join("usr/.cast-tree-id/forged-child");
+        std::fs::create_dir_all(reserved_path.parent().unwrap()).unwrap();
+        std::fs::write(&reserved_path, b"forged marker").unwrap();
+
+        let mut collector = collect::Collector::new(input.path());
+        collector
+            .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
+            .unwrap();
+        let reserved = collector
+            .path(&reserved_path, &mut stone::StoneDigestWriterHasher::new())
+            .unwrap();
+        let sealed = collector.seal().unwrap();
+
+        let plan = test_derivation_plan();
+        let definition = ResolvedOutput::default();
+        let mut bucket = analysis::Bucket::default();
+        bucket.paths.push(reserved);
+        let package = Package::new_with_architecture(
+            "reserved-owner",
+            &plan.package,
+            &definition,
+            bucket,
+            NonZeroU64::new(1).unwrap(),
+            Architecture::X86_64,
+            1,
+        );
+
+        let runtime = crate::private_tempdir();
+        let output = tempfile::tempdir().unwrap();
+        let artifact_root = tempfile::tempdir().unwrap();
+        let recipe =
+            crate::Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu"))
+                .unwrap();
+        let mut layout = plan.layout.clone();
+        layout.artifacts_dir = artifact_root.path().to_string_lossy().into_owned();
+        let paths = Paths::new(&recipe, layout, runtime.path(), output.path()).unwrap();
+
+        assert!(matches!(
+            emit_frozen(
+                &paths,
+                &plan.package,
+                &plan.provenance.recipe.sha256,
+                std::iter::empty(),
+                Architecture::X86_64,
+                &[package],
+                &plan.derivation_id(),
+                &sealed,
+            ),
+            Err(Error::ReservedLayoutTarget {
+                target,
+                package,
+                path,
+            }) if target == "/usr/.cast-tree-id/forged-child"
+                && package == "reserved-owner"
+                && path == reserved_path
+        ));
+        assert!(direct_names(artifact_root.path()).is_empty());
+    }
+
+    #[test]
+    fn near_system_metadata_names_remain_legal_for_mason_layouts() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let definition = ResolvedOutput::default();
+        let mut collector = collect::Collector::new(root.path());
+        collector
+            .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
+            .unwrap();
+        let mut hasher = stone::StoneDigestWriterHasher::new();
+        let mut bucket = analysis::Bucket::default();
+
+        let near_names = ["usr/.cast-tree-id-old", "usr/.stateID.old/child"];
+        for relative in near_names {
+            let path = root.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"ordinary package data").unwrap();
+        }
+        for relative in near_names {
+            let path = root.path().join(relative);
+            bucket.paths.push(collector.path(&path, &mut hasher).unwrap());
+        }
+
+        let package = Package::new_with_architecture(
+            "near-names",
+            &plan.package,
+            &definition,
+            bucket,
+            NonZeroU64::new(1).unwrap(),
+            Architecture::X86_64,
+            1,
+        );
+        verify_unique_layout_targets(&[package]).unwrap();
+    }
+
+    #[test]
     fn non_directory_normalized_ancestor_is_rejected_before_emission() {
         let root = tempfile::tempdir().unwrap();
         let normalized_ancestor = root.path().join("usr/bin");
@@ -2791,6 +2896,15 @@ pub enum Error {
     },
     #[snafu(display("size overflow while totaling {resource}"))]
     SizeOverflow { resource: &'static str },
+    #[snafu(display(
+        "package layout target {target} from {package} ({}) is reserved for Cast system metadata",
+        path.display()
+    ))]
+    ReservedLayoutTarget {
+        target: String,
+        package: String,
+        path: PathBuf,
+    },
     #[snafu(display(
         "duplicate package layout target {target}: {first_package} ({}) and {second_package} ({})",
         first_path.display(),

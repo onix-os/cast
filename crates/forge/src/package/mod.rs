@@ -12,6 +12,23 @@ pub use self::meta::{Meta, MissingMetaFieldError, Name, RepositoryMetaError};
 pub mod meta;
 pub mod render;
 
+/// Return whether one normalized, raw `/usr`-relative package target belongs
+/// to Cast's system-metadata namespace.
+///
+/// Stone layout targets omit the leading `/usr/`. Packages must never own the
+/// state marker or the permanent tree-identity marker, nor anything beneath
+/// either marker if a future representation turns one into a directory. This
+/// predicate deliberately reserves only those exact first components; similar
+/// package names remain available.
+pub fn is_reserved_usr_layout_target(target: &str) -> bool {
+    [".cast-tree-id", ".stateID"].into_iter().any(|reserved| {
+        target == reserved
+            || target
+                .strip_prefix(reserved)
+                .is_some_and(|remainder| remainder.starts_with('/'))
+    })
+}
+
 /// Unique ID of a [`Package`]
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, From, Into, Display)]
 #[debug("{_0:?}")]
@@ -165,4 +182,36 @@ where
 pub struct Update<'a> {
     pub old: &'a Package,
     pub new: &'a Package,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_reserved_usr_layout_target;
+
+    #[test]
+    fn system_metadata_reservation_is_exact_and_descendant_aware() {
+        for target in [
+            ".cast-tree-id",
+            ".cast-tree-id/child",
+            ".cast-tree-id/nested/child",
+            ".stateID",
+            ".stateID/child",
+            ".stateID/nested/child",
+        ] {
+            assert!(is_reserved_usr_layout_target(target), "did not reserve {target:?}");
+        }
+
+        for target in [
+            ".cast-tree",
+            ".cast-tree-id-old",
+            ".cast-tree-id.old/child",
+            ".state",
+            ".stateID-old",
+            ".stateID.old/child",
+            "share/.cast-tree-id",
+            "share/.stateID",
+        ] {
+            assert!(!is_reserved_usr_layout_target(target), "over-reserved {target:?}");
+        }
+    }
 }
