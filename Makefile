@@ -180,6 +180,9 @@ forge-frozen-publication-test:
 		linux_fs::tests::expired_sync_filesystem_deadline_fails_before_syncfs \
 		client::tests::frozen_root_publication_never_replaces_an_existing_destination \
 		client::tests::frozen_publication_adopts_an_applied_rename_even_when_the_syscall_reports_error \
+		client::tests::frozen_publication_reconciles_an_applied_rename_after_the_work_deadline_expires \
+		client::tests::frozen_private_directory_setup_failures_remove_the_exact_provisional_wrapper \
+		client::tests::frozen_private_directory_normalizes_setgid_inherited_from_its_parent \
 		client::tests::frozen_publication_error_before_rename_preserves_the_retained_stage_for_bounded_cleanup \
 		client::tests::frozen_publication_reconciles_a_racing_destination_without_replacing_it \
 		client::tests::frozen_publication_detects_destination_substitution_and_never_deletes_the_foreign_tree \

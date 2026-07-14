@@ -540,7 +540,11 @@ rejecting `N + 1`.
   barriers, and exact reconciliation of both names after every syscall result,
   including an error reported after the move applied. Internal failure cleanup
   can recurse only when the wrapper name still identifies the retained root;
-  foreign source or destination substitutions are preserved. Linux cannot
+  foreign source or destination substitutions are preserved. Production
+  materialization stops ordinary work 30 seconds before its overall timeout;
+  after any namespace mutation, reconciliation and provisional-wrapper cleanup
+  receive that fresh, separately bounded recovery budget instead of reusing an
+  already-expired work deadline. Linux cannot
   make rename or unlink conditional on an earlier inode observation, so the
   final-component guarantee deliberately remains the private-stage and
   cooperating-writer boundary rather than a claim of safety against an
