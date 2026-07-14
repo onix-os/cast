@@ -91,11 +91,19 @@ the plan's derivation ID rather than synthesizing an identity from runtime
 state.
 
 Git resolution is also byte-bound rather than commit-only. Source-lock schema
-v2 records the canonical normalized checkout SHA-256, derivation schema v13
+v2 records the canonical normalized checkout SHA-256, derivation schema v15
 includes it directly in plan identity and explanation, and frozen setup
 recomputes it before execution. Authored `clone_dir` is validated and preserved
 as the exact plan destination. Old source-lock schemas and digest mismatches
 fail closed instead of synthesizing compatibility state.
+
+Archive expansion is a typed built-in prepare step in derivation schema v15.
+The executor accepts only plain, gzip, xz, or standard-frame zstd tar streams,
+preflights their bounded entry graph before writing, extracts beneath a private
+descriptor root, and publishes only when the repeated digest and second
+manifest still match. Unsupported containers, unsafe links and paths, sparse
+or special entries, topology collisions, and mutations fail closed without an
+external unpacker.
 
 Planning and packaging now consume `PackageSpec` and `DerivationPlan`
 directly. The former `stone_recipe::RecipeSpec` semantic domain, its
@@ -404,7 +412,7 @@ dependencies are structural.
   `build.lock.glu`; Gluon evaluation describes requests while Rust performs and
   freezes I/O-backed resolution.
 - [x] Bind every Git source to both its complete commit and a canonical
-  normalized-tree SHA-256 in source-lock schema v2 and derivation schema v13;
+  normalized-tree SHA-256 in source-lock schema v2 and derivation schema v15;
   use one refresh/execution materializer, reject schema v1 and byte mismatches,
   and preserve validated authored `clone_dir` destinations.
 - [x] Eliminate wall-clock and Git fallback; plan creation requires an
@@ -489,9 +497,18 @@ rejecting `N + 1`.
   and atomic cache publication.
 - [x] Bound analyzer duration and output, and kill the full analyzer process
   group before joining its output readers.
-- [x] Bound every frozen build step by wall time, independent and combined
-  output budgets, fixed-size drains, child-local resource limits, and complete
-  descendant cleanup.
+- [x] Bound every external frozen build command by wall time, independent and
+  combined output budgets, fixed-size drains, child-local descriptor/core
+  limits, and complete descendant cleanup.
+- [x] Preflight and extract locked source archives structurally with exact
+  compressed, decoded, entry, path, depth, file, aggregate, and wall-time
+  limits; reject traversal, unsafe links, sparse/special entries, topology
+  collisions, mutation, and unsupported compression or containers before
+  publication.
+- [ ] Enforce aggregate per-derivation PID, memory, swap, and CPU ceilings in a
+  delegated cgroup v2 boundary, plus byte and inode ceilings for every writable
+  scratch filesystem. Rootless hosts without the required delegation or quota
+  backend must fail before execution rather than silently weakening policy.
 - [x] Apply the same finite process, output, progress-record, repository-size,
   and repository-entry policy to Git mirrors, fetches, and checkouts.
 - [x] Load, save, and delete Gluon configuration fragments through
@@ -508,6 +525,11 @@ inputs are rejected with structured diagnostics; no error path leaves a child,
 partial cache, staging object, or ambiguous fallback eligible for reuse.
 
 ### Phase 10: Prove representative package declarations
+
+Offline source, lock, and planning proofs are not contentful execution proof.
+The contentful build, decoded-bundle, reproduction, and required-capability
+items below remain open until a non-skipped required-capability run provides
+that evidence.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
@@ -526,11 +548,12 @@ partial cache, staging object, or ambiguous fallback eligible for reuse.
   zero-test-resistant `make examples` gate and document what it does and does
   not prove. Real execution remains exclusive to contentful fixture closures.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
-  for CMake, Meson, Cargo, Autotools, custom-step, and split-output builds.
+  for Autotools, Cargo, vendored Cargo, CMake, custom-step, generated-daemon,
+  pre-setup-hook, Meson, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
-- [x] Add a pinned, contentful Stone bootstrap closure for the six real
-  execution fixtures containing their declared tools and runtime dependencies.
+- [ ] Maintain a pinned, contentful Stone bootstrap closure for every real
+  execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution.
 - [x] Before entering the container, require every frozen executable binding to

@@ -90,7 +90,6 @@ pub enum ContextValue {
     RustcWrapper,
     SourcePath,
     SourceDestination,
-    SourceStripComponents,
 }
 
 /// Text built without an open-ended template language.
@@ -567,13 +566,6 @@ pub struct BuildProgramSpec {
     pub requirement: BuildToolSpec,
 }
 
-/// Structural extraction policy for one archive source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchivePreparationPolicySpec {
-    pub create_directory: BuilderCommandSpec,
-    pub unpack: BuilderCommandSpec,
-}
-
 /// Structural copy policy for one already-fetched git source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitPreparationPolicySpec {
@@ -584,7 +576,6 @@ pub struct GitPreparationPolicySpec {
 /// Repository-owned source preparation commands and their locked inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcePreparationPolicySpec {
-    pub archive: ArchivePreparationPolicySpec,
     pub git: GitPreparationPolicySpec,
 }
 
@@ -1320,8 +1311,6 @@ impl ResourceValidator {
     }
 
     fn sources(&mut self, sources: &SourcePreparationPolicySpec) -> Result<(), BuildPolicyConversionError> {
-        self.command("sources.archive.create_directory", &sources.archive.create_directory)?;
-        self.command("sources.archive.unpack", &sources.archive.unpack)?;
         self.command("sources.git.create_directory", &sources.git.create_directory)?;
         self.command("sources.git.copy", &sources.git.copy)
     }
@@ -1872,9 +1861,6 @@ fn validate_toolchain_inputs(field: &str, inputs: &ToolchainInputPolicySpec) -> 
 }
 
 fn validate_sources(sources: &SourcePreparationPolicySpec) -> Result<(), BuildPolicyConversionError> {
-    validate_command("sources.archive.create_directory", &sources.archive.create_directory)?;
-    validate_command("sources.archive.unpack", &sources.archive.unpack)?;
-
     validate_command("sources.git.create_directory", &sources.git.create_directory)?;
     validate_command("sources.git.copy", &sources.git.copy)
 }
@@ -2470,8 +2456,8 @@ mod tests {
         let mut oversized = policy;
         oversized
             .sources
-            .archive
-            .unpack
+            .git
+            .copy
             .args
             .push(TextSpec::Context(ContextValue::Jobs));
         assert_eq!(
@@ -2514,8 +2500,8 @@ mod tests {
         assert_counted!(|value: &mut BuildPolicySpec| value.build_root.base.push(value.build_root.base[0].clone()));
         assert_counted!(|value: &mut BuildPolicySpec| value
             .sources
-            .archive
-            .unpack
+            .git
+            .copy
             .args
             .push(TextSpec::Literal("branch-test".to_owned())));
         assert_counted!(|value: &mut BuildPolicySpec| value

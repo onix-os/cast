@@ -434,7 +434,18 @@ pub(super) fn assert_fixture_bundle(
     role: BundleRootRole,
 ) -> BTreeMap<String, Vec<u8>> {
     assert!(
-        matches!(name, "autotools" | "cargo" | "cmake" | "custom" | "meson" | "split"),
+        matches!(
+            name,
+            "autotools"
+                | "cargo"
+                | "cargo-vendored"
+                | "cmake"
+                | "custom"
+                | "daemon-generated"
+                | "hooks-patch"
+                | "meson"
+                | "split"
+        ),
         "unknown contentful execution fixture {name:?}"
     );
     planned
@@ -442,7 +453,11 @@ pub(super) fn assert_fixture_bundle(
         .validate()
         .unwrap_or_else(|error| panic!("{name}: validate the frozen plan before inspecting its bundle: {error}"));
 
-    let package_name = format!("cast-{name}-fixture");
+    let package_name = match name {
+        "daemon-generated" => "cast-daemon-fixture".to_owned(),
+        "hooks-patch" => "cast-hooks-fixture".to_owned(),
+        _ => format!("cast-{name}-fixture"),
+    };
     assert_eq!(planned.plan.package.name, package_name);
     assert_eq!(planned.plan.package.version, "1.0.0");
     assert_eq!(planned.plan.package.source_release, 1);
@@ -450,7 +465,7 @@ pub(super) fn assert_fixture_bundle(
     assert_eq!(planned.plan.package.architecture, "x86_64");
     assert_eq!(
         planned.plan.package.homepage,
-        format!("https://fixtures.invalid/cast-{name}-fixture"),
+        format!("https://fixtures.invalid/{package_name}"),
         "{name}: fixture homepage is part of the package metadata golden"
     );
     assert_eq!(
@@ -496,6 +511,8 @@ pub(super) fn assert_fixture_bundle(
             output_names,
             BTreeSet::from(["out", "libs", "devel", "docs", "dbginfo"])
         );
+    } else if name == "daemon-generated" {
+        assert_eq!(output_names, BTreeSet::from(["out", "docs", "dbginfo"]));
     } else {
         assert_eq!(
             output_names,
@@ -529,6 +546,8 @@ pub(super) fn assert_fixture_bundle(
     assert_manifests(name, planned, &artefacts, &packages);
     if name == "split" {
         assert_split_fixture(planned, &packages);
+    } else if name == "daemon-generated" {
+        assert_daemon_fixture(planned, &packages);
     } else {
         assert_simple_fixture(name, planned, &packages);
     }
@@ -1628,17 +1647,34 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
         return;
     }
 
-    let executable = format!("bin/cast-{fixture}-fixture");
+    let (executable, messages) = match fixture {
+        "cargo-vendored" => (
+            "bin/cast-cargo-vendored-fixture".to_owned(),
+            vec!["hello from ", "vendored Cargo fixture"],
+        ),
+        "hooks-patch" => ("bin/cast-hooks-fixture".to_owned(), vec!["pre_setup hook applied"]),
+        _ => (
+            format!("bin/cast-{fixture}-fixture"),
+            vec![match fixture {
+                "autotools" => "cast autotools fixture",
+                "cargo" => "cast cargo fixture",
+                "cmake" => "cast cmake fixture",
+                "meson" => "cast meson fixture",
+                other => panic!("{other}: simple fixture needs an explicit payload golden"),
+            }],
+        ),
+    };
     assert_leaf_paths(fixture, "out", root, [executable.as_str()]);
     assert_no_directories(fixture, "out", root);
     let bytes = regular_bytes(fixture, root, &executable);
     assert_eq!(root.layouts[&executable].mode & 0o777, 0o755);
     let executable_elf = assert_runtime_elf(fixture, &executable, bytes, RuntimeElfKind::Executable);
-    let message = format!("cast {fixture} fixture");
-    assert!(
-        contains_bytes(bytes, message.as_bytes()),
-        "{fixture}: installed executable does not contain its tracked fixture payload"
-    );
+    for message in messages {
+        assert!(
+            contains_bytes(bytes, message.as_bytes()),
+            "{fixture}: installed executable does not contain tracked payload fragment {message:?}"
+        );
+    }
     let mut root_dependencies = planned_output_dependencies(planned, root_plan);
     root_dependencies.extend(executable_elf.dependencies.iter().cloned());
     assert_exact_relations(
@@ -1647,7 +1683,10 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
         root_dependencies,
         BTreeSet::from([
             root_plan.package_name.clone(),
-            format!("binary(cast-{fixture}-fixture)"),
+            format!(
+                "binary({})",
+                Path::new(&executable).file_name().unwrap().to_str().unwrap()
+            ),
         ]),
     );
 
@@ -1674,6 +1713,102 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
             );
         }
     }
+}
+
+fn assert_daemon_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "daemon-generated";
+    let flags = planned
+        .plan
+        .outputs
+        .iter()
+        .map(|output| (output.name.as_str(), output.include_in_manifest))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        flags,
+        BTreeMap::from([("out", true), ("docs", false), ("dbginfo", false)])
+    );
+
+    let (root_plan, root) = output(planned, packages, "out");
+    let executable = "sbin/cast-daemon-fixture";
+    let config = "share/defaults/cast-daemon-fixture/cast-daemon.conf";
+    let service = "lib/systemd/system/cast-daemon.service";
+    assert_leaf_paths(FIXTURE, "out", root, [executable, config, service]);
+    assert_no_directories(FIXTURE, "out", root);
+    assert_regular(
+        FIXTURE,
+        root,
+        config,
+        0o644,
+        generated_daemon_bytes("packaging/cast-daemon.conf.in"),
+    );
+    assert_regular(
+        FIXTURE,
+        root,
+        service,
+        0o644,
+        generated_daemon_bytes("packaging/cast-daemon.service.in"),
+    );
+    let executable_bytes = regular_bytes(FIXTURE, root, executable);
+    assert_eq!(root.layouts[executable].mode & 0o777, 0o755);
+    assert!(
+        contains_bytes(executable_bytes, b"cast daemon fixture"),
+        "{FIXTURE}: installed daemon omits its compiled identity"
+    );
+    assert!(
+        contains_bytes(
+            executable_bytes,
+            b"/usr/share/defaults/cast-daemon-fixture/cast-daemon.conf"
+        ),
+        "{FIXTURE}: compiled daemon omits its configured default path"
+    );
+    let executable_elf = assert_runtime_elf(FIXTURE, executable, executable_bytes, RuntimeElfKind::Executable);
+    let mut root_dependencies = planned_output_dependencies(planned, root_plan);
+    root_dependencies.extend(executable_elf.dependencies.iter().cloned());
+    assert_exact_relations(
+        FIXTURE,
+        root,
+        root_dependencies,
+        BTreeSet::from([
+            root_plan.package_name.clone(),
+            "sysbinary(cast-daemon-fixture)".to_owned(),
+        ]),
+    );
+
+    let (docs_plan, docs) = output(planned, packages, "docs");
+    let manual = "share/man/man8/cast-daemon.8";
+    assert_leaf_paths(FIXTURE, "docs", docs, [manual]);
+    assert_no_directories(FIXTURE, "docs", docs);
+    assert_regular(
+        FIXTURE,
+        docs,
+        manual,
+        0o644,
+        generated_daemon_bytes("packaging/cast-daemon.8.in"),
+    );
+    assert_exact_relations(
+        FIXTURE,
+        docs,
+        planned_output_dependencies(planned, docs_plan),
+        BTreeSet::from([docs_plan.package_name.clone()]),
+    );
+
+    let (debug_plan, debug) = output(planned, packages, "dbginfo");
+    assert_debug_output(FIXTURE, debug, &[executable_elf]);
+    assert_exact_relations(
+        FIXTURE,
+        debug,
+        planned_output_dependencies(planned, debug_plan),
+        BTreeSet::from([debug_plan.package_name.clone()]),
+    );
+}
+
+fn generated_daemon_bytes(relative: &str) -> Vec<u8> {
+    String::from_utf8(tracked_bytes("cast-daemon-fixture-1.0.0", relative))
+        .expect("daemon fixture templates are UTF-8")
+        .replace("@PROJECT_VERSION@", "1.0.0")
+        .replace("@CMAKE_INSTALL_FULL_SBINDIR@", "/usr/sbin")
+        .replace("@CMAKE_INSTALL_FULL_DATADIR@", "/usr/share")
+        .into_bytes()
 }
 
 fn assert_split_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {

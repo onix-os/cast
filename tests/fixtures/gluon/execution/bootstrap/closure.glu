@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-// Exact contentful bootstrap closure for the six offline execution fixtures.
+// Exact contentful bootstrap closure for the offline execution fixtures.
 // Package names, versions, sizes, URLs, outputs, and dependency edges are
 // derived from the pinned immutable Stone index. Only content identities are
 // repeated here, so the index remains the single metadata authority.
@@ -48,13 +48,16 @@ let repository = {
     fixtures = [
         "autotools",
         "cargo",
+        "cargo-vendored",
         "cmake",
         "custom",
+        "daemon-generated",
+        "hooks-patch",
         "meson",
         "split",
     ],
     packages = {
-        total_download_bytes = 325704878,
+        total_download_bytes = 315882255,
         sha256 = [
             "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
             "05c3a68a59a328130bdc9168840207c6b6e80aded711145498120f0c978510fc",
@@ -63,6 +66,7 @@ let repository = {
             "088b73089d76e6db2bae002949e2325c3b922aa96073bc88de0de9a7bb450125",
             "08d455fb979e5787b9efb44c9f59d5f9221dd66c667dd40bb65ef030d2d996ef",
             "09d4173bbe9cc713cbcfdb4e448131a6d8475e52a0c7580806c6ec63feb1971b",
+            "0a46d3a445acfcaf027ff96ee70f6ef5a2ff428a3cbda2c9fa0646583680d052",
             "0b9be7e32a236a2dbcdf9496e7115550107fad6d8e8ab2316cbc6ea6947d142a",
             "0bfba9d7008bb0158e2edc02f2ea6c56fd3ccbe575ce1ffd1a4e4a8220929858",
             "0d7472d04b9d1a2c4751eff182e223d161a08120c008d349b5d3bbe678e7fa64",
@@ -80,7 +84,6 @@ let repository = {
             "1da8500934edde9791b33884e42e840b2f869b630f2ed7b491ee41a74fd6ee58",
             "1f7182a6a85c690c672049277b31c6b66864f581fcf6692c9d424ef31328213b",
             "20a6cfc76001152c45a7f77f1ee50bfdb816d0b67408cd6857f023022f37f0d9",
-            "214c45b13f3f2f43ebf29f2a3517d5cb022aa1ec23036de353de85c567b21fd8",
             "233d0727fa93dddeb063fb343b3f1c0e874887d1517bf5a00a26f6c179fa298a",
             "2490e10ec4a13b4bce41c609a5a43693a33cd85b336a1aba696c8a64122f0126",
             "29fc6f21049f216f917c91ba7736bbdfb69e008ae21d8c6c6d65dddf261faf65",

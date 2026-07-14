@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+# Generated default configuration for cast-daemon-fixture @PROJECT_VERSION@.
+listen_address=127.0.0.1
+listen_port=9467
+state_directory=/var/lib/cast-daemon-fixture

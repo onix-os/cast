@@ -103,6 +103,7 @@ impl<'a> Executor<'a> {
         setpgid(Pid::from_raw(0), Pid::from_raw(0))?;
         let pgid = getpgrp();
         ::container::set_term_fg(pgid)?;
+        let mut archive_session = crate::archive::ArchiveSessionBudget::production();
 
         let target = &self.plan.build_lock.target.name;
         for (job_index, job) in self.plan.jobs.iter().enumerate() {
@@ -121,7 +122,7 @@ impl<'a> Executor<'a> {
                     phase: parse_phase(&phase.name)?,
                 }));
                 for step in phase.pre.iter().chain(&phase.steps).chain(&phase.post) {
-                    self.run_step(step)?;
+                    self.run_step(step, job, &mut archive_session)?;
                 }
                 timing.finish(timer);
             }
@@ -130,7 +131,36 @@ impl<'a> Executor<'a> {
         Ok(())
     }
 
-    fn run_step(&self, step: &StepPlan) -> Result<(), Error> {
+    fn run_step(
+        &self,
+        step: &StepPlan,
+        job: &JobPlan,
+        archive_session: &mut crate::archive::ArchiveSessionBudget,
+    ) -> Result<(), Error> {
+        if let StepPlan::ExtractArchive {
+            source,
+            destination,
+            strip_components,
+        } = step
+        {
+            let source_index = usize::try_from(*source).map_err(|_| Error::InvalidArchiveSource(*source))?;
+            let Some(stone_recipe::derivation::LockedSource::Archive { sha256, filename, .. }) =
+                self.plan.sources.get(source_index)
+            else {
+                return Err(Error::InvalidArchiveSource(*source));
+            };
+            crate::archive::extract_locked_tar(
+                Path::new(&self.plan.layout.source_dir),
+                filename,
+                sha256,
+                Path::new(&job.build_dir),
+                destination,
+                *strip_components,
+                self.plan.source_date_epoch,
+                archive_session,
+            )?;
+            return Ok(());
+        }
         let (program, args, step_environment, working_dir) = match step {
             StepPlan::Run {
                 program,
@@ -150,6 +180,7 @@ impl<'a> Executor<'a> {
                 environment,
                 working_dir.as_str(),
             ),
+            StepPlan::ExtractArchive { .. } => unreachable!("archive extraction returned above"),
         };
         let environment = merged_environment(&self.plan.environment, step_environment);
         let status = logged(program, DescendantContainment::PidNamespace, |command| {
@@ -1059,6 +1090,10 @@ pub enum Error {
     UnsupportedPgoStage(String),
     #[error("unsupported frozen phase {0}")]
     UnsupportedPhase(String),
+    #[error("frozen archive source index {0} is invalid")]
+    InvalidArchiveSource(u32),
+    #[error("archive extraction")]
+    Archive(#[from] crate::archive::Error),
     #[error(transparent)]
     StepExecution(#[from] StepExecutionError),
     #[error("build step failed with status code {0}")]

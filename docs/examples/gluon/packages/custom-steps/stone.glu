@@ -11,6 +11,7 @@ let phases = b.scripts {
         b.step.run
             (b.program.package (b.package_ref "schema-compiler") "/opt/schema-compiler/bin/schema-compile")
             ["--input", "schema", "--output", "build/generated.c"],
+        b.step.run (b.program.binary "cc") ["build/generated.c", "-o", "build/custom-tool"],
     ],
     install = b.phase [
         b.step.shell_with {
@@ -45,6 +46,7 @@ let base = b.mk_package (b.meta {
     builder = b.builder.custom phases [
         b.dep.binary "mkdir",
         b.dep.package "schema-compiler",
+        b.dep.binary "cc",
         b.dep.binary "install",
         b.dep.binary "ln",
         b.dep.binary "test",

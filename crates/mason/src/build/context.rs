@@ -71,7 +71,6 @@ impl PgoContextStage {
 pub struct TextContextOverlay {
     pub source_path: Option<String>,
     pub source_destination: Option<String>,
-    pub source_strip_components: Option<u32>,
 }
 
 /// Fully resolved install layout retained for hooks and structural builders.
@@ -984,12 +983,6 @@ impl<'a> TextResolver<'a> {
                     .as_deref()
                     .ok_or(ContextError::MissingContext { value })?,
             ),
-            ContextValue::SourceStripComponents => ContextExpansion::Owned(
-                self.overlay
-                    .source_strip_components
-                    .map(|value| value.to_string())
-                    .ok_or(ContextError::MissingContext { value })?,
-            ),
         })
     }
 
@@ -1432,7 +1425,6 @@ mod tests {
         let overlay = TextContextOverlay {
             source_path: Some("/mason/sourcedir/source archive.tar.xz".to_owned()),
             source_destination: Some("source tree".to_owned()),
-            source_strip_components: Some(2),
         };
         let Run {
             program,
@@ -1440,22 +1432,20 @@ mod tests {
             working_dir,
             ..
         } = context
-            .resolve_command(&context.policy.sources.archive.unpack, &overlay)
+            .resolve_command(&context.policy.sources.git.copy, &overlay)
             .unwrap()
         else {
             panic!("expected run")
         };
-        assert_eq!(program.path, "/usr/bin/bsdtar-static");
+        assert_eq!(program.path, "/usr/bin/cp");
         assert_eq!(working_dir, "/mason/build/x86_64");
         assert_eq!(
             args,
             [
-                "xf",
-                "/mason/sourcedir/source archive.tar.xz",
-                "-C",
+                "-Ra",
+                "--no-preserve=ownership",
+                "/mason/sourcedir/source archive.tar.xz/.",
                 "source tree",
-                "--strip-components=2",
-                "--no-same-owner",
             ]
         );
     }
@@ -1596,7 +1586,7 @@ mod tests {
     fn command_preflights_aggregate_items_before_building_argv() {
         let mut context = fixture_context("x86_64", false, false);
         context.environment.clear();
-        let mut command = context.policy.sources.archive.create_directory.clone();
+        let mut command = context.policy.sources.git.create_directory.clone();
         command.args = vec![TextSpec::Literal("a".to_owned()), TextSpec::Literal("b".to_owned())];
         command.environment.clear();
         command.working_dir = TextSpec::Literal("work".to_owned());
@@ -1615,7 +1605,7 @@ mod tests {
     #[test]
     fn fragment_boundaries_revalidate_commands_and_environment() {
         let mut context = fixture_context("x86_64", false, false);
-        let mut command = context.policy.sources.archive.create_directory.clone();
+        let mut command = context.policy.sources.git.create_directory.clone();
         let allowed_arguments = command.args.len();
         command.args.push(TextSpec::Literal("extra".to_owned()));
         context.limits.max_builder_arguments = allowed_arguments;

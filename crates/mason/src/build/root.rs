@@ -216,6 +216,7 @@ fn frozen_executable_bindings(plan: &DerivationPlan) -> Result<Vec<forge::Frozen
                     executables.push(interpreter);
                     executables.extend(declared_programs);
                 }
+                StepPlan::ExtractArchive { .. } => {}
             }
         }
     }
@@ -461,6 +462,7 @@ fn extend_job_executables(inputs: &mut Vec<UnresolvedInput>, jobs: &[Job]) -> Re
                                 });
                             }
                         }
+                        StepPlan::ExtractArchive { .. } => {}
                     }
                 }
             }

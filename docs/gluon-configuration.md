@@ -22,7 +22,7 @@ constructed only during that conversion.
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
 | Cast package | `stone.glu` | `cast.package.v3` and `cast.builders.*.v2` |
-| Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v4` |
+| Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v5` |
 | Cast profile | `profile.glu` or `profile.d/*.glu` | `cast.profile.v1` |
 | Cast repository | `repo.glu` or `repo.d/*.glu` | `cast.repository.v1` |
 | Packaged Cast trigger | `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` | `cast.trigger.v1` |
@@ -267,13 +267,26 @@ fail closed before execution. Authored `clone_dir` is a validated single
 component and is preserved as the frozen materialization destination; the
 outer destination name is separately part of derivation identity.
 
+Archive bytes are likewise bound by their source-lock SHA-256. For an unpacked
+source, derivation schema v15 freezes a built-in `ExtractArchive` step in the
+prepare-phase body which identifies the locked source, normalized relative
+destination, and `strip_components` value. Cast accepts plain, gzip, xz, and
+standard-frame zstd tar streams. Other compression or container formats have
+no external-tool fallback. It
+preflights a bounded canonical manifest, extracts into a private
+descriptor-rooted stage, and publishes only if a second scan and repeated
+archive digests agree. See the
+[archive extraction contract](package-authoring.md#archive-extraction-contract)
+for the accepted entry types and rejection rules.
+
 `build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
 planning, including `cast build --update-lock`. Its request fingerprint
 binds the evaluated recipe and source lock, selected target and policy,
 profile, toolchain, builder, job count, and the typed provenance of every
-requested provider. Schema v5 contains the exact resolved package/output closure, only the repository
-snapshots used by that closure, build/host/target platforms, and independent
-policy-root, target, profile, toolchain, and builder identities. Every request
+requested provider. Schema v6 contains the exact resolved package/output
+closure, only the repository snapshots used by that closure, build/host/target
+platforms, and independent policy-root, target, profile, toolchain, and builder
+identities. Every request
 stores a canonical sorted set of origins: builder/native/build/check position,
 output runtime position, policy source/field/index, job executable coordinate,
 or analyzer role. It rejects disconnected packages, unused snapshots, requests
@@ -290,8 +303,8 @@ schema freezes the executor ABI and implementation fingerprint separately inside
 `ExecutionPolicy`, so changing execution compatibility cannot be
 mistaken for changing authored builder structure. It also freezes the selected
 credential contract and every reachable analyzer program and provider request.
-The current derivation schema is v14; build-lock origins participate in both
-the lock digest and the canonical derivation identity.
+The current derivation schema is v15; build-lock origins and typed built-in
+archive extraction participate in the canonical derivation identity.
 
 The Cast implementation fingerprint is produced at compile time from the
 production source tree and effective build context. In addition to the Rust

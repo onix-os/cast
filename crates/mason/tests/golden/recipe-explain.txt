@@ -1,6 +1,6 @@
 derivation_explain {
   schema {
-    derivation_plan = 14
+    derivation_plan = 15
     build_lock = 6
   }
   identity {
@@ -8,7 +8,7 @@ derivation_explain {
     cast_fingerprint = "sha256:cast"
     recipe = "9a77dd152cbee683b8f15a7f9747c7c3bd9bc00c1532cbf58b4c917dbdb0ad69"
     source_lock = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
-    build_lock = "49f3c5f4f1fa5fabec3b9b985b2572f5cad7e2ae6663b8288f7744e88e9078a7"
+    build_lock = "9584e449991b4927e2665bfb5d205fc99083e665220cc8b5492bfdc8c6dc1cf4"
     request = "locked-request-fingerprint"
   }
   recipe_provenance {
@@ -262,7 +262,7 @@ derivation_explain {
         origin 2 {
           kind = "job_executable"
           job = 0
-          phase = 0
+          phase = 1
           phase_name = "build"
           section = "steps"
           step = 0
@@ -346,7 +346,7 @@ derivation_explain {
         origin 1 {
           kind = "job_executable"
           job = 0
-          phase = 0
+          phase = 1
           phase_name = "build"
           section = "steps"
           step = 0
@@ -369,7 +369,7 @@ derivation_explain {
         origin 1 {
           kind = "job_executable"
           job = 0
-          phase = 0
+          phase = 1
           phase_name = "build"
           section = "post"
           step = 0
@@ -406,7 +406,7 @@ derivation_explain {
         origin 0 {
           kind = "job_executable"
           job = 0
-          phase = 0
+          phase = 1
           phase_name = "build"
           section = "pre"
           step = 0
@@ -475,6 +475,21 @@ derivation_explain {
       work_dir = "/sandbox/build/job/work"
       phases {
         phase 0 {
+          name = "prepare"
+          pre {
+          }
+          steps {
+            step 0 {
+              kind = "extract_archive"
+              source = 0
+              destination = "demo-source"
+              strip_components = 1
+            }
+          }
+          post {
+          }
+        }
+        phase 1 {
           name = "build"
           pre {
             step 0 {
@@ -849,6 +864,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "6e24f4248fea34c4ee2a7fa3e8d131eb8425c985c0694f309bb71260f8ba2f20"
+    derivation_id = "f855ee52edba6accf0afe01d272c57360ab05225e6e1e8fcf7e858d034272b32"
   }
 }

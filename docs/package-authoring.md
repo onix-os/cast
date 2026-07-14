@@ -371,6 +371,57 @@ normalized to the plan's `source_date_epoch` but do not change the tree digest.
 Archive copies likewise receive an independent cache inode, fixed mode, and
 the frozen timestamp.
 
+### Archive extraction contract
+
+When an archive has `unpack = b.boolean.true`, derivation schema v15 records a
+built-in `ExtractArchive` step in the prepare-phase body. The step refers to one
+locked archive by index and freezes its normalized relative destination and
+`strip_dirs` value. Plan validation rejects a non-archive source, extraction in
+any hook or other phase, more than 128 stripped components, equal or nested
+archive destinations, and any archive destination that is equal to, above, or
+below a locked Git checkout directory. The step is executed by Cast itself, not by
+`bsdtar`, `tar`, or a package-provided command, so there is no undeclared
+executable or format fallback.
+
+The decoder selects compression from the bytes, not the filename suffix:
+
+| Accepted stream | Common suffixes |
+|---|---|
+| Plain tar | `.tar` |
+| Gzip-compressed tar | `.tar.gz`, `.tgz` |
+| XZ-compressed tar | `.tar.xz`, `.txz` |
+| Zstandard-compressed tar with standard frame magic | `.tar.zst`, `.tar.zstd` |
+
+Bzip2, ZIP, 7z, RAR, lzip, Unix compress (`.Z`), and every other compression or
+container format are unsupported. A recognized compressed stream must decode
+to a valid tar stream; a suggestive filename does not change that requirement.
+
+Before touching the destination, Cast verifies the locked digest and scans the
+decoded tar into a bounded canonical manifest. Regular files, directories,
+non-escaping relative symlinks, and backward hard links to an already admitted
+regular file or hard link are supported. It rejects unsafe or duplicate paths,
+escaping links, forward or stripped-away hard-link targets, sparse files,
+special inodes, incompatible path topology, global PAX state, and unsupported
+PAX keys (including PAX `size` overrides). Compressed and decoded bytes,
+decoder working memory, entries, aggregate path bytes, path and link depth,
+per-entry and aggregate extension data, individual and aggregate file sizes,
+materialized nodes, and wall time all have fixed ceilings. Extraction count,
+compressed bytes, decoded bytes, entries, path data, extension data, logical
+and physical file bytes, nodes, and wall time also have aggregate limits shared
+by every archive step in one derivation.
+
+Cast copies and hashes the locked source once into a sealed immutable snapshot;
+both scans and extraction read only that snapshot, so a same-UID host writer
+cannot alternate archive contents between verification passes. Extraction
+writes only beneath a private descriptor-rooted stage. Cast descriptor-pins and
+normalizes nested destination parents, normalizes the stage to exact modes and
+`source_date_epoch`, scans the snapshot a second time, requires both canonical
+manifests to match, and publishes without replacing an existing destination.
+Pre-publication failures trigger bounded stage cleanup. A failure after the
+atomic rename (for example, a durability-sync error) aborts the build but never
+mistakes the published tree for the private stage and purges it through the
+obsolete stage name.
+
 ### Frozen builds are offline
 
 Every byte fetched from outside the build root must be declared in `sources`
@@ -442,9 +493,10 @@ The source timestamp and job count are explicit because build scripts can
 observe them. The derivation ID is SHA-256 over the canonical
 `DerivationPlan`, including locked sources and dependencies, selected policy,
 jobs and phases, environment, execution policy, pseudo-filesystems, outputs,
-and timestamp. Derivation schema v13 includes the canonical build-lock origin
-mapping, so changing only why an unchanged provider was requested changes the
-derivation ID.
+and timestamp. Derivation schema v15 includes the canonical build-lock origin
+mapping and typed built-in archive extraction, so changing only why an
+unchanged provider was requested, or changing an archive source, destination,
+or strip count, changes the derivation ID.
 
 ## Frozen execution
 

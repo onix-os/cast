@@ -10,6 +10,7 @@ pub use self::recipe::Recipe;
 pub use self::timing::Timing;
 
 mod architecture;
+mod archive;
 mod build;
 mod build_lock;
 pub mod cli;

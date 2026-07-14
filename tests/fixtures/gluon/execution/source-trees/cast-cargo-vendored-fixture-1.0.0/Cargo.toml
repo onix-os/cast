@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "cast-cargo-vendored-fixture"
+version = "1.0.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[dependencies]
+cast-fixture-greeting = "0.1.0"
+
+[[bin]]
+name = "cast-cargo-vendored-fixture"
+path = "src/main.rs"
+
+# Keep the extracted fixture self-contained even when its source tree is
+# inspected from inside a larger Cargo checkout.
+[workspace]

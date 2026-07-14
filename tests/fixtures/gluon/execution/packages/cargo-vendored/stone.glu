@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let cargo = import! cast.builders.cargo.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-cargo-vendored-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-cargo-vendored-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    // `.cargo/config.toml`, Cargo.lock, and the complete directory source are
+    // part of the source archive. The structural builder adds `--frozen` and
+    // has no fetch phase, so the declared dependency must resolve offline.
+    builder = cargo.builder {
+        features = [],
+        binaries = ["cast-cargo-vendored-fixture"],
+        run_tests = b.boolean.true,
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-cargo-vendored-fixture-1.0.0.tar.gz",
+            hash = "66cca1b5c1e183488393cb40761c1fafd0ea509ee76589f9c1935671724421ba",
+            rename = b.optional.set "cast-cargo-vendored-fixture.tar.gz",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-cargo-vendored-fixture",
+        },
+    ],
+    .. base
+}

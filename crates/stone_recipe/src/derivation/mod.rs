@@ -28,7 +28,7 @@ use crate::{
     package::valid_package_name,
     spec::{
         SourceUrlKind, SourceUrlValidationError, is_canonical_git_commit, is_canonical_sha256,
-        is_safe_artifact_component, validate_source_url,
+        is_normalized_relative_path, is_safe_artifact_component, validate_source_url,
     },
 };
 
@@ -42,7 +42,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 14;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 15;
 
 /// Resource limits for process-facing data in one frozen derivation.
 ///
@@ -502,7 +502,12 @@ impl DerivationPlan {
         }
 
         for (index, job) in self.jobs.iter().enumerate() {
-            job.validate(index, Path::new(&self.layout.build_dir), &self.build_lock)?;
+            job.validate(
+                index,
+                Path::new(&self.layout.build_dir),
+                &self.sources,
+                &self.build_lock,
+            )?;
         }
         for (index, input) in self.manifest_build_inputs.iter().enumerate() {
             input.validate(&format!("manifest_build_inputs[{index}]"))?;
@@ -815,11 +820,18 @@ impl PhasePlan {
         &self,
         parent: &str,
         build_dir: &Path,
+        sources: &[LockedSource],
         build_lock: &BuildLock,
     ) -> Result<(), DerivationValidationError> {
         for (group, steps) in [("pre", &self.pre), ("steps", &self.steps), ("post", &self.post)] {
             for (step_index, step) in steps.iter().enumerate() {
-                step.validate(&format!("{parent}.{group}[{step_index}]"), build_dir, build_lock)?;
+                step.validate(
+                    &format!("{parent}.{group}[{step_index}]"),
+                    build_dir,
+                    sources,
+                    build_lock,
+                    self.name.eq_ignore_ascii_case("prepare") && group == "steps",
+                )?;
             }
         }
         Ok(())
@@ -849,6 +861,7 @@ impl JobPlan {
         &self,
         job_index: usize,
         layout_build_dir: &Path,
+        sources: &[LockedSource],
         build_lock: &BuildLock,
     ) -> Result<(), DerivationValidationError> {
         let build_field = format!("jobs[{job_index}].build_dir");
@@ -902,8 +915,47 @@ impl JobPlan {
             phase.validate(
                 &format!("jobs[{job_index}].phases[{phase_index}]"),
                 build_dir,
+                sources,
                 build_lock,
             )?;
+        }
+        let archive_destinations = self
+            .phases
+            .iter()
+            .flat_map(|phase| phase.pre.iter().chain(&phase.steps).chain(&phase.post))
+            .filter_map(|step| match step {
+                StepPlan::ExtractArchive { destination, .. } => Some(destination.as_str()),
+                StepPlan::Run { .. } | StepPlan::Shell { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        for (index, destination) in archive_destinations.iter().enumerate() {
+            let destination = Path::new(destination);
+            if archive_destinations.iter().skip(index + 1).any(|other| {
+                let other = Path::new(other);
+                destination == other || destination.starts_with(other) || other.starts_with(destination)
+            }) {
+                return Err(DerivationValidationError::OverlappingArchiveDestinations { job: job_index });
+            }
+        }
+        for destination in archive_destinations {
+            let destination_path = Path::new(destination);
+            for (source, directory) in sources.iter().enumerate().filter_map(|(source, value)| match value {
+                LockedSource::Git { directory, .. } => Some((source, directory.as_str())),
+                LockedSource::Archive { .. } => None,
+            }) {
+                let git_path = Path::new(directory);
+                if destination_path == git_path
+                    || destination_path.starts_with(git_path)
+                    || git_path.starts_with(destination_path)
+                {
+                    return Err(DerivationValidationError::ArchiveDestinationOverlapsGitSource {
+                        job: job_index,
+                        destination: destination.to_owned(),
+                        source_index: source,
+                        directory: directory.to_owned(),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -939,10 +991,23 @@ pub enum StepPlan {
         environment: BTreeMap<String, String>,
         working_dir: String,
     },
+    /// Built-in, fail-closed extraction of one exact locked archive.
+    ExtractArchive {
+        source: u32,
+        destination: String,
+        strip_components: u32,
+    },
 }
 
 impl StepPlan {
-    fn validate(&self, field: &str, build_dir: &Path, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
+    fn validate(
+        &self,
+        field: &str,
+        build_dir: &Path,
+        sources: &[LockedSource],
+        build_lock: &BuildLock,
+        archive_allowed: bool,
+    ) -> Result<(), DerivationValidationError> {
         match self {
             Self::Run {
                 program, working_dir, ..
@@ -963,6 +1028,42 @@ impl StepPlan {
                 }
                 require_nonempty(&format!("{field}.script"), script)?;
                 validate_step_working_dir(field, working_dir, build_dir)
+            }
+            Self::ExtractArchive {
+                source,
+                destination,
+                strip_components,
+            } => {
+                if !archive_allowed {
+                    return Err(DerivationValidationError::ArchiveStepOutsidePrepare {
+                        field: field.to_owned(),
+                    });
+                }
+                let source_index =
+                    usize::try_from(*source).map_err(|_| DerivationValidationError::InvalidArchiveStepSource {
+                        field: field.to_owned(),
+                        source_index: *source,
+                    })?;
+                if !matches!(sources.get(source_index), Some(LockedSource::Archive { .. })) {
+                    return Err(DerivationValidationError::InvalidArchiveStepSource {
+                        field: field.to_owned(),
+                        source_index: *source,
+                    });
+                }
+                if !is_normalized_relative_path(destination) {
+                    return Err(DerivationValidationError::UnsafeArchiveStepDestination {
+                        field: field.to_owned(),
+                        destination: destination.clone(),
+                    });
+                }
+                if *strip_components > 128 {
+                    return Err(DerivationValidationError::ArchiveStripComponentsLimit {
+                        field: field.to_owned(),
+                        found: *strip_components,
+                        limit: 128,
+                    });
+                }
+                Ok(())
             }
         }
     }
@@ -994,6 +1095,16 @@ impl StepPlan {
                 encoder.string(script);
                 encoder.map(environment);
                 encoder.string(working_dir);
+            }
+            Self::ExtractArchive {
+                source,
+                destination,
+                strip_components,
+            } => {
+                encoder.variant(2);
+                encoder.u32(*source);
+                encoder.string(destination);
+                encoder.u32(*strip_components);
             }
         }
     }
@@ -2152,6 +2263,7 @@ impl ProcessDataBudget {
                     environment,
                 )
             }
+            StepPlan::ExtractArchive { destination, .. } => self.path(&format!("{field}.destination"), destination),
         }
     }
 
@@ -2557,6 +2669,25 @@ pub enum DerivationValidationError {
     },
     #[error("jobs[{job}].phases[{phase}].name: unsupported frozen phase {name:?}")]
     UnsupportedPhase { job: usize, phase: usize, name: String },
+    #[error("jobs[{job}] contains overlapping archive extraction destinations")]
+    OverlappingArchiveDestinations { job: usize },
+    #[error(
+        "jobs[{job}] archive destination {destination:?} overlaps sources[{source_index}] Git directory {directory:?}"
+    )]
+    ArchiveDestinationOverlapsGitSource {
+        job: usize,
+        destination: String,
+        source_index: usize,
+        directory: String,
+    },
+    #[error("{field}: built-in archive extraction is permitted only in the prepare phase body")]
+    ArchiveStepOutsidePrepare { field: String },
+    #[error("{field}.source: {source_index} does not identify a locked archive")]
+    InvalidArchiveStepSource { field: String, source_index: u32 },
+    #[error("{field}.destination: unsafe normalized relative archive destination {destination:?}")]
+    UnsafeArchiveStepDestination { field: String, destination: String },
+    #[error("{field}.strip_components: found {found}, limit {limit}")]
+    ArchiveStripComponentsLimit { field: String, found: u32, limit: u32 },
     #[error("sources[{index}].url: invalid source URL: {source}")]
     InvalidSourceUrl {
         index: usize,
@@ -3163,6 +3294,26 @@ mod tests {
         &mut plan.jobs[0].phases[0].steps[0]
     }
 
+    fn insert_prepare_archive_steps(plan: &mut DerivationPlan, steps: Vec<StepPlan>) {
+        plan.jobs[0].phases.insert(
+            0,
+            PhasePlan {
+                name: "Prepare".to_owned(),
+                pre: Vec::new(),
+                steps,
+                post: Vec::new(),
+            },
+        );
+    }
+
+    fn archive_step(source: u32, destination: &str, strip_components: u32) -> StepPlan {
+        StepPlan::ExtractArchive {
+            source,
+            destination: destination.to_owned(),
+            strip_components,
+        }
+    }
+
     fn make_sample_shell(plan: &mut DerivationPlan) {
         let (environment, working_dir) = match sample_step_mut(plan) {
             StepPlan::Run {
@@ -3170,7 +3321,7 @@ mod tests {
                 working_dir,
                 ..
             } => (environment.clone(), working_dir.clone()),
-            StepPlan::Shell { .. } => return,
+            StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => return,
         };
         *sample_step_mut(plan) = StepPlan::Shell {
             interpreter: sample_analyzer_tool("bash"),
@@ -3221,17 +3372,107 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_pre_toolchain_command_schema_thirteen() {
+    fn validation_rejects_pre_structural_archive_schema_fourteen() {
         let mut plan = sample_plan();
-        plan.schema_version = 13;
+        plan.schema_version = 14;
 
         assert!(matches!(
             plan.validate(),
             Err(DerivationValidationError::UnsupportedSchema {
-                found: 13,
+                found: 14,
                 expected: DERIVATION_PLAN_SCHEMA_VERSION,
             })
         ));
+    }
+
+    #[test]
+    fn structural_archive_steps_are_prepare_only_locked_bounded_and_nonoverlapping() {
+        let mut valid = sample_plan();
+        insert_prepare_archive_steps(&mut valid, vec![archive_step(0, "vendor/source", 1)]);
+        valid.validate().unwrap();
+
+        let mut hook = sample_plan();
+        hook.jobs[0].phases.insert(
+            0,
+            PhasePlan {
+                name: "Prepare".to_owned(),
+                pre: vec![archive_step(0, "source", 1)],
+                steps: Vec::new(),
+                post: Vec::new(),
+            },
+        );
+        assert!(matches!(
+            hook.validate(),
+            Err(DerivationValidationError::ArchiveStepOutsidePrepare { ref field })
+                if field == "jobs[0].phases[0].pre[0]"
+        ));
+
+        let mut wrong_kind = sample_plan();
+        wrong_kind.sources.push(sample_git_source(1, "git-source"));
+        insert_prepare_archive_steps(&mut wrong_kind, vec![archive_step(1, "source", 1)]);
+        assert!(matches!(
+            wrong_kind.validate(),
+            Err(DerivationValidationError::InvalidArchiveStepSource { source_index: 1, .. })
+        ));
+
+        let mut unsafe_destination = sample_plan();
+        insert_prepare_archive_steps(&mut unsafe_destination, vec![archive_step(0, "../source", 1)]);
+        assert!(matches!(
+            unsafe_destination.validate(),
+            Err(DerivationValidationError::UnsafeArchiveStepDestination { .. })
+        ));
+
+        let mut excessive_strip = sample_plan();
+        insert_prepare_archive_steps(&mut excessive_strip, vec![archive_step(0, "source", 129)]);
+        assert!(matches!(
+            excessive_strip.validate(),
+            Err(DerivationValidationError::ArchiveStripComponentsLimit {
+                found: 129,
+                limit: 128,
+                ..
+            })
+        ));
+
+        let mut overlapping = sample_plan();
+        insert_prepare_archive_steps(
+            &mut overlapping,
+            vec![archive_step(0, "source", 1), archive_step(0, "source/nested", 1)],
+        );
+        assert!(matches!(
+            overlapping.validate(),
+            Err(DerivationValidationError::OverlappingArchiveDestinations { job: 0 })
+        ));
+    }
+
+    #[test]
+    fn archive_destinations_cannot_merge_with_git_sources_in_either_source_order() {
+        let mut archive_first = sample_plan();
+        archive_first.sources.push(sample_git_source(1, "source"));
+        insert_prepare_archive_steps(&mut archive_first, vec![archive_step(0, "source/nested", 1)]);
+
+        let mut git_first = sample_plan();
+        git_first.sources = vec![
+            sample_git_source(0, "source"),
+            LockedSource::Archive {
+                order: 1,
+                url: "https://example.invalid/hello.tar.zst".to_owned(),
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                filename: "hello.tar.zst".to_owned(),
+            },
+        ];
+        insert_prepare_archive_steps(&mut git_first, vec![archive_step(1, "source", 1)]);
+
+        for plan in [archive_first, git_first] {
+            assert!(matches!(
+                plan.validate(),
+                Err(DerivationValidationError::ArchiveDestinationOverlapsGitSource {
+                    job: 0,
+                    ref destination,
+                    ref directory,
+                    ..
+                }) if destination.starts_with("source") && directory == "source"
+            ));
+        }
     }
 
     #[test]
@@ -4700,7 +4941,7 @@ mod tests {
                 "phase",
                 Box::new(|plan| match &mut plan.jobs[0].phases[0].steps[0] {
                     StepPlan::Run { args, .. } => args.push("--verbose".to_owned()),
-                    StepPlan::Shell { .. } => unreachable!(),
+                    StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => unreachable!(),
                 }),
             ),
             (

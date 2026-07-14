@@ -55,9 +55,18 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Six separate fixtures contain small, real source trees for the Autotools,
-Cargo, CMake, custom-step, Meson, and split-output package shapes. Run their
+Nine separate fixtures contain small, real source trees for Autotools, Cargo,
+vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
+generated daemon assets, and native split-output package shapes. Run their
 proof lanes from the repository root:
+
+The checked-in archive matrix keeps six fixtures as plain USTAR and exercises
+all three supported compressed paths with vendored Cargo as deterministic
+gzip, the patch-hook fixture as deterministic XZ, and the generated-daemon
+fixture as deterministic Zstandard. `make fixture-sources` rebuilds those
+exact bytes; the offline lane rejects any format, filename, or digest drift.
+The default `flake.nix` development shell supplies the required gzip, XZ, and
+Zstandard command-line encoders.
 
 ```sh
 make execution-fixtures
@@ -67,12 +76,14 @@ make fixtures-ci
 
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source archives, validates the pinned Stone index and closure declaration, and
-proves that all six recipes resolve to that exact closure. `make
+proves that all nine recipes resolve to that exact closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
-materializes the production-format root mirror, then builds, packages, and
-reproduces every fixture. It may skip execution when the host cannot create the
-required namespaces; pass `REQUIRE_EXECUTION=1` to reject that skip. `make
-fixtures-ci` runs both lanes and always requires execution.
+materializes the production-format root mirror, then attempts to build,
+package, and reproduce every fixture. It may skip execution when the host
+cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
+that skip. A skipped developer run is not evidence that contentful execution or
+bundle reproduction succeeded. `make fixtures-ci` runs both lanes and always
+requires execution.
 
 Execution requires Linux user and mount namespaces. For an unprivileged caller,
 the current mapper specifically requires `/usr/bin/newgidmap` and at least one

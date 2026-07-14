@@ -444,7 +444,7 @@ mod tests {
                 .evaluation
                 .imported_modules
                 .iter()
-                .any(|module| module.logical_name == "cast.build_policy.v4")
+                .any(|module| module.logical_name == "cast.build_policy.v5")
         );
     }
 
@@ -495,7 +495,7 @@ l.policy "test-policy" [
         fs::write(
             root.path().join("modify.glu"),
             r#"
-let b = import! cast.build_policy.v4
+let b = import! cast.build_policy.v5
 b.policy_patch {
     build_subdir = b.patch.set "modified-builddir",
     .. b.defaults.policy_patch
@@ -586,7 +586,7 @@ l.policy "validated-policy" [l.layer "site" [
         fs::write(
             root.path().join("invalid.glu"),
             r#"
-let b = import! cast.build_policy.v4
+let b = import! cast.build_policy.v5
 b.policy_patch {
     build_subdir = b.patch.set "",
     .. b.defaults.policy_patch

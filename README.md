@@ -94,9 +94,17 @@ freeze I/O-backed resolution:
   closure, repository snapshots, platforms, policy identities, and typed input
   provenance.
 
-The derivation-plan schema is v14. It binds the Cast implementation identity,
-recipe and policy provenance, locks, resolved commands, environment, outputs,
-and reproducibility inputs into one SHA-256 derivation identity.
+The derivation-plan schema is v15. It binds the Cast implementation identity,
+recipe and policy provenance, locks, resolved commands, built-in archive
+extraction, environment, outputs, and reproducibility inputs into one SHA-256
+derivation identity.
+
+Unpacked sources are limited to tar streams which are plain, gzip-compressed,
+xz-compressed, or zstd-compressed with standard frame magic. Cast extracts them
+itself through the frozen plan; unsupported compression and container formats
+fail closed without an external unpacker fallback. The complete archive
+contract is documented in the
+[package-authoring guide](docs/package-authoring.md#archive-extraction-contract).
 
 ```sh
 cast recipe update ./stone.glu

@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "cast-fixture-greeting"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[lib]
+path = "src/lib.rs"

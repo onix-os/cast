@@ -30,7 +30,17 @@ const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const BOOTSTRAP_PROFILE: &str = "planner-contentful-bootstrap";
-const REQUIRED_EXECUTION_FIXTURES: [&str; 6] = ["autotools", "cargo", "cmake", "custom", "meson", "split"];
+const REQUIRED_EXECUTION_FIXTURES: [&str; 9] = [
+    "autotools",
+    "cargo",
+    "cargo-vendored",
+    "cmake",
+    "custom",
+    "daemon-generated",
+    "hooks-patch",
+    "meson",
+    "split",
+];
 
 #[derive(Debug, PartialEq, Eq)]
 enum FrozenStepShape {
@@ -43,6 +53,19 @@ enum FrozenStepShape {
         declared_programs: Vec<String>,
         script: String,
     },
+    ExtractArchive {
+        source: u32,
+        destination: String,
+        strip_components: u32,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FrozenPhaseShape {
+    name: String,
+    pre: Vec<FrozenStepShape>,
+    steps: Vec<FrozenStepShape>,
+    post: Vec<FrozenStepShape>,
 }
 
 fn step_shape(step: &stone_recipe::derivation::StepPlan) -> FrozenStepShape {
@@ -61,6 +84,41 @@ fn step_shape(step: &stone_recipe::derivation::StepPlan) -> FrozenStepShape {
             declared_programs: declared_programs.iter().map(|program| program.path.clone()).collect(),
             script: script.clone(),
         },
+        stone_recipe::derivation::StepPlan::ExtractArchive {
+            source,
+            destination,
+            strip_components,
+        } => FrozenStepShape::ExtractArchive {
+            source: *source,
+            destination: destination.clone(),
+            strip_components: *strip_components,
+        },
+    }
+}
+
+fn extract(destination: &str) -> FrozenStepShape {
+    FrozenStepShape::ExtractArchive {
+        source: 0,
+        destination: destination.to_owned(),
+        strip_components: 1,
+    }
+}
+
+fn phase(name: &str, steps: Vec<FrozenStepShape>) -> FrozenPhaseShape {
+    FrozenPhaseShape {
+        name: name.to_owned(),
+        pre: Vec::new(),
+        steps,
+        post: Vec::new(),
+    }
+}
+
+fn phase_with_pre(name: &str, pre: Vec<FrozenStepShape>, steps: Vec<FrozenStepShape>) -> FrozenPhaseShape {
+    FrozenPhaseShape {
+        name: name.to_owned(),
+        pre,
+        steps,
+        post: Vec::new(),
     }
 }
 
@@ -79,47 +137,51 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
     assert_eq!(job.pgo_stage, None, "{name}: unexpected PGO stage");
     assert_eq!(job.pgo_dir, None, "{name}: unexpected PGO directory");
 
-    let prepare = vec![run("mkdir", "-p"), run("bsdtar-static", "xf")];
+    let prepare = |destination: &str| phase("Prepare", vec![extract(destination)]);
     let expected = match name {
         "cmake" => vec![
-            ("Prepare", prepare),
-            ("Setup", vec![run("cmake", "-G")]),
-            ("Build", vec![run("cmake", "--build")]),
-            ("Install", vec![run("cmake", "--install")]),
-            ("Check", vec![run("ctest", "--test-dir")]),
+            prepare("cast-cmake-fixture"),
+            phase("Setup", vec![run("cmake", "-G")]),
+            phase("Build", vec![run("cmake", "--build")]),
+            phase("Install", vec![run("cmake", "--install")]),
+            phase("Check", vec![run("ctest", "--test-dir")]),
         ],
         "split" => vec![
-            ("Prepare", prepare),
-            ("Setup", vec![run("cmake", "-G")]),
-            ("Build", vec![run("cmake", "--build")]),
-            ("Install", vec![run("cmake", "--install")]),
-            ("Check", vec![run("ctest", "--test-dir")]),
+            prepare("cast-split-fixture"),
+            phase("Setup", vec![run("cmake", "-G")]),
+            phase("Build", vec![run("cmake", "--build")]),
+            phase("Install", vec![run("cmake", "--install")]),
+            phase("Check", vec![run("ctest", "--test-dir")]),
         ],
         "meson" => vec![
-            ("Prepare", prepare),
-            ("Setup", vec![run("meson", "setup")]),
-            ("Build", vec![run("meson", "compile")]),
-            ("Install", vec![run("meson", "install")]),
-            ("Check", vec![run("meson", "test")]),
+            prepare("cast-meson-fixture"),
+            phase("Setup", vec![run("meson", "setup")]),
+            phase("Build", vec![run("meson", "compile")]),
+            phase("Install", vec![run("meson", "install")]),
+            phase("Check", vec![run("meson", "test")]),
         ],
-        "cargo" => vec![
-            ("Prepare", prepare),
-            ("Build", vec![run("cargo", "build")]),
-            ("Install", vec![run("install", "-Dm00755")]),
-            ("Check", vec![run("cargo", "test")]),
+        "cargo" | "cargo-vendored" => vec![
+            prepare(if name == "cargo" {
+                "cast-cargo-fixture"
+            } else {
+                "cast-cargo-vendored-fixture"
+            }),
+            phase("Build", vec![run("cargo", "build")]),
+            phase("Install", vec![run("install", "-Dm00755")]),
+            phase("Check", vec![run("cargo", "test")]),
         ],
         "autotools" => vec![
-            ("Prepare", prepare),
-            ("Setup", vec![run("dash", "./configure")]),
-            ("Build", vec![run("make", "VERBOSE=1")]),
-            ("Install", vec![run("make", "install")]),
-            ("Check", vec![run("make", "check")]),
+            prepare("cast-autotools-fixture"),
+            phase("Setup", vec![run("dash", "./configure")]),
+            phase("Build", vec![run("make", "VERBOSE=1")]),
+            phase("Install", vec![run("make", "install")]),
+            phase("Check", vec![run("make", "check")]),
         ],
         "custom" => vec![
-            ("Prepare", prepare),
-            ("Setup", vec![run("mkdir", "-p")]),
-            ("Build", vec![run("cp", "payload.txt")]),
-            (
+            prepare("cast-custom-fixture"),
+            phase("Setup", vec![run("mkdir", "-p")]),
+            phase("Build", vec![run("cp", "payload.txt")]),
+            phase(
                 "Install",
                 vec![FrozenStepShape::Shell {
                     interpreter: "/usr/bin/dash".to_owned(),
@@ -128,7 +190,25 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
                         .to_owned(),
                 }],
             ),
-            ("Check", vec![run("cmp", "payload.txt")]),
+            phase("Check", vec![run("cmp", "payload.txt")]),
+        ],
+        "daemon-generated" => vec![
+            prepare("cast-daemon-fixture"),
+            phase("Setup", vec![run("cmake", "-G")]),
+            phase("Build", vec![run("cmake", "--build")]),
+            phase("Install", vec![run("cmake", "--install")]),
+            phase("Check", vec![run("ctest", "--test-dir")]),
+        ],
+        "hooks-patch" => vec![
+            prepare("cast-hooks-fixture"),
+            phase_with_pre(
+                "Setup",
+                vec![run("patch", "-p1")],
+                vec![run("cmake", "-G")],
+            ),
+            phase("Build", vec![run("cmake", "--build")]),
+            phase("Install", vec![run("cmake", "--install")]),
+            phase("Check", vec![run("ctest", "--test-dir")]),
         ],
         other => panic!("unexpected execution fixture {other:?}"),
     };
@@ -137,13 +217,13 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         .phases
         .iter()
         .map(|phase| {
-            assert!(phase.pre.is_empty(), "{name}/{}: unexpected pre-hook", phase.name);
-            assert!(phase.post.is_empty(), "{name}/{}: unexpected post-hook", phase.name);
             assert!(!phase.steps.is_empty(), "{name}/{}: empty frozen phase", phase.name);
-            (
-                phase.name.as_str(),
-                phase.steps.iter().map(step_shape).collect::<Vec<_>>(),
-            )
+            FrozenPhaseShape {
+                name: phase.name.clone(),
+                pre: phase.pre.iter().map(step_shape).collect(),
+                steps: phase.steps.iter().map(step_shape).collect(),
+                post: phase.post.iter().map(step_shape).collect(),
+            }
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
@@ -414,17 +494,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     );
 
     for required in [
-        "autoconf",
-        "automake",
-        "bsdtar-static",
-        "clang",
-        "cmake",
-        "dash",
-        "make",
-        "meson",
-        "ninja",
-        "pkgconf",
-        "python",
+        "autoconf", "automake", "clang", "cmake", "dash", "make", "meson", "ninja", "patch", "pkgconf", "python",
         "rust",
     ] {
         assert!(
@@ -729,7 +799,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
 
 #[test]
 fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
-    let (closure, _) = validated_bootstrap();
+    let (closure, indexed) = validated_bootstrap();
     let expected_packages = closure.packages.sha256.iter().cloned().collect::<BTreeSet<_>>();
     let matrix = BootstrapPlanningMatrix::new(&closure);
     let mut resolved_packages = BTreeSet::new();
@@ -787,9 +857,20 @@ fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
             .difference(&resolved_packages)
             .cloned()
             .collect::<Vec<_>>();
+        let resolved_total_download_bytes = resolved_packages
+            .iter()
+            .map(|hash| {
+                indexed[hash]
+                    .download_size
+                    .unwrap_or_else(|| panic!("resolved bootstrap package {hash} has no declared size"))
+            })
+            .try_fold(0u64, |total, size| total.checked_add(size))
+            .expect("resolved bootstrap package byte sum overflowed");
         panic!(
-            "the six real execution plans differ from the declarative bootstrap closure; \
-             missing_from_manifest={missing_from_manifest:?}, unused_in_manifest={unused_in_manifest:?}"
+            "the real execution plans differ from the declarative bootstrap closure; \
+             missing_from_manifest={missing_from_manifest:?}, unused_in_manifest={unused_in_manifest:?}, \
+             resolved_total_download_bytes={resolved_total_download_bytes}, \
+             resolved_packages={resolved_packages:?}"
         );
     }
 }

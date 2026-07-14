@@ -777,6 +777,16 @@ fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[S
                 formatter.close(indent + 2);
                 formatter.string(indent + 2, "working_dir", working_dir);
             }
+            StepPlan::ExtractArchive {
+                source,
+                destination,
+                strip_components,
+            } => {
+                formatter.string(indent + 2, "kind", "extract_archive");
+                formatter.field(indent + 2, "source", source);
+                formatter.string(indent + 2, "destination", destination);
+                formatter.field(indent + 2, "strip_components", strip_components);
+            }
         }
         formatter.close(indent + 1);
     }
@@ -1055,7 +1065,7 @@ mod tests {
                             },
                             InputOrigin::JobExecutable {
                                 job: 0,
-                                phase: 0,
+                                phase: 1,
                                 phase_name: "build".to_owned(),
                                 section: JobStepSection::Steps,
                                 step: 0,
@@ -1097,7 +1107,7 @@ mod tests {
                     output: "out".to_owned(),
                     origins: vec![InputOrigin::JobExecutable {
                         job: 0,
-                        phase: 0,
+                        phase: 1,
                         phase_name: "build".to_owned(),
                         section: JobStepSection::Pre,
                         step: 0,
@@ -1115,7 +1125,7 @@ mod tests {
                         },
                         InputOrigin::JobExecutable {
                             job: 0,
-                            phase: 0,
+                            phase: 1,
                             phase_name: "build".to_owned(),
                             section: JobStepSection::Steps,
                             step: 0,
@@ -1134,7 +1144,7 @@ mod tests {
                         },
                         InputOrigin::JobExecutable {
                             job: 0,
-                            phase: 0,
+                            phase: 1,
                             phase_name: "build".to_owned(),
                             section: JobStepSection::Post,
                             step: 0,
@@ -1248,31 +1258,43 @@ mod tests {
                 pgo_dir: Some("/sandbox/build/pgo".to_owned()),
                 build_dir: "/sandbox/build/job".to_owned(),
                 work_dir: "/sandbox/build/job/work".to_owned(),
-                phases: vec![PhasePlan {
-                    name: "build".to_owned(),
-                    pre: vec![StepPlan::Run {
-                        program: executable("prepare"),
-                        args: vec!["--first".to_owned(), "second value".to_owned()],
-                        environment: BTreeMap::from([
-                            ("Z_PRE".to_owned(), "z".to_owned()),
-                            ("A_PRE".to_owned(), "a".to_owned()),
-                        ]),
-                        working_dir: "/sandbox/build/job/work".to_owned(),
-                    }],
-                    steps: vec![StepPlan::Shell {
-                        interpreter: executable("bash"),
-                        declared_programs: vec![executable("alpha")],
-                        script: "printf 'build\\n'".to_owned(),
-                        environment: BTreeMap::from([("BUILD_MODE".to_owned(), "release".to_owned())]),
-                        working_dir: "/sandbox/build/job/work".to_owned(),
-                    }],
-                    post: vec![StepPlan::Run {
-                        program: executable("finish"),
-                        args: Vec::new(),
-                        environment: BTreeMap::new(),
-                        working_dir: "/sandbox/build/job".to_owned(),
-                    }],
-                }],
+                phases: vec![
+                    PhasePlan {
+                        name: "prepare".to_owned(),
+                        pre: Vec::new(),
+                        steps: vec![StepPlan::ExtractArchive {
+                            source: 0,
+                            destination: "demo-source".to_owned(),
+                            strip_components: 1,
+                        }],
+                        post: Vec::new(),
+                    },
+                    PhasePlan {
+                        name: "build".to_owned(),
+                        pre: vec![StepPlan::Run {
+                            program: executable("prepare"),
+                            args: vec!["--first".to_owned(), "second value".to_owned()],
+                            environment: BTreeMap::from([
+                                ("Z_PRE".to_owned(), "z".to_owned()),
+                                ("A_PRE".to_owned(), "a".to_owned()),
+                            ]),
+                            working_dir: "/sandbox/build/job/work".to_owned(),
+                        }],
+                        steps: vec![StepPlan::Shell {
+                            interpreter: executable("bash"),
+                            declared_programs: vec![executable("alpha")],
+                            script: "printf 'build\\n'".to_owned(),
+                            environment: BTreeMap::from([("BUILD_MODE".to_owned(), "release".to_owned())]),
+                            working_dir: "/sandbox/build/job/work".to_owned(),
+                        }],
+                        post: vec![StepPlan::Run {
+                            program: executable("finish"),
+                            args: Vec::new(),
+                            environment: BTreeMap::new(),
+                            working_dir: "/sandbox/build/job".to_owned(),
+                        }],
+                    },
+                ],
             }],
             environment: BTreeMap::from([
                 ("Z_GLOBAL".to_owned(), "z".to_owned()),

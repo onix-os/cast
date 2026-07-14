@@ -32,11 +32,14 @@
               mysqlSupport = false;
             })
             pkgs.git
+            pkgs.gzip
             pkgs.gnumake
             pkgs.jq
             pkgs.pkg-config
             pkgs.typos
             pkgs.valgrind
+            pkgs.xz
+            pkgs.zstd
           ];
 
           CC = "${pkgs.clang}/bin/clang";

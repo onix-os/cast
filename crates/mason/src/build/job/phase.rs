@@ -389,23 +389,11 @@ fn prepare_steps(
                     .cloned()
                     .unwrap_or_else(|| materialization_name.clone());
                 let strip_dirs = strip_dirs.unwrap_or(1);
-                let overlay = TextContextOverlay {
-                    source_path: Some(
-                        paths
-                            .upstreams()
-                            .guest
-                            .join(&materialization_name)
-                            .display()
-                            .to_string(),
-                    ),
-                    source_destination: Some(unpack_dir),
-                    source_strip_components: Some(
-                        u32::try_from(strip_dirs).expect("validated source strip_dirs fits u32"),
-                    ),
-                };
-
-                steps.push(context.resolve_command(&policy.spec.sources.archive.create_directory, &overlay)?);
-                steps.push(context.resolve_command(&policy.spec.sources.archive.unpack, &overlay)?);
+                steps.push(StepPlan::ExtractArchive {
+                    source: u32::try_from(index).expect("validated source count fits u32"),
+                    destination: unpack_dir,
+                    strip_components: u32::try_from(strip_dirs).expect("validated source strip_dirs fits u32"),
+                });
             }
             UpstreamSpec::Git { .. } => {
                 let overlay = TextContextOverlay {
@@ -418,7 +406,6 @@ fn prepare_steps(
                             .to_string(),
                     ),
                     source_destination: Some(materialization_name),
-                    source_strip_components: None,
                 };
 
                 steps.push(context.resolve_command(&policy.spec.sources.git.create_directory, &overlay)?);
@@ -522,7 +509,7 @@ mod direct_tests {
     fn shell_script(step: &StepPlan) -> &str {
         match step {
             StepPlan::Shell { script, .. } => script,
-            StepPlan::Run { .. } => panic!("expected an authored shell step"),
+            StepPlan::Run { .. } | StepPlan::ExtractArchive { .. } => panic!("expected an authored shell step"),
         }
     }
 
@@ -798,17 +785,21 @@ mod direct_tests {
         let context = context_for(&recipe, &paths, &policy, None);
         let steps = prepare_steps(&sources, &paths, &context, &policy).unwrap();
 
-        assert_eq!(steps.len(), 4);
-        let StepPlan::Run { program, args, .. } = &steps[1] else {
-            panic!("archive preparation must be structural")
+        assert_eq!(steps.len(), 3);
+        let StepPlan::ExtractArchive {
+            source,
+            destination,
+            strip_components,
+        } = &steps[0]
+        else {
+            panic!("archive preparation must be a built-in structural step")
         };
-        assert_eq!(program.path, "/usr/bin/bsdtar-static");
-        assert_eq!(args[1], format!("/mason/sourcedir/{archive_name}"));
-        assert_eq!(args[3], "source tree");
-        assert_eq!(args[4], "--strip-components=2");
+        assert_eq!(*source, 0);
+        assert_eq!(destination, "source tree");
+        assert_eq!(*strip_components, 2);
         assert!(!steps.iter().any(|step| matches!(step, StepPlan::Shell { .. })));
 
-        let StepPlan::Run { program, args, .. } = &steps[3] else {
+        let StepPlan::Run { program, args, .. } = &steps[2] else {
             panic!("git preparation must be structural")
         };
         assert_eq!(program.path, "/usr/bin/cp");

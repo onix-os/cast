@@ -524,6 +524,7 @@ fn jobs_use_package_directory(jobs: &[JobPlan], package_dir: &str) -> bool {
                 .chain(environment.values().map(String::as_str))
                 .chain(std::iter::once(working_dir.as_str()))
                 .any(|value| value.contains(package_dir)),
+            StepPlan::ExtractArchive { destination, .. } => destination.contains(package_dir),
         })
 }
 

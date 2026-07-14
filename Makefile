@@ -127,7 +127,7 @@ execution-fixtures: fixture-sources-check
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
-	@echo "Resolving all six execution fixtures against the pinned real Stone index..."
+	@echo "Resolving all nine execution fixtures against the pinned real Stone index..."
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
 		--exact --list | \
@@ -153,7 +153,7 @@ bootstrap-fixtures:
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
 		--ignored --exact --nocapture
-	@echo "Building, packaging, and reproducing all six fixtures from the contentful closure..."
+	@echo "Building, packaging, and reproducing all nine fixtures from the contentful closure..."
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --list | \
@@ -219,9 +219,9 @@ help:
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
-	@echo "  bootstrap-fixtures  Fetch the pinned closure and build all six real fixtures twice"
+	@echo "  bootstrap-fixtures  Fetch the pinned closure and build all nine real fixtures twice"
 	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"
-	@echo "  fixtures-ci    Required-capability six-fixture execution and reproduction gate"
+	@echo "  fixtures-ci    Required-capability nine-fixture execution and reproduction gate"
 	@echo "  fixture-sources  Rebuild deterministic offline execution-source archives"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"

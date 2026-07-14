@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Embedded, pure API imported by repository build policy as
-// `cast.build_policy.v4`.
+// `cast.build_policy.v5`.
 
 let _ = import! std.types
 let arrays = import! std.array.prim
@@ -75,7 +75,6 @@ type ContextValue =
     | RustcWrapper
     | SourcePath
     | SourceDestination
-    | SourceStripComponents
 
 type TextPartSpec =
     | LiteralPart { value : String }
@@ -295,18 +294,12 @@ type BuilderCommandSpec = {
     working_dir : TextSpec,
 }
 
-type ArchivePreparationPolicySpec = {
-    create_directory : BuilderCommandSpec,
-    unpack : BuilderCommandSpec,
-}
-
 type GitPreparationPolicySpec = {
     create_directory : BuilderCommandSpec,
     copy : BuilderCommandSpec,
 }
 
 type SourcePreparationPolicySpec = {
-    archive : ArchivePreparationPolicySpec,
     git : GitPreparationPolicySpec,
 }
 
@@ -577,7 +570,6 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
         rustc_wrapper = RustcWrapper,
         source_path = SourcePath,
         source_destination = SourceDestination,
-        source_strip_components = SourceStripComponents,
     },
     optional = {
         no_text = NoText,

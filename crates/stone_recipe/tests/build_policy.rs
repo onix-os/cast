@@ -78,14 +78,15 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
-        "cast.build_policy.v4"
+        "cast.build_policy.v5"
     );
 }
 
 #[test]
-fn build_policy_v4_is_a_hard_abi_boundary() {
-    assert_eq!(BUILD_POLICY_ABI_VERSION, 4);
+fn build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired() {
+    assert_eq!(BUILD_POLICY_ABI_VERSION, 5);
     for retired in [
+        "cast.build_policy.v4",
         "boulder.build_policy.v3",
         "cast.build_policy.v3",
         "cast.build_policy.v2",
@@ -711,36 +712,8 @@ fn repository_sandbox_and_cache_paths_are_explicit_guest_abi() {
 }
 
 #[test]
-fn repository_source_preparation_is_argv_preserving_policy() {
+fn repository_git_source_preparation_is_argv_preserving_policy() {
     let policy = repository_policy_value();
-    let archive = policy.sources.archive;
-    assert_eq!(archive.create_directory.program.path, "/usr/bin/mkdir");
-    assert_eq!(
-        archive.create_directory.program.requirement,
-        BuildToolSpec::Binary("mkdir".to_owned())
-    );
-    assert_eq!(
-        archive.create_directory.args,
-        [
-            TextSpec::Literal("-p".to_owned()),
-            TextSpec::Context(ContextValue::SourceDestination),
-        ]
-    );
-    assert_eq!(archive.unpack.program.path, "/usr/bin/bsdtar-static");
-    assert_eq!(
-        archive.unpack.args,
-        [
-            TextSpec::Literal("xf".to_owned()),
-            TextSpec::Context(ContextValue::SourcePath),
-            TextSpec::Literal("-C".to_owned()),
-            TextSpec::Context(ContextValue::SourceDestination),
-            TextSpec::Concat(vec![
-                TextSpec::Literal("--strip-components=".to_owned()),
-                TextSpec::Context(ContextValue::SourceStripComponents),
-            ]),
-            TextSpec::Literal("--no-same-owner".to_owned()),
-        ]
-    );
     let git = policy.sources.git;
     assert_eq!(git.copy.program.path, "/usr/bin/cp");
     assert_eq!(

@@ -4,7 +4,7 @@
 // Repository-owned build policy. This file contains data only; every dynamic
 // value is an explicit member of the finite build context.
 
-let p = import! cast.build_policy.v4
+let p = import! cast.build_policy.v5
 
 let lit = p.text.literal
 let ctx = \value -> p.text.context value
@@ -302,19 +302,6 @@ let create_source_directory = source_command "mkdir" [
 ]
 
 let sources = {
-    archive = {
-        // Every archive format is handled by this exact structural command;
-        // closure requirements cannot drift from an extension-only switch.
-        create_directory = create_source_directory,
-        unpack = source_command "bsdtar-static" [
-            lit "xf",
-            ctx c.source_path,
-            lit "-C",
-            ctx c.source_destination,
-            cat [lit "--strip-components=", ctx c.source_strip_components],
-            lit "--no-same-owner",
-        ],
-    },
     git = {
         create_directory = create_source_directory,
         copy = source_command "cp" [
