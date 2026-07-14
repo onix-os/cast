@@ -148,10 +148,10 @@ mod tests {
         let layout = BuilderLayout::from_policy(&policy.spec.sandbox, &policy.spec.build_root.compiler_cache);
         let runtime = tempfile::tempdir().unwrap();
         let paths = Paths::new(&recipe, layout, runtime.path(), runtime.path()).unwrap();
-        let target = policy.target("x86_64").unwrap().clone();
+        let target = policy.target("x86_64").unwrap();
 
         let job = Job::new(
-            &target,
+            target,
             None,
             &recipe,
             &paths,
