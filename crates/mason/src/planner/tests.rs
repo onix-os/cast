@@ -52,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 33] = [
+const PACKAGE_EXAMPLES: [&str; 37] = [
     "autotools",
     "binary-release",
     "cargo",
@@ -69,11 +69,15 @@ const PACKAGE_EXAMPLES: [&str; 33] = [
     "gettext-catalogs",
     "go-module",
     "hooks",
+    "kernel-module-factory",
+    "layered-overrides",
     "manual-compiler-pipeline",
+    "maven-application",
     "meson",
     "meta-package",
     "minimal",
     "multiple-sources",
+    "nodejs-vendored-application",
     "options-tuning",
     "output-policy-factory",
     "output-tool-wrapper",
@@ -1145,11 +1149,134 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "factory-override" => assert_factory_override_semantics(declaration, plan),
         "gettext-catalogs" => assert_gettext_catalog_semantics(declaration, plan),
         "go-module" => assert_go_module_semantics(declaration, plan),
+        "kernel-module-factory" => assert_kernel_module_factory_semantics(declaration, plan),
+        "layered-overrides" => assert_layered_override_semantics(declaration, plan),
+        "maven-application" => assert_maven_application_semantics(declaration, plan),
+        "nodejs-vendored-application" => assert_nodejs_vendored_application_semantics(declaration, plan),
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
         "zig-project" => assert_zig_project_semantics(declaration, plan),
         _ => {}
     }
+}
+
+fn assert_kernel_module_factory_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "atlas-sensor-module");
+    assert_eq!(declaration.architectures, ["x86_64", "aarch64"]);
+    assert!(matches!(
+        declaration.native_build_inputs.as_slice(),
+        [DependencySpec::Output(output)]
+            if output.package.name == "linux-lts" && output.output == "devel"
+    ));
+    assert_eq!(
+        dependency_names(&declaration.builder.required_tools),
+        ["binary(make)", "binary(modinfo)", "binary(bash)", "binary(install)"]
+    );
+    let [StepSpec::Run { args, .. }] = declaration.builder.phases.build.steps.as_slice() else {
+        panic!("kernel-module-factory must retain one structural make step");
+    };
+    assert_eq!(
+        args.as_slice(),
+        [
+            "KERNEL_RELEASE=6.12.28-onix1",
+            "KERNEL_DIR=/usr/lib/modules/6.12.28-onix1/build",
+            "modules",
+        ]
+    );
+    let root = declaration.outputs.iter().find(|output| output.name == "out").unwrap();
+    assert!(root.paths.iter().any(|path| {
+        matches!(path, stone_recipe::PathSpec::Any { path }
+            if path == "/usr/lib/modules/6.12.28-onix1/extra/atlas-sensor.ko")
+    }));
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
+}
+
+fn assert_layered_override_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "layered-proxy");
+    assert_eq!(
+        dependency_names(&declaration.native_build_inputs),
+        ["binary(hardening-check)"]
+    );
+    assert_eq!(
+        dependency_names(&declaration.build_inputs),
+        ["pkgconfig(zlib)", "pkgconfig(libarchive)"]
+    );
+    assert_eq!(
+        declaration
+            .outputs
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "out",
+            "docs",
+            "devel",
+            "dbginfo",
+            "libs",
+            "32bit",
+            "32bit-devel",
+            "32bit-dbginfo",
+            "demos",
+            "tools",
+        ]
+    );
+    assert_eq!(
+        declaration
+            .tuning
+            .iter()
+            .map(|tuning| tuning.key.as_str())
+            .collect::<Vec<_>>(),
+        ["harden", "optimize"]
+    );
+    assert!(!declaration.options.debug);
+    assert!(declaration.options.strip);
+    assert!(declaration.options.compressman);
+    assert!(!declaration.options.networking);
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
+}
+
+fn assert_maven_application_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "pulse-router");
+    assert_eq!(
+        dependency_names(&declaration.builder.required_tools),
+        ["binary(mvn)", "binary(install)"]
+    );
+    for phase in [&declaration.builder.phases.build, &declaration.builder.phases.check] {
+        let [StepSpec::Shell { script, .. }] = phase.steps.as_slice() else {
+            panic!("maven-application build and check phases must remain explicit shell steps");
+        };
+        for required in ["--offline", "-Dmaven.repo.local=", "-Dproject.build.outputTimestamp="] {
+            assert!(
+                script.contains(required),
+                "maven-application lost offline setting {required}"
+            );
+        }
+    }
+    assert!(!declaration.options.networking);
+    assert!(matches!(declaration.sources.as_slice(), [UpstreamSpec::Archive { .. }]));
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
+}
+
+fn assert_nodejs_vendored_application_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "nodejs-nebula-lint");
+    assert_eq!(
+        dependency_names(&declaration.builder.required_tools),
+        ["binary(node)", "binary(install)", "binary(cp)"]
+    );
+    for phase in [&declaration.builder.phases.build, &declaration.builder.phases.check] {
+        let [StepSpec::Shell { script, .. }] = phase.steps.as_slice() else {
+            panic!("nodejs-vendored-application build and check phases must remain explicit shell steps");
+        };
+        assert!(script.contains("NODE_PATH=\"${CAST_SOURCE_DIR}/vendor/node_modules\""));
+        assert!(!script.contains("npm"));
+    }
+    assert!(!declaration.options.networking);
+    assert!(matches!(declaration.sources.as_slice(), [UpstreamSpec::Archive { .. }]));
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
 }
 
 fn assert_gettext_catalog_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
