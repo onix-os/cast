@@ -4874,6 +4874,9 @@ fn require_usr_relative_stone_target(target: &str) -> Result<UsrRelativeStoneTar
             return Err("the materialized path is too deep");
         }
     }
+    if package::is_reserved_usr_layout_target(target) {
+        return Err("the target is reserved for Cast system metadata");
+    }
     Ok(UsrRelativeStoneTarget(target))
 }
 
@@ -7793,6 +7796,26 @@ mod tests {
                     reason: "the target is absolute",
                 }) if rejected_package == package && rejected_target == absolute
             ));
+
+            for reserved in [".cast-tree-id", ".stateID/forged-child"] {
+                let invalid = test_stone_layout(kind, reserved);
+                assert!(matches!(
+                    require_usr_relative_stone_layout(&package, &invalid),
+                    Err(Error::InvalidStoneLayoutTarget {
+                        package: rejected_package,
+                        target,
+                        reason: "the target is reserved for Cast system metadata",
+                    }) if rejected_package == package && target == reserved
+                ));
+                assert!(matches!(
+                    vfs(vec![(package.clone(), invalid)]),
+                    Err(Error::InvalidStoneLayoutTarget {
+                        package: rejected_package,
+                        target,
+                        reason: "the target is reserved for Cast system metadata",
+                    }) if rejected_package == package && target == reserved
+                ));
+            }
         }
     }
 
@@ -7850,7 +7873,14 @@ mod tests {
     fn stone_layout_ingestion_accepts_utf8_and_exact_linux_path_boundaries() {
         // Layout targets are AStr values, so non-UTF-8 bytes cannot enter this
         // validator. Non-ASCII UTF-8 remains part of the admitted domain.
-        for target in ["bin/tool", ".hidden", "share/Grüße/工具", "usr/bin/nested"] {
+        for target in [
+            "bin/tool",
+            ".hidden",
+            ".cast-tree-id-old",
+            ".stateID.old/child",
+            "share/Grüße/工具",
+            "usr/bin/nested",
+        ] {
             require_usr_relative_stone_target(target).unwrap();
         }
 
@@ -10455,6 +10485,31 @@ let cast = import! cast.system.v1
                 reason: "the target is absolute",
             }) if rejected_package == package && target == "/usr/bin/tool"
         ));
+    }
+
+    #[test]
+    fn direct_database_frozen_consumer_rejects_reserved_targets_before_destination_mutation() {
+        for target in [".cast-tree-id", ".stateID/forged-child"] {
+            let layout = StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFREG | 0o755,
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(1, target.into()),
+            };
+
+            assert_frozen_layout_rejected_before_touching_destination(layout, |error| {
+                assert!(matches!(
+                    error,
+                    Error::InvalidStoneLayoutTarget {
+                        package,
+                        target: rejected_target,
+                        reason: "the target is reserved for Cast system metadata",
+                    } if package == package::Id::from("invalid-layout")
+                        && rejected_target == target
+                ));
+            });
+        }
     }
 
     #[test]
