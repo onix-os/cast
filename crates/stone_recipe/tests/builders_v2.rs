@@ -156,7 +156,7 @@ fn autotools_builder_declares_structural_phase_contract() {
 
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(autoconf)", "binary(automake)"]
+        ["binary(autoconf)", "binary(automake)", "binary(install)"]
     );
     assert_eq!(
         evaluated.package.builder.environment,

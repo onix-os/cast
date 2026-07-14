@@ -12,6 +12,10 @@ let builder = \config -> b.builder.structured {
     required_tools = [
         b.dep.binary "autoconf",
         b.dep.binary "automake",
+        // Generated Makefiles commonly invoke `install` as a child of make.
+        // Keep that program in the declared closure rather than depending on
+        // an accidental transitive provider.
+        b.dep.binary "install",
     ],
     environment = [b.environment.autotools],
     phases = b.scripts {
