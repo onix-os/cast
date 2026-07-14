@@ -9,7 +9,7 @@
 //! and do not yet support local triggers
 use std::{
     io,
-    os::unix::process::CommandExt,
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{self, Stdio},
 };
@@ -20,7 +20,6 @@ use container::Container;
 use gluon_config::{Evaluator, Source};
 use itertools::Itertools;
 use thiserror::Error;
-use tracing::{error, warn};
 use triggers::format::{CompiledHandler, Handler, Trigger};
 
 use super::PendingFile;
@@ -243,37 +242,92 @@ impl TriggerRunner<'_> {
 
 /// Internal executor for triggers.
 fn execute_trigger_directly(trigger: &CompiledHandler) -> Result<(), Error> {
-    match trigger.handler() {
+    execute_handler_directly(trigger.handler())
+}
+
+fn execute_handler_directly(trigger: &Handler) -> Result<(), Error> {
+    match trigger {
         Handler::Run { run, args } => {
-            let cmd = trigger_command(run, args).spawn()?.wait_with_output()?;
+            let output = trigger_command(run, args).spawn()?.wait_with_output()?;
+            if output.status.success() {
+                return Ok(());
+            }
 
-            if let Some(code) = cmd.status.code() {
-                if code != 0 {
-                    // Convert outputs once and reuse
-                    let stdout = String::from_utf8_lossy(&cmd.stdout);
-                    let stderr = String::from_utf8_lossy(&cmd.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            if let Some(code) = output.status.code() {
+                return Err(Error::TriggerExited {
+                    command: run.clone(),
+                    args: args.clone(),
+                    code,
+                    stdout,
+                    stderr,
+                });
+            }
+            if let Some(signal) = output.status.signal() {
+                return Err(Error::TriggerSignaled {
+                    command: run.clone(),
+                    args: args.clone(),
+                    signal,
+                    stdout,
+                    stderr,
+                });
+            }
 
-                    warn!(
-                        command = run,
-                        args = ?args,
-                        exit_code = code,
-                        stdout = %stdout,
-                        stderr = %stderr,
-                        "Trigger exited with non-zero status code"
-                    );
-                }
-            } else {
-                error!(
-                    command = run,
-                    args = ?args,
-                    "Failed to execute trigger"
-                );
+            return Err(Error::TriggerTerminated {
+                command: run.clone(),
+                args: args.clone(),
+                stdout,
+                stderr,
+            });
+        }
+        Handler::Delete { delete } => {
+            // Match the handler's documented `rm -- PATH...` semantics without
+            // invoking an ambient executable. Validate the complete list before
+            // mutating anything, unlink non-directory entries directly, and
+            // never recurse or follow a symlink target.
+            let paths = delete
+                .iter()
+                .map(|path| validate_delete_path(path))
+                .collect::<Result<Vec<_>, _>>()?;
+            for path in paths {
+                fs_err::remove_file(path).map_err(|source| Error::DeletePath {
+                    path: path.to_owned(),
+                    source,
+                })?;
             }
         }
-        Handler::Delete { .. } => todo!(),
     }
 
     Ok(())
+}
+
+fn validate_delete_path(path: &str) -> Result<&Path, Error> {
+    let invalid = |reason| Error::InvalidDeletePath {
+        path: PathBuf::from(path),
+        reason,
+    };
+
+    if path.is_empty() {
+        return Err(invalid("path is empty"));
+    }
+    if path.as_bytes().contains(&0) {
+        return Err(invalid("path contains NUL"));
+    }
+    if !path.starts_with('/') {
+        return Err(invalid("path is not absolute"));
+    }
+    if path == "/" {
+        return Err(invalid("filesystem root cannot be deleted"));
+    }
+    if path[1..]
+        .split('/')
+        .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(invalid("path is not lexically normalized"));
+    }
+
+    Ok(Path::new(path))
 }
 
 /// Build the deliberately small, target-root-owned process context shared by
@@ -340,13 +394,56 @@ pub enum Error {
     #[error("triggers")]
     Triggers(#[from] triggers::Error),
 
+    #[error("trigger command `{command}` {args:?} exited with status {code}; stdout: {stdout:?}; stderr: {stderr:?}")]
+    TriggerExited {
+        command: String,
+        args: Vec<String>,
+        code: i32,
+        stdout: String,
+        stderr: String,
+    },
+
+    #[error(
+        "trigger command `{command}` {args:?} was terminated by signal {signal}; stdout: {stdout:?}; stderr: {stderr:?}"
+    )]
+    TriggerSignaled {
+        command: String,
+        args: Vec<String>,
+        signal: i32,
+        stdout: String,
+        stderr: String,
+    },
+
+    #[error(
+        "trigger command `{command}` {args:?} terminated without an exit code or signal; stdout: {stdout:?}; stderr: {stderr:?}"
+    )]
+    TriggerTerminated {
+        command: String,
+        args: Vec<String>,
+        stdout: String,
+        stderr: String,
+    },
+
+    #[error("invalid delete-trigger path `{}`: {reason}", path.display())]
+    InvalidDeletePath { path: PathBuf, reason: &'static str },
+
+    #[error("delete trigger could not unlink `{}`", path.display())]
+    DeletePath {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
     #[error("io")]
     IO(#[from] io::Error),
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, os::fd::AsRawFd};
+    use std::{
+        collections::BTreeMap,
+        os::{fd::AsRawFd, unix::fs::symlink},
+    };
 
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
@@ -434,5 +531,131 @@ let base = cast.trigger "depmod" "Update kernel module dependencies"
             "trigger probe failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn nonzero_trigger_exit_is_a_hard_error_with_diagnostics() {
+        let handler = Handler::Run {
+            run: "/bin/sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                "printf trigger-out; printf trigger-err >&2; exit 23".to_owned(),
+            ],
+        };
+
+        let error = execute_handler_directly(&handler).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::TriggerExited {
+                ref command,
+                code: 23,
+                ref stdout,
+                ref stderr,
+                ..
+            } if command == "/bin/sh" && stdout == "trigger-out" && stderr == "trigger-err"
+        ));
+    }
+
+    #[test]
+    fn signaled_trigger_exit_is_a_hard_error() {
+        let handler = Handler::Run {
+            run: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "kill -TERM $$".to_owned()],
+        };
+
+        let error = execute_handler_directly(&handler).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::TriggerSignaled {
+                ref command,
+                signal: nix::libc::SIGTERM,
+                ..
+            } if command == "/bin/sh"
+        ));
+    }
+
+    #[test]
+    fn delete_handler_unlinks_files_and_symlinks_without_following_targets() {
+        let temporary = tempfile::tempdir().unwrap();
+        let file = temporary.path().join("generated-cache");
+        let target = temporary.path().join("retained-target");
+        let link = temporary.path().join("generated-link");
+        fs_err::write(&file, b"delete me").unwrap();
+        fs_err::write(&target, b"retain me").unwrap();
+        symlink(&target, &link).unwrap();
+        let handler = Handler::Delete {
+            delete: vec![file.to_string_lossy().into_owned(), link.to_string_lossy().into_owned()],
+        };
+
+        execute_handler_directly(&handler).unwrap();
+
+        assert!(!file.exists());
+        assert!(!link.exists());
+        assert_eq!(fs_err::read(target).unwrap(), b"retain me");
+    }
+
+    #[test]
+    fn delete_handler_rejects_ambiguous_paths_before_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let marker = temporary.path().join("must-remain");
+        fs_err::write(&marker, b"untouched").unwrap();
+        let ambiguous = temporary.path().join("subdir/../escape");
+        let handler = Handler::Delete {
+            delete: vec![
+                marker.to_string_lossy().into_owned(),
+                ambiguous.to_string_lossy().into_owned(),
+            ],
+        };
+
+        let error = execute_handler_directly(&handler).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::InvalidDeletePath { ref path, reason }
+                if path == &ambiguous && reason == "path is not lexically normalized"
+        ));
+        assert_eq!(fs_err::read(marker).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn delete_handler_never_recurses_into_directories() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("directory");
+        let marker = directory.join("must-remain");
+        fs_err::create_dir(&directory).unwrap();
+        fs_err::write(&marker, b"untouched").unwrap();
+        let handler = Handler::Delete {
+            delete: vec![directory.to_string_lossy().into_owned()],
+        };
+
+        let error = execute_handler_directly(&handler).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::DeletePath { ref path, .. } if path == &directory
+        ));
+        assert_eq!(fs_err::read(marker).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn delete_path_contract_requires_normalized_absolute_non_root_paths() {
+        for path in [
+            "",
+            "relative",
+            "/",
+            "//tmp/file",
+            "/tmp/./file",
+            "/tmp/../file",
+            "/tmp/file/",
+        ] {
+            assert!(matches!(
+                validate_delete_path(path),
+                Err(Error::InvalidDeletePath { .. })
+            ));
+        }
+
+        assert_eq!(validate_delete_path("/tmp/file").unwrap(), Path::new("/tmp/file"));
     }
 }
