@@ -287,8 +287,10 @@ PolicySpec -> PolicySpec
 
 Policy maps use explicit `add`, `replace`, and `modify` operations. Duplicate
 unqualified additions are errors. Stone deliberately uses these ordered,
-one-way transformations instead of recursive overlay fixed points: package
-composition must remain finite, inspectable, and native to the Gluon ABI.
+one-way transformations in the current ABI so package composition remains
+finite and inspectable. This plan does not require recursive overlay fixed
+points; future interoperability can be evaluated separately without making it
+the organizing goal of Stone's package model.
 
 ### Frozen derivation plan
 
@@ -607,11 +609,16 @@ The final architecture must demonstrate:
 
 ## Explicit non-goals
 
+These are out of scope for this plan, not permanent compatibility
+prohibitions. Future Nix interoperability may be considered on its own merits
+after the Stone-native Gluon model is solid; this work is not organized around
+providing it.
+
 - Reimplementing the Nix language or Nix store.
 - Building a lazy recursive Nixpkgs clone inside Gluon.
 - Translating Nix expressions or evaluated Nix derivations into Gluon recipes.
-  Nixpkgs is design and example inspiration only, not a compatibility input or
-  alternate package-authoring frontend.
+  Nixpkgs is design and example inspiration for this plan, not a required
+  compatibility input or alternate package-authoring frontend.
 - Automatic `callPackage` argument-name reflection in the initial design.
 - Evaluation-time fetching or import-from-derivation.
 - Accepting mutable recipe-directory inputs before a content-addressed local
