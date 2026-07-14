@@ -10,12 +10,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{CStr, CString},
     fs::{File, Metadata, OpenOptions},
-    io::Read,
+    io::{Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsRawFd, FromRawFd, IntoRawFd},
         unix::{
             ffi::OsStrExt,
-            fs::{MetadataExt, OpenOptionsExt},
+            fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         },
     },
     path::{Component, Path, PathBuf},
@@ -24,7 +24,10 @@ use std::{
 
 use elf::{
     ElfBytes,
-    abi::{DT_NEEDED, DT_SONAME, EM_X86_64, ET_DYN, ET_EXEC, EV_CURRENT, PT_INTERP, PT_LOAD},
+    abi::{
+        DT_NEEDED, DT_SONAME, ELFCOMPRESS_ZLIB, ELFCOMPRESS_ZSTD, EM_X86_64, ET_DYN, ET_EXEC, EV_CURRENT, PT_INTERP,
+        PT_LOAD, SHT_PROGBITS,
+    },
     endian::{AnyEndian, EndianParse},
     file::Class,
     note::Note,
@@ -227,6 +230,16 @@ impl BundleDirectory {
     }
 
     fn read_artefact(&self, fixture: &str, name: &str, aggregate_remaining: u64) -> Vec<u8> {
+        self.read_artefact_after_authentication(fixture, name, aggregate_remaining, || {})
+    }
+
+    fn read_artefact_after_authentication(
+        &self,
+        fixture: &str,
+        name: &str,
+        aggregate_remaining: u64,
+        checkpoint: impl FnOnce(),
+    ) -> Vec<u8> {
         let mut components = Path::new(name).components();
         assert!(
             matches!(components.next(), Some(Component::Normal(component)) if component == std::ffi::OsStr::new(name))
@@ -287,12 +300,8 @@ impl BundleDirectory {
             "{fixture}: authenticated bundle sizes exceed the {MAX_FIXTURE_BUNDLE_BYTES}-byte aggregate boundary"
         );
         let stamp = FileStamp::from_metadata(&before);
-        let bytes = read_bounded(
-            fixture,
-            &format!("emitted artefact {name:?}"),
-            &mut file,
-            MAX_FIXTURE_ARTEFACT_BYTES,
-        );
+        checkpoint();
+        let bytes = read_bounded(fixture, &format!("emitted artefact {name:?}"), &mut file, before.size());
         assert_eq!(
             u64::try_from(bytes.len()).unwrap(),
             before.size(),
@@ -355,6 +364,41 @@ impl BundleDirectory {
     }
 }
 
+#[test]
+fn authenticated_artefact_size_is_the_authoritative_read_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(STAGED_BUNDLE_MODE)).unwrap();
+    let artefact_path = root.path().join("fixture.stone");
+    let mut writer = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&artefact_path)
+        .unwrap();
+    writer.write_all(b"a").unwrap();
+    writer.sync_all().unwrap();
+    std::fs::set_permissions(&artefact_path, std::fs::Permissions::from_mode(PUBLISHED_ARTEFACT_MODE)).unwrap();
+
+    let directory = BundleDirectory::open("growth", root.path(), BundleRootRole::Staged);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        directory.read_artefact_after_authentication("growth", "fixture.stone", 1, || {
+            writer.seek(SeekFrom::End(0)).unwrap();
+            writer.write_all(b"b").unwrap();
+            writer.sync_all().unwrap();
+        });
+    }))
+    .expect_err("growing an artefact after authentication must fail");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(
+        message.contains("exceeds its 1-byte boundary"),
+        "growth must be rejected by the authenticated-size read cap, not only by a later stamp check: {message}"
+    );
+}
+
 fn read_bounded(fixture: &str, role: &str, file: &mut File, maximum: u64) -> Vec<u8> {
     let mut bytes = Vec::new();
     let reserve = usize::try_from(maximum.min(64 * 1024)).unwrap();
@@ -383,7 +427,12 @@ struct PackageImage {
 /// fixture. This deliberately does more than prove that Stone can parse its
 /// own output: it ties metadata, layouts, indices, content, manifests, the
 /// frozen plan, and the checked-in source fixture together.
-pub(super) fn assert_fixture_bundle(name: &str, planned: &super::super::Planned, root: &Path, role: BundleRootRole) {
+pub(super) fn assert_fixture_bundle(
+    name: &str,
+    planned: &super::super::Planned,
+    root: &Path,
+    role: BundleRootRole,
+) -> BTreeMap<String, Vec<u8>> {
     assert!(
         matches!(name, "autotools" | "cargo" | "cmake" | "custom" | "meson" | "split"),
         "unknown contentful execution fixture {name:?}"
@@ -483,6 +532,8 @@ pub(super) fn assert_fixture_bundle(name: &str, planned: &super::super::Planned,
     } else {
         assert_simple_fixture(name, planned, &packages);
     }
+
+    artefacts
 }
 
 fn fixture_limits() -> StoneDecodeLimits {
@@ -577,6 +628,14 @@ fn decode_package(fixture: &str, planned: &super::super::Planned, output: &Outpu
         layout_payloads.is_empty(),
         layout_records.is_empty(),
         "{fixture}: {} encoded an empty Layout payload",
+        output.package_name
+    );
+
+    assert!(
+        layout_records
+            .windows(2)
+            .all(|pair| pair[0].file.target() < pair[1].file.target()),
+        "{fixture}: {} Layout targets are not in strict canonical order",
         output.package_name
     );
 
@@ -678,6 +737,7 @@ fn decode_package(fixture: &str, planned: &super::super::Planned, output: &Outpu
 
     let mut content = BTreeMap::new();
     let mut cursor = 0u64;
+    let mut previous_index_key = None;
     for index in indices {
         assert_eq!(
             index.start, cursor,
@@ -689,6 +749,15 @@ fn decode_package(fixture: &str, planned: &super::super::Planned, output: &Outpu
             "{fixture}: {} has a reversed index range",
             output.package_name
         );
+        let size = index.end - index.start;
+        if let Some((previous_size, previous_digest)) = previous_index_key {
+            assert!(
+                previous_size > size || (previous_size == size && previous_digest < index.digest),
+                "{fixture}: {} Index records are not ordered by size descending then digest ascending",
+                output.package_name
+            );
+        }
+        previous_index_key = Some((size, index.digest));
         let start = usize::try_from(index.start).unwrap();
         let end = usize::try_from(index.end).unwrap();
         let blob = unpacked
@@ -951,13 +1020,13 @@ fn assert_frozen_provenance(
             (StonePayloadMetaTag::SourceRef, StonePayloadMetaPrimitive::String(value)) => Some(value.as_str()),
             _ => None,
         })
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     let recipe = format!("gluon-evaluation-sha256:{}", planned.plan.provenance.recipe.sha256);
     let derivation = format!("derivation-sha256:{}", planned.plan.derivation_id());
     assert_eq!(
         actual,
-        BTreeSet::from([recipe.as_str(), derivation.as_str()]),
-        "{fixture}: {package} provenance does not name the exact recipe and derivation"
+        [recipe.as_str(), derivation.as_str()],
+        "{fixture}: {package} provenance is not the exact canonical recipe-then-derivation sequence"
     );
 }
 
@@ -1976,6 +2045,80 @@ fn parse_structural_elf<'a>(fixture: &str, target: &str, bytes: &'a [u8]) -> Elf
     elf
 }
 
+fn unique_section_by_name(
+    fixture: &str,
+    target: &str,
+    elf: &ElfBytes<'_, AnyEndian>,
+    expected: &str,
+) -> Option<elf::section::SectionHeader> {
+    let (headers, names) = elf.section_headers_with_strtab().unwrap_or_else(|error| {
+        panic!("{fixture}: parse /usr/{target} section names while finding {expected}: {error}")
+    });
+    let headers = headers.unwrap_or_else(|| panic!("{fixture}: /usr/{target} has no section-header table"));
+    let names = names.unwrap_or_else(|| panic!("{fixture}: /usr/{target} has no section-name string table"));
+    let mut found = None;
+    for section in headers.iter() {
+        let name = names
+            .get(usize::try_from(section.sh_name).unwrap())
+            .unwrap_or_else(|error| {
+                panic!("{fixture}: resolve /usr/{target} section name while finding {expected}: {error}")
+            });
+        if name == expected {
+            assert!(
+                found.replace(section).is_none(),
+                "{fixture}: /usr/{target} repeats ELF section {expected}"
+            );
+        }
+    }
+    found
+}
+
+fn canonical_interpreter<'a>(fixture: &str, target: &str, data: &'a [u8]) -> &'a str {
+    let interpreter = CStr::from_bytes_until_nul(data)
+        .unwrap_or_else(|error| panic!("{fixture}: /usr/{target} interpreter is not NUL-terminated: {error}"));
+    assert_eq!(
+        interpreter.to_bytes_with_nul().len(),
+        data.len(),
+        "{fixture}: /usr/{target} interpreter contains bytes after its terminator"
+    );
+    let interpreter = interpreter
+        .to_str()
+        .unwrap_or_else(|error| panic!("{fixture}: /usr/{target} interpreter is not UTF-8: {error}"));
+    let relative = interpreter.strip_prefix('/').unwrap_or("");
+    assert!(
+        !relative.is_empty()
+            && !interpreter.bytes().any(|byte| byte.is_ascii_control())
+            && relative
+                .split('/')
+                .all(|component| !component.is_empty() && !matches!(component, "." | "..")),
+        "{fixture}: /usr/{target} interpreter is not a canonical absolute path"
+    );
+    interpreter
+}
+
+#[test]
+fn interpreter_path_must_be_exactly_normalized() {
+    assert_eq!(
+        canonical_interpreter("interp", "tool", b"/usr/lib/ld-linux-x86-64.so.2\0"),
+        "/usr/lib/ld-linux-x86-64.so.2"
+    );
+    for malformed in [
+        &b"relative\0"[..],
+        &b"/\0"[..],
+        &b"/usr//lib/ld.so\0"[..],
+        &b"/usr/./lib/ld.so\0"[..],
+        &b"/usr/../lib/ld.so\0"[..],
+        &b"/usr/lib/\0"[..],
+        &b"/usr/\x01lib/ld.so\0"[..],
+        &b"/usr/lib/ld.so\0trailing"[..],
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| canonical_interpreter("interp", "tool", malformed)).is_err(),
+            "non-canonical interpreter was accepted: {malformed:?}"
+        );
+    }
+}
+
 fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeElfKind) -> NativeElf {
     let elf = parse_structural_elf(fixture, target, bytes);
     match kind {
@@ -2017,27 +2160,72 @@ fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeEl
             .unwrap_or_else(|error| panic!("{fixture}: runtime ELF /usr/{target} segment escapes file: {error}"));
     }
 
-    let interp = elf
-        .section_header_by_name(".interp")
-        .unwrap_or_else(|error| panic!("{fixture}: inspect /usr/{target} interpreter section: {error}"));
-    match kind {
+    for name in [".debug_info", ".zdebug_info", ".debug_line", ".zdebug_line"] {
+        assert!(
+            unique_section_by_name(fixture, target, &elf, name).is_none(),
+            "{fixture}: stripped runtime ELF /usr/{target} retains {name}"
+        );
+    }
+
+    let interp_section = unique_section_by_name(fixture, target, &elf, ".interp");
+    let interp_segments = segments
+        .iter()
+        .filter(|segment| segment.p_type == PT_INTERP)
+        .collect::<Vec<_>>();
+    let interpreter = match kind {
         RuntimeElfKind::Executable => {
-            assert!(
-                segments.iter().any(|segment| segment.p_type == PT_INTERP),
-                "{fixture}: executable /usr/{target} has no PT_INTERP program header"
+            assert_eq!(
+                interp_segments.len(),
+                1,
+                "{fixture}: executable /usr/{target} must have exactly one PT_INTERP program header"
             );
+            let section = interp_section
+                .as_ref()
+                .unwrap_or_else(|| panic!("{fixture}: executable /usr/{target} has no .interp section"));
+            let (section_data, compression) = elf
+                .section_data(section)
+                .unwrap_or_else(|error| panic!("{fixture}: read executable /usr/{target} .interp: {error}"));
             assert!(
-                interp.is_some(),
-                "{fixture}: executable /usr/{target} has no .interp section"
+                compression.is_none(),
+                "{fixture}: executable /usr/{target} has a compressed .interp section"
             );
+            let segment_data = elf
+                .segment_data(interp_segments[0])
+                .unwrap_or_else(|error| panic!("{fixture}: read executable /usr/{target} PT_INTERP segment: {error}"));
+            assert_eq!(
+                interp_segments[0].p_offset, section.sh_offset,
+                "{fixture}: executable /usr/{target} PT_INTERP and .interp offsets differ"
+            );
+            assert_eq!(
+                interp_segments[0].p_filesz, section.sh_size,
+                "{fixture}: executable /usr/{target} PT_INTERP and .interp sizes differ"
+            );
+            assert_eq!(
+                interp_segments[0].p_memsz, interp_segments[0].p_filesz,
+                "{fixture}: executable /usr/{target} PT_INTERP has distinct file and memory sizes"
+            );
+            assert_eq!(
+                interp_segments[0].p_vaddr, section.sh_addr,
+                "{fixture}: executable /usr/{target} PT_INTERP and .interp virtual addresses differ"
+            );
+            assert_eq!(
+                segment_data, section_data,
+                "{fixture}: executable /usr/{target} PT_INTERP and .interp bytes differ"
+            );
+            Some(canonical_interpreter(fixture, target, section_data))
         }
         RuntimeElfKind::SharedLibrary => {
             assert!(
-                interp.is_none(),
+                interp_section.is_none(),
                 "{fixture}: shared library /usr/{target} unexpectedly has .interp"
-            )
+            );
+            assert!(
+                interp_segments.is_empty(),
+                "{fixture}: shared library /usr/{target} unexpectedly has PT_INTERP"
+            );
+            None
         }
-    }
+    };
 
     let build_id = elf_build_id(fixture, target, &elf);
     assert_eq!(
@@ -2052,7 +2240,7 @@ fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeEl
         "{fixture}: /usr/{target} GNU build ID is not lowercase hexadecimal"
     );
 
-    let (dependencies, soname) = runtime_elf_relations(fixture, target, &elf, interp.as_ref());
+    let (dependencies, soname) = runtime_elf_relations(fixture, target, &elf, interpreter);
     if matches!(kind, RuntimeElfKind::SharedLibrary) {
         assert!(
             soname.is_some(),
@@ -2078,7 +2266,7 @@ fn runtime_elf_relations(
     fixture: &str,
     target: &str,
     elf: &ElfBytes<'_, AnyEndian>,
-    interp: Option<&elf::section::SectionHeader>,
+    interpreter: Option<&str>,
 ) -> (BTreeSet<String>, Option<String>) {
     let mut needed = Vec::new();
     let mut soname = None;
@@ -2106,19 +2294,7 @@ fn runtime_elf_relations(
             format!("soname({name}(x86_64))")
         })
         .collect::<BTreeSet<_>>();
-    if let Some(section) = interp {
-        let (data, compression) = elf
-            .section_data(section)
-            .unwrap_or_else(|error| panic!("{fixture}: read /usr/{target} .interp: {error}"));
-        assert!(
-            compression.is_none(),
-            "{fixture}: /usr/{target} has a compressed .interp section"
-        );
-        let interpreter = CStr::from_bytes_until_nul(data)
-            .unwrap_or_else(|error| panic!("{fixture}: /usr/{target} .interp is not NUL-terminated: {error}"))
-            .to_str()
-            .unwrap_or_else(|error| panic!("{fixture}: /usr/{target} .interp is not UTF-8: {error}"));
-        assert_eq!(interpreter.as_bytes().len() + 1, data.len());
+    if let Some(interpreter) = interpreter {
         dependencies.insert(format!("interpreter({interpreter}(x86_64))"));
     }
     let soname = soname.map(|offset| {
@@ -2207,14 +2383,123 @@ fn assert_debug_elf(fixture: &str, target: &str, bytes: &[u8], original: &Native
         "{fixture}: debug ELF /usr/{target} build ID differs from its runtime ELF"
     );
     for alternatives in [[".debug_info", ".zdebug_info"], [".debug_line", ".zdebug_line"]] {
+        let sections = alternatives.map(|name| unique_section_by_name(fixture, target, &elf, name));
+        assert_eq!(
+            sections.iter().filter(|section| section.is_some()).count(),
+            1,
+            "{fixture}: debug ELF /usr/{target} must contain exactly one of {} and {}",
+            alternatives[0],
+            alternatives[1]
+        );
+        let (name, section) = alternatives
+            .into_iter()
+            .zip(sections)
+            .find_map(|(name, section)| section.map(|section| (name, section)))
+            .expect("exactly one debug-section alternative was required");
+        assert_debug_section(fixture, target, &elf, name, &section);
+    }
+}
+
+fn assert_debug_section(
+    fixture: &str,
+    target: &str,
+    elf: &ElfBytes<'_, AnyEndian>,
+    name: &str,
+    section: &elf::section::SectionHeader,
+) {
+    assert_eq!(
+        section.sh_type, SHT_PROGBITS,
+        "{fixture}: debug ELF /usr/{target} section {name} is not SHT_PROGBITS"
+    );
+    assert_ne!(
+        section.sh_size, 0,
+        "{fixture}: debug ELF /usr/{target} section {name} is empty"
+    );
+    let (data, compression) = elf
+        .section_data(section)
+        .unwrap_or_else(|error| panic!("{fixture}: read debug ELF /usr/{target} section {name}: {error}"));
+    assert!(
+        !data.is_empty(),
+        "{fixture}: debug ELF /usr/{target} section {name} has no stored data"
+    );
+
+    if name.starts_with(".zdebug_") {
         assert!(
-            alternatives.iter().any(|name| {
-                elf.section_header_by_name(name)
-                    .unwrap_or_else(|error| panic!("{fixture}: inspect /usr/{target} debug section {name}: {error}"))
-                    .is_some()
-            }),
-            "{fixture}: debug ELF /usr/{target} lacks {} data",
-            alternatives[0]
+            compression.is_none(),
+            "{fixture}: GNU-compressed debug section /usr/{target}:{name} also uses SHF_COMPRESSED"
+        );
+        assert!(
+            data.len() > 12 && data.starts_with(b"ZLIB"),
+            "{fixture}: GNU-compressed debug section /usr/{target}:{name} has no valid ZLIB envelope"
+        );
+        let plain_size = u64::from_be_bytes(data[4..12].try_into().unwrap());
+        assert!(
+            plain_size >= 6,
+            "{fixture}: GNU-compressed debug section /usr/{target}:{name} declares no DWARF unit"
+        );
+    } else if let Some(compression) = compression {
+        assert!(
+            matches!(compression.ch_type, ELFCOMPRESS_ZLIB | ELFCOMPRESS_ZSTD),
+            "{fixture}: debug section /usr/{target}:{name} uses an unknown compression type"
+        );
+        assert!(
+            compression.ch_size >= 6,
+            "{fixture}: compressed debug section /usr/{target}:{name} declares no DWARF unit"
+        );
+        assert!(
+            compression.ch_addralign <= 1 || compression.ch_addralign.is_power_of_two(),
+            "{fixture}: compressed debug section /usr/{target}:{name} has invalid alignment"
+        );
+    } else {
+        assert_dwarf_unit_prefix(fixture, target, name, data);
+    }
+}
+
+fn assert_dwarf_unit_prefix(fixture: &str, target: &str, name: &str, data: &[u8]) {
+    assert!(
+        data.len() >= 6,
+        "{fixture}: debug section /usr/{target}:{name} is too short for a DWARF unit"
+    );
+    let initial = u32::from_le_bytes(data[..4].try_into().unwrap());
+    let (prefix, body_size, version_offset) = if initial == u32::MAX {
+        assert!(
+            data.len() >= 14,
+            "{fixture}: debug section /usr/{target}:{name} has a truncated DWARF64 unit"
+        );
+        (12usize, u64::from_le_bytes(data[4..12].try_into().unwrap()), 12usize)
+    } else {
+        assert!(
+            initial < 0xffff_fff0,
+            "{fixture}: debug section /usr/{target}:{name} uses a reserved DWARF initial length"
+        );
+        (4usize, u64::from(initial), 4usize)
+    };
+    assert!(
+        body_size >= 2,
+        "{fixture}: debug section /usr/{target}:{name} declares a DWARF unit without a version"
+    );
+    let total = u64::try_from(prefix)
+        .unwrap()
+        .checked_add(body_size)
+        .expect("DWARF unit length overflow");
+    assert!(
+        total <= u64::try_from(data.len()).unwrap(),
+        "{fixture}: debug section /usr/{target}:{name} has a truncated DWARF unit"
+    );
+    let version = u16::from_le_bytes(data[version_offset..version_offset + 2].try_into().unwrap());
+    assert!(
+        (2..=5).contains(&version),
+        "{fixture}: debug section /usr/{target}:{name} has unsupported DWARF version {version}"
+    );
+}
+
+#[test]
+fn dwarf_debug_section_prefix_must_be_nonempty_and_bounded() {
+    assert_dwarf_unit_prefix("dwarf", "debug", ".debug_info", &[2, 0, 0, 0, 5, 0]);
+    for malformed in [&[][..], &[0, 0, 0, 0, 5, 0], &[8, 0, 0, 0, 5, 0]] {
+        assert!(
+            std::panic::catch_unwind(|| assert_dwarf_unit_prefix("dwarf", "debug", ".debug_info", malformed)).is_err(),
+            "malformed DWARF prefix was accepted: {malformed:?}"
         );
     }
 }

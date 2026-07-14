@@ -96,7 +96,7 @@ mod tests {
         );
         let recipe_ref = format!("{RECIPE_FINGERPRINT_SOURCE_REF_PREFIX}{recipe_fingerprint}");
         let derivation_ref = format!("{DERIVATION_ID_SOURCE_REF_PREFIX}{derivation_id}");
-        let expected = BTreeSet::from([recipe_ref.as_str(), derivation_ref.as_str()]);
+        let expected = [recipe_ref.as_str(), derivation_ref.as_str()];
 
         let mut package_output = Cursor::new(Vec::new());
         let mut package_writer = StoneWriter::new(&mut package_output, StoneHeaderV1FileType::Binary).unwrap();
@@ -141,7 +141,7 @@ mod tests {
         );
     }
 
-    fn source_refs(payload: &[StonePayloadMetaRecord]) -> BTreeSet<&str> {
+    fn source_refs(payload: &[StonePayloadMetaRecord]) -> Vec<&str> {
         payload
             .iter()
             .filter_map(|record| match (&record.tag, &record.primitive) {

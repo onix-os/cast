@@ -17,9 +17,9 @@ use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1Fi
 use url::Url;
 
 use super::{
-    EXECUTION_FIXTURES, Env, Publication, Request, SOURCE_DATE_EPOCH, TARGET, WriteOutcome, assert_emitted_bundle,
-    bundle_bytes, container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain,
-    execute_and_publish, execution_capability_required, plan_for_build, profile,
+    EXECUTION_FIXTURES, Env, Publication, Request, SOURCE_DATE_EPOCH, TARGET, WriteOutcome,
+    container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain, execute_and_publish,
+    execution_capability_required, plan_for_build, profile,
 };
 
 #[path = "bootstrap/bundle.rs"]
@@ -567,8 +567,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
         executed += 1;
 
         let published_root = matrix.output_dir.join(derivation_id.as_str());
-        let published = assert_emitted_bundle(&first, &published_root);
-        bundle::assert_fixture_bundle(name, &first, &published_root, bundle::BundleRootRole::Published);
+        let published = bundle::assert_fixture_bundle(name, &first, &published_root, bundle::BundleRootRole::Published);
 
         let locked = plan_for_build(matrix.env(), matrix.request(recipe, false), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: reuse contentful build lock: {error:#}"));
@@ -594,19 +593,16 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
             )
         });
         assert_eq!(second_publication, Publication::Reused, "{name}: repeated publication");
-        let repeated = assert_emitted_bundle(&locked, &locked.runtime.paths.artefacts().host);
-        bundle::assert_fixture_bundle(
+        let repeated = bundle::assert_fixture_bundle(
             name,
             &locked,
             &locked.runtime.paths.artefacts().host,
             bundle::BundleRootRole::Staged,
         );
         assert_eq!(repeated, published, "{name}: repeated build changed emitted bytes");
-        assert_eq!(
-            bundle_bytes(&published_root),
-            published,
-            "{name}: published generation changed"
-        );
+        let preserved =
+            bundle::assert_fixture_bundle(name, &locked, &published_root, bundle::BundleRootRole::Published);
+        assert_eq!(preserved, published, "{name}: published generation changed");
     }
 
     assert_eq!(executed, EXECUTION_FIXTURES.len());

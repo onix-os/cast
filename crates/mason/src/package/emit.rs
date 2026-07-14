@@ -2004,6 +2004,7 @@ fn emit_package(
         let mut layouts = Vec::new();
         try_reserve(&mut layouts, package.analysis.paths.len(), "package layout records")?;
         layouts.extend(package.analysis.paths.iter().map(|path| path.layout.clone()));
+        layouts.sort_unstable_by(|left, right| left.file.target().cmp(right.file.target()));
         if !layouts.is_empty() {
             writer.add_payload(layouts.as_slice()).context(StoneBinaryWriterSnafu)?;
         }
@@ -2130,18 +2131,27 @@ mod verification_tests {
     #[test]
     fn real_contentful_stone_emission_survives_transactional_staging() {
         let input = tempfile::tempdir().unwrap();
-        let source = input.path().join("usr/bin/tool");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, b"contentful stone payload").unwrap();
+        let largest = input.path().join("usr/bin/largest");
+        let equal_a = input.path().join("usr/bin/equal-a");
+        let equal_b = input.path().join("usr/bin/equal-b");
+        std::fs::create_dir_all(largest.parent().unwrap()).unwrap();
+        std::fs::write(&largest, b"the largest contentful stone payload").unwrap();
+        std::fs::write(&equal_a, b"aaaa").unwrap();
+        std::fs::write(&equal_b, b"bbbb").unwrap();
         let mut collector = collect::Collector::new(input.path());
         collector
             .add_rule("*", "out", stone_recipe::derivation::PathRuleKind::Any)
             .unwrap();
-        let info = collector
-            .path(&source, &mut stone::StoneDigestWriterHasher::new())
-            .unwrap();
+        let mut hasher = stone::StoneDigestWriterHasher::new();
+        // Deliberately feed both layout targets and content sizes in a
+        // non-canonical order. The emitter, not traversal accident, owns the
+        // Stone wire order.
+        let infos = [&equal_b, &largest, &equal_a]
+            .into_iter()
+            .map(|source| collector.path(source, &mut hasher).unwrap())
+            .collect::<Vec<_>>();
         let mut bucket = analysis::Bucket::default();
-        bucket.paths.push(info);
+        bucket.paths.extend(infos);
         let plan = test_derivation_plan();
         let definition = ResolvedOutput::default();
         let package = Package::new_with_architecture(
@@ -2169,7 +2179,24 @@ mod verification_tests {
         let mut stone = File::open(output.path().join(filename)).unwrap();
         let payloads = forge::util::stone_payloads(&mut stone).unwrap();
         assert!(payloads.iter().any(|payload| payload.meta().is_some()));
-        assert!(payloads.iter().any(|payload| payload.layout().is_some()));
+        let layouts = payloads.iter().find_map(|payload| payload.layout()).unwrap();
+        assert_eq!(
+            layouts
+                .body
+                .iter()
+                .map(|record| record.file.target())
+                .collect::<Vec<_>>(),
+            ["bin/equal-a", "bin/equal-b", "bin/largest"]
+        );
+        let indices = payloads.iter().find_map(|payload| payload.index()).unwrap();
+        assert!(indices.body.windows(2).all(|pair| {
+            let left_size = pair[0].end - pair[0].start;
+            let right_size = pair[1].end - pair[1].start;
+            left_size > right_size || (left_size == right_size && pair[0].digest < pair[1].digest)
+        }));
+        assert_eq!(indices.body[0].end - indices.body[0].start, 36);
+        assert_eq!(indices.body[1].end - indices.body[1].start, 4);
+        assert_eq!(indices.body[2].end - indices.body[2].start, 4);
         assert!(payloads.iter().any(|payload| payload.content().is_some()));
     }
 
