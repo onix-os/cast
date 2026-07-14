@@ -174,10 +174,15 @@ The current standard modules support `pre_` and `post_` positions for `setup`,
 package-validation error. Hook and builder step order is preserved, but every
 frozen shell step runs in its own declared interpreter process. `b.step.shell`
 is shorthand for a Gluon-authored `/usr/bin/bash` capability with no additional
-programs. Filesystem effects persist;
-process-local variables and working-directory changes never cross step
-boundaries. Put a one-command environment assignment directly on the command
-which consumes it.
+programs. Filesystem effects persist; process-local variables, shell options,
+and working-directory changes never cross step boundaries. In particular, an
+`export` in `pre_check` ends with that hook process and does not configure the
+standard builder's following `CMakeTest` (or any other standard builder) step.
+Put an environment assignment directly on the command which consumes it in the
+same hook or custom-builder shell step. If a standard test command itself
+requires extra environment variables, use a custom builder whose `check` phase
+contains that command; a hook cannot mutate the standard builder step, and the
+current package ABI has no per-step environment override.
 
 The package ABI exposes the typed standard-step constructors used by the
 embedded modules, plus `b.step.run`, `b.step.shell`, and `b.step.shell_with`
@@ -196,23 +201,53 @@ and every non-builtin program invoked by the script:
 
 ```gluon
 let b = import! cast.package.v3
+let zig = b.program.binary "zig"
 
 let scripts = b.scripts {
-    setup = b.phase [b.step.run (b.program.binary "zig") ["build", "--fetch"]],
-    build = b.phase [b.step.run (b.program.binary "zig") ["build", "-Doptimize=ReleaseSafe"]],
-    check = b.phase [b.step.run (b.program.binary "zig") ["build", "test"]],
+    // The locked source contains build.zig, build.zig.zon, and a complete
+    // vendor/ tree. build.zig.zon refers to each dependency by local path.
+    setup = b.phase [
+        b.step.shell r#"test -f build.zig
+test -f build.zig.zon
+test -d vendor"#,
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [zig],
+            script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
+ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
+zig build -Doptimize=ReleaseSafe"#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [zig],
+            script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
+ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
+zig build test -Doptimize=ReleaseSafe"#,
+        },
+    ],
     install = b.phase [
         b.step.shell_with {
             interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "zig"],
-            script = r#"zig build install --prefix "${CAST_INSTALL_ROOT}${CAST_PREFIX}""#,
+            declared_programs = [zig],
+            script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
+ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
+zig build install -Doptimize=ReleaseSafe --prefix "${CAST_INSTALL_ROOT}${CAST_PREFIX}""#,
         },
     ],
     .. b.defaults.scripts
 }
 
 {
-    builder = b.builder.custom scripts [],
+    builder = b.builder.custom scripts [b.dep.binary "zig"],
+    sources = [
+        b.source.archive
+            "https://example.invalid/zig-hello-1.0.0-vendored.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
     .. b.mk_package (b.meta {
         pname = "zig-hello",
         version = "1.0.0",
@@ -222,6 +257,13 @@ let scripts = b.scripts {
     })
 }
 ```
+
+This graph has no dependency-download or fetch phase. The admitted source
+archive supplies the complete vendor tree before execution, `build.zig.zon`
+resolves only local paths, and every Zig process repeats its cache assignments
+because no process environment crosses a step boundary. A URL dependency or an
+incomplete vendor tree must fail the offline build; it is not a reason to add
+an in-build fetch command.
 
 `Shell` is an explicit, literal escape hatch. It never enters the former macro
 parser: `%name` and `%(name)` have no special meaning. `b.program.binary` and

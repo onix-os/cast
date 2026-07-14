@@ -76,9 +76,8 @@ let base = b.mk_package (b.meta {
             b.step.run (b.program.binary "patch") ["-p1", "-i", "packaging/reproducible-build.patch"],
         ],
         pre_check = [
-            b.step.shell r#"export TZ=UTC
-export NORTHSTAR_TEST_MODE=isolated
-test -d build"#,
+            b.step.shell r#"test -d "${CAST_BUILDER_DIR}"
+test -f "${CAST_BUILDER_DIR}/CMakeCache.txt""#,
         ],
         post_install = [
             b.step.shell_with {

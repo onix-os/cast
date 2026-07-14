@@ -25,9 +25,8 @@ let base = b.mk_package (b.meta {
             b.step.run (b.program.binary "strip-nondeterminism") ["build/generated.dat"],
         ],
         pre_check = [
-            b.step.shell r#"export TZ=UTC
-export LC_ALL=C
-test -d build"#,
+            b.step.shell r#"test -d "${CAST_BUILDER_DIR}"
+test -f "${CAST_BUILDER_DIR}/CMakeCache.txt""#,
         ],
         post_install = [
             b.step.shell_with {
