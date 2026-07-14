@@ -203,6 +203,12 @@ impl Installation {
         self.cast_path("root").join(path)
     }
 
+    /// Return the private directory for failed trees that must not be exposed
+    /// as bootable or prunable system roots.
+    pub(crate) fn state_quarantine_dir(&self) -> PathBuf {
+        self.cast_path("quarantine")
+    }
+
     /// Build a staging path for in-progress system root transactions
     pub fn staging_path(&self, path: impl AsRef<Path>) -> PathBuf {
         self.root_path("staging").join(path)
@@ -319,6 +325,13 @@ fn ensure_dirs_exist(root: &Path) -> Result<(), Error> {
     ensure_controlled_child(&cast.file, OsStr::new("assets"), &assets_path).map_err(|source| {
         Error::PrepareDirectory {
             path: assets_path,
+            source,
+        }
+    })?;
+    let quarantine_path = cast_path.join("quarantine");
+    ensure_controlled_child(&cast.file, OsStr::new("quarantine"), &quarantine_path).map_err(|source| {
+        Error::PrepareDirectory {
+            path: quarantine_path,
             source,
         }
     })?;
@@ -660,19 +673,20 @@ mod tests {
     }
 
     #[test]
-    fn newly_created_cache_and_asset_roots_have_exact_private_mode() {
+    fn newly_created_capability_roots_have_exact_private_mode() {
         let temporary = tempfile::tempdir().unwrap();
         let installation = Installation::open(temporary.path(), None).unwrap();
 
         assert_eq!(mode(&temporary.path().join(".cast")), PRIVATE_DIRECTORY_MODE);
         assert_eq!(mode(&installation.cache_path("")), PRIVATE_DIRECTORY_MODE);
         assert_eq!(mode(&installation.assets_path("")), PRIVATE_DIRECTORY_MODE);
+        assert_eq!(mode(&installation.state_quarantine_dir()), PRIVATE_DIRECTORY_MODE);
     }
 
     #[test]
-    fn hostile_umask_cannot_weaken_new_cache_and_asset_roots() {
+    fn hostile_umask_cannot_weaken_new_capability_roots() {
         const CHILD: &str = "CAST_INSTALLATION_UMASK_TEST_CHILD";
-        const TEST: &str = "installation::tests::hostile_umask_cannot_weaken_new_cache_and_asset_roots";
+        const TEST: &str = "installation::tests::hostile_umask_cannot_weaken_new_capability_roots";
 
         if let Some(root) = std::env::var_os(CHILD) {
             // umask is process-global, so mutate it only in the isolated test
@@ -683,6 +697,7 @@ mod tests {
             assert_eq!(mode(&installation.root.join(".cast")), PRIVATE_DIRECTORY_MODE);
             assert_eq!(mode(&installation.cache_path("")), PRIVATE_DIRECTORY_MODE);
             assert_eq!(mode(&installation.assets_path("")), PRIVATE_DIRECTORY_MODE);
+            assert_eq!(mode(&installation.state_quarantine_dir()), PRIVATE_DIRECTORY_MODE);
             return;
         }
 
@@ -722,6 +737,28 @@ mod tests {
                 if path == cache && source.kind() == io::ErrorKind::PermissionDenied
         ));
         assert_eq!(mode(&cache), 0o775);
+    }
+
+    #[test]
+    fn existing_group_writable_state_quarantine_is_rejected_without_chmod_laundering() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cast = prepare_cast_parent(temporary.path());
+        for directory in ["cache", "assets"] {
+            let path = cast.join(directory);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE)).unwrap();
+        }
+        let quarantine = cast.join("quarantine");
+        std::fs::create_dir(&quarantine).unwrap();
+        std::fs::set_permissions(&quarantine, std::fs::Permissions::from_mode(0o775)).unwrap();
+
+        let error = Installation::open(temporary.path(), None).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::PrepareDirectory { path, source }
+                if path == quarantine && source.kind() == io::ErrorKind::PermissionDenied
+        ));
+        assert_eq!(mode(&quarantine), 0o775);
     }
 
     #[test]

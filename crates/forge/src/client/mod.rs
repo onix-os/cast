@@ -176,6 +176,61 @@ pub struct Client {
     scope: Scope,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatefulTransitionCheckpoint {
+    AfterTransactionTriggers,
+    AfterUsrExchange,
+    AfterSystemTriggersStarted,
+    AfterSystemTriggers,
+    BeforePreviousStateArchive,
+    AfterPreviousStateArchive,
+    BeforeCandidateBootSynchronization,
+    AfterCandidateBootSynchronizationStarted,
+    BeforeRecoveryPreviousStateRestore,
+    BeforeRecoveryUsrExchange,
+    BeforeRecoveryCandidatePreservation,
+    BeforeRecoveryCandidateInvalidation,
+    BeforeRecoveryBootSynchronization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatefulCandidateOrigin {
+    Fresh,
+    Archived,
+    ActiveReblit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviousUsrLocation {
+    Staging,
+    Archived(state::Id),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchivedStatePublication {
+    Exchanged,
+    Published,
+}
+
+#[derive(Debug, Default)]
+struct StatefulRecoveryFailures {
+    restore_previous: Option<Box<Error>>,
+    reverse_exchange: Option<Box<Error>>,
+    preserve_candidate: Option<Box<Error>>,
+    invalidate_candidate: Option<Box<Error>>,
+    repair_boot: Option<Box<Error>>,
+}
+
+impl StatefulRecoveryFailures {
+    fn is_empty(&self) -> bool {
+        self.restore_previous.is_none()
+            && self.reverse_exchange.is_none()
+            && self.preserve_candidate.is_none()
+            && self.invalidate_candidate.is_none()
+            && self.repair_boot.is_none()
+    }
+}
+
 /// One executable path that must be supplied by one exact package in a
 /// materialized frozen closure.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -685,21 +740,55 @@ impl Client {
 
     /// Activates the provided state and runs system triggers once applied.
     ///
-    /// The current state gets archived.\
+    /// The current state gets archived only after system triggers complete.
+    /// If a later archive or boot synchronization step fails, Cast restores
+    /// the previous `/usr`, preserves the failed candidate, and attempts to
+    /// repair boot metadata for the restored state. Once candidate boot
+    /// synchronization has begun, recovery remains explicitly unverified even
+    /// when that compensating synchronization appears to succeed. Arbitrary
+    /// side effects already performed by a system trigger are outside that
+    /// filesystem recovery.
+    ///
     /// Returns the old state that was archived.
     pub fn activate_state(&self, id: state::Id, skip_triggers: bool, skip_boot: bool) -> Result<state::Id, Error> {
         self.require_non_frozen()?;
+        let _guard = signal::ignore([Signal::SIGINT])?;
+        let _inhibitor = signal::inhibit(
+            vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
+            "cast".into(),
+            "Activating state".into(),
+            "block".into(),
+        )?;
+
+        self.activate_state_with_checkpoint(id, skip_triggers, skip_boot, |_| Ok(()))
+    }
+
+    fn activate_state_with_checkpoint<F>(
+        &self,
+        id: state::Id,
+        skip_triggers: bool,
+        skip_boot: bool,
+        mut checkpoint: F,
+    ) -> Result<state::Id, Error>
+    where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
         // Fetch the new state
         let new = self.state_db.get(id).map_err(|_| Error::StateDoesntExist(id))?;
 
         // Get old (current) state
-        let Some(old) = self.installation.active_state else {
+        let Some(old_id) = self.installation.active_state else {
             return Err(Error::NoActiveState);
         };
 
-        if new.id == old {
+        if new.id == old_id {
             return Err(Error::StateAlreadyActive(id));
         }
+        let old = self.state_db.get(old_id)?;
+
+        // Resolve the trigger view before moving either filesystem tree. A
+        // database or VFS failure must leave the archived candidate untouched.
+        let fstree = self.vfs(new.selections.iter().map(|selection| &selection.package))?;
 
         let staging_dir = self.installation.staging_dir();
 
@@ -711,26 +800,18 @@ impl Client {
         // Move new (archived) state to staging
         fs::rename(self.installation.root_path(new.id.to_string()), &staging_dir)?;
 
-        // Promote staging
-        self.promote_staging()?;
+        self.commit_stateful_staging(
+            &fstree,
+            &new,
+            Some(&old),
+            StatefulCandidateOrigin::Archived,
+            true,
+            !skip_triggers,
+            !skip_boot,
+            &mut checkpoint,
+        )?;
 
-        // Archive old state
-        self.archive_state(old)?;
-
-        // Build VFS from new state selections
-        // to build triggers from
-        let fstree = self.vfs(new.selections.iter().map(|selection| &selection.package))?;
-
-        if !skip_triggers {
-            // Run system triggers
-            Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), &fstree)?;
-        }
-
-        if !skip_boot {
-            boot::synchronize(self, &new)?;
-        }
-
-        Ok(old)
+        Ok(old_id)
     }
 
     /// Create a new recorded state from the provided packages
@@ -741,12 +822,12 @@ impl Client {
     pub fn new_state(&self, selections: &[Selection], summary: impl ToString) -> Result<Option<State>, Error> {
         self.require_non_frozen()?;
         let _guard = signal::ignore([Signal::SIGINT])?;
-        let _fd = signal::inhibit(
+        let _inhibitor = signal::inhibit(
             vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
             "cast".into(),
             "Applying new state".into(),
             "block".into(),
-        );
+        )?;
 
         let explicit_packages =
             self.resolve_packages(selections.iter().filter_map(|s| s.explicit.then_some(&s.package)))?;
@@ -864,39 +945,407 @@ impl Client {
         old_state: Option<state::Id>,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
+        self.apply_stateful_blit_with_checkpoint(fstree, state, old_state, system_snapshot, |_| Ok(()))
+    }
+
+    fn apply_stateful_blit_with_checkpoint<F>(
+        &self,
+        fstree: vfs::Tree<PendingFile>,
+        state: &State,
+        old_state: Option<state::Id>,
+        system_snapshot: SystemModel,
+        mut checkpoint: F,
+    ) -> Result<(), Error>
+    where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
         self.require_non_frozen()?;
-        record_state_id(&self.installation.staging_dir(), state.id)?;
-        record_os_release(&self.installation.staging_dir())?;
-        record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
+        let archive_previous = old_state.is_some();
+        let (previous, candidate_origin) = match old_state {
+            Some(id) => match self.state_db.get(id) {
+                Ok(previous) => (Some(previous), StatefulCandidateOrigin::Fresh),
+                Err(error) => {
+                    return Err(self.preserve_unswapped_candidate(
+                        state.id,
+                        Some(id),
+                        StatefulCandidateOrigin::Fresh,
+                        Error::Db(error),
+                        &mut checkpoint,
+                    ));
+                }
+            },
+            // Active-state verification reblits the same state and deliberately
+            // does not archive the replaced corrupt tree on success. It still
+            // needs the state value for boot repair if recovery reverses the
+            // exchange.
+            None if self.installation.active_state == Some(state.id) => {
+                (Some(state.clone()), StatefulCandidateOrigin::ActiveReblit)
+            }
+            None => (None, StatefulCandidateOrigin::Fresh),
+        };
 
-        create_root_links(&self.installation.isolation_dir())?;
+        let prepare = (|| {
+            record_state_id(&self.installation.staging_dir(), state.id)?;
+            record_os_release(&self.installation.staging_dir())?;
+            record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
 
-        // The container running triggers expects /etc to exist
-        let root_etc = self.installation.root.join("etc");
-        fs::create_dir_all(root_etc)?;
+            create_root_links(&self.installation.isolation_dir())?;
 
-        let isolation_etc = self.installation.isolation_dir().join("etc");
-        fs::create_dir_all(isolation_etc)?;
+            // The container running triggers expects /etc to exist.
+            let root_etc = self.installation.root.join("etc");
+            fs::create_dir_all(root_etc)?;
 
-        // Apply transaction triggers
-        Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?;
+            let isolation_etc = self.installation.isolation_dir().join("etc");
+            fs::create_dir_all(isolation_etc)?;
 
-        // Staging is only used with [`Scope::Stateful`]
-        self.promote_staging()?;
+            // Transaction triggers run before `/usr` is exchanged. Their
+            // arbitrary external side effects cannot be undone, but the
+            // candidate tree can still be preserved outside the active root.
+            Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?;
+            checkpoint(StatefulTransitionCheckpoint::AfterTransactionTriggers)?;
+            Ok(())
+        })();
 
-        // Now we got it staged, we need working rootfs
-        create_root_links(&self.installation.root)?;
-
-        if let Some(id) = old_state {
-            self.archive_state(id)?;
+        if let Err(primary) = prepare {
+            return Err(self.preserve_unswapped_candidate(
+                state.id,
+                previous.as_ref().map(|state| state.id),
+                candidate_origin,
+                primary,
+                &mut checkpoint,
+            ));
         }
 
-        // At this point we're allowed to run system triggers
-        Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), &fstree)?;
+        self.commit_stateful_staging(
+            &fstree,
+            state,
+            previous.as_ref(),
+            candidate_origin,
+            archive_previous,
+            true,
+            true,
+            &mut checkpoint,
+        )
+    }
 
-        boot::synchronize(self, state)?;
+    /// Commit a completely prepared staging `/usr` and keep the prior tree
+    /// recoverable until system triggers have succeeded.
+    ///
+    /// The prior state is archived before candidate boot synchronization so
+    /// `boot::synchronize` can still enumerate it as an immediate rollback
+    /// entry. A failure after that archive first moves it back to staging,
+    /// reverses the same atomic exchange, preserves the failed candidate, and
+    /// attempts to repair boot metadata for the restored state. A candidate
+    /// boot failure remains a structured incomplete recovery because the boot
+    /// backend cannot prove that partial candidate metadata was removed. This
+    /// does not claim to reverse arbitrary side effects performed by a trigger.
+    fn commit_stateful_staging<F>(
+        &self,
+        fstree: &vfs::Tree<PendingFile>,
+        candidate: &State,
+        previous: Option<&State>,
+        candidate_origin: StatefulCandidateOrigin,
+        archive_previous: bool,
+        run_system_triggers: bool,
+        run_boot_synchronization: bool,
+        checkpoint: &mut F,
+    ) -> Result<(), Error>
+    where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
+        if let Err(primary) = self.promote_staging() {
+            return Err(self.preserve_unswapped_candidate(
+                candidate.id,
+                previous.map(|state| state.id),
+                candidate_origin,
+                primary,
+                checkpoint,
+            ));
+        }
 
+        let mut previous_location = PreviousUsrLocation::Staging;
+        let mut system_triggers_incomplete = false;
+        let mut candidate_boot_synchronization_started = false;
+        let primary = (|| {
+            checkpoint(StatefulTransitionCheckpoint::AfterUsrExchange)?;
+
+            // Root ABI links refer into `/usr`, so the same links remain valid
+            // after either the forward or reverse exchange.
+            create_root_links(&self.installation.root)?;
+
+            if run_system_triggers {
+                system_triggers_incomplete = true;
+                checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggersStarted)?;
+                Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), fstree)?;
+                system_triggers_incomplete = false;
+            }
+            checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggers)?;
+
+            if archive_previous && let Some(previous) = previous {
+                checkpoint(StatefulTransitionCheckpoint::BeforePreviousStateArchive)?;
+                self.archive_state(previous.id)?;
+                previous_location = PreviousUsrLocation::Archived(previous.id);
+                checkpoint(StatefulTransitionCheckpoint::AfterPreviousStateArchive)?;
+            }
+
+            if run_boot_synchronization {
+                checkpoint(StatefulTransitionCheckpoint::BeforeCandidateBootSynchronization)?;
+                candidate_boot_synchronization_started = true;
+                checkpoint(StatefulTransitionCheckpoint::AfterCandidateBootSynchronizationStarted)?;
+                boot::synchronize(self, candidate, previous)?;
+            }
+
+            Ok(())
+        })();
+
+        match primary {
+            Ok(()) => Ok(()),
+            Err(primary) => Err(self.recover_swapped_candidate(
+                candidate.id,
+                previous,
+                candidate_origin,
+                previous_location,
+                system_triggers_incomplete,
+                candidate_boot_synchronization_started,
+                primary,
+                checkpoint,
+            )),
+        }
+    }
+
+    fn preserve_unswapped_candidate<F>(
+        &self,
+        candidate: state::Id,
+        previous: Option<state::Id>,
+        candidate_origin: StatefulCandidateOrigin,
+        primary: Error,
+        checkpoint: &mut F,
+    ) -> Error
+    where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
+        let mut failures = StatefulRecoveryFailures::default();
+        self.recover_failed_candidate(candidate, candidate_origin, false, checkpoint, &mut failures);
+
+        if failures.is_empty() {
+            Error::StatefulCandidatePreserved {
+                candidate,
+                previous,
+                primary: Box::new(primary),
+            }
+        } else {
+            Error::StatefulTransitionRecoveryFailed {
+                candidate,
+                previous,
+                primary: Box::new(primary),
+                restore_previous: None,
+                reverse_exchange: None,
+                preserve_candidate: failures.preserve_candidate,
+                invalidate_candidate: failures.invalidate_candidate,
+                repair_boot: None,
+            }
+        }
+    }
+
+    fn recover_swapped_candidate<F>(
+        &self,
+        candidate: state::Id,
+        previous: Option<&State>,
+        candidate_origin: StatefulCandidateOrigin,
+        previous_location: PreviousUsrLocation,
+        system_triggers_incomplete: bool,
+        candidate_boot_synchronization_started: bool,
+        primary: Error,
+        checkpoint: &mut F,
+    ) -> Error
+    where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
+        let previous_id = previous.map(|state| state.id);
+        let mut failures = StatefulRecoveryFailures::default();
+
+        if let PreviousUsrLocation::Archived(previous) = previous_location {
+            let restored = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryPreviousStateRestore)
+                .and_then(|()| self.restore_archived_state_to_staging(previous));
+            if let Err(error) = restored {
+                failures.restore_previous = Some(Box::new(error));
+                return self.stateful_recovery_error(candidate, previous_id, primary, failures);
+            }
+        }
+
+        let reversed = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryUsrExchange)
+            .and_then(|()| self.exchange_staging_and_live_usr());
+        if let Err(error) = reversed {
+            failures.reverse_exchange = Some(Box::new(error));
+            return self.stateful_recovery_error(candidate, previous_id, primary, failures);
+        }
+
+        // Once the reverse exchange succeeds, the failed candidate is safely
+        // back in staging. Candidate preservation and restored-state boot repair
+        // are independent recovery steps, so attempt both and retain both
+        // errors if necessary.
+        self.recover_failed_candidate(
+            candidate,
+            candidate_origin,
+            system_triggers_incomplete,
+            checkpoint,
+            &mut failures,
+        );
+
+        if candidate_boot_synchronization_started {
+            let repair: Result<(), Error> = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryBootSynchronization)
+                .and_then(|()| {
+                    let Some(previous) = previous else {
+                        return Err(Error::StatefulBootRepairUnverified {
+                            candidate,
+                            previous: None,
+                        });
+                    };
+
+                    match boot::synchronize(self, previous, None) {
+                        Ok(()) => Err(Error::StatefulBootRepairUnverified {
+                            candidate,
+                            previous: Some(previous.id),
+                        }),
+                        Err(error) => Err(Error::Boot(error)),
+                    }
+                });
+            if let Err(error) = repair {
+                failures.repair_boot = Some(Box::new(error));
+            }
+        }
+
+        self.stateful_recovery_error(candidate, previous_id, primary, failures)
+    }
+
+    fn stateful_recovery_error(
+        &self,
+        candidate: state::Id,
+        previous: Option<state::Id>,
+        primary: Error,
+        failures: StatefulRecoveryFailures,
+    ) -> Error {
+        if failures.is_empty() {
+            Error::StatefulTransitionUsrRestored {
+                candidate,
+                previous,
+                primary: Box::new(primary),
+            }
+        } else {
+            Error::StatefulTransitionRecoveryFailed {
+                candidate,
+                previous,
+                primary: Box::new(primary),
+                restore_previous: failures.restore_previous,
+                reverse_exchange: failures.reverse_exchange,
+                preserve_candidate: failures.preserve_candidate,
+                invalidate_candidate: failures.invalidate_candidate,
+                repair_boot: failures.repair_boot,
+            }
+        }
+    }
+
+    fn recover_failed_candidate<F>(
+        &self,
+        candidate: state::Id,
+        candidate_origin: StatefulCandidateOrigin,
+        quarantine_archived_candidate: bool,
+        checkpoint: &mut F,
+        failures: &mut StatefulRecoveryFailures,
+    ) where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
+        if let Err(error) = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryCandidatePreservation)
+            .and_then(|()| self.preserve_failed_candidate(candidate, candidate_origin, quarantine_archived_candidate))
+        {
+            failures.preserve_candidate = Some(Box::new(error));
+        }
+
+        self.invalidate_fresh_candidate(candidate, candidate_origin, checkpoint, failures);
+    }
+
+    fn invalidate_fresh_candidate<F>(
+        &self,
+        candidate: state::Id,
+        candidate_origin: StatefulCandidateOrigin,
+        checkpoint: &mut F,
+        failures: &mut StatefulRecoveryFailures,
+    ) where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
+        if candidate_origin == StatefulCandidateOrigin::Fresh
+            && let Err(error) = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryCandidateInvalidation)
+                .and_then(|()| self.state_db.remove(&candidate).map_err(Error::Db))
+        {
+            failures.invalidate_candidate = Some(Box::new(error));
+        }
+    }
+
+    fn exchange_staging_and_live_usr(&self) -> Result<(), Error> {
+        let staged = self.installation.staging_path("usr");
+        let live = self.installation.root.join("usr");
+        Self::atomic_swap(&staged, &live).map_err(Error::Blit)
+    }
+
+    fn restore_archived_state_to_staging(&self, state: state::Id) -> Result<(), Error> {
+        let archived = self.installation.root_path(state.to_string()).join("usr");
+        let staged = self.installation.staging_path("usr");
+        fs::rename(archived, staged)?;
         Ok(())
+    }
+
+    fn preserve_failed_candidate(
+        &self,
+        candidate: state::Id,
+        candidate_origin: StatefulCandidateOrigin,
+        quarantine_archived_candidate: bool,
+    ) -> Result<(), Error> {
+        if candidate_origin == StatefulCandidateOrigin::Archived && !quarantine_archived_candidate {
+            return self.archive_state(candidate);
+        }
+
+        // Fresh candidates may be only partially prepared, an active reblit
+        // would duplicate the restored live state identity, and an archived
+        // candidate whose system-trigger phase did not complete may have been
+        // partially mutated. None is safe in the ordinary bootable/prunable
+        // state-root namespace.
+        let kind = match candidate_origin {
+            StatefulCandidateOrigin::Fresh => "new-state",
+            StatefulCandidateOrigin::ActiveReblit => "active-reblit",
+            StatefulCandidateOrigin::Archived => "archived-state",
+        };
+        let prefix = format!("failed-{kind}-{candidate}-");
+        let quarantine = tempfile::Builder::new()
+            .prefix(&prefix)
+            .tempdir_in(self.installation.state_quarantine_dir())?;
+        rename_noreplace(&self.installation.staging_path("usr"), &quarantine.path().join("usr"))?;
+        // The quarantine owns the preserved candidate from this point on;
+        // prevent TempDir from deleting it when the recovery helper exits.
+        let _quarantine = quarantine.keep();
+        Ok(())
+    }
+
+    /// Atomically publish a repaired non-active state without first deleting
+    /// the only archived tree. Existing archives are exchanged with staging;
+    /// missing archives are installed with no-replace publication.
+    fn publish_rebuilt_archived_state(&self, state: state::Id) -> Result<ArchivedStatePublication, Error> {
+        let staged = self.installation.staging_path("usr");
+        let archived = self.installation.root_path(state.to_string()).join("usr");
+
+        match fs::symlink_metadata(&archived) {
+            Ok(_) => {
+                Self::atomic_swap(&staged, &archived)?;
+                Ok(ArchivedStatePublication::Exchanged)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if let Some(parent) = archived.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                rename_noreplace(&staged, &archived)?;
+                Ok(ArchivedStatePublication::Published)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn apply_ephemeral_blit(
@@ -1394,7 +1843,7 @@ impl Client {
 
         let state = self.state_db.get(state_id)?;
 
-        boot::synchronize(self, &state).map_err(Error::Boot)
+        boot::synchronize(self, &state, None).map_err(Error::Boot)
     }
 
     /// List all states for this Cast [`Installation`]
@@ -5752,6 +6201,45 @@ pub enum Error {
     StateAlreadyActive(state::Id),
     #[error("state {0} doesn't exist")]
     StateDoesntExist(state::Id),
+    #[error(
+        "state transition for candidate {candidate} failed before /usr was exchanged; the candidate was preserved outside the active root and arbitrary trigger side effects may remain: {primary}"
+    )]
+    StatefulCandidatePreserved {
+        candidate: state::Id,
+        previous: Option<state::Id>,
+        #[source]
+        primary: Box<Error>,
+    },
+    #[error(
+        "state transition for candidate {candidate} failed; /usr was restored to {previous:?}, the failed candidate was preserved outside the active root, and arbitrary trigger side effects may remain: {primary}"
+    )]
+    StatefulTransitionUsrRestored {
+        candidate: state::Id,
+        previous: Option<state::Id>,
+        #[source]
+        primary: Box<Error>,
+    },
+    #[error(
+        "boot synchronization for failed candidate {candidate} had already started; synchronization for restored state {previous:?} returned without a verifiable proof that candidate boot metadata was removed"
+    )]
+    StatefulBootRepairUnverified {
+        candidate: state::Id,
+        previous: Option<state::Id>,
+    },
+    #[error(
+        "state transition for candidate {candidate} failed with primary error {primary}; recovery for previous state {previous:?} was incomplete (restore_previous={restore_previous:?}, reverse_exchange={reverse_exchange:?}, preserve_candidate={preserve_candidate:?}, invalidate_candidate={invalidate_candidate:?}, repair_boot={repair_boot:?})"
+    )]
+    StatefulTransitionRecoveryFailed {
+        candidate: state::Id,
+        previous: Option<state::Id>,
+        #[source]
+        primary: Box<Error>,
+        restore_previous: Option<Box<Error>>,
+        reverse_exchange: Option<Box<Error>>,
+        preserve_candidate: Option<Box<Error>>,
+        invalidate_candidate: Option<Box<Error>>,
+        repair_boot: Option<Box<Error>>,
+    },
     #[error("No metadata found for package {0:?}")]
     MissingMetadata(package::Id),
     #[error("package {package} has invalid /usr-relative Stone layout target {target:?}: {reason}")]
@@ -6223,7 +6711,7 @@ pub enum Error {
     /// The operation was explicitly cancelled at the user's request
     #[error("cancelled")]
     Cancelled,
-    #[error("ignore signals during blit")]
+    #[error("protect state mutation from interruption")]
     BlitSignalIgnore(#[from] signal::Error),
     #[error("load Gluon system intent or generated state snapshot")]
     LoadSystemModel(#[from] system_model::LoadError),
@@ -9481,6 +9969,701 @@ let cast = import! cast.system.v1
             &expected,
             "active-package",
         );
+    }
+
+    #[test]
+    fn rebuilt_non_active_state_atomically_exchanges_with_existing_archive() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let state = client.state_db.add(&[], Some("archived"), None).unwrap();
+
+        let archived_root = client.installation.root_path(state.id.to_string());
+        let old = generated_system_snapshot("old-archived-package");
+        let old_encoded = old.encoded().to_owned();
+        record_state_id(&archived_root, state.id).unwrap();
+        record_system_snapshot(&archived_root, old).unwrap();
+
+        let repaired = generated_system_snapshot("repaired-archived-package");
+        let repaired_encoded = repaired.encoded().to_owned();
+        record_state_id(&client.installation.staging_dir(), state.id).unwrap();
+        record_system_snapshot(&client.installation.staging_dir(), repaired).unwrap();
+
+        let publication = client.publish_rebuilt_archived_state(state.id).unwrap();
+        assert_eq!(publication, ArchivedStatePublication::Exchanged);
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&archived_root),
+            &repaired_encoded,
+            "repaired-archived-package",
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&client.installation.staging_dir()),
+            &old_encoded,
+            "old-archived-package",
+        );
+    }
+
+    #[test]
+    fn rebuilt_missing_non_active_state_uses_noreplace_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let state = client.state_db.add(&[], Some("missing archive"), None).unwrap();
+        let repaired = generated_system_snapshot("repaired-missing-package");
+        let repaired_encoded = repaired.encoded().to_owned();
+        record_state_id(&client.installation.staging_dir(), state.id).unwrap();
+        record_system_snapshot(&client.installation.staging_dir(), repaired).unwrap();
+
+        let publication = client.publish_rebuilt_archived_state(state.id).unwrap();
+        assert_eq!(publication, ArchivedStatePublication::Published);
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
+            &repaired_encoded,
+            "repaired-missing-package",
+        );
+        assert!(!client.installation.staging_path("usr").exists());
+    }
+
+    struct StatefulTransitionFixture {
+        _temporary: tempfile::TempDir,
+        client: Client,
+        previous: State,
+        candidate: State,
+        previous_snapshot: String,
+        candidate_snapshot: String,
+    }
+
+    fn stateful_transition_fixture(archive_candidate: bool) -> StatefulTransitionFixture {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut client = stateful_test_client(temporary.path());
+        let previous = client.state_db.add(&[], Some("previous"), None).unwrap();
+        let candidate = client.state_db.add(&[], Some("candidate"), None).unwrap();
+        client.installation.active_state = Some(previous.id);
+
+        let previous_model = generated_system_snapshot("previous-package");
+        let previous_snapshot = previous_model.encoded().to_owned();
+        record_state_id(&client.installation.root, previous.id).unwrap();
+        record_system_snapshot(&client.installation.root, previous_model).unwrap();
+
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let candidate_snapshot = candidate_model.encoded().to_owned();
+        if archive_candidate {
+            let candidate_root = client.installation.root_path(candidate.id.to_string());
+            record_state_id(&candidate_root, candidate.id).unwrap();
+            record_system_snapshot(&candidate_root, candidate_model).unwrap();
+        }
+
+        StatefulTransitionFixture {
+            _temporary: temporary,
+            client,
+            previous,
+            candidate,
+            previous_snapshot,
+            candidate_snapshot,
+        }
+    }
+
+    fn injected_state_transition_error(message: &'static str) -> Error {
+        Error::Io(io::Error::other(message))
+    }
+
+    fn assert_recovered_stateful_transition(fixture: &StatefulTransitionFixture) {
+        let installation = &fixture.client.installation;
+        assert_eq!(
+            fs::read_to_string(installation.root.join("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&installation.root),
+            &fixture.previous_snapshot,
+            "previous-package",
+        );
+
+        let candidate_root = installation.root_path(fixture.candidate.id.to_string());
+        assert_eq!(
+            fs::read_to_string(candidate_root.join("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&candidate_root),
+            &fixture.candidate_snapshot,
+            "candidate-package",
+        );
+        assert!(!installation.staging_path("usr").exists());
+        assert!(
+            !installation
+                .root_path(fixture.previous.id.to_string())
+                .join("usr")
+                .exists()
+        );
+    }
+
+    fn assert_fresh_candidate_quarantined_and_invalidated(fixture: &StatefulTransitionFixture) {
+        let installation = &fixture.client.installation;
+        assert_eq!(
+            fs::read_to_string(installation.root.join("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&installation.root),
+            &fixture.previous_snapshot,
+            "previous-package",
+        );
+        assert!(fixture.client.state_db.get(fixture.candidate.id).is_err());
+        assert!(!installation.root_path(fixture.candidate.id.to_string()).exists());
+        assert!(!installation.staging_path("usr").exists());
+
+        let quarantines = fs::read_dir(installation.state_quarantine_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(quarantines.len(), 1);
+        let quarantine = &quarantines[0];
+        assert!(
+            quarantine
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!("failed-new-state-{}-", fixture.candidate.id))
+        );
+        assert_eq!(
+            fs::read_to_string(quarantine.join("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(quarantine),
+            &fixture.candidate_snapshot,
+            "candidate-package",
+        );
+    }
+
+    #[test]
+    fn archived_activation_archive_failure_reverses_usr_and_rearchives_the_candidate() {
+        let fixture = stateful_transition_fixture(true);
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, true, |checkpoint| {
+                if checkpoint == StatefulTransitionCheckpoint::BeforePreviousStateArchive {
+                    Err(injected_state_transition_error("previous-state archive"))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionUsrRestored {
+                candidate,
+                previous: Some(previous),
+                ..
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert_recovered_stateful_transition(&fixture);
+    }
+
+    #[test]
+    fn skipped_boot_is_not_synchronized_during_pre_boot_recovery() {
+        let fixture = stateful_transition_fixture(true);
+        let mut attempted_boot_repair = false;
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, true, |checkpoint| match checkpoint {
+                StatefulTransitionCheckpoint::AfterUsrExchange => {
+                    Err(injected_state_transition_error("pre-boot activation failure"))
+                }
+                StatefulTransitionCheckpoint::BeforeRecoveryBootSynchronization => {
+                    attempted_boot_repair = true;
+                    Ok(())
+                }
+                _ => Ok(()),
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, Error::StatefulTransitionUsrRestored { .. }));
+        assert!(!attempted_boot_repair);
+        assert_recovered_stateful_transition(&fixture);
+    }
+
+    #[test]
+    fn candidate_boot_sees_the_archived_previous_state_and_failure_restores_it() {
+        let fixture = stateful_transition_fixture(true);
+        let previous_archive = fixture
+            .client
+            .installation
+            .root_path(fixture.previous.id.to_string())
+            .join("usr");
+        let staged = fixture.client.installation.staging_path("usr");
+        let mut observed_boot_boundary = false;
+
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, false, |checkpoint| {
+                if checkpoint == StatefulTransitionCheckpoint::BeforeCandidateBootSynchronization {
+                    observed_boot_boundary = true;
+                    assert_eq!(
+                        fs::read_to_string(previous_archive.join(".stateID")).unwrap(),
+                        fixture.previous.id.to_string()
+                    );
+                    assert!(!staged.exists());
+                    Err(injected_state_transition_error("candidate boot synchronization"))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert!(observed_boot_boundary);
+        assert!(matches!(error, Error::StatefulTransitionUsrRestored { .. }));
+        assert_recovered_stateful_transition(&fixture);
+    }
+
+    #[test]
+    fn new_stateful_post_swap_failure_quarantines_and_invalidates_candidate() {
+        let fixture = stateful_transition_fixture(false);
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterPreviousStateArchive {
+                        Err(injected_state_transition_error("after previous-state archive"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionUsrRestored {
+                candidate,
+                previous: Some(previous),
+                ..
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert_fresh_candidate_quarantined_and_invalidated(&fixture);
+    }
+
+    #[test]
+    fn incomplete_fresh_reverse_retains_live_candidate_record_and_reopens() {
+        let fixture = stateful_transition_fixture(false);
+        let root = fixture._temporary.path().to_owned();
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |checkpoint| match checkpoint {
+                    StatefulTransitionCheckpoint::AfterUsrExchange => {
+                        Err(injected_state_transition_error("fresh transition failure"))
+                    }
+                    StatefulTransitionCheckpoint::BeforeRecoveryUsrExchange => {
+                        Err(injected_state_transition_error("reverse exchange failure"))
+                    }
+                    _ => Ok(()),
+                },
+            )
+            .unwrap_err();
+
+        let Error::StatefulTransitionRecoveryFailed {
+            reverse_exchange: Some(_),
+            invalidate_candidate,
+            ..
+        } = error
+        else {
+            panic!("expected incomplete reverse recovery");
+        };
+        assert!(invalidate_candidate.is_none());
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.root.join("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.staging_path("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+
+        let candidate = fixture.candidate.id;
+        drop(fixture.client);
+        let reopened = stateful_test_client(&root);
+        assert_eq!(reopened.installation.active_state, Some(candidate));
+        assert_eq!(reopened.get_active_state().unwrap().unwrap().id, candidate);
+    }
+
+    #[test]
+    fn incomplete_previous_restore_retains_live_fresh_candidate_record_and_reopens() {
+        let fixture = stateful_transition_fixture(false);
+        let root = fixture._temporary.path().to_owned();
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |checkpoint| match checkpoint {
+                    StatefulTransitionCheckpoint::AfterPreviousStateArchive => {
+                        Err(injected_state_transition_error("fresh transition failure"))
+                    }
+                    StatefulTransitionCheckpoint::BeforeRecoveryPreviousStateRestore => {
+                        Err(injected_state_transition_error("previous-state restore failure"))
+                    }
+                    _ => Ok(()),
+                },
+            )
+            .unwrap_err();
+
+        let Error::StatefulTransitionRecoveryFailed {
+            restore_previous: Some(_),
+            invalidate_candidate,
+            ..
+        } = error
+        else {
+            panic!("expected incomplete previous-state restore");
+        };
+        assert!(invalidate_candidate.is_none());
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.root.join("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                fixture
+                    .client
+                    .installation
+                    .root_path(fixture.previous.id.to_string())
+                    .join("usr/.stateID")
+            )
+            .unwrap(),
+            fixture.previous.id.to_string()
+        );
+
+        let candidate = fixture.candidate.id;
+        drop(fixture.client);
+        let reopened = stateful_test_client(&root);
+        assert_eq!(reopened.installation.active_state, Some(candidate));
+        assert_eq!(reopened.get_active_state().unwrap().unwrap().id, candidate);
+    }
+
+    #[test]
+    fn new_stateful_pre_swap_failure_quarantines_and_invalidates_candidate() {
+        let fixture = stateful_transition_fixture(false);
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterTransactionTriggers {
+                        Err(injected_state_transition_error("pre-swap preparation"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulCandidatePreserved {
+                candidate,
+                previous: Some(previous),
+                ..
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert_fresh_candidate_quarantined_and_invalidated(&fixture);
+    }
+
+    #[test]
+    fn incomplete_archived_system_trigger_phase_quarantines_the_mutated_candidate() {
+        let fixture = stateful_transition_fixture(true);
+        let root = fixture._temporary.path().to_owned();
+        let marker = Path::new("usr/partial-system-trigger");
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, false, true, |checkpoint| {
+                if checkpoint == StatefulTransitionCheckpoint::AfterSystemTriggersStarted {
+                    fs::write(fixture.client.installation.root.join(marker), b"partial mutation").unwrap();
+                    Err(injected_state_transition_error("incomplete system trigger phase"))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionUsrRestored {
+                candidate,
+                previous: Some(previous),
+                ..
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.root.join("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert!(
+            !fixture
+                .client
+                .installation
+                .root_path(fixture.candidate.id.to_string())
+                .exists()
+        );
+        assert!(!fixture.client.installation.staging_path("usr").exists());
+
+        let quarantines = fs::read_dir(fixture.client.installation.state_quarantine_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(quarantines.len(), 1);
+        assert!(
+            quarantines[0]
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!("failed-archived-state-{}-", fixture.candidate.id))
+        );
+        assert_eq!(fs::read(quarantines[0].join(marker)).unwrap(), b"partial mutation");
+
+        let previous = fixture.previous.id;
+        drop(fixture.client);
+        let reopened = stateful_test_client(&root);
+        assert_eq!(reopened.installation.active_state, Some(previous));
+        assert_eq!(reopened.get_active_state().unwrap().unwrap().id, previous);
+    }
+
+    #[test]
+    fn completed_archived_system_trigger_phase_can_rearchive_after_later_failure() {
+        let fixture = stateful_transition_fixture(true);
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, false, false, |checkpoint| {
+                if checkpoint == StatefulTransitionCheckpoint::BeforeCandidateBootSynchronization {
+                    Err(injected_state_transition_error("post-trigger boot preparation"))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, Error::StatefulTransitionUsrRestored { .. }));
+        assert_recovered_stateful_transition(&fixture);
+        assert_eq!(
+            fs::read_dir(fixture.client.installation.state_quarantine_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn two_failed_active_state_reblits_use_unique_non_state_quarantines() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut client = stateful_test_client(temporary.path());
+        let state = client.state_db.add(&[], Some("active"), None).unwrap();
+        client.installation.active_state = Some(state.id);
+
+        let restored_model = generated_system_snapshot("restored-active-package");
+        let restored_snapshot = restored_model.encoded().to_owned();
+        record_state_id(&client.installation.root, state.id).unwrap();
+        record_system_snapshot(&client.installation.root, restored_model).unwrap();
+
+        let mut failed_snapshots = BTreeSet::new();
+        for package in ["first-failed-reblit-package", "second-failed-reblit-package"] {
+            let failed_model = generated_system_snapshot(package);
+            failed_snapshots.insert(failed_model.encoded().to_owned());
+            let error = client
+                .apply_stateful_blit_with_checkpoint(
+                    vfs(Vec::new()).unwrap(),
+                    &state,
+                    None,
+                    failed_model,
+                    |checkpoint| {
+                        if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                            Err(injected_state_transition_error("active-state reblit"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .unwrap_err();
+
+            assert!(matches!(
+                error,
+                Error::StatefulTransitionUsrRestored {
+                    candidate,
+                    previous: Some(previous),
+                    ..
+                } if candidate == state.id && previous == state.id
+            ));
+            assert_eq!(
+                fs::read_to_string(client.installation.root.join("usr/.stateID")).unwrap(),
+                state.id.to_string()
+            );
+            assert_generated_snapshot(
+                &system_model::snapshot_path(&client.installation.root),
+                &restored_snapshot,
+                "restored-active-package",
+            );
+            assert!(!client.installation.root_path(state.id.to_string()).join("usr").exists());
+            assert!(!client.installation.staging_path("usr").exists());
+        }
+
+        let quarantine_dir = client.installation.state_quarantine_dir();
+        assert!(!quarantine_dir.starts_with(client.installation.root_path("")));
+        let quarantines = fs::read_dir(&quarantine_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(quarantines.len(), 2);
+        assert_eq!(quarantines.iter().collect::<BTreeSet<_>>().len(), 2);
+
+        let mut preserved_snapshots = BTreeSet::new();
+        for quarantine in quarantines {
+            assert!(
+                quarantine
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(&format!("failed-active-reblit-{}-", state.id))
+            );
+            assert_eq!(
+                fs::read_to_string(quarantine.join("usr/.stateID")).unwrap(),
+                state.id.to_string()
+            );
+            preserved_snapshots.insert(fs::read_to_string(system_model::snapshot_path(&quarantine)).unwrap());
+        }
+        assert_eq!(preserved_snapshots, failed_snapshots);
+    }
+
+    #[test]
+    fn recovery_reports_candidate_preservation_and_boot_repair_failures_without_losing_either_usr() {
+        let fixture = stateful_transition_fixture(true);
+        let mut attempted_boot_repair = false;
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, false, |checkpoint| match checkpoint {
+                StatefulTransitionCheckpoint::AfterCandidateBootSynchronizationStarted => Err(
+                    injected_state_transition_error("candidate boot synchronization failure"),
+                ),
+                StatefulTransitionCheckpoint::BeforeRecoveryCandidatePreservation => {
+                    Err(injected_state_transition_error("candidate preservation failure"))
+                }
+                StatefulTransitionCheckpoint::BeforeRecoveryBootSynchronization => {
+                    attempted_boot_repair = true;
+                    Err(injected_state_transition_error("restored-state boot repair failure"))
+                }
+                _ => Ok(()),
+            })
+            .unwrap_err();
+
+        let Error::StatefulTransitionRecoveryFailed {
+            candidate,
+            previous: Some(previous),
+            restore_previous,
+            reverse_exchange,
+            preserve_candidate,
+            repair_boot,
+            ..
+        } = error
+        else {
+            panic!("expected structured state recovery failure");
+        };
+        assert_eq!(candidate, fixture.candidate.id);
+        assert_eq!(previous, fixture.previous.id);
+        assert!(restore_previous.is_none());
+        assert!(reverse_exchange.is_none());
+        assert!(preserve_candidate.is_some());
+        assert!(repair_boot.is_some());
+        assert!(attempted_boot_repair);
+
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.root.join("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&fixture.client.installation.root),
+            &fixture.previous_snapshot,
+            "previous-package",
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.staging_path("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_generated_snapshot(
+            &system_model::snapshot_path(&fixture.client.installation.staging_dir()),
+            &fixture.candidate_snapshot,
+            "candidate-package",
+        );
+        assert!(
+            !fixture
+                .client
+                .installation
+                .root_path(fixture.candidate.id.to_string())
+                .join("usr")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn apparent_boot_repair_success_remains_structurally_unverified() {
+        let fixture = stateful_transition_fixture(true);
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, false, |checkpoint| {
+                if checkpoint == StatefulTransitionCheckpoint::AfterCandidateBootSynchronizationStarted {
+                    Err(injected_state_transition_error(
+                        "candidate boot synchronization failure",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        let Error::StatefulTransitionRecoveryFailed {
+            candidate,
+            previous: Some(previous),
+            repair_boot: Some(repair_boot),
+            ..
+        } = error
+        else {
+            panic!("expected unverified boot repair failure");
+        };
+        assert_eq!(candidate, fixture.candidate.id);
+        assert_eq!(previous, fixture.previous.id);
+        assert!(matches!(
+            *repair_boot,
+            Error::StatefulBootRepairUnverified {
+                candidate,
+                previous: Some(previous),
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert_recovered_stateful_transition(&fixture);
     }
 
     #[test]

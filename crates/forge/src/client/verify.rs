@@ -196,6 +196,16 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
         return Err(client::Error::Cancelled);
     }
 
+    // Acquire and require interruption protection before the first repair
+    // mutation, then retain both guards for the complete repair transaction.
+    let _guard = signal::ignore([Signal::SIGINT])?;
+    let _inhibitor = signal::inhibit(
+        vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
+        "cast".into(),
+        "Verifying states".into(),
+        "block".into(),
+    )?;
+
     // Calculate and resolve the unique set of packages with asset issues
     let issue_packages = issues
         .iter()
@@ -242,14 +252,6 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
 
     println!("Reblitting affected states");
 
-    let _guard = signal::ignore([Signal::SIGINT])?;
-    let _fd = signal::inhibit(
-        vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
-        "cast".into(),
-        "Verifying states".into(),
-        "block".into(),
-    );
-
     // Reblit each state
     for id in issue_states {
         let state = states
@@ -276,20 +278,15 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
                 state,
             )?;
 
-            // Use the staged blit as an ephereral target for the non-active state
-            // then archive it to it's archive directory
+            // Use the staged blit as an ephemeral target for the non-active
+            // state, then atomically exchange it with the existing archive or
+            // publish it with no-replace when the archive is missing.
             client::record_state_id(&client.installation.staging_dir(), state.id)?;
             client.apply_ephemeral_blit(fstree, &client.installation.staging_dir(), system_model)?;
-
-            // Remove the old archive state so the new blit can be archived
-            fs::remove_dir_all(client.installation.root_path(state.id.to_string())).or_else(|e| {
-                if e.kind() == io::ErrorKind::NotFound {
-                    Ok(())
-                } else {
-                    Err(e)
-                }
-            })?;
-            client.archive_state(state.id)?;
+            client.publish_rebuilt_archived_state(state.id)?;
+            // After exchange this removes only the displaced corrupt tree; a
+            // no-replace publication leaves merely the staging wrapper/links.
+            fs::remove_dir_all(client.installation.staging_dir())?;
         }
 
         println!(" {} state #{}", "»".green(), state.id);

@@ -22,9 +22,11 @@ use itertools::Itertools;
 use stone::{StonePayloadLayoutFile, StonePayloadLayoutRecord};
 use thiserror::{self, Error};
 
-use crate::{Installation, State, db, package::Id};
+use crate::{Installation, State, db, package::Id, state::Id as StateId};
 
 use super::Client;
+
+const MAX_ROLLBACK_STATES: usize = 4;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -122,26 +124,71 @@ fn layouts_for_state(client: &Client, state: &State) -> Result<Vec<(Id, StonePay
     client.layout_db.query(state.selections.iter().map(|s| &s.package))
 }
 
-/// Return an additional 4 older states excluding the current state
-fn states_except_new(client: &Client, state: &State) -> Result<Vec<State>, db::Error> {
-    let states = client
-        .state_db
-        .list_ids()?
-        .into_iter()
-        .filter_map(|(id, whence)| {
-            // All states with older ID and not the current state
-            if id != state.id && state.id > id {
-                Some((id, whence))
-            } else {
-                None
-            }
+/// Select the bounded rollback-state IDs for one active head.
+///
+/// An explicit immediate previous state is always pinned first. Remaining
+/// capacity is filled with the most recently created states without assuming
+/// that a rollback head has the greatest numeric ID: activating an older state
+/// must not make newer, still-valid alternatives disappear on the next
+/// standalone boot synchronization.
+fn select_rollback_state_ids<T: Ord>(
+    head: StateId,
+    immediate_previous: Option<StateId>,
+    candidates: impl IntoIterator<Item = (StateId, T)>,
+) -> Vec<StateId> {
+    let immediate_previous = immediate_previous.filter(|id| *id != head);
+    let mut selected = Vec::with_capacity(MAX_ROLLBACK_STATES);
+    if let Some(id) = immediate_previous {
+        selected.push(id);
+    }
+
+    let remaining = MAX_ROLLBACK_STATES - selected.len();
+    selected.extend(
+        candidates
+            .into_iter()
+            .filter(|(id, _)| *id != head && Some(*id) != immediate_previous)
+            .sorted_by(|(left_id, left_created), (right_id, right_created)| {
+                right_created.cmp(left_created).then_with(|| right_id.cmp(left_id))
+            })
+            .take(remaining)
+            .map(|(id, _)| id),
+    );
+    selected
+}
+
+/// Resolve every selected rollback state without silently reducing the boot
+/// set when one database lookup fails. The transition-supplied predecessor is
+/// already an authenticated in-memory value and therefore needs no second
+/// lookup.
+fn resolve_rollback_states<T: Clone, E>(
+    ids: impl IntoIterator<Item = StateId>,
+    immediate_previous: Option<(StateId, &T)>,
+    mut load: impl FnMut(StateId) -> Result<T, E>,
+) -> Result<Vec<T>, E> {
+    ids.into_iter()
+        .map(|id| match immediate_previous {
+            Some((previous_id, previous)) if previous_id == id => Ok((*previous).clone()),
+            _ => load(id),
         })
-        .sorted_by_key(|(_, whence)| whence.to_owned())
-        .rev()
-        .take(4)
-        .filter_map(|(id, _)| client.state_db.get(id).ok())
-        .collect::<Vec<_>>();
-    Ok(states)
+        .collect()
+}
+
+/// Return the bounded rollback states for the active head, pinning its
+/// immediate predecessor when supplied by a state transition.
+fn rollback_states(
+    client: &Client,
+    state: &State,
+    immediate_previous: Option<&State>,
+) -> Result<Vec<State>, db::Error> {
+    let ids = select_rollback_state_ids(
+        state.id,
+        immediate_previous.map(|previous| previous.id),
+        client.state_db.list_ids()?,
+    );
+
+    resolve_rollback_states(ids, immediate_previous.map(|previous| (previous.id, previous)), |id| {
+        client.state_db.get(id)
+    })
 }
 
 /// Generate a schema for the root
@@ -163,7 +210,12 @@ fn os_schema_for_root(root: &Path) -> Result<Schema, Error> {
     }
 }
 
-pub fn synchronize(client: &Client, state: &State) -> Result<(), Error> {
+/// Synchronize boot metadata for `state`.
+///
+/// A transition should supply its immediate previous state so that state is
+/// retained as the first rollback choice even when activating a lower ID.
+/// Standalone synchronization and pruning may pass `None`.
+pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&State>) -> Result<(), Error> {
     let root = client.installation.root.clone();
     let is_native = root.to_string_lossy() == "/";
     // Create an appropriate configuration
@@ -182,7 +234,7 @@ pub fn synchronize(client: &Client, state: &State) -> Result<(), Error> {
     let systemd = Pattern::from_str("lib*/systemd/boot/efi/*.efi")?;
     let booty_bits = boot_files_from_new_state(&client.installation, &head_layouts, &systemd);
 
-    let mut all_states = states_except_new(client, state)?;
+    let mut all_states = rollback_states(client, state, immediate_previous)?;
 
     // no fun times without a bootloder
     if booty_bits.is_empty() {
@@ -245,11 +297,9 @@ pub fn synchronize(client: &Client, state: &State) -> Result<(), Error> {
         return Ok(());
     }
 
-    // If we can't get a manager, find, but don't bomb. Its probably a topology failure.
-    let manager = match blsforme::Manager::new(&config) {
-        Ok(m) => m.with_entries(entries.into_iter()).with_bootloader_assets(booty_bits),
-        Err(_) => return Ok(()),
-    };
+    let manager = blsforme::Manager::new(&config)?
+        .with_entries(entries.into_iter())
+        .with_bootloader_assets(booty_bits);
 
     // Only allow mounting pre-sync for a native run
     if is_native {
@@ -260,6 +310,67 @@ pub fn synchronize(client: &Client, state: &State) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::state::Id;
+
+    use super::{MAX_ROLLBACK_STATES, resolve_rollback_states, select_rollback_state_ids};
+
+    fn id(value: i32) -> Id {
+        Id::from(value)
+    }
+
+    #[test]
+    fn reverse_id_activation_pins_the_newer_immediate_previous_state() {
+        let selected = select_rollback_state_ids(
+            id(7),
+            Some(id(10)),
+            [(id(10), 10), (id(8), 8), (id(6), 6), (id(5), 5), (id(4), 4)],
+        );
+
+        assert_eq!(selected, [id(10), id(8), id(6), id(5)]);
+        assert_eq!(selected.len(), MAX_ROLLBACK_STATES);
+    }
+
+    #[test]
+    fn standalone_sync_keeps_newer_ids_when_an_older_state_is_active() {
+        let selected = select_rollback_state_ids(
+            id(7),
+            None,
+            [(id(10), 10), (id(8), 8), (id(6), 6), (id(5), 5), (id(4), 4)],
+        );
+
+        assert_eq!(selected, [id(10), id(8), id(6), id(5)]);
+        assert_eq!(selected.len(), MAX_ROLLBACK_STATES);
+    }
+
+    #[test]
+    fn pinned_previous_is_deduplicated_and_counts_toward_capacity() {
+        let selected = select_rollback_state_ids(
+            id(10),
+            Some(id(8)),
+            [(id(9), 9), (id(8), 8), (id(7), 7), (id(6), 6), (id(5), 5)],
+        );
+
+        assert_eq!(selected, [id(8), id(9), id(7), id(6)]);
+        assert_eq!(selected.len(), MAX_ROLLBACK_STATES);
+        assert_eq!(selected.iter().filter(|&&selected| selected == id(8)).count(), 1);
+    }
+
+    #[test]
+    fn selected_state_lookup_failure_aborts_instead_of_reducing_the_boot_set() {
+        let pinned = String::from("pinned");
+        let mut requested = Vec::new();
+        let result = resolve_rollback_states([id(8), id(7)], Some((id(8), &pinned)), |state| {
+            requested.push(state);
+            Err::<String, _>("state database lookup failed")
+        });
+
+        assert_eq!(result, Err("state database lookup failed"));
+        assert_eq!(requested, [id(7)]);
+    }
 }
 
 pub fn print_status(installation: &Installation) -> Result<(), Error> {
