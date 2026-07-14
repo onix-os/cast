@@ -610,7 +610,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   Anchor inspection to the opened root, accept only the exact raw-byte symlink
   targets, retain inode witnesses through the directory fsync, and reject
   final-name, staging-name, and root-replacement races.
-- [ ] Land a versioned, bounded, checksummed transition-journal codec and an
+- [x] Land a versioned, bounded, checksummed transition-journal codec and an
   owner-private descriptor-relative store. Canonical creation, advancement,
   and deletion must be conditional, process- and thread-serialized, atomic,
   fsync-ordered, crash-reopenable, and locked by an exact full-frame v1 golden
@@ -645,7 +645,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   candidate, never guess through a foreign occupant, and retain an
   undeletable `BootRepairUnverified` record when boot side effects cannot be
   proved repaired.
-- [ ] Add database ownership probes that distinguish matching, cleared,
+- [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not
   permission to start another transaction.
