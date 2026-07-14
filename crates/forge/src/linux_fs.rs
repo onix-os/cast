@@ -19,6 +19,7 @@ use std::{
 };
 
 const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+const POSIX_ACCESS_ACL_XATTR: &CStr = c"system.posix_acl_access";
 const POSIX_DEFAULT_ACL_XATTR: &CStr = c"system.posix_acl_default";
 const MAX_DECIMAL_PID_BYTES: usize = 16;
 const MAX_THREAD_SELF_BYTES: usize = MAX_DECIMAL_PID_BYTES * 2 + 6;
@@ -144,6 +145,65 @@ pub(crate) fn link_path_descriptor_noreplace(
     require_same_inode(expected, inode_identity(&target.metadata()?))
 }
 
+/// Move one exact directory entry between retained parents without replacing
+/// any destination entry. Both names must be single components; callers keep
+/// authority in the descriptors rather than mutable absolute pathnames.
+pub(crate) fn renameat2_noreplace(
+    source_directory: &std::fs::File,
+    source_name: &CStr,
+    destination_directory: &std::fs::File,
+    destination_name: &CStr,
+) -> io::Result<()> {
+    for (role, name) in [("source", source_name), ("destination", destination_name)] {
+        if name.to_bytes().is_empty() || name.to_bytes().contains(&b'/') || matches!(name.to_bytes(), b"." | b"..") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("descriptor-relative rename {role} must be one nonempty component"),
+            ));
+        }
+    }
+
+    loop {
+        // SAFETY: both retained directory descriptors and both C strings stay
+        // live for the syscall. RENAME_NOREPLACE prevents destination loss.
+        if unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_renameat2,
+                source_directory.as_raw_fd(),
+                source_name.as_ptr(),
+                destination_directory.as_raw_fd(),
+                destination_name.as_ptr(),
+                nix::libc::RENAME_NOREPLACE,
+            )
+        } == 0
+        {
+            return Ok(());
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
+    }
+}
+
+/// Flush every pending write on the filesystem containing a retained
+/// capability. This is intentionally broader than `fsync` on one directory:
+/// failed-candidate preservation must not delete its database correlation
+/// while trigger-created descendants are still only dirty cache state.
+pub(crate) fn sync_filesystem(file: &std::fs::File) -> io::Result<()> {
+    loop {
+        // SAFETY: the retained descriptor remains live and identifies the
+        // filesystem whose pending data and metadata must reach stable storage.
+        if unsafe { nix::libc::syncfs(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
+    }
+}
+
 fn authenticated_descriptor_name(file: &std::fs::File) -> io::Result<(std::fs::File, CString, InodeIdentity)> {
     let expected = inode_identity(&file.metadata()?);
     let proc = openat2_file(
@@ -208,25 +268,28 @@ fn authenticated_descriptor_name(file: &std::fs::File) -> io::Result<(std::fs::F
 /// but a default ACL is not. Admitting one would let later children inherit
 /// authority that an otherwise-safe directory mode does not reveal.
 pub(crate) fn require_no_default_acl(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    require_no_acl_xattr(file, path, POSIX_DEFAULT_ACL_XATTR, "inheritable POSIX default")
+}
+
+/// Reject an explicit POSIX access ACL on an authenticated readable inode.
+///
+/// The synthesized empty live `/usr` baseline requires a canonical mode-only
+/// authority model. Existing trees continue to rely on the mode mask plus the
+/// separate default-ACL check above.
+pub(crate) fn require_no_access_acl(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    require_no_acl_xattr(file, path, POSIX_ACCESS_ACL_XATTR, "POSIX access")
+}
+
+fn require_no_acl_xattr(file: &std::fs::File, path: &Path, name: &CStr, role: &'static str) -> io::Result<()> {
     loop {
-        // SAFETY: `file` and the static xattr name remain live. A null value
+        // SAFETY: `file` and the supplied static xattr name remain live. A null value
         // with size zero is the documented existence/size query and does not
         // copy attribute bytes into userspace.
-        let result = unsafe {
-            nix::libc::fgetxattr(
-                file.as_raw_fd(),
-                POSIX_DEFAULT_ACL_XATTR.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-            )
-        };
+        let result = unsafe { nix::libc::fgetxattr(file.as_raw_fd(), name.as_ptr(), std::ptr::null_mut(), 0) };
         if result >= 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!(
-                    "capability directory carries an inheritable POSIX default ACL: {}",
-                    path.display()
-                ),
+                format!("capability inode carries a {role} ACL: {}", path.display()),
             ));
         }
 

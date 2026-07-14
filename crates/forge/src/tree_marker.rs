@@ -10,7 +10,7 @@
 //! mint a token nor promote, repair, or remove a temporary marker.
 
 use std::{
-    ffi::{CStr, OsStr},
+    ffi::{CStr, CString, OsStr},
     fs::{File, Permissions},
     io,
     os::{
@@ -27,7 +27,9 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{
-    linux_fs::{controlled_resolution, link_path_descriptor_noreplace, openat2_file, require_no_default_acl},
+    linux_fs::{
+        controlled_resolution, link_path_descriptor_noreplace, openat2_file, require_no_default_acl, sync_filesystem,
+    },
     transition_journal::TreeToken,
 };
 
@@ -160,11 +162,67 @@ pub(crate) enum TreeMarkerError {
     },
     #[error("tree marker inode changed while retained at `{}`", path.display())]
     MarkerChanged { path: PathBuf },
+    #[error("retained /usr directory no longer matches the named tree at `{}`", path.display())]
+    DirectoryChanged { path: PathBuf },
     #[error("temporary tree marker inode changed at `{}`", path.display())]
     TemporaryChanged { path: PathBuf },
 }
 
 impl TreeMarkerStore {
+    /// Open and authenticate one named `/usr` directory without following a
+    /// symlink or procfs magic link in any pathname component.
+    ///
+    /// The path is pinned once with `O_PATH`, reopened readably for marker
+    /// operations, and then opened a third time after [`Self::open`] has
+    /// established its retained witness. All three descriptors must identify
+    /// the same directory. This is the pathname boundary used by the current
+    /// transition coordinator until the larger descriptor-rooted namespace
+    /// migration removes absolute activation paths altogether.
+    pub(crate) fn open_path(path: impl Into<PathBuf>) -> Result<Self, TreeMarkerError> {
+        let path = path.into();
+        let encoded = CString::new(path.as_os_str().as_bytes())
+            .map_err(|source| io_error("encode named /usr directory", &path, source.into()))?;
+        let resolution = (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64;
+        let pinned = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            resolution,
+        )
+        .map_err(|source| io_error("pin named /usr directory", &path, source))?;
+        let expected = directory_witness(&pinned, &path)?;
+        let readable = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_CLOEXEC
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_NONBLOCK,
+            0,
+            resolution,
+        )
+        .map_err(|source| io_error("open named /usr directory", &path, source))?;
+        if directory_witness(&readable, &path)? != expected {
+            return Err(TreeMarkerError::MarkerChanged { path });
+        }
+
+        let store = Self::open(&readable, &path)?;
+        let named = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            resolution,
+        )
+        .map_err(|source| io_error("revalidate named /usr directory", &path, source))?;
+        if directory_witness(&named, &path)? != store.witness {
+            return Err(TreeMarkerError::MarkerChanged { path });
+        }
+        Ok(store)
+    }
+
     /// Reopen and authenticate one already-retained `/usr` capability.
     pub(crate) fn open(usr: &File, display_path: impl Into<PathBuf>) -> Result<Self, TreeMarkerError> {
         let path = display_path.into();
@@ -192,6 +250,36 @@ impl TreeMarkerStore {
             path,
             witness: expected,
         })
+    }
+
+    /// Require two independently opened stores to retain the exact same
+    /// directory inode and authenticated metadata. A matching marker token is
+    /// not enough: marker bytes can be copied into a substituted directory.
+    pub(crate) fn require_same_directory(&self, named: &Self) -> Result<(), TreeMarkerError> {
+        self.validate_usr()?;
+        named.validate_usr()?;
+        if self.witness == named.witness {
+            Ok(())
+        } else {
+            Err(TreeMarkerError::DirectoryChanged {
+                path: named.path.clone(),
+            })
+        }
+    }
+
+    /// Persist all dirty descendants on the candidate's filesystem and the
+    /// exact retained tree root while proving the capability did not change.
+    /// The later bounded recursive coordinator walk is still required to
+    /// authenticate a stable inventory; this broad `syncfs` barrier supplies
+    /// the durability needed before discarding a database correlation.
+    pub(crate) fn sync_retained_tree(&self) -> Result<(), TreeMarkerError> {
+        self.validate_usr()?;
+        sync_filesystem(&self.usr)
+            .map_err(|source| io_error("sync filesystem containing retained /usr", &self.path, source))?;
+        self.usr
+            .sync_all()
+            .map_err(|source| io_error("sync retained /usr directory", &self.path, source))?;
+        self.validate_usr()
     }
 
     /// Create a marker or adopt a strictly valid marker while no journal
@@ -474,6 +562,18 @@ impl TreeMarkerStore {
 impl RetainedTreeMarker {
     pub(crate) fn token(&self) -> &TreeToken {
         &self.token
+    }
+
+    /// Bind a marker reopened through a current pathname to this retained
+    /// marker inode, not merely to a copy of its token bytes.
+    pub(crate) fn require_same_marker(&self, named: &Self) -> Result<(), TreeMarkerError> {
+        if self.witness == named.witness && self.token == named.token {
+            Ok(())
+        } else {
+            Err(TreeMarkerError::MarkerChanged {
+                path: named.path.clone(),
+            })
+        }
     }
 
     /// Prove that both the retained descriptor and canonical name still denote
@@ -986,7 +1086,7 @@ mod tests {
                 }
                 "directory" => fs::create_dir(&marker).unwrap(),
                 "fifo" => {
-                    let encoded = std::ffi::CString::new(marker.as_os_str().as_bytes()).unwrap();
+                    let encoded = CString::new(marker.as_os_str().as_bytes()).unwrap();
                     // SAFETY: encoded is one live NUL-terminated pathname.
                     assert_eq!(unsafe { nix::libc::mkfifo(encoded.as_ptr(), 0o444) }, 0);
                 }

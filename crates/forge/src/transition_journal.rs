@@ -1544,12 +1544,31 @@ impl TransitionJournalStore {
             path: root.to_owned(),
             source,
         })?;
+        Self::open_from_root(&root_directory, root)
+    }
+
+    /// Open below an installation-root capability retained before the caller
+    /// acquired its installation lock. No absolute pathname is reopened as
+    /// authority for journal creation or locking.
+    pub(crate) fn open_retained(root_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let root_directory =
+            open_existing_directory(root_directory, c".", root, DirectoryPolicy::Controlled).map_err(|source| {
+                StorageError::OpenRoot {
+                    path: root.to_owned(),
+                    source,
+                }
+            })?;
+        Self::open_from_root(&root_directory, root)
+    }
+
+    fn open_from_root(root_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
         let cast_path = root.join(".cast");
-        let cast = open_existing_directory(&root_directory, c".cast", &cast_path, DirectoryPolicy::Controlled)
-            .map_err(|source| StorageError::OpenCastDirectory {
+        let cast = open_existing_directory(root_directory, c".cast", &cast_path, DirectoryPolicy::Controlled).map_err(
+            |source| StorageError::OpenCastDirectory {
                 path: cast_path.clone(),
                 source,
-            })?;
+            },
+        )?;
         let path = cast_path.join("journal");
         let directory =
             ensure_journal_directory(&cast, &path).map_err(|source| StorageError::OpenJournalDirectory {

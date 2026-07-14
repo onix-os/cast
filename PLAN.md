@@ -646,6 +646,39 @@ and instant rollback mechanism; it hardens their failure semantics.
   named pathname fallback. The recovery API is structurally read-only: a
   missing, malformed, mismatched, replaced, or temporary marker fails without
   minting or repair.
+- [x] Consume that primitive at the real in-process activation boundary without
+  claiming crash-reopen coordination. After candidate materialization (and,
+  for the legacy fresh-state path, database allocation), the stateful client
+  takes the canonical journal lock, rejects any journal or transition-bearing
+  database row, then creates or adopts distinct markers for candidate and
+  previous before transaction/system triggers or `/usr` exchange. When live
+  `/usr` is genuinely absent, it is created as an exact empty same-mount child
+  beneath the retained installation-root descriptor, checked for ACLs and
+  racing occupants, fully synced with its parent, name-revalidated, and marked
+  before exchange. The guard retains both inode proofs and the journal lock
+  across exchange, archive, quarantine, and compensating recovery; every
+  post-preparation pathname check uses the exact-token recovery reader and
+  binds both the currently named directory and marker inode to the retained
+  proofs, so a copied token cannot authenticate a substituted tree. Failed
+  candidates enter a deterministic token-named quarantine through retained
+  parent descriptors and a no-replace move. Only an empty slot created and
+  inode-retained by the live guard is eligible for one bounded production
+  retry after an in-process fault; pre-existing empty or populated collisions
+  fail closed. A `syncfs` barrier flushes dirty candidate data and metadata on
+  its root filesystem before the changed parents are synced, and the complete
+  retained name/inode proof is repeated before a fresh database row may be
+  invalidated. Nested-mount rejection and any other-filesystem descendants
+  remain part of the pending descriptor-recursive coordinator. Archive and
+  restore moves no longer replace racing empty occupants. Failed preparation
+  retains the candidate at its authenticated pre-transition location and keeps
+  its database row; any preservation durability fault retains the database
+  correlation and the exact candidate either in staging or in its retained
+  quarantine slot. This remains an in-process, cooperating-lock boundary: it
+  cannot make a filesystem rename and SQLite deletion atomic against an
+  uncooperative same-UID writer. It does not create a journal record, reconcile
+  a reboot, perform the bounded descriptor-recursive stable-inventory proof,
+  authenticate the entire activation namespace, or finish the pre-journal
+  baseline and coordinator items below.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree

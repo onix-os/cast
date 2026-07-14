@@ -16,6 +16,7 @@ use std::{
         },
     },
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use fs_err as fs;
@@ -61,6 +62,11 @@ pub struct Installation {
     /// If defined, the user-authored desired system intent of the installation.
     pub system_model: Option<LoadedSystemModel>,
 
+    /// Authenticated installation-root capability retained for the lifetime of
+    /// every clone. Stateful namespace mutations must be rooted here rather
+    /// than reopening `root` as authority.
+    root_directory: Arc<std::fs::File>,
+
     /// Acquired locks that guarantee exclusive access
     /// to the installation for mutable operations
     _locks: Vec<lockfile::Lock>,
@@ -103,9 +109,9 @@ impl Installation {
         // Authenticate the installation root before provisioning any `.cast`
         // component below it. Every provisioning mutation is descriptor
         // relative and the root name is revalidated before and after the
-        // remaining pathname-based open work. Retaining root authority across
-        // later transactions belongs to the descriptor-rooted activation work
-        // tracked separately in PLAN.md.
+        // remaining pathname-based open work. The readable root capability is
+        // retained by Installation clones; migrating every activation path
+        // beneath it remains tracked separately in PLAN.md.
         let root_directory = open_installation_root_path(&root).map_err(|source| Error::ValidateRootDirectory {
             path: root.clone(),
             source,
@@ -192,6 +198,7 @@ impl Installation {
             active_state,
             cache_dir,
             system_model,
+            root_directory: Arc::new(root_directory),
             _locks,
             discovery,
         })
@@ -199,6 +206,24 @@ impl Installation {
 
     pub(crate) fn is_frozen_cache(&self) -> bool {
         matches!(self.discovery, Discovery::FrozenCache)
+    }
+
+    /// Borrow the exact installation-root inode authenticated before locks,
+    /// database discovery, and client construction.
+    pub(crate) fn root_directory(&self) -> &std::fs::File {
+        &self.root_directory
+    }
+
+    /// Prove that the public installation-root name still denotes the retained
+    /// capability. Call this before and after any descriptor-relative namespace
+    /// mutation whose result is intended to be reachable through `root`.
+    pub(crate) fn revalidate_root_directory(&self) -> Result<(), Error> {
+        require_named_installation_root(&self.root, &self.root_directory).map_err(|source| {
+            Error::ValidateRootDirectory {
+                path: self.root.clone(),
+                source,
+            }
+        })
     }
 
     /// Return true if we lack write access

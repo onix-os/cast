@@ -1,0 +1,1240 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+//! Durable `/usr` identity guard for the existing stateful coordinator.
+//!
+//! This is deliberately narrower than the eventual crash-reopen transition
+//! state machine. It obtains the already-defined journal lock, proves that no
+//! journal or transition-bearing database row exists, and only then permits
+//! the tree-marker primitive to create or adopt permanent identities. Once
+//! prepared, every named-tree check is recovery-style and read-only: it can
+//! neither mint nor repair a marker.
+
+use std::{
+    ffi::CStr,
+    io,
+    os::{
+        fd::AsRawFd as _,
+        unix::fs::{MetadataExt as _, PermissionsExt as _},
+    },
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+
+use thiserror::Error;
+
+use crate::{
+    Installation, db, installation,
+    linux_fs::{
+        chmod_path_descriptor, controlled_resolution, openat2_file, renameat2_noreplace, require_no_access_acl,
+        require_no_default_acl,
+    },
+    state,
+    transition_journal::{QuarantineName, TransitionJournalStore},
+    tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
+};
+
+const LIVE_USR_NAME: &CStr = c"usr";
+const TREE_MARKER_NAME: &[u8] = b".cast-tree-id";
+const SYNTHESIZED_USR_MODE: u32 = 0o755;
+const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+const STAGING_RELATIVE: &CStr = c".cast/root/staging";
+const QUARANTINE_RELATIVE: &CStr = c".cast/quarantine";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FailedCandidateKind {
+    NewState,
+    ActiveReblit,
+    ArchivedState,
+}
+
+impl FailedCandidateKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NewState => "new-state",
+            Self::ActiveReblit => "active-reblit",
+            Self::ArchivedState => "archived-state",
+        }
+    }
+}
+
+/// Retains every namespace capability until database invalidation has either
+/// completed or been refused. The path is diagnostic only; authority remains
+/// in the open descriptors and the candidate identity guard.
+#[derive(Debug)]
+pub(crate) struct QuarantinedCandidate {
+    name: std::ffi::CString,
+    destination_path: PathBuf,
+    staging: RetainedDirectory,
+    quarantine: RetainedDirectory,
+    slot: RetainedDirectory,
+}
+
+/// Attempt-local authority for one deterministic quarantine slot.
+///
+/// An empty directory at the token-derived name is not evidence that this
+/// process created it: a same-UID writer can pre-create the same shape.  The
+/// retained descriptor makes in-process fault retry possible without ever
+/// adopting an unproven pathname.  Crash-reopen adoption belongs to the
+/// durable transition journal rather than this narrower guard.
+#[derive(Debug)]
+struct RetainedQuarantineAttempt {
+    name: std::ffi::CString,
+    slot: RetainedDirectory,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetainedDirectoryWitness {
+    device: u64,
+    inode: u64,
+    owner: u32,
+    mode: u32,
+}
+
+#[derive(Debug)]
+struct RetainedDirectory {
+    file: std::fs::File,
+    path: PathBuf,
+    witness: RetainedDirectoryWitness,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum QuarantineFaultPoint {
+    CandidatePreSync,
+    SlotSync,
+    QuarantineBaseSync,
+    Rename,
+    MovedCandidateSync,
+    SourceParentSync,
+    DestinationParentSync,
+    FinalRevalidation,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BEFORE_LIVE_USR_MKDIR: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_QUARANTINE_SLOT_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static QUARANTINE_FAULT: std::cell::RefCell<Option<(QuarantineFaultPoint, usize)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Retained identities for the candidate and previous `/usr` trees.
+///
+/// Keeping the journal store in this value keeps its exclusive lock alive for
+/// the entire in-process activation and compensating recovery. The journal is
+/// not created by this slice.
+#[derive(Debug)]
+pub(crate) struct StatefulTreeIdentity {
+    journal: TransitionJournalStore,
+    candidate: RetainedIdentity,
+    previous: RetainedIdentity,
+    quarantine_attempt: Mutex<Option<RetainedQuarantineAttempt>>,
+}
+
+#[derive(Debug)]
+struct RetainedIdentity {
+    store: TreeMarkerStore,
+    marker: RetainedTreeMarker,
+}
+
+impl StatefulTreeIdentity {
+    /// Establish both permanent identities before the coordinator performs a
+    /// trigger, exchange, archive, quarantine, or other transition effect.
+    pub(crate) fn prepare(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+    ) -> Result<Self, Error> {
+        let root = &installation.root;
+        let previous_path = root.join("usr");
+        // Lock ordering is installation lock (owned by Installation), state
+        // database (already opened), then journal lock. Do not invent a second
+        // lock for marker publication.
+        installation.revalidate_root_directory()?;
+        let journal = TransitionJournalStore::open_retained(installation.root_directory(), root)?;
+        require_clean_baseline(&journal, state_db)?;
+
+        // Authenticate the materialized candidate and establish a strictly
+        // empty, same-mount previous tree only when the retained root proves
+        // that `usr` is genuinely absent.
+        let candidate_store = TreeMarkerStore::open_path(candidate_path)?;
+        let previous_store = open_or_synthesize_live_usr(installation)?;
+        let candidate = RetainedIdentity::prepare(candidate_store)?;
+        let previous = RetainedIdentity::prepare(previous_store)?;
+        if candidate.marker.token() == previous.marker.token() {
+            return Err(Error::DuplicateTreeToken {
+                candidate: candidate_path.to_owned(),
+                previous: previous_path,
+                token: candidate.marker.token().as_str().to_owned(),
+            });
+        }
+
+        candidate.revalidate_retained()?;
+        previous.revalidate_retained()?;
+        // A cooperating writer cannot pass either held flock. Repeating the
+        // evidence audit after marker publication also makes the ordering an
+        // executable invariant rather than a comment.
+        require_clean_baseline(&journal, state_db)?;
+        installation.revalidate_root_directory()?;
+
+        Ok(Self {
+            journal,
+            candidate,
+            previous,
+            quarantine_attempt: Mutex::new(None),
+        })
+    }
+
+    /// Revalidate both retained inodes and their current pre-exchange names.
+    pub(crate) fn verify_pre_exchange(&self, candidate_path: &Path, previous_path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.candidate.verify_named_read_only(candidate_path)?;
+        self.previous.verify_named_read_only(previous_path)?;
+        Ok(())
+    }
+
+    /// Verify the forward layout after the atomic exchange.
+    pub(crate) fn verify_forward_exchange(&self, live_path: &Path, previous_path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.candidate.verify_named_read_only(live_path)?;
+        self.previous.verify_named_read_only(previous_path)?;
+        Ok(())
+    }
+
+    /// Verify the previous tree at staging or its archive using only the
+    /// recovery reader.
+    pub(crate) fn verify_previous_for_recovery(&self, path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.previous.verify_named_read_only(path)
+    }
+
+    /// Verify the candidate tree at live, staging, archive, or quarantine
+    /// using only the recovery reader.
+    pub(crate) fn verify_candidate_for_recovery(&self, path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.candidate.verify_named_read_only(path)
+    }
+
+    /// Flush the filesystem containing the retained candidate and persist its
+    /// authenticated root at the current name. The later crash coordinator
+    /// still owns bounded descriptor-recursive inventory authentication; this
+    /// barrier proves durability, not a stable descendant namespace.
+    pub(crate) fn sync_candidate_for_recovery(&self, path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.candidate.verify_named_read_only(path)?;
+        self.candidate.store.sync_retained_tree()?;
+        self.candidate.verify_named_read_only(path)
+    }
+
+    /// Publish a failed candidate into one deterministic, token-derived
+    /// quarantine slot and make the rename durable before its database
+    /// correlation may be removed.
+    pub(crate) fn quarantine_candidate(
+        &self,
+        installation: &Installation,
+        candidate: state::Id,
+        kind: FailedCandidateKind,
+    ) -> Result<QuarantinedCandidate, Error> {
+        self.require_no_journal()?;
+        installation.revalidate_root_directory()?;
+
+        let staging_path = installation.staging_dir();
+        let source_path = installation.staging_path("usr");
+        let quarantine_path = installation.state_quarantine_dir();
+        let staging =
+            RetainedDirectory::open_beneath(installation.root_directory(), STAGING_RELATIVE, staging_path.clone())?;
+        let quarantine = RetainedDirectory::open_beneath(
+            installation.root_directory(),
+            QUARANTINE_RELATIVE,
+            quarantine_path.clone(),
+        )?;
+        if staging.witness.device != quarantine.witness.device {
+            return Err(Error::QuarantineCrossDevice {
+                source_path: staging_path,
+                destination: quarantine_path,
+            });
+        }
+
+        let name = QuarantineName::parse(format!(
+            "failed-{}-{candidate}-{}",
+            kind.as_str(),
+            self.candidate.marker.token().as_str()
+        ))
+        .map_err(Error::InvalidQuarantineName)?;
+        let encoded_name = std::ffi::CString::new(name.as_str())
+            .map_err(|source| quarantine_io("encode quarantine slot name", &quarantine.path, source.into()))?;
+        let slot_path = quarantine.path.join(name.as_str());
+        let destination_path = slot_path.join("usr");
+        let mut retained_attempt = self
+            .quarantine_attempt
+            .lock()
+            .map_err(|_| Error::QuarantineAttemptLockPoisoned)?;
+        let existing_slot = quarantine.open_optional_child(&encoded_name, slot_path.clone())?;
+        let (slot, already_moved) = match (retained_attempt.as_ref(), existing_slot) {
+            (None, None) => {
+                self.candidate.verify_named_read_only(&source_path)?;
+                quarantine_checkpoint(QuarantineFaultPoint::CandidatePreSync)?;
+                self.sync_candidate_for_recovery(&source_path)?;
+                let slot = RetainedDirectory::create_private_child(&quarantine, &encoded_name, slot_path.clone())?;
+                *retained_attempt = Some(RetainedQuarantineAttempt {
+                    name: encoded_name.clone(),
+                    slot: slot.clone_retained()?,
+                });
+                quarantine_checkpoint(QuarantineFaultPoint::SlotSync)?;
+                slot.sync("sync empty failed-candidate quarantine slot")?;
+                quarantine_checkpoint(QuarantineFaultPoint::QuarantineBaseSync)?;
+                quarantine.sync("sync quarantine base after slot creation")?;
+                (slot, false)
+            }
+            (None, Some(_)) => {
+                return Err(Error::QuarantineSlotExists { path: slot_path });
+            }
+            (Some(_), None) => {
+                return Err(Error::QuarantineDirectoryChanged { path: slot_path });
+            }
+            (Some(attempt), Some(slot)) => {
+                if attempt.name != encoded_name {
+                    return Err(Error::QuarantineAttemptChanged {
+                        expected: attempt.name.to_string_lossy().into_owned(),
+                        actual: name.as_str().to_owned(),
+                    });
+                }
+                attempt.slot.require_same(&slot)?;
+                if slot.witness.mode != PRIVATE_DIRECTORY_MODE {
+                    return Err(Error::UnsafeQuarantineDirectory {
+                        path: slot.path.clone(),
+                        owner: slot.witness.owner,
+                        mode: slot.witness.mode,
+                    });
+                }
+                match slot.entries(2)?.as_slice() {
+                    [] => {
+                        self.candidate.verify_named_read_only(&source_path)?;
+                        quarantine_checkpoint(QuarantineFaultPoint::CandidatePreSync)?;
+                        self.sync_candidate_for_recovery(&source_path)?;
+                        quarantine_checkpoint(QuarantineFaultPoint::SlotSync)?;
+                        slot.sync("resync empty failed-candidate quarantine slot")?;
+                        quarantine_checkpoint(QuarantineFaultPoint::QuarantineBaseSync)?;
+                        quarantine.sync("resync quarantine base for resumed publication")?;
+                        (slot, false)
+                    }
+                    [entry] if entry.as_slice() == b"usr" => {
+                        staging.require_child_absent(LIVE_USR_NAME)?;
+                        let moved = slot.open_child(LIVE_USR_NAME, destination_path.clone())?;
+                        self.candidate
+                            .verify_store_read_only(&TreeMarkerStore::open(&moved.file, &destination_path)?)?;
+                        self.candidate.verify_named_read_only(&destination_path)?;
+                        (slot, true)
+                    }
+                    entries => {
+                        return Err(Error::UnexpectedQuarantineEntries {
+                            path: slot.path.clone(),
+                            entries: entries
+                                .iter()
+                                .map(|name| String::from_utf8_lossy(name).into_owned())
+                                .collect(),
+                        });
+                    }
+                }
+            }
+        };
+        drop(retained_attempt);
+
+        if !already_moved {
+            staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
+            quarantine.revalidate_beneath(installation.root_directory(), QUARANTINE_RELATIVE)?;
+            slot.revalidate_child(&quarantine, &encoded_name)?;
+            slot.require_child_absent(LIVE_USR_NAME)?;
+            slot.require_exact_entries(&[])?;
+            let source_usr = staging.open_child(LIVE_USR_NAME, source_path.clone())?;
+            self.candidate
+                .verify_store_read_only(&TreeMarkerStore::open(&source_usr.file, &source_path)?)?;
+            self.candidate.verify_named_read_only(&source_path)?;
+
+            quarantine_checkpoint(QuarantineFaultPoint::Rename)?;
+            renameat2_noreplace(&staging.file, LIVE_USR_NAME, &slot.file, LIVE_USR_NAME)
+                .map_err(|source| quarantine_io("move failed candidate into quarantine", &slot_path, source))?;
+        }
+
+        staging.require_child_absent(LIVE_USR_NAME)?;
+        slot.require_exact_entries(&[b"usr"])?;
+        let moved = slot.open_child(LIVE_USR_NAME, destination_path.clone())?;
+        self.candidate
+            .verify_store_read_only(&TreeMarkerStore::open(&moved.file, &destination_path)?)?;
+        self.candidate.verify_named_read_only(&destination_path)?;
+
+        quarantine_checkpoint(QuarantineFaultPoint::MovedCandidateSync)?;
+        self.sync_candidate_for_recovery(&destination_path)?;
+        quarantine_checkpoint(QuarantineFaultPoint::SourceParentSync)?;
+        staging.sync("sync staging after failed-candidate removal")?;
+        quarantine_checkpoint(QuarantineFaultPoint::DestinationParentSync)?;
+        slot.sync("sync quarantine slot after failed-candidate publication")?;
+        quarantine.sync("resync quarantine base after failed-candidate publication")?;
+
+        let quarantined = QuarantinedCandidate {
+            name: encoded_name,
+            destination_path,
+            staging,
+            quarantine,
+            slot,
+        };
+        quarantine_checkpoint(QuarantineFaultPoint::FinalRevalidation)?;
+        self.revalidate_quarantined_candidate(installation, &quarantined)?;
+
+        Ok(quarantined)
+    }
+
+    /// Repeat the complete durability and identity proof immediately before a
+    /// fresh candidate's database correlation is removed.
+    pub(crate) fn revalidate_quarantined_candidate(
+        &self,
+        installation: &Installation,
+        quarantined: &QuarantinedCandidate,
+    ) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.sync_candidate_for_recovery(&quarantined.destination_path)?;
+        quarantined
+            .staging
+            .sync("resync staging before candidate invalidation")?;
+        quarantined
+            .slot
+            .sync("resync quarantine slot before candidate invalidation")?;
+        quarantined
+            .quarantine
+            .sync("resync quarantine base before candidate invalidation")?;
+        installation.revalidate_root_directory()?;
+        quarantined
+            .staging
+            .revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
+        quarantined
+            .quarantine
+            .revalidate_beneath(installation.root_directory(), QUARANTINE_RELATIVE)?;
+        quarantined
+            .slot
+            .revalidate_child(&quarantined.quarantine, &quarantined.name)?;
+        quarantined.staging.require_child_absent(LIVE_USR_NAME)?;
+        quarantined.slot.require_exact_entries(&[b"usr"])?;
+        let moved = quarantined
+            .slot
+            .open_child(LIVE_USR_NAME, quarantined.destination_path.clone())?;
+        self.candidate
+            .verify_store_read_only(&TreeMarkerStore::open(&moved.file, &quarantined.destination_path)?)?;
+        self.candidate.verify_named_read_only(&quarantined.destination_path)
+    }
+
+    /// Verify the layout after a compensating reverse exchange.
+    pub(crate) fn verify_restored(&self, live_previous_path: &Path, staged_candidate_path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.previous.verify_named_read_only(live_previous_path)?;
+        self.candidate.verify_named_read_only(staged_candidate_path)?;
+        Ok(())
+    }
+
+    fn require_no_journal(&self) -> Result<(), Error> {
+        if let Some(record) = self.journal.load()? {
+            return Err(Error::JournalAppeared {
+                transition: record.transition_id.as_str().to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct OpenedLiveUsr {
+    pinned: std::fs::File,
+    readable: std::fs::File,
+}
+
+fn open_or_synthesize_live_usr(installation: &Installation) -> Result<TreeMarkerStore, Error> {
+    let path = installation.root.join("usr");
+    installation.revalidate_root_directory()?;
+    if let Some(opened) = open_live_usr(installation, &path)? {
+        require_named_live_usr(installation, &opened.pinned, &path)?;
+        let store = TreeMarkerStore::open(&opened.readable, &path)?;
+        // With no active-state evidence, an existing nonempty tree is neither
+        // the synthesized empty baseline nor an authenticated legacy active
+        // tree. Refuse to bless it with a permanent token.
+        if installation.active_state.is_none() {
+            require_no_access_acl(&opened.readable, &path)
+                .map_err(|source| live_usr_io("reject access ACL on unowned live /usr", &path, source))?;
+            let marker_only = require_empty_or_marker_only_directory(&opened.readable, &path)?;
+            if marker_only {
+                // A failed first-install attempt may already have durably
+                // published the baseline marker. Validate and adopt that exact
+                // evidence rather than permanently making the next attempt
+                // reject its own marker.
+                store.read_for_recovery()?;
+            }
+            opened
+                .readable
+                .sync_all()
+                .map_err(|source| live_usr_io("sync pre-existing empty live /usr", &path, source))?;
+            installation
+                .root_directory()
+                .sync_all()
+                .map_err(|source| live_usr_io("sync pre-existing live /usr name", &path, source))?;
+        }
+        require_named_live_usr(installation, &opened.pinned, &path)?;
+        installation.revalidate_root_directory()?;
+        return Ok(store);
+    }
+
+    before_live_usr_mkdir();
+    loop {
+        // SAFETY: the retained root descriptor and static component remain
+        // live. mkdirat never follows or replaces the final component.
+        if unsafe {
+            nix::libc::mkdirat(
+                installation.root_directory().as_raw_fd(),
+                LIVE_USR_NAME.as_ptr(),
+                SYNTHESIZED_USR_MODE,
+            )
+        } == 0
+        {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        match source.kind() {
+            io::ErrorKind::Interrupted => {}
+            io::ErrorKind::AlreadyExists => return Err(Error::LiveUsrAppeared { path }),
+            _ => return Err(live_usr_io("create empty live /usr", &path, source)),
+        }
+    }
+
+    let opened = open_live_usr(installation, &path)?.ok_or_else(|| Error::LiveUsrDisappeared { path: path.clone() })?;
+    require_fresh_synthesized_usr(&opened.readable, &path)?;
+    chmod_path_descriptor(&opened.pinned, SYNTHESIZED_USR_MODE)
+        .map_err(|source| live_usr_io("normalize empty live /usr mode", &path, source))?;
+    require_exact_synthesized_usr(&opened.readable, &path)?;
+
+    // Persist the empty child and its name before a marker can be generated.
+    opened
+        .readable
+        .sync_all()
+        .map_err(|source| live_usr_io("sync empty live /usr", &path, source))?;
+    installation
+        .root_directory()
+        .sync_all()
+        .map_err(|source| live_usr_io("sync installation root after live /usr creation", &path, source))?;
+    require_named_live_usr(installation, &opened.pinned, &path)?;
+    let reopened =
+        open_live_usr(installation, &path)?.ok_or_else(|| Error::LiveUsrDisappeared { path: path.clone() })?;
+    require_same_directory(&opened.pinned, &reopened.pinned, &path)?;
+    require_exact_synthesized_usr(&reopened.readable, &path)?;
+    reopened
+        .readable
+        .sync_all()
+        .map_err(|source| live_usr_io("resync authenticated empty live /usr", &path, source))?;
+    installation
+        .root_directory()
+        .sync_all()
+        .map_err(|source| live_usr_io("resync authenticated installation root", &path, source))?;
+    installation.revalidate_root_directory()?;
+
+    let store = TreeMarkerStore::open(&reopened.readable, &path)?;
+    require_named_live_usr(installation, &opened.pinned, &path)?;
+    Ok(store)
+}
+
+fn open_live_usr(installation: &Installation, path: &Path) -> Result<Option<OpenedLiveUsr>, Error> {
+    let pinned = match openat2_file(
+        installation.root_directory().as_raw_fd(),
+        LIVE_USR_NAME,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        controlled_resolution(),
+    ) {
+        Ok(file) => file,
+        Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => return Ok(None),
+        Err(source) => return Err(live_usr_io("pin live /usr", path, source)),
+    };
+    let readable = openat2_file(
+        installation.root_directory().as_raw_fd(),
+        LIVE_USR_NAME,
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        0,
+        controlled_resolution(),
+    )
+    .map_err(|source| live_usr_io("open live /usr", path, source))?;
+    require_same_directory(&pinned, &readable, path)?;
+    Ok(Some(OpenedLiveUsr { pinned, readable }))
+}
+
+fn require_named_live_usr(installation: &Installation, retained: &std::fs::File, path: &Path) -> Result<(), Error> {
+    installation.revalidate_root_directory()?;
+    let named = openat2_file(
+        installation.root_directory().as_raw_fd(),
+        LIVE_USR_NAME,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        controlled_resolution(),
+    )
+    .map_err(|source| live_usr_io("revalidate live /usr name", path, source))?;
+    require_same_directory(retained, &named, path)
+}
+
+fn require_fresh_synthesized_usr(file: &std::fs::File, path: &Path) -> Result<(), Error> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| live_usr_io("inspect fresh empty live /usr", path, source))?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    // SAFETY: geteuid has no arguments and cannot fail.
+    let owner = unsafe { nix::libc::geteuid() };
+    if !metadata.file_type().is_dir() || metadata.uid() != owner || mode & !SYNTHESIZED_USR_MODE != 0 {
+        return Err(Error::UnsafeSynthesizedUsr {
+            path: path.to_owned(),
+            owner: metadata.uid(),
+            mode,
+        });
+    }
+    require_no_access_acl(file, path)
+        .map_err(|source| live_usr_io("reject access ACL on empty live /usr", path, source))?;
+    require_no_default_acl(file, path)
+        .map_err(|source| live_usr_io("reject default ACL on empty live /usr", path, source))?;
+    require_empty_directory(file, path)
+}
+
+fn require_exact_synthesized_usr(file: &std::fs::File, path: &Path) -> Result<(), Error> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| live_usr_io("inspect normalized empty live /usr", path, source))?;
+    let mode = metadata.permissions().mode() & 0o7777;
+    // SAFETY: geteuid has no arguments and cannot fail.
+    let owner = unsafe { nix::libc::geteuid() };
+    if !metadata.file_type().is_dir() || metadata.uid() != owner || mode != SYNTHESIZED_USR_MODE {
+        return Err(Error::UnsafeSynthesizedUsr {
+            path: path.to_owned(),
+            owner: metadata.uid(),
+            mode,
+        });
+    }
+    require_no_access_acl(file, path)
+        .map_err(|source| live_usr_io("reject access ACL on normalized live /usr", path, source))?;
+    require_no_default_acl(file, path)
+        .map_err(|source| live_usr_io("reject default ACL on normalized live /usr", path, source))?;
+    require_empty_directory(file, path)
+}
+
+fn require_empty_directory(file: &std::fs::File, path: &Path) -> Result<(), Error> {
+    inspect_baseline_directory(file, path, false).map(drop)
+}
+
+/// Return true only for the exact marker-only retry baseline. Every other
+/// entry, including marker temporaries and a marker plus foreign content,
+/// fails closed without cleanup.
+fn require_empty_or_marker_only_directory(file: &std::fs::File, path: &Path) -> Result<bool, Error> {
+    inspect_baseline_directory(file, path, true)
+}
+
+fn inspect_baseline_directory(file: &std::fs::File, path: &Path, allow_marker: bool) -> Result<bool, Error> {
+    // SAFETY: fcntl receives one live directory descriptor and returns a fresh
+    // close-on-exec descriptor on success.
+    let duplicate = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate == -1 {
+        return Err(live_usr_io(
+            "duplicate empty live /usr for enumeration",
+            path,
+            io::Error::last_os_error(),
+        ));
+    }
+    // dup shares a directory offset with the retained descriptor. Reset it so
+    // repeated emptiness proofs never mistake a prior EOF for a new scan.
+    // SAFETY: duplicate is one fresh live directory descriptor.
+    if unsafe { nix::libc::lseek(duplicate, 0, nix::libc::SEEK_SET) } == -1 {
+        let source = io::Error::last_os_error();
+        // SAFETY: duplicate is still uniquely owned here.
+        unsafe { nix::libc::close(duplicate) };
+        return Err(live_usr_io("rewind empty live /usr enumeration", path, source));
+    }
+    // SAFETY: fdopendir consumes the fresh duplicate on success.
+    let stream = unsafe { nix::libc::fdopendir(duplicate) };
+    if stream.is_null() {
+        let source = io::Error::last_os_error();
+        // SAFETY: fdopendir failed and did not consume the duplicate.
+        unsafe { nix::libc::close(duplicate) };
+        return Err(live_usr_io("enumerate empty live /usr", path, source));
+    }
+
+    let mut marker_seen = false;
+    let result = loop {
+        // SAFETY: Linux exposes thread-local errno through this pointer.
+        unsafe { *nix::libc::__errno_location() = 0 };
+        // SAFETY: stream remains live and exclusively used here.
+        let entry = unsafe { nix::libc::readdir(stream) };
+        if entry.is_null() {
+            let source = io::Error::last_os_error();
+            break if source.raw_os_error() == Some(0) {
+                Ok(marker_seen)
+            } else {
+                Err(live_usr_io("enumerate empty live /usr", path, source))
+            };
+        }
+        // SAFETY: d_name is NUL terminated for this live dirent.
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let name = name.to_bytes();
+        if matches!(name, b"." | b"..") {
+            continue;
+        }
+        if allow_marker && name == TREE_MARKER_NAME && !marker_seen {
+            marker_seen = true;
+        } else {
+            break Err(Error::LiveUsrNotEmpty {
+                path: path.to_owned(),
+                entry: String::from_utf8_lossy(name).into_owned(),
+            });
+        }
+    };
+    // SAFETY: stream was returned by fdopendir and remains open.
+    let closed = unsafe { nix::libc::closedir(stream) };
+    if closed == -1 && result.is_ok() {
+        return Err(live_usr_io(
+            "close empty live /usr enumeration",
+            path,
+            io::Error::last_os_error(),
+        ));
+    }
+    result
+}
+
+fn require_same_directory(expected: &std::fs::File, actual: &std::fs::File, path: &Path) -> Result<(), Error> {
+    let expected = expected
+        .metadata()
+        .map_err(|source| live_usr_io("inspect retained live /usr", path, source))?;
+    let actual = actual
+        .metadata()
+        .map_err(|source| live_usr_io("inspect reopened live /usr", path, source))?;
+    if (expected.dev(), expected.ino()) == (actual.dev(), actual.ino()) {
+        Ok(())
+    } else {
+        Err(Error::LiveUsrChanged { path: path.to_owned() })
+    }
+}
+
+impl RetainedDirectory {
+    fn open_beneath(root: &std::fs::File, relative: &CStr, path: PathBuf) -> Result<Self, Error> {
+        Self::open_at(root, relative, path)
+    }
+
+    fn open_child(&self, name: &CStr, path: PathBuf) -> Result<Self, Error> {
+        Self::open_at(&self.file, name, path)
+    }
+
+    fn clone_retained(&self) -> Result<Self, Error> {
+        let clone = Self::open_at(&self.file, c".", self.path.clone())?;
+        self.require_same(&clone)?;
+        Ok(clone)
+    }
+
+    fn open_optional_child(&self, name: &CStr, path: PathBuf) -> Result<Option<Self>, Error> {
+        match openat2_file(
+            self.file.as_raw_fd(),
+            name,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            controlled_resolution(),
+        ) {
+            Ok(probe) => {
+                drop(probe);
+                Self::open_at(&self.file, name, path).map(Some)
+            }
+            Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => Ok(None),
+            Err(source) => Err(quarantine_io("probe retained child directory", &path, source)),
+        }
+    }
+
+    fn open_at(parent: &std::fs::File, name: &CStr, path: PathBuf) -> Result<Self, Error> {
+        let pinned = openat2_file(
+            parent.as_raw_fd(),
+            name,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| quarantine_io("pin retained directory", &path, source))?;
+        let expected = retained_directory_witness(&pinned, &path)?;
+        let file = openat2_file(
+            parent.as_raw_fd(),
+            name,
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_CLOEXEC
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_NONBLOCK,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| quarantine_io("open retained directory", &path, source))?;
+        if retained_directory_witness(&file, &path)? != expected {
+            return Err(Error::QuarantineDirectoryChanged { path });
+        }
+        require_no_access_acl(&file, &path)
+            .map_err(|source| quarantine_io("reject access ACL on retained directory", &path, source))?;
+        require_no_default_acl(&file, &path)
+            .map_err(|source| quarantine_io("reject default ACL on retained directory", &path, source))?;
+        Ok(Self {
+            file,
+            path,
+            witness: expected,
+        })
+    }
+
+    fn create_private_child(parent: &Self, name: &CStr, path: PathBuf) -> Result<Self, Error> {
+        loop {
+            // SAFETY: parent and the single validated quarantine-name C string
+            // remain live. mkdirat never follows or replaces the final name.
+            if unsafe { nix::libc::mkdirat(parent.file.as_raw_fd(), name.as_ptr(), PRIVATE_DIRECTORY_MODE) } == 0 {
+                break;
+            }
+            let source = io::Error::last_os_error();
+            match source.kind() {
+                io::ErrorKind::Interrupted => {}
+                io::ErrorKind::AlreadyExists => return Err(Error::QuarantineSlotExists { path }),
+                _ => return Err(quarantine_io("create private quarantine slot", &path, source)),
+            }
+        }
+
+        let pinned = openat2_file(
+            parent.file.as_raw_fd(),
+            name,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| quarantine_io("pin fresh quarantine slot", &path, source))?;
+        let metadata = pinned
+            .metadata()
+            .map_err(|source| quarantine_io("inspect fresh quarantine slot", &path, source))?;
+        let mode = metadata.permissions().mode() & 0o7777;
+        // A just-created slot may expose only an owner-owned subset of 0700
+        // under the process umask. Anything else is substitution evidence.
+        if !metadata.file_type().is_dir()
+            || metadata.uid() != unsafe { nix::libc::geteuid() }
+            || mode & !PRIVATE_DIRECTORY_MODE != 0
+        {
+            return Err(Error::UnsafeQuarantineDirectory {
+                path,
+                owner: metadata.uid(),
+                mode,
+            });
+        }
+        chmod_path_descriptor(&pinned, PRIVATE_DIRECTORY_MODE)
+            .map_err(|source| quarantine_io("normalize fresh quarantine slot mode", &path, source))?;
+        let expected = retained_directory_witness(&pinned, &path)?;
+        before_quarantine_slot_reopen();
+        let slot = Self::open_at(&parent.file, name, path)?;
+        if slot.witness != expected {
+            return Err(Error::QuarantineDirectoryChanged {
+                path: slot.path.clone(),
+            });
+        }
+        if slot.witness.mode != PRIVATE_DIRECTORY_MODE {
+            return Err(Error::UnsafeQuarantineDirectory {
+                path: slot.path.clone(),
+                owner: slot.witness.owner,
+                mode: slot.witness.mode,
+            });
+        }
+        slot.require_exact_entries(&[])?;
+        Ok(slot)
+    }
+
+    fn sync(&self, operation: &'static str) -> Result<(), Error> {
+        if retained_directory_witness(&self.file, &self.path)? != self.witness {
+            return Err(Error::QuarantineDirectoryChanged {
+                path: self.path.clone(),
+            });
+        }
+        self.file
+            .sync_all()
+            .map_err(|source| quarantine_io(operation, &self.path, source))?;
+        if retained_directory_witness(&self.file, &self.path)? != self.witness {
+            return Err(Error::QuarantineDirectoryChanged {
+                path: self.path.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn revalidate_beneath(&self, root: &std::fs::File, relative: &CStr) -> Result<(), Error> {
+        let named = Self::open_at(root, relative, self.path.clone())?;
+        self.require_same(&named)
+    }
+
+    fn revalidate_child(&self, parent: &Self, name: &CStr) -> Result<(), Error> {
+        let named = Self::open_at(&parent.file, name, self.path.clone())?;
+        self.require_same(&named)
+    }
+
+    fn require_same(&self, named: &Self) -> Result<(), Error> {
+        if retained_directory_witness(&self.file, &self.path)? == self.witness && named.witness == self.witness {
+            Ok(())
+        } else {
+            Err(Error::QuarantineDirectoryChanged {
+                path: self.path.clone(),
+            })
+        }
+    }
+
+    fn require_child_absent(&self, name: &CStr) -> Result<(), Error> {
+        match openat2_file(
+            self.file.as_raw_fd(),
+            name,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            controlled_resolution(),
+        ) {
+            Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => Ok(()),
+            Ok(_) => Err(Error::QuarantineDestinationExists {
+                path: self.path.join(name.to_string_lossy().as_ref()),
+            }),
+            Err(source) => Err(quarantine_io(
+                "prove quarantine child absence",
+                &self.path.join(name.to_string_lossy().as_ref()),
+                source,
+            )),
+        }
+    }
+
+    fn require_exact_entries(&self, expected: &[&[u8]]) -> Result<(), Error> {
+        let mut actual = self.entries(expected.len().saturating_add(1))?;
+        let mut expected = expected.iter().map(|name| name.to_vec()).collect::<Vec<_>>();
+        actual.sort();
+        expected.sort();
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(Error::UnexpectedQuarantineEntries {
+                path: self.path.clone(),
+                entries: actual
+                    .into_iter()
+                    .map(|name| String::from_utf8_lossy(&name).into_owned())
+                    .collect(),
+            })
+        }
+    }
+
+    fn entries(&self, limit: usize) -> Result<Vec<Vec<u8>>, Error> {
+        retained_directory_entries(&self.file, &self.path, limit)
+    }
+}
+
+fn retained_directory_witness(file: &std::fs::File, path: &Path) -> Result<RetainedDirectoryWitness, Error> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| quarantine_io("inspect retained directory", path, source))?;
+    let witness = RetainedDirectoryWitness {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        owner: metadata.uid(),
+        mode: metadata.permissions().mode() & 0o7777,
+    };
+    if metadata.file_type().is_dir()
+        && witness.owner == unsafe { nix::libc::geteuid() }
+        && witness.mode & 0o7000 == 0
+        && witness.mode & 0o022 == 0
+        && witness.mode & 0o700 == 0o700
+    {
+        Ok(witness)
+    } else {
+        Err(Error::UnsafeQuarantineDirectory {
+            path: path.to_owned(),
+            owner: witness.owner,
+            mode: witness.mode,
+        })
+    }
+}
+
+fn retained_directory_entries(file: &std::fs::File, path: &Path, limit: usize) -> Result<Vec<Vec<u8>>, Error> {
+    // SAFETY: fcntl returns a fresh close-on-exec descriptor on success.
+    let duplicate = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate == -1 {
+        return Err(quarantine_io(
+            "duplicate retained directory for enumeration",
+            path,
+            io::Error::last_os_error(),
+        ));
+    }
+    // SAFETY: duplicate is a fresh live directory descriptor.
+    if unsafe { nix::libc::lseek(duplicate, 0, nix::libc::SEEK_SET) } == -1 {
+        let source = io::Error::last_os_error();
+        // SAFETY: duplicate remains uniquely owned here.
+        unsafe { nix::libc::close(duplicate) };
+        return Err(quarantine_io("rewind retained directory enumeration", path, source));
+    }
+    // SAFETY: fdopendir consumes the fresh descriptor on success.
+    let stream = unsafe { nix::libc::fdopendir(duplicate) };
+    if stream.is_null() {
+        let source = io::Error::last_os_error();
+        // SAFETY: fdopendir failed and did not consume duplicate.
+        unsafe { nix::libc::close(duplicate) };
+        return Err(quarantine_io("enumerate retained directory", path, source));
+    }
+
+    let mut entries = Vec::new();
+    let result = loop {
+        // SAFETY: errno is thread-local on Linux.
+        unsafe { *nix::libc::__errno_location() = 0 };
+        // SAFETY: stream remains live and exclusively used here.
+        let entry = unsafe { nix::libc::readdir(stream) };
+        if entry.is_null() {
+            let source = io::Error::last_os_error();
+            break if source.raw_os_error() == Some(0) {
+                Ok(entries)
+            } else {
+                Err(quarantine_io("enumerate retained directory", path, source))
+            };
+        }
+        // SAFETY: d_name is NUL terminated for the returned dirent.
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if matches!(name, b"." | b"..") {
+            continue;
+        }
+        entries.push(name.to_vec());
+        if entries.len() > limit {
+            break Err(Error::UnexpectedQuarantineEntries {
+                path: path.to_owned(),
+                entries: entries
+                    .into_iter()
+                    .map(|name| String::from_utf8_lossy(&name).into_owned())
+                    .collect(),
+            });
+        }
+    };
+    // SAFETY: stream was returned by fdopendir and remains live.
+    let closed = unsafe { nix::libc::closedir(stream) };
+    if closed == -1 && result.is_ok() {
+        return Err(quarantine_io(
+            "close retained directory enumeration",
+            path,
+            io::Error::last_os_error(),
+        ));
+    }
+    result
+}
+
+#[cfg(test)]
+pub(crate) fn arm_quarantine_fault(point: QuarantineFaultPoint) {
+    arm_quarantine_faults(point, 1);
+}
+
+#[cfg(test)]
+pub(crate) fn arm_quarantine_faults(point: QuarantineFaultPoint, count: usize) {
+    assert!(count > 0, "quarantine fault count must be nonzero");
+    QUARANTINE_FAULT.with(|slot| {
+        assert!(
+            slot.replace(Some((point, count))).is_none(),
+            "quarantine fault already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
+    QUARANTINE_FAULT.with(|slot| {
+        let mut armed = slot.borrow_mut();
+        match armed.as_mut() {
+            Some((armed_point, remaining)) if *armed_point == point => {
+                *remaining -= 1;
+                if *remaining == 0 {
+                    *armed = None;
+                }
+                Err(Error::InjectedQuarantineFault { point })
+            }
+            _ => Ok(()),
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
+    let _ = point;
+    Ok(())
+}
+
+fn quarantine_io(operation: &'static str, path: &Path, source: io::Error) -> Error {
+    Error::Quarantine {
+        operation,
+        path: path.to_owned(),
+        source,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn arm_before_live_usr_mkdir(hook: impl FnOnce() + 'static) {
+    BEFORE_LIVE_USR_MKDIR.with(|slot| {
+        assert!(
+            slot.replace(Some(Box::new(hook))).is_none(),
+            "live /usr hook already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn arm_before_quarantine_slot_reopen(hook: impl FnOnce() + 'static) {
+    BEFORE_QUARANTINE_SLOT_REOPEN.with(|slot| {
+        assert!(
+            slot.replace(Some(Box::new(hook))).is_none(),
+            "quarantine slot reopen hook already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn before_live_usr_mkdir() {
+    BEFORE_LIVE_USR_MKDIR.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_live_usr_mkdir() {}
+
+#[cfg(test)]
+fn before_quarantine_slot_reopen() {
+    BEFORE_QUARANTINE_SLOT_REOPEN.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_quarantine_slot_reopen() {}
+
+fn live_usr_io(operation: &'static str, path: &Path, source: io::Error) -> Error {
+    Error::LiveUsr {
+        operation,
+        path: path.to_owned(),
+        source,
+    }
+}
+
+impl RetainedIdentity {
+    fn prepare(store: TreeMarkerStore) -> Result<Self, Error> {
+        let marker = store.adopt_or_create_before_journal()?;
+        Ok(Self { store, marker })
+    }
+
+    /// This method is intentionally incapable of reaching marker creation.
+    fn verify_named_read_only(&self, path: &Path) -> Result<(), Error> {
+        self.revalidate_retained()?;
+        let named_store = TreeMarkerStore::open_path(path)?;
+        self.verify_store_read_only(&named_store)
+    }
+
+    fn verify_store_read_only(&self, named_store: &TreeMarkerStore) -> Result<(), Error> {
+        self.revalidate_retained()?;
+        self.store.require_same_directory(named_store)?;
+        let named = named_store.read_expected_for_recovery(self.marker.token())?;
+        self.marker.require_same_marker(&named)?;
+        named.revalidate(named_store)?;
+        self.revalidate_retained()?;
+        self.store.require_same_directory(named_store)?;
+        self.marker.require_same_marker(&named).map_err(Error::from)
+    }
+
+    fn revalidate_retained(&self) -> Result<(), Error> {
+        self.marker.revalidate(&self.store).map_err(Error::from)
+    }
+}
+
+fn require_clean_baseline(journal: &TransitionJournalStore, state_db: &db::state::Database) -> Result<(), Error> {
+    if let Some(record) = journal.load()? {
+        return Err(Error::UnresolvedJournal {
+            transition: record.transition_id.as_str().to_owned(),
+        });
+    }
+    if let Some(orphan) = state_db.audit_in_flight_transition()? {
+        return Err(Error::OrphanTransitionRow {
+            state: i32::from(orphan.state_id),
+            transition: orphan.transition_id.as_str().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum Error {
+    #[error("revalidate the retained installation root")]
+    Installation(#[from] installation::Error),
+    #[error("open or inspect the durable transition journal")]
+    Journal(#[from] crate::transition_journal::StorageError),
+    #[error("audit transition-bearing state rows")]
+    StateEvidence(#[from] db::state::TransitionEvidenceError),
+    #[error("prepare or authenticate a durable tree marker")]
+    TreeMarker(#[from] TreeMarkerError),
+    #[error("construct a bounded deterministic failed-candidate quarantine name")]
+    InvalidQuarantineName(#[source] crate::transition_journal::CodecError),
+    #[error("{operation} at failed-candidate quarantine path `{}`", path.display())]
+    Quarantine {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("unsafe retained quarantine directory `{}` (uid={owner}, mode={mode:04o})", path.display())]
+    UnsafeQuarantineDirectory { path: PathBuf, owner: u32, mode: u32 },
+    #[error("retained quarantine directory changed at `{}`", path.display())]
+    QuarantineDirectoryChanged { path: PathBuf },
+    #[error("failed-candidate quarantine attempt lock is poisoned")]
+    QuarantineAttemptLockPoisoned,
+    #[error("failed-candidate quarantine attempt changed from `{expected}` to `{actual}`")]
+    QuarantineAttemptChanged { expected: String, actual: String },
+    #[error("deterministic failed-candidate quarantine slot already exists at `{}`", path.display())]
+    QuarantineSlotExists { path: PathBuf },
+    #[error(
+        "failed candidate source `{}` and quarantine destination `{}` are on different filesystems",
+        source_path.display(),
+        destination.display()
+    )]
+    QuarantineCrossDevice { source_path: PathBuf, destination: PathBuf },
+    #[error("failed-candidate quarantine destination already exists at `{}`", path.display())]
+    QuarantineDestinationExists { path: PathBuf },
+    #[error("unexpected entries in failed-candidate quarantine directory `{}`: {entries:?}", path.display())]
+    UnexpectedQuarantineEntries { path: PathBuf, entries: Vec<String> },
+    #[cfg(test)]
+    #[error("injected failed-candidate quarantine fault at {point:?}")]
+    InjectedQuarantineFault { point: QuarantineFaultPoint },
+    #[error("{operation} at `{}`", path.display())]
+    LiveUsr {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("live /usr appeared while synthesizing the proven-absent name at `{}`", path.display())]
+    LiveUsrAppeared { path: PathBuf },
+    #[error("newly created live /usr disappeared at `{}`", path.display())]
+    LiveUsrDisappeared { path: PathBuf },
+    #[error("live /usr name changed while retained at `{}`", path.display())]
+    LiveUsrChanged { path: PathBuf },
+    #[error("synthesized live /usr is unsafe at `{}` (uid={owner}, mode={mode:04o})", path.display())]
+    UnsafeSynthesizedUsr { path: PathBuf, owner: u32, mode: u32 },
+    #[error("live /usr cannot be adopted as an empty baseline at `{}`; found `{entry}`", path.display())]
+    LiveUsrNotEmpty { path: PathBuf, entry: String },
+    #[error("unresolved transition journal {transition} blocks tree-marker publication")]
+    UnresolvedJournal { transition: String },
+    #[error("transition journal {transition} appeared while its exclusive lock was retained")]
+    JournalAppeared { transition: String },
+    #[error("orphan transition row for state {state} and transition {transition} blocks tree-marker publication")]
+    OrphanTransitionRow { state: i32, transition: String },
+    #[error(
+        "candidate tree `{}` and previous tree `{}` carry duplicate permanent token {token}",
+        candidate.display(),
+        previous.display()
+    )]
+    DuplicateTreeToken {
+        candidate: PathBuf,
+        previous: PathBuf,
+        token: String,
+    },
+}

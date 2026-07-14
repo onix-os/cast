@@ -30,14 +30,13 @@ pub mod state;
 pub mod system_model;
 #[cfg(test)]
 pub(crate) mod test_support;
-// The journal codec and storage are intentionally landed before activation
-// recovery starts consuming them. Keeping the boundary isolated makes the
-// on-disk contract independently testable before it can affect `/usr`.
+// The journal codec and storage remain independently testable while the
+// bounded identity guard begins consuming their exclusive lock. Journal
+// creation and crash-reopen reconciliation are still separate work.
 #[allow(dead_code)]
 pub(crate) mod transition_journal;
-// Durable tree identity lands before the transition coordinator consumes it.
-// Keeping the creation and recovery APIs isolated makes the no-mint recovery
-// contract independently testable.
-#[allow(dead_code)]
+// Durable tree identity keeps creation and recovery APIs isolated so the
+// coordinator cannot accidentally mint or repair an identity during recovery.
+pub(crate) mod transition_identity;
 pub(crate) mod tree_marker;
 pub mod util;

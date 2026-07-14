@@ -61,6 +61,7 @@ use crate::{
     repository, runtime, signal,
     state::{self, Selection},
     system_model::{self, LoadedSystemModel},
+    transition_identity::{FailedCandidateKind, QuarantinedCandidate, StatefulTreeIdentity},
 };
 
 pub use self::extract::extract;
@@ -181,6 +182,7 @@ pub struct Client {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatefulTransitionCheckpoint {
     AfterTransactionTriggers,
+    BeforeUsrExchange,
     AfterUsrExchange,
     AfterSystemTriggersStarted,
     AfterSystemTriggers,
@@ -793,6 +795,15 @@ impl Client {
         let fstree = self.vfs(new.selections.iter().map(|selection| &selection.package))?;
 
         let staging_dir = self.installation.staging_dir();
+        let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
+        let tree_identity = self.prepare_stateful_tree_identity(&archived_usr).map_err(|source| {
+            Error::StatefulTreeIdentityPreparationFailed {
+                candidate: new.id,
+                previous: Some(old.id),
+                location: archived_usr.clone(),
+                source: Box::new(source.into()),
+            }
+        })?;
 
         // Ensure staging dir exists
         if !staging_dir.exists() {
@@ -801,6 +812,19 @@ impl Client {
 
         // Move new (archived) state to staging
         fs::rename(self.installation.root_path(new.id.to_string()), &staging_dir)?;
+        if let Err(primary) = tree_identity.verify_pre_exchange(
+            &self.installation.staging_path("usr"),
+            &self.installation.root.join("usr"),
+        ) {
+            return Err(self.preserve_unswapped_candidate(
+                new.id,
+                Some(old.id),
+                StatefulCandidateOrigin::Archived,
+                primary.into(),
+                &tree_identity,
+                &mut checkpoint,
+            ));
+        }
 
         self.commit_stateful_staging(
             &fstree,
@@ -810,6 +834,7 @@ impl Client {
             true,
             !skip_triggers,
             !skip_boot,
+            &tree_identity,
             &mut checkpoint,
         )?;
 
@@ -963,6 +988,21 @@ impl Client {
     {
         self.require_non_frozen()?;
         let archive_previous = old_state.is_some();
+        let candidate_usr = self.installation.staging_path("usr");
+        // Empty package selections deliberately materialize no filesystem
+        // root. Record the state identity first so the hardened metadata path
+        // creates and authenticates the candidate `/usr` before the tree
+        // marker guard attempts to pin it. This also covers remove-last-package
+        // and empty active-state verification reblits.
+        record_state_id(&self.installation.staging_dir(), state.id)?;
+        let tree_identity = self.prepare_stateful_tree_identity(&candidate_usr).map_err(|source| {
+            Error::StatefulTreeIdentityPreparationFailed {
+                candidate: state.id,
+                previous: old_state,
+                location: candidate_usr,
+                source: Box::new(source.into()),
+            }
+        })?;
         let (previous, candidate_origin) = match old_state {
             Some(id) => match self.state_db.get(id) {
                 Ok(previous) => (Some(previous), StatefulCandidateOrigin::Fresh),
@@ -972,6 +1012,7 @@ impl Client {
                         Some(id),
                         StatefulCandidateOrigin::Fresh,
                         Error::Db(error),
+                        &tree_identity,
                         &mut checkpoint,
                     ));
                 }
@@ -987,7 +1028,6 @@ impl Client {
         };
 
         let prepare = (|| {
-            record_state_id(&self.installation.staging_dir(), state.id)?;
             record_os_release(&self.installation.staging_dir())?;
             record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
 
@@ -1003,7 +1043,15 @@ impl Client {
             // Transaction triggers run before `/usr` is exchanged. Their
             // arbitrary external side effects cannot be undone, but the
             // candidate tree can still be preserved outside the active root.
+            tree_identity.verify_pre_exchange(
+                &self.installation.staging_path("usr"),
+                &self.installation.root.join("usr"),
+            )?;
             Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?;
+            tree_identity.verify_pre_exchange(
+                &self.installation.staging_path("usr"),
+                &self.installation.root.join("usr"),
+            )?;
             checkpoint(StatefulTransitionCheckpoint::AfterTransactionTriggers)?;
             Ok(())
         })();
@@ -1014,6 +1062,7 @@ impl Client {
                 previous.as_ref().map(|state| state.id),
                 candidate_origin,
                 primary,
+                &tree_identity,
                 &mut checkpoint,
             ));
         }
@@ -1026,6 +1075,7 @@ impl Client {
             archive_previous,
             true,
             true,
+            &tree_identity,
             &mut checkpoint,
         )
     }
@@ -1050,17 +1100,27 @@ impl Client {
         archive_previous: bool,
         run_system_triggers: bool,
         run_boot_synchronization: bool,
+        tree_identity: &StatefulTreeIdentity,
         checkpoint: &mut F,
     ) -> Result<(), Error>
     where
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
-        if let Err(primary) = self.promote_staging() {
+        if let Err(primary) = tree_identity
+            .verify_pre_exchange(
+                &self.installation.staging_path("usr"),
+                &self.installation.root.join("usr"),
+            )
+            .map_err(Error::from)
+            .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeUsrExchange))
+            .and_then(|()| self.promote_staging())
+        {
             return Err(self.preserve_unswapped_candidate(
                 candidate.id,
                 previous.map(|state| state.id),
                 candidate_origin,
                 primary,
+                tree_identity,
                 checkpoint,
             ));
         }
@@ -1069,6 +1129,10 @@ impl Client {
         let mut system_triggers_incomplete = false;
         let mut candidate_boot_synchronization_started = false;
         let primary = (|| {
+            tree_identity.verify_forward_exchange(
+                &self.installation.root.join("usr"),
+                &self.installation.staging_path("usr"),
+            )?;
             checkpoint(StatefulTransitionCheckpoint::AfterUsrExchange)?;
 
             // Root ABI links refer into `/usr`, so the same links remain valid
@@ -1079,22 +1143,33 @@ impl Client {
                 system_triggers_incomplete = true;
                 checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggersStarted)?;
                 Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), fstree)?;
+                tree_identity.verify_forward_exchange(
+                    &self.installation.root.join("usr"),
+                    &self.installation.staging_path("usr"),
+                )?;
                 system_triggers_incomplete = false;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggers)?;
 
             if archive_previous && let Some(previous) = previous {
                 checkpoint(StatefulTransitionCheckpoint::BeforePreviousStateArchive)?;
+                tree_identity.verify_previous_for_recovery(&self.installation.staging_path("usr"))?;
                 self.archive_state(previous.id)?;
                 previous_location = PreviousUsrLocation::Archived(previous.id);
+                tree_identity.verify_forward_exchange(
+                    &self.installation.root.join("usr"),
+                    &self.installation.root_path(previous.id.to_string()).join("usr"),
+                )?;
                 checkpoint(StatefulTransitionCheckpoint::AfterPreviousStateArchive)?;
             }
 
             if run_boot_synchronization {
                 checkpoint(StatefulTransitionCheckpoint::BeforeCandidateBootSynchronization)?;
+                tree_identity.verify_candidate_for_recovery(&self.installation.root.join("usr"))?;
                 candidate_boot_synchronization_started = true;
                 checkpoint(StatefulTransitionCheckpoint::AfterCandidateBootSynchronizationStarted)?;
                 boot::synchronize(self, candidate, previous)?;
+                tree_identity.verify_candidate_for_recovery(&self.installation.root.join("usr"))?;
             }
 
             Ok(())
@@ -1110,6 +1185,7 @@ impl Client {
                 system_triggers_incomplete,
                 candidate_boot_synchronization_started,
                 primary,
+                tree_identity,
                 checkpoint,
             )),
         }
@@ -1121,13 +1197,21 @@ impl Client {
         previous: Option<state::Id>,
         candidate_origin: StatefulCandidateOrigin,
         primary: Error,
+        tree_identity: &StatefulTreeIdentity,
         checkpoint: &mut F,
     ) -> Error
     where
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
         let mut failures = StatefulRecoveryFailures::default();
-        self.recover_failed_candidate(candidate, candidate_origin, false, checkpoint, &mut failures);
+        self.recover_failed_candidate(
+            candidate,
+            candidate_origin,
+            false,
+            tree_identity,
+            checkpoint,
+            &mut failures,
+        );
 
         if failures.is_empty() {
             Error::StatefulCandidatePreserved {
@@ -1158,6 +1242,7 @@ impl Client {
         system_triggers_incomplete: bool,
         candidate_boot_synchronization_started: bool,
         primary: Error,
+        tree_identity: &StatefulTreeIdentity,
         checkpoint: &mut F,
     ) -> Error
     where
@@ -1167,16 +1252,43 @@ impl Client {
         let mut failures = StatefulRecoveryFailures::default();
 
         if let PreviousUsrLocation::Archived(previous) = previous_location {
-            let restored = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryPreviousStateRestore)
-                .and_then(|()| self.restore_archived_state_to_staging(previous));
+            let restored = tree_identity
+                .verify_candidate_for_recovery(&self.installation.root.join("usr"))
+                .map_err(Error::from)
+                .and_then(|()| {
+                    tree_identity
+                        .verify_previous_for_recovery(&self.installation.root_path(previous.to_string()).join("usr"))
+                        .map_err(Error::from)
+                })
+                .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryPreviousStateRestore))
+                .and_then(|()| self.restore_archived_state_to_staging(previous))
+                .and_then(|()| {
+                    tree_identity
+                        .verify_previous_for_recovery(&self.installation.staging_path("usr"))
+                        .map_err(Error::from)
+                });
             if let Err(error) = restored {
                 failures.restore_previous = Some(Box::new(error));
                 return self.stateful_recovery_error(candidate, previous_id, primary, failures);
             }
         }
 
-        let reversed = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryUsrExchange)
-            .and_then(|()| self.exchange_staging_and_live_usr());
+        let reversed = tree_identity
+            .verify_forward_exchange(
+                &self.installation.root.join("usr"),
+                &self.installation.staging_path("usr"),
+            )
+            .map_err(Error::from)
+            .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryUsrExchange))
+            .and_then(|()| self.exchange_staging_and_live_usr())
+            .and_then(|()| {
+                tree_identity
+                    .verify_restored(
+                        &self.installation.root.join("usr"),
+                        &self.installation.staging_path("usr"),
+                    )
+                    .map_err(Error::from)
+            });
         if let Err(error) = reversed {
             failures.reverse_exchange = Some(Box::new(error));
             return self.stateful_recovery_error(candidate, previous_id, primary, failures);
@@ -1190,6 +1302,7 @@ impl Client {
             candidate,
             candidate_origin,
             system_triggers_incomplete,
+            tree_identity,
             checkpoint,
             &mut failures,
         );
@@ -1252,24 +1365,72 @@ impl Client {
         candidate: state::Id,
         candidate_origin: StatefulCandidateOrigin,
         quarantine_archived_candidate: bool,
+        tree_identity: &StatefulTreeIdentity,
         checkpoint: &mut F,
         failures: &mut StatefulRecoveryFailures,
     ) where
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
-        if let Err(error) = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryCandidatePreservation)
-            .and_then(|()| self.preserve_failed_candidate(candidate, candidate_origin, quarantine_archived_candidate))
-        {
+        let preflight = tree_identity
+            .verify_candidate_for_recovery(&self.installation.staging_path("usr"))
+            .map_err(Error::from)
+            .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryCandidatePreservation));
+        if let Err(error) = preflight {
             failures.preserve_candidate = Some(Box::new(error));
+            return;
         }
 
-        self.invalidate_fresh_candidate(candidate, candidate_origin, checkpoint, failures);
+        let preservation = match self.preserve_failed_candidate(
+            candidate,
+            candidate_origin,
+            quarantine_archived_candidate,
+            tree_identity,
+        ) {
+            Ok(preservation) => preservation,
+            Err(first) if candidate_origin != StatefulCandidateOrigin::Archived || quarantine_archived_candidate => {
+                match self.preserve_failed_candidate(
+                    candidate,
+                    candidate_origin,
+                    quarantine_archived_candidate,
+                    tree_identity,
+                ) {
+                    Ok(preservation) => preservation,
+                    Err(retry) => {
+                        failures.preserve_candidate = Some(Box::new(Error::StatefulCandidatePreservationRetryFailed {
+                            first: Box::new(first),
+                            retry: Box::new(retry),
+                        }));
+                        // Never delete the only database correlation for a
+                        // candidate whose retained quarantine publication did
+                        // not survive one bounded in-process retry.
+                        return;
+                    }
+                }
+            }
+            Err(error) => {
+                failures.preserve_candidate = Some(Box::new(error));
+                // Never delete the only database correlation for a candidate
+                // which has not first been durably preserved.
+                return;
+            }
+        };
+
+        self.invalidate_fresh_candidate(
+            candidate,
+            candidate_origin,
+            preservation.as_ref(),
+            tree_identity,
+            checkpoint,
+            failures,
+        );
     }
 
     fn invalidate_fresh_candidate<F>(
         &self,
         candidate: state::Id,
         candidate_origin: StatefulCandidateOrigin,
+        preservation: Option<&QuarantinedCandidate>,
+        tree_identity: &StatefulTreeIdentity,
         checkpoint: &mut F,
         failures: &mut StatefulRecoveryFailures,
     ) where
@@ -1277,6 +1438,16 @@ impl Client {
     {
         if candidate_origin == StatefulCandidateOrigin::Fresh
             && let Err(error) = checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryCandidateInvalidation)
+                .and_then(|()| {
+                    let preservation = preservation.ok_or_else(|| {
+                        Error::Io(io::Error::other(
+                            "fresh candidate has no retained quarantine proof before invalidation",
+                        ))
+                    })?;
+                    tree_identity
+                        .revalidate_quarantined_candidate(&self.installation, preservation)
+                        .map_err(Error::from)
+                })
                 .and_then(|()| self.state_db.remove(&candidate).map_err(Error::Db))
         {
             failures.invalidate_candidate = Some(Box::new(error));
@@ -1292,7 +1463,10 @@ impl Client {
     fn restore_archived_state_to_staging(&self, state: state::Id) -> Result<(), Error> {
         let archived = self.installation.root_path(state.to_string()).join("usr");
         let staged = self.installation.staging_path("usr");
-        fs::rename(archived, staged)?;
+        // Recovery must never silently replace a racing empty staging
+        // occupant. The archived previous tree remains the only authenticated
+        // rollback source until this no-replace move succeeds.
+        rename_noreplace(&archived, &staged)?;
         Ok(())
     }
 
@@ -1301,9 +1475,13 @@ impl Client {
         candidate: state::Id,
         candidate_origin: StatefulCandidateOrigin,
         quarantine_archived_candidate: bool,
-    ) -> Result<(), Error> {
+        tree_identity: &StatefulTreeIdentity,
+    ) -> Result<Option<QuarantinedCandidate>, Error> {
         if candidate_origin == StatefulCandidateOrigin::Archived && !quarantine_archived_candidate {
-            return self.archive_state(candidate);
+            self.archive_state(candidate)?;
+            tree_identity
+                .verify_candidate_for_recovery(&self.installation.root_path(candidate.to_string()).join("usr"))?;
+            return Ok(None);
         }
 
         // Fresh candidates may be only partially prepared, an active reblit
@@ -1312,19 +1490,25 @@ impl Client {
         // partially mutated. None is safe in the ordinary bootable/prunable
         // state-root namespace.
         let kind = match candidate_origin {
-            StatefulCandidateOrigin::Fresh => "new-state",
-            StatefulCandidateOrigin::ActiveReblit => "active-reblit",
-            StatefulCandidateOrigin::Archived => "archived-state",
+            StatefulCandidateOrigin::Fresh => FailedCandidateKind::NewState,
+            StatefulCandidateOrigin::ActiveReblit => FailedCandidateKind::ActiveReblit,
+            StatefulCandidateOrigin::Archived => FailedCandidateKind::ArchivedState,
         };
-        let prefix = format!("failed-{kind}-{candidate}-");
-        let quarantine = tempfile::Builder::new()
-            .prefix(&prefix)
-            .tempdir_in(self.installation.state_quarantine_dir())?;
-        rename_noreplace(&self.installation.staging_path("usr"), &quarantine.path().join("usr"))?;
-        // The quarantine owns the preserved candidate from this point on;
-        // prevent TempDir from deleting it when the recovery helper exits.
-        let _quarantine = quarantine.keep();
-        Ok(())
+        tree_identity
+            .quarantine_candidate(&self.installation, candidate, kind)
+            .map(Some)
+            .map_err(Error::from)
+    }
+
+    /// Acquire the canonical journal lock, reject unresolved journal/database
+    /// evidence, and establish permanent marker identities for the staged
+    /// candidate and live previous tree. The returned guard retains all three
+    /// capabilities through activation and compensating recovery.
+    fn prepare_stateful_tree_identity(
+        &self,
+        candidate_usr: &Path,
+    ) -> Result<StatefulTreeIdentity, crate::transition_identity::Error> {
+        StatefulTreeIdentity::prepare(&self.installation, &self.state_db, candidate_usr)
     }
 
     /// Atomically publish a repaired non-active state without first deleting
@@ -1390,12 +1574,10 @@ impl Client {
         let usr_target = self.installation.root.join("usr");
         let usr_source = self.installation.staging_path("usr");
 
-        // Create the target tree
-        if !usr_target.try_exists()? {
-            fs::create_dir_all(&usr_target)?;
-        }
-
-        // Now swap staging with live
+        // The durable identity guard has already pinned and authenticated both
+        // names. Never recreate a missing target here: a replacement created
+        // between verification and exchange would be unmarked and recovery
+        // could no longer prove which logical tree moved.
         Self::atomic_swap(&usr_source, &usr_target)?;
 
         Ok(())
@@ -1434,8 +1616,9 @@ impl Client {
         {
             fs::create_dir_all(parent)?;
         }
-        // hot swap the staging/usr into the root/$id/usr
-        fs::rename(usr_source, &usr_target)?;
+        // Never erase a racing or stale empty archive occupant. The caller can
+        // retain both identities and report the incomplete transition.
+        rename_noreplace(&usr_source, &usr_target)?;
         Ok(())
     }
 
@@ -7248,6 +7431,10 @@ pub enum Error {
         previous: Option<state::Id>,
     },
     #[error(
+        "failed-candidate preservation failed and its one bounded in-process retry also failed (first={first}; retry={retry})"
+    )]
+    StatefulCandidatePreservationRetryFailed { first: Box<Error>, retry: Box<Error> },
+    #[error(
         "state transition for candidate {candidate} failed with primary error {primary}; recovery for previous state {previous:?} was incomplete (restore_previous={restore_previous:?}, reverse_exchange={reverse_exchange:?}, preserve_candidate={preserve_candidate:?}, invalidate_candidate={invalidate_candidate:?}, repair_boot={repair_boot:?})"
     )]
     StatefulTransitionRecoveryFailed {
@@ -7735,6 +7922,21 @@ pub enum Error {
     PostBlit(#[from] postblit::Error),
     #[error("boot")]
     Boot(#[from] boot::Error),
+    #[error("prepare or authenticate durable state-transition tree identities")]
+    StatefulTreeIdentity {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error(
+        "durable tree-identity preparation for candidate {candidate} failed before activation; candidate tree remains at {location:?}, previous state is {previous:?}, and the candidate database row was not invalidated"
+    )]
+    StatefulTreeIdentityPreparationFailed {
+        candidate: state::Id,
+        previous: Option<state::Id>,
+        location: PathBuf,
+        #[source]
+        source: Box<Error>,
+    },
     /// Had issues processing user-provided string input
     #[error("string processing")]
     Dialog(#[from] tui::dialoguer::Error),
@@ -7757,6 +7959,14 @@ pub enum Error {
     Sync(#[source] Box<sync::Error>),
     #[error("Gluon system intent doesn't exist at {0:?}")]
     ImportSystemIntentDoesntExist(PathBuf),
+}
+
+impl From<crate::transition_identity::Error> for Error {
+    fn from(source: crate::transition_identity::Error) -> Self {
+        Self::StatefulTreeIdentity {
+            source: Box::new(source),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -11972,6 +12182,13 @@ let cast = import! cast.system.v1
             let candidate_root = client.installation.root_path(candidate.id.to_string());
             record_state_id(&candidate_root, candidate.id).unwrap();
             record_system_snapshot(&candidate_root, candidate_model).unwrap();
+        } else {
+            // Production fresh-state activation receives an already
+            // materialized staging /usr from blit_root. Keep the transition
+            // fixture faithful now that marker identity must precede metadata
+            // decoration and trigger execution.
+            record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
+            record_system_snapshot(&client.installation.staging_dir(), candidate_model).unwrap();
         }
 
         StatefulTransitionFixture {
@@ -11986,6 +12203,11 @@ let cast = import! cast.system.v1
 
     fn injected_state_transition_error(message: &'static str) -> Error {
         Error::Io(io::Error::other(message))
+    }
+
+    fn recovery_tree_token(usr: &Path) -> String {
+        let store = crate::tree_marker::TreeMarkerStore::open_path(usr).unwrap();
+        store.read_for_recovery().unwrap().token().as_str().to_owned()
     }
 
     fn assert_recovered_stateful_transition(fixture: &StatefulTransitionFixture) {
@@ -12056,6 +12278,911 @@ let cast = import! cast.system.v1
             &fixture.candidate_snapshot,
             "candidate-package",
         );
+    }
+
+    #[test]
+    fn quarantine_durability_faults_never_invalidate_the_fresh_candidate() {
+        use crate::transition_identity::QuarantineFaultPoint;
+
+        for fault in [
+            QuarantineFaultPoint::CandidatePreSync,
+            QuarantineFaultPoint::SlotSync,
+            QuarantineFaultPoint::QuarantineBaseSync,
+            QuarantineFaultPoint::Rename,
+            QuarantineFaultPoint::MovedCandidateSync,
+            QuarantineFaultPoint::SourceParentSync,
+            QuarantineFaultPoint::DestinationParentSync,
+            QuarantineFaultPoint::FinalRevalidation,
+        ] {
+            let fixture = stateful_transition_fixture(false);
+            let mut candidate_token = None;
+            crate::transition_identity::arm_quarantine_faults(fault, 2);
+
+            let error = fixture
+                .client
+                .apply_stateful_blit_with_checkpoint(
+                    vfs(Vec::new()).unwrap(),
+                    &fixture.candidate,
+                    Some(fixture.previous.id),
+                    generated_system_snapshot("candidate-package"),
+                    |checkpoint| {
+                        if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                            candidate_token = Some(recovery_tree_token(&fixture.client.installation.root.join("usr")));
+                            Err(injected_state_transition_error("force failed-candidate quarantine"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .unwrap_err();
+
+            assert!(
+                matches!(
+                    &error,
+                    Error::StatefulTransitionRecoveryFailed {
+                        preserve_candidate: Some(_),
+                        ..
+                    }
+                ),
+                "fault {fault:?} unexpectedly completed preservation: {error:#?}"
+            );
+            assert_eq!(
+                fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+                fixture.candidate.id,
+                "fault {fault:?} deleted the only candidate correlation"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.client.installation.root.join("usr/.stateID")).unwrap(),
+                fixture.previous.id.to_string()
+            );
+
+            let expected = candidate_token.unwrap();
+            let mut retained_tokens = Vec::new();
+            let staged = fixture.client.installation.staging_path("usr");
+            if staged.exists() {
+                retained_tokens.push(recovery_tree_token(&staged));
+            }
+            for entry in fs::read_dir(fixture.client.installation.state_quarantine_dir()).unwrap() {
+                let usr = entry.unwrap().path().join("usr");
+                if usr.exists() {
+                    retained_tokens.push(recovery_tree_token(&usr));
+                }
+            }
+            assert_eq!(
+                retained_tokens,
+                [expected],
+                "fault {fault:?} lost or duplicated the candidate tree"
+            );
+        }
+    }
+
+    #[test]
+    fn single_quarantine_durability_fault_is_resumed_before_invalidation() {
+        use crate::transition_identity::QuarantineFaultPoint;
+
+        for fault in [
+            QuarantineFaultPoint::CandidatePreSync,
+            QuarantineFaultPoint::SlotSync,
+            QuarantineFaultPoint::QuarantineBaseSync,
+            QuarantineFaultPoint::Rename,
+            QuarantineFaultPoint::MovedCandidateSync,
+            QuarantineFaultPoint::SourceParentSync,
+            QuarantineFaultPoint::DestinationParentSync,
+            QuarantineFaultPoint::FinalRevalidation,
+        ] {
+            let fixture = stateful_transition_fixture(false);
+            let mut token = None;
+
+            crate::transition_identity::arm_quarantine_fault(fault);
+            let error = fixture
+                .client
+                .apply_stateful_blit_with_checkpoint(
+                    vfs(Vec::new()).unwrap(),
+                    &fixture.candidate,
+                    Some(fixture.previous.id),
+                    generated_system_snapshot("candidate-package"),
+                    |checkpoint| {
+                        if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                            token = Some(recovery_tree_token(&fixture.client.installation.root.join("usr")));
+                            Err(injected_state_transition_error("force resumable quarantine fault"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .unwrap_err();
+
+            assert!(
+                matches!(error, Error::StatefulTransitionUsrRestored { .. }),
+                "single fault {fault:?} did not resume through production recovery: {error:#?}"
+            );
+            assert!(fixture.client.state_db.get(fixture.candidate.id).is_err());
+            assert!(!fixture.client.installation.staging_path("usr").exists());
+            let quarantines = fs::read_dir(fixture.client.installation.state_quarantine_dir())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            assert_eq!(quarantines.len(), 1);
+            assert_eq!(recovery_tree_token(&quarantines[0].join("usr")), token.unwrap());
+        }
+    }
+
+    #[test]
+    fn quarantine_is_revalidated_after_the_invalidation_checkpoint() {
+        let fixture = stateful_transition_fixture(false);
+        let mut displaced = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| match checkpoint {
+                    StatefulTransitionCheckpoint::AfterUsrExchange => {
+                        Err(injected_state_transition_error("force quarantine"))
+                    }
+                    StatefulTransitionCheckpoint::BeforeRecoveryCandidateInvalidation => {
+                        let quarantine = fs::read_dir(fixture.client.installation.state_quarantine_dir())
+                            .unwrap()
+                            .next()
+                            .unwrap()
+                            .unwrap()
+                            .path();
+                        let moved = quarantine.with_extension("displaced");
+                        fs::rename(&quarantine, &moved).unwrap();
+                        fs::create_dir(&quarantine).unwrap();
+                        fs::write(quarantine.join("sentinel"), b"substituted slot").unwrap();
+                        displaced = Some((quarantine, moved));
+                        Ok(())
+                    }
+                    _ => Ok(()),
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionRecoveryFailed {
+                invalidate_candidate: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        let (replacement, moved) = displaced.unwrap();
+        assert_eq!(fs::read(replacement.join("sentinel")).unwrap(), b"substituted slot");
+        assert_eq!(
+            fs::read_to_string(moved.join("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+    }
+
+    #[test]
+    fn deterministic_quarantine_name_collision_preserves_foreign_entry_and_database_row() {
+        let fixture = stateful_transition_fixture(false);
+        let mut collision = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                        let token = recovery_tree_token(&fixture.client.installation.root.join("usr"));
+                        let path = fixture
+                            .client
+                            .installation
+                            .state_quarantine_dir()
+                            .join(format!("failed-new-state-{}-{token}", fixture.candidate.id));
+                        fs::create_dir(&path).unwrap();
+                        fs::write(path.join("sentinel"), b"foreign quarantine occupant").unwrap();
+                        collision = Some(path);
+                        Err(injected_state_transition_error("quarantine collision"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            &error,
+            Error::StatefulTransitionRecoveryFailed {
+                preserve_candidate: Some(_),
+                ..
+            }
+        ));
+        let collision = collision.unwrap();
+        assert_eq!(
+            fs::read(collision.join("sentinel")).unwrap(),
+            b"foreign quarantine occupant"
+        );
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.staging_path("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+    }
+
+    #[test]
+    fn empty_deterministic_quarantine_collision_is_never_adopted() {
+        let fixture = stateful_transition_fixture(false);
+        let mut collision = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                        let token = recovery_tree_token(&fixture.client.installation.root.join("usr"));
+                        let path = fixture
+                            .client
+                            .installation
+                            .state_quarantine_dir()
+                            .join(format!("failed-new-state-{}-{token}", fixture.candidate.id));
+                        fs::create_dir(&path).unwrap();
+                        fs::set_permissions(&path, Permissions::from_mode(0o700)).unwrap();
+                        collision = Some(path);
+                        Err(injected_state_transition_error("empty quarantine collision"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            &error,
+            Error::StatefulTransitionRecoveryFailed {
+                preserve_candidate: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        assert!(fixture.client.installation.staging_path("usr").is_dir());
+        assert_eq!(fs::read_dir(collision.unwrap()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn quarantine_slot_creation_rejects_replacement_before_retention() {
+        let fixture = stateful_transition_fixture(false);
+        let quarantine_root = fixture.client.installation.state_quarantine_dir();
+        let observed: std::rc::Rc<std::cell::RefCell<Option<(PathBuf, PathBuf)>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let hook_observed = observed.clone();
+        crate::transition_identity::arm_before_quarantine_slot_reopen(move || {
+            let created = fs::read_dir(&quarantine_root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .next()
+                .expect("quarantine slot must have been created before reopen");
+            let displaced = created.with_extension("created");
+            fs::rename(&created, &displaced).unwrap();
+            fs::create_dir(&created).unwrap();
+            fs::set_permissions(&created, Permissions::from_mode(0o700)).unwrap();
+            hook_observed.replace(Some((created, displaced)));
+        });
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                        Err(injected_state_transition_error("replace fresh quarantine slot"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            &error,
+            Error::StatefulTransitionRecoveryFailed {
+                preserve_candidate: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.staging_path("usr/.stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        let (replacement, displaced) = observed.as_ref().borrow().clone().unwrap();
+        assert_eq!(fs::read_dir(replacement).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(displaced).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn stateful_tree_tokens_follow_their_logical_trees_through_exchange_and_archive() {
+        let fixture = stateful_transition_fixture(true);
+        let live_usr = fixture.client.installation.root.join("usr");
+        let staged_usr = fixture.client.installation.staging_path("usr");
+        let previous_archive = fixture
+            .client
+            .installation
+            .root_path(fixture.previous.id.to_string())
+            .join("usr");
+        let mut exchanged_tokens = None;
+
+        fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, true, |checkpoint| {
+                if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                    exchanged_tokens = Some((recovery_tree_token(&live_usr), recovery_tree_token(&staged_usr)));
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        let (candidate_token, previous_token) = exchanged_tokens.expect("exchange boundary was observed");
+        assert_ne!(candidate_token, previous_token);
+        assert_eq!(recovery_tree_token(&live_usr), candidate_token);
+        assert_eq!(recovery_tree_token(&previous_archive), previous_token);
+        assert!(!staged_usr.exists());
+    }
+
+    #[test]
+    fn recovery_never_recreates_a_missing_candidate_tree_marker() {
+        let fixture = stateful_transition_fixture(false);
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let live_usr = fixture.client.installation.root.join("usr");
+        let staged_usr = fixture.client.installation.staging_path("usr");
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                        fs::remove_file(live_usr.join(".cast-tree-id")).unwrap();
+                        Err(injected_state_transition_error("marker removed after exchange"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                Error::StatefulTransitionRecoveryFailed {
+                    candidate,
+                    previous: Some(previous),
+                    reverse_exchange: Some(_),
+                    ..
+                } if *candidate == fixture.candidate.id && *previous == fixture.previous.id
+            ),
+            "unexpected recovery result: {error:#?}"
+        );
+        assert!(!live_usr.join(".cast-tree-id").exists());
+        assert!(staged_usr.join(".cast-tree-id").is_file());
+        assert_eq!(
+            fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(staged_usr.join(".stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id,
+            "an unauthenticated candidate must retain its database row"
+        );
+    }
+
+    #[test]
+    fn unresolved_journal_evidence_blocks_marker_publication_before_activation() {
+        let fixture = stateful_transition_fixture(false);
+        let journal =
+            crate::transition_journal::TransitionJournalStore::open(&fixture.client.installation.root).unwrap();
+        drop(journal);
+        let canonical = fixture.client.installation.root.join(".cast/journal/state-transition");
+        fs::write(&canonical, b"not-a-canonical-transition-record").unwrap();
+        fs::set_permissions(&canonical, Permissions::from_mode(0o600)).unwrap();
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |_| Ok(()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTreeIdentityPreparationFailed {
+                candidate,
+                previous: Some(previous),
+                ..
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert!(!fixture.client.installation.root.join("usr/.cast-tree-id").exists());
+        assert!(!fixture.client.installation.staging_path("usr/.cast-tree-id").exists());
+        assert_eq!(fs::read(&canonical).unwrap(), b"not-a-canonical-transition-record");
+    }
+
+    #[test]
+    fn orphan_transition_row_blocks_marker_publication_before_activation() {
+        let fixture = stateful_transition_fixture(false);
+        let transition = state::TransitionId::generate().unwrap();
+        fixture
+            .client
+            .state_db
+            .add_with_transition(&transition, &[], Some("orphan"), None)
+            .unwrap();
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |_| Ok(()),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTreeIdentityPreparationFailed {
+                candidate,
+                previous: Some(previous),
+                ..
+            } if candidate == fixture.candidate.id && previous == fixture.previous.id
+        ));
+        assert!(!fixture.client.installation.root.join("usr/.cast-tree-id").exists());
+        assert!(!fixture.client.installation.staging_path("usr/.cast-tree-id").exists());
+        assert!(
+            !fixture
+                .client
+                .installation
+                .root
+                .join(".cast/journal/state-transition")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let candidate = client.state_db.add(&[], Some("first state"), None).unwrap();
+        record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
+        record_system_snapshot(
+            &client.installation.staging_dir(),
+            generated_system_snapshot("first-state-package"),
+        )
+        .unwrap();
+        let candidate_usr = client.installation.staging_path("usr");
+        let live_usr = client.installation.root.join("usr");
+        assert!(!live_usr.exists());
+
+        let tree_identity = client.prepare_stateful_tree_identity(&candidate_usr).unwrap();
+        tree_identity.verify_pre_exchange(&candidate_usr, &live_usr).unwrap();
+        let synthesized_token = recovery_tree_token(&live_usr);
+        let candidate_token = recovery_tree_token(&candidate_usr);
+        assert_ne!(synthesized_token, candidate_token);
+        let metadata = fs::symlink_metadata(&live_usr).unwrap();
+        assert!(metadata.file_type().is_dir());
+        assert_eq!(metadata.uid(), unsafe { nix::libc::geteuid() });
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o755);
+        let entries = fs::read_dir(&live_usr)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, [OsString::from(".cast-tree-id")]);
+
+        client
+            .commit_stateful_staging(
+                &vfs(Vec::new()).unwrap(),
+                &candidate,
+                None,
+                StatefulCandidateOrigin::Fresh,
+                false,
+                false,
+                false,
+                &tree_identity,
+                &mut |_| Ok(()),
+            )
+            .unwrap();
+
+        assert_eq!(recovery_tree_token(&live_usr), candidate_token);
+        assert_eq!(recovery_tree_token(&candidate_usr), synthesized_token);
+        assert_eq!(
+            fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+            candidate.id.to_string()
+        );
+        assert_eq!(client.state_db.get(candidate.id).unwrap().id, candidate.id);
+        assert!(!client.installation.root.join(".cast/journal/state-transition").exists());
+    }
+
+    #[test]
+    fn failed_first_install_can_retry_the_exact_marker_only_previous_baseline() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let live_usr = client.installation.root.join("usr");
+        let mut previous_token = None;
+
+        for summary in ["first failed attempt", "retry attempt"] {
+            let candidate = client.state_db.add(&[], Some(summary), None).unwrap();
+            let mut reached_exchange = false;
+            let error = client
+                .apply_stateful_blit_with_checkpoint(
+                    vfs(Vec::new()).unwrap(),
+                    &candidate,
+                    None,
+                    generated_system_snapshot(summary),
+                    |checkpoint| {
+                        if checkpoint == StatefulTransitionCheckpoint::BeforeUsrExchange {
+                            reached_exchange = true;
+                            Err(injected_state_transition_error("fail before first-install exchange"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .unwrap_err();
+
+            assert!(
+                reached_exchange,
+                "retry stopped before the exchange boundary: {error:#?}"
+            );
+            assert!(matches!(error, Error::StatefulCandidatePreserved { .. }));
+            let token = recovery_tree_token(&live_usr);
+            if let Some(previous_token) = &previous_token {
+                assert_eq!(
+                    &token, previous_token,
+                    "retry must adopt the exact durable baseline token"
+                );
+            } else {
+                previous_token = Some(token);
+            }
+            let entries = fs::read_dir(&live_usr)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(entries, [OsString::from(".cast-tree-id")]);
+        }
+    }
+
+    #[test]
+    fn first_install_marker_retry_rejects_marker_plus_foreign_content_unchanged() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let first = client.state_db.add(&[], Some("first attempt"), None).unwrap();
+        record_state_id(&client.installation.staging_dir(), first.id).unwrap();
+        let identity = client
+            .prepare_stateful_tree_identity(&client.installation.staging_path("usr"))
+            .unwrap();
+        drop(identity);
+
+        let live_usr = client.installation.root.join("usr");
+        let token = recovery_tree_token(&live_usr);
+        let foreign = live_usr.join("foreign");
+        fs::write(&foreign, b"do not remove").unwrap();
+
+        let error = client
+            .prepare_stateful_tree_identity(&client.installation.staging_path("usr"))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::transition_identity::Error::LiveUsrNotEmpty { .. }
+        ));
+        assert_eq!(recovery_tree_token(&live_usr), token);
+        assert_eq!(fs::read(&foreign).unwrap(), b"do not remove");
+    }
+
+    #[test]
+    fn first_install_rejects_a_hostile_live_usr_symlink_unchanged() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let candidate = client.state_db.add(&[], Some("first state"), None).unwrap();
+        record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
+        let candidate_usr = client.installation.staging_path("usr");
+        let foreign = client.installation.root.join("foreign-usr");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("foreign"), b"untouched").unwrap();
+        symlink("foreign-usr", client.installation.root.join("usr")).unwrap();
+
+        let error = client.prepare_stateful_tree_identity(&candidate_usr).unwrap_err();
+        assert!(matches!(error, crate::transition_identity::Error::LiveUsr { .. }));
+        assert!(
+            fs::symlink_metadata(client.installation.root.join("usr"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(client.installation.root.join("usr")).unwrap(),
+            Path::new("foreign-usr")
+        );
+        assert_eq!(fs::read(foreign.join("foreign")).unwrap(), b"untouched");
+        assert!(!candidate_usr.join(".cast-tree-id").exists());
+    }
+
+    #[test]
+    fn first_install_rejects_a_preexisting_nonempty_unmanaged_usr_unchanged() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let candidate = client.state_db.add(&[], Some("first state"), None).unwrap();
+        record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
+        let candidate_usr = client.installation.staging_path("usr");
+        let live_usr = client.installation.root.join("usr");
+        fs::create_dir(&live_usr).unwrap();
+        fs::set_permissions(&live_usr, Permissions::from_mode(0o755)).unwrap();
+        fs::write(live_usr.join("foreign"), b"untouched").unwrap();
+
+        let error = client.prepare_stateful_tree_identity(&candidate_usr).unwrap_err();
+        assert!(
+            matches!(&error, crate::transition_identity::Error::LiveUsrNotEmpty { .. }),
+            "unexpected nonempty live /usr result: {error:#?}"
+        );
+        assert_eq!(fs::read(live_usr.join("foreign")).unwrap(), b"untouched");
+        assert!(!live_usr.join(".cast-tree-id").exists());
+        assert!(!candidate_usr.join(".cast-tree-id").exists());
+    }
+
+    #[test]
+    fn first_install_rejects_a_racing_nonempty_usr_occupant_unchanged() {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let candidate = client.state_db.add(&[], Some("first state"), None).unwrap();
+        record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
+        let candidate_usr = client.installation.staging_path("usr");
+        let live_usr = client.installation.root.join("usr");
+        let raced = live_usr.clone();
+        crate::transition_identity::arm_before_live_usr_mkdir(move || {
+            fs::create_dir(&raced).unwrap();
+            fs::write(raced.join("foreign"), b"racing occupant").unwrap();
+        });
+
+        let error = client.prepare_stateful_tree_identity(&candidate_usr).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::transition_identity::Error::LiveUsrAppeared { .. }
+        ));
+        assert_eq!(fs::read(live_usr.join("foreign")).unwrap(), b"racing occupant");
+        assert!(!live_usr.join(".cast-tree-id").exists());
+        assert!(!candidate_usr.join(".cast-tree-id").exists());
+    }
+
+    #[test]
+    fn duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees() {
+        let fixture = stateful_transition_fixture(false);
+        let candidate_usr = fixture.client.installation.staging_path("usr");
+        let live_usr = fixture.client.installation.root.join("usr");
+        let journal =
+            crate::transition_journal::TransitionJournalStore::open(&fixture.client.installation.root).unwrap();
+        assert!(journal.load().unwrap().is_none());
+        let candidate_store = crate::tree_marker::TreeMarkerStore::open_path(&candidate_usr).unwrap();
+        let candidate_marker = candidate_store.adopt_or_create_before_journal().unwrap();
+        candidate_marker.revalidate(&candidate_store).unwrap();
+        let frame = fs::read(candidate_usr.join(".cast-tree-id")).unwrap();
+        fs::write(live_usr.join(".cast-tree-id"), &frame).unwrap();
+        fs::set_permissions(live_usr.join(".cast-tree-id"), Permissions::from_mode(0o444)).unwrap();
+        drop(candidate_marker);
+        drop(candidate_store);
+        drop(journal);
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |_| Ok(()),
+            )
+            .unwrap_err();
+
+        let Error::StatefulTreeIdentityPreparationFailed { source, .. } = error else {
+            panic!("expected durable identity preparation failure");
+        };
+        let Error::StatefulTreeIdentity { source } = *source else {
+            panic!("expected tree identity source");
+        };
+        assert!(matches!(
+            source.downcast_ref::<crate::transition_identity::Error>(),
+            Some(crate::transition_identity::Error::DuplicateTreeToken { .. })
+        ));
+        assert_eq!(fs::read(candidate_usr.join(".cast-tree-id")).unwrap(), frame);
+        assert_eq!(fs::read(live_usr.join(".cast-tree-id")).unwrap(), frame);
+        assert_eq!(
+            fs::read_to_string(candidate_usr.join(".stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_same_content_marker_name_substitution_without_repair() {
+        let fixture = stateful_transition_fixture(false);
+        let candidate_model = generated_system_snapshot("candidate-package");
+        let live_usr = fixture.client.installation.root.join("usr");
+        let marker_path = live_usr.join(".cast-tree-id");
+        let mut replacement = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                        let frame = fs::read(&marker_path).unwrap();
+                        let original = fs::symlink_metadata(&marker_path).unwrap().ino();
+                        fs::remove_file(&marker_path).unwrap();
+                        fs::write(&marker_path, &frame).unwrap();
+                        fs::set_permissions(&marker_path, Permissions::from_mode(0o444)).unwrap();
+                        let substituted = fs::symlink_metadata(&marker_path).unwrap().ino();
+                        assert_ne!(original, substituted);
+                        replacement = Some((frame, substituted));
+                        Err(injected_state_transition_error("same-content marker substitution"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionRecoveryFailed {
+                reverse_exchange: Some(_),
+                ..
+            }
+        ));
+        let (frame, inode) = replacement.unwrap();
+        assert_eq!(fs::read(&marker_path).unwrap(), frame);
+        assert_eq!(fs::symlink_metadata(&marker_path).unwrap().ino(), inode);
+        assert_eq!(
+            fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_whole_directory_same_token_substitution_without_exchange() {
+        let fixture = stateful_transition_fixture(false);
+        let live_usr = fixture.client.installation.root.join("usr");
+        let displaced = fixture.client.installation.root.join("displaced-candidate-usr");
+        let mut replacement_identity = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
+                        let marker = fs::read(live_usr.join(".cast-tree-id")).unwrap();
+                        let state_id = fs::read(live_usr.join(".stateID")).unwrap();
+                        fs::rename(&live_usr, &displaced).unwrap();
+                        fs::create_dir(&live_usr).unwrap();
+                        fs::set_permissions(&live_usr, Permissions::from_mode(0o755)).unwrap();
+                        fs::write(live_usr.join(".cast-tree-id"), marker).unwrap();
+                        fs::set_permissions(live_usr.join(".cast-tree-id"), Permissions::from_mode(0o444)).unwrap();
+                        fs::write(live_usr.join(".stateID"), state_id).unwrap();
+                        replacement_identity = Some(fs::symlink_metadata(&live_usr).unwrap().ino());
+                        Err(injected_state_transition_error(
+                            "whole-directory same-token substitution",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionRecoveryFailed {
+                reverse_exchange: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            fs::symlink_metadata(&live_usr).unwrap().ino(),
+            replacement_identity.unwrap(),
+            "recovery must not exchange the substituted directory"
+        );
+        assert_eq!(recovery_tree_token(&live_usr), recovery_tree_token(&displaced));
+        assert_eq!(
+            fs::read_to_string(displaced.join(".stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.staging_path("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+    }
+
+    #[test]
+    fn missing_live_usr_between_identity_check_and_exchange_is_never_recreated() {
+        let fixture = stateful_transition_fixture(false);
+        let live_usr = fixture.client.installation.root.join("usr");
+        let displaced = fixture.client.installation.root.join("displaced-previous-usr");
+        let staged_usr = fixture.client.installation.staging_path("usr");
+        let mut expected_tokens = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::BeforeUsrExchange {
+                        expected_tokens = Some((recovery_tree_token(&staged_usr), recovery_tree_token(&live_usr)));
+                        fs::rename(&live_usr, &displaced).unwrap();
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(&error, Error::StatefulCandidatePreserved { .. }), "{error:#?}");
+        let (candidate_token, previous_token) = expected_tokens.unwrap();
+        assert!(
+            !live_usr.exists(),
+            "promotion must not synthesize an unmarked exchange target"
+        );
+        assert_eq!(recovery_tree_token(&displaced), previous_token);
+        let quarantines = fs::read_dir(fixture.client.installation.state_quarantine_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(recovery_tree_token(&quarantines[0].join("usr")), candidate_token);
     }
 
     #[test]
@@ -12284,6 +13411,97 @@ let cast = import! cast.system.v1
             } if candidate == fixture.candidate.id && previous == fixture.previous.id
         ));
         assert_fresh_candidate_quarantined_and_invalidated(&fixture);
+    }
+
+    #[test]
+    fn previous_archive_never_replaces_a_racing_empty_destination() {
+        let fixture = stateful_transition_fixture(false);
+        let destination = fixture
+            .client
+            .installation
+            .root_path(fixture.previous.id.to_string())
+            .join("usr");
+        let mut occupant_inode = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::BeforePreviousStateArchive {
+                        fs::create_dir_all(&destination).unwrap();
+                        occupant_inode = Some(fs::symlink_metadata(&destination).unwrap().ino());
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, Error::StatefulTransitionUsrRestored { .. }),
+            "{error:#?}"
+        );
+        assert_eq!(
+            fs::symlink_metadata(&destination).unwrap().ino(),
+            occupant_inode.unwrap()
+        );
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        assert_eq!(
+            fs::read_to_string(fixture.client.installation.root.join("usr/.stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+    }
+
+    #[test]
+    fn previous_restore_never_replaces_a_racing_empty_staging_destination() {
+        let fixture = stateful_transition_fixture(false);
+        let staged = fixture.client.installation.staging_path("usr");
+        let archived = fixture
+            .client
+            .installation
+            .root_path(fixture.previous.id.to_string())
+            .join("usr");
+        let mut occupant_inode = None;
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                generated_system_snapshot("candidate-package"),
+                |checkpoint| {
+                    if checkpoint == StatefulTransitionCheckpoint::AfterPreviousStateArchive {
+                        fs::create_dir(&staged).unwrap();
+                        occupant_inode = Some(fs::symlink_metadata(&staged).unwrap().ino());
+                        Err(injected_state_transition_error("force previous restore"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionRecoveryFailed {
+                restore_previous: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(fs::symlink_metadata(&staged).unwrap().ino(), occupant_inode.unwrap());
+        assert_eq!(fs::read_dir(&staged).unwrap().count(), 0);
+        assert_eq!(
+            fs::read_to_string(archived.join(".stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_eq!(
+            fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+            fixture.candidate.id
+        );
     }
 
     #[test]
@@ -12550,14 +13768,17 @@ let cast = import! cast.system.v1
                 )
                 .unwrap_err();
 
-            assert!(matches!(
-                error,
-                Error::StatefulTransitionUsrRestored {
-                    candidate,
-                    previous: Some(previous),
-                    ..
-                } if candidate == state.id && previous == state.id
-            ));
+            assert!(
+                matches!(
+                    &error,
+                    Error::StatefulTransitionUsrRestored {
+                        candidate,
+                        previous: Some(previous),
+                        ..
+                    } if *candidate == state.id && *previous == state.id
+                ),
+                "unexpected active reblit recovery result: {error:#?}"
+            );
             assert_eq!(
                 fs::read_to_string(client.installation.root.join("usr/.stateID")).unwrap(),
                 state.id.to_string()
@@ -12592,6 +13813,11 @@ let cast = import! cast.system.v1
             assert_eq!(
                 fs::read_to_string(quarantine.join("usr/.stateID")).unwrap(),
                 state.id.to_string()
+            );
+            let token = recovery_tree_token(&quarantine.join("usr"));
+            assert_eq!(
+                quarantine.file_name().unwrap().to_string_lossy(),
+                format!("failed-active-reblit-{}-{token}", state.id)
             );
             preserved_snapshots.insert(fs::read_to_string(system_model::snapshot_path(&quarantine)).unwrap());
         }

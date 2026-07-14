@@ -28,7 +28,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -103,6 +103,38 @@ product-names:
 test: lint config-formats-test delegated-fixture-runner-test cache-clean-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
+
+forge-transition-identity-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::stateful_tree_tokens_follow_their_logical_trees_through_exchange_and_archive \
+		client::tests::recovery_never_recreates_a_missing_candidate_tree_marker \
+		client::tests::recovery_rejects_same_content_marker_name_substitution_without_repair \
+		client::tests::recovery_rejects_whole_directory_same_token_substitution_without_exchange \
+		client::tests::missing_live_usr_between_identity_check_and_exchange_is_never_recreated \
+		client::tests::unresolved_journal_evidence_blocks_marker_publication_before_activation \
+		client::tests::orphan_transition_row_blocks_marker_publication_before_activation \
+		client::tests::state_creation_records_and_exports_the_generated_snapshot \
+		client::tests::two_failed_active_state_reblits_use_unique_non_state_quarantines \
+		client::tests::quarantine_durability_faults_never_invalidate_the_fresh_candidate \
+		client::tests::single_quarantine_durability_fault_is_resumed_before_invalidation \
+		client::tests::quarantine_is_revalidated_after_the_invalidation_checkpoint \
+		client::tests::deterministic_quarantine_name_collision_preserves_foreign_entry_and_database_row \
+		client::tests::empty_deterministic_quarantine_collision_is_never_adopted \
+		client::tests::quarantine_slot_creation_rejects_replacement_before_retention \
+		client::tests::previous_archive_never_replaces_a_racing_empty_destination \
+		client::tests::previous_restore_never_replaces_a_racing_empty_staging_destination \
+		client::tests::first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr \
+		client::tests::failed_first_install_can_retry_the_exact_marker_only_previous_baseline \
+		client::tests::first_install_marker_retry_rejects_marker_plus_foreign_content_unchanged \
+		client::tests::first_install_rejects_a_hostile_live_usr_symlink_unchanged \
+		client::tests::first_install_rejects_a_preexisting_nonempty_unmanaged_usr_unchanged \
+		client::tests::first_install_rejects_a_racing_nonempty_usr_occupant_unchanged \
+		client::tests::duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 cache-clean-test:
 	@echo "Running the harness-free descriptor-anchored cache-clean proof..."
@@ -280,6 +312,7 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
+	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
