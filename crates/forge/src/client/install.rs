@@ -336,6 +336,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     use sha2::{Digest as _, Sha256};
+    use stone::{StoneHeaderV1FileType, StoneWriter};
 
     use super::*;
     use crate::{
@@ -418,6 +419,30 @@ mod tests {
             )
             .unwrap();
         client
+    }
+
+    fn metadata_only_package(directory: &std::path::Path, index: usize) -> Package {
+        let name = format!("metadata-only-{index:02}");
+        let path = directory.join(format!("{name}.stone"));
+        let mut package = package(&name, BTreeSet::new());
+        package.meta.uri = None;
+        package.meta.hash = None;
+        package.meta.download_size = None;
+
+        let mut file = fs_err::File::create(&path).unwrap();
+        let mut writer = StoneWriter::new(&mut file, StoneHeaderV1FileType::Binary).unwrap();
+        let payload = package.meta.clone().to_stone_payload();
+        writer.add_payload(payload.as_slice()).unwrap();
+        writer.finalize().unwrap();
+        drop(file);
+
+        let bytes = fs_err::read(&path).unwrap();
+        let id = hex::encode(Sha256::digest(&bytes));
+        package.id = package::Id::from(id.clone());
+        package.meta.hash = Some(id);
+        package.meta.uri = Some(url::Url::from_file_path(&path).unwrap().to_string());
+        package.meta.download_size = Some(u64::try_from(bytes.len()).unwrap());
+        package
     }
 
     #[test]
@@ -538,6 +563,56 @@ mod tests {
         assert_eq!(requested, id);
         assert_eq!(metadata_hash.as_deref(), Some("different-repository-identity"));
         assert_eq!(fs_err::read(marker).unwrap(), b"before");
+    }
+
+    #[test]
+    fn metadata_only_frozen_closure_publishes_without_an_asset_pool() {
+        let temporary = tempfile::tempdir().unwrap();
+        let package_dir = temporary.path().join("metadata-only-stones");
+        fs_err::create_dir(&package_dir).unwrap();
+        let packages = (0..15)
+            .map(|index| metadata_only_package(&package_dir, index))
+            .collect::<Vec<_>>();
+        let ids = packages.iter().map(|package| package.id.clone()).collect::<Vec<_>>();
+        let mut client = frozen_client(temporary.path(), packages);
+
+        // The helper creates the destination because older frozen-client
+        // construction required it. Production materialization is strictly
+        // absent-only, so remove it before invoking the public entry point.
+        client.discard_frozen_root().unwrap();
+        let asset_pool = client.installation.assets_path("v2");
+        if asset_pool.exists() {
+            fs_err::remove_dir_all(&asset_pool).unwrap();
+        }
+        assert!(!asset_pool.exists());
+
+        client.materialize_frozen_root(&ids, 1_700_000_000).unwrap();
+
+        let frozen_root = temporary.path().join("frozen-root");
+        let root_metadata = fs_err::symlink_metadata(&frozen_root).unwrap();
+        assert!(root_metadata.is_dir());
+        assert_eq!(root_metadata.permissions().mode() & 0o7777, 0o755);
+        for (source, target) in super::super::ROOT_ABI_LINKS {
+            assert_eq!(
+                fs_err::read_link(frozen_root.join(target)).unwrap(),
+                std::path::Path::new(source)
+            );
+        }
+        assert!(
+            !asset_pool.exists(),
+            "a metadata-only closure must not synthesize an unused asset pool"
+        );
+        assert!(
+            fs_err::read_dir(temporary.path()).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".forge-frozen-stage-")),
+            "atomic publication must not leak its private stage wrapper"
+        );
+
+        let guard = client.require_frozen_executables(&ids, &[]).unwrap();
+        guard.revalidate().unwrap();
     }
 
     #[test]

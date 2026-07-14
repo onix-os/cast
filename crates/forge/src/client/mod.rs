@@ -1358,6 +1358,7 @@ impl Client {
 
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
+const EMPTY_FILE_DIGEST: u128 = 0x99aa_06d3_0147_98d8_6001_c324_468d_497f;
 const MAX_FROZEN_EXECUTABLE_PACKAGES: usize = 4_096;
 const MAX_FROZEN_EXECUTABLE_CLOSURE_ID_BYTES: usize = MIB as usize;
 const MAX_FROZEN_EXECUTABLE_BINDINGS: usize = 4_096;
@@ -4349,12 +4350,31 @@ fn blit_tree_into_open_root(
     progress.set_length(tree.len());
     progress.set_position(0_u64);
 
-    let cache_dir = installation.assets_path("v2");
-    let cache_fd = open_owned(
-        &cache_dir,
-        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
-        Mode::empty(),
-    )?;
+    // Metadata-only closures and packages containing only directories,
+    // symlinks, or canonical empty files have no asset-store dependency.
+    // Opening assets/v2 unconditionally made those valid closures fail with
+    // ENOENT after cache unpacking correctly produced no asset directory.
+    let mut requires_asset_cache = false;
+    for item in tree.iter() {
+        require_blit_deadline(deadline)?;
+        if matches!(
+            &item.layout.file,
+            StonePayloadLayoutFile::Regular(digest, _) if *digest != EMPTY_FILE_DIGEST
+        ) {
+            requires_asset_cache = true;
+            break;
+        }
+    }
+    let cache_fd = if requires_asset_cache {
+        let cache_dir = installation.assets_path("v2");
+        Some(open_owned(
+            &cache_dir,
+            OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
+            Mode::empty(),
+        )?)
+    } else {
+        None
+    };
 
     let blit = || -> Result<BlitStats, Error> {
         let mut stats = BlitStats::default();
@@ -4363,7 +4383,7 @@ fn blit_tree_into_open_root(
             if let Element::Directory(_, _, children) = root {
                 stats = stats.merge(blit_children(
                     root_fd,
-                    cache_fd.as_raw_fd(),
+                    cache_fd.as_ref().map(AsRawFd::as_raw_fd),
                     children,
                     &progress,
                     materialization,
@@ -4409,7 +4429,7 @@ fn blit_tree_into_open_root(
 /// resolution at runtime.
 fn blit_element(
     parent: RawFd,
-    cache: RawFd,
+    cache: Option<RawFd>,
     element: Element<'_, PendingFile>,
     progress: &ProgressBar,
     materialization: AssetMaterialization,
@@ -4479,7 +4499,7 @@ fn blit_element(
 
 fn blit_children(
     parent: RawFd,
-    cache: RawFd,
+    cache: Option<RawFd>,
     children: Vec<Element<'_, PendingFile>>,
     progress: &ProgressBar,
     materialization: AssetMaterialization,
@@ -4515,7 +4535,7 @@ fn blit_children(
 /// * `item`    - New inode being recorded
 fn blit_element_item(
     parent: RawFd,
-    cache: RawFd,
+    cache: Option<RawFd>,
     subpath: &str,
     item: &PendingFile,
     stats: &mut BlitStats,
@@ -4538,7 +4558,7 @@ fn blit_element_item(
             match *id {
                 // Mystery empty-file hash. Do not allow dupes!
                 // https://github.com/serpent-os/tools/issues/372
-                0x99aa_06d3_0147_98d8_6001_c324_468d_497f => {
+                EMPTY_FILE_DIGEST => {
                     let _file = openat_owned(
                         parent,
                         subpath,
@@ -4547,20 +4567,25 @@ fn blit_element_item(
                     )?;
                 }
                 // Regular file
-                _ => match materialization {
-                    AssetMaterialization::HardLink => {
-                        linkat(
-                            Some(cache),
-                            fp.to_str().unwrap(),
-                            Some(parent),
-                            subpath,
-                            nix::unistd::LinkatFlags::NoSymlinkFollow,
-                        )?;
+                _ => {
+                    let cache = cache.ok_or_else(|| {
+                        io::Error::other("non-empty regular blit entry has no authenticated asset-cache descriptor")
+                    })?;
+                    match materialization {
+                        AssetMaterialization::HardLink => {
+                            linkat(
+                                Some(cache),
+                                fp.to_str().unwrap(),
+                                Some(parent),
+                                subpath,
+                                nix::unistd::LinkatFlags::NoSymlinkFollow,
+                            )?;
+                        }
+                        AssetMaterialization::IndependentCopy => {
+                            copy_asset(cache, &fp, parent, subpath, deadline)?;
+                        }
                     }
-                    AssetMaterialization::IndependentCopy => {
-                        copy_asset(cache, &fp, parent, subpath, deadline)?;
-                    }
-                },
+                }
             }
 
             // Creation modes are filtered through the process umask. Apply
