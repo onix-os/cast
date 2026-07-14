@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: cast-split
+Description: Native split-output execution fixture
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lcast-split
+Cflags: -I${includedir}/cast-split

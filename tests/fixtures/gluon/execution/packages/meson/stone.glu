@@ -1,0 +1,28 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-meson-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-meson-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = meson.default,
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-meson-fixture-1.0.0.tar",
+            hash = "59188abb5058ac80eff3cad52320d76b84d1c1f802b5195cb4ac70b329dbcf6a",
+            rename = b.optional.set "cast-meson-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-meson-fixture",
+        },
+    ],
+    .. base
+}

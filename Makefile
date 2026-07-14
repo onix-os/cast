@@ -16,7 +16,7 @@ STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples execution-fixtures fixture-sources check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -103,6 +103,15 @@ examples:
 		planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation -- \
 		--exact --nocapture
 
+fixture-sources:
+	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh"
+
+execution-fixtures:
+	@echo "Checking locked offline execution-source fixtures..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
+		--exact --nocapture
+
 check:
 	@$(CARGO) check --workspace --all-targets
 
@@ -156,6 +165,8 @@ help:
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  examples      Check, evaluate, freeze, and execute the Gluon package examples"
+	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
+	@echo "  fixture-sources  Rebuild deterministic offline execution-source archives"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
 	@echo "  fmt           Format the workspace"

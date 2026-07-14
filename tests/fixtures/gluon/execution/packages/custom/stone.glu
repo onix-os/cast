@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        b.step.run (b.program.binary "cp") ["payload.txt", "build/payload.txt"],
+    ],
+    check = b.phase [
+        b.step.run (b.program.binary "cmp") ["payload.txt", "build/payload.txt"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm644 build/payload.txt "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast-custom-fixture/payload.txt""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-custom-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-custom-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "cp",
+        b.dep.binary "cmp",
+        b.dep.binary "install",
+        b.dep.binary "dash",
+    ],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-custom-fixture-1.0.0.tar",
+            hash = "383289a2b1cc9e7b4008e4e94fb7d9142f9ee56e8a70263ec795136e5fcc2d93",
+            rename = b.optional.set "cast-custom-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-custom-fixture",
+        },
+    ],
+    .. base
+}

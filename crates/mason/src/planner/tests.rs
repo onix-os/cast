@@ -35,8 +35,8 @@ use crate::{
     package::{self, FrozenPackager, Packager, Publication},
     profile,
     source_lock::{
-        ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, encode_source_lock,
-        write_source_lock,
+        ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, decode_source_lock,
+        encode_source_lock, write_source_lock,
     },
 };
 
@@ -67,6 +67,7 @@ const PACKAGE_EXAMPLES: [&str; 17] = [
     "realistic-daemon",
     "split-outputs",
 ];
+const EXECUTION_FIXTURES: [&str; 6] = ["autotools", "cargo", "cmake", "custom", "meson", "split"];
 
 const RECIPE: &str = r#"let b = import! cast.package.v3
 
@@ -403,6 +404,97 @@ fn package_example_roots() -> Vec<(String, PathBuf)> {
         "the planner matrix must explicitly cover every checked-in package example"
     );
     examples
+}
+
+#[test]
+fn offline_execution_fixture_archives_are_real_locked_and_complete() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
+    let packages = root.join("packages");
+    let archives = root.join("archives");
+    let source_trees = root.join("source-trees");
+
+    let discovered = [&packages, &source_trees].map(|directory| {
+        let mut names = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .filter(|entry| entry.file_type().unwrap().is_dir())
+            .map(|entry| entry.file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    });
+    assert_eq!(discovered[0], EXECUTION_FIXTURES);
+    assert_eq!(
+        discovered[1],
+        [
+            "cast-autotools-fixture-1.0.0",
+            "cast-cargo-fixture-1.0.0",
+            "cast-cmake-fixture-1.0.0",
+            "cast-custom-fixture-1.0.0",
+            "cast-meson-fixture-1.0.0",
+            "cast-split-fixture-1.0.0",
+        ]
+    );
+
+    let mut admitted_archives = BTreeSet::new();
+    for name in EXECUTION_FIXTURES {
+        let recipe_path = packages.join(name).join("stone.glu");
+        let recipe = crate::Recipe::load_authored(&recipe_path)
+            .unwrap_or_else(|error| panic!("{name}: evaluate execution fixture: {error:#}"));
+        let lock_path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
+        let lock_bytes = fs::read(&lock_path).unwrap();
+        let lock = decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes)
+            .unwrap_or_else(|error| panic!("{name}: decode source lock: {error:#}"));
+        lock.validate_against(&recipe.declaration.sources)
+            .unwrap_or_else(|error| panic!("{name}: validate source lock: {error:#}"));
+        assert_eq!(
+            lock_bytes,
+            encode_source_lock(&lock).into_bytes(),
+            "{name}: checked-in source lock is not canonical"
+        );
+
+        let [SourceResolution::Archive(source)] = lock.sources.as_slice() else {
+            panic!("{name}: execution fixture must have exactly one archive source");
+        };
+        let url = Url::parse(&source.url).unwrap();
+        assert_eq!(
+            url.scheme(),
+            "https",
+            "{name}: production source policy must remain HTTPS"
+        );
+        assert_eq!(url.host_str(), Some("fixtures.invalid"));
+        let filename = url.path_segments().unwrap().next_back().unwrap();
+        let archive_path = archives.join(filename);
+        let metadata = fs::symlink_metadata(&archive_path).unwrap();
+        assert!(metadata.file_type().is_file(), "{name}: archive must be a regular file");
+        assert_eq!(
+            metadata.len(),
+            10_240,
+            "{name}: fixture archive size unexpectedly changed"
+        );
+        let bytes = fs::read(&archive_path).unwrap();
+        assert_eq!(
+            &bytes[257..263],
+            b"ustar\0",
+            "{name}: fixture is not an uncompressed USTAR archive"
+        );
+        assert_eq!(hex::encode(Sha256::digest(&bytes)), source.sha256);
+        assert!(
+            admitted_archives.insert(filename.to_owned()),
+            "duplicate execution archive"
+        );
+    }
+
+    let present_archives = fs::read_dir(archives)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_file())
+        .map(|entry| entry.file_name().into_string().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        present_archives, admitted_archives,
+        "orphaned execution fixture archive"
+    );
 }
 
 fn copy_package_directory(source: &Path, destination: &Path) {
