@@ -364,12 +364,177 @@ impl Phase {
     }
 }
 
+/// Canonical kernel boot identifier captured when a transition is created.
+///
+/// Runtime inode and mount witnesses are comparable only while this boot ID
+/// and the mount-namespace identity below still match. The ID is deliberately
+/// kept separate from the durable per-tree token.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub(crate) struct BootId(String);
+
+impl BootId {
+    pub(crate) const TEXT_LENGTH: usize = 36;
+
+    pub(crate) fn parse(value: impl Into<String>) -> Result<Self, CodecError> {
+        let value = Self(value.into());
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), CodecError> {
+        let bytes = self.0.as_bytes();
+        let canonical = bytes.len() == Self::TEXT_LENGTH
+            && bytes.iter().enumerate().all(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+                }
+            });
+        let nonzero = bytes.iter().any(|byte| !matches!(*byte, b'0' | b'-'));
+        if !canonical || !nonzero {
+            return Err(CodecError::InvalidBootId);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for BootId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(D::Error::custom)
+    }
+}
+
+/// Immutable random logical identity assigned to one `/usr` tree.
+///
+/// The coordinator will persist this value inside the tree before it creates
+/// a journal. Paths and runtime inode values may change during exchange or
+/// reboot. A copied token is duplicate/corrupt evidence, not a second identity.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub(crate) struct TreeToken(String);
+
+impl TreeToken {
+    pub(crate) const TEXT_LENGTH: usize = 32;
+    const RANDOM_BYTES: usize = Self::TEXT_LENGTH / 2;
+
+    /// Generate one canonical tree token from the kernel CSPRNG.
+    ///
+    /// The marker implementation must use this constructor rather than
+    /// duplicating the token's random-byte or encoding contract. There is no
+    /// time-, PID-, counter-, or userspace-random fallback.
+    #[allow(dead_code)] // consumed by the durable tree-marker integration slice
+    pub(crate) fn generate() -> io::Result<Self> {
+        let mut random = [0_u8; Self::RANDOM_BYTES];
+        let mut filled = 0;
+        while filled < random.len() {
+            // SAFETY: getrandom writes at most the supplied remaining length
+            // into the live array and retains no pointer after returning.
+            let result = unsafe {
+                nix::libc::syscall(
+                    nix::libc::SYS_getrandom,
+                    random[filled..].as_mut_ptr(),
+                    random.len() - filled,
+                    0,
+                )
+            };
+            if result == -1 {
+                let source = io::Error::last_os_error();
+                if source.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(source);
+            }
+            let read = usize::try_from(result)
+                .map_err(|_| io::Error::other("getrandom returned a negative tree-token length"))?;
+            if read == 0 || read > random.len() - filled {
+                return Err(io::Error::other("getrandom returned an invalid tree-token length"));
+            }
+            filled += read;
+        }
+
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = [0_u8; Self::TEXT_LENGTH];
+        for (index, byte) in random.into_iter().enumerate() {
+            encoded[index * 2] = HEX[usize::from(byte >> 4)];
+            encoded[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
+        }
+        let encoded = String::from_utf8(encoded.to_vec()).expect("lowercase hexadecimal is valid UTF-8");
+        Self::parse(encoded).map_err(|_| io::Error::other("kernel randomness encoded to a noncanonical tree token"))
+    }
+
+    pub(crate) fn parse(value: impl Into<String>) -> Result<Self, CodecError> {
+        let value = Self(value.into());
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), CodecError> {
+        let bytes = self.0.as_bytes();
+        if bytes.len() != Self::TEXT_LENGTH
+            || !bytes
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+            || bytes.iter().all(|byte| *byte == b'0')
+        {
+            return Err(CodecError::InvalidTreeToken);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for TreeToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(D::Error::custom)
+    }
+}
+
+/// Identity of the mount namespace in which runtime witnesses were captured.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct TreeIdentity {
+pub(crate) struct MountNamespaceIdentity {
     pub(crate) st_dev: u64,
     pub(crate) inode: u64,
-    pub(crate) statx_mount_id: u64,
+}
+
+/// Runtime epoch in which the journal's device, inode, and mount witnesses are
+/// meaningful. A changed epoch requires durable-token-based reconciliation;
+/// it must never reinterpret the persisted runtime values as current proof.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeEpoch {
+    pub(crate) boot_id: BootId,
+    pub(crate) mount_namespace: MountNamespaceIdentity,
+}
+
+/// Creation-time runtime witness for one `/usr` directory.
+///
+/// `mount_id` is intentionally generic: Linux 5.6 can obtain it from
+/// authenticated `/proc/self/fdinfo`, before `STATX_MNT_ID` was introduced.
+/// It is namespace-local and is not the durable tree identity.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeTreeIdentity {
+    pub(crate) st_dev: u64,
+    pub(crate) inode: u64,
+    pub(crate) mount_id: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -377,14 +542,16 @@ pub(crate) struct TreeIdentity {
 pub(crate) struct Candidate {
     pub(crate) id: Option<i32>,
     pub(crate) origin: CandidateOrigin,
-    pub(crate) usr_identity: TreeIdentity,
+    pub(crate) tree_token: TreeToken,
+    pub(crate) usr_runtime_identity: RuntimeTreeIdentity,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Previous {
     pub(crate) id: Option<i32>,
-    pub(crate) usr_identity: TreeIdentity,
+    pub(crate) tree_token: TreeToken,
+    pub(crate) usr_runtime_identity: RuntimeTreeIdentity,
     pub(crate) origin: PreviousOrigin,
 }
 
@@ -449,6 +616,7 @@ pub(crate) struct TransitionRecord {
     pub(crate) version: u16,
     pub(crate) generation: u64,
     pub(crate) transition_id: TransitionId,
+    pub(crate) creation_epoch: RuntimeEpoch,
     pub(crate) operation: Operation,
     pub(crate) phase: Phase,
     pub(crate) rollback: Option<RollbackPlan>,
@@ -462,9 +630,11 @@ impl TransitionRecord {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn preparing(
         transition_id: TransitionId,
+        creation_epoch: RuntimeEpoch,
         operation: Operation,
         candidate_id: Option<i32>,
-        candidate_usr_identity: TreeIdentity,
+        candidate_tree_token: TreeToken,
+        candidate_usr_runtime_identity: RuntimeTreeIdentity,
         previous: Previous,
         run_system_triggers: bool,
         run_boot_sync: bool,
@@ -481,13 +651,15 @@ impl TransitionRecord {
             version: PAYLOAD_VERSION,
             generation: 1,
             transition_id,
+            creation_epoch,
             operation,
             phase: Phase::Preparing,
             rollback: None,
             candidate: Candidate {
                 id: candidate_id,
                 origin: candidate_origin,
-                usr_identity: candidate_usr_identity,
+                tree_token: candidate_tree_token,
+                usr_runtime_identity: candidate_usr_runtime_identity,
             },
             previous,
             options: TransitionOptions {
@@ -511,8 +683,11 @@ impl TransitionRecord {
         if self.generation == 0 {
             return Err(CodecError::ZeroGeneration);
         }
-        self.previous.usr_identity.validate()?;
-        self.candidate.usr_identity.validate()?;
+        self.creation_epoch.validate()?;
+        self.previous.tree_token.validate()?;
+        self.candidate.tree_token.validate()?;
+        self.previous.usr_runtime_identity.validate()?;
+        self.candidate.usr_runtime_identity.validate()?;
         for id in [self.candidate.id, self.previous.id].into_iter().flatten() {
             if id <= 0 {
                 return Err(CodecError::InvalidStateId(id));
@@ -633,8 +808,26 @@ impl TransitionRecord {
     }
 
     fn validate_relationships(&self) -> Result<(), CodecError> {
-        if self.candidate.usr_identity == self.previous.usr_identity {
-            return Err(CodecError::CandidatePreviousIdentityCollision);
+        if self.candidate.tree_token == self.previous.tree_token {
+            return Err(CodecError::CandidatePreviousTreeTokenCollision);
+        }
+
+        let candidate = self.candidate.usr_runtime_identity;
+        let previous = self.previous.usr_runtime_identity;
+        if candidate.same_object(previous) {
+            return Err(CodecError::CandidatePreviousObjectCollision);
+        }
+        if candidate.st_dev != previous.st_dev {
+            return Err(CodecError::CandidatePreviousFilesystemMismatch {
+                candidate: candidate.st_dev,
+                previous: previous.st_dev,
+            });
+        }
+        if candidate.mount_id != previous.mount_id {
+            return Err(CodecError::CandidatePreviousMountMismatch {
+                candidate: candidate.mount_id,
+                previous: previous.mount_id,
+            });
         }
 
         let archive_previous = matches!(self.previous.origin, PreviousOrigin::ActiveState);
@@ -768,12 +961,32 @@ impl TransitionRecord {
     }
 }
 
-impl TreeIdentity {
+impl MountNamespaceIdentity {
     fn validate(self) -> Result<(), CodecError> {
-        if self.st_dev == 0 || self.inode == 0 || self.statx_mount_id == 0 {
-            return Err(CodecError::ZeroTreeIdentity);
+        if self.st_dev == 0 || self.inode == 0 {
+            return Err(CodecError::ZeroMountNamespaceIdentity);
         }
         Ok(())
+    }
+}
+
+impl RuntimeEpoch {
+    fn validate(&self) -> Result<(), CodecError> {
+        self.boot_id.validate()?;
+        self.mount_namespace.validate()
+    }
+}
+
+impl RuntimeTreeIdentity {
+    fn validate(self) -> Result<(), CodecError> {
+        if self.st_dev == 0 || self.inode == 0 || self.mount_id == 0 {
+            return Err(CodecError::ZeroRuntimeTreeIdentity);
+        }
+        Ok(())
+    }
+
+    fn same_object(self, other: Self) -> bool {
+        self.st_dev == other.st_dev && self.inode == other.inode
     }
 }
 
@@ -1017,12 +1230,14 @@ fn validate_advance(expected: &TransitionRecord, next: &TransitionRecord) -> Res
     }
     if expected.format != next.format
         || expected.version != next.version
+        || expected.creation_epoch != next.creation_epoch
         || expected.operation != next.operation
         || expected.previous != next.previous
         || expected.options != next.options
         || expected.quarantine_name != next.quarantine_name
         || expected.candidate.origin != next.candidate.origin
-        || expected.candidate.usr_identity != next.candidate.usr_identity
+        || expected.candidate.tree_token != next.candidate.tree_token
+        || expected.candidate.usr_runtime_identity != next.candidate.usr_runtime_identity
     {
         return Err(CodecError::ImmutableTransitionDataChanged);
     }
@@ -1114,6 +1329,10 @@ pub(crate) enum CodecError {
     GenerationExhausted,
     #[error("next journal generation must be {expected}, not {actual}")]
     GenerationMismatch { expected: u64, actual: u64 },
+    #[error("boot ID must be one nonzero canonical lowercase UUID")]
+    InvalidBootId,
+    #[error("tree token must be exactly 32 nonzero lowercase hexadecimal characters")]
+    InvalidTreeToken,
     #[error("quarantine name must be one bounded lowercase ASCII path component")]
     InvalidQuarantineName,
     #[error("state ID must be positive, not {0}")]
@@ -1146,8 +1365,10 @@ pub(crate) enum CodecError {
         origin: PreviousOrigin,
         archive_previous: bool,
     },
-    #[error("tree identities must contain nonzero device, inode, and mount IDs")]
-    ZeroTreeIdentity,
+    #[error("the creation mount-namespace identity must contain nonzero device and inode values")]
+    ZeroMountNamespaceIdentity,
+    #[error("runtime tree identities must contain nonzero device, inode, and mount IDs")]
+    ZeroRuntimeTreeIdentity,
     #[error("a forward phase cannot carry a rollback plan")]
     RollbackPlanOnForwardPhase,
     #[error("a rollback phase requires its durable rollback plan")]
@@ -1158,8 +1379,18 @@ pub(crate) enum CodecError {
     DisabledPhase(Phase),
     #[error("fresh allocation phases are invalid for an existing candidate")]
     FreshPhaseForExistingCandidate,
-    #[error("candidate and previous /usr identities must be distinct")]
-    CandidatePreviousIdentityCollision,
+    #[error("candidate and previous /usr tree tokens must be distinct")]
+    CandidatePreviousTreeTokenCollision,
+    #[error("candidate and previous /usr runtime witnesses identify the same filesystem object")]
+    CandidatePreviousObjectCollision,
+    #[error(
+        "candidate and previous /usr trees must share one filesystem for atomic exchange, not devices {candidate} and {previous}"
+    )]
+    CandidatePreviousFilesystemMismatch { candidate: u64, previous: u64 },
+    #[error(
+        "candidate and previous /usr trees must share one mount for atomic exchange, not mount IDs {candidate} and {previous}"
+    )]
+    CandidatePreviousMountMismatch { candidate: u64, previous: u64 },
     #[error("candidate and previous state IDs must be distinct for this operation")]
     CandidatePreviousStateCollision,
     #[error("rollback action {action} has status {status:?}, but possible={possible}")]
@@ -2452,11 +2683,26 @@ mod tests {
         TransitionId::parse("11111111111111111111111111111111").unwrap()
     }
 
-    fn identity(seed: u64) -> TreeIdentity {
-        TreeIdentity {
-            st_dev: seed,
-            inode: seed + 1,
-            statx_mount_id: seed + 2,
+    fn boot_id() -> BootId {
+        BootId::parse("01234567-89ab-4cde-8f01-23456789abcd").unwrap()
+    }
+
+    fn runtime_epoch() -> RuntimeEpoch {
+        RuntimeEpoch {
+            boot_id: boot_id(),
+            mount_namespace: MountNamespaceIdentity { st_dev: 30, inode: 31 },
+        }
+    }
+
+    fn tree_token(digit: char) -> TreeToken {
+        TreeToken::parse(digit.to_string().repeat(TreeToken::TEXT_LENGTH)).unwrap()
+    }
+
+    fn identity(inode: u64) -> RuntimeTreeIdentity {
+        RuntimeTreeIdentity {
+            st_dev: 10,
+            inode,
+            mount_id: 12,
         }
     }
 
@@ -2467,17 +2713,20 @@ mod tests {
             version: PAYLOAD_VERSION,
             generation: 7,
             transition_id: id(),
+            creation_epoch: runtime_epoch(),
             operation: Operation::NewState,
             phase,
             rollback: None,
             candidate: Candidate {
                 id: (!matches!(forward, ForwardPhase::Preparing | ForwardPhase::FreshStateAllocating)).then_some(42),
                 origin: CandidateOrigin::Fresh,
-                usr_identity: identity(10),
+                tree_token: tree_token('a'),
+                usr_runtime_identity: identity(10),
             },
             previous: Previous {
                 id: Some(41),
-                usr_identity: identity(20),
+                tree_token: tree_token('b'),
+                usr_runtime_identity: identity(20),
                 origin: PreviousOrigin::ActiveState,
             },
             options: TransitionOptions {
@@ -2500,12 +2749,15 @@ mod tests {
     fn creation_record() -> TransitionRecord {
         TransitionRecord::preparing(
             id(),
+            runtime_epoch(),
             Operation::NewState,
             None,
+            tree_token('a'),
             identity(10),
             Previous {
                 id: Some(41),
-                usr_identity: identity(20),
+                tree_token: tree_token('b'),
+                usr_runtime_identity: identity(20),
                 origin: PreviousOrigin::ActiveState,
             },
             true,
@@ -2888,6 +3140,68 @@ mod tests {
     }
 
     #[test]
+    fn reboot_identity_schema_is_required_strict_and_has_no_v1_aliases() {
+        let valid = encode(&record(Phase::Preparing)).unwrap();
+        let rejects = |frame: Vec<u8>| assert!(matches!(decode(&frame), Err(CodecError::Json(_))));
+        const BOOT_FIELD: &str = "\"boot_id\":\"01234567-89ab-4cde-8f01-23456789abcd\",";
+        const NAMESPACE_FIELD: &str = "\"mount_namespace\":{\"st_dev\":30,\"inode\":31}";
+        const EPOCH_FIELD: &str = concat!(
+            "\"creation_epoch\":{",
+            "\"boot_id\":\"01234567-89ab-4cde-8f01-23456789abcd\",",
+            "\"mount_namespace\":{\"st_dev\":30,\"inode\":31}},"
+        );
+        const CANDIDATE_TOKEN_FIELD: &str = "\"tree_token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",";
+        const PREVIOUS_TOKEN_FIELD: &str = "\"tree_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",";
+        const CANDIDATE_RUNTIME_FIELD: &str = "\"usr_runtime_identity\":{\"st_dev\":10,\"inode\":10,\"mount_id\":12}";
+        const PREVIOUS_RUNTIME_FIELD: &str = "\"usr_runtime_identity\":{\"st_dev\":10,\"inode\":20,\"mount_id\":12}";
+
+        rejects(replace_payload(&valid, |payload| payload.replacen(EPOCH_FIELD, "", 1)));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen(EPOCH_FIELD, &format!("{EPOCH_FIELD}{EPOCH_FIELD}"), 1)
+        }));
+        rejects(replace_payload(&valid, |payload| payload.replacen(BOOT_FIELD, "", 1)));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen(BOOT_FIELD, &format!("{BOOT_FIELD}{BOOT_FIELD}"), 1)
+        }));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen(&format!(",{NAMESPACE_FIELD}"), "", 1)
+        }));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen("\"inode\":31", "\"inode\":31,\"future_namespace_field\":1", 1)
+        }));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen(
+                NAMESPACE_FIELD,
+                &format!("{NAMESPACE_FIELD},\"future_epoch_field\":true"),
+                1,
+            )
+        }));
+        for token_field in [CANDIDATE_TOKEN_FIELD, PREVIOUS_TOKEN_FIELD] {
+            rejects(replace_payload(&valid, |payload| payload.replacen(token_field, "", 1)));
+            rejects(replace_payload(&valid, |payload| {
+                payload.replacen(token_field, &format!("{token_field}{token_field}"), 1)
+            }));
+        }
+        for runtime_field in [CANDIDATE_RUNTIME_FIELD, PREVIOUS_RUNTIME_FIELD] {
+            rejects(replace_payload(&valid, |payload| {
+                payload.replacen(&format!(",{runtime_field}"), "", 1)
+            }));
+            rejects(replace_payload(&valid, |payload| {
+                payload.replacen(runtime_field, &format!("{runtime_field},{runtime_field}"), 1)
+            }));
+        }
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen("\"usr_runtime_identity\"", "\"usr_identity\"", 1)
+        }));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen("\"mount_id\":12", "\"statx_mount_id\":12", 1)
+        }));
+        rejects(replace_payload(&valid, |payload| {
+            payload.replacen(",\"mount_id\":12", "", 1)
+        }));
+    }
+
+    #[test]
     fn record_trailing_bytes_and_noncanonical_json_are_rejected() {
         let mut trailing = encode(&record(Phase::Preparing)).unwrap();
         trailing.push(b' ');
@@ -2908,6 +3222,50 @@ mod tests {
         ] {
             assert!(TransitionId::parse(invalid).is_err());
         }
+        assert_eq!(boot_id().as_str(), "01234567-89ab-4cde-8f01-23456789abcd");
+        for invalid in [
+            "",
+            "01234567-89ab-4cde-8f01-23456789abc",
+            "01234567-89ab-4cde-8f01-23456789abcdd",
+            "01234567-89AB-4cde-8f01-23456789abcd",
+            "0123456789ab-4cde-8f01-23456789abcd",
+            "01234567-89ab-4cde-8f01-23456789abcg",
+            "00000000-0000-0000-0000-000000000000",
+            "01234567-89ab-4cde-8f01-23456789abc\n",
+        ] {
+            assert!(matches!(BootId::parse(invalid), Err(CodecError::InvalidBootId)));
+        }
+        assert_eq!(tree_token('a').as_str(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        for invalid in [
+            "",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "00000000000000000000000000000000",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        ] {
+            assert!(matches!(TreeToken::parse(invalid), Err(CodecError::InvalidTreeToken)));
+        }
+
+        let valid = encode(&record(Phase::Preparing)).unwrap();
+        let invalid_boot = replace_payload(&valid, |payload| {
+            payload.replacen(
+                "01234567-89ab-4cde-8f01-23456789abcd",
+                "01234567-89AB-4cde-8f01-23456789abcd",
+                1,
+            )
+        });
+        assert!(matches!(decode(&invalid_boot), Err(CodecError::Json(_))));
+        let invalid_token = replace_payload(&valid, |payload| {
+            payload.replacen(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "00000000000000000000000000000000",
+                1,
+            )
+        });
+        assert!(matches!(decode(&invalid_token), Err(CodecError::Json(_))));
+
         for invalid in ["", ".", "..", "../escape", "Upper", "has space"] {
             assert!(matches!(
                 QuarantineName::parse(invalid),
@@ -2939,18 +3297,32 @@ mod tests {
     }
 
     #[test]
+    fn generated_tree_tokens_are_canonical_and_distinct() {
+        let mut generated = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            let token = TreeToken::generate().unwrap();
+            assert_eq!(token.as_str().len(), TreeToken::TEXT_LENGTH);
+            assert_eq!(TreeToken::parse(token.as_str()).unwrap(), token);
+            assert!(generated.insert(token), "kernel CSPRNG repeated a 128-bit tree token");
+        }
+    }
+
+    #[test]
     fn preparing_constructor_derives_wire_fields_and_rejects_invalid_operation_layouts() {
         let quarantine = QuarantineName::parse("constructor-proof").unwrap();
         assert_eq!(quarantine.as_str(), "constructor-proof");
         let previous = Previous {
             id: Some(41),
-            usr_identity: identity(20),
+            tree_token: tree_token('b'),
+            usr_runtime_identity: identity(20),
             origin: PreviousOrigin::ActiveState,
         };
         let record = TransitionRecord::preparing(
             id(),
+            runtime_epoch(),
             Operation::ActivateArchived,
             Some(42),
+            tree_token('a'),
             identity(10),
             previous.clone(),
             false,
@@ -2963,7 +3335,9 @@ mod tests {
         assert_eq!(record.generation, 1);
         assert_eq!(record.phase, Phase::Preparing);
         assert_eq!(record.rollback, None);
+        assert_eq!(record.creation_epoch, runtime_epoch());
         assert_eq!(record.candidate.origin, CandidateOrigin::Archived);
+        assert_eq!(record.candidate.tree_token, tree_token('a'));
         assert!(record.options.archive_previous);
         assert!(!record.options.run_system_triggers);
         assert!(record.options.run_boot_sync);
@@ -2971,8 +3345,10 @@ mod tests {
         assert!(matches!(
             TransitionRecord::preparing(
                 id(),
+                runtime_epoch(),
                 Operation::NewState,
                 Some(42),
+                tree_token('a'),
                 identity(10),
                 previous.clone(),
                 true,
@@ -2984,8 +3360,10 @@ mod tests {
         assert!(matches!(
             TransitionRecord::preparing(
                 id(),
+                runtime_epoch(),
                 Operation::ActivateArchived,
                 None,
+                tree_token('a'),
                 identity(10),
                 previous,
                 true,
@@ -2997,10 +3375,99 @@ mod tests {
     }
 
     #[test]
-    fn preparing_pins_both_identities_and_operation_relationships_fail_closed() {
+    fn preparing_pins_epoch_tokens_runtime_witnesses_and_operation_relationships_fail_closed() {
+        for mount_namespace in [
+            MountNamespaceIdentity { st_dev: 0, inode: 31 },
+            MountNamespaceIdentity { st_dev: 30, inode: 0 },
+        ] {
+            let mut invalid = record(Phase::Preparing);
+            invalid.creation_epoch.mount_namespace = mount_namespace;
+            assert!(matches!(encode(&invalid), Err(CodecError::ZeroMountNamespaceIdentity)));
+        }
+
         let mut invalid = record(Phase::Preparing);
-        invalid.previous.usr_identity.st_dev = 0;
-        assert!(matches!(encode(&invalid), Err(CodecError::ZeroTreeIdentity)));
+        invalid.creation_epoch.boot_id = BootId("00000000-0000-0000-0000-000000000000".to_owned());
+        assert!(matches!(encode(&invalid), Err(CodecError::InvalidBootId)));
+
+        for runtime_identity in [
+            RuntimeTreeIdentity {
+                st_dev: 0,
+                inode: 10,
+                mount_id: 12,
+            },
+            RuntimeTreeIdentity {
+                st_dev: 10,
+                inode: 0,
+                mount_id: 12,
+            },
+            RuntimeTreeIdentity {
+                st_dev: 10,
+                inode: 10,
+                mount_id: 0,
+            },
+        ] {
+            let mut invalid_candidate = record(Phase::Preparing);
+            invalid_candidate.candidate.usr_runtime_identity = runtime_identity;
+            assert!(matches!(
+                encode(&invalid_candidate),
+                Err(CodecError::ZeroRuntimeTreeIdentity)
+            ));
+
+            let mut invalid_previous = record(Phase::Preparing);
+            invalid_previous.previous.usr_runtime_identity = runtime_identity;
+            assert!(matches!(
+                encode(&invalid_previous),
+                Err(CodecError::ZeroRuntimeTreeIdentity)
+            ));
+        }
+
+        let mut invalid = record(Phase::Preparing);
+        invalid.candidate.tree_token = TreeToken("00000000000000000000000000000000".to_owned());
+        assert!(matches!(encode(&invalid), Err(CodecError::InvalidTreeToken)));
+
+        let mut invalid = record(Phase::Preparing);
+        invalid.previous.tree_token = invalid.candidate.tree_token.clone();
+        assert!(matches!(
+            encode(&invalid),
+            Err(CodecError::CandidatePreviousTreeTokenCollision)
+        ));
+
+        let mut invalid = record(Phase::Preparing);
+        invalid.candidate.usr_runtime_identity = invalid.previous.usr_runtime_identity;
+        invalid.candidate.usr_runtime_identity.mount_id += 1;
+        assert!(matches!(
+            encode(&invalid),
+            Err(CodecError::CandidatePreviousObjectCollision)
+        ));
+
+        let mut invalid = record(Phase::Preparing);
+        invalid.candidate.usr_runtime_identity.st_dev += 1;
+        assert!(matches!(
+            encode(&invalid),
+            Err(CodecError::CandidatePreviousFilesystemMismatch { .. })
+        ));
+
+        let mut invalid = record(Phase::Preparing);
+        invalid.candidate.usr_runtime_identity.mount_id += 1;
+        assert!(matches!(
+            encode(&invalid),
+            Err(CodecError::CandidatePreviousMountMismatch { .. })
+        ));
+
+        let valid = record(Phase::Preparing);
+        assert_eq!(
+            valid.candidate.usr_runtime_identity.st_dev,
+            valid.previous.usr_runtime_identity.st_dev
+        );
+        assert_eq!(
+            valid.candidate.usr_runtime_identity.mount_id,
+            valid.previous.usr_runtime_identity.mount_id
+        );
+        assert_ne!(
+            valid.candidate.usr_runtime_identity.inode,
+            valid.previous.usr_runtime_identity.inode
+        );
+        encode(&valid).unwrap();
 
         let mut invalid = record(Phase::Preparing);
         invalid.candidate.id = Some(42);
@@ -3014,10 +3481,10 @@ mod tests {
         ));
 
         let mut invalid = record(Phase::CandidatePrepared);
-        invalid.candidate.usr_identity = invalid.previous.usr_identity;
+        invalid.candidate.usr_runtime_identity = invalid.previous.usr_runtime_identity;
         assert!(matches!(
             encode(&invalid),
-            Err(CodecError::CandidatePreviousIdentityCollision)
+            Err(CodecError::CandidatePreviousObjectCollision)
         ));
 
         let mut invalid = new_state_record(Phase::Preparing);
@@ -3236,12 +3703,32 @@ mod tests {
             Err(CodecError::GenerationExhausted)
         ));
 
-        let mut identity_changed = legal.clone();
-        identity_changed.candidate.usr_identity = identity(99);
-        assert!(matches!(
-            validate_advance(&current, &identity_changed),
-            Err(CodecError::ImmutableTransitionDataChanged)
-        ));
+        let mut epoch_boot_changed = legal.clone();
+        epoch_boot_changed.creation_epoch.boot_id = BootId::parse("11111111-1111-4111-8111-111111111111").unwrap();
+        let mut epoch_namespace_changed = legal.clone();
+        epoch_namespace_changed.creation_epoch.mount_namespace.inode += 1;
+        let mut candidate_token_changed = legal.clone();
+        candidate_token_changed.candidate.tree_token = tree_token('c');
+        let mut previous_token_changed = legal.clone();
+        previous_token_changed.previous.tree_token = tree_token('c');
+        let mut candidate_runtime_changed = legal.clone();
+        candidate_runtime_changed.candidate.usr_runtime_identity = identity(99);
+        let mut previous_runtime_changed = legal.clone();
+        previous_runtime_changed.previous.usr_runtime_identity = identity(98);
+
+        for changed in [
+            epoch_boot_changed,
+            epoch_namespace_changed,
+            candidate_token_changed,
+            previous_token_changed,
+            candidate_runtime_changed,
+            previous_runtime_changed,
+        ] {
+            assert!(matches!(
+                validate_advance(&current, &changed),
+                Err(CodecError::ImmutableTransitionDataChanged)
+            ));
+        }
     }
 
     #[test]
