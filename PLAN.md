@@ -507,10 +507,14 @@ rejecting `N + 1`.
   limits; reject traversal, unsafe links, sparse/special entries, topology
   collisions, mutation, and unsupported compression or containers before
   publication.
-- [ ] Enforce aggregate per-derivation PID, memory, swap, and CPU ceilings in a
+- [x] Enforce aggregate per-derivation PID, memory, swap, and CPU ceilings in a
   delegated cgroup v2 boundary, plus byte and inode ceilings for every writable
   scratch filesystem. Rootless hosts without the required delegation or quota
   backend must fail before execution rather than silently weakening policy.
+  Mason authenticates the delegated subtree and exact controller readback
+  before payload entry; its private `/tmp` and Forge transaction-trigger
+  `/tmp` mounts have exact size/inode readback on both activation paths, while
+  the setup-only minimal `/dev` is recursively sealed read-only.
 - [x] Apply the same finite process, output, progress-record, repository-size,
   and repository-entry policy to Git mirrors, fetches, and checkouts.
 - [x] Load, save, and delete Gluon configuration fragments through
@@ -554,10 +558,12 @@ that evidence.
   pre-setup-hook, Meson, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
-- [ ] Maintain a pinned, contentful Stone bootstrap closure for every real
+- [x] Maintain a pinned, contentful Stone bootstrap closure for every real
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
-  store do not count as frozen execution.
+  store do not count as frozen execution. The offline fixture lane verifies
+  each of the nine exact closure declarations and their aggregate 107-package
+  pool before the delegated runner materializes the production-format root.
 - [x] Before entering the container, require every frozen executable binding's
   entry point to belong to its declared provider and resolve to a regular
   executable through uniquely owned symlink hops inside the exact frozen
@@ -572,10 +578,13 @@ that evidence.
   layout, index, content, output relations, modes, and manifest membership.
   Rebuild from the unchanged source and build locks and require byte-identical
   plans, derivation IDs, Stone files, and manifests before accepting reuse.
-- [ ] Add a required-capability Make lane for CI where unavailable namespace or
+- [x] Add a required-capability Make lane for CI where unavailable namespace or
   mount support is a failure, not a skip. The ordinary developer lane may
   report a narrowly classified capability skip, but must never report it as an
-  execution success or use it to hide a payload failure.
+  execution success or use it to hide a payload failure. `make fixtures-ci`
+  selects every fixture with `REQUIRE_EXECUTION=1`; its harness-free runner
+  creates an authenticated, bounded-lifetime delegated systemd unit and CI
+  establishes and preflights the required user manager first.
 
 **Exit gate:** every example is checked and frozen through public production
 boundaries; all four standard builders plus the custom and split-output cases
