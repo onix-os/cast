@@ -1,0 +1,62 @@
+let strings = import! std.string.prim
+let b = import! cast.package.v3
+
+// Specializing this pure factory with another kernel record changes the
+// dependency closure, build arguments, installed module path, and targets as
+// one value. Nothing consults `uname` or an ambient /lib/modules directory.
+\kernel ->
+    let make = b.program.binary "make"
+    let release_arg = strings.append "KERNEL_RELEASE=" kernel.release
+    let build_tree_arg = strings.append "KERNEL_DIR=" kernel.build_tree
+    let module_root = strings.append "/usr/lib/modules/" kernel.release
+    let module_path = strings.append module_root "/extra/atlas-sensor.ko"
+
+    let phases = b.scripts {
+        build = b.phase [
+            b.step.run make [release_arg, build_tree_arg, "modules"],
+        ],
+        check = b.phase [
+            b.step.run (b.program.binary "modinfo") ["build/atlas-sensor.ko"],
+        ],
+        install = b.phase [
+            // The checked-in installer accepts the selected kernel ABI and
+            // reads CAST_INSTALL_ROOT; it never mutates the live module tree.
+            b.step.run
+                (b.program.binary "bash")
+                ["packaging/install-module", kernel.release],
+        ],
+        .. b.defaults.scripts
+    }
+
+    let root = b.output_with {
+        summary = b.optional.set "Atlas sensor module for the selected LTS kernel",
+        runtime_inputs = [b.dep.output kernel.package "out"],
+        paths = [b.path.any module_path],
+        .. b.output "out"
+    }
+
+    let base = b.mk_package (b.meta {
+        pname = "atlas-sensor-module",
+        version = "2.3.1",
+        release = 1,
+        homepage = "https://example.invalid/atlas-sensor",
+        license = ["GPL-2.0-only"],
+    })
+
+    {
+        builder = b.builder.custom phases [
+            b.dep.binary "make",
+            b.dep.binary "modinfo",
+            b.dep.binary "bash",
+            b.dep.binary "install",
+        ],
+        native_build_inputs = [kernel.headers],
+        outputs = [root],
+        sources = [
+            b.source.archive
+                "https://example.invalid/atlas-sensor-module-2.3.1.tar.xz"
+                "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+        ],
+        architectures = kernel.architectures,
+        .. base
+    }

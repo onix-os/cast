@@ -87,6 +87,16 @@ Read the [Gluon configuration contract](docs/gluon-configuration.md) and the
 [package-authoring guide](docs/package-authoring.md). Runnable examples live in
 [docs/examples/gluon](docs/examples/gluon).
 
+The checked package corpus includes standard builders and deliberately more
+Nix-inspired composition patterns: an explicit
+[kernel-package specialization](docs/examples/gluon/packages/kernel-module-factory),
+[ordered package layers](docs/examples/gluon/packages/layered-overrides), and
+fully admitted offline dependency closures for
+[Node.js](docs/examples/gluon/packages/nodejs-vendored-application) and
+[Maven](docs/examples/gluon/packages/maven-application). `make examples` checks
+and evaluates every package root through the public Cast CLI, then freezes each
+one twice to prove deterministic lock reuse without network access.
+
 ### Package locks and plans
 
 Cast never rewrites authored `stone.glu` modules. Adjacent generated files

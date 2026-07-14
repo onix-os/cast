@@ -1,0 +1,76 @@
+let b = import! cast.package.v3
+
+let maven = b.program.binary "mvn"
+
+// The source archive carries the complete Maven repository selected by the
+// dependency lock. `--offline` and the explicit repository path make a missing
+// artifact a build failure instead of a network fetch.
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.shell r#"test -f pom.xml
+test -f dependencies.lock
+test -d vendor/m2"#,
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [maven],
+            script = r#"mvn --offline --batch-mode --no-transfer-progress \
+    -Dmaven.repo.local="${CAST_SOURCE_DIR}/vendor/m2" \
+    -Dproject.build.outputTimestamp="${SOURCE_DATE_EPOCH}" \
+    -DskipTests package"#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [maven],
+            script = r#"mvn --offline --batch-mode --no-transfer-progress \
+    -Dmaven.repo.local="${CAST_SOURCE_DIR}/vendor/m2" \
+    -Dproject.build.outputTimestamp="${SOURCE_DATE_EPOCH}" \
+    test"#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm644 target/pulse-router.jar "${CAST_INSTALL_ROOT}${CAST_DATADIR}/java/pulse-router/pulse-router.jar"
+install -Dm755 packaging/pulse-router "${CAST_INSTALL_ROOT}${CAST_BINDIR}/pulse-router""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Pulse routing service built from a locked Maven repository",
+    runtime_inputs = [b.dep.binary "java"],
+    paths = [
+        b.path.exe "/usr/bin/pulse-router",
+        b.path.any "/usr/share/java/pulse-router/pulse-router.jar",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "pulse-router",
+    version = "7.2.0",
+    release = 1,
+    homepage = "https://example.invalid/pulse-router",
+    license = ["Apache-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mvn",
+        b.dep.binary "install",
+    ],
+    outputs = [root],
+    sources = [
+        b.source.archive
+            "https://example.invalid/pulse-router-7.2.0-vendored.tar.xz"
+            "6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345",
+    ],
+    architectures = ["native"],
+    .. base
+}
