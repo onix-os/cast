@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-pub use self::client::{Client, ClientBuilder, FrozenExecutableBinding};
+pub use self::client::{Client, ClientBuilder, FrozenExecutableBinding, FrozenRootGuard};
 pub use self::dependency::{Dependency, Provider};
 pub use self::installation::Installation;
 pub use self::package::Package;
