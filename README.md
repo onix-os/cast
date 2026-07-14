@@ -29,6 +29,10 @@ profiles, repositories, transaction triggers, and desired system state are all
 authored in Gluon. YAML and KDL loaders, fallbacks, dual writes, and compatibility
 representations have been removed.
 
+That break is specifically with the inherited YAML/KDL configuration paths. Nix
+compatibility or interoperability is not a goal of the current Gluon work, but it
+is not rejected or designed out; it remains a separate future decision.
+
 This is an architectural break, not a file-extension change. Gluon programs
 cross typed, versioned, capability-restricted ABIs and produce evaluation
 fingerprints. Authored programs remain separate from generated locks and
