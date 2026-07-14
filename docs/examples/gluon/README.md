@@ -52,3 +52,40 @@ depends on those remote endpoints. The planner proof substitutes
 content-addressed local fixtures. The execution proof is limited to `minimal`,
 so this corpus does not claim that the fictional upstream projects themselves
 can be built.
+
+## Representative execution fixtures
+
+Six separate fixtures contain small, real source trees for the Autotools,
+Cargo, CMake, custom-step, Meson, and split-output package shapes. Run their
+proof lanes from the repository root:
+
+```sh
+make execution-fixtures
+make bootstrap-fixtures
+make fixtures-ci
+```
+
+`make execution-fixtures` is the offline lane: it byte-checks the deterministic
+source archives, validates the pinned Stone index and closure declaration, and
+proves that all six recipes resolve to that exact closure. `make
+bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
+materializes the production-format root mirror, then builds, packages, and
+reproduces every fixture. It may skip execution when the host cannot create the
+required namespaces; pass `REQUIRE_EXECUTION=1` to reject that skip. `make
+fixtures-ci` runs both lanes and always requires execution.
+
+Execution requires Linux user and mount namespaces. For an unprivileged caller,
+the current mapper specifically requires `/usr/bin/newgidmap` and at least one
+delegated GID in `/etc/subgid`; the usual `uidmap` package provides the helper.
+The UID map is written directly, so `/usr/bin/newuidmap` and `/etc/subuid` are
+not currently consumed. Check the basic namespace capability with:
+
+```sh
+unshare --user --map-root-user --mount true
+```
+
+Some hosts disable unprivileged namespaces through
+`kernel.unprivileged_userns_clone`. Ubuntu hosts may additionally set
+`kernel.apparmor_restrict_unprivileged_userns=1`; the required CI lane enables
+the former and temporarily sets the latter to `0`. Changing either setting is
+a host security-policy decision and may require an administrator.

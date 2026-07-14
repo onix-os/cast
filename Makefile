@@ -17,7 +17,7 @@ REQUIRE_EXECUTION ?= 0
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures fixtures-ci fixture-sources check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -107,16 +107,31 @@ examples:
 fixture-sources:
 	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh"
 
-execution-fixtures:
+fixture-sources-check:
+	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh" --check
+
+execution-fixtures: fixture-sources-check
 	@echo "Checking locked offline execution-source fixtures..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
+		--exact --list | \
+		grep -Fqx 'planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
 		--exact --nocapture
 	@echo "Checking the declarative pinned Stone bootstrap manifest and index..."
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
+		--exact --list | \
+		grep -Fqx 'planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
 	@echo "Resolving all six execution fixtures against the pinned real Stone index..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
+		--exact --list | \
+		grep -Fqx 'planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
 		--exact --nocapture
@@ -125,17 +140,29 @@ bootstrap-fixtures:
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
+		--ignored --exact --list | \
+		grep -Fqx 'planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
 		--ignored --exact --nocapture
 	@echo "Materializing the complete closure as a production-format offline root mirror..."
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
+		--ignored --exact --list | \
+		grep -Fqx 'planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
 		--ignored --exact --nocapture
 	@echo "Building, packaging, and reproducing all six fixtures from the contentful closure..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
+		--ignored --exact --list | \
+		grep -Fqx 'planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure: test'
 	@CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --nocapture
 
-fixtures-ci:
+fixtures-ci: execution-fixtures
 	@$(MAKE) --no-print-directory bootstrap-fixtures REQUIRE_EXECUTION=1
 
 check:

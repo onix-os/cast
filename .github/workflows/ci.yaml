@@ -69,6 +69,22 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install rootless ID mapping support
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes uidmap
+          test -x /usr/bin/newgidmap
+          user_name="$(id -un)"
+          user_id="$(id -u)"
+          if ! awk -F: -v name="$user_name" -v uid="$user_id" \
+            '($1 == name || $1 == uid) && $3 >= 1 { found = 1 } END { exit !found }' \
+            /etc/subgid; then
+            sudo usermod --add-subgids 524288-589823 "$user_name"
+          fi
+          awk -F: -v name="$user_name" -v uid="$user_id" \
+            '($1 == name || $1 == uid) && $3 >= 1 { found = 1 } END { exit !found }' \
+            /etc/subgid
+
       - name: Restore the verified Stone bootstrap closure
         uses: actions/cache@v5
         with:
@@ -84,6 +100,9 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           unshare --user --map-root-user --mount true
+
+      - name: Probe the production Mason container boundary
+        run: make examples REQUIRE_EXECUTION=1
 
       - name: Build and reproduce all frozen fixtures
         run: make fixtures-ci

@@ -4,21 +4,36 @@
 
 set -eu
 
+mode=write
+case "${1-}" in
+    '') ;;
+    --check) mode=check ;;
+    *) printf 'usage: %s [--check]\n' "$0" >&2; exit 2 ;;
+esac
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 source_root="$fixture_root/source-trees"
 archive_root="$fixture_root/archives"
 temporary=
+check_root=
 
 cleanup() {
     if [ -n "$temporary" ]; then
         rm -f "$temporary"
+    fi
+    if [ -n "$check_root" ]; then
+        rm -rf "$check_root"
     fi
 }
 
 trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$archive_root"
+
+if [ "$mode" = check ]; then
+    check_root=$(mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
+fi
 
 for fixture in \
     cast-autotools-fixture-1.0.0 \
@@ -30,7 +45,11 @@ for fixture in \
 do
     source="$source_root/$fixture"
     output="$archive_root/$fixture.tar"
-    temporary="$archive_root/.$fixture.tar.tmp"
+    if [ "$mode" = check ]; then
+        temporary="$check_root/$fixture.tar"
+    else
+        temporary="$archive_root/.$fixture.tar.tmp"
+    fi
 
     test -d "$source"
     rm -f "$temporary"
@@ -46,6 +65,43 @@ do
         -cf "$temporary" \
         "$fixture"
     chmod 0644 "$temporary"
-    mv -f "$temporary" "$output"
+    if [ "$mode" = check ]; then
+        test -f "$output"
+        test ! -L "$output"
+        if ! cmp -s "$temporary" "$output"; then
+            printf 'execution fixture archive is stale: %s\n' "$output" >&2
+            exit 1
+        fi
+        rm -f "$temporary"
+    else
+        mv -f "$temporary" "$output"
+    fi
     temporary=
 done
+
+count=0
+for entry in "$archive_root"/*; do
+    test -e "$entry" || {
+        printf 'execution fixture archive directory is empty: %s\n' "$archive_root" >&2
+        exit 1
+    }
+    test -f "$entry" && test ! -L "$entry" || {
+        printf 'unexpected non-regular execution fixture archive entry: %s\n' "$entry" >&2
+        exit 1
+    }
+    case "$(basename "$entry")" in
+        cast-autotools-fixture-1.0.0.tar|\
+        cast-cargo-fixture-1.0.0.tar|\
+        cast-cmake-fixture-1.0.0.tar|\
+        cast-custom-fixture-1.0.0.tar|\
+        cast-meson-fixture-1.0.0.tar|\
+        cast-split-fixture-1.0.0.tar) ;;
+        *) printf 'unexpected execution fixture archive: %s\n' "$entry" >&2; exit 1 ;;
+    esac
+    count=$((count + 1))
+done
+
+test "$count" -eq 6 || {
+    printf 'expected exactly six execution fixture archives, found %s\n' "$count" >&2
+    exit 1
+}
