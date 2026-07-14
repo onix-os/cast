@@ -492,7 +492,7 @@ rejecting `N + 1`.
 - [x] Bound every frozen build step by wall time, independent and combined
   output budgets, fixed-size drains, child-local resource limits, and complete
   descendant cleanup.
-- [ ] Apply the same finite process, output, progress-record, repository-size,
+- [x] Apply the same finite process, output, progress-record, repository-size,
   and repository-entry policy to Git mirrors, fetches, and checkouts.
 - [x] Load, save, and delete Gluon configuration fragments through
   descriptor-anchored, size/count-bounded, race-resistant operations.
@@ -500,7 +500,7 @@ rejecting `N + 1`.
   and after every policy patch.
 - [x] Bound Stone payload counts, records, declared and expanded sizes,
   malformed lengths, content streaming, and aggregate archive consumption.
-- [ ] Replace recursive/unbounded package collection with a bounded,
+- [x] Replace recursive/unbounded package collection with a bounded,
   descriptor-safe, deterministic walk and verified content reads.
 
 **Exit gate:** malformed, oversized, changing, blocking, or resource-exhausting
@@ -529,7 +529,7 @@ partial cache, staging object, or ambiguous fallback eligible for reuse.
   for CMake, Meson, Cargo, Autotools, custom-step, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
-- [ ] Replace metadata-only execution providers with a pinned, contentful Stone
+- [x] Replace metadata-only execution providers with a pinned, contentful Stone
   bootstrap closure containing the real declared tools and their runtime
   dependencies. Test-only command shims, undeclared host tools, and a mounted
   host or Nix store do not count as frozen execution.
