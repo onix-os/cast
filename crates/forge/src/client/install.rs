@@ -133,7 +133,7 @@ fn install_resolved(
     let mut instant = Instant::now();
 
     // Get installed packages to check against
-    let installed = client.registry.list_installed().collect::<Vec<_>>();
+    let installed = client.registry.list_installed()?;
     let is_installed = |p: &Package| installed.iter().any(|i| i.meta.name == p.meta.name);
 
     // Get missing packages that are:
@@ -256,11 +256,10 @@ fn install_resolved(
 #[instrument(skip(client))]
 fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<package::Id>, Error> {
     // Parse pkg args into valid / invalid sets
-    let queried = pkgs.iter().map(|p| find_packages(p, client));
-
     let mut results = vec![];
 
-    for (id, pkg) in queried {
+    for package in pkgs {
+        let (id, pkg) = find_packages(package, client)?;
         if let Some(pkg) = pkg {
             results.push(pkg.id);
         } else {
@@ -272,15 +271,16 @@ fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<package::Id>, Err
 }
 
 /// Resolve a package name to the first package
-fn find_packages(id: &str, client: &Client) -> (String, Option<Package>) {
+fn find_packages(id: &str, client: &Client) -> Result<(String, Option<Package>), Error> {
     let provider = Provider::from_name(id).unwrap();
     let result = client
         .registry
-        .by_provider(&provider, Flags::new().with_available())
+        .by_provider(&provider, Flags::new().with_available())?
+        .into_iter()
         .next();
 
     // First only, pre-sorted
-    (id.into(), result)
+    Ok((id.into(), result))
 }
 
 /// Simple timing information for Install
@@ -310,6 +310,9 @@ pub enum Error {
     #[error("transaction")]
     Transaction(#[from] transaction::Error),
 
+    #[error("registry query")]
+    Registry(#[from] crate::registry::Error),
+
     /// A database specific error occurred
     #[error("db")]
     DB(#[from] crate::db::Error),
@@ -330,9 +333,13 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use sha2::{Digest as _, Sha256};
+
     use super::*;
     use crate::{
-        Dependency, Installation, Registry, State,
+        Dependency, Installation, Registry, State, db,
         registry::plugin,
         repository,
         state::{self, Selection},
@@ -386,9 +393,29 @@ mod tests {
         )]);
         let client = Client::frozen("frozen-test", installation, repositories, blit_root).unwrap();
         let repository = client.repositories.active().next().unwrap();
+        let index_bytes = b"frozen repository test snapshot";
+        let index_sha256 = hex::encode(Sha256::digest(index_bytes));
+        let index_uri = match &repository.repository.source {
+            repository::Source::DirectIndex(index_uri) => index_uri.clone(),
+            repository::Source::RootIndex(_) => unreachable!("frozen test repository is direct"),
+        };
+        let snapshot = db::meta::Snapshot::new(
+            index_uri,
+            index_sha256.clone(),
+            u64::try_from(index_bytes.len()).unwrap(),
+        )
+        .unwrap();
+        let immutable = repository::manager::immutable_index_path(&repository, &index_sha256);
+        fs_err::create_dir_all(immutable.parent().unwrap()).unwrap();
+        fs_err::set_permissions(immutable.parent().unwrap(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        fs_err::write(&immutable, index_bytes).unwrap();
+        fs_err::set_permissions(&immutable, std::fs::Permissions::from_mode(0o444)).unwrap();
         repository
             .db
-            .batch_add(packages.into_iter().map(|package| (package.id, package.meta)).collect())
+            .replace_all_with_snapshot(
+                packages.into_iter().map(|package| (package.id, package.meta)).collect(),
+                snapshot,
+            )
             .unwrap();
         client
     }

@@ -280,13 +280,13 @@ fn resolve_build_lock(
     }
     let references = requested.iter().map(|input| input.request.as_str()).collect::<Vec<_>>();
     let closure = client.resolve_available_closure(&references)?;
-    let mut snapshots = client
-        .repository_index_snapshots()?
-        .into_iter()
+    let mut snapshots = closure
+        .repository_snapshots
+        .iter()
         .map(|snapshot| RepositorySnapshot {
             id: snapshot.id.to_string(),
             index_uri: snapshot.index_uri.to_string(),
-            snapshot: snapshot.sha256,
+            snapshot: snapshot.sha256.clone(),
         })
         .collect::<Vec<_>>();
     let packages = closure

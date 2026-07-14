@@ -90,7 +90,11 @@ fn determine_provider(args: &ArgMatches) -> Result<Provider, Error> {
     }
 }
 
-fn query_packages(client: &Client, flags: package::Flags, provider: Provider) -> BTreeMap<MatchKind, Vec<Output>> {
+fn query_packages(
+    client: &Client,
+    flags: package::Flags,
+    provider: Provider,
+) -> Result<BTreeMap<MatchKind, Vec<Output>>, Error> {
     match provider {
         Provider {
             kind: dependency::Kind::PackageName,
@@ -111,7 +115,7 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
         package::Flags::new().with_available()
     };
 
-    let output = query_packages(&client, flags, provider);
+    let output = query_packages(&client, flags, provider)?;
 
     if output.values().all(Vec::is_empty) {
         return Ok(());
@@ -125,11 +129,15 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
     Ok(())
 }
 
-fn search_packages(client: &Client, flags: package::Flags, keyword: &str) -> BTreeMap<MatchKind, Vec<Output>> {
+fn search_packages(
+    client: &Client,
+    flags: package::Flags,
+    keyword: &str,
+) -> Result<BTreeMap<MatchKind, Vec<Output>>, Error> {
     let mut results: BTreeMap<MatchKind, Vec<Output>> = BTreeMap::new();
 
     let keyword_lowercase = keyword.to_ascii_lowercase();
-    for pkg in client.search_packages(keyword, flags) {
+    for pkg in client.search_packages(keyword, flags)? {
         let pkg_name_lowercase = pkg.meta.name.as_str().to_ascii_lowercase();
         let match_kind = if pkg_name_lowercase.contains(&keyword_lowercase) {
             MatchKind::Name
@@ -142,12 +150,19 @@ fn search_packages(client: &Client, flags: package::Flags, keyword: &str) -> BTr
             search_match: Some(keyword.to_owned()),
         });
     }
-    results
+    Ok(results)
 }
 
-fn search_by_provider(client: &Client, flags: package::Flags, provider: Provider) -> BTreeMap<MatchKind, Vec<Output>> {
-    let packages = client.lookup_packages_by_provider(&provider, flags);
-    BTreeMap::from([(MatchKind::Name, packages.into_iter().map(Output::from).collect())])
+fn search_by_provider(
+    client: &Client,
+    flags: package::Flags,
+    provider: Provider,
+) -> Result<BTreeMap<MatchKind, Vec<Output>>, Error> {
+    let packages = client.lookup_packages_by_provider(&provider, flags)?;
+    Ok(BTreeMap::from([(
+        MatchKind::Name,
+        packages.into_iter().map(Output::from).collect(),
+    )]))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -342,7 +357,7 @@ mod tests {
     fn test_handle(query: &str) -> BTreeMap<MatchKind, Vec<Output>> {
         let args = cast(query);
         let provider = determine_provider(&args).unwrap();
-        query_packages(client(), flags_available(), provider)
+        query_packages(client(), flags_available(), provider).unwrap()
     }
 
     #[test]

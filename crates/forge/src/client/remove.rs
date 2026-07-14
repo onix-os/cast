@@ -23,7 +23,7 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
     let mut timing = Timing::default();
     let mut instant = Instant::now();
 
-    let installed = client.registry.list_installed().collect::<Vec<_>>();
+    let installed = client.registry.list_installed()?;
     let installed_ids = installed.iter().map(|p| p.id.clone()).collect::<BTreeSet<_>>();
 
     // Separate packages between installed / not installed (or invalid)
@@ -186,6 +186,9 @@ pub enum Error {
 
     #[error("transaction")]
     Transaction(#[from] transaction::Error),
+
+    #[error("registry query")]
+    Registry(#[from] crate::registry::Error),
 
     #[error("db")]
     DB(#[from] db::Error),

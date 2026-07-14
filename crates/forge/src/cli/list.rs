@@ -68,10 +68,10 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
 
     // Grab a client for the target, enumerate packages
     let client = Client::new(environment::NAME, installation)?;
-    let pkgs = client.list_packages(filter_flags).collect::<Vec<_>>();
+    let pkgs = client.list_packages(filter_flags)?;
 
     let sync_available = if sync.is_some() {
-        client.list_packages(Flags::new().with_available()).collect::<Vec<_>>()
+        client.list_packages(Flags::new().with_available())?
     } else {
         vec![]
     };

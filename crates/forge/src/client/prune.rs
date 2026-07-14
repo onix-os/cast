@@ -257,13 +257,7 @@ pub(super) fn prune_cache(
             .collect::<BTreeSet<_>>();
 
         // Packages in all active repos
-        let repo_packages = repositories
-            .active()
-            .map(|repo| repo.db.package_ids())
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect::<BTreeSet<_>>();
+        let repo_packages = repositories.active_package_ids()?;
 
         // Keep state + active repo packages
         let packages_to_keep = state_packages.into_iter().chain(repo_packages).collect::<BTreeSet<_>>();
@@ -508,6 +502,8 @@ pub enum Error {
     PruneCurrent,
     #[error("db")]
     DB(#[from] db::Error),
+    #[error("repository integrity")]
+    Repository(#[from] repository::manager::Error),
     #[error("io")]
     Io(#[from] io::Error),
     #[error("string processing")]

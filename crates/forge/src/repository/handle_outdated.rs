@@ -207,7 +207,7 @@ let cast = import! cast.system.v1
                 repository,
                 db::meta::Database::new(":memory:").unwrap(),
                 None,
-                Some(legacy_uri.clone()),
+                temporary.path().join("repo-cache"),
             ),
             legacy_index_uri: legacy_uri,
             compatible_root_index_source: repository::RootIndexSource {

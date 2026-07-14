@@ -5,6 +5,7 @@
 //! for managing and using them.
 
 use itertools::Itertools;
+use thiserror::Error;
 
 use crate::Provider;
 use crate::package::{self, Package};
@@ -29,61 +30,57 @@ impl Registry {
         self.plugins.push(plugin);
     }
 
-    fn query<'a, T, I>(&'a self, query: impl Fn(&'a Plugin) -> I + Copy + 'a) -> impl Iterator<Item = T> + 'a
+    fn query<'a, T, I>(
+        &'a self,
+        query: impl Fn(&'a Plugin) -> Result<I, plugin::QueryError> + Copy + 'a,
+    ) -> Result<Vec<T>, Error>
     where
         I: IntoIterator<Item = T> + 'a,
     {
-        self.plugins
+        let mut values = Vec::new();
+        for plugin in self
+            .plugins
             .iter()
             .sorted_by(|a, b| a.priority().cmp(&b.priority()).reverse())
-            .flat_map(query)
+        {
+            values.extend(query(plugin)?);
+        }
+        Ok(values)
     }
 
     /// Return a sorted stream of [`Package`] by provider
-    pub fn by_provider<'a>(
-        &'a self,
-        provider: &'a Provider,
-        flags: package::Flags,
-    ) -> impl Iterator<Item = Package> + 'a {
+    pub fn by_provider(&self, provider: &Provider, flags: package::Flags) -> Result<Vec<Package>, Error> {
         self.query(move |plugin| plugin.query_provider(provider, flags))
     }
 
     /// Optimized version of `by_provider` returning [`package::Id`] only
-    pub fn by_provider_id_only<'a>(
-        &'a self,
-        provider: &'a Provider,
-        flags: package::Flags,
-    ) -> impl Iterator<Item = package::Id> + 'a {
+    pub fn by_provider_id_only(&self, provider: &Provider, flags: package::Flags) -> Result<Vec<package::Id>, Error> {
         self.query(move |plugin| plugin.query_provider_id_only(provider, flags))
     }
 
     /// Return a sorted stream of [`Package`] by name
-    pub fn by_name<'a>(
-        &'a self,
-        package_name: &'a package::Name,
-        flags: package::Flags,
-    ) -> impl Iterator<Item = Package> + 'a {
+    pub fn by_name(&self, package_name: &package::Name, flags: package::Flags) -> Result<Vec<Package>, Error> {
         self.query(move |plugin| plugin.query_name(package_name, flags))
     }
 
     /// Return a sorted stream of [`Package`] by id
-    pub fn by_id<'a>(&'a self, id: &'a package::Id) -> impl Iterator<Item = Package> + 'a {
+    pub fn by_id(&self, id: &package::Id) -> Result<Vec<Package>, Error> {
         self.query(move |plugin| plugin.package(id))
     }
 
-    pub fn by_keyword<'a>(&'a self, keyword: &'a str, flags: package::Flags) -> impl Iterator<Item = Package> + 'a {
+    pub fn by_keyword(&self, keyword: &str, flags: package::Flags) -> Result<Vec<Package>, Error> {
         self.query(move |plugin| plugin.query_keyword(keyword, flags))
     }
 
     /// Return a sorted stream of [`Package`] matching the given [`Flags`]
     ///
     /// [`Flags`]: package::Flags
-    pub fn list(&self, flags: package::Flags) -> impl Iterator<Item = Package> + '_ {
+    pub fn list(&self, flags: package::Flags) -> Result<Vec<Package>, Error> {
         self.query(move |plugin| plugin.list(flags))
     }
 
     /// Return a sorted stream of installed [`Package`]
-    pub fn list_installed(&self) -> impl Iterator<Item = Package> + '_ {
+    pub fn list_installed(&self) -> Result<Vec<Package>, Error> {
         self.list(package::Flags::default().with_installed())
     }
 
@@ -91,6 +88,12 @@ impl Registry {
     pub fn transaction(&self, lookup: transaction::Lookup) -> Result<Transaction<'_>, transaction::Error> {
         transaction::new(self, lookup)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("registry plugin query failed")]
+    Plugin(#[from] plugin::QueryError),
 }
 
 #[cfg(test)]
@@ -138,10 +141,10 @@ mod test {
             vec![package("c", 50), package("d", 1)],
         )));
 
-        let query = registry.list(package::Flags::default());
+        let query = registry.list(package::Flags::default()).unwrap();
 
         // Packages are sorted by plugin priority, desc -> release number, desc
-        for (idx, package) in query.enumerate() {
+        for (idx, package) in query.into_iter().enumerate() {
             let id = |id: &'static str| package::Id::from(id);
 
             match idx {
@@ -192,14 +195,14 @@ mod test {
             ],
         )));
 
-        let installed = registry.list_installed().collect();
-        let available = registry.list(package::Flags::default().with_available()).collect();
+        let installed = registry.list_installed().unwrap();
+        let available = registry.list(package::Flags::default().with_available()).unwrap();
         let installed_source = registry
             .list(package::Flags::new().with_installed().with_source())
-            .collect();
+            .unwrap();
         let available_source = registry
             .list(package::Flags::new().with_available().with_source())
-            .collect();
+            .unwrap();
 
         fn matches(actual: Vec<Package>, expected: &[&'static str]) -> bool {
             let actual = actual

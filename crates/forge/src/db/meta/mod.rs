@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use astr::AStr;
 use diesel::prelude::*;
@@ -18,12 +19,8 @@ use super::MAX_VARIABLE_NUMBER;
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/meta/migrations");
 const PACKAGE_INSERT_CHUNK_SIZE: usize = 128;
-// The repository manager consumes these in the next integration checkpoint.
-#[allow(dead_code)]
 const ACTIVE_SNAPSHOT_SINGLETON: i32 = 1;
-#[allow(dead_code)]
 const MAX_SNAPSHOT_INDEX_URI_BYTES: usize = 8 * 1024;
-#[allow(dead_code)]
 const MAX_SNAPSHOT_BYTE_SIZE: u64 = 16 * 1024 * 1024;
 
 mod schema;
@@ -39,13 +36,15 @@ pub enum Filter<'a> {
 #[derive(Debug, Clone)]
 pub struct Database {
     conn: Connection,
+    // Keeps a descriptor used by `/proc/self/fd/<n>/db` SQLite paths alive for
+    // the complete connection lifetime. Ordinary databases leave this empty.
+    _directory_anchor: Option<Arc<fs_err::File>>,
 }
 
 /// The exact repository index whose package rows are active in this database.
 ///
 /// Fields are private so every value crosses the same URI, digest, and size
 /// validation boundary before it can participate in a replacement transaction.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Snapshot {
     index_uri: Url,
@@ -53,7 +52,6 @@ pub(crate) struct Snapshot {
     byte_size: u64,
 }
 
-#[allow(dead_code)]
 impl Snapshot {
     pub(crate) fn new(index_uri: Url, sha256: String, byte_size: u64) -> Result<Self, Error> {
         let snapshot = Self {
@@ -80,12 +78,21 @@ impl Snapshot {
 
 impl Database {
     pub fn new(url: &str) -> Result<Self, Error> {
+        Self::new_with_anchor(url, None)
+    }
+
+    pub(crate) fn new_anchored(url: &str, directory_anchor: Arc<fs_err::File>) -> Result<Self, Error> {
+        Self::new_with_anchor(url, Some(directory_anchor))
+    }
+
+    fn new_with_anchor(url: &str, directory_anchor: Option<Arc<fs_err::File>>) -> Result<Self, Error> {
         let mut conn = SqliteConnection::establish(url)?;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(Error::Migration)?;
 
         Ok(Database {
             conn: Connection::new(conn),
+            _directory_anchor: directory_anchor,
         })
     }
 
@@ -97,191 +104,60 @@ impl Database {
     }
 
     pub fn get(&self, package: &package::Id) -> Result<Meta, Error> {
-        self.conn.exec(|conn| {
-            let meta = model::meta::table
-                .select(model::Meta::as_select())
-                .find(package.to_string())
-                .first::<model::Meta>(conn)?;
-            let licenses = model::License::belonging_to(&meta)
-                .select(model::meta_licenses::license)
-                .load::<String>(conn)?;
-            let dependencies = model::Dependency::belonging_to(&meta)
-                .select(model::Dependency::as_select())
-                .load_iter(conn)?
-                .map(|d| Ok(d?.dependency))
-                .collect::<Result<_, Error>>()?;
-            let providers = model::Provider::belonging_to(&meta)
-                .select(model::Provider::as_select())
-                .load_iter(conn)?
-                .map(|p| Ok(p?.provider))
-                .collect::<Result<_, Error>>()?;
-            let conflicts = model::Conflict::belonging_to(&meta)
-                .select(model::Conflict::as_select())
-                .load_iter(conn)?
-                .map(|p| Ok(p?.conflict))
-                .collect::<Result<_, Error>>()?;
+        self.conn.exec(|conn| get_impl(package, conn))
+    }
 
-            Ok(Meta {
-                name: meta.name,
-                version_identifier: meta.version_identifier,
-                source_release: meta.source_release as u64,
-                build_release: meta.build_release as u64,
-                architecture: meta.architecture,
-                summary: meta.summary,
-                description: meta.description,
-                source_id: meta.source_id,
-                homepage: meta.homepage,
-                licenses,
-                dependencies,
-                providers,
-                conflicts,
-                uri: meta.uri,
-                hash: meta.hash,
-                download_size: meta.download_size.map(|size| size as u64),
+    /// Read one package and the snapshot owning its rows from the same SQLite
+    /// read transaction. `None` means the exact package is absent, not that a
+    /// different snapshot may be substituted by the caller.
+    pub(crate) fn get_with_active_snapshot(
+        &self,
+        package: &package::Id,
+    ) -> Result<(Option<Snapshot>, Option<Meta>), Error> {
+        self.conn.exec(|conn| {
+            conn.transaction(|tx| {
+                let snapshot = active_snapshot_impl(tx)?;
+                let package = match get_impl(package, tx) {
+                    Ok(package) => Some(package),
+                    Err(Error::RowNotFound) => None,
+                    Err(error) => return Err(error),
+                };
+                Ok((snapshot, package))
             })
         })
     }
 
     pub fn provider_packages(&self, provider: &Provider) -> Result<Vec<package::Id>, Error> {
-        self.conn.exec(|conn| {
-            model::meta_providers::table
-                .select(model::meta_providers::package)
-                .distinct()
-                .filter(model::meta_providers::provider.eq(provider.to_string()))
-                .load_iter::<AStr, _>(conn)?
-                .map(|result| {
-                    let id = result?;
-                    Ok(id.into())
-                })
-                .collect()
-        })
+        self.conn.exec(|conn| provider_packages_impl(provider, conn))
+    }
+
+    pub(crate) fn provider_packages_with_active_snapshot(
+        &self,
+        provider: &Provider,
+    ) -> Result<(Option<Snapshot>, Vec<package::Id>), Error> {
+        self.conn
+            .exec(|conn| conn.transaction(|tx| Ok((active_snapshot_impl(tx)?, provider_packages_impl(provider, tx)?))))
     }
 
     pub fn query(&self, filter: Option<Filter<'_>>) -> Result<Vec<(package::Id, Meta)>, Error> {
-        self.conn.exec(|conn| {
-            let map_row = |result| {
-                let meta: model::Meta = result?;
+        self.conn.exec(|conn| query_impl(filter, conn))
+    }
 
-                Ok((
-                    package::Id::from(AStr::from(meta.package)),
-                    Meta {
-                        name: meta.name,
-                        version_identifier: meta.version_identifier,
-                        source_release: meta.source_release as u64,
-                        build_release: meta.build_release as u64,
-                        architecture: meta.architecture,
-                        summary: meta.summary,
-                        description: meta.description,
-                        source_id: meta.source_id,
-                        homepage: meta.homepage,
-                        licenses: Default::default(),
-                        dependencies: Default::default(),
-                        providers: Default::default(),
-                        conflicts: Default::default(),
-                        uri: meta.uri,
-                        hash: meta.hash,
-                        download_size: meta.download_size.map(|size| size as u64),
-                    },
-                ))
-            };
-
-            let mut entries: BTreeMap<package::Id, Meta> = match &filter {
-                Some(Filter::Provider(provider)) => model::meta::table
-                    .select(model::Meta::as_select())
-                    .inner_join(model::meta_providers::table)
-                    .filter(model::meta_providers::provider.eq(provider.to_string()))
-                    .load_iter::<model::Meta, _>(conn)?,
-                Some(Filter::Dependency(dependency)) => model::meta::table
-                    .select(model::Meta::as_select())
-                    .inner_join(model::meta_dependencies::table)
-                    .filter(model::meta_dependencies::dependency.eq(dependency.to_string()))
-                    .load_iter::<model::Meta, _>(conn)?,
-                Some(Filter::Name(name)) => model::meta::table
-                    .select(model::Meta::as_select())
-                    .filter(model::meta::name.eq(name.to_string()))
-                    .load_iter::<model::Meta, _>(conn)?,
-                Some(Filter::Keyword(keyword)) => {
-                    let pattern = format!("%{keyword}%");
-                    model::meta::table
-                        .select(model::Meta::as_select())
-                        .filter(
-                            model::meta::name
-                                .like(pattern.clone())
-                                .or(model::meta::summary.like(pattern)),
-                        )
-                        .load_iter::<model::Meta, _>(conn)?
-                }
-                None => model::meta::table
-                    .select(model::Meta::as_select())
-                    .load_iter::<model::Meta, _>(conn)?,
-            }
-            .map(map_row)
-            .collect::<Result<_, Error>>()?;
-
-            let package_ids = entries
-                .keys()
-                .map(|id| model::PackageId { id: id.to_string() })
-                .collect::<Vec<_>>();
-
-            for chunk in package_ids.chunks(MAX_VARIABLE_NUMBER) {
-                // Add licenses
-                model::License::belonging_to(chunk)
-                    .load_iter::<model::License, _>(conn)?
-                    .try_for_each::<_, Result<_, Error>>(|result| {
-                        let row = result?;
-                        if let Some(meta) = entries.get_mut(row.package.as_str()) {
-                            meta.licenses.push(row.license);
-                        }
-                        Ok(())
-                    })?;
-
-                // Add dependencies
-                model::Dependency::belonging_to(chunk)
-                    .load_iter::<model::Dependency, _>(conn)?
-                    .try_for_each::<_, Result<_, Error>>(|result| {
-                        let row = result?;
-                        if let Some(meta) = entries.get_mut(row.package.as_str()) {
-                            meta.dependencies.insert(row.dependency);
-                        }
-                        Ok(())
-                    })?;
-
-                // Add providers
-                model::Provider::belonging_to(chunk)
-                    .load_iter::<model::Provider, _>(conn)?
-                    .try_for_each::<_, Result<_, Error>>(|result| {
-                        let row = result?;
-                        if let Some(meta) = entries.get_mut(row.package.as_str()) {
-                            meta.providers.insert(row.provider);
-                        }
-                        Ok(())
-                    })?;
-
-                // Add conflicts
-                model::Conflict::belonging_to(chunk)
-                    .load_iter::<model::Conflict, _>(conn)?
-                    .try_for_each::<_, Result<_, Error>>(|result| {
-                        let row = result?;
-                        if let Some(meta) = entries.get_mut(row.package.as_str()) {
-                            meta.conflicts.insert(row.conflict);
-                        }
-                        Ok(())
-                    })?;
-            }
-
-            Ok(entries.into_iter().collect())
-        })
+    pub(crate) fn query_with_active_snapshot(
+        &self,
+        filter: Option<Filter<'_>>,
+    ) -> Result<(Option<Snapshot>, Vec<(package::Id, Meta)>), Error> {
+        self.conn
+            .exec(|conn| conn.transaction(|tx| Ok((active_snapshot_impl(tx)?, query_impl(filter, tx)?))))
     }
 
     pub fn package_ids(&self) -> Result<BTreeSet<package::Id>, Error> {
-        self.conn.exec(|conn| {
-            Ok(model::meta::table
-                .select(model::meta::package)
-                .distinct()
-                .load_iter::<AStr, _>(conn)?
-                .map(|result| result.map(package::Id::from))
-                .collect::<Result<_, _>>()?)
-        })
+        self.conn.exec(package_ids_impl)
+    }
+
+    pub(crate) fn package_ids_with_active_snapshot(&self) -> Result<(Option<Snapshot>, BTreeSet<package::Id>), Error> {
+        self.conn
+            .exec(|conn| conn.transaction(|tx| Ok((active_snapshot_impl(tx)?, package_ids_impl(tx)?))))
     }
 
     pub fn file_hashes(&self) -> Result<BTreeSet<String>, Error> {
@@ -326,7 +202,6 @@ impl Database {
     /// Atomically replace the complete package set and its accepted index
     /// identity. No snapshot row is visible unless every package chunk and
     /// relation insert committed successfully in the same transaction.
-    #[allow(dead_code)]
     pub(crate) fn replace_all_with_snapshot(
         &self,
         packages: Vec<(package::Id, Meta)>,
@@ -343,17 +218,8 @@ impl Database {
         })
     }
 
-    #[allow(dead_code)]
     pub(crate) fn active_snapshot(&self) -> Result<Option<Snapshot>, Error> {
-        self.conn.exec(|conn| {
-            model::active_repository_snapshot::table
-                .select(model::ActiveRepositorySnapshot::as_select())
-                .find(ACTIVE_SNAPSHOT_SINGLETON)
-                .first::<model::ActiveRepositorySnapshot>(conn)
-                .optional()?
-                .map(decode_active_snapshot)
-                .transpose()
-        })
+        self.conn.exec(active_snapshot_impl)
     }
 
     pub fn remove(&self, package: &package::Id) -> Result<(), Error> {
@@ -370,7 +236,194 @@ impl Database {
     }
 }
 
-#[allow(dead_code)]
+fn get_impl(package: &package::Id, conn: &mut SqliteConnection) -> Result<Meta, Error> {
+    let meta = model::meta::table
+        .select(model::Meta::as_select())
+        .find(package.to_string())
+        .first::<model::Meta>(conn)
+        .optional()?
+        .ok_or(Error::RowNotFound)?;
+    let licenses = model::License::belonging_to(&meta)
+        .select(model::meta_licenses::license)
+        .load::<String>(conn)?;
+    let dependencies = model::Dependency::belonging_to(&meta)
+        .select(model::Dependency::as_select())
+        .load_iter(conn)?
+        .map(|dependency| Ok(dependency?.dependency))
+        .collect::<Result<_, Error>>()?;
+    let providers = model::Provider::belonging_to(&meta)
+        .select(model::Provider::as_select())
+        .load_iter(conn)?
+        .map(|provider| Ok(provider?.provider))
+        .collect::<Result<_, Error>>()?;
+    let conflicts = model::Conflict::belonging_to(&meta)
+        .select(model::Conflict::as_select())
+        .load_iter(conn)?
+        .map(|conflict| Ok(conflict?.conflict))
+        .collect::<Result<_, Error>>()?;
+
+    Ok(Meta {
+        name: meta.name,
+        version_identifier: meta.version_identifier,
+        source_release: meta.source_release as u64,
+        build_release: meta.build_release as u64,
+        architecture: meta.architecture,
+        summary: meta.summary,
+        description: meta.description,
+        source_id: meta.source_id,
+        homepage: meta.homepage,
+        licenses,
+        dependencies,
+        providers,
+        conflicts,
+        uri: meta.uri,
+        hash: meta.hash,
+        download_size: meta.download_size.map(|size| size as u64),
+    })
+}
+
+fn provider_packages_impl(provider: &Provider, conn: &mut SqliteConnection) -> Result<Vec<package::Id>, Error> {
+    model::meta_providers::table
+        .select(model::meta_providers::package)
+        .distinct()
+        .filter(model::meta_providers::provider.eq(provider.to_string()))
+        .load_iter::<AStr, _>(conn)?
+        .map(|result| {
+            let id = result?;
+            Ok(id.into())
+        })
+        .collect()
+}
+
+fn query_impl(filter: Option<Filter<'_>>, conn: &mut SqliteConnection) -> Result<Vec<(package::Id, Meta)>, Error> {
+    let map_row = |result| {
+        let meta: model::Meta = result?;
+
+        Ok((
+            package::Id::from(AStr::from(meta.package)),
+            Meta {
+                name: meta.name,
+                version_identifier: meta.version_identifier,
+                source_release: meta.source_release as u64,
+                build_release: meta.build_release as u64,
+                architecture: meta.architecture,
+                summary: meta.summary,
+                description: meta.description,
+                source_id: meta.source_id,
+                homepage: meta.homepage,
+                licenses: Default::default(),
+                dependencies: Default::default(),
+                providers: Default::default(),
+                conflicts: Default::default(),
+                uri: meta.uri,
+                hash: meta.hash,
+                download_size: meta.download_size.map(|size| size as u64),
+            },
+        ))
+    };
+
+    let mut entries: BTreeMap<package::Id, Meta> = match &filter {
+        Some(Filter::Provider(provider)) => model::meta::table
+            .select(model::Meta::as_select())
+            .inner_join(model::meta_providers::table)
+            .filter(model::meta_providers::provider.eq(provider.to_string()))
+            .load_iter::<model::Meta, _>(conn)?,
+        Some(Filter::Dependency(dependency)) => model::meta::table
+            .select(model::Meta::as_select())
+            .inner_join(model::meta_dependencies::table)
+            .filter(model::meta_dependencies::dependency.eq(dependency.to_string()))
+            .load_iter::<model::Meta, _>(conn)?,
+        Some(Filter::Name(name)) => model::meta::table
+            .select(model::Meta::as_select())
+            .filter(model::meta::name.eq(name.to_string()))
+            .load_iter::<model::Meta, _>(conn)?,
+        Some(Filter::Keyword(keyword)) => {
+            let pattern = format!("%{keyword}%");
+            model::meta::table
+                .select(model::Meta::as_select())
+                .filter(
+                    model::meta::name
+                        .like(pattern.clone())
+                        .or(model::meta::summary.like(pattern)),
+                )
+                .load_iter::<model::Meta, _>(conn)?
+        }
+        None => model::meta::table
+            .select(model::Meta::as_select())
+            .load_iter::<model::Meta, _>(conn)?,
+    }
+    .map(map_row)
+    .collect::<Result<_, Error>>()?;
+
+    let package_ids = entries
+        .keys()
+        .map(|id| model::PackageId { id: id.to_string() })
+        .collect::<Vec<_>>();
+
+    for chunk in package_ids.chunks(MAX_VARIABLE_NUMBER) {
+        model::License::belonging_to(chunk)
+            .load_iter::<model::License, _>(conn)?
+            .try_for_each::<_, Result<_, Error>>(|result| {
+                let row = result?;
+                if let Some(meta) = entries.get_mut(row.package.as_str()) {
+                    meta.licenses.push(row.license);
+                }
+                Ok(())
+            })?;
+
+        model::Dependency::belonging_to(chunk)
+            .load_iter::<model::Dependency, _>(conn)?
+            .try_for_each::<_, Result<_, Error>>(|result| {
+                let row = result?;
+                if let Some(meta) = entries.get_mut(row.package.as_str()) {
+                    meta.dependencies.insert(row.dependency);
+                }
+                Ok(())
+            })?;
+
+        model::Provider::belonging_to(chunk)
+            .load_iter::<model::Provider, _>(conn)?
+            .try_for_each::<_, Result<_, Error>>(|result| {
+                let row = result?;
+                if let Some(meta) = entries.get_mut(row.package.as_str()) {
+                    meta.providers.insert(row.provider);
+                }
+                Ok(())
+            })?;
+
+        model::Conflict::belonging_to(chunk)
+            .load_iter::<model::Conflict, _>(conn)?
+            .try_for_each::<_, Result<_, Error>>(|result| {
+                let row = result?;
+                if let Some(meta) = entries.get_mut(row.package.as_str()) {
+                    meta.conflicts.insert(row.conflict);
+                }
+                Ok(())
+            })?;
+    }
+
+    Ok(entries.into_iter().collect())
+}
+
+fn package_ids_impl(conn: &mut SqliteConnection) -> Result<BTreeSet<package::Id>, Error> {
+    Ok(model::meta::table
+        .select(model::meta::package)
+        .distinct()
+        .load_iter::<AStr, _>(conn)?
+        .map(|result| result.map(package::Id::from))
+        .collect::<Result<_, _>>()?)
+}
+
+fn active_snapshot_impl(conn: &mut SqliteConnection) -> Result<Option<Snapshot>, Error> {
+    model::active_repository_snapshot::table
+        .select(model::ActiveRepositorySnapshot::as_select())
+        .find(ACTIVE_SNAPSHOT_SINGLETON)
+        .first::<model::ActiveRepositorySnapshot>(conn)
+        .optional()?
+        .map(decode_active_snapshot)
+        .transpose()
+}
+
 fn validate_snapshot(snapshot: &Snapshot) -> Result<i64, Error> {
     let uri_bytes = snapshot.index_uri().as_str().len();
     if uri_bytes > MAX_SNAPSHOT_INDEX_URI_BYTES {
@@ -390,7 +443,7 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<i64, Error> {
         });
     }
     match snapshot.index_uri().scheme() {
-        "http" | "https" if snapshot.index_uri().host_str().is_some() => {}
+        "https" if snapshot.index_uri().host_str().is_some() => {}
         "file" if snapshot.index_uri().query().is_none() && snapshot.index_uri().to_file_path().is_ok() => {}
         "file" => {
             return Err(Error::SnapshotIndexUriPolicy {
@@ -399,7 +452,7 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<i64, Error> {
         }
         _ => {
             return Err(Error::SnapshotIndexUriPolicy {
-                reason: "only absolute HTTP(S) and local file URIs are supported",
+                reason: "only absolute HTTPS and local file URIs are supported",
             });
         }
     }
@@ -416,7 +469,6 @@ fn validate_snapshot(snapshot: &Snapshot) -> Result<i64, Error> {
     checked_snapshot_byte_size(snapshot)
 }
 
-#[allow(dead_code)]
 fn checked_snapshot_byte_size(snapshot: &Snapshot) -> Result<i64, Error> {
     if snapshot.byte_size() > MAX_SNAPSHOT_BYTE_SIZE {
         return Err(Error::SnapshotByteSizeOutOfRange {
@@ -430,7 +482,6 @@ fn checked_snapshot_byte_size(snapshot: &Snapshot) -> Result<i64, Error> {
     })
 }
 
-#[allow(dead_code)]
 fn decode_active_snapshot(stored: model::ActiveRepositorySnapshot) -> Result<Snapshot, Error> {
     if stored.singleton != ACTIVE_SNAPSHOT_SINGLETON {
         return Err(Error::InvalidSnapshotSingleton(stored.singleton));
@@ -445,7 +496,6 @@ fn clear_active_snapshot_impl(tx: &mut SqliteConnection) -> Result<(), Error> {
     Ok(())
 }
 
-#[allow(dead_code)]
 fn insert_active_snapshot_impl(snapshot: &Snapshot, byte_size: i64, tx: &mut SqliteConnection) -> Result<(), Error> {
     diesel::insert_into(model::active_repository_snapshot::table)
         .values(model::NewActiveRepositorySnapshot {
@@ -469,7 +519,7 @@ fn clear_packages_impl(tx: &mut SqliteConnection) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_package_batch(packages: &[(package::Id, Meta)]) -> Result<(), Error> {
+pub(crate) fn validate_package_batch(packages: &[(package::Id, Meta)]) -> Result<(), Error> {
     let mut ids = Vec::new();
     ids.try_reserve_exact(packages.len())
         .map_err(Error::ReservePackageIds)?;
@@ -888,6 +938,10 @@ mod test {
         ));
         assert!(matches!(
             Snapshot::new("ftp://example.test/stone.index".parse().unwrap(), "a".repeat(64), 0,),
+            Err(Error::SnapshotIndexUriPolicy { .. })
+        ));
+        assert!(matches!(
+            Snapshot::new("http://example.test/stone.index".parse().unwrap(), "a".repeat(64), 0,),
             Err(Error::SnapshotIndexUriPolicy { .. })
         ));
         assert!(matches!(

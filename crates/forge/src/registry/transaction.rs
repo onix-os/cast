@@ -111,7 +111,7 @@ impl Transaction<'_> {
         let check_node = self.packages.add_node_or_get_index(&check_id);
 
         // Grab this package in question
-        let package = self.registry.by_id(&check_id).next();
+        let package = self.registry.by_id(&check_id)?.into_iter().next();
         let package = package.ok_or(Error::NoCandidate(check_id.to_string()))?;
 
         tracing::Span::current().record("check_name", package.meta.name.as_str());
@@ -163,21 +163,37 @@ impl Transaction<'_> {
     // Try all strategies to resolve a provider for installation
     fn resolve_provider(&self, provider: Provider) -> Result<package::Id, Error> {
         match self.lookup {
-            Lookup::InstalledOnly => self
-                .resolve_provider_with_filter(ProviderFilter::Selections(provider.clone()))
-                .or_else(|_| self.resolve_provider_with_filter(ProviderFilter::Installed(provider.clone()))),
-            Lookup::AvailableOnly => self
-                .resolve_provider_with_filter(ProviderFilter::Selections(provider.clone()))
-                .or_else(|_| self.resolve_provider_with_filter(ProviderFilter::Available(provider.clone()))),
-            Lookup::PreferInstalled => self
-                .resolve_provider_with_filter(ProviderFilter::Selections(provider.clone()))
-                .or_else(|_| self.resolve_provider_with_filter(ProviderFilter::Installed(provider.clone())))
-                .or_else(|_| self.resolve_provider_with_filter(ProviderFilter::Available(provider.clone()))),
-            Lookup::PreferAvailable => self
-                .resolve_provider_with_filter(ProviderFilter::Selections(provider.clone()))
-                .or_else(|_| self.resolve_provider_with_filter(ProviderFilter::Available(provider.clone())))
-                .or_else(|_| self.resolve_provider_with_filter(ProviderFilter::Installed(provider.clone()))),
+            Lookup::InstalledOnly => self.resolve_filters([
+                ProviderFilter::Selections(provider.clone()),
+                ProviderFilter::Installed(provider),
+            ]),
+            Lookup::AvailableOnly => self.resolve_filters([
+                ProviderFilter::Selections(provider.clone()),
+                ProviderFilter::Available(provider),
+            ]),
+            Lookup::PreferInstalled => self.resolve_filters([
+                ProviderFilter::Selections(provider.clone()),
+                ProviderFilter::Installed(provider.clone()),
+                ProviderFilter::Available(provider),
+            ]),
+            Lookup::PreferAvailable => self.resolve_filters([
+                ProviderFilter::Selections(provider.clone()),
+                ProviderFilter::Available(provider.clone()),
+                ProviderFilter::Installed(provider),
+            ]),
         }
+    }
+
+    fn resolve_filters<const N: usize>(&self, filters: [ProviderFilter; N]) -> Result<package::Id, Error> {
+        let mut missing = None;
+        for filter in filters {
+            match self.resolve_provider_with_filter(filter) {
+                Ok(package) => return Ok(package),
+                Err(Error::NoCandidate(provider)) => missing = Some(provider),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::NoCandidate(missing.unwrap_or_default()))
     }
 
     /// Attempt to resolve the filterered provider
@@ -185,12 +201,14 @@ impl Transaction<'_> {
         match filter {
             ProviderFilter::Available(provider) => self
                 .registry
-                .by_provider_id_only(&provider, package::Flags::new().with_available())
+                .by_provider_id_only(&provider, package::Flags::new().with_available())?
+                .into_iter()
                 .next()
                 .ok_or(Error::NoCandidate(provider.to_string())),
             ProviderFilter::Installed(provider) => self
                 .registry
-                .by_provider_id_only(&provider, package::Flags::new().with_installed())
+                .by_provider_id_only(&provider, package::Flags::new().with_installed())?
+                .into_iter()
                 .next()
                 .ok_or(Error::NoCandidate(provider.to_string())),
             ProviderFilter::Selections(provider) => self
@@ -215,6 +233,9 @@ pub enum Error {
 
     #[error("meta db")]
     Database(#[from] crate::db::meta::Error),
+
+    #[error("registry query")]
+    Registry(#[from] super::Error),
 }
 
 #[cfg(test)]

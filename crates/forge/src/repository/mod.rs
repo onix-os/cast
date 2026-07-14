@@ -3,10 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
 use derive_more::{AsRef, Debug, Display, From, Into};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -75,7 +74,11 @@ pub struct Cached {
     pub repository: Repository,
     pub db: meta::Database,
     pub config_path: Option<PathBuf>,
-    index_uri: Arc<ArcSwap<Option<Url>>>,
+    pub(crate) cache_dir: PathBuf,
+    /// Verification evidence is only a cache. The SQLite snapshot remains the
+    /// sole authority for which generation is active; this entry is keyed by
+    /// that complete snapshot and shared by every clone/plugin for this repo.
+    pub(crate) verified_snapshot: Arc<Mutex<Option<manager::VerifiedSnapshot>>>,
 }
 
 /// Content identity of one initialized repository index.
@@ -84,6 +87,7 @@ pub struct IndexSnapshot {
     pub id: Id,
     pub index_uri: Url,
     pub sha256: String,
+    pub byte_size: u64,
 }
 
 impl Cached {
@@ -92,27 +96,16 @@ impl Cached {
         repository: Repository,
         db: meta::Database,
         config_path: Option<PathBuf>,
-        index_uri: Option<Url>,
+        cache_dir: PathBuf,
     ) -> Self {
         Self {
             id,
             repository,
             db,
             config_path,
-            index_uri: Arc::new(ArcSwap::new(Arc::new(index_uri))),
+            cache_dir,
+            verified_snapshot: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// Resolved index uri from a repository [`Source`]
-    ///
-    /// Is `None` if the [`Source`] has not yet been resolved,
-    /// in the case of a `root-index` source
-    pub fn index_uri(&self) -> Option<Url> {
-        self.index_uri.load().as_ref().clone()
-    }
-
-    fn set_index_uri(&self, uri: Url) {
-        self.index_uri.swap(Arc::new(Some(uri)));
     }
 }
 

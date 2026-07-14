@@ -24,7 +24,7 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
     }
 
     // Get the previously installed Cast package.
-    let installed = client.registry.list_installed().collect::<Vec<_>>();
+    let installed = client.registry.list_installed()?;
     let Some(previous_cast) = installed.into_iter().find(|p| p.meta.name.as_str() == "cast") else {
         return todo!("error can't self upgrade without cast installed in current state");
     };
@@ -81,7 +81,7 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
                         name: "cast".to_owned(),
                     },
                     package::Flags::new().with_available(),
-                );
+                )?;
 
                 if let Some(package) = packages.first() {
                     cast_priority_map.insert(unsupported_repo.repository.repository.priority, package.clone());
@@ -159,6 +159,9 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
 pub enum Error {
     #[error("client")]
     Client(#[from] client::Error),
+
+    #[error("registry query")]
+    Registry(#[from] crate::registry::Error),
 
     #[error("get state {0} from state_db")]
     MissingActiveStateFromDb(#[source] db::Error, state::Id),

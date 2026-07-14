@@ -11,6 +11,7 @@
 
 use crate::Provider;
 use crate::registry::package::{self, Package};
+use thiserror::Error;
 
 pub use self::active::Active;
 pub use self::cobble::Cobble;
@@ -38,81 +39,97 @@ pub enum Plugin {
 impl Plugin {
     /// Return a package for the given [`package::Id`]. Returns `None` if
     /// the `package` cannot be located.
-    pub fn package(&self, id: &package::Id) -> Option<Package> {
-        match self {
-            Plugin::Active(plugin) => plugin.package(id),
+    pub fn package(&self, id: &package::Id) -> Result<Option<Package>, QueryError> {
+        Ok(match self {
+            Plugin::Active(plugin) => return plugin.package(id).map_err(QueryError::Active),
             Plugin::Cobble(plugin) => plugin.package(id),
-            Plugin::Repository(plugin) => plugin.package(id),
+            Plugin::Repository(plugin) => return plugin.package(id).map_err(QueryError::Repository),
 
             #[cfg(any(test, feature = "testing"))]
             Plugin::Test(plugin) => plugin.package(id),
-        }
+        })
     }
 
     /// List all packages with matching `flags`
-    pub fn list(&self, flags: package::Flags) -> package::Sorted<Vec<Package>> {
-        package::Sorted::new(match self {
-            Plugin::Active(plugin) => plugin.list(flags),
+    pub fn list(&self, flags: package::Flags) -> Result<package::Sorted<Vec<Package>>, QueryError> {
+        Ok(package::Sorted::new(match self {
+            Plugin::Active(plugin) => plugin.list(flags).map_err(QueryError::Active)?,
             Plugin::Cobble(plugin) => plugin.list(flags),
-            Plugin::Repository(plugin) => plugin.list(flags),
+            Plugin::Repository(plugin) => plugin.list(flags).map_err(QueryError::Repository)?,
 
             #[cfg(any(test, feature = "testing"))]
             Plugin::Test(plugin) => plugin.list(flags),
-        })
+        }))
     }
 
-    pub fn query_keyword(&self, keyword: &str, flags: package::Flags) -> package::Sorted<Vec<Package>> {
-        package::Sorted::new(match self {
-            Plugin::Active(plugin) => plugin.query_keyword(keyword, flags),
+    pub fn query_keyword(
+        &self,
+        keyword: &str,
+        flags: package::Flags,
+    ) -> Result<package::Sorted<Vec<Package>>, QueryError> {
+        Ok(package::Sorted::new(match self {
+            Plugin::Active(plugin) => plugin.query_keyword(keyword, flags).map_err(QueryError::Active)?,
             Plugin::Cobble(plugin) => plugin.query_keyword(keyword, flags),
-            Plugin::Repository(plugin) => plugin.query_keyword(keyword, flags),
+            Plugin::Repository(plugin) => plugin.query_keyword(keyword, flags).map_err(QueryError::Repository)?,
 
             #[cfg(any(test, feature = "testing"))]
             Plugin::Test(plugin) => plugin.query_keyword(keyword, flags),
-        })
+        }))
     }
 
     /// Returns a list of packages with matching `provider` and `flags`
-    pub fn query_provider(&self, provider: &Provider, flags: package::Flags) -> package::Sorted<Vec<Package>> {
-        package::Sorted::new(match self {
-            Plugin::Active(plugin) => plugin.query_provider(provider, flags),
+    pub fn query_provider(
+        &self,
+        provider: &Provider,
+        flags: package::Flags,
+    ) -> Result<package::Sorted<Vec<Package>>, QueryError> {
+        Ok(package::Sorted::new(match self {
+            Plugin::Active(plugin) => plugin.query_provider(provider, flags).map_err(QueryError::Active)?,
             Plugin::Cobble(plugin) => plugin.query_provider(provider, flags),
-            Plugin::Repository(plugin) => plugin.query_provider(provider, flags),
+            Plugin::Repository(plugin) => plugin.query_provider(provider, flags).map_err(QueryError::Repository)?,
 
             #[cfg(any(test, feature = "testing"))]
             Plugin::Test(plugin) => plugin.query_provider(provider, flags),
-        })
+        }))
     }
 
     pub fn query_provider_id_only(
         &self,
         provider: &Provider,
         flags: package::Flags,
-    ) -> package::Sorted<Vec<package::Id>> {
-        package::Sorted::new(match self {
-            Plugin::Active(plugin) => plugin.query_provider_id_only(provider, flags),
+    ) -> Result<package::Sorted<Vec<package::Id>>, QueryError> {
+        Ok(package::Sorted::new(match self {
+            Plugin::Active(plugin) => plugin
+                .query_provider_id_only(provider, flags)
+                .map_err(QueryError::Active)?,
             Plugin::Cobble(plugin) => plugin
                 .query_provider(provider, flags)
                 .into_iter()
                 .map(|p| p.id)
                 .collect(),
-            Plugin::Repository(plugin) => plugin.query_provider_id_only(provider, flags),
+            Plugin::Repository(plugin) => plugin
+                .query_provider_id_only(provider, flags)
+                .map_err(QueryError::Repository)?,
 
             #[cfg(any(test, feature = "testing"))]
             Plugin::Test(plugin) => plugin.query_provider_id_only(provider, flags),
-        })
+        }))
     }
 
     /// Returns a list of packages with matching `package_name` and `flags`
-    pub fn query_name(&self, package_name: &package::Name, flags: package::Flags) -> package::Sorted<Vec<Package>> {
-        package::Sorted::new(match self {
-            Plugin::Active(plugin) => plugin.query_name(package_name, flags),
+    pub fn query_name(
+        &self,
+        package_name: &package::Name,
+        flags: package::Flags,
+    ) -> Result<package::Sorted<Vec<Package>>, QueryError> {
+        Ok(package::Sorted::new(match self {
+            Plugin::Active(plugin) => plugin.query_name(package_name, flags).map_err(QueryError::Active)?,
             Plugin::Cobble(plugin) => plugin.query_name(package_name, flags),
-            Plugin::Repository(plugin) => plugin.query_name(package_name, flags),
+            Plugin::Repository(plugin) => plugin.query_name(package_name, flags).map_err(QueryError::Repository)?,
 
             #[cfg(any(test, feature = "testing"))]
             Plugin::Test(plugin) => plugin.query_name(package_name, flags),
-        })
+        }))
     }
 
     /// Plugin priority
@@ -128,6 +145,14 @@ impl Plugin {
             Plugin::Test(plugin) => plugin.priority,
         }
     }
+}
+
+#[derive(Debug, Error)]
+pub enum QueryError {
+    #[error(transparent)]
+    Active(#[from] active::QueryError),
+    #[error(transparent)]
+    Repository(#[from] repository::QueryError),
 }
 
 #[cfg(any(test, feature = "testing"))]

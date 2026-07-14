@@ -13,6 +13,8 @@ use crate::{Client, Package, Provider, dependency, package, registry::transactio
 pub struct AvailableClosure {
     pub requests: Vec<ResolvedRequest>,
     pub packages: Vec<ResolvedPackage>,
+    /// Exact repository generations held stable for the complete resolution.
+    pub repository_snapshots: Vec<crate::repository::IndexSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,13 +35,15 @@ impl Client {
     /// state. The same registry transaction used by installation chooses the
     /// exact closure.
     pub fn resolve_available_closure(&self, requested: &[&str]) -> Result<AvailableClosure, Error> {
+        let stable_view = self.repositories.stable_snapshot_view()?;
         let mut roots = Vec::with_capacity(requested.len());
         let mut requests = Vec::with_capacity(requested.len());
         for request in requested {
             let provider = Provider::from_name(request)?;
             let package = self
                 .registry
-                .by_provider(&provider, package::Flags::new().with_available())
+                .by_provider(&provider, package::Flags::new().with_available())?
+                .into_iter()
                 .next()
                 .ok_or_else(|| Error::NoCandidate((*request).to_owned()))?;
             roots.push(package.id.clone());
@@ -69,7 +73,11 @@ impl Client {
         packages.sort_by(|left, right| left.package.id.cmp(&right.package.id));
 
         requests.sort_by(|left, right| left.request.cmp(&right.request));
-        Ok(AvailableClosure { requests, packages })
+        Ok(AvailableClosure {
+            requests,
+            packages,
+            repository_snapshots: stable_view.snapshots().to_vec(),
+        })
     }
 }
 
@@ -87,4 +95,6 @@ pub enum Error {
     Client(#[from] super::Error),
     #[error(transparent)]
     Repository(#[from] crate::repository::manager::Error),
+    #[error(transparent)]
+    Registry(#[from] crate::registry::Error),
 }

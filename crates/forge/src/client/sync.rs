@@ -30,7 +30,7 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
     let system_model = client.installation.system_model.clone();
 
     // Grab all the existing installed packages
-    let installed = client.registry.list_installed().collect::<Vec<_>>();
+    let installed = client.registry.list_installed()?;
 
     // Resolve the final state of packages after considering sync updates
     let finalized = if let Some(system_model) = &system_model {
@@ -225,26 +225,21 @@ fn resolve_with_installed(client: &Client, packages: &[Package]) -> Result<Vec<P
 
     // For each explicit package, replace it w/ it's sync'd change (if available)
     // or return the original package
-    let with_sync = packages
-        .iter()
-        .filter_map(|p| {
-            if !p.flags.explicit {
-                return None;
-            }
-
-            // Get first available = use highest priority
-            if let Some(lookup) = client
-                .registry
-                .by_name(&p.meta.name, package::Flags::new().with_available())
-                .next()
-                && !all_ids.contains(&lookup.id)
-            {
-                return Some(lookup.id);
-            }
-
-            Some(p.id.clone())
-        })
-        .collect::<Vec<_>>();
+    let mut with_sync = Vec::new();
+    for package in packages.iter().filter(|package| package.flags.explicit) {
+        let lookup = client
+            .registry
+            .by_name(&package.meta.name, package::Flags::new().with_available())?
+            .into_iter()
+            .next();
+        if let Some(lookup) = lookup
+            && !all_ids.contains(&lookup.id)
+        {
+            with_sync.push(lookup.id);
+        } else {
+            with_sync.push(package.id.clone());
+        }
+    }
 
     // Build a new tx from this sync'd package set
     let mut tx = client.registry.transaction(transaction::Lookup::PreferAvailable)?;
@@ -265,12 +260,13 @@ fn resolve_with_system_model(client: &Client, system_model: &LoadedSystemModel) 
     let packages = system_model
         .packages
         .iter()
-        .map(|provider| {
-            client
+        .map(|provider| -> Result<package::Id, Error> {
+            Ok(client
                 .registry
-                .by_provider_id_only(provider, package::Flags::default().with_available())
+                .by_provider_id_only(provider, package::Flags::default().with_available())?
+                .into_iter()
                 .next()
-                .ok_or(Error::MissingSystemModelPackage(provider.clone()))
+                .ok_or(Error::MissingSystemModelPackage(provider.clone()))?)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -309,6 +305,9 @@ pub enum Error {
 
     #[error("transaction")]
     Transaction(#[from] transaction::Error),
+
+    #[error("registry query")]
+    Registry(#[from] crate::registry::Error),
 
     #[error("io")]
     Io(#[from] std::io::Error),

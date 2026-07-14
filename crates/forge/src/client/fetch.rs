@@ -172,14 +172,18 @@ pub fn fetch(client: &mut Client, pkgs: &[&str], output_dir: &Path, verbose: boo
 #[instrument(skip(client))]
 fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<ResolvedPackage>, Error> {
     // Parse pkg args into valid / invalid sets
-    let queried = pkgs.iter().map(|p| find_packages(p, client));
-
     let mut results = vec![];
 
-    for (id, pkg) in queried {
+    for package in pkgs {
+        let (id, pkg) = find_packages(package, client)?;
         if let Some(pkg) = pkg {
             // We'll need to resolve explicitly by id to populate the full meta.uri
-            let resolved_pkg_meta = client.registry.by_id(&pkg.id).next().ok_or(Error::NoPackage(id))?;
+            let resolved_pkg_meta = client
+                .registry
+                .by_id(&pkg.id)?
+                .into_iter()
+                .next()
+                .ok_or(Error::NoPackage(id))?;
 
             results.push(ResolvedPackage {
                 meta: resolved_pkg_meta.meta,
@@ -193,15 +197,16 @@ fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<ResolvedPackage>,
 }
 
 /// Resolve a package name to the first package
-fn find_packages(id: &str, client: &Client) -> (String, Option<Package>) {
+fn find_packages(id: &str, client: &Client) -> Result<(String, Option<Package>), Error> {
     let provider = Provider::from_name(id).unwrap();
     let result = client
         .registry
-        .by_provider(&provider, Flags::new().with_available())
+        .by_provider(&provider, Flags::new().with_available())?
+        .into_iter()
         .next();
 
     // First only, pre-sorted
-    (id.into(), result)
+    Ok((id.into(), result))
 }
 
 #[derive(Debug, Error)]
@@ -214,6 +219,9 @@ pub enum Error {
 
     #[error("client")]
     Client(#[from] client::Error),
+
+    #[error("registry query")]
+    Registry(#[from] crate::registry::Error),
 
     /// The given package couldn't be found
     #[error("no package found: {0}")]

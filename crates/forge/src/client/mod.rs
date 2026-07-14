@@ -253,9 +253,16 @@ impl Client {
         }
     }
 
+    fn preflight_repository_integrity(&self) -> Result<(), Error> {
+        self.repositories
+            .preflight_active_snapshots()
+            .map_err(Error::Repository)
+    }
+
     /// Perform package installation
     pub fn install(&mut self, packages: &[&str], yes: bool, simulate: bool) -> Result<install::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_repository_integrity()?;
         install(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
     }
 
@@ -271,6 +278,7 @@ impl Client {
         simulate: bool,
     ) -> Result<install::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_repository_integrity()?;
         install::install_exact(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
     }
 
@@ -319,12 +327,14 @@ impl Client {
     /// Perform package fetches
     pub fn fetch(&mut self, packages: &[&str], output_dir: &Path, verbose: bool) -> Result<fetch::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_repository_integrity()?;
         fetch(self, packages, output_dir, verbose).map_err(|error| Error::Fetch(Box::new(error)))
     }
 
     /// Perform a sync
     pub fn sync(&mut self, yes: bool, simulate: bool) -> Result<sync::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_repository_integrity()?;
         sync(self, yes, simulate).map_err(|error| Error::Sync(Box::new(error)))
     }
 
@@ -433,10 +443,10 @@ impl Client {
 
     /// Resolves the provided id with the underlying registry, returning the first matching [`Package`]
     pub fn resolve_package(&self, package: &package::Id) -> Result<Package, Error> {
-        self.registry
-            .by_id(package)
-            .next()
-            .ok_or(Error::MissingMetadata(package.clone()))
+        self.preflight_repository_integrity()?;
+        let resolved = self.registry.by_id(package)?.into_iter().next();
+        self.preflight_repository_integrity()?;
+        resolved.ok_or(Error::MissingMetadata(package.clone()))
     }
 
     fn resolve_frozen_repository_package(&self, package: &package::Id) -> Result<Package, Error> {
@@ -455,12 +465,20 @@ impl Client {
         &self,
         packages: impl IntoIterator<Item = &'a package::Id>,
     ) -> Result<Vec<Package>, Error> {
+        self.preflight_repository_integrity()?;
         let mut metadata = packages
             .into_iter()
-            .map(|id| self.registry.by_id(id).next().ok_or(Error::MissingMetadata(id.clone())))
+            .map(|id| {
+                self.registry
+                    .by_id(id)?
+                    .into_iter()
+                    .next()
+                    .ok_or(Error::MissingMetadata(id.clone()))
+            })
             .collect::<Result<Vec<_>, _>>()?;
         metadata.sort_by_key(|p| p.meta.name.to_string());
         metadata.dedup_by_key(|p| p.meta.name.to_string());
+        self.preflight_repository_integrity()?;
         Ok(metadata)
     }
 
@@ -471,26 +489,38 @@ impl Client {
     }
 
     /// Returns all unique packages which provide the supplied [`Provider`]
-    pub fn lookup_packages_by_provider(&self, provider: &Provider, flags: package::Flags) -> Vec<Package> {
-        self.registry
-            .by_provider(provider, flags)
+    pub fn lookup_packages_by_provider(
+        &self,
+        provider: &Provider,
+        flags: package::Flags,
+    ) -> Result<Vec<Package>, Error> {
+        self.preflight_repository_integrity()?;
+        let packages = self
+            .registry
+            .by_provider(provider, flags)?
+            .into_iter()
             .unique_by(|p| p.id.clone())
-            .collect()
+            .collect();
+        self.preflight_repository_integrity()?;
+        Ok(packages)
     }
 
-    /// Return a sorted iterator of packages matching the given flags
-    pub fn list_packages(&self, flags: package::Flags) -> impl Iterator<Item = Package> + '_ {
-        self.registry.list(flags)
+    /// Return sorted packages matching the given flags. Repository integrity
+    /// failures are first-class and cannot be flattened into an empty list.
+    pub fn list_packages(&self, flags: package::Flags) -> Result<Vec<Package>, Error> {
+        self.preflight_repository_integrity()?;
+        let packages = self.registry.list(flags)?;
+        self.preflight_repository_integrity()?;
+        Ok(packages)
     }
 
     /// Returns all packages with names containing the provided keyword
     /// and match the given flags
-    pub fn search_packages<'a>(
-        &'a self,
-        keyword: &'a str,
-        flags: package::Flags,
-    ) -> impl Iterator<Item = Package> + 'a {
-        self.registry.by_keyword(keyword, flags)
+    pub fn search_packages(&self, keyword: &str, flags: package::Flags) -> Result<Vec<Package>, Error> {
+        self.preflight_repository_integrity()?;
+        let packages = self.registry.by_keyword(keyword, flags)?;
+        self.preflight_repository_integrity()?;
+        Ok(packages)
     }
 
     /// Activates the provided state and runs system triggers once applied.
@@ -3110,6 +3140,8 @@ pub enum Error {
     CacheUnpack(#[source] cache::UnpackError, package::Name, PathBuf),
     #[error("repository manager")]
     Repository(#[from] repository::manager::Error),
+    #[error("package registry query")]
+    Registry(#[from] crate::registry::Error),
     #[error("db")]
     Db(#[from] db::Error),
     #[error("prune")]

@@ -1,7 +1,19 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{future::Future, io, os::unix::fs::OpenOptionsExt as _, path::Path, sync::OnceLock, time::Duration};
+use std::{
+    ffi::CString,
+    future::Future,
+    io,
+    mem::{size_of, zeroed},
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{ffi::OsStrExt as _, fs::OpenOptionsExt as _},
+    },
+    path::Path,
+    sync::OnceLock,
+    time::Duration,
+};
 
 use futures_util::TryStreamExt;
 use serde::de::DeserializeOwned;
@@ -208,13 +220,11 @@ async fn fetch(url: Url) -> Result<Fetched, Error> {
     validate_fetch_url(&url)?;
     if let Ok(path) = url.to_file_path() {
         // O_NONBLOCK prevents a file URL naming a FIFO/device from consuming a
-        // blocking-pool thread beyond the operation timeout. O_NOFOLLOW closes
-        // the final-component symlink race before descriptor inspection.
-        let file = tokio::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(path)
-            .await?;
+        // blocking-pool thread beyond the operation timeout. Descriptor-rooted
+        // openat2 rejects symlinks in every component, not only the final one;
+        // this preserves repository capability checks against an intermediate
+        // symlink which lexically remains below the admitted root.
+        let file = tokio::fs::File::from_std(open_local_regular_file(&path)?);
         let metadata = file.metadata().await?;
         if !metadata.file_type().is_file() {
             return Err(Error::Read(io::Error::new(
@@ -230,6 +240,56 @@ async fn fetch(url: Url) -> Result<Fetched, Error> {
     } else {
         http_get(url).await
     }
+}
+
+fn open_local_regular_file(path: &Path) -> io::Result<std::fs::File> {
+    let relative = path
+        .strip_prefix(Path::new("/"))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "local download path is not absolute"))?;
+    if relative.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "local download path does not name a file",
+        ));
+    }
+    let root = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        .open("/")?;
+    let relative = CString::new(relative.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "local download path contains NUL"))?;
+    // SAFETY: zero is valid for every open_how field.
+    let mut how: nix::libc::open_how = unsafe { zeroed() };
+    how.flags =
+        u64::from((nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK) as u32);
+    how.resolve = nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS;
+    // SAFETY: root and the relative C path remain live, and success returns a
+    // fresh descriptor owned by the caller.
+    let descriptor = unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_openat2,
+            root.as_raw_fd(),
+            relative.as_ptr(),
+            &how,
+            size_of::<nix::libc::open_how>(),
+        )
+    };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let descriptor = i32::try_from(descriptor)
+        .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
+    // SAFETY: successful openat2 returned this fresh owned descriptor.
+    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let file = std::fs::File::from(descriptor);
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "local download resource is not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Admit only URL forms whose authority and local-path meaning are explicit.
@@ -551,6 +611,32 @@ mod tests {
             assert!(!error.to_string().contains("secret"));
             assert!(!error.to_string().contains(rejected));
         }
+    }
+
+    #[tokio::test]
+    async fn local_fetch_rejects_intermediate_and_final_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let repository = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("package.stone"), b"outside").unwrap();
+
+        symlink(outside.path(), repository.path().join("escape")).unwrap();
+        let intermediate = Url::from_file_path(repository.path().join("escape/package.stone")).unwrap();
+        assert!(matches!(fetch(intermediate).await, Err(Error::Read(_))));
+
+        symlink(
+            outside.path().join("package.stone"),
+            repository.path().join("package.stone"),
+        )
+        .unwrap();
+        let final_component = Url::from_file_path(repository.path().join("package.stone")).unwrap();
+        assert!(matches!(fetch(final_component).await, Err(Error::Read(_))));
+
+        let regular_path = repository.path().join("regular.stone");
+        std::fs::write(&regular_path, b"inside").unwrap();
+        let regular = Url::from_file_path(regular_path).unwrap();
+        assert_eq!(fetch(regular).await.unwrap().content_length, Some(6));
     }
 
     #[test]
