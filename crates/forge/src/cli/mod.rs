@@ -120,15 +120,31 @@ pub fn try_dispatch(command: &str, args: &ArgMatches, context: &Context) -> Resu
         return Ok(false);
     }
 
+    // These commands operate only on their explicit file arguments. Opening
+    // the configured system installation first would make an unrelated root
+    // policy, lock, or declarative-system warning affect a rootless operation.
+    match command {
+        "extract" => {
+            extract::handle(args).map_err(Error::Extract)?;
+            return Ok(true);
+        }
+        "index" => {
+            index::handle(args).map_err(Error::Index)?;
+            return Ok(true);
+        }
+        "inspect" => {
+            inspect::handle(args).map_err(Error::Inspect)?;
+            return Ok(true);
+        }
+        _ => {}
+    }
+
     let installation = open_installation(context)?;
 
     match command {
         "boot" => boot::handle(args, installation).map_err(Error::Boot)?,
-        "extract" => extract::handle(args).map_err(Error::Extract)?,
         "fetch" => fetch::handle(args, installation, context.verbose).map_err(Error::Fetch)?,
-        "index" => index::handle(args).map_err(Error::Index)?,
         "info" => info::handle(args, installation).map_err(Error::Info)?,
-        "inspect" => inspect::handle(args).map_err(Error::Inspect)?,
         "install" => install::handle(args, installation, context.assume_yes).map_err(Error::Install)?,
         "list" => list::handle(args, installation).map_err(Error::List)?,
         "remove" => remove::handle(args, installation, context.assume_yes).map_err(Error::Remove)?,
@@ -137,6 +153,7 @@ pub fn try_dispatch(command: &str, args: &ArgMatches, context: &Context) -> Resu
         "search-file" => search_file::handle(args, installation).map_err(Error::SearchFile)?,
         "state" => state::handle(args, installation, context.assume_yes, context.verbose).map_err(Error::State)?,
         "sync" => sync::handle(args, installation, context.assume_yes).map_err(Error::Sync)?,
+        "extract" | "index" | "inspect" => unreachable!("rootless commands return before opening an installation"),
         _ => unreachable!("Cast command names and package dispatch must stay aligned"),
     }
 
@@ -277,5 +294,22 @@ mod tests {
         let matches = Command::new("other").get_matches_from(["other"]);
         assert!(!try_dispatch("other", &matches, &context).unwrap());
         assert!(!try_dispatch_cache("other", &matches, &context).unwrap());
+    }
+
+    #[test]
+    fn rootless_dispatch_does_not_open_the_context_root() {
+        let stone =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bash-completion-2.11-1-1-x86_64.stone");
+        let matches = inspect::command()
+            .try_get_matches_from([
+                "inspect".into(),
+                "--check".into(),
+                "--quiet".into(),
+                stone.into_os_string(),
+            ])
+            .unwrap();
+        let context = Context::new("/definitely/not/a/cast/root", None, false, false);
+
+        assert!(try_dispatch("inspect", &matches, &context).unwrap());
     }
 }

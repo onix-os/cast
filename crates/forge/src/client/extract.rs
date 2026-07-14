@@ -3,6 +3,7 @@
 
 use std::{
     io::{self, Read, Seek, SeekFrom},
+    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
 };
 
@@ -15,16 +16,26 @@ use crate::{
     Installation,
     client::{self, cache::asset_path},
     installation,
+    linux_fs::{normalize_new_directory, require_named_directory},
     package::{self, MissingMetaFieldError},
     util,
 };
 
 pub fn extract(stones: Vec<&PathBuf>, output_dir: &Path) -> Result<(), Error> {
-    let installation = Installation::open(Path::new("."), None)?;
-
     util::ensure_dir_exists(output_dir)?;
-
     let output_dir = output_dir.canonicalize()?;
+
+    // Extraction needs Forge's asset materializer, not an installation rooted
+    // in the caller's working tree. Keep its transient authority private and
+    // on the output filesystem so hardlink materialization cannot fail merely
+    // because the system temporary directory lives on another mount.
+    let temporary = tempfile::Builder::new()
+        .prefix(".cast-extract-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(&output_dir)?;
+    let temporary_anchor = normalize_new_directory(temporary.path(), 0o700)?;
+    let installation = Installation::open_frozen(temporary.path(), None)?;
+    require_named_directory(temporary.path(), &temporary_anchor, 0o700)?;
 
     for path in stones {
         let rdr = File::open(path).map_err(Error::IO)?;
@@ -118,9 +129,6 @@ pub fn extract(stones: Vec<&PathBuf>, output_dir: &Path) -> Result<(), Error> {
         client::blit_root(&installation, &vfs, &extraction_root.canonicalize()?)?;
     }
 
-    // Clean up transient .cast install
-    fs::remove_dir_all(installation.root.join(".cast"))?;
-
     Ok(())
 }
 
@@ -143,4 +151,48 @@ pub enum Error {
 
     #[error("installation")]
     Installation(#[from] installation::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{os::unix::fs::PermissionsExt as _, process::Command};
+
+    use super::*;
+
+    #[test]
+    fn extraction_uses_an_output_local_private_installation() {
+        const CHILD: &str = "CAST_EXTRACT_PRIVATE_INSTALLATION_CHILD";
+        const TEST: &str = "client::extract::tests::extraction_uses_an_output_local_private_installation";
+
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            let work = root.join("group-writable-worktree");
+            let output = root.join("output");
+            fs::create_dir(&work).unwrap();
+            fs::set_permissions(&work, std::fs::Permissions::from_mode(0o775)).unwrap();
+            fs::create_dir(&output).unwrap();
+            std::env::set_current_dir(&work).unwrap();
+
+            extract(Vec::new(), &output).unwrap();
+
+            assert!(!work.join(".cast").exists());
+            assert!(fs::read_dir(&output).unwrap().next().is_none());
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg(TEST)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(CHILD, temporary.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "private extraction child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

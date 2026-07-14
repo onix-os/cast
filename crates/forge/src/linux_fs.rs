@@ -123,6 +123,94 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
     Ok(())
 }
 
+/// Pin and normalize one freshly-created directory without chmodding its
+/// mutable pathname.
+///
+/// Callers must have just created `path` with a maximum mode of `mode`. The
+/// owner/subset check prevents a privileged caller from laundering a raced-in
+/// directory owned by another user. The public name is reopened after chmod so
+/// a replacement cannot be reported as the normalized temporary root.
+pub(crate) fn normalize_new_directory(path: &Path, mode: u32) -> io::Result<std::fs::File> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "new directory normalization requires an absolute path",
+        ));
+    }
+    if mode & !0o7777 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("filesystem mode is outside the canonical 07777 mask: {mode:#o}"),
+        ));
+    }
+
+    let encoded = CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "new directory path contains NUL"))?;
+    let flags = nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW;
+    let resolve = (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64;
+    let pinned = openat2_file(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve)?;
+    require_new_directory_residue(&pinned, path, mode)?;
+    let expected = inode_identity(&pinned.metadata()?);
+    chmod_path_descriptor(&pinned, mode)?;
+
+    let named = openat2_file(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve)?;
+    require_same_inode(expected, inode_identity(&named.metadata()?))?;
+    require_exact_directory(&pinned, path, mode)?;
+    require_exact_directory(&named, path, mode)?;
+    Ok(pinned)
+}
+
+/// Prove that a pathname still denotes one retained normalized directory.
+pub(crate) fn require_named_directory(path: &Path, retained: &std::fs::File, mode: u32) -> io::Result<()> {
+    let encoded = CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "directory path contains NUL"))?;
+    let flags = nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW;
+    let resolve = (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64;
+    let expected = inode_identity(&retained.metadata()?);
+    require_exact_directory(retained, path, mode)?;
+    let named = openat2_file(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve)?;
+    require_same_inode(expected, inode_identity(&named.metadata()?))?;
+    require_exact_directory(&named, path, mode)
+}
+
+fn require_new_directory_residue(file: &std::fs::File, path: &Path, requested_mode: u32) -> io::Result<()> {
+    let metadata = file.metadata()?;
+    let actual_mode = metadata.permissions().mode() & 0o7777;
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let effective_owner = unsafe { nix::libc::geteuid() };
+    if metadata.file_type().is_dir() && metadata.uid() == effective_owner && actual_mode & !requested_mode == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "fresh directory is not a same-owner subset-mode residue: {} (uid={}, mode={actual_mode:04o})",
+                path.display(),
+                metadata.uid()
+            ),
+        ))
+    }
+}
+
+fn require_exact_directory(file: &std::fs::File, path: &Path, expected_mode: u32) -> io::Result<()> {
+    let metadata = file.metadata()?;
+    let actual_mode = metadata.permissions().mode() & 0o7777;
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let effective_owner = unsafe { nix::libc::geteuid() };
+    if metadata.file_type().is_dir() && metadata.uid() == effective_owner && actual_mode == expected_mode {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "directory is not the exact normalized same-owner inode: {} (uid={}, mode={actual_mode:04o})",
+                path.display(),
+                metadata.uid()
+            ),
+        ))
+    }
+}
+
 fn inode_identity(metadata: &std::fs::Metadata) -> InodeIdentity {
     InodeIdentity {
         device: metadata.dev(),
@@ -320,7 +408,7 @@ fn controlled_resolution() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::{
-        os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+        os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
         process::Command,
     };
 
@@ -391,6 +479,38 @@ mod tests {
         let after = retained.metadata().unwrap();
         assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
         assert_eq!(after.permissions().mode() & 0o7777, 0o700);
+    }
+
+    #[test]
+    fn new_directory_normalization_retains_identity_and_rejects_name_substitution() {
+        let parent = tempfile::tempdir().unwrap();
+        let temporary = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent.path())
+            .unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let retained = normalize_new_directory(temporary.path(), 0o700).unwrap();
+        require_named_directory(temporary.path(), &retained, 0o700).unwrap();
+
+        let displaced = parent.path().join("displaced");
+        std::fs::rename(temporary.path(), &displaced).unwrap();
+        std::fs::create_dir(temporary.path()).unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(require_named_directory(temporary.path(), &retained, 0o700).is_err());
+        assert_eq!(
+            (retained.metadata().unwrap().dev(), retained.metadata().unwrap().ino()),
+            (
+                std::fs::metadata(&displaced).unwrap().dev(),
+                std::fs::metadata(&displaced).unwrap().ino()
+            )
+        );
+
+        std::fs::remove_dir(temporary.path()).unwrap();
+        symlink(&displaced, temporary.path()).unwrap();
+        assert!(normalize_new_directory(temporary.path(), 0o700).is_err());
+        std::fs::remove_file(temporary.path()).unwrap();
+        std::fs::rename(displaced, temporary.path()).unwrap();
     }
 
     #[test]
