@@ -538,9 +538,21 @@ rejecting `N + 1`.
   finite advisory parent lock serializes cooperating Forge writers, and
   publication uses descriptor-relative no-replace rename, pre/post durability
   barriers, and exact reconciliation of both names after every syscall result,
-  including an error reported after the move applied. Internal failure cleanup
-  can recurse only when the wrapper name still identifies the retained root;
-  foreign source or destination substitutions are preserved. Production
+  including an error reported after the move applied. Public discard now takes
+  the same retained-parent lock, admits only a same-owner directory on that
+  filesystem, detaches it durably into a retained random 0700 quarantine, and
+  reconciles both names before destructive work. A mode-zero root is widened
+  through its pinned descriptor immediately before the cross-parent rename and
+  private traversal. Every observed in-process detach failure attempts,
+  durability-syncs, and revalidates an exact mode restore of that retained
+  inode; a failed restore is returned as a structured dual error rather than
+  hidden.
+  Recursive removal opens every child beneath retained descriptors without
+  symlink, magic-link, or mount traversal, enforces the same inode/depth/time
+  bounds, and reconciles error-after-applied or interrupted unlinks before any
+  retry. Internal failure cleanup can recurse only when the wrapper name still
+  identifies the retained root; foreign source, destination, child, or wrapper
+  substitutions are preserved. Production
   materialization stops ordinary work 30 seconds before its overall timeout;
   after any namespace mutation, reconciliation and provisional-wrapper cleanup
   receive that fresh, separately bounded recovery budget instead of reusing an
@@ -551,6 +563,10 @@ rejecting `N + 1`.
   uncooperative same-EUID process. The materialization deadline likewise
   remains cooperative around individual syscalls rather than a claim that an
   arbitrary blocking filesystem can be preempted in-process.
+  Crash-reopen discovery and reclamation of a durably detached random discard
+  quarantine, including interruption between public mode widening and
+  rename-or-restore, remains part of Phase 11; this phase claims bounded
+  in-process preservation, not journal-backed reboot recovery.
 
 **Exit gate:** malformed, oversized, changing, blocking, or resource-exhausting
 inputs are rejected with structured diagnostics; no error path leaves a child,

@@ -28,7 +28,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-frozen-normalization-test forge-frozen-publication-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -189,6 +189,34 @@ forge-frozen-publication-test:
 		client::tests::frozen_publication_rejects_a_foreign_stage_name_without_publishing_or_deleting_it \
 		client::tests::frozen_destination_lock_serializes_cooperating_publishers_with_a_finite_wait \
 		client::tests::failed_frozen_root_blit_never_publishes_or_leaves_a_reusable_stage; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-frozen-discard-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::frozen_discard_widens_unreadable_roots_for_detach_and_private_cleanup \
+		client::tests::frozen_discard_restores_mode_when_post_chmod_identity_inspection_fails \
+		client::tests::frozen_discard_is_idempotent_when_the_public_root_is_absent \
+		client::tests::frozen_discard_unlinks_symlinks_without_touching_external_targets \
+		client::tests::frozen_discard_depth_limit_accepts_n_and_preserves_n_plus_one_privately \
+		client::tests::frozen_discard_entry_limit_rejects_n_plus_one_before_deletion \
+		client::tests::frozen_discard_rejects_non_directory_roots_without_creating_quarantine \
+		client::tests::frozen_discard_rename_failure_removes_only_its_exact_empty_quarantine \
+		client::tests::frozen_discard_adopts_an_applied_detach_even_when_the_syscall_reports_error \
+		client::tests::frozen_discard_completes_after_an_applied_detach_reports_error \
+		client::tests::frozen_discard_reconciles_an_applied_detach_after_the_work_deadline_expires \
+		client::tests::frozen_discard_unlink_reconciles_applied_errors_and_bounded_interrupts \
+		client::tests::frozen_discard_unlink_never_retries_against_a_foreign_replacement \
+		client::tests::frozen_discard_preserves_a_racing_quarantine_collision_and_the_public_root \
+		client::tests::frozen_discard_detects_source_substitution_without_deleting_the_foreign_tree \
+		client::tests::frozen_discard_preserves_a_replaced_quarantine_wrapper_and_the_detached_root \
+		client::tests::frozen_discard_uses_the_same_finite_parent_lock_as_publication \
+		client::tests::frozen_discard_rejects_destination_parent_replacement_without_touching_either_tree \
+		client::tests::frozen_root_normalizes_enforceable_metadata_in_canonical_order \
+		client::tests::frozen_root_normalizes_and_discards_a_mode_zero_directory; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done

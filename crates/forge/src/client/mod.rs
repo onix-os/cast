@@ -507,7 +507,7 @@ impl Client {
     /// points, restores owner access only on directories being discarded, and
     /// enforces finite entry, depth, and wall-time bounds.
     pub fn discard_frozen_root(&self) -> Result<(), Error> {
-        discard_frozen_root_path(self.frozen_root()?)
+        discard_frozen_root_destination(self.frozen_destination()?)
     }
 
     /// Prove that every frozen executable binding is supplied by its exact
@@ -5926,12 +5926,28 @@ fn sync_frozen_publication_file(
     operation: &'static str,
     deadline: Instant,
 ) -> Result<(), Error> {
-    require_frozen_materialization_deadline(deadline)?;
-    file.sync_all().map_err(|source| Error::SyncFrozenPublication {
-        path: path.to_owned(),
-        operation,
-        source,
-    })?;
+    let mut interruptions = 0usize;
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        match file.sync_all() {
+            Ok(()) => break,
+            Err(source)
+                if source.kind() == io::ErrorKind::Interrupted
+                    && interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS =>
+            {
+                interruptions += 1;
+            }
+            Err(source) => {
+                return Err(frozen_materialization_io_error(deadline, source, |source| {
+                    Error::SyncFrozenPublication {
+                        path: path.to_owned(),
+                        operation,
+                        source,
+                    }
+                }));
+            }
+        }
+    }
     require_frozen_materialization_deadline(deadline)
 }
 
@@ -5985,7 +6001,7 @@ fn discard_retained_frozen_stage(
         });
     }
     let mut entries = 1usize;
-    discard_frozen_directory(readable.as_raw_fd(), 0, &mut entries, deadline)?;
+    discard_frozen_directory(&readable, &stage.path.join("root"), 0, &mut entries, deadline)?;
     drop(readable);
     if frozen_publication_name_state(
         &stage.file,
@@ -5999,8 +6015,14 @@ fn discard_retained_frozen_stage(
             stage: stage.path.clone(),
         });
     }
-    require_frozen_materialization_deadline(deadline)?;
-    unlinkat(Some(stage.file.as_raw_fd()), c"root", UnlinkatFlags::RemoveDir)?;
+    unlink_frozen_discard_entry_until(
+        &stage.file,
+        c"root",
+        &stage.path.join("root"),
+        expected_after_chmod,
+        UnlinkatFlags::RemoveDir,
+        deadline,
+    )?;
     require_frozen_private_directory_entries(stage, &[], deadline)?;
     sync_frozen_publication_file(&stage.file, &stage.path, "sync discarded private stage", deadline)
 }
@@ -6013,27 +6035,45 @@ fn remove_empty_frozen_private_directory(
     require_frozen_destination_parent(destination)?;
     require_frozen_private_directory_named(directory, destination, deadline)?;
     require_frozen_private_directory_entries(directory, &[], deadline)?;
-    require_frozen_materialization_deadline(deadline)?;
-    let result = unlinkat(
-        Some(destination.parent.as_raw_fd()),
-        directory.name.as_c_str(),
-        UnlinkatFlags::RemoveDir,
-    );
-    let named = frozen_named_identity_until(&destination.parent, &directory.name, &directory.path, deadline)?;
-    match (result, named) {
-        (_, None) => {
-            sync_frozen_publication_file(
-                &destination.parent,
-                &destination.parent_path,
-                "sync removed private frozen-root directory",
-                deadline,
-            )?;
-            Ok(())
+    let mut interruptions = 0usize;
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        let result = unlinkat(
+            Some(destination.parent.as_raw_fd()),
+            directory.name.as_c_str(),
+            UnlinkatFlags::RemoveDir,
+        );
+        let recovery_deadline = frozen_namespace_recovery_deadline();
+        let named =
+            frozen_named_identity_until(&destination.parent, &directory.name, &directory.path, recovery_deadline)?;
+        match (result, named) {
+            (_, None) => {
+                sync_frozen_publication_file(
+                    &destination.parent,
+                    &destination.parent_path,
+                    "sync removed private frozen-root directory",
+                    recovery_deadline,
+                )?;
+                return Ok(());
+            }
+            (Err(Errno::EINTR), Some(identity))
+                if identity == directory.identity && interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS =>
+            {
+                interruptions += 1;
+            }
+            (Err(source), Some(identity)) if identity == directory.identity => {
+                return Err(frozen_materialization_io_error(
+                    deadline,
+                    io::Error::from_raw_os_error(source as i32),
+                    Error::Io,
+                ));
+            }
+            _ => {
+                return Err(Error::FrozenPrivateDirectoryChanged {
+                    path: directory.path.clone(),
+                });
+            }
         }
-        (Err(source), Some(identity)) if identity == directory.identity => Err(source.into()),
-        _ => Err(Error::FrozenPrivateDirectoryChanged {
-            path: directory.path.clone(),
-        }),
     }
 }
 
@@ -6076,71 +6116,470 @@ impl Drop for FrozenDiscardDirectoryStream {
     }
 }
 
-fn discard_frozen_root_path(root_path: &Path) -> Result<(), Error> {
-    let deadline = Instant::now() + FROZEN_MATERIALIZATION_TIMEOUT;
+fn discard_frozen_root_destination(destination: &FrozenRootDestination) -> Result<(), Error> {
+    let deadline = Instant::now() + FROZEN_MATERIALIZATION_TIMEOUT - FROZEN_NAMESPACE_RECOVERY_TIMEOUT;
+    discard_frozen_root_destination_until(destination, deadline)
+}
+
+fn discard_frozen_root_destination_until(destination: &FrozenRootDestination, deadline: Instant) -> Result<(), Error> {
+    discard_frozen_root_destination_with(
+        destination,
+        deadline,
+        |source_directory, source_name, destination_directory, destination_name| {
+            renameat2_noreplace_until(
+                source_directory.file(),
+                source_name,
+                destination_directory.file(),
+                destination_name,
+                deadline,
+            )
+        },
+    )
+}
+
+fn discard_frozen_root_destination_with(
+    destination: &FrozenRootDestination,
+    deadline: Instant,
+    rename: impl FnOnce(&fs::File, &CStr, &fs::File, &CStr) -> io::Result<()>,
+) -> Result<(), Error> {
     require_frozen_materialization_deadline(deadline)?;
-    match fs::symlink_metadata(root_path) {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.into()),
-    }
-
-    let pinned = open_frozen_root_anchor(root_path)?;
-    let expected = frozen_root_anchor_witness(&pinned, root_path)?;
-    let parent = root_path
-        .parent()
-        .ok_or_else(|| Error::InvalidFrozenRootDestination(root_path.to_owned()))?;
-    let quarantine = tempfile::Builder::new()
-        .prefix(".forge-frozen-discard-")
-        .tempdir_in(parent)?;
-    let detached = quarantine.path().join("root");
-    rename_noreplace(root_path, &detached).map_err(|source| Error::DetachFrozenRoot {
-        root: root_path.to_owned(),
-        quarantine: detached.clone(),
-        source,
-    })?;
-
-    // The quarantine now owns a real tree. Disable TempDir's generic recursive
-    // destructor before any fallible check so every cleanup attempt remains on
-    // this bounded descriptor-rooted path.
-    let quarantine_path = quarantine.keep();
-    let detached = quarantine_path.join("root");
-    let moved = open_frozen_root_anchor(&detached)?;
-    let actual = frozen_root_anchor_witness(&moved, &detached)?;
-    // rename(2) legitimately advances directory ctime. Identity here is the
-    // descriptor-pinned inode and its directory type; the still-open `pinned`
-    // descriptor prevents inode reuse while the name is detached.
-    if actual.device != expected.device
-        || actual.inode != expected.inode
-        || (actual.mode & nix::libc::S_IFMT) != (expected.mode & nix::libc::S_IFMT)
+    let _lock = lock_frozen_destination_until(destination, deadline)?;
+    let Some(pinned) =
+        open_frozen_named_entry_until(&destination.parent, &destination.name, &destination.root_path, deadline)?
+    else {
+        return Ok(());
+    };
+    let expected = frozen_root_identity(&pinned, &destination.root_path)?;
+    let metadata = pinned.metadata()?;
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let effective_owner = unsafe { nix::libc::geteuid() };
+    if metadata.mode() & nix::libc::S_IFMT != nix::libc::S_IFDIR
+        || metadata.uid() != effective_owner
+        || metadata.dev() != destination.parent_identity.device
     {
+        return Err(Error::UnsafeFrozenRootDiscard {
+            root: destination.root_path.clone(),
+            owner: metadata.uid(),
+            mode: metadata.mode(),
+        });
+    }
+    let quarantine = create_frozen_private_directory(destination, b".forge-frozen-discard-", deadline)?;
+    let detached = quarantine.path.join("root");
+    let detached_identity = match detach_frozen_root_with(destination, &quarantine, &pinned, expected, deadline, rename)
+    {
+        Ok(identity) => identity,
+        Err(primary) => {
+            let cleanup_deadline = frozen_namespace_recovery_deadline();
+            let cleanup = require_frozen_private_directory_entries(&quarantine, &[], cleanup_deadline)
+                .and_then(|()| remove_empty_frozen_private_directory(&quarantine, destination, cleanup_deadline));
+            return match cleanup {
+                Ok(()) => Err(primary),
+                Err(cleanup) => Err(Error::CleanupFrozenDiscardQuarantine {
+                    quarantine: quarantine.path,
+                    primary: Box::new(primary),
+                    cleanup: Box::new(cleanup),
+                }),
+            };
+        }
+    };
+
+    // The root is now durably absent from its public name and exact at the
+    // retained private slot. Destructive traversal gets its own finite budget;
+    // any failure preserves the non-reusable quarantine instead of exposing a
+    // partially deleted public root.
+    let cleanup_deadline = Instant::now() + FROZEN_MATERIALIZATION_TIMEOUT;
+    let moved = openat2_frozen_until(
+        quarantine.file.as_raw_fd(),
+        Path::new("root"),
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+        cleanup_deadline,
+    )
+    .map_err(|source| Error::OpenFrozenDiscardDirectory { source })?;
+    if frozen_root_identity(&moved, &detached)? != detached_identity {
         return Err(Error::FrozenRootChangedDuringDiscard {
-            root: root_path.to_owned(),
+            root: destination.root_path.clone(),
             quarantine: detached,
         });
     }
-
-    let mut permissions = moved.metadata()?.permissions();
-    permissions.set_mode(permissions.mode() | 0o700);
-    fs::set_permissions(&detached, permissions)?;
-    let directory = open_owned(
-        &detached,
-        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK,
-        Mode::empty(),
-    )?;
     let mut entries = 1usize;
-    discard_frozen_directory(directory.as_raw_fd(), 0, &mut entries, deadline)?;
-    drop(directory);
-    drop(moved);
-    drop(pinned);
+    discard_frozen_directory(&moved, &detached, 0, &mut entries, cleanup_deadline)?;
+    if frozen_publication_name_state(
+        &quarantine.file,
+        c"root",
+        &detached,
+        detached_identity,
+        cleanup_deadline,
+    )? != FrozenPublicationNameState::Expected
+    {
+        return Err(Error::FrozenRootChangedDuringDiscard {
+            root: destination.root_path.clone(),
+            quarantine: detached,
+        });
+    }
+    require_frozen_private_directory_entries(&quarantine, &[b"root"], cleanup_deadline)?;
+    unlink_frozen_discard_entry_until(
+        &quarantine.file,
+        c"root",
+        &detached,
+        detached_identity,
+        UnlinkatFlags::RemoveDir,
+        cleanup_deadline,
+    )?;
+    require_frozen_private_directory_entries(&quarantine, &[], cleanup_deadline)?;
+    sync_frozen_publication_file(
+        &quarantine.file,
+        &quarantine.path,
+        "sync emptied frozen discard quarantine",
+        cleanup_deadline,
+    )?;
+    remove_empty_frozen_private_directory(&quarantine, destination, cleanup_deadline)
+}
+
+fn detach_frozen_root_with(
+    destination: &FrozenRootDestination,
+    quarantine: &FrozenPrivateDirectory,
+    pinned: &fs::File,
+    expected: FrozenRootIdentity,
+    deadline: Instant,
+    rename: impl FnOnce(&fs::File, &CStr, &fs::File, &CStr) -> io::Result<()>,
+) -> Result<FrozenRootIdentity, Error> {
     require_frozen_materialization_deadline(deadline)?;
-    fs::remove_dir(&detached)?;
-    fs::remove_dir(&quarantine_path)?;
-    Ok(())
+    require_frozen_destination_parent(destination)?;
+    require_frozen_private_directory_named(quarantine, destination, deadline)?;
+    require_frozen_private_directory_entries(quarantine, &[], deadline)?;
+    if frozen_root_identity(pinned, &destination.root_path)? != expected
+        || frozen_publication_name_state(
+            &destination.parent,
+            &destination.name,
+            &destination.root_path,
+            expected,
+            deadline,
+        )? != FrozenPublicationNameState::Expected
+    {
+        return Err(Error::FrozenRootChangedDuringDiscard {
+            root: destination.root_path.clone(),
+            quarantine: quarantine.path.join("root"),
+        });
+    }
+
+    // The root may legitimately be mode 000. syncfs on the retained parent
+    // flushes the filesystem without requiring a readable root descriptor.
+    // The exact mode is widened only immediately before rename below and is
+    // restored through the retained descriptor on every failed detach.
+    sync_filesystem_until(destination.parent.file(), deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::SyncFrozenPublication {
+            path: destination.root_path.clone(),
+            operation: "sync frozen-root filesystem before detach",
+            source,
+        })
+    })?;
+    sync_frozen_publication_file(
+        &destination.parent,
+        &destination.parent_path,
+        "sync frozen-root parent before detach",
+        deadline,
+    )?;
+    sync_frozen_publication_file(
+        &quarantine.file,
+        &quarantine.path,
+        "sync empty frozen-root quarantine",
+        deadline,
+    )?;
+
+    require_frozen_destination_parent(destination)?;
+    require_frozen_private_directory_named(quarantine, destination, deadline)?;
+    require_frozen_private_directory_entries(quarantine, &[], deadline)?;
+    if frozen_publication_name_state(
+        &destination.parent,
+        &destination.name,
+        &destination.root_path,
+        expected,
+        deadline,
+    )? != FrozenPublicationNameState::Expected
+    {
+        return Err(Error::FrozenRootChangedDuringDiscard {
+            root: destination.root_path.clone(),
+            quarantine: quarantine.path.join("root"),
+        });
+    }
+
+    // Linux requires write/search permission on a directory whose `..` entry
+    // changes during a cross-parent rename. Restore owner access through the
+    // retained descriptor immediately before the mutation, then restore the
+    // exact original mode on every failed detach. Successful detaches keep the
+    // widened mode only inside the private wrapper for bounded deletion.
+    let detached_expected = prepare_frozen_discard_root_mode(pinned, destination, expected, deadline)?;
+
+    let detach = (|| {
+        require_frozen_materialization_deadline(deadline)?;
+        if frozen_publication_name_state(
+            &destination.parent,
+            &destination.name,
+            &destination.root_path,
+            detached_expected,
+            deadline,
+        )? != FrozenPublicationNameState::Expected
+        {
+            return Err(Error::FrozenRootChangedDuringDiscard {
+                root: destination.root_path.clone(),
+                quarantine: quarantine.path.join("root"),
+            });
+        }
+
+        let rename_error = rename(&destination.parent, &destination.name, &quarantine.file, c"root").err();
+        let recovery_deadline = frozen_namespace_recovery_deadline();
+        let source_state = frozen_publication_name_state(
+            &destination.parent,
+            &destination.name,
+            &destination.root_path,
+            detached_expected,
+            recovery_deadline,
+        )?;
+        let quarantine_state = frozen_publication_name_state(
+            &quarantine.file,
+            c"root",
+            &quarantine.path.join("root"),
+            detached_expected,
+            recovery_deadline,
+        )?;
+        if source_state == FrozenPublicationNameState::Absent
+            && quarantine_state == FrozenPublicationNameState::Expected
+        {
+            sync_frozen_publication_file(
+                &destination.parent,
+                &destination.parent_path,
+                "sync public parent after frozen-root detach",
+                recovery_deadline,
+            )?;
+            sync_frozen_publication_file(
+                &quarantine.file,
+                &quarantine.path,
+                "sync quarantine after frozen-root detach",
+                recovery_deadline,
+            )?;
+            sync_filesystem_until(quarantine.file.file(), recovery_deadline).map_err(|source| {
+                frozen_materialization_io_error(recovery_deadline, source, |source| Error::SyncFrozenPublication {
+                    path: quarantine.path.clone(),
+                    operation: "sync detached frozen-root namespace",
+                    source,
+                })
+            })?;
+            require_frozen_destination_parent(destination)?;
+            require_frozen_private_directory_named(quarantine, destination, recovery_deadline)?;
+            require_frozen_private_directory_entries(quarantine, &[b"root"], recovery_deadline)?;
+            if frozen_publication_name_state(
+                &destination.parent,
+                &destination.name,
+                &destination.root_path,
+                detached_expected,
+                recovery_deadline,
+            )? != FrozenPublicationNameState::Absent
+                || frozen_publication_name_state(
+                    &quarantine.file,
+                    c"root",
+                    &quarantine.path.join("root"),
+                    detached_expected,
+                    recovery_deadline,
+                )? != FrozenPublicationNameState::Expected
+                || frozen_root_identity(pinned, &quarantine.path.join("root"))? != detached_expected
+            {
+                return Err(Error::FrozenDiscardNamespaceMismatch {
+                    root: destination.root_path.clone(),
+                    quarantine: quarantine.path.join("root"),
+                });
+            }
+            return Ok(detached_expected);
+        }
+
+        match (source_state, quarantine_state, rename_error) {
+            (FrozenPublicationNameState::Expected, FrozenPublicationNameState::Absent, Some(source)) => {
+                Err(Error::DetachFrozenRoot {
+                    root: destination.root_path.clone(),
+                    quarantine: quarantine.path.join("root"),
+                    source,
+                })
+            }
+            _ => Err(Error::FrozenDiscardNamespaceMismatch {
+                root: destination.root_path.clone(),
+                quarantine: quarantine.path.join("root"),
+            }),
+        }
+    })();
+
+    match detach {
+        Ok(identity) => Ok(identity),
+        Err(primary) => Err(restore_frozen_discard_root_mode(pinned, destination, expected, primary)),
+    }
+}
+
+fn prepare_frozen_discard_root_mode(
+    pinned: &fs::File,
+    destination: &FrozenRootDestination,
+    expected: FrozenRootIdentity,
+    deadline: Instant,
+) -> Result<FrozenRootIdentity, Error> {
+    prepare_frozen_discard_root_mode_with(pinned, destination, expected, deadline, frozen_root_identity)
+}
+
+fn prepare_frozen_discard_root_mode_with(
+    pinned: &fs::File,
+    destination: &FrozenRootDestination,
+    expected: FrozenRootIdentity,
+    deadline: Instant,
+    inspect: impl FnOnce(&fs::File, &Path) -> Result<FrozenRootIdentity, Error>,
+) -> Result<FrozenRootIdentity, Error> {
+    let discard_permissions = expected.mode & 0o7777 | 0o700;
+    let mut detached_expected = expected;
+    detached_expected.mode = expected.mode & !0o7777 | discard_permissions;
+    let normalize = chmod_path_descriptor_until(pinned.file(), discard_permissions, deadline);
+    let normalized = match inspect(pinned, &destination.root_path) {
+        Ok(normalized) => normalized,
+        Err(primary) => {
+            return Err(restore_frozen_discard_root_mode(pinned, destination, expected, primary));
+        }
+    };
+    if normalized == detached_expected {
+        return Ok(detached_expected);
+    }
+    let primary = match normalize {
+        Err(source) => {
+            frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenPrivateDirectory {
+                path: destination.root_path.clone(),
+                source,
+            })
+        }
+        Ok(()) => Error::FrozenRootChangedDuringDiscard {
+            root: destination.root_path.clone(),
+            quarantine: destination.parent_path.clone(),
+        },
+    };
+    Err(restore_frozen_discard_root_mode(pinned, destination, expected, primary))
+}
+
+fn restore_frozen_discard_root_mode(
+    pinned: &fs::File,
+    destination: &FrozenRootDestination,
+    expected: FrozenRootIdentity,
+    primary: Error,
+) -> Error {
+    if frozen_root_identity(pinned, &destination.root_path).ok() == Some(expected) {
+        return primary;
+    }
+    let recovery_deadline = frozen_namespace_recovery_deadline();
+    let restore = chmod_path_descriptor_until(pinned.file(), expected.mode & 0o7777, recovery_deadline)
+        .map_err(|source| Error::NormalizeFrozenPrivateDirectory {
+            path: destination.root_path.clone(),
+            source,
+        })
+        .and_then(|()| {
+            if frozen_root_identity(pinned, &destination.root_path)? == expected {
+                Ok(())
+            } else {
+                Err(Error::FrozenRootChangedDuringDiscard {
+                    root: destination.root_path.clone(),
+                    quarantine: destination.parent_path.clone(),
+                })
+            }
+        })
+        .and_then(|()| {
+            sync_filesystem_until(destination.parent.file(), recovery_deadline).map_err(|source| {
+                frozen_materialization_io_error(recovery_deadline, source, |source| Error::SyncFrozenPublication {
+                    path: destination.root_path.clone(),
+                    operation: "sync restored frozen-root discard mode",
+                    source,
+                })
+            })
+        })
+        .and_then(|()| {
+            if frozen_root_identity(pinned, &destination.root_path)? == expected {
+                Ok(())
+            } else {
+                Err(Error::FrozenRootChangedDuringDiscard {
+                    root: destination.root_path.clone(),
+                    quarantine: destination.parent_path.clone(),
+                })
+            }
+        });
+    match restore {
+        Ok(()) => primary,
+        Err(restore) => Error::RestoreFrozenDiscardRootMode {
+            root: destination.root_path.clone(),
+            primary: Box::new(primary),
+            restore: Box::new(restore),
+        },
+    }
+}
+
+fn unlink_frozen_discard_entry_until(
+    directory: &fs::File,
+    name: &CStr,
+    path: &Path,
+    expected: FrozenRootIdentity,
+    flags: UnlinkatFlags,
+    deadline: Instant,
+) -> Result<(), Error> {
+    unlink_frozen_discard_entry_with(directory, name, path, expected, deadline, |directory, name| {
+        unlinkat(Some(directory.as_raw_fd()), name, flags)
+    })
+}
+
+fn unlink_frozen_discard_entry_with(
+    directory: &fs::File,
+    name: &CStr,
+    path: &Path,
+    expected: FrozenRootIdentity,
+    deadline: Instant,
+    mut remove: impl FnMut(&fs::File, &CStr) -> Result<(), Errno>,
+) -> Result<(), Error> {
+    if frozen_publication_name_state(directory, name, path, expected, deadline)? != FrozenPublicationNameState::Expected
+    {
+        return Err(Error::FrozenDiscardEntryChanged);
+    }
+
+    let mut interruptions = 0usize;
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        let result = remove(directory, name);
+
+        // unlinkat can be interrupted after its observable namespace effect.
+        // Always classify the retained parent/name before deciding whether to
+        // retry. The still-open anchor held by the caller prevents the exact
+        // inode number from being recycled during this reconciliation.
+        let recovery_deadline = frozen_namespace_recovery_deadline();
+        match frozen_publication_name_state(directory, name, path, expected, recovery_deadline)? {
+            FrozenPublicationNameState::Absent => return Ok(()),
+            FrozenPublicationNameState::Foreign => return Err(Error::FrozenDiscardEntryChanged),
+            FrozenPublicationNameState::Expected => match result {
+                Err(Errno::EINTR) if interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS => {
+                    interruptions += 1;
+                }
+                Err(source) => {
+                    return Err(frozen_materialization_io_error(
+                        deadline,
+                        io::Error::from_raw_os_error(source as i32),
+                        |source| Error::RemoveFrozenDiscardEntry {
+                            path: path.to_owned(),
+                            source,
+                        },
+                    ));
+                }
+                Ok(()) => return Err(Error::FrozenDiscardEntryChanged),
+            },
+        }
+    }
 }
 
 fn discard_frozen_directory(
-    directory: RawFd,
+    directory: &fs::File,
+    directory_path: &Path,
     depth: usize,
     entries: &mut usize,
     deadline: Instant,
@@ -6153,73 +6592,85 @@ fn discard_frozen_directory(
         });
     }
 
-    let names = frozen_discard_entry_names(directory, entries, deadline)?;
+    let names = frozen_discard_entry_names(directory.as_raw_fd(), entries, deadline)?;
     for name in names {
         require_frozen_materialization_deadline(deadline)?;
-        let mut metadata = MaybeUninit::<nix::libc::stat>::uninit();
-        // SAFETY: directory and name are live, metadata points to writable
-        // storage, and AT_SYMLINK_NOFOLLOW prevents target traversal.
-        let status = unsafe {
-            nix::libc::fstatat(
-                directory,
-                name.as_ptr(),
-                metadata.as_mut_ptr(),
-                nix::libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if status != 0 {
-            return Err(Error::InspectFrozenDiscardEntry {
-                source: io::Error::last_os_error(),
-            });
-        }
-        // SAFETY: successful fstatat initialized the complete stat value.
-        let metadata = unsafe { metadata.assume_init() };
-        if metadata.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR {
-            let child_name = Path::new(OsStr::from_bytes(name.as_bytes()));
+        let child_name = Path::new(OsStr::from_bytes(name.as_bytes()));
+        let child_path = directory_path.join(child_name);
+        let resolution = nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV;
+        let anchor = openat2_frozen_until(
+            directory.as_raw_fd(),
+            child_name,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            resolution,
+            deadline,
+        )
+        .map_err(|source| Error::OpenFrozenDiscardEntry {
+            path: child_path.clone(),
+            source,
+        })?;
+        let anchored_before = anchor.metadata()?;
+        if anchored_before.mode() & nix::libc::S_IFMT == nix::libc::S_IFDIR {
             // Prove this name is an ordinary directory on the same filesystem
             // before chmod touches it. In particular, a hostile mount point
             // fails RESOLVE_NO_XDEV without changing the mounted root's mode.
-            let anchor = openat2_frozen(
-                directory,
-                child_name,
-                nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-                nix::libc::RESOLVE_BENEATH
-                    | nix::libc::RESOLVE_NO_SYMLINKS
-                    | nix::libc::RESOLVE_NO_MAGICLINKS
-                    | nix::libc::RESOLVE_NO_XDEV,
-            )
-            .map_err(|source| Error::OpenFrozenDiscardDirectory { source })?;
-            fchmodat(
-                Some(directory),
-                name.as_c_str(),
-                Mode::from_bits_truncate(metadata.st_mode | 0o700),
-                nix::sys::stat::FchmodatFlags::NoFollowSymlink,
+            chmod_path_descriptor_until(anchor.file(), anchored_before.mode() & 0o7777 | 0o700, deadline).map_err(
+                |source| {
+                    frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenPrivateDirectory {
+                        path: child_path.clone(),
+                        source,
+                    })
+                },
             )?;
-            let child = openat2_frozen(
-                directory,
+            let expected = frozen_root_identity(&anchor, &child_path)?;
+            let child = openat2_frozen_until(
+                directory.as_raw_fd(),
                 child_name,
                 nix::libc::O_RDONLY
                     | nix::libc::O_DIRECTORY
                     | nix::libc::O_CLOEXEC
                     | nix::libc::O_NOFOLLOW
                     | nix::libc::O_NONBLOCK,
-                nix::libc::RESOLVE_BENEATH
-                    | nix::libc::RESOLVE_NO_SYMLINKS
-                    | nix::libc::RESOLVE_NO_MAGICLINKS
-                    | nix::libc::RESOLVE_NO_XDEV,
+                resolution,
+                deadline,
             )
-            .map_err(|source| Error::OpenFrozenDiscardDirectory { source })?;
-            let anchored_metadata = anchor.metadata()?;
-            let child_metadata = child.metadata()?;
-            if (anchored_metadata.dev(), anchored_metadata.ino()) != (child_metadata.dev(), child_metadata.ino()) {
+            .map_err(|source| Error::OpenFrozenDiscardEntry {
+                path: child_path.clone(),
+                source,
+            })?;
+            if frozen_root_identity(&child, &child_path)? != expected {
                 return Err(Error::FrozenDiscardEntryChanged);
             }
-            discard_frozen_directory(child.as_raw_fd(), depth + 1, entries, deadline)?;
+            discard_frozen_directory(&child, &child_path, depth + 1, entries, deadline)?;
             drop(child);
-            drop(anchor);
-            unlinkat(Some(directory), name.as_c_str(), UnlinkatFlags::RemoveDir)?;
+            if frozen_root_identity(&anchor, &child_path)? != expected {
+                return Err(Error::FrozenDiscardEntryChanged);
+            }
+            // Linux has no inode-conditional unlink. The private 0700 wrapper
+            // and cooperating-writer lock are therefore the final-component
+            // race boundary; post-syscall reconciliation still refuses to
+            // retry against a foreign replacement.
+            unlink_frozen_discard_entry_until(
+                directory,
+                name.as_c_str(),
+                &child_path,
+                expected,
+                UnlinkatFlags::RemoveDir,
+                deadline,
+            )?;
         } else {
-            unlinkat(Some(directory), name.as_c_str(), UnlinkatFlags::NoRemoveDir)?;
+            let expected = frozen_root_identity(&anchor, &child_path)?;
+            unlink_frozen_discard_entry_until(
+                directory,
+                name.as_c_str(),
+                &child_path,
+                expected,
+                UnlinkatFlags::NoRemoveDir,
+                deadline,
+            )?;
         }
     }
     Ok(())
@@ -6227,12 +6678,21 @@ fn discard_frozen_directory(
 
 fn frozen_discard_entry_names(directory: RawFd, entries: &mut usize, deadline: Instant) -> Result<Vec<CString>, Error> {
     require_frozen_materialization_deadline(deadline)?;
-    let cursor = openat_owned(
+    let cursor = openat2_frozen_until(
         directory,
-        ".",
-        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK,
-        Mode::empty(),
-    )?;
+        Path::new("."),
+        nix::libc::O_CLOEXEC
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_RDONLY
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+        deadline,
+    )
+    .map_err(|source| Error::OpenFrozenDiscardDirectory { source })?;
     let descriptor = cursor.into_raw_fd();
     // SAFETY: fdopendir consumes this fresh owned descriptor on success. On
     // failure it remains ours and is closed explicitly below.
@@ -6247,6 +6707,7 @@ fn frozen_discard_entry_names(directory: RawFd, entries: &mut usize, deadline: I
     };
     let stream = FrozenDiscardDirectoryStream(stream);
     let mut names = Vec::new();
+    let mut interruptions = 0usize;
     loop {
         require_frozen_materialization_deadline(deadline)?;
         // SAFETY: errno is thread-local and readdir uses null for both EOF and
@@ -6261,6 +6722,10 @@ fn frozen_discard_entry_names(directory: RawFd, entries: &mut usize, deadline: I
             let errno = unsafe { *nix::libc::__errno_location() };
             if errno == 0 {
                 break;
+            }
+            if errno == nix::libc::EINTR && interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS {
+                interruptions += 1;
+                continue;
             }
             return Err(Error::ReadFrozenDiscardDirectory {
                 source: io::Error::from_raw_os_error(errno),
@@ -10669,6 +11134,26 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("unsafe frozen root at discard boundary {root:?}: uid={owner}, mode={mode:#o}")]
+    UnsafeFrozenRootDiscard { root: PathBuf, owner: u32, mode: u32 },
+    #[error("frozen-root discard namespace changed from {root:?} to {quarantine:?}")]
+    FrozenDiscardNamespaceMismatch { root: PathBuf, quarantine: PathBuf },
+    #[error(
+        "frozen-root discard failed for {root:?}: {primary}; restoring its exact public mode also failed: {restore}"
+    )]
+    RestoreFrozenDiscardRootMode {
+        root: PathBuf,
+        primary: Box<Error>,
+        restore: Box<Error>,
+    },
+    #[error(
+        "frozen-root detach failed for {quarantine:?}: {primary}; exact empty-quarantine cleanup also failed: {cleanup}"
+    )]
+    CleanupFrozenDiscardQuarantine {
+        quarantine: PathBuf,
+        primary: Box<Error>,
+        cleanup: Box<Error>,
+    },
     #[error("frozen root {root:?} changed while detaching it into {quarantine:?}")]
     FrozenRootChangedDuringDiscard { root: PathBuf, quarantine: PathBuf },
     #[error("frozen-root discard exceeds {limit} entries (got {actual})")]
@@ -10677,8 +11162,15 @@ pub enum Error {
     FrozenDiscardDepthLimit { limit: usize, actual: usize },
     #[error("frozen-root discard directory changed while it was pinned")]
     FrozenDiscardEntryChanged,
-    #[error("inspect frozen-root discard entry")]
-    InspectFrozenDiscardEntry {
+    #[error("open frozen-root discard entry {path:?}")]
+    OpenFrozenDiscardEntry {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("remove frozen-root discard entry {path:?}")]
+    RemoveFrozenDiscardEntry {
+        path: PathBuf,
         #[source]
         source: io::Error,
     },
@@ -15024,6 +15516,29 @@ let cast = import! cast.system.v1
         (destination, stage, root, deadline)
     }
 
+    fn frozen_discard_fixture(parent_path: &Path) -> (FrozenRootDestination, fs::File, FrozenRootIdentity, Instant) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let destination = frozen_publication_destination(parent_path, "published");
+        fs::create_dir(&destination.root_path).unwrap();
+        fs::write(destination.root_path.join("candidate"), b"retained candidate").unwrap();
+        let pinned =
+            open_frozen_named_entry_until(&destination.parent, &destination.name, &destination.root_path, deadline)
+                .unwrap()
+                .unwrap();
+        let identity = frozen_root_identity(&pinned, &destination.root_path).unwrap();
+        (destination, pinned, identity, deadline)
+    }
+
+    fn frozen_discard_quarantine_names(parent: &Path) -> Vec<OsString> {
+        let mut names = fs::read_dir(parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.as_bytes().starts_with(b".forge-frozen-discard-"))
+            .collect::<Vec<_>>();
+        names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        names
+    }
+
     #[test]
     fn frozen_root_publication_never_replaces_an_existing_destination() {
         let temporary = tempfile::tempdir().unwrap();
@@ -15366,6 +15881,504 @@ let cast = import! cast.system.v1
 
         let error = lock_frozen_destination_until(&second, Instant::now() + Duration::from_millis(20)).unwrap_err();
         assert!(matches!(error, Error::FrozenMaterializationTimeout { .. }));
+    }
+
+    #[test]
+    fn frozen_discard_widens_unreadable_roots_for_detach_and_private_cleanup() {
+        for mode in [0o000, 0o300] {
+            let temporary = tempfile::tempdir().unwrap();
+            let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+            fs::set_permissions(&destination.root_path, Permissions::from_mode(mode)).unwrap();
+
+            discard_frozen_root_destination_until(&destination, deadline).unwrap();
+
+            assert!(!destination.root_path.exists(), "root mode was {mode:04o}");
+            assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+        }
+    }
+
+    #[test]
+    fn frozen_discard_restores_mode_when_post_chmod_identity_inspection_fails() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+        fs::set_permissions(&destination.root_path, Permissions::from_mode(0o000)).unwrap();
+        let expected = frozen_root_identity(&pinned, &destination.root_path).unwrap();
+
+        let error = prepare_frozen_discard_root_mode_with(&pinned, &destination, expected, deadline, |_, path| {
+            Err(Error::StatFrozenExecutableRoot {
+                path: path.to_owned(),
+                source: io::Error::from_raw_os_error(nix::libc::EIO),
+            })
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, Error::StatFrozenExecutableRoot { .. }));
+        assert_eq!(frozen_root_identity(&pinned, &destination.root_path).unwrap(), expected);
+        assert_eq!(
+            fs::symlink_metadata(&destination.root_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0
+        );
+        fs::set_permissions(&destination.root_path, Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn frozen_discard_is_idempotent_when_the_public_root_is_absent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = frozen_publication_destination(temporary.path(), "published");
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        discard_frozen_root_destination_until(&destination, deadline).unwrap();
+        discard_frozen_root_destination_until(&destination, deadline).unwrap();
+
+        assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+    }
+
+    #[test]
+    fn frozen_discard_unlinks_symlinks_without_touching_external_targets() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("must-survive"), b"external").unwrap();
+        symlink(&outside, destination.root_path.join("escape")).unwrap();
+
+        discard_frozen_root_destination_until(&destination, deadline).unwrap();
+
+        assert_eq!(fs::read(outside.join("must-survive")).unwrap(), b"external");
+        assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+    }
+
+    #[test]
+    fn frozen_discard_depth_limit_accepts_n_and_preserves_n_plus_one_privately() {
+        for depth in [MAX_FROZEN_LAYOUT_PATH_COMPONENTS, MAX_FROZEN_LAYOUT_PATH_COMPONENTS + 1] {
+            let temporary = tempfile::tempdir().unwrap();
+            let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+            let mut nested = destination.root_path.clone();
+            for _ in 0..depth {
+                nested.push("d");
+                fs::create_dir(&nested).unwrap();
+            }
+
+            let result = discard_frozen_root_destination_until(&destination, deadline);
+            if depth == MAX_FROZEN_LAYOUT_PATH_COMPONENTS {
+                result.unwrap();
+                assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(Error::FrozenDiscardDepthLimit { limit, actual })
+                        if limit == MAX_FROZEN_LAYOUT_PATH_COMPONENTS
+                            && actual == MAX_FROZEN_LAYOUT_PATH_COMPONENTS + 1
+                ));
+                assert!(!destination.root_path.exists());
+                assert_eq!(frozen_discard_quarantine_names(temporary.path()).len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn frozen_discard_entry_limit_rejects_n_plus_one_before_deletion() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+        let root = fs::File::open(&destination.root_path).unwrap();
+        let mut entries = MAX_FROZEN_NORMALIZED_INODES;
+
+        let error = discard_frozen_directory(&root, &destination.root_path, 0, &mut entries, deadline).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::FrozenDiscardEntryLimit { limit, actual }
+                if limit == MAX_FROZEN_NORMALIZED_INODES && actual == MAX_FROZEN_NORMALIZED_INODES + 1
+        ));
+        assert_eq!(
+            fs::read(destination.root_path.join("candidate")).unwrap(),
+            b"retained candidate"
+        );
+    }
+
+    #[test]
+    fn frozen_discard_rejects_non_directory_roots_without_creating_quarantine() {
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = frozen_publication_destination(temporary.path(), "published");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        fs::write(&destination.root_path, b"must survive").unwrap();
+
+        let error = discard_frozen_root_destination_until(&destination, deadline).unwrap_err();
+        assert!(matches!(error, Error::UnsafeFrozenRootDiscard { .. }));
+        assert_eq!(fs::read(&destination.root_path).unwrap(), b"must survive");
+        assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+
+        fs::remove_file(&destination.root_path).unwrap();
+        let target = temporary.path().join("symlink-target");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("must-survive"), b"foreign").unwrap();
+        symlink(&target, &destination.root_path).unwrap();
+
+        assert!(discard_frozen_root_destination_until(&destination, deadline).is_err());
+        assert_eq!(fs::read(target.join("must-survive")).unwrap(), b"foreign");
+        assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+    }
+
+    #[test]
+    fn frozen_discard_rename_failure_removes_only_its_exact_empty_quarantine() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+        fs::set_permissions(&destination.root_path, Permissions::from_mode(0o000)).unwrap();
+
+        let error = discard_frozen_root_destination_with(&destination, deadline, |_, _, _, _| {
+            Err(io::Error::from_raw_os_error(nix::libc::EIO))
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, Error::DetachFrozenRoot { .. }));
+        assert_eq!(
+            fs::symlink_metadata(&destination.root_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0
+        );
+        fs::set_permissions(&destination.root_path, Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            fs::read(destination.root_path.join("candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+    }
+
+    #[test]
+    fn frozen_discard_adopts_an_applied_detach_even_when_the_syscall_reports_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, pinned, expected, deadline) = frozen_discard_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let quarantine = create_frozen_private_directory(&destination, b".discard-applied-test-", deadline).unwrap();
+
+        detach_frozen_root_with(
+            &destination,
+            &quarantine,
+            &pinned,
+            expected,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )?;
+                Err(io::Error::from_raw_os_error(nix::libc::EIO))
+            },
+        )
+        .unwrap();
+
+        assert!(!destination.root_path.exists());
+        assert_eq!(
+            fs::read(quarantine.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        let cleanup_deadline = frozen_namespace_recovery_deadline();
+        discard_retained_frozen_stage(&quarantine, &destination, &pinned, cleanup_deadline).unwrap();
+        remove_empty_frozen_private_directory(&quarantine, &destination, cleanup_deadline).unwrap();
+    }
+
+    #[test]
+    fn frozen_discard_completes_after_an_applied_detach_reports_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+
+        discard_frozen_root_destination_with(
+            &destination,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )?;
+                Err(io::Error::from_raw_os_error(nix::libc::EIO))
+            },
+        )
+        .unwrap();
+
+        assert!(!destination.root_path.exists());
+        assert!(frozen_discard_quarantine_names(temporary.path()).is_empty());
+    }
+
+    #[test]
+    fn frozen_discard_reconciles_an_applied_detach_after_the_work_deadline_expires() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, pinned, expected, _) = frozen_discard_fixture(temporary.path());
+        let setup_deadline = Instant::now() + Duration::from_secs(30);
+        let _lock = lock_frozen_destination_until(&destination, setup_deadline).unwrap();
+        let quarantine =
+            create_frozen_private_directory(&destination, b".discard-expired-test-", setup_deadline).unwrap();
+        let work_deadline = Instant::now() + Duration::from_millis(50);
+
+        detach_frozen_root_with(
+            &destination,
+            &quarantine,
+            &pinned,
+            expected,
+            work_deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    work_deadline,
+                )?;
+                while Instant::now() <= work_deadline {
+                    std::thread::yield_now();
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(!destination.root_path.exists());
+        assert_eq!(
+            fs::read(quarantine.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        let cleanup_deadline = frozen_namespace_recovery_deadline();
+        discard_retained_frozen_stage(&quarantine, &destination, &pinned, cleanup_deadline).unwrap();
+        remove_empty_frozen_private_directory(&quarantine, &destination, cleanup_deadline).unwrap();
+    }
+
+    #[test]
+    fn frozen_discard_unlink_reconciles_applied_errors_and_bounded_interrupts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = open_frozen_destination_parent(temporary.path()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        for (name, report_applied_error) in [(c"applied", true), (c"interrupted", false)] {
+            let path = temporary.path().join(OsStr::from_bytes(name.to_bytes()));
+            fs::write(&path, b"discard me").unwrap();
+            let anchor = open_frozen_named_entry_until(&directory, name, &path, deadline)
+                .unwrap()
+                .unwrap();
+            let expected = frozen_root_identity(&anchor, &path).unwrap();
+            let mut calls = 0usize;
+
+            unlink_frozen_discard_entry_with(&directory, name, &path, expected, deadline, |directory, name| {
+                calls += 1;
+                if report_applied_error {
+                    unlinkat(Some(directory.as_raw_fd()), name, UnlinkatFlags::NoRemoveDir)?;
+                    Err(Errno::EIO)
+                } else if calls == 1 {
+                    Err(Errno::EINTR)
+                } else {
+                    unlinkat(Some(directory.as_raw_fd()), name, UnlinkatFlags::NoRemoveDir)
+                }
+            })
+            .unwrap();
+
+            assert!(!path.exists());
+            assert_eq!(calls, if report_applied_error { 1 } else { 2 });
+        }
+
+        let bounded = temporary.path().join("bounded-interrupts");
+        fs::write(&bounded, b"must survive").unwrap();
+        let anchor = open_frozen_named_entry_until(&directory, c"bounded-interrupts", &bounded, deadline)
+            .unwrap()
+            .unwrap();
+        let expected = frozen_root_identity(&anchor, &bounded).unwrap();
+        let mut calls = 0usize;
+        let error = unlink_frozen_discard_entry_with(
+            &directory,
+            c"bounded-interrupts",
+            &bounded,
+            expected,
+            deadline,
+            |_, _| {
+                calls += 1;
+                Err(Errno::EINTR)
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RemoveFrozenDiscardEntry { .. }));
+        assert_eq!(calls, MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS + 1);
+        assert_eq!(fs::read(&bounded).unwrap(), b"must survive");
+    }
+
+    #[test]
+    fn frozen_discard_unlink_never_retries_against_a_foreign_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = open_frozen_destination_parent(temporary.path()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let path = temporary.path().join("candidate");
+        let displaced = temporary.path().join("displaced-candidate");
+        fs::write(&path, b"retained").unwrap();
+        let anchor = open_frozen_named_entry_until(&directory, c"candidate", &path, deadline)
+            .unwrap()
+            .unwrap();
+        let expected = frozen_root_identity(&anchor, &path).unwrap();
+
+        let error = unlink_frozen_discard_entry_with(&directory, c"candidate", &path, expected, deadline, |_, _| {
+            fs::rename(&path, &displaced).unwrap();
+            fs::write(&path, b"foreign").unwrap();
+            Err(Errno::EIO)
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, Error::FrozenDiscardEntryChanged));
+        assert_eq!(fs::read(&path).unwrap(), b"foreign");
+        assert_eq!(fs::read(&displaced).unwrap(), b"retained");
+    }
+
+    #[test]
+    fn frozen_discard_preserves_a_racing_quarantine_collision_and_the_public_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, pinned, expected, deadline) = frozen_discard_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let quarantine = create_frozen_private_directory(&destination, b".discard-collision-test-", deadline).unwrap();
+        let collision = quarantine.path.join("root");
+
+        let error = detach_frozen_root_with(
+            &destination,
+            &quarantine,
+            &pinned,
+            expected,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                fs::create_dir(&collision)?;
+                fs::write(collision.join("foreign"), b"must survive")?;
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::FrozenDiscardNamespaceMismatch { .. }));
+        assert_eq!(
+            fs::read(destination.root_path.join("candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert_eq!(fs::read(collision.join("foreign")).unwrap(), b"must survive");
+    }
+
+    #[test]
+    fn frozen_discard_detects_source_substitution_without_deleting_the_foreign_tree() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, pinned, expected, deadline) = frozen_discard_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let quarantine = create_frozen_private_directory(&destination, b".discard-source-test-", deadline).unwrap();
+        let displaced = temporary.path().join("displaced-retained-root");
+        let public = destination.root_path.clone();
+
+        let error = detach_frozen_root_with(
+            &destination,
+            &quarantine,
+            &pinned,
+            expected,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                fs::rename(&public, &displaced)?;
+                fs::create_dir(&public)?;
+                fs::write(public.join("foreign"), b"must survive")?;
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::FrozenDiscardNamespaceMismatch { .. }));
+        assert_eq!(fs::read(displaced.join("candidate")).unwrap(), b"retained candidate");
+        assert_eq!(fs::read(quarantine.path.join("root/foreign")).unwrap(), b"must survive");
+        assert!(!public.exists());
+    }
+
+    #[test]
+    fn frozen_discard_preserves_a_replaced_quarantine_wrapper_and_the_detached_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+        let displaced_wrapper = temporary.path().join("displaced-discard-wrapper");
+
+        let error = discard_frozen_root_destination_with(
+            &destination,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                let names = frozen_discard_quarantine_names(temporary.path());
+                assert_eq!(names.len(), 1);
+                let public_wrapper = temporary.path().join(&names[0]);
+                fs::rename(&public_wrapper, &displaced_wrapper)?;
+                fs::create_dir(&public_wrapper)?;
+                fs::write(public_wrapper.join("foreign"), b"must survive")?;
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, Error::CleanupFrozenDiscardQuarantine { .. }));
+        assert!(!destination.root_path.exists());
+        assert_eq!(
+            fs::read(displaced_wrapper.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        let names = frozen_discard_quarantine_names(temporary.path());
+        assert_eq!(names.len(), 1);
+        assert_eq!(
+            fs::read(temporary.path().join(&names[0]).join("foreign")).unwrap(),
+            b"must survive"
+        );
+    }
+
+    #[test]
+    fn frozen_discard_uses_the_same_finite_parent_lock_as_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+
+        let error = discard_frozen_root_destination_until(&destination, Instant::now() + Duration::from_millis(20))
+            .unwrap_err();
+        assert!(matches!(error, Error::FrozenMaterializationTimeout { .. }));
+        assert_eq!(
+            fs::read(destination.root_path.join("candidate")).unwrap(),
+            b"retained candidate"
+        );
+    }
+
+    #[test]
+    fn frozen_discard_rejects_destination_parent_replacement_without_touching_either_tree() {
+        let temporary = tempfile::tempdir().unwrap();
+        let namespace = temporary.path().join("namespace");
+        fs::create_dir(&namespace).unwrap();
+        let (destination, _pinned, _expected, deadline) = frozen_discard_fixture(&namespace);
+        let displaced_namespace = temporary.path().join("displaced-namespace");
+        fs::rename(&namespace, &displaced_namespace).unwrap();
+        fs::create_dir(&namespace).unwrap();
+        fs::create_dir(namespace.join("published")).unwrap();
+        fs::write(namespace.join("published/foreign"), b"must survive").unwrap();
+
+        assert!(discard_frozen_root_destination_until(&destination, deadline).is_err());
+        assert_eq!(
+            fs::read(displaced_namespace.join("published/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert_eq!(fs::read(namespace.join("published/foreign")).unwrap(), b"must survive");
     }
 
     #[test]
