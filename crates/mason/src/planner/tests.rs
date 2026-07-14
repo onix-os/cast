@@ -880,20 +880,32 @@ fn setup_capability_denial(message: &str) -> bool {
         "pivot_root",
         "sethostname",
         "unmount old root",
-        "drop payload mount-administration capability",
     ]
     .iter()
     .any(|prefix| message.starts_with(prefix));
-    let permission_failure = message.contains("Operation not permitted")
-        || message.contains("Permission denied")
-        || message.contains("Function not implemented")
-        || message.contains("EPERM")
-        || message.contains("EACCES")
-        || message.contains("ENOSYS");
+    // Child setup errors are rendered from a typed `nix::Errno` source. Match
+    // only its exact terminal representation: paths and operation labels are
+    // diagnostic text and must never be able to smuggle an errno substring
+    // into the capability-skip decision.
+    let permission_failure = [
+        ": EPERM: Operation not permitted",
+        ": EACCES: Permission denied",
+        ": ENOSYS: Function not implemented",
+    ]
+    .iter()
+    .any(|suffix| message.ends_with(suffix));
     setup_failure && permission_failure
 }
 
 fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
+    // The Mason wrapper is transparent, so `source()` skips directly to the
+    // wrapped container error's own source (often a bare `Errno`). Inspect the
+    // typed wrapper before walking the chain or the operation identity needed
+    // to distinguish namespace denial from unrelated EPERM failures is lost.
+    if let Some(crate::container::Error::Container(error)) = error.downcast_ref::<crate::container::Error>() {
+        return container_capability_unavailable(error);
+    }
+
     // `thiserror` may make a transparent wrapper's concrete inner error
     // unavailable to `downcast_ref`, but its exact display remains in the
     // source chain. Accept only known setup labels, never `run: ...` payload
@@ -903,9 +915,25 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
     }
     if let Some(error) = error.downcast_ref::<::container::Error>() {
         return match error {
-            // The container crate currently groups clone, pipe, signal, and
-            // wait errors into this variant. An errno alone therefore does
-            // not prove namespace capability unavailability.
+            ::container::Error::CloneNamespaces { source } => matches!(
+                source,
+                nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS
+            ),
+            ::container::Error::CloneIntoCgroup { source } => matches!(
+                source.raw_os_error(),
+                Some(code)
+                    if code == nix::libc::ENOSYS
+                        || code == nix::libc::EPERM
+                        || code == nix::libc::E2BIG
+            ),
+            // Once the kernel accepted atomic placement, authentication and
+            // teardown failures are lifecycle violations, not evidence that
+            // the host merely lacks an optional execution capability.
+            ::container::Error::CgroupLifecycle { .. }
+            | ::container::Error::CgroupCleanup { .. }
+            | ::container::Error::CgroupCleanupAfterFailure { .. } => false,
+            // Pipe, signal, and wait failures remain grouped here. An errno
+            // alone therefore does not prove namespace capability denial.
             ::container::Error::Nix { .. } => false,
             ::container::Error::Idmap { source } => {
                 source
@@ -1162,10 +1190,48 @@ fn checked_in_metadata_only_example_fails_closed_before_execution() {
 
 #[test]
 fn frozen_execution_capability_skip_never_hides_payload_or_ambiguous_nix_failures() {
-    let setup = crate::container::Error::Container(::container::Error::Failure {
-        message: "clear inherited supplementary groups: EPERM: Operation not permitted".to_owned(),
+    for source in [
+        nix::errno::Errno::EPERM,
+        nix::errno::Errno::EACCES,
+        nix::errno::Errno::ENOSYS,
+    ] {
+        let namespace = crate::container::Error::Container(::container::Error::CloneNamespaces { source });
+        assert!(container_capability_unavailable(&namespace));
+    }
+    let namespace_resource_exhaustion = crate::container::Error::Container(::container::Error::CloneNamespaces {
+        source: nix::errno::Errno::EAGAIN,
     });
-    assert!(container_capability_unavailable(&setup));
+    assert!(!container_capability_unavailable(&namespace_resource_exhaustion));
+
+    for terminal in [
+        "EPERM: Operation not permitted",
+        "EACCES: Permission denied",
+        "ENOSYS: Function not implemented",
+    ] {
+        let setup = crate::container::Error::Container(::container::Error::Failure {
+            message: format!("mount /work: {terminal}"),
+        });
+        assert!(container_capability_unavailable(&setup));
+    }
+
+    for message in [
+        "mount /work/EPERM: EIO: Input/output error",
+        "mount /work/EACCES: unrelated failure",
+        "mount /work/ENOSYS: operation failed",
+        "mount /work: Operation not permitted",
+        "clear inherited supplementary groups: permission denied by payload text",
+        "restrict payload scheduler to the fair class: EPERM: Operation not permitted",
+        "drop all payload capabilities: EPERM: Operation not permitted",
+        "install mandatory payload seccomp policy: EACCES: Permission denied",
+    ] {
+        let injected = crate::container::Error::Container(::container::Error::Failure {
+            message: message.to_owned(),
+        });
+        assert!(
+            !container_capability_unavailable(&injected),
+            "diagnostic text must not classify {message:?} as a host capability denial"
+        );
+    }
 
     let payload = crate::container::Error::Container(::container::Error::Failure {
         message: "run: package frozen example: permission denied".to_owned(),

@@ -38,9 +38,13 @@ use nix::unistd::{
 };
 use snafu::{ResultExt, Snafu};
 
+use self::clone3::{Clone3Outcome, clone3_into_cgroup};
 use self::idmap::idmap;
 
+pub mod cgroup;
+mod clone3;
 mod idmap;
+mod seccomp;
 
 // linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
 const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
@@ -130,9 +134,11 @@ pub enum LoopbackPolicy {
 /// [`Container::bind_rw`]. That exception applies to the exact bind mount, not
 /// to nested mounts; each writable nested mount must be declared separately.
 /// This keeps undeclared paths, including package-manager content and
-/// dependency trees, immutable to the payload. Read-only setup also removes
-/// mount-administration capability before the payload runs; pseudo-filesystems
-/// remain governed by [`PseudoFilesystemPolicy`].
+/// dependency trees, immutable to the payload. Every container payload,
+/// regardless of root policy, enters with a sanitized descriptor table, no
+/// Linux capabilities, the fair scheduler, and a mandatory seccomp policy
+/// preventing namespace, mount, device-node, and file-handle escape syscalls;
+/// pseudo-filesystems remain governed by [`PseudoFilesystemPolicy`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RootFilesystemPolicy {
     ReadOnly,
@@ -429,8 +435,36 @@ impl Container {
         }
     }
 
-    /// Run `f` as a container process payload
-    pub fn run<E>(mut self, mut f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
+    /// Run `f` as a container process payload.
+    ///
+    /// This compatibility path preserves legacy `clone(2)` activation. Frozen
+    /// derivations must use [`Container::run_in_cgroup`] so aggregate resource
+    /// accounting begins atomically at process creation.
+    pub fn run<E>(self, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        self.run_internal(None, f)
+    }
+
+    /// Run `f` with atomic placement in an authenticated cgroup v2 leaf.
+    ///
+    /// There is deliberately no numeric `cgroup.procs` migration and no
+    /// fallback to legacy clone. The kernel must create both the child and its
+    /// pidfd with `clone3(CLONE_INTO_CGROUP | CLONE_PIDFD)` before any child
+    /// instruction is released into trusted setup.
+    pub fn run_in_cgroup<E>(self, leaf: cgroup::CgroupLeaf, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        self.run_internal(Some(leaf), f)
+    }
+
+    fn run_internal<E>(
+        mut self,
+        mut cgroup_leaf: Option<cgroup::CgroupLeaf>,
+        mut f: impl FnMut() -> Result<(), E>,
+    ) -> Result<(), Error>
     where
         E: std::error::Error + Send + Sync + 'static,
     {
@@ -438,125 +472,261 @@ impl Container {
         // child later clones mounts from these descriptors through an empty
         // path, so neither a pathname substitution after `run` starts nor a
         // cwd change during setup can redirect a declared source.
-        let mut anchored_bind_sources = if let Some(root_anchor) = &self.root_anchor {
-            pin_anchored_bind_sources(root_anchor.as_raw_fd(), &self.binds).map_err(|error| Error::Failure {
-                message: format_error(error),
-            })?
-        } else {
-            Vec::new()
+        let preparation = (|| {
+            let anchored_bind_sources = if let Some(root_anchor) = &self.root_anchor {
+                pin_anchored_bind_sources(root_anchor.as_raw_fd(), &self.binds).map_err(|error| Error::Failure {
+                    message: format_error(error),
+                })?
+            } else {
+                Vec::new()
+            };
+
+            // clone(2) needs a caller-owned stack. Fork-like clone3 without
+            // CLONE_VM must instead use stack=0/stack_size=0 and resumes on the
+            // copy-on-write copy of this Rust stack.
+            let stack = if cgroup_leaf.is_none() {
+                Some(CloneStack::new().map_err(|source| Error::Failure {
+                    message: format!("allocate guarded clone stack: {source}"),
+                })?)
+            } else {
+                None
+            };
+
+            // Both ends are close-on-exec. The child retains the writer only
+            // long enough to return one bounded setup/payload diagnostic.
+            let sync = SyncPipe::new()?;
+            Ok::<_, Error>((anchored_bind_sources, stack, sync))
+        })();
+        let (mut anchored_bind_sources, mut stack, mut sync) = match preparation {
+            Ok(prepared) => prepared,
+            Err(failure) => {
+                return Err(match cgroup_leaf.take() {
+                    Some(leaf) => cleanup_unstarted_cgroup(failure, leaf),
+                    None => failure,
+                });
+            }
         };
-
-        // Each invocation owns its clone stack until the child is reaped.
-        // A shared static stack lets concurrent container activations corrupt
-        // each other's clone frames before either child has copied them.
-        let mut stack = CloneStack::new().map_err(|source| Error::Failure {
-            message: format!("allocate guarded clone stack: {source}"),
-        })?;
-
-        // Pipe to synchronize parent & child. Both ends must be close-on-exec:
-        // the child retains the write end while running the Rust payload so it
-        // can report setup/payload errors, but spawned commands must never
-        // inherit that control descriptor.
-        let mut sync = SyncPipe::new()?;
         let child_sync = sync.raw();
-
         let flags = namespace_flags(self.networking);
 
-        let clone_cb = Box::new(
-            || match enter(&mut self, &mut anchored_bind_sources, child_sync, &mut f) {
-                Ok(_) => 0,
-                // Write error back to parent process
-                Err(error) => {
-                    let error = format_error(error);
-                    for _ in 0..3 {
-                        match write(child_sync.1, error.as_bytes()) {
-                            Ok(_) => break,
-                            Err(Errno::EINTR) => continue,
-                            Err(_) => break,
-                        }
-                    }
-
-                    let _ = close(child_sync.1);
-
-                    1
+        let spawn = if let Some(leaf) = cgroup_leaf.as_ref() {
+            let result = (|| {
+                let placement = leaf.placement().map_err(|source| Error::CgroupLifecycle { source })?;
+                let inherited = placement.inherited_raw_fds();
+                // SAFETY: the child outcome below closes both cgroup
+                // descriptors, never unwinds, and terminates through _exit.
+                let outcome = unsafe { clone3_into_cgroup(flags.bits() as u64, placement.target()) }
+                    .map_err(|source| Error::CloneIntoCgroup { source })?;
+                Ok::<_, Error>((outcome, inherited))
+            })();
+            match result {
+                Ok((Clone3Outcome::Parent { pid, pidfd }, _)) => Ok((pid, Some(pidfd))),
+                Ok((Clone3Outcome::Child, inherited)) => {
+                    let exit_code = match close_inherited_cgroup_descriptors(inherited) {
+                        Ok(()) => child_exit_code(&mut self, &mut anchored_bind_sources, child_sync, &mut f),
+                        Err(error) => report_child_error(child_sync.1, error),
+                    };
+                    // SAFETY: this is the raw fork-like clone3 child. Running
+                    // destructors or unwinding through pre-clone frames is not
+                    // sound; _exit terminates only this process immediately.
+                    unsafe { nix::libc::_exit(exit_code) }
                 }
-            },
-        );
-        let pid = unsafe { clone(clone_cb, stack.as_mut_slice(), flags, Some(SIGCHLD)) }.context(NixSnafu)?;
+                Err(failure) => Err(failure),
+            }
+        } else {
+            let clone_cb =
+                Box::new(|| child_exit_code(&mut self, &mut anchored_bind_sources, child_sync, &mut f) as isize);
+            let stack = stack.as_mut().expect("legacy activation owns a clone stack");
+            unsafe { clone(clone_cb, stack.as_mut_slice(), flags, Some(SIGCHLD)) }
+                .map(|pid| (pid, None))
+                .map_err(|source| Error::CloneNamespaces { source })
+        };
 
-        // Every build receives the same one-identity credential namespace:
-        // namespace root maps to the caller and no other IDs exist.
-        if let Err(source) = idmap(pid) {
-            abort_child(pid);
-            return Err(Error::Idmap { source });
-        }
+        let (pid, pidfd) = match spawn {
+            Ok(spawned) => spawned,
+            Err(failure) => {
+                return Err(match cgroup_leaf.take() {
+                    Some(leaf) => cleanup_unstarted_cgroup(failure, leaf),
+                    None => failure,
+                });
+            }
+        };
 
-        // Signal dispositions are process-global. Serialize the override and
-        // install it before releasing the child, then restore the exact prior
-        // action on every path through the RAII guard.
-        let mut sigint_override = if self.ignore_host_sigint {
-            match SignalOverride::install(Signal::SIGINT) {
-                Ok(override_) => Some(override_),
+        // Keep the pidfd live until every wait or abort path has reaped the
+        // exact child. Numeric PID reuse is therefore never part of cgroup
+        // activation authority.
+        let _pidfd = pidfd;
+        let result = (|| {
+            // Every build receives the same one-identity credential namespace:
+            // namespace root maps to the caller and no other IDs exist.
+            if let Err(source) = idmap(pid) {
+                abort_child(pid);
+                return Err(Error::Idmap { source });
+            }
+
+            if let Some(leaf) = cgroup_leaf.as_ref() {
+                let expected_tgid = match u32::try_from(pid.as_raw()) {
+                    Ok(tgid) => tgid,
+                    Err(_) => {
+                        abort_child(pid);
+                        return Err(Error::Failure {
+                            message: format!("clone3 returned invalid child TGID {}", pid.as_raw()),
+                        });
+                    }
+                };
+                if let Err(source) = leaf.require_sole_member(expected_tgid) {
+                    abort_child(pid);
+                    return Err(Error::CgroupLifecycle { source });
+                }
+            }
+
+            // Signal dispositions are process-global. Serialize the override
+            // and install it before releasing the child, then restore the
+            // exact prior action on every path through the RAII guard.
+            let mut sigint_override = if self.ignore_host_sigint {
+                match SignalOverride::install(Signal::SIGINT) {
+                    Ok(override_) => Some(override_),
+                    Err(source) => {
+                        abort_child(pid);
+                        return Err(Error::Nix { source });
+                    }
+                }
+            } else {
+                None
+            };
+
+            match write(sync.write_fd(), &[Message::Continue as u8]) {
+                Ok(1) => {}
+                Ok(_) => {
+                    abort_child(pid);
+                    return Err(Error::Nix { source: Errno::EIO });
+                }
                 Err(source) => {
                     abort_child(pid);
                     return Err(Error::Nix { source });
                 }
             }
-        } else {
-            None
-        };
+            // Linux closes the descriptor even when close reports EINTR. Keep
+            // the diagnostic but never abandon the already released child.
+            let close_write_error = sync.close_write().err();
 
-        // Allow child to continue
-        match write(sync.write_fd(), &[Message::Continue as u8]) {
-            Ok(1) => {}
-            Ok(_) => {
-                abort_child(pid);
-                return Err(Error::Nix { source: Errno::EIO });
+            let status = match wait_for_child(pid) {
+                Ok(status) => status,
+                Err(source) => {
+                    abort_child(pid);
+                    return Err(Error::Nix { source });
+                }
+            };
+
+            if let Some(override_) = sigint_override.take() {
+                override_.restore().context(NixSnafu)?;
             }
+
+            let result = match status {
+                WaitStatus::Exited(_, 0) => Ok(()),
+                WaitStatus::Exited(..) => {
+                    let error = read_child_error(sync.read_fd()).context(NixSnafu)?;
+                    Err(Error::Failure { message: error })
+                }
+                WaitStatus::Signaled(_, signal, _) => Err(Error::Signaled { signal }),
+                WaitStatus::Stopped(..)
+                | WaitStatus::PtraceEvent(..)
+                | WaitStatus::PtraceSyscall(_)
+                | WaitStatus::Continued(_)
+                | WaitStatus::StillAlive => {
+                    abort_child(pid);
+                    Err(Error::UnknownExit)
+                }
+            };
+
+            match (result, close_write_error) {
+                (Ok(()), Some(source)) => Err(Error::Nix { source }),
+                (result, _) => result,
+            }
+        })();
+
+        match cgroup_leaf.take() {
+            Some(leaf) => finalize_started_cgroup(result, leaf),
+            None => result,
+        }
+    }
+}
+
+fn child_exit_code<E>(
+    container: &mut Container,
+    anchored_bind_sources: &mut Vec<PinnedAnchoredBindSource>,
+    sync: (RawFd, RawFd),
+    f: &mut impl FnMut() -> Result<(), E>,
+) -> i32
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match enter(container, anchored_bind_sources, sync, f) {
+        Ok(()) => 0,
+        Err(error) => report_child_error(sync.1, error),
+    }
+}
+
+fn report_child_error(error_writer: RawFd, error: ContainerError) -> i32 {
+    let error = format_error(error);
+    for _ in 0..3 {
+        match write(error_writer, error.as_bytes()) {
+            Ok(_) => break,
+            Err(Errno::EINTR) => continue,
+            Err(_) => break,
+        }
+    }
+    let _ = close(error_writer);
+    1
+}
+
+fn close_inherited_cgroup_descriptors(descriptors: [RawFd; 2]) -> Result<(), ContainerError> {
+    if descriptors[0] == descriptors[1] || descriptors.iter().any(|descriptor| *descriptor < 0) {
+        return InvalidInheritedCgroupDescriptorsSnafu { descriptors }.fail();
+    }
+    for descriptor in descriptors {
+        match close(descriptor) {
+            Ok(()) | Err(Errno::EINTR) => {}
             Err(source) => {
-                abort_child(pid);
-                return Err(Error::Nix { source });
+                return Err(source).context(CloseInheritedCgroupDescriptorSnafu { descriptor });
             }
         }
-        // Write no longer needed
-        // Do not abandon a running child if close reports an error. Linux has
-        // already released the descriptor even when `close` returns EINTR, so
-        // retain the error and supervise the child to completion first.
-        let close_write_error = sync.close_write().err();
-
-        let status = match wait_for_child(pid) {
-            Ok(status) => status,
-            Err(source) => {
-                abort_child(pid);
-                return Err(Error::Nix { source });
-            }
-        };
-
-        if let Some(override_) = sigint_override.take() {
-            override_.restore().context(NixSnafu)?;
+        // Linux closes a descriptor even when close(2) reports EINTR. Prove
+        // the child retained no cgroup capability before it waits or performs
+        // any namespace setup.
+        let result = unsafe { nix::libc::fcntl(descriptor, nix::libc::F_GETFD) };
+        if result != -1 || Errno::last() != Errno::EBADF {
+            return RetainedInheritedCgroupDescriptorSnafu { descriptor }.fail();
         }
+    }
+    Ok(())
+}
 
-        let result = match status {
-            WaitStatus::Exited(_, 0) => Ok(()),
-            WaitStatus::Exited(..) => {
-                let error = read_child_error(sync.read_fd()).context(NixSnafu)?;
-                Err(Error::Failure { message: error })
-            }
-            WaitStatus::Signaled(_, signal, _) => Err(Error::Signaled { signal }),
-            WaitStatus::Stopped(..)
-            | WaitStatus::PtraceEvent(..)
-            | WaitStatus::PtraceSyscall(_)
-            | WaitStatus::Continued(_)
-            | WaitStatus::StillAlive => {
-                abort_child(pid);
-                Err(Error::UnknownExit)
-            }
-        };
+fn cleanup_unstarted_cgroup(failure: Error, mut leaf: cgroup::CgroupLeaf) -> Error {
+    match leaf.remove_unstarted() {
+        Ok(()) => failure,
+        Err(cleanup) => Error::CgroupCleanupAfterFailure {
+            failure: Box::new(failure),
+            cleanup,
+            leaf: Some(Box::new(leaf)),
+        },
+    }
+}
 
-        match (result, close_write_error) {
-            (Ok(()), Some(source)) => Err(Error::Nix { source }),
-            (result, _) => result,
-        }
+fn finalize_started_cgroup(result: Result<(), Error>, mut leaf: cgroup::CgroupLeaf) -> Result<(), Error> {
+    match leaf.kill_and_remove(cgroup::DrainPolicy::default()) {
+        Ok(()) => result,
+        Err(cleanup) => Err(match result {
+            Ok(()) => Error::CgroupCleanup {
+                cleanup,
+                leaf: Some(Box::new(leaf)),
+            },
+            Err(failure) => Error::CgroupCleanupAfterFailure {
+                failure: Box::new(failure),
+                cleanup,
+                leaf: Some(Box::new(leaf)),
+            },
+        }),
     }
 }
 
@@ -612,7 +782,6 @@ fn enter<E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    let anchored = container.root_anchor.is_some();
     // Ensure process is cleaned up if parent dies
     set_pdeathsig(Signal::SIGKILL).context(SetPDeathSigSnafu)?;
 
@@ -646,13 +815,17 @@ where
     // copy-on-write Container value.
     container.binds.clear();
 
-    if anchored {
-        sanitize_anchored_payload_fds(sync.1)?;
-    }
-
-    if anchored || matches!(container.root_filesystem, RootFilesystemPolicy::ReadOnly) {
-        drop_mount_administration()?;
-    }
+    // Descriptor and privilege confinement are container invariants, not
+    // optional consequences of selecting a descriptor-backed or read-only
+    // root. A pathname container retaining a host directory descriptor can
+    // otherwise escape its pivoted root with openat(2), while a writable-root
+    // payload can use namespace-root capabilities to recreate setup-only
+    // authority such as the auxiliary GID or arbitrary device nodes.
+    validate_payload_standard_fds()?;
+    sanitize_payload_fds(sync.1)?;
+    restrict_payload_scheduler()?;
+    drop_all_payload_capabilities()?;
+    seccomp::install_payload_filter().context(InstallPayloadSeccompSnafu)?;
 
     let result = f().boxed().context(RunSnafu);
     if result.is_ok() {
@@ -663,12 +836,43 @@ where
     result
 }
 
-fn sanitize_anchored_payload_fds(error_writer: RawFd) -> Result<(), ContainerError> {
+fn sanitize_payload_fds(error_writer: RawFd) -> Result<(), ContainerError> {
     if error_writer < 3 {
         return InvalidPayloadErrorDescriptorSnafu { fd: error_writer }.fail();
     }
     close_range(3, error_writer as u32 - 1)?;
     close_range(error_writer as u32 + 1, u32::MAX)
+}
+
+fn validate_payload_standard_fds() -> Result<(), ContainerError> {
+    for fd in 0..=2 {
+        // A closed standard descriptor carries no authority and is allowed.
+        // Any live descriptor is inspected before the rest of the inherited
+        // table is closed. Directory and O_PATH descriptors are pathname
+        // capabilities rather than ordinary byte streams and must never be
+        // handed to untrusted payload code through stdin/stdout/stderr.
+        let mut stat: nix::libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { nix::libc::fstat(fd, &mut stat) } == -1 {
+            let source = Errno::last();
+            if source == Errno::EBADF {
+                continue;
+            }
+            return Err(source).context(InspectPayloadStandardDescriptorSnafu { fd });
+        }
+        let status_flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
+        if status_flags == -1 {
+            return Err(Errno::last()).context(InspectPayloadStandardDescriptorSnafu { fd });
+        }
+        let kind = stat.st_mode & nix::libc::S_IFMT;
+        if standard_descriptor_is_unsafe(kind, status_flags) {
+            return UnsafePayloadStandardDescriptorSnafu { fd, kind, status_flags }.fail();
+        }
+    }
+    Ok(())
+}
+
+fn standard_descriptor_is_unsafe(kind: nix::libc::mode_t, status_flags: nix::libc::c_int) -> bool {
+    kind == nix::libc::S_IFDIR || status_flags & nix::libc::O_PATH == nix::libc::O_PATH
 }
 
 fn close_range(first: u32, last: u32) -> Result<(), ContainerError> {
@@ -721,7 +925,9 @@ fn validate_payload_credentials(
 }
 
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
-const CAP_SYS_ADMIN: u32 = 21;
+// Version 3 exposes two u32 words. Linux capability numbers are contiguous;
+// PR_CAPBSET_READ reports EINVAL at the first unsupported number.
+const MAX_LINUX_CAPABILITY_NUMBER: u32 = 63;
 
 #[repr(C)]
 struct CapabilityHeader {
@@ -737,36 +943,121 @@ struct CapabilityData {
     inheritable: u32,
 }
 
-/// Remove the one capability that could undo the frozen mount policy.
+/// Remove every Linux capability from the untrusted payload.
 ///
-/// Clearing the live sets is not sufficient for namespace UID zero: a later
-/// `execve` can regain capabilities from the bounding set. Drop the bounding
-/// entry first, clear the ambient set, then clear and verify every live set.
-fn drop_mount_administration() -> Result<(), ContainerError> {
+/// A denylist is not a stable confinement boundary: namespace UID zero can use
+/// capabilities such as CAP_SETGID, CAP_CHOWN, CAP_MKNOD,
+/// CAP_DAC_READ_SEARCH, or CAP_SYS_CHROOT to recover setup-only authority or
+/// bypass pathname policy. Clearing only the live sets is also insufficient,
+/// because a later execve can regain capabilities from the bounding set. Drop
+/// every supported bounding entry first, clear the ambient and live sets, then
+/// verify all three sources of authority.
+fn drop_all_payload_capabilities() -> Result<(), ContainerError> {
+    let capabilities = supported_capability_numbers().context(DropPayloadCapabilitiesSnafu)?;
     unsafe {
-        checked_prctl(prctl(PR_CAPBSET_DROP, CAP_SYS_ADMIN, 0, 0, 0)).context(DropMountAdministrationSnafu)?;
+        for &capability in &capabilities {
+            let present = checked_prctl_value(prctl(PR_CAPBSET_READ, capability, 0, 0, 0))
+                .context(DropPayloadCapabilitiesSnafu)?;
+            if present != 0 {
+                checked_prctl(prctl(PR_CAPBSET_DROP, capability, 0, 0, 0)).context(DropPayloadCapabilitiesSnafu)?;
+            }
+        }
         checked_prctl(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0))
-            .context(DropMountAdministrationSnafu)?;
+            .context(DropPayloadCapabilitiesSnafu)?;
     }
 
-    let mut capabilities = read_capabilities().context(DropMountAdministrationSnafu)?;
-    clear_capability(&mut capabilities, CAP_SYS_ADMIN);
-    write_capabilities(&capabilities).context(DropMountAdministrationSnafu)?;
+    write_capabilities(&[CapabilityData::default(); 2]).context(DropPayloadCapabilitiesSnafu)?;
 
-    let retained_live = capability_is_set(
-        &read_capabilities().context(DropMountAdministrationSnafu)?,
-        CAP_SYS_ADMIN,
-    );
-    let retained_bounding = unsafe {
-        checked_prctl_value(prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN, 0, 0, 0)).context(DropMountAdministrationSnafu)? != 0
+    let live = read_capabilities().context(DropPayloadCapabilitiesSnafu)?;
+    for capability in capabilities {
+        let retained_live = capability_is_set(&live, capability);
+        let retained_bounding = unsafe {
+            checked_prctl_value(prctl(PR_CAPBSET_READ, capability, 0, 0, 0)).context(DropPayloadCapabilitiesSnafu)? != 0
+        };
+        let retained_ambient = unsafe {
+            checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, capability, 0, 0))
+                .context(DropPayloadCapabilitiesSnafu)?
+                != 0
+        };
+        if retained_live || retained_bounding || retained_ambient {
+            return PayloadRetainsCapabilitySnafu { capability }.fail();
+        }
+    }
+    Ok(())
+}
+
+fn supported_capability_numbers() -> Result<Vec<u32>, Errno> {
+    let mut capabilities = Vec::new();
+    let mut reached_kernel_end = false;
+    for capability in 0..=MAX_LINUX_CAPABILITY_NUMBER {
+        let result = unsafe { prctl(PR_CAPBSET_READ, capability, 0, 0, 0) };
+        if result == -1 {
+            let source = Errno::last();
+            if source == Errno::EINVAL {
+                reached_kernel_end = true;
+                break;
+            }
+            return Err(source);
+        }
+        capabilities.push(capability);
+    }
+    if capabilities.is_empty() {
+        return Err(Errno::EINVAL);
+    }
+    if !reached_kernel_end {
+        // Capability ABI v3 has exactly 64 live-set bits. If a future kernel
+        // exposes capability 64, silently clearing only the old range would
+        // leave an unknown privilege recoverable after execve.
+        let unsupported = MAX_LINUX_CAPABILITY_NUMBER + 1;
+        let result = unsafe { prctl(PR_CAPBSET_READ, unsupported, 0, 0, 0) };
+        if result != -1 {
+            return Err(Errno::EOVERFLOW);
+        }
+        let source = Errno::last();
+        if source != Errno::EINVAL {
+            return Err(source);
+        }
+    }
+    Ok(capabilities)
+}
+
+/// Make `cpu.max` an enforceable aggregate ceiling for the eventual cgroup
+/// boundary. The controller throttles fair-class work; therefore the payload
+/// must neither inherit a real-time/deadline policy nor retain a route back to
+/// one. All capabilities, including CAP_SYS_NICE, are removed separately by
+/// [`drop_all_payload_capabilities`].
+fn restrict_payload_scheduler() -> Result<(), ContainerError> {
+    let zero = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
     };
-    let retained_ambient = unsafe {
-        checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, CAP_SYS_ADMIN, 0, 0))
-            .context(DropMountAdministrationSnafu)?
-            != 0
+    if unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_RTPRIO, &zero) } == -1 {
+        return Err(Errno::last()).context(RestrictPayloadSchedulerSnafu);
+    }
+
+    let parameter = nix::libc::sched_param { sched_priority: 0 };
+    if unsafe { nix::libc::sched_setscheduler(0, nix::libc::SCHED_OTHER, &parameter) } == -1 {
+        return Err(Errno::last()).context(RestrictPayloadSchedulerSnafu);
+    }
+
+    let policy = unsafe { nix::libc::sched_getscheduler(0) };
+    if policy == -1 {
+        return Err(Errno::last()).context(RestrictPayloadSchedulerSnafu);
+    }
+    let mut limit = nix::libc::rlimit {
+        rlim_cur: nix::libc::RLIM_INFINITY,
+        rlim_max: nix::libc::RLIM_INFINITY,
     };
-    if retained_live || retained_bounding || retained_ambient {
-        return PayloadRetainsMountAdministrationSnafu.fail();
+    if unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_RTPRIO, &mut limit) } == -1 {
+        return Err(Errno::last()).context(RestrictPayloadSchedulerSnafu);
+    }
+    if policy != nix::libc::SCHED_OTHER || limit.rlim_cur != 0 || limit.rlim_max != 0 {
+        return PayloadRetainsRealtimeSchedulingSnafu {
+            policy,
+            soft_limit: limit.rlim_cur,
+            hard_limit: limit.rlim_max,
+        }
+        .fail();
     }
     Ok(())
 }
@@ -789,14 +1080,6 @@ fn write_capabilities(data: &[CapabilityData; 2]) -> Result<(), Errno> {
     };
     let result = unsafe { syscall(SYS_capset, &mut header, data.as_ptr()) };
     checked_syscall(result)
-}
-
-fn clear_capability(data: &mut [CapabilityData; 2], capability: u32) {
-    let word = capability as usize / u32::BITS as usize;
-    let mask = !(1_u32 << (capability % u32::BITS));
-    data[word].effective &= mask;
-    data[word].permitted &= mask;
-    data[word].inheritable &= mask;
 }
 
 fn capability_is_set(data: &[CapabilityData; 2], capability: u32) -> bool {
@@ -2543,9 +2826,45 @@ pub enum Error {
     UnknownExit,
     #[snafu(display("error setting up isolated-root credential map"))]
     Idmap { source: idmap::Error },
+    /// The host rejected creation of the container's mandatory namespaces.
+    ///
+    /// Keeping this operation separate from generic nix failures lets callers
+    /// recognize namespace-capability denials without hiding unrelated pipe,
+    /// signal, wait, or payload failures that happen to use the same errno.
+    #[snafu(display("clone isolated namespaces"))]
+    CloneNamespaces { source: nix::Error },
+    #[snafu(display("clone child atomically into the derivation cgroup"))]
+    CloneIntoCgroup { source: io::Error },
+    #[snafu(display("authenticate derivation cgroup lifecycle"))]
+    CgroupLifecycle { source: cgroup::CgroupError },
+    #[snafu(display("remove derivation cgroup after execution: {cleanup}"))]
+    CgroupCleanup {
+        cleanup: cgroup::CgroupError,
+        leaf: Option<Box<cgroup::CgroupLeaf>>,
+    },
+    #[snafu(display("{failure}; additionally failed to remove derivation cgroup: {cleanup}"))]
+    CgroupCleanupAfterFailure {
+        failure: Box<Error>,
+        cleanup: cgroup::CgroupError,
+        leaf: Option<Box<cgroup::CgroupLeaf>>,
+    },
     // FIXME: Replace with more fine-grained variants
     #[snafu(display("nix"))]
     Nix { source: nix::Error },
+}
+
+impl Error {
+    /// Take the authenticated cgroup cleanup capability retained by a failed
+    /// teardown. Callers that continue running after this error must retry or
+    /// quarantine it rather than silently dropping authority to the leaf.
+    pub fn take_cgroup_leaf(&mut self) -> Option<cgroup::CgroupLeaf> {
+        match self {
+            Self::CgroupCleanup { leaf, .. } | Self::CgroupCleanupAfterFailure { leaf, .. } => {
+                leaf.take().map(|leaf| *leaf)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Snafu)]
@@ -2580,14 +2899,42 @@ enum ContainerError {
         effective_gid: u32,
         supplementary_gids: Vec<u32>,
     },
-    #[snafu(display("drop payload mount-administration capability"))]
-    DropMountAdministration { source: nix::Error },
-    #[snafu(display("payload retained mount-administration capability"))]
-    PayloadRetainsMountAdministration,
-    #[snafu(display("sanitize anchored payload descriptors"))]
+    #[snafu(display("restrict payload scheduler to the fair class"))]
+    RestrictPayloadScheduler { source: nix::Error },
+    #[snafu(display(
+        "payload retained real-time scheduling access: policy={policy}, RLIMIT_RTPRIO={soft_limit}/{hard_limit}"
+    ))]
+    PayloadRetainsRealtimeScheduling {
+        policy: i32,
+        soft_limit: nix::libc::rlim_t,
+        hard_limit: nix::libc::rlim_t,
+    },
+    #[snafu(display("drop all payload capabilities"))]
+    DropPayloadCapabilities { source: nix::Error },
+    #[snafu(display("payload retained capability {capability}"))]
+    PayloadRetainsCapability { capability: u32 },
+    #[snafu(display("install mandatory payload seccomp policy"))]
+    InstallPayloadSeccomp { source: io::Error },
+    #[snafu(display("inspect payload standard descriptor {fd}"))]
+    InspectPayloadStandardDescriptor { fd: RawFd, source: nix::Error },
+    #[snafu(display(
+        "payload standard descriptor {fd} is a pathname capability: kind={kind:o}, status_flags={status_flags:#x}"
+    ))]
+    UnsafePayloadStandardDescriptor {
+        fd: RawFd,
+        kind: nix::libc::mode_t,
+        status_flags: nix::libc::c_int,
+    },
+    #[snafu(display("sanitize payload descriptors"))]
     SanitizePayloadDescriptors { source: nix::Error },
     #[snafu(display("payload error descriptor {fd} overlaps standard I/O"))]
     InvalidPayloadErrorDescriptor { fd: RawFd },
+    #[snafu(display("clone child inherited invalid cgroup descriptor pair {descriptors:?}"))]
+    InvalidInheritedCgroupDescriptors { descriptors: [RawFd; 2] },
+    #[snafu(display("close inherited cgroup descriptor {descriptor}"))]
+    CloseInheritedCgroupDescriptor { descriptor: RawFd, source: nix::Error },
+    #[snafu(display("clone child retained cgroup descriptor {descriptor} after close"))]
+    RetainedInheritedCgroupDescriptor { descriptor: RawFd },
     #[snafu(display("sethostname"))]
     SetHostname { source: nix::Error },
     #[snafu(display("{operation} for anchored root {}", label.display()))]
@@ -2691,7 +3038,6 @@ mod tests {
     use std::io::{self, Read as _};
     use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
-    use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
 
     use fs_err as fs;
@@ -2703,17 +3049,18 @@ mod tests {
     use nix::unistd::mkfifo;
 
     use super::{
-        AnchoredMountTargetKind, Bind, BindSource, CAP_SYS_ADMIN, CLONE_STACK_BYTES, CapabilityData, CloneStack,
-        Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
-        MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
-        PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
-        RootMountDecision, SignalOverride, SyncPipe, SysPolicy, TmpPolicy, capability_is_set, checked_prctl_value,
-        clear_capability, descriptor_stat, duplicate_cloexec, format_error, namespace_flags,
+        AnchoredMountTargetKind, Bind, BindSource, CLONE_STACK_BYTES, CapabilityData, CloneStack, Container,
+        ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
+        MAX_LINUX_CAPABILITY_NUMBER, MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET,
+        PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision,
+        RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncPipe, SysPolicy, TmpPolicy, capability_is_set,
+        checked_prctl_value, descriptor_stat, duplicate_cloexec, format_error, namespace_flags,
         normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
         pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions, read_capabilities,
         read_child_error, reopen_pinned_readonly, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
-        set_mount_access, validate_anchored_mount_topology, validate_minimal_device_source,
-        validate_payload_credentials, validate_resolver_target,
+        set_mount_access, standard_descriptor_is_unsafe, supported_capability_numbers,
+        validate_anchored_mount_topology, validate_minimal_device_source, validate_payload_credentials,
+        validate_resolver_target,
     };
 
     fn open_path_directory(path: &Path) -> OwnedFd {
@@ -2942,12 +3289,12 @@ mod tests {
         .unwrap();
         assert!(matches!(path_error, ContainerError::UnpinnedAnchoredMountSource { .. }));
 
-        let socket_path = source.path().join("socket");
-        let _listener = UnixListener::bind(&socket_path).unwrap();
-        let socket = open_path_file(&socket_path);
+        let fifo_path = source.path().join("fifo");
+        mkfifo(&fifo_path, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+        let fifo = open_path_file(&fifo_path);
         let error = Container::new_anchored(root.path(), &anchor)
             .unwrap()
-            .bind_rw_pinned(&socket, &socket_path, "/work")
+            .bind_rw_pinned(&fifo, &fifo_path, "/work")
             .err()
             .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
@@ -3202,8 +3549,8 @@ mod tests {
     }
 
     #[test]
-    fn mount_administration_is_removed_from_every_live_capability_set() {
-        let mut capabilities = [
+    fn empty_payload_capability_state_removes_every_live_capability() {
+        let capabilities = [
             CapabilityData {
                 effective: u32::MAX,
                 permitted: u32::MAX,
@@ -3215,15 +3562,22 @@ mod tests {
                 inheritable: u32::MAX,
             },
         ];
-        let unrelated_low = CAP_SYS_ADMIN - 1;
-        let unrelated_high = u32::BITS + 1;
+        for capability in 0..=MAX_LINUX_CAPABILITY_NUMBER {
+            assert!(capability_is_set(&capabilities, capability));
+        }
 
-        assert!(capability_is_set(&capabilities, CAP_SYS_ADMIN));
-        clear_capability(&mut capabilities, CAP_SYS_ADMIN);
+        let empty = [CapabilityData::default(); 2];
+        for capability in 0..=MAX_LINUX_CAPABILITY_NUMBER {
+            assert!(!capability_is_set(&empty, capability));
+        }
+    }
 
-        assert!(!capability_is_set(&capabilities, CAP_SYS_ADMIN));
-        assert!(capability_is_set(&capabilities, unrelated_low));
-        assert!(capability_is_set(&capabilities, unrelated_high));
+    #[test]
+    fn standard_descriptors_reject_pathname_capabilities() {
+        assert!(standard_descriptor_is_unsafe(nix::libc::S_IFDIR, nix::libc::O_RDONLY));
+        assert!(standard_descriptor_is_unsafe(nix::libc::S_IFREG, nix::libc::O_PATH));
+        assert!(!standard_descriptor_is_unsafe(nix::libc::S_IFREG, nix::libc::O_RDONLY));
+        assert!(!standard_descriptor_is_unsafe(nix::libc::S_IFIFO, nix::libc::O_WRONLY));
     }
 
     #[test]
@@ -3250,7 +3604,7 @@ mod tests {
                     "write undeclared root path before remount attempts",
                 )?;
                 fs::write("/work/result", b"writable bind")?;
-                require_mount_administration_absent()?;
+                require_payload_security_boundary()?;
 
                 let remount = nix::mount::mount::<str, str, str, str>(
                     None,
@@ -3443,7 +3797,7 @@ mod tests {
                 Errno::EROFS,
                 "mutate undeclared anchored root path",
             )?;
-            require_mount_administration_absent()
+            require_payload_security_boundary()
         });
 
         match result {
@@ -3699,20 +4053,116 @@ mod tests {
         }
     }
 
-    fn require_mount_administration_absent() -> io::Result<()> {
+    fn require_payload_security_boundary() -> io::Result<()> {
         let capabilities = read_capabilities().map_err(errno_to_io)?;
-        if capability_is_set(&capabilities, CAP_SYS_ADMIN) {
-            return Err(io::Error::other("CAP_SYS_ADMIN remains in a live capability set"));
+        for capability in supported_capability_numbers().map_err(errno_to_io)? {
+            if capability_is_set(&capabilities, capability) {
+                return Err(io::Error::other(format!(
+                    "capability {capability} remains in a live payload set"
+                )));
+            }
+            let bounding =
+                unsafe { checked_prctl_value(prctl(PR_CAPBSET_READ, capability, 0, 0, 0)).map_err(errno_to_io)? };
+            let ambient = unsafe {
+                checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, capability, 0, 0))
+                    .map_err(errno_to_io)?
+            };
+            if bounding != 0 || ambient != 0 {
+                return Err(io::Error::other(format!(
+                    "capability {capability} remains recoverable: bounding={bounding}, ambient={ambient}"
+                )));
+            }
         }
-        let bounding =
-            unsafe { checked_prctl_value(prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN, 0, 0, 0)).map_err(errno_to_io)? };
-        let ambient = unsafe {
-            checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, CAP_SYS_ADMIN, 0, 0))
-                .map_err(errno_to_io)?
-        };
-        if bounding != 0 || ambient != 0 {
+
+        let policy = unsafe { nix::libc::sched_getscheduler(0) };
+        if policy != nix::libc::SCHED_OTHER {
             return Err(io::Error::other(format!(
-                "CAP_SYS_ADMIN remains recoverable: bounding={bounding}, ambient={ambient}"
+                "payload scheduler policy is {policy}, not SCHED_OTHER"
+            )));
+        }
+        let mut limit = nix::libc::rlimit {
+            rlim_cur: nix::libc::RLIM_INFINITY,
+            rlim_max: nix::libc::RLIM_INFINITY,
+        };
+        if unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_RTPRIO, &mut limit) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        if limit.rlim_cur != 0 || limit.rlim_max != 0 {
+            return Err(io::Error::other(format!(
+                "payload RLIMIT_RTPRIO remains {}/{}",
+                limit.rlim_cur, limit.rlim_max
+            )));
+        }
+
+        let no_new_privileges = unsafe { prctl(nix::libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+        if no_new_privileges != 1 {
+            return Err(if no_new_privileges == -1 {
+                io::Error::last_os_error()
+            } else {
+                io::Error::other(format!(
+                    "payload PR_GET_NO_NEW_PRIVS returned {no_new_privileges}, expected 1"
+                ))
+            });
+        }
+        let seccomp_mode = unsafe { prctl(nix::libc::PR_GET_SECCOMP, 0, 0, 0, 0) };
+        if seccomp_mode != 2 {
+            return Err(if seccomp_mode == -1 {
+                io::Error::last_os_error()
+            } else {
+                io::Error::other(format!(
+                    "payload PR_GET_SECCOMP returned {seccomp_mode}, expected filter mode 2"
+                ))
+            });
+        }
+
+        require_raw_syscall_errno(
+            unsafe { nix::libc::syscall(nix::libc::SYS_clone3, std::ptr::null::<nix::libc::c_void>(), 0_usize) },
+            Errno::ENOSYS,
+            "clone3 under payload filter",
+        )?;
+        require_raw_syscall_errno(
+            unsafe { nix::libc::syscall(nix::libc::SYS_unshare, 0_u64) },
+            Errno::EPERM,
+            "unshare under payload filter",
+        )?;
+        require_raw_syscall_errno(
+            unsafe {
+                nix::libc::syscall(
+                    nix::libc::SYS_mount,
+                    std::ptr::null::<nix::libc::c_void>(),
+                    std::ptr::null::<nix::libc::c_void>(),
+                    std::ptr::null::<nix::libc::c_void>(),
+                    0_u64,
+                    std::ptr::null::<nix::libc::c_void>(),
+                )
+            },
+            Errno::EPERM,
+            "mount under payload filter",
+        )?;
+
+        let thread = std::thread::Builder::new()
+            .name("seccomp-clone-fallback".to_owned())
+            .spawn(|| 0x5ec_c0de_u32)?;
+        if thread
+            .join()
+            .map_err(|_| io::Error::other("payload pthread probe panicked"))?
+            != 0x5ec_c0de
+        {
+            return Err(io::Error::other("payload pthread probe returned the wrong value"));
+        }
+        Ok(())
+    }
+
+    fn require_raw_syscall_errno(result: nix::libc::c_long, expected: Errno, operation: &str) -> io::Result<()> {
+        if result != -1 {
+            return Err(io::Error::other(format!(
+                "{operation} unexpectedly returned {result}, expected {expected}"
+            )));
+        }
+        let found = Errno::last();
+        if found != expected {
+            return Err(io::Error::other(format!(
+                "{operation} failed with {found}, expected {expected}"
             )));
         }
         Ok(())
@@ -3724,7 +4174,9 @@ mod tests {
 
     fn host_denied_user_namespace_setup(error: &ContainerRunError) -> bool {
         match error {
-            ContainerRunError::Nix { source: Errno::EPERM } => true,
+            ContainerRunError::CloneNamespaces {
+                source: Errno::EPERM | Errno::EACCES | Errno::ENOSYS,
+            } => true,
             ContainerRunError::Failure { message }
                 if message.starts_with("clear inherited supplementary groups:")
                     && message.contains("EPERM: Operation not permitted") =>
@@ -3736,6 +4188,21 @@ mod tests {
             } => source.kind() == io::ErrorKind::PermissionDenied || source.raw_os_error() == Some(Errno::EPERM as i32),
             _ => false,
         }
+    }
+
+    #[test]
+    fn namespace_capability_denial_is_not_inferred_from_generic_nix_failures() {
+        for source in [Errno::EPERM, Errno::EACCES, Errno::ENOSYS] {
+            assert!(host_denied_user_namespace_setup(&ContainerRunError::CloneNamespaces {
+                source,
+            }));
+        }
+        assert!(!host_denied_user_namespace_setup(&ContainerRunError::CloneNamespaces {
+            source: Errno::EAGAIN,
+        }));
+        assert!(!host_denied_user_namespace_setup(&ContainerRunError::Nix {
+            source: Errno::EPERM,
+        }));
     }
 
     #[test]
@@ -3918,11 +4385,11 @@ mod tests {
     #[test]
     fn special_file_bind_gets_a_file_mountpoint() {
         let temporary = tempfile::tempdir().unwrap();
-        let source = temporary.path().join("device.sock");
-        let _listener = UnixListener::bind(&source).unwrap();
+        let source = temporary.path().join("device.fifo");
+        mkfifo(&source, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
         let target = temporary.path().join("mountpoints/device");
 
-        assert!(fs::metadata(&source).unwrap().file_type().is_socket());
+        assert!(fs::metadata(&source).unwrap().file_type().is_fifo());
         prepare_bind_target(&source, &target).unwrap();
 
         let target_metadata = fs::metadata(target).unwrap();

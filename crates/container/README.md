@@ -24,6 +24,12 @@ Below is a walkthrough to build and enter a container. The logic is simple but d
   1. With Bill's identity crisis over, the parent writes a sentinel value into the pipe that makes the `read` function unblock.
   1. Bills has an isolated user and group, but not an isolated filesystem. Since we are now privileged inside it, we're able to choose a directory as the root directory, and bind-mount important filesystems like tmpfs, procfs and sysfs. We also bind-mount devices like `/dev/zero` and `/dev/urandom`. Finally, we perform a `pivot_root` to hide the host filesystem for good.
      - `pivot_root` is more secure than the well-known `chroot`, in that it's not possible to escape it.
+  1. Setup-only descriptors are closed, standard I/O is rejected if it hides a
+     directory capability, the scheduler is normalized, and every Linux
+     capability is removed from the live, ambient, and bounding sets.
+  1. A mandatory seccomp filter denies namespace re-entry, mount and root
+     replacement, device creation, file-handle opens, x32 calls, and unknown
+     future syscalls before Bill builds/tests the package.
   1. Bill finally builds/tests the package as the parent waits for it to finish.
 
 ## Pseudo-filesystem policy
@@ -50,11 +56,12 @@ created close-on-exec, so it is never inherited by commands run in a payload.
 `RootFilesystemPolicy::ReadOnly` recursively makes the root and all of its
 existing submounts read-only, then reopens only explicit `bind_rw` mounts. For
 that policy, each exception applies only to the exact bind mount: nested mounts
-remain read-only unless they are separately declared with `bind_rw`. Once setup
-is complete, the container removes `CAP_SYS_ADMIN` from every payload
-capability set, including the bounding set, so a later command cannot regain
-the capability through `execve` and remount the root writable. Separately
-selected pseudo-filesystems retain the access declared by their own policy.
+remain read-only unless they are separately declared with `bind_rw`. Payload
+privilege confinement does not depend on this choice: writable and read-only
+containers both close inherited setup descriptors, remove every capability,
+and install the same seccomp topology boundary. Separately selected
+pseudo-filesystems retain the access declared by their own policy, but payload
+code cannot create new mounts or device nodes.
 
 #### References
 
