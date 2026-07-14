@@ -17,7 +17,7 @@ use tui::{ProgressBar, ProgressStyle, Styled};
 
 use crate::Paths;
 
-use super::collect::{Collector, Error as CollectError, PathInfo, SealedTree};
+use super::collect::{Collector, Error as CollectError, GeneratedArtifact, PathInfo, SealedTree};
 
 mod handler;
 
@@ -89,7 +89,6 @@ impl<'a> Chain<'a> {
                     let mut bucket_mut = BucketMut {
                         providers: &mut bucket.providers,
                         dependencies: &mut bucket.dependencies,
-                        hasher: self.hasher,
                         analysis: self.analysis,
                         paths: self.paths,
                     };
@@ -98,10 +97,7 @@ impl<'a> Chain<'a> {
                 };
                 path.check_deadline()?;
 
-                let Response {
-                    decision,
-                    mut generated_paths,
-                } = response;
+                let Response { decision, publications } = response;
 
                 // Every fallible allocation whose result is needed after a
                 // generated batch is admitted must happen before admission.
@@ -127,27 +123,40 @@ impl<'a> Chain<'a> {
                             replacement = Some(info);
                         }
                         Err(CollectError::UnwitnessedPath { .. }) => {
-                            generated_paths.try_reserve(1)?;
-                            generated_paths.push(newpath.clone());
                             generated_replacement = true;
                         }
                         Err(error) => return Err(Box::new(error)),
                     }
                 }
-                queue.try_reserve(generated_paths.len())?;
-                let mut generated = self.collector.paths(&generated_paths, self.hasher)?;
-                if generated_replacement {
-                    replacement = generated.pop();
-                    let info = replacement.as_ref().ok_or_else(|| {
-                        Box::new(std::io::Error::other("generated replacement was not authenticated")) as BoxError
-                    })?;
-                    self.buckets
-                        .entry(info.package.clone())
-                        .or_default()
-                        .paths
-                        .try_reserve(1)?;
+                queue.try_reserve(publications.iter().filter(|artifact| artifact.analyze()).count())?;
+                let published = self.collector.publish_generated(&publications, self.hasher)?;
+                for (artifact, info) in publications.iter().zip(published) {
+                    let is_replacement = matches!(
+                        &decision,
+                        Decision::ReplaceFile { newpath }
+                            if newpath == &info.path
+                    );
+                    if is_replacement {
+                        if replacement.is_some() {
+                            return Err(Box::new(std::io::Error::other(
+                                "replacement path was published more than once",
+                            )));
+                        }
+                        self.buckets
+                            .entry(info.package.clone())
+                            .or_default()
+                            .paths
+                            .try_reserve(1)?;
+                        replacement = Some(info);
+                    } else if artifact.analyze() {
+                        queue.push_back(info);
+                    }
                 }
-                queue.extend(generated);
+                if generated_replacement && replacement.is_none() {
+                    return Err(Box::new(std::io::Error::other(
+                        "generated replacement was not published and authenticated",
+                    )));
+                }
 
                 match decision {
                     Decision::NextHandler => continue 'handlers,
@@ -245,14 +254,13 @@ impl Bucket {
 pub struct BucketMut<'a> {
     pub providers: &'a mut BTreeSet<Provider>,
     pub dependencies: &'a mut BTreeSet<Dependency>,
-    pub hasher: &'a mut StoneDigestWriterHasher,
     pub analysis: &'a AnalysisPlan,
     pub paths: &'a Paths,
 }
 
 pub struct Response {
     pub decision: Decision,
-    pub generated_paths: Vec<PathBuf>,
+    pub(crate) publications: Vec<GeneratedArtifact>,
 }
 
 pub enum Decision {
@@ -266,7 +274,7 @@ impl From<Decision> for Response {
     fn from(decision: Decision) -> Self {
         Self {
             decision,
-            generated_paths: vec![],
+            publications: vec![],
         }
     }
 }
@@ -310,13 +318,40 @@ mod tests {
         generated: PathBuf,
     }
 
+    struct GenerateReplacement {
+        absolute: PathBuf,
+        relative: PathBuf,
+    }
+
+    impl Handler for GenerateReplacement {
+        fn handle(&self, _bucket: &mut BucketMut<'_>, _path: &mut PathInfo) -> Result<Response, BoxError> {
+            Ok(Response {
+                decision: Decision::ReplaceFile {
+                    newpath: self.absolute.clone(),
+                },
+                publications: vec![GeneratedArtifact::regular(
+                    self.relative.clone(),
+                    b"generated replacement".to_vec(),
+                    0o644,
+                    None,
+                    false,
+                )],
+            })
+        }
+    }
+
     impl Handler for GenerateThenFail {
         fn handle(&self, _bucket: &mut BucketMut<'_>, path: &mut PathInfo) -> Result<Response, BoxError> {
             if path.path == self.original {
-                fs::write(&self.generated, b"generated")?;
                 return Ok(Response {
                     decision: Decision::IncludeFile,
-                    generated_paths: vec![self.generated.clone()],
+                    publications: vec![GeneratedArtifact::regular(
+                        self.generated.clone(),
+                        b"generated".to_vec(),
+                        0o644,
+                        None,
+                        true,
+                    )],
                 });
             }
 
@@ -366,6 +401,47 @@ mod tests {
     }
 
     #[test]
+    fn generated_replacement_is_published_then_routed_to_its_selected_output() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+
+        let install = tempfile::tempdir().unwrap();
+        let original_path = install.path().join("original");
+        let replacement_path = install.path().join("replacement");
+        fs::write(&original_path, b"original").unwrap();
+        let mut collector = Collector::new(install.path());
+        collector.add_rule("*", "root-output", PathRuleKind::Any).unwrap();
+        collector
+            .add_rule("/replacement", "replacement-output", PathRuleKind::Any)
+            .unwrap();
+
+        let mut hasher = StoneDigestWriterHasher::new();
+        let original = collector.path(&original_path, &mut hasher).unwrap();
+        let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        chain.handlers = vec![HandlerEntry {
+            kind: AnalyzerKind::IncludeAny,
+            handler: Box::new(GenerateReplacement {
+                absolute: replacement_path.clone(),
+                relative: PathBuf::from("replacement"),
+            }),
+        }];
+
+        chain.process([original]).unwrap();
+
+        assert_eq!(fs::read(&replacement_path).unwrap(), b"generated replacement");
+        assert!(chain.buckets["root-output"].paths.is_empty());
+        assert_eq!(chain.buckets["replacement-output"].paths.len(), 1);
+        assert_eq!(
+            chain.buckets["replacement-output"].paths[0].target_path,
+            Path::new("/replacement")
+        );
+    }
+
+    #[test]
     fn any_failure_after_generated_admission_poisons_the_inventory() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
@@ -376,7 +452,6 @@ mod tests {
 
         let install = tempfile::tempdir().unwrap();
         let original_path = install.path().join("original");
-        let generated = install.path().join("generated");
         fs::write(&original_path, b"original").unwrap();
         let mut collector = Collector::new(install.path());
         collector.add_rule("*", "out", PathRuleKind::Any).unwrap();
@@ -388,7 +463,7 @@ mod tests {
             kind: AnalyzerKind::IncludeAny,
             handler: Box::new(GenerateThenFail {
                 original: original_path,
-                generated,
+                generated: PathBuf::from("generated"),
             }),
         }];
 

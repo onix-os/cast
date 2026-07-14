@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use filetime::FileTime;
 use itertools::Itertools;
 use nix::{
     errno::Errno,
@@ -12,14 +11,13 @@ use nix::{
     unistd::{Pid, getpid},
 };
 use std::{
-    ffi::{CStr, CString},
+    ffi::{CStr, CString, OsStr},
     fmt,
     fs::{File as StdFile, OpenOptions as StdOpenOptions, Permissions},
-    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Write},
     mem::{MaybeUninit, size_of},
     os::fd::{AsRawFd, FromRawFd},
     os::unix::ffi::OsStrExt,
-    os::unix::fs::symlink,
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     os::unix::process::CommandExt,
     path::{Component, Path, PathBuf},
@@ -29,12 +27,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fs_err::{self as fs, File};
 use sha2::{Digest, Sha256};
 use stone::relation::{Dependency, Kind, Provider};
 use thiserror::Error;
 
-use crate::package::collect::PathInfo;
+use crate::package::collect::{GeneratedArtifact, GeneratedTimes, PathInfo};
 
 pub use self::elf::elf;
 pub use self::python::python;
@@ -278,6 +275,151 @@ pub(super) struct ExternalAnalyzerInput {
     expected_digest: [u8; 32],
 }
 
+/// A private writable copy for analyzers such as objcopy and strip which need
+/// a pathname they may replace. The mutable pathname never points into the
+/// collected output tree. Once the complete analyzer process boundary has
+/// exited, the final single regular file is read into bounded memory, the
+/// private directory is verified and removed, and only those bytes may be
+/// handed to the collector's replacement transaction.
+pub(super) struct ExternalAnalyzerMutation(ExternalAnalyzerInput);
+
+impl ExternalAnalyzerMutation {
+    pub(super) fn new(
+        input: &VerifiedAnalyzerInput,
+        display_path: &Path,
+        file_name: &str,
+        directory_suffix: &str,
+    ) -> Result<Self, BoxError> {
+        let mut sandbox = ExternalAnalyzerInput::new(input, display_path, file_name, directory_suffix)?;
+        let preparation = (|| -> Result<(), BoxError> {
+            // SAFETY: these are live descriptors for the private file and
+            // directory constructed above. The immutable source remains
+            // sealed; only this disposable copy becomes writable.
+            if unsafe { nix::libc::fchmod(sandbox.file.as_raw_fd(), 0o600) } == -1 {
+                return Err(Box::new(AnalyzerSandboxError::ProtectFile {
+                    path: display_path.to_owned(),
+                    source: std::io::Error::last_os_error(),
+                }));
+            }
+            if unsafe { nix::libc::fchmod(sandbox.directory_file.as_raw_fd(), 0o700) } == -1 {
+                return Err(Box::new(AnalyzerSandboxError::ProtectDirectory {
+                    path: display_path.to_owned(),
+                    source: std::io::Error::last_os_error(),
+                }));
+            }
+            sandbox
+                .directory_file
+                .sync_all()
+                .map_err(|source| AnalyzerSandboxError::SyncDirectory {
+                    path: display_path.to_owned(),
+                    source,
+                })?;
+            sandbox.expected_directory = SandboxSnapshot::from_metadata(&sandbox.directory_file.metadata()?);
+            sandbox.expected_file = SandboxSnapshot::from_metadata(&sandbox.file.metadata()?);
+            Ok(())
+        })();
+
+        match preparation {
+            Ok(()) => Ok(Self(sandbox)),
+            Err(operation) => match sandbox.cleanup(true) {
+                Ok(()) => Err(operation),
+                Err(finalization) => Err(Box::new(AnalyzerOperationFinalizationError {
+                    operation,
+                    finalization,
+                })),
+            },
+        }
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        self.0.path()
+    }
+
+    pub(super) fn output_path(&self, file_name: &str) -> Result<PathBuf, BoxError> {
+        validate_sandbox_component(file_name)?;
+        if self.0.path.file_name().and_then(|name| name.to_str()) == Some(file_name) {
+            return Err(Box::new(AnalyzerSandboxError::InvalidName {
+                name: file_name.to_owned(),
+            }));
+        }
+        Ok(self.0.working_directory().join(file_name))
+    }
+
+    /// Finalize a mutable analyzer operation. A failed child result is cleaned
+    /// without attempting to consume its partial output. A successful child
+    /// must leave exactly one single-link regular file at the authenticated
+    /// private name; its bytes are bounded before allocation and reverified
+    /// before the sandbox is removed.
+    pub(super) fn finish(
+        self,
+        info: &PathInfo,
+        operation: Result<(), BoxError>,
+        byte_limit: u64,
+    ) -> Result<Vec<u8>, BoxError> {
+        self.finish_inner(info, operation, byte_limit, None)
+            .map(|(primary, generated)| {
+                debug_assert!(generated.is_none());
+                primary
+            })
+    }
+
+    pub(super) fn finish_with_output(
+        self,
+        info: &PathInfo,
+        operation: Result<(), BoxError>,
+        byte_limit: u64,
+        output_name: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>), BoxError> {
+        self.finish_inner(info, operation, byte_limit, Some(output_name))
+            .map(|(primary, generated)| (primary, generated.expect("requested mutable analyzer output")))
+    }
+
+    fn finish_inner(
+        self,
+        info: &PathInfo,
+        operation: Result<(), BoxError>,
+        byte_limit: u64,
+        output_name: Option<&str>,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), BoxError> {
+        let mut sandbox = self.0;
+        let output_name = output_name
+            .map(|name| {
+                validate_sandbox_component(name)?;
+                if sandbox.path.file_name().and_then(|candidate| candidate.to_str()) == Some(name) {
+                    return Err(Box::new(AnalyzerSandboxError::InvalidName { name: name.to_owned() }) as BoxError);
+                }
+                CString::new(name)
+                    .map_err(|_| Box::new(AnalyzerSandboxError::InvalidName { name: name.to_owned() }) as BoxError)
+            })
+            .transpose();
+        let (bytes, verification) = if operation.is_ok() {
+            match output_name.and_then(|name| sandbox.read_mutated_output(info, byte_limit, name.as_deref())) {
+                Ok(bytes) => (Some(bytes), Ok(())),
+                Err(error) => (None, Err(error)),
+            }
+        } else {
+            (None, Ok(()))
+        };
+        let cleanup = sandbox.cleanup(true);
+        let deadline = info.check_deadline().map_err(|error| Box::new(error) as BoxError);
+        let finalization = combine_finalization_errors(verification, cleanup, deadline);
+
+        match (operation, bytes, finalization) {
+            (Ok(()), Some(bytes), Ok(())) => Ok(bytes),
+            (Ok(()), Some(_), Err(finalization)) => Err(finalization),
+            (Ok(()), None, Err(finalization)) => Err(finalization),
+            (Err(operation), None, Ok(())) => Err(operation),
+            (Err(operation), None, Err(finalization)) => Err(Box::new(AnalyzerOperationFinalizationError {
+                operation,
+                finalization,
+            })),
+            (Ok(()), None, Ok(())) | (Err(_), Some(_), _) => {
+                unreachable!("mutable analyzer finalization state is internally consistent")
+            }
+        }
+    }
+}
+
 impl ExternalAnalyzerInput {
     pub(super) fn new(
         input: &VerifiedAnalyzerInput,
@@ -513,6 +655,70 @@ impl ExternalAnalyzerInput {
         Ok(())
     }
 
+    fn read_mutated_output(
+        &self,
+        info: &PathInfo,
+        byte_limit: u64,
+        output_name: Option<&CStr>,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), BoxError> {
+        require_sandbox_node(
+            &self.path,
+            self.expected_directory,
+            &self.directory_file.metadata()?,
+            "mutable analyzer directory descriptor",
+        )?;
+        let directory_path = self.working_directory();
+        let directory_from_parent =
+            open_sandbox_directory(&self.parent_file, &self.directory_name).map_err(|source| {
+                AnalyzerSandboxError::Inspect {
+                    path: directory_path.to_owned(),
+                    source,
+                }
+            })?;
+        require_sandbox_node(
+            directory_path,
+            self.expected_directory,
+            &directory_from_parent.metadata()?,
+            "mutable analyzer directory path",
+        )?;
+        let expected_names = match output_name {
+            Some(output) => vec![self.file_name.as_c_str(), output],
+            None => vec![self.file_name.as_c_str()],
+        };
+        verify_mutated_sandbox_inventory(&self.directory_file, directory_path, &expected_names)?;
+
+        let primary =
+            read_mutated_sandbox_regular(info, &self.directory_file, &self.file_name, &self.path, byte_limit)?;
+        let generated = output_name
+            .map(|name| {
+                let path = directory_path.join(OsStr::from_bytes(name.to_bytes()));
+                read_mutated_sandbox_regular(info, &self.directory_file, name, &path, byte_limit)
+            })
+            .transpose()?;
+        verify_mutated_sandbox_inventory(&self.directory_file, directory_path, &expected_names)?;
+        require_sandbox_node(
+            directory_path,
+            self.expected_directory,
+            &self.directory_file.metadata()?,
+            "mutable analyzer directory after output read",
+        )?;
+        let directory_from_parent =
+            open_sandbox_directory(&self.parent_file, &self.directory_name).map_err(|source| {
+                AnalyzerSandboxError::Inspect {
+                    path: directory_path.to_owned(),
+                    source,
+                }
+            })?;
+        require_sandbox_node(
+            directory_path,
+            self.expected_directory,
+            &directory_from_parent.metadata()?,
+            "mutable analyzer directory path after output read",
+        )?;
+        info.check_deadline()?;
+        Ok((primary, generated))
+    }
+
     fn cleanup(&mut self, remove_attached: bool) -> Result<(), BoxError> {
         let Some(directory) = self.directory.take() else {
             return Ok(());
@@ -657,7 +863,7 @@ impl SandboxSnapshot {
     }
 }
 
-fn open_sandbox_file(directory: &StdFile, name: &CString, path: &Path) -> Result<StdFile, BoxError> {
+fn open_sandbox_file(directory: &StdFile, name: &CStr, path: &Path) -> Result<StdFile, BoxError> {
     // SAFETY: directory and name are live; O_NOFOLLOW rejects a substituted
     // symlink and O_NONBLOCK prevents a substituted FIFO from blocking.
     let descriptor = unsafe {
@@ -736,10 +942,128 @@ fn require_sandbox_snapshot(
     }
 }
 
+fn require_sandbox_node(
+    path: &Path,
+    expected: SandboxSnapshot,
+    actual: &std::fs::Metadata,
+    subject: &'static str,
+) -> Result<(), BoxError> {
+    if expected.same_node(SandboxSnapshot::from_metadata(actual)) {
+        Ok(())
+    } else {
+        Err(Box::new(AnalyzerSandboxError::SnapshotChanged {
+            path: path.to_owned(),
+            subject,
+        }))
+    }
+}
+
+fn validate_sandbox_component(file_name: &str) -> Result<(), BoxError> {
+    CString::new(file_name).map_err(|_| {
+        Box::new(AnalyzerSandboxError::InvalidName {
+            name: file_name.to_owned(),
+        }) as BoxError
+    })?;
+    if Path::new(file_name).file_name().and_then(|name| name.to_str()) == Some(file_name) {
+        Ok(())
+    } else {
+        Err(Box::new(AnalyzerSandboxError::InvalidName {
+            name: file_name.to_owned(),
+        }))
+    }
+}
+
+fn read_mutated_sandbox_regular(
+    info: &PathInfo,
+    directory: &StdFile,
+    name: &CStr,
+    path: &Path,
+    byte_limit: u64,
+) -> Result<Vec<u8>, BoxError> {
+    let mut file = open_sandbox_file(directory, name, path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+        return Err(Box::new(AnalyzerSandboxError::InvalidMutatedOutput {
+            path: path.to_owned(),
+            detail: "expected one single-link regular file",
+        }));
+    }
+    let expected = SandboxSnapshot::from_metadata(&metadata);
+    if expected.size > byte_limit {
+        return Err(Box::new(AnalyzerSandboxError::MutatedOutputTooLarge {
+            path: path.to_owned(),
+            size: expected.size,
+            limit: byte_limit,
+        }));
+    }
+    let capacity = usize::try_from(expected.size).map_err(|_| AnalyzerSandboxError::MutatedOutputAllocation {
+        path: path.to_owned(),
+        size: expected.size,
+    })?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|source| AnalyzerSandboxError::MutatedOutputReserve {
+            path: path.to_owned(),
+            size: expected.size,
+            detail: source.to_string(),
+        })?;
+    let mut buffer = [0_u8; 64 * 1024];
+    while bytes.len() < capacity {
+        info.check_deadline()?;
+        let allowed = (capacity - bytes.len()).min(buffer.len());
+        let read = file.read(&mut buffer[..allowed])?;
+        if read == 0 {
+            return Err(Box::new(AnalyzerSandboxError::MutatedOutputLength {
+                path: path.to_owned(),
+                expected: expected.size,
+                actual: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            }));
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let mut probe = [0_u8; 1];
+    if file.read(&mut probe)? != 0 {
+        return Err(Box::new(AnalyzerSandboxError::MutatedOutputLength {
+            path: path.to_owned(),
+            expected: expected.size,
+            actual: expected.size.saturating_add(1),
+        }));
+    }
+    require_sandbox_snapshot(path, expected, &file.metadata()?, "mutable analyzer output descriptor")?;
+    let reopened = open_sandbox_file(directory, name, path)?;
+    require_sandbox_snapshot(path, expected, &reopened.metadata()?, "mutable analyzer output path")?;
+    Ok(bytes)
+}
+
+fn verify_mutated_sandbox_inventory(
+    directory: &StdFile,
+    display_path: &Path,
+    expected_names: &[&CStr],
+) -> Result<(), BoxError> {
+    let entries = sandbox_directory_entries(directory, expected_names.len() + 1, analyzer_cleanup_deadline()).map_err(
+        |source| AnalyzerSandboxError::Inspect {
+            path: display_path.to_owned(),
+            source,
+        },
+    )?;
+    if entries.len() == expected_names.len()
+        && expected_names
+            .iter()
+            .all(|expected| entries.iter().any(|actual| actual.as_bytes() == expected.to_bytes()))
+    {
+        Ok(())
+    } else {
+        Err(Box::new(AnalyzerSandboxError::InventoryChanged {
+            path: display_path.to_owned(),
+        }))
+    }
+}
+
 fn verify_sandbox_inventory(
     directory: &StdFile,
     display_path: &Path,
-    expected_name: &std::ffi::OsStr,
+    expected_name: &OsStr,
     expected_snapshot: SandboxSnapshot,
 ) -> Result<(), BoxError> {
     // Enumerate a duplicate of the pinned descriptor, not the mutable
@@ -1106,6 +1430,16 @@ enum AnalyzerSandboxError {
     InventoryChanged { path: PathBuf },
     #[error("private analyzer input content changed at {path}")]
     DigestChanged { path: PathBuf },
+    #[error("mutable analyzer output at {path} is invalid: {detail}")]
+    InvalidMutatedOutput { path: PathBuf, detail: &'static str },
+    #[error("mutable analyzer output at {path} is {size} bytes, exceeding the {limit}-byte limit")]
+    MutatedOutputTooLarge { path: PathBuf, size: u64, limit: u64 },
+    #[error("mutable analyzer output at {path} of {size} bytes cannot fit in memory")]
+    MutatedOutputAllocation { path: PathBuf, size: u64 },
+    #[error("failed to reserve {size} bytes for mutable analyzer output at {path}: {detail}")]
+    MutatedOutputReserve { path: PathBuf, size: u64, detail: String },
+    #[error("mutable analyzer output at {path} changed length: expected {expected}, found {actual}")]
+    MutatedOutputLength { path: PathBuf, expected: u64, actual: u64 },
     #[error("private analyzer directory was detached before cleanup: {path}")]
     DetachedDirectory { path: PathBuf },
     #[error("unfinished private analyzer directory retained for namespace teardown: {path}")]
@@ -1185,6 +1519,7 @@ enum AnalyzerInputError {
 /// Run one analyzer tool and reject all non-success statuses before consuming
 /// any partial stdout. Silently accepting failed analysis would make package
 /// relations depend on host/runtime failure state outside the frozen plan.
+#[cfg(test)]
 pub(super) fn checked_output(mut command: Command) -> Result<Output, BoxError> {
     checked_output_with_limits(&mut command, ANALYZER_LIMITS)
 }
@@ -2102,76 +2437,95 @@ pub fn compressman(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Re
         return Ok(Decision::NextHandler.into());
     }
 
-    pub fn compress_file_zstd(path: &Path) -> Result<PathBuf, BoxError> {
-        let output_path = path.with_added_extension(".zst");
-        let mut reader = BufReader::new(File::open(path)?);
-        let mut writer = BufWriter::new(File::create(&output_path)?);
+    let destination = info.target_path.strip_prefix("/")?.with_added_extension("zst");
+    let target = Path::new("/").join(&destination);
+    let newpath = info.path.with_added_extension("zst");
+    let (accessed, modified) = info.file_times()?;
+    let times = Some(GeneratedTimes { accessed, modified });
 
-        zstd::stream::copy_encode(&mut reader, &mut writer, 16)?;
-
-        writer.flush()?;
-
-        Ok(output_path)
-    }
-
-    let mut generated_path = PathBuf::new();
-
-    let metadata = fs::metadata(&info.path)?;
-    let atime = metadata.accessed()?;
-    let mtime = metadata.modified()?;
-
-    let uncompressed_file = fs::canonicalize(&info.path)?;
-    /* we are deducing this in advance to have something against which to symlink */
-    let compressed_zst_file = uncompressed_file.with_added_extension(".zst");
-
-    /* If we have a man/info symlink then update the link to the compressed file */
-    if info.path.is_symlink() {
-        let new_zst_symlink = info.path.with_added_extension(".zst");
-
-        /*
-         * Depending on the order in which the files get analysed,
-         * the new compressed file may not yet exist, so compress it _now_
-         * in order that the correct metadata src info is returned to the binary writer.
-         */
-        if !fs::exists(&new_zst_symlink)? {
-            compress_file_zstd(&uncompressed_file)?;
-            let _ = bucket.paths.install().guest.join(&compressed_zst_file);
+    let artifact = if info.is_symlink() {
+        if info.inventory_contains_symlink_target(&target)? {
+            None
+        } else {
+            let compressed_target = Path::new(info.symlink_target()?).with_added_extension("zst");
+            let compressed_target = compressed_target
+                .to_str()
+                .ok_or_else(|| std::io::Error::other("compressed man symlink target is not UTF-8"))?
+                .to_owned();
+            Some(GeneratedArtifact::symlink(destination, compressed_target, times, false))
         }
-
-        symlink(&compressed_zst_file, &new_zst_symlink)?;
-
-        /* Restore the original {a,m}times for reproducibility */
-        filetime::set_symlink_file_times(
-            &new_zst_symlink,
-            FileTime::from_system_time(atime),
-            FileTime::from_system_time(mtime),
-        )?;
-
-        generated_path.push(bucket.paths.install().guest.join(new_zst_symlink));
-        return Ok(Decision::ReplaceFile {
-            newpath: generated_path,
+    } else if info.is_file() {
+        if info.inventory_contains_regular_target(&target)? {
+            None
+        } else {
+            Some(GeneratedArtifact::regular(
+                destination,
+                compress_zstd(info)?,
+                0o644,
+                times,
+                false,
+            ))
         }
-        .into());
+    } else {
+        return Ok(Decision::NextHandler.into());
+    };
+
+    Ok(Response {
+        decision: Decision::ReplaceFile { newpath },
+        publications: artifact.into_iter().collect(),
+    })
+}
+
+fn compress_zstd(info: &PathInfo) -> Result<Vec<u8>, BoxError> {
+    let limit = usize::try_from(info.regular_file_byte_limit()?)
+        .map_err(|_| std::io::Error::other("regular file byte limit does not fit in memory"))?;
+    let mut input = info.open_verified()?;
+    let mut output = BoundedBytes::new(limit);
+    zstd::stream::copy_encode(&mut input, &mut output, 16)?;
+    input.finish()?;
+    Ok(output.into_inner())
+}
+
+struct BoundedBytes {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl BoundedBytes {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
     }
 
-    /* We already know what the returned filename will be, so just ignore the return value */
-    if !compressed_zst_file.try_exists()? {
-        compress_file_zstd(&uncompressed_file)?;
+    fn into_inner(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for BoundedBytes {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let total =
+            self.bytes.len().checked_add(buffer.len()).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "compressed output length overflow")
+            })?;
+        if total > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "compressed output exceeds the collected regular-file limit",
+            ));
+        }
+        self.bytes
+            .try_reserve(buffer.len())
+            .map_err(|source| std::io::Error::other(format!("failed to reserve compressed output: {source}")))?;
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
     }
 
-    /* Restore the original {a,m}times for reproducibility */
-    filetime::set_file_handle_times(
-        &File::open(&compressed_zst_file)?.into_file(),
-        Some(FileTime::from_system_time(atime)),
-        Some(FileTime::from_system_time(mtime)),
-    )?;
-
-    generated_path.push(bucket.paths.install().guest.join(compressed_zst_file));
-
-    Ok(Decision::ReplaceFile {
-        newpath: generated_path,
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
-    .into())
 }
 
 #[cfg(test)]
@@ -2438,7 +2792,7 @@ mod tests {
             verify_sandbox_inventory(
                 &sandbox.directory_file,
                 &original_path,
-                std::ffi::OsStr::new("input.pc"),
+                OsStr::new("input.pc"),
                 expected_after_mutation,
             )
             .is_err(),
@@ -2552,7 +2906,6 @@ mod tests {
         let mut bucket = BucketMut {
             providers: &mut providers,
             dependencies: &mut dependencies,
-            hasher: &mut hasher,
             analysis: &plan.analysis,
             paths: &paths,
         };
@@ -2565,6 +2918,119 @@ mod tests {
         );
         assert!(dependencies.is_empty());
         assert_eq!(fs::read(path).unwrap(), content);
+    }
+
+    #[test]
+    fn compressman_declares_regular_output_then_collector_publishes_it() {
+        let install = tempfile::tempdir().unwrap();
+        let path = install.path().join("usr/share/man/man1/demo.1");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = b"deterministic manual page\n";
+        fs::write(&path, content).unwrap();
+
+        let mut collector = Collector::new(install.path());
+        collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut info = collector.path(&path, &mut hasher).unwrap();
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        plan.analysis.compress_man = true;
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let mut providers = BTreeSet::new();
+        let mut dependencies = BTreeSet::new();
+        let mut bucket = BucketMut {
+            providers: &mut providers,
+            dependencies: &mut dependencies,
+            analysis: &plan.analysis,
+            paths: &paths,
+        };
+
+        let response = compressman(&mut bucket, &mut info).unwrap();
+        let compressed = path.with_added_extension("zst");
+        assert_eq!(compressed, path.parent().unwrap().join("demo.1.zst"));
+        assert!(matches!(
+            &response.decision,
+            Decision::ReplaceFile { newpath } if newpath == &compressed
+        ));
+        assert_eq!(response.publications.len(), 1);
+        assert!(
+            !compressed.exists(),
+            "handler published outside the collector transaction"
+        );
+        assert_eq!(fs::read(&path).unwrap(), content);
+
+        let published = collector
+            .publish_generated(&response.publications, &mut hasher)
+            .unwrap();
+        assert_eq!(published.len(), 1);
+        assert!(!path.parent().unwrap().join("demo.1..zst").exists());
+        let decoded = zstd::stream::decode_all(fs::File::open(&compressed).unwrap()).unwrap();
+        assert_eq!(decoded, content);
+        collector.seal().unwrap();
+    }
+
+    #[test]
+    fn compressman_symlink_publication_does_not_eagerly_mutate_its_target() {
+        let install = tempfile::tempdir().unwrap();
+        let directory = install.path().join("usr/share/man/man1");
+        fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("demo.1");
+        let link = directory.join("alias.1");
+        let content = b"target manual page\n";
+        fs::write(&target, content).unwrap();
+        symlink("demo.1", &link).unwrap();
+
+        let mut collector = Collector::new(install.path());
+        collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut link_info = collector.path(&link, &mut hasher).unwrap();
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        plan.analysis.compress_man = true;
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let mut providers = BTreeSet::new();
+        let mut dependencies = BTreeSet::new();
+        let mut bucket = BucketMut {
+            providers: &mut providers,
+            dependencies: &mut dependencies,
+            analysis: &plan.analysis,
+            paths: &paths,
+        };
+
+        let link_response = compressman(&mut bucket, &mut link_info).unwrap();
+        let compressed_link = link.with_added_extension("zst");
+        let compressed_target = target.with_added_extension("zst");
+        assert_eq!(compressed_link, directory.join("alias.1.zst"));
+        assert_eq!(compressed_target, directory.join("demo.1.zst"));
+        assert!(!compressed_link.exists());
+        assert!(!compressed_target.exists());
+        collector
+            .publish_generated(&link_response.publications, &mut hasher)
+            .unwrap();
+        assert_eq!(fs::read_link(&compressed_link).unwrap(), Path::new("demo.1.zst"));
+        assert!(!directory.join("alias.1..zst").exists());
+        assert!(!directory.join("demo.1..zst").exists());
+        assert!(
+            !compressed_target.exists(),
+            "symlink handling eagerly wrote a different collected path"
+        );
+
+        let mut target_info = collector.path(&target, &mut hasher).unwrap();
+        let target_response = compressman(&mut bucket, &mut target_info).unwrap();
+        collector
+            .publish_generated(&target_response.publications, &mut hasher)
+            .unwrap();
+        assert_eq!(
+            zstd::stream::decode_all(fs::File::open(&compressed_target).unwrap()).unwrap(),
+            content
+        );
+        collector.seal().unwrap();
     }
 
     #[test]

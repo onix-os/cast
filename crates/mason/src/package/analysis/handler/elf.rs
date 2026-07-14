@@ -16,13 +16,12 @@ use elf::{
 use fs_err::File;
 use path_clean::clean;
 
-use forge::util;
 use stone::relation::{Dependency, Kind, Provider};
 
-use super::{analyzer_command, checked_output};
+use super::{ExternalAnalyzerMutation, VerifiedAnalyzerInput, analyzer_command, checked_output_for};
 use crate::package::{
     analysis::{BoxError, BucketMut, Decision, Response},
-    collect::PathInfo,
+    collect::{GeneratedArtifact, PathInfo},
 };
 
 pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
@@ -64,22 +63,56 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
 
     let build_id = parse_build_id(&mut elf);
 
-    let mut generated_paths = vec![];
+    let mut publications = vec![];
 
     if let Some(build_id) = build_id {
-        if let Some(debug_path) = split_debug(bucket, info, bit_size, &build_id)? {
-            // Add new split file to be analyzed
-            generated_paths.push(debug_path);
+        let debug_destination = bucket
+            .analysis
+            .debug
+            .then(|| pending_debug_destination(info, bit_size, &build_id))
+            .transpose()?
+            .flatten();
+        if !bucket.analysis.strip && debug_destination.is_none() {
+            return Ok(Response {
+                decision: Decision::IncludeFile,
+                publications,
+            });
         }
-        strip(bucket, info)?;
-
-        // Restat original file after split & strip
-        info.restat(bucket.hasher)?;
+        let byte_limit = info.regular_file_byte_limit()?;
+        let input = VerifiedAnalyzerInput::from_path_info(info, info.size)?;
+        let sandbox = ExternalAnalyzerMutation::new(&input, &info.target_path, "input.elf", ".elf-mutation")?;
+        let debug_output = debug_destination
+            .as_ref()
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("build-id debug output has a validated UTF-8 basename");
+                sandbox.output_path(name).map(|private| (name, private))
+            })
+            .transpose()?;
+        let operation = (|| {
+            if let Some((_, output)) = &debug_output {
+                split_debug(bucket, info, sandbox.path(), output)?;
+            }
+            strip(bucket, info, sandbox.path())
+        })();
+        let (replacement, debug_bytes) = match &debug_output {
+            Some((name, _)) => {
+                let (replacement, debug) = sandbox.finish_with_output(info, operation, byte_limit, name)?;
+                (replacement, Some(debug))
+            }
+            None => (sandbox.finish(info, operation, byte_limit)?, None),
+        };
+        info.replace_regular_from(&replacement)?;
+        if let Some((destination, bytes)) = debug_destination.zip(debug_bytes) {
+            publications.push(GeneratedArtifact::regular(destination, bytes, 0o644, None, true));
+        }
     }
 
     Ok(Response {
         decision: Decision::IncludeFile,
-        generated_paths,
+        publications,
     })
 }
 
@@ -101,94 +134,297 @@ mod tests {
     use elf::abi::{ET_DYN, ET_EXEC};
     use std::{
         collections::BTreeSet,
-        os::fd::AsRawFd,
+        os::unix::fs::{MetadataExt, PermissionsExt},
         path::{Path, PathBuf},
     };
 
     use super::{elf, parse_build_id, parse_elf};
     use crate::{
         Paths, Recipe,
-        package::{analysis::BucketMut, collect::PathInfo, test_derivation_plan},
+        package::{
+            analysis::{BucketMut, Decision},
+            collect::Collector,
+            test_derivation_plan,
+        },
     };
+    use stone::StoneDigestWriterHasher;
     use stone::relation::Kind as RelationKind;
-    use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
-    use stone_recipe::derivation::{ExecutablePlan, RelationPlan};
+    use stone_recipe::derivation::{ExecutablePlan, PathRuleKind, RelationPlan};
 
-    fn open_build_id_fixture() -> fs_err::File {
+    fn build_id_fixture_path() -> PathBuf {
         let mut candidates = vec![PathBuf::from("/bin/sh"), PathBuf::from("/usr/bin/env")];
         candidates.push(std::env::current_exe().unwrap());
 
         candidates
             .into_iter()
-            .find_map(|path| {
-                let mut parsed = parse_elf(&path).ok()?;
-                parse_build_id(&mut parsed)?;
-                fs_err::File::open(path).ok()
+            .find(|path| {
+                parse_elf(path)
+                    .ok()
+                    .and_then(|mut parsed| parse_build_id(&mut parsed))
+                    .is_some()
             })
             .expect("the Linux analyzer tests require an ELF fixture with a GNU build ID")
     }
 
-    fn assert_requested_tool_failure_is_propagated(debug: bool, strip: bool) {
-        let executable = open_build_id_fixture();
-        let proc_fd_path = PathBuf::from(format!("/proc/self/fd/{}", executable.as_raw_fd()));
+    fn write_analyzer_script(path: &Path, source: &str) {
+        fs_err::write(path, source).unwrap();
+        fs_err::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
+    fn assert_requested_tool_failure_is_propagated(debug: bool, strip: bool) {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
         let runtime = tempfile::tempdir().unwrap();
         let output = tempfile::tempdir().unwrap();
-        let plan = test_derivation_plan();
-        let paths = Paths::new(&recipe, plan.layout, runtime.path(), output.path()).unwrap();
-        let mut analysis = plan.analysis;
-        analysis.debug = debug;
-        analysis.strip = strip;
-        analysis.tools.objcopy = debug.then(|| ExecutablePlan {
-            path: "/usr/bin/llvm-objcopy".to_owned(),
+        let tools = tempfile::tempdir().unwrap();
+        let marker = tools.path().join("invoked");
+        let failing_program = tools.path().join("failing-analyzer");
+        write_analyzer_script(
+            &failing_program,
+            &format!(
+                "#!/bin/sh\nset -eu\nprintf invoked > '{}'\nfor target do :; done\nprintf partial-output > \"$target\"\nexit 9\n",
+                marker.display()
+            ),
+        );
+
+        let mut plan = test_derivation_plan();
+        plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();
+        plan.analysis.debug = debug;
+        plan.analysis.strip = strip;
+        plan.analysis.tools.objcopy = debug.then(|| ExecutablePlan {
+            path: failing_program.to_string_lossy().into_owned(),
             requirement: RelationPlan {
                 kind: RelationKind::Binary.into(),
-                name: "llvm-objcopy".to_owned(),
+                name: "failing-analyzer".to_owned(),
             },
         });
-        analysis.tools.strip = strip.then(|| ExecutablePlan {
-            path: "/usr/bin/llvm-strip".to_owned(),
+        plan.analysis.tools.strip = strip.then(|| ExecutablePlan {
+            path: failing_program.to_string_lossy().into_owned(),
             requirement: RelationPlan {
                 kind: RelationKind::Binary.into(),
-                name: "llvm-strip".to_owned(),
+                name: "failing-analyzer".to_owned(),
             },
         });
 
-        let target_path = PathBuf::from("/usr/bin/analyzer-failure-fixture");
-        let mut info = PathInfo {
-            path: proc_fd_path,
-            target_path: target_path.clone(),
-            layout: StonePayloadLayoutRecord {
-                uid: 0,
-                gid: 0,
-                mode: nix::libc::S_IFREG | 0o755,
-                tag: 0,
-                file: StonePayloadLayoutFile::Regular(0, target_path.to_string_lossy().into()),
-            },
-            size: executable.metadata().unwrap().len(),
-            package: std::sync::Arc::<str>::from("fixture"),
-            verified: None,
-        };
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let installed = paths.install().guest.join("usr/bin/analyzer-failure-fixture");
+        fs_err::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs_err::copy(build_id_fixture_path(), &installed).unwrap();
+        let original = fs_err::read(&installed).unwrap();
+        let original_inode = fs_err::metadata(&installed).unwrap().ino();
+
+        let mut collector = Collector::new(&paths.install().guest);
+        collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut info = collector.path(&installed, &mut hasher).unwrap();
         let mut providers = BTreeSet::new();
         let mut dependencies = BTreeSet::new();
-        let mut hasher = StoneDigestWriterHasher::new();
         let mut bucket = BucketMut {
             providers: &mut providers,
             dependencies: &mut dependencies,
-            hasher: &mut hasher,
-            analysis: &analysis,
+            analysis: &plan.analysis,
             paths: &paths,
         };
 
-        // The analyzer subprocess closes every inherited descriptor before
-        // exec, so its /proc/self/fd path cannot name the still-open ELF. The
-        // parent can still restat it: a swallowed tool error would return Ok.
         assert!(
             elf(&mut bucket, &mut info).is_err(),
             "a requested ELF analyzer tool failure must abort package analysis"
         );
+        assert!(marker.exists(), "the requested failing analyzer was not invoked");
+        assert_eq!(fs_err::read(&installed).unwrap(), original);
+        assert_eq!(fs_err::metadata(&installed).unwrap().ino(), original_inode);
+        info.verify_unchanged().unwrap();
+        collector.seal().unwrap();
+    }
+
+    #[test]
+    fn strip_mutates_only_a_private_copy_then_commits_transactionally() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();
+        let tools = tempfile::tempdir().unwrap();
+        let observed = tools.path().join("observed-strip-input");
+        let strip_program = tools.path().join("strip-fixture");
+        write_analyzer_script(
+            &strip_program,
+            &format!(
+                "#!/bin/sh\nset -eu\nfor target do :; done\nprintf '%s' \"$target\" > '{}'\nprintf 'transactional-strip-output' > \"$target\"\n",
+                observed.display()
+            ),
+        );
+        plan.analysis.debug = false;
+        plan.analysis.strip = true;
+        plan.analysis.tools.strip = Some(ExecutablePlan {
+            path: strip_program.to_string_lossy().into_owned(),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary.into(),
+                name: "strip-fixture".to_owned(),
+            },
+        });
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let installed = paths.install().guest.join("usr/bin/fixture");
+        fs_err::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs_err::copy(build_id_fixture_path(), &installed).unwrap();
+        let original_inode = fs_err::metadata(&installed).unwrap().ino();
+        let original_mode = fs_err::metadata(&installed).unwrap().mode();
+
+        let mut collector = Collector::new(&paths.install().guest);
+        collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut info = collector.path(&installed, &mut hasher).unwrap();
+        let original_hash = info.file_hash().unwrap();
+        let mut providers = BTreeSet::new();
+        let mut dependencies = BTreeSet::new();
+        let mut bucket = BucketMut {
+            providers: &mut providers,
+            dependencies: &mut dependencies,
+            analysis: &plan.analysis,
+            paths: &paths,
+        };
+
+        let response = elf(&mut bucket, &mut info).unwrap();
+        assert!(matches!(response.decision, Decision::IncludeFile));
+        assert!(response.publications.is_empty());
+        assert_eq!(fs_err::read(&installed).unwrap(), b"transactional-strip-output");
+        assert_ne!(fs_err::metadata(&installed).unwrap().ino(), original_inode);
+        assert_eq!(fs_err::metadata(&installed).unwrap().mode(), original_mode);
+        assert_ne!(info.file_hash().unwrap(), original_hash);
+        info.verify_unchanged().unwrap();
+
+        let private_input = PathBuf::from(String::from_utf8(fs_err::read(&observed).unwrap()).unwrap());
+        assert_ne!(private_input, installed);
+        assert!(private_input.to_string_lossy().contains(".mason-analyzer-"));
+        assert!(!private_input.exists(), "private analyzer input was not removed");
+        collector.seal().unwrap();
+    }
+
+    #[test]
+    fn debug_link_mutates_private_copy_and_generated_debug_is_admitted() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();
+        let tools = tempfile::tempdir().unwrap();
+        let observed_split = tools.path().join("observed-split-input");
+        let observed_link = tools.path().join("observed-link-input");
+        let objcopy_program = tools.path().join("objcopy-fixture");
+        write_analyzer_script(
+            &objcopy_program,
+            &format!(
+                "#!/bin/sh\nset -eu\ncase \"$1\" in\n  --only-keep-debug)\n    printf '%s' \"$2\" > '{}'\n    printf 'debug-payload' > \"$3\"\n    ;;\n  --add-gnu-debuglink)\n    printf '%s' \"$3\" > '{}'\n    printf 'debug-link' >> \"$3\"\n    ;;\n  *) exit 64 ;;\nesac\n",
+                observed_split.display(),
+                observed_link.display()
+            ),
+        );
+        plan.analysis.debug = true;
+        plan.analysis.strip = false;
+        plan.analysis.tools.objcopy = Some(ExecutablePlan {
+            path: objcopy_program.to_string_lossy().into_owned(),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary.into(),
+                name: "objcopy-fixture".to_owned(),
+            },
+        });
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let installed = paths.install().guest.join("usr/bin/fixture");
+        fs_err::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs_err::copy(build_id_fixture_path(), &installed).unwrap();
+        let mut expected = fs_err::read(&installed).unwrap();
+        expected.extend_from_slice(b"debug-link");
+
+        let mut collector = Collector::new(&paths.install().guest);
+        collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut info = collector.path(&installed, &mut hasher).unwrap();
+        let mut providers = BTreeSet::new();
+        let mut dependencies = BTreeSet::new();
+        let mut bucket = BucketMut {
+            providers: &mut providers,
+            dependencies: &mut dependencies,
+            analysis: &plan.analysis,
+            paths: &paths,
+        };
+
+        let response = elf(&mut bucket, &mut info).unwrap();
+        assert!(matches!(response.decision, Decision::IncludeFile));
+        assert_eq!(response.publications.len(), 1);
+        assert_eq!(fs_err::read(&installed).unwrap(), expected);
+        info.verify_unchanged().unwrap();
+
+        let split_input = PathBuf::from(String::from_utf8(fs_err::read(&observed_split).unwrap()).unwrap());
+        let link_input = PathBuf::from(String::from_utf8(fs_err::read(&observed_link).unwrap()).unwrap());
+        assert_eq!(split_input, link_input);
+        assert_ne!(split_input, installed);
+        assert!(!split_input.exists(), "private objcopy input was not removed");
+
+        let generated = collector
+            .publish_generated(&response.publications, &mut hasher)
+            .unwrap();
+        assert_eq!(generated.len(), 1);
+        assert_eq!(fs_err::read(&generated[0].path).unwrap(), b"debug-payload");
+        collector.seal().unwrap();
+    }
+
+    #[test]
+    fn failed_private_strip_leaves_collected_file_and_witness_unchanged() {
+        let recipe =
+            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let mut plan = test_derivation_plan();
+        plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();
+        let tools = tempfile::tempdir().unwrap();
+        let observed = tools.path().join("observed-failed-strip-input");
+        let strip_program = tools.path().join("failing-strip-fixture");
+        write_analyzer_script(
+            &strip_program,
+            &format!(
+                "#!/bin/sh\nset -eu\nfor target do :; done\nprintf '%s' \"$target\" > '{}'\nprintf 'partial-private-output' > \"$target\"\nexit 9\n",
+                observed.display()
+            ),
+        );
+        plan.analysis.debug = false;
+        plan.analysis.strip = true;
+        plan.analysis.tools.strip = Some(ExecutablePlan {
+            path: strip_program.to_string_lossy().into_owned(),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary.into(),
+                name: "failing-strip-fixture".to_owned(),
+            },
+        });
+        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+        let installed = paths.install().guest.join("usr/bin/fixture");
+        fs_err::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs_err::copy(build_id_fixture_path(), &installed).unwrap();
+        let original = fs_err::read(&installed).unwrap();
+        let original_inode = fs_err::metadata(&installed).unwrap().ino();
+
+        let mut collector = Collector::new(&paths.install().guest);
+        collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+        let mut hasher = StoneDigestWriterHasher::new();
+        let mut info = collector.path(&installed, &mut hasher).unwrap();
+        let mut providers = BTreeSet::new();
+        let mut dependencies = BTreeSet::new();
+        let mut bucket = BucketMut {
+            providers: &mut providers,
+            dependencies: &mut dependencies,
+            analysis: &plan.analysis,
+            paths: &paths,
+        };
+
+        assert!(elf(&mut bucket, &mut info).is_err());
+        assert_eq!(fs_err::read(&installed).unwrap(), original);
+        assert_eq!(fs_err::metadata(&installed).unwrap().ino(), original_inode);
+        info.verify_unchanged().unwrap();
+        let private_input = PathBuf::from(String::from_utf8(fs_err::read(&observed).unwrap()).unwrap());
+        assert_ne!(private_input, installed);
+        assert!(!private_input.exists(), "failed analyzer sandbox was not removed");
+        collector.seal().unwrap();
     }
 
     #[test]
@@ -439,16 +675,26 @@ fn parse_build_id(elf: &mut elf::ElfStream<AnyEndian, File>) -> Option<String> {
     None
 }
 
+fn pending_debug_destination(info: &PathInfo, bit_size: Class, build_id: &str) -> Result<Option<PathBuf>, BoxError> {
+    if build_id.len() < 2 {
+        return Ok(None);
+    }
+    let debug_dir = if matches!(bit_size, Class::ELF64) {
+        Path::new("usr/lib/debug/.build-id")
+    } else {
+        Path::new("usr/lib32/debug/.build-id")
+    };
+    let destination = debug_dir.join(&build_id[..2]).join(format!("{}.debug", &build_id[2..]));
+    let target = Path::new("/").join(&destination);
+    Ok((!info.inventory_contains_regular_target(&target)?).then_some(destination))
+}
+
 fn split_debug(
     bucket: &BucketMut<'_>,
     info: &PathInfo,
-    bit_size: Class,
-    build_id: &str,
-) -> Result<Option<PathBuf>, BoxError> {
-    if !bucket.analysis.debug {
-        return Ok(None);
-    }
-
+    mutable_input: &Path,
+    private_debug_output: &Path,
+) -> Result<(), BoxError> {
     let objcopy = &bucket
         .analysis
         .tools
@@ -457,42 +703,26 @@ fn split_debug(
         .expect("validated analysis plan requires objcopy when ELF debug splitting is enabled")
         .path;
 
-    let debug_dir = if matches!(bit_size, Class::ELF64) {
-        Path::new("usr/lib/debug/.build-id")
-    } else {
-        Path::new("usr/lib32/debug/.build-id")
-    };
-    let debug_info_relative_dir = debug_dir.join(&build_id[..2]);
-    let debug_info_dir = bucket.paths.install().guest.join(debug_info_relative_dir);
-    let debug_info_path = debug_info_dir.join(format!("{}.debug", &build_id[2..]));
-
-    // Is it possible we already split this?
-    if debug_info_path.exists() {
-        return Ok(None);
-    }
-
-    util::ensure_dir_exists(&debug_info_dir)?;
-
     let mut command = analyzer_command(objcopy);
     command
         .arg("--only-keep-debug")
-        .arg(&info.path)
-        .arg(&debug_info_path)
+        .arg(mutable_input)
+        .arg(private_debug_output)
         .env("LC_ALL", "C");
-    checked_output(command)?;
+    checked_output_for(info, command)?;
 
     let mut command = analyzer_command(objcopy);
     command
         .arg("--add-gnu-debuglink")
-        .arg(&debug_info_path)
-        .arg(&info.path)
+        .arg(private_debug_output)
+        .arg(mutable_input)
         .env("LC_ALL", "C");
-    checked_output(command)?;
+    checked_output_for(info, command)?;
 
-    Ok(Some(debug_info_path))
+    Ok(())
 }
 
-fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
+fn strip(bucket: &BucketMut<'_>, info: &PathInfo, mutable_input: &Path) -> Result<(), BoxError> {
     if !bucket.analysis.strip {
         return Ok(());
     }
@@ -514,12 +744,12 @@ fn strip(bucket: &BucketMut<'_>, info: &PathInfo) -> Result<(), BoxError> {
     command.env("LC_ALL", "C");
 
     if is_executable {
-        command.arg(&info.path);
+        command.arg(mutable_input);
     } else {
-        command.args(["-g", "--strip-unneeded"]).arg(&info.path);
+        command.args(["-g", "--strip-unneeded"]).arg(mutable_input);
     }
 
-    checked_output(command)?;
+    checked_output_for(info, command)?;
 
     Ok(())
 }

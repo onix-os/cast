@@ -17,7 +17,7 @@ use std::{
     path::{Component, Path, PathBuf},
     ptr::NonNull,
     sync::{Arc, Mutex, OnceLock},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use astr::AStr;
@@ -28,6 +28,9 @@ use stone_recipe::derivation::PathRuleKind;
 use thiserror::Error as ThisError;
 
 mod mutation;
+mod publication;
+
+pub(crate) use publication::{GeneratedArtifact, GeneratedTimes};
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
@@ -280,6 +283,7 @@ impl Collector {
         Ok(witness)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn check_deadline(&self, path: &Path) -> Result<(), Error> {
         self.deadline().check(path)
     }
@@ -325,6 +329,7 @@ impl Collector {
     /// Authenticate a complete analyzer-generated batch before producing any
     /// path information. Missing ancestors are admitted only when they lead to
     /// one of the exact declared leaves; undeclared siblings fail the batch.
+    #[allow(dead_code)]
     pub fn paths(&self, paths: &[PathBuf], hasher: &mut StoneDigestWriterHasher) -> Result<Vec<PathInfo>, Error> {
         let witness = self.witness()?;
         if paths.is_empty() {
@@ -1436,6 +1441,33 @@ impl WitnessGraph {
         }))
     }
 
+    fn contains_symlink(&self, relative: &Path) -> Result<bool, Error> {
+        let (parent, name) = split_parent_name(relative, &self.anchor.path.join(relative))?;
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::AdmissionsOpen => {}
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "query package inventory",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let Some(parent) = lookup_directory(&state.directories, &parent) else {
+            return Ok(false);
+        };
+        Ok(find_child(&state.directories, parent, &name).is_some_and(|child| {
+            matches!(
+                &child.kind,
+                WitnessChildKind::Entry(EntryWitness {
+                    kind: WitnessEntryKind::Symlink { .. },
+                    ..
+                })
+            )
+        }))
+    }
+
     fn child_directory_id(
         &self,
         parent: DirectoryId,
@@ -1540,101 +1572,6 @@ impl WitnessGraph {
             return Err(changed(display_path, "witnessed directory was replaced"));
         }
         Ok(file)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn restate_regular(
-        self: &Arc<Self>,
-        parent: DirectoryId,
-        name: &OsStr,
-        old_snapshot: FileSnapshot,
-        new_snapshot: FileSnapshot,
-        hash: u128,
-        path: &Path,
-    ) -> Result<(), Error> {
-        self.deadline.check(path)?;
-        let mut state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
-        match state.phase {
-            WitnessPhase::AdmissionsOpen => {}
-            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
-            phase => {
-                return Err(Error::InvalidInventoryPhase {
-                    operation: "restate analyzed regular file",
-                    phase: phase.name(),
-                });
-            }
-        }
-        let expected = find_child(&state.directories, parent, name)
-            .ok_or_else(|| Error::UnwitnessedPath { path: path.to_owned() })?;
-        let WitnessChildKind::Entry(expected) = &expected.kind else {
-            return Err(changed(path, "analyzed path was witnessed as a directory"));
-        };
-        if expected.snapshot != old_snapshot || !matches!(expected.kind, WitnessEntryKind::Regular { .. }) {
-            return Err(changed(path, "analyzed path has a stale regular-file witness"));
-        }
-        if old_snapshot.node != new_snapshot.node || old_snapshot.links != 1 || new_snapshot.links != 1 {
-            return Err(changed(
-                path,
-                "analyzed regular file transition was not an in-place single-link mutation",
-            ));
-        }
-
-        let parent_relative = directory_relative(&state.directories, parent, &self.anchor.path)?;
-        let parent_snapshot = state.directories[parent].snapshot;
-        let parent_file = self.anchor.open_directory(&parent_relative)?;
-        require_snapshot(
-            path,
-            parent_snapshot,
-            &metadata(&parent_file, "stat restated package parent", path)?,
-        )?;
-        let parent_handle = DirectoryHandle {
-            file: parent_file,
-            relative: parent_relative,
-            display_path: path.parent().unwrap_or(&self.anchor.path).to_owned(),
-            snapshot: parent_snapshot,
-            anchor: Arc::clone(&self.anchor),
-            witness: Arc::clone(self),
-            witness_id: parent,
-        };
-        let rescan_usage = Arc::new(Mutex::new(CollectionUsage::default()));
-        let rescan = CollectionContext::new(self.limits, rescan_usage, Arc::clone(&self.deadline));
-        let names = read_directory_names(&parent_handle, &rescan)?;
-        let expected_names = &state.directories[parent].children;
-        if names.len() != expected_names.len()
-            || names
-                .iter()
-                .zip(expected_names)
-                .any(|(actual, expected)| actual != &expected.name)
-        {
-            return Err(changed(path, "analyzed file parent membership changed"));
-        }
-
-        let mut usage = self.usage.lock().map_err(|_| Error::StatePoisoned)?;
-        let mut updated_usage = usage.clone();
-        updated_usage.regular_bytes = updated_usage
-            .regular_bytes
-            .checked_sub(old_snapshot.size)
-            .and_then(|bytes| bytes.checked_add(new_snapshot.size))
-            .ok_or(Error::ArithmeticOverflow {
-                resource: "total regular file bytes",
-                path: path.to_owned(),
-            })?;
-        enforce_u64_limit(
-            "total regular file bytes",
-            self.limits.max_total_regular_bytes,
-            updated_usage.regular_bytes,
-            path,
-        )?;
-        let position = state.directories[parent]
-            .children
-            .binary_search_by(|child| child.name.as_os_str().cmp(name))
-            .map_err(|_| Error::UnwitnessedPath { path: path.to_owned() })?;
-        state.directories[parent].children[position].kind = WitnessChildKind::Entry(EntryWitness {
-            snapshot: new_snapshot,
-            kind: WitnessEntryKind::Regular { hash },
-        });
-        *usage = updated_usage;
-        Ok(())
     }
 }
 
@@ -2353,119 +2290,6 @@ impl VerifiedPath {
             exceeded: false,
         })
     }
-
-    fn restat_regular(
-        &mut self,
-        layout: &mut StonePayloadLayoutRecord,
-        size: &mut u64,
-        hasher: &mut StoneDigestWriterHasher,
-    ) -> Result<(), Error> {
-        let path = self.display_path()?;
-        if !matches!(self.kind, VerifiedKind::Regular { .. }) {
-            return Err(Error::UnverifiedContent { path });
-        }
-        let parent = self.open_parent("restat package parent")?;
-        let file = open_entry_handle(&parent, &self.name, &path)?;
-        let current_metadata = metadata(&file, "restat analyzed package file", &path)?;
-        if !current_metadata.file_type().is_file() {
-            return Err(changed(&path, "analyzed package path is no longer a regular file"));
-        }
-        let new_snapshot = FileSnapshot::from_metadata(&current_metadata);
-        if new_snapshot.node != self.snapshot.node {
-            self.witness.poison();
-            return Err(changed(
-                &path,
-                "analyzed regular file was replaced without an authenticated transition",
-            ));
-        }
-        if self.snapshot.links != 1 || new_snapshot.links != 1 {
-            self.witness.poison();
-            return Err(changed(
-                &path,
-                "in-place analyzer mutation of multiply-linked files is not supported",
-            ));
-        }
-        enforce_u64_limit(
-            "regular file bytes",
-            self.limits.max_file_bytes,
-            new_snapshot.size,
-            &path,
-        )?;
-
-        let context = CollectionContext::detached(self.limits, Arc::clone(&self.deadline));
-        let mut opened = open_entry(
-            &parent,
-            &self.name,
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
-            &path,
-        )?;
-        require_snapshot(
-            &path,
-            new_snapshot,
-            &metadata(&opened, "stat analyzed package file", &path)?,
-        )?;
-        hasher.reset();
-        let mut buffer = [0u8; HASH_BUFFER_BYTES];
-        let mut bytes_read = 0u64;
-        loop {
-            context.check_time(&path)?;
-            let read = opened.read(&mut buffer).map_err(|source| Error::Io {
-                operation: "rehash analyzed package file",
-                path: path.clone(),
-                source,
-            })?;
-            if read == 0 {
-                break;
-            }
-            bytes_read = bytes_read.checked_add(read as u64).ok_or(Error::ArithmeticOverflow {
-                resource: "regular file bytes",
-                path: path.clone(),
-            })?;
-            if bytes_read > new_snapshot.size {
-                return Err(changed(&path, "analyzed package file grew while rehashing"));
-            }
-            hasher.update(&buffer[..read]);
-        }
-        if bytes_read != new_snapshot.size {
-            return Err(changed(&path, "analyzed package file changed size while rehashing"));
-        }
-        require_snapshot(
-            &path,
-            new_snapshot,
-            &metadata(&opened, "verify analyzed package file", &path)?,
-        )?;
-        let reopened = open_entry_handle(&parent, &self.name, &path)?;
-        require_snapshot(
-            &path,
-            new_snapshot,
-            &metadata(&reopened, "verify analyzed package path", &path)?,
-        )?;
-
-        let hash = hasher.digest128();
-        let target = match &layout.file {
-            StonePayloadLayoutFile::Regular(_, target) => target.clone(),
-            _ => return Err(Error::UnverifiedContent { path }),
-        };
-        let new_layout = StonePayloadLayoutRecord {
-            uid: current_metadata.uid(),
-            gid: current_metadata.gid(),
-            mode: current_metadata.mode(),
-            tag: layout.tag,
-            file: StonePayloadLayoutFile::Regular(hash, target),
-        };
-        if let Err(error) =
-            self.witness
-                .restate_regular(self.parent_id, &self.name, self.snapshot, new_snapshot, hash, &path)
-        {
-            self.witness.poison();
-            return Err(error);
-        }
-        *layout = new_layout;
-        *size = new_snapshot.size;
-        self.snapshot = new_snapshot;
-        self.kind = VerifiedKind::Regular { hash };
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -2497,17 +2321,6 @@ impl PathInfo {
         }
     }
 
-    pub fn restat(&mut self, hasher: &mut StoneDigestWriterHasher) -> Result<(), Error> {
-        let verified = self.verified.as_mut().ok_or_else(|| Error::UnverifiedContent {
-            path: self.path.clone(),
-        })?;
-        let result = verified.restat_regular(&mut self.layout, &mut self.size, hasher);
-        if result.is_err() {
-            verified.witness.poison();
-        }
-        result
-    }
-
     /// Replace one collected single-link regular file from bounded in-memory
     /// bytes. The collector owns publication and witness updates; callers
     /// never write through the mutable output-tree pathname, and no caller-
@@ -2537,6 +2350,17 @@ impl PathInfo {
             .remaining(&self.path)
     }
 
+    pub(crate) fn regular_file_byte_limit(&self) -> Result<u64, Error> {
+        Ok(self
+            .verified
+            .as_ref()
+            .ok_or_else(|| Error::UnverifiedContent {
+                path: self.path.clone(),
+            })?
+            .limits
+            .max_file_bytes)
+    }
+
     pub(crate) fn inventory_contains_regular_target(&self, target: &Path) -> Result<bool, Error> {
         let verified = self.verified.as_ref().ok_or_else(|| Error::UnverifiedContent {
             path: self.path.clone(),
@@ -2551,6 +2375,65 @@ impl PathInfo {
             return Ok(false);
         }
         verified.witness.contains_regular(relative)
+    }
+
+    pub(crate) fn inventory_contains_symlink_target(&self, target: &Path) -> Result<bool, Error> {
+        let verified = self.verified.as_ref().ok_or_else(|| Error::UnverifiedContent {
+            path: self.path.clone(),
+        })?;
+        verified.deadline.check(target)?;
+        let relative = target.strip_prefix("/").unwrap_or(target);
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Ok(false);
+        }
+        verified.witness.contains_symlink(relative)
+    }
+
+    pub(crate) fn symlink_target(&self) -> Result<&str, Error> {
+        let verified = self.verified.as_ref().ok_or_else(|| Error::UnverifiedContent {
+            path: self.path.clone(),
+        })?;
+        let VerifiedKind::Symlink { target } = &verified.kind else {
+            return Err(Error::UnverifiedContent {
+                path: self.path.clone(),
+            });
+        };
+        verified.verify()?;
+        Ok(target)
+    }
+
+    pub(crate) fn file_times(&self) -> Result<(SystemTime, SystemTime), Error> {
+        let verified = self.verified.as_ref().ok_or_else(|| Error::UnverifiedContent {
+            path: self.path.clone(),
+        })?;
+        verified.verify()?;
+        let path = verified.display_path()?;
+        let parent = verified.open_parent("open collected entry for timestamp capture")?;
+        let handle = open_entry_handle(&parent, &verified.name, &path)?;
+        let current = metadata(&handle, "capture collected entry timestamps", &path)?;
+        require_snapshot(&path, verified.snapshot, &current)?;
+        let accessed = current.accessed().map_err(|source| Error::Io {
+            operation: "read collected entry access time",
+            path: path.clone(),
+            source,
+        })?;
+        let modified = current.modified().map_err(|source| Error::Io {
+            operation: "read collected entry modification time",
+            path: path.clone(),
+            source,
+        })?;
+        let reopened = open_entry_handle(&parent, &verified.name, &path)?;
+        require_snapshot(
+            &path,
+            verified.snapshot,
+            &metadata(&reopened, "verify collected entry after timestamp capture", &path)?,
+        )?;
+        verified.deadline.check(&path)?;
+        Ok((accessed, modified))
     }
 
     pub(crate) fn verify_unchanged(&self) -> Result<(), Error> {
@@ -2573,6 +2456,10 @@ impl PathInfo {
 
     pub fn is_file(&self) -> bool {
         matches!(self.layout.file, StonePayloadLayoutFile::Regular(..))
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        matches!(self.layout.file, StonePayloadLayoutFile::Symlink(..))
     }
 
     pub fn file_hash(&self) -> Option<u128> {
@@ -3765,6 +3652,14 @@ pub enum Error {
     },
     #[error("regular-file replacement committed at {path}, but finalization is ambiguous: {primary}", path = path.display())]
     MutationCommitAmbiguous { path: PathBuf, primary: Box<Error> },
+    #[error("generated-path publication failed and rollback was incomplete at {path}: primary={primary}; cleanup={cleanup}", path = path.display())]
+    GeneratedPublicationRollback {
+        path: PathBuf,
+        primary: Box<Error>,
+        cleanup: Box<Error>,
+    },
+    #[error("generated paths were admitted at {path}, but finalization is ambiguous: {primary}", path = path.display())]
+    GeneratedPublicationCommitAmbiguous { path: PathBuf, primary: Box<Error> },
     #[error("{operation} failed for {path}", path = path.display())]
     Io {
         operation: &'static str,
@@ -4529,63 +4424,6 @@ mod tests {
     }
 
     #[test]
-    fn strict_restat_accepts_same_inode_and_rejects_replacement() {
-        let root = tempfile::tempdir().unwrap();
-        let path = write_file(root.path(), "file", 0o644);
-        let collector = all_collector(root.path());
-        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
-        let inode = fs::metadata(&path).unwrap().ino();
-        fs::write(&path, b"mutated in place").unwrap();
-        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
-        info.restat(&mut StoneDigestWriterHasher::new()).unwrap();
-        collector.seal().unwrap();
-
-        let root = tempfile::tempdir().unwrap();
-        let path = write_file(root.path(), "file", 0o644);
-        let collector = all_collector(root.path());
-        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
-        fs::rename(&path, root.path().join("old")).unwrap();
-        fs::write(&path, b"replacement").unwrap();
-        assert!(matches!(
-            info.restat(&mut StoneDigestWriterHasher::new()),
-            Err(Error::TreeChanged { .. })
-        ));
-        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
-    }
-
-    #[test]
-    fn restat_accepts_the_exact_file_limit_and_every_failure_poisons() {
-        let root = tempfile::tempdir().unwrap();
-        let path = write_file(root.path(), "file", 0o644);
-        let mut limits = CollectionLimits::default();
-        limits.max_file_bytes = 8;
-        limits.max_total_regular_bytes = 8;
-        let collector = collector_with_limits(root.path(), limits);
-        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
-        fs::write(&path, b"12345678").unwrap();
-        info.restat(&mut StoneDigestWriterHasher::new()).unwrap();
-        collector.seal().unwrap();
-
-        let root = tempfile::tempdir().unwrap();
-        let path = write_file(root.path(), "file", 0o644);
-        limits.max_file_bytes = 7;
-        limits.max_total_regular_bytes = 7;
-        let collector = collector_with_limits(root.path(), limits);
-        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
-        fs::write(&path, b"12345678").unwrap();
-        assert!(matches!(
-            info.restat(&mut StoneDigestWriterHasher::new()),
-            Err(Error::LimitExceeded {
-                resource: "regular file bytes",
-                limit: 7,
-                actual: 8,
-                ..
-            })
-        ));
-        assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
-    }
-
-    #[test]
     fn sealed_inventory_rejects_late_add_delete_metadata_and_replacement() {
         for action in 0..4 {
             let root = tempfile::tempdir().unwrap();
@@ -4610,21 +4448,17 @@ mod tests {
     }
 
     #[test]
-    fn sealed_phase_rejects_admission_and_restat_transitions() {
+    fn sealed_phase_rejects_late_admission() {
         let root = tempfile::tempdir().unwrap();
-        let path = write_file(root.path(), "file", 0o644);
+        write_file(root.path(), "file", 0o644);
         let collector = all_collector(root.path());
-        let mut info = collector.path(&path, &mut StoneDigestWriterHasher::new()).unwrap();
+        collector
+            .enumerate_paths(None, &mut StoneDigestWriterHasher::new())
+            .unwrap();
         collector.seal().unwrap();
         let generated = write_file(root.path(), "generated", 0o644);
         assert!(matches!(
             collector.paths(&[generated], &mut StoneDigestWriterHasher::new()),
-            Err(Error::InvalidInventoryPhase { phase: "sealed", .. })
-        ));
-
-        fs::write(&path, b"same inode mutation").unwrap();
-        assert!(matches!(
-            info.restat(&mut StoneDigestWriterHasher::new()),
             Err(Error::InvalidInventoryPhase { phase: "sealed", .. })
         ));
     }
