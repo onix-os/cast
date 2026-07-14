@@ -30,14 +30,13 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
-use crate::state::TransitionId;
+use crate::{linux_fs::chmod_path_descriptor, state::TransitionId};
 
 const JOURNAL_DIRECTORY: &CStr = c"journal";
 const CANONICAL_NAME: &CStr = c"state-transition";
 const LOCK_NAME: &CStr = c"state-transition.lock";
 const JOURNAL_DIRECTORY_MODE: u32 = 0o700;
 const JOURNAL_FILE_MODE: u32 = 0o600;
-const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
 const MAX_QUARANTINE_NAME_BYTES: usize = 128;
 const MAX_STALE_TEMPORARIES: usize = 256;
 const TEMPORARY_PREFIX: &[u8] = b".state-transition.tmp-";
@@ -2355,12 +2354,17 @@ enum DirectoryPolicy {
 }
 
 fn ensure_journal_directory(cast: &std::fs::File, path: &Path) -> io::Result<std::fs::File> {
-    // SAFETY: the directory descriptor and fixed NUL-terminated name live for
-    // the call. mkdirat never follows the final component.
-    if unsafe { nix::libc::mkdirat(cast.as_raw_fd(), JOURNAL_DIRECTORY.as_ptr(), JOURNAL_DIRECTORY_MODE) } == -1 {
+    loop {
+        // SAFETY: the directory descriptor and fixed NUL-terminated name live
+        // for the call. mkdirat never follows the final component.
+        if unsafe { nix::libc::mkdirat(cast.as_raw_fd(), JOURNAL_DIRECTORY.as_ptr(), JOURNAL_DIRECTORY_MODE) } == 0 {
+            break;
+        }
         let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::AlreadyExists {
-            return Err(source);
+        match source.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::AlreadyExists => break,
+            _ => return Err(source),
         }
     }
 
@@ -2499,20 +2503,26 @@ fn openat2_file(dirfd: RawFd, path: &CStr, flags: i32, mode: u32, resolve: u64) 
     how.flags = u64::from(flags as u32);
     how.mode = u64::from(mode);
     how.resolve = resolve;
-    // SAFETY: all pointers and the directory descriptor remain live. A
-    // successful openat2 returns one fresh descriptor owned below.
-    let descriptor = unsafe {
-        nix::libc::syscall(
-            nix::libc::SYS_openat2,
-            dirfd,
-            path.as_ptr(),
-            &how,
-            size_of::<nix::libc::open_how>(),
-        )
+    let descriptor = loop {
+        // SAFETY: all pointers and the directory descriptor remain live. A
+        // successful openat2 returns one fresh descriptor owned below.
+        let descriptor = unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_openat2,
+                dirfd,
+                path.as_ptr(),
+                &how,
+                size_of::<nix::libc::open_how>(),
+            )
+        };
+        if descriptor != -1 {
+            break descriptor;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
     };
-    if descriptor == -1 {
-        return Err(io::Error::last_os_error());
-    }
     let descriptor = i32::try_from(descriptor)
         .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
     // SAFETY: successful openat2 returned this fresh owned descriptor.
@@ -2525,110 +2535,6 @@ fn controlled_resolution() -> u64 {
         | nix::libc::RESOLVE_NO_MAGICLINKS
         | nix::libc::RESOLVE_NO_SYMLINKS
         | nix::libc::RESOLVE_NO_XDEV) as u64
-}
-
-fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Result<()> {
-    // Linux 5.6 cannot fchmod an O_PATH descriptor directly. Resolve only the
-    // live decimal descriptor through an authenticated procfs fd directory;
-    // never chmod the mutable journal pathname.
-    let proc = openat2_file(
-        nix::libc::AT_FDCWD,
-        c"/proc",
-        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-        0,
-        (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
-    )?;
-    require_procfs(&proc, Path::new("/proc"))?;
-    let process = proc_self_component(&proc)?;
-    let process = openat2_file(
-        proc.as_raw_fd(),
-        &process,
-        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-        0,
-        controlled_resolution(),
-    )?;
-    require_procfs(&process, Path::new("/proc/<pid>"))?;
-    let descriptors = openat2_file(
-        process.as_raw_fd(),
-        c"fd",
-        nix::libc::O_RDONLY
-            | nix::libc::O_DIRECTORY
-            | nix::libc::O_CLOEXEC
-            | nix::libc::O_NOFOLLOW
-            | nix::libc::O_NONBLOCK,
-        0,
-        controlled_resolution(),
-    )?;
-    require_procfs(&descriptors, Path::new("/proc/<pid>/fd"))?;
-
-    let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
-    loop {
-        // SAFETY: the authenticated directory, live decimal descriptor name,
-        // and target O_PATH descriptor remain pinned for the call. flags=0
-        // deliberately follows the procfs magic link to that exact inode.
-        if unsafe { nix::libc::fchmodat(descriptors.as_raw_fd(), descriptor.as_ptr(), mode, 0) } == 0 {
-            return Ok(());
-        }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
-}
-
-fn proc_self_component(proc: &std::fs::File) -> io::Result<CString> {
-    const MAX_DECIMAL_PID_BYTES: usize = 16;
-    let mut bytes = [0_u8; MAX_DECIMAL_PID_BYTES + 1];
-    let length = loop {
-        // SAFETY: proc is a live authenticated directory, `self` is a fixed
-        // NUL-terminated component, and bytes is writable for its full size.
-        let length = unsafe {
-            nix::libc::readlinkat(
-                proc.as_raw_fd(),
-                c"self".as_ptr(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-            )
-        };
-        if length >= 0 {
-            break usize::try_from(length).map_err(|_| io::Error::other("negative procfs self length"))?;
-        }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    };
-    if length == 0
-        || length > MAX_DECIMAL_PID_BYTES
-        || bytes[..length].iter().any(|byte| !byte.is_ascii_digit())
-        || bytes[0] == b'0'
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "authenticated procfs self link is not one bounded canonical decimal PID",
-        ));
-    }
-    CString::new(&bytes[..length]).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "procfs PID contains NUL"))
-}
-
-fn require_procfs(file: &std::fs::File, path: &Path) -> io::Result<()> {
-    // SAFETY: zeroed statfs storage is a valid output buffer and the file
-    // descriptor remains live throughout fstatfs.
-    let mut stat: nix::libc::statfs = unsafe { zeroed() };
-    if unsafe { nix::libc::fstatfs(file.as_raw_fd(), &mut stat) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if stat.f_type != PROC_SUPER_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "refusing unauthenticated descriptor chmod through {}: expected procfs magic {PROC_SUPER_MAGIC:#x}, found {:#x}",
-                path.display(),
-                stat.f_type
-            ),
-        ));
-    }
-    Ok(())
 }
 
 fn renameat2(old_dir: RawFd, old: &CStr, new_dir: RawFd, new: &CStr, flags: u32) -> io::Result<()> {

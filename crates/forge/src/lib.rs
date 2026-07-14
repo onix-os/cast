@@ -19,6 +19,7 @@ pub mod db;
 pub mod dependency;
 pub mod environment;
 pub mod installation;
+mod linux_fs;
 pub mod package;
 pub mod registry;
 pub mod repository;
