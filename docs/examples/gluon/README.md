@@ -113,8 +113,9 @@ the delegated unit, selects the one exact Cargo-reported test executable with
 already prepared package store. Cast remains the workspace's sole binary
 target.
 
-Execution requires Linux user and mount namespaces plus a systemd cgroup-v2
-unit configured with `Delegate=cpu memory pids` and
+Execution requires Linux 5.6 or newer because descriptor-safe activation uses
+`openat2(2)`. It also requires user and mount namespaces plus a systemd
+cgroup-v2 unit configured with `Delegate=cpu memory pids` and
 `DelegateSubgroup=cast-supervisor`. The fixture runner creates this transient
 `Type=exec` service with cgroup-lifetime exit and control-group cleanup
 semantics. Each invocation owns a random, authenticated unit name, stops that

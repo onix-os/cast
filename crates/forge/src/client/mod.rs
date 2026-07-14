@@ -18,7 +18,7 @@ use std::{
         fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
         unix::{
             ffi::{OsStrExt, OsStringExt},
-            fs::{MetadataExt, PermissionsExt, symlink},
+            fs::{MetadataExt, PermissionsExt},
         },
     },
     path::{Component as PathComponent, Path, PathBuf},
@@ -4047,23 +4047,322 @@ const ROOT_ABI_LINKS: [(&str, &str); 5] = [
     ("usr/lib32", "lib32"),
 ];
 
-/// Add root symlinks & os-release file
-fn create_root_links(root: &Path) -> io::Result<()> {
-    'linker: for (source, target) in ROOT_ABI_LINKS {
-        let final_target = root.join(target);
-        let staging_target = root.join(format!("{target}.next"));
+/// Establish the stable merged-/usr root ABI links without replacing anything.
+fn create_root_links(root: &Path) -> Result<(), Error> {
+    create_root_links_with(root, |_| {}, |directory| directory.sync_all())
+}
 
-        if staging_target.exists() {
-            fs::remove_file(&staging_target)?;
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootAbiLinkCheckpoint {
+    RootOpened,
+    PreflightComplete,
+    AfterSync,
+}
 
-        if final_target.exists() && final_target.is_symlink() && final_target.read_link()?.to_string_lossy() == source {
-            continue 'linker;
+fn create_root_links_with<C, S>(root: &Path, mut checkpoint: C, mut sync: S) -> Result<(), Error>
+where
+    C: FnMut(RootAbiLinkCheckpoint),
+    S: FnMut(&fs::File) -> io::Result<()>,
+{
+    let root = if root.is_absolute() {
+        root.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|source| Error::OpenRootAbiDirectory {
+                root: root.to_owned(),
+                source,
+            })?
+            .join(root)
+    };
+    let directory = open_root_abi_directory(&root).map_err(|source| Error::OpenRootAbiDirectory {
+        root: root.clone(),
+        source,
+    })?;
+    let identity = root_abi_directory_identity(&directory).map_err(|source| Error::StatRootAbiDirectory {
+        root: root.clone(),
+        source,
+    })?;
+    checkpoint(RootAbiLinkCheckpoint::RootOpened);
+
+    let mut links = Vec::with_capacity(ROOT_ABI_LINKS.len());
+    for (source, target) in ROOT_ABI_LINKS {
+        require_root_abi_staging_absent(&directory, &root, target)?;
+        links.push((
+            source,
+            target,
+            pin_root_abi_link(&directory, &root, source, target, true)?,
+        ));
+    }
+    checkpoint(RootAbiLinkCheckpoint::PreflightComplete);
+
+    for (source, target, pinned) in &mut links {
+        let source = *source;
+        let target = *target;
+        if pinned.is_some() {
+            continue;
         }
-        symlink(source, &staging_target)?;
-        fs::rename(staging_target, final_target)?;
+        match symlinkat(source, Some(directory.as_raw_fd()), target) {
+            Ok(()) => {}
+            Err(Errno::EEXIST) => {
+                // A concurrent creator is authenticated by the common pin
+                // below. Never replace or remove what won the race.
+            }
+            Err(error) => {
+                return Err(Error::CreateRootAbiLink {
+                    path: root.join(target),
+                    target: source.to_owned(),
+                    source: io::Error::from_raw_os_error(error as i32),
+                });
+            }
+        }
+        *pinned = pin_root_abi_link(&directory, &root, source, target, false)?;
     }
 
+    // Always sync, including an idempotent no-op retry after a prior sync
+    // failure, so every successful return is a durability boundary.
+    sync(&directory).map_err(|source| Error::SyncRootAbiDirectory {
+        root: root.clone(),
+        source,
+    })?;
+    checkpoint(RootAbiLinkCheckpoint::AfterSync);
+
+    // Revalidate the complete namespace after publication and sync. This also
+    // detects `.next` or final-name races without ever cleaning them up.
+    for (source, target, pinned) in &links {
+        let source = *source;
+        let target = *target;
+        require_root_abi_staging_absent(&directory, &root, target)?;
+        require_pinned_root_abi_link(
+            &directory,
+            &root,
+            source,
+            target,
+            pinned.as_ref().expect("every root ABI link was pinned before sync"),
+        )?;
+    }
+    require_root_abi_directory(&root, &directory, identity)
+}
+
+fn open_root_abi_directory(root: &Path) -> io::Result<fs::File> {
+    openat2_frozen(
+        AT_FDCWD,
+        root,
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        (nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+    )
+}
+
+fn open_root_abi_entry(directory: &fs::File, root: &Path, name: &str) -> Result<Option<fs::File>, Error> {
+    match openat2_frozen(
+        directory.as_raw_fd(),
+        Path::new(name),
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+    ) {
+        Ok(entry) => Ok(Some(entry)),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(Error::InspectRootAbiEntry {
+            path: root.join(name),
+            source,
+        }),
+    }
+}
+
+fn require_root_abi_staging_absent(directory: &fs::File, root: &Path, target: &str) -> Result<(), Error> {
+    let name = format!("{target}.next");
+    let Some(entry) = open_root_abi_entry(directory, root, &name)? else {
+        return Ok(());
+    };
+    let metadata = entry.metadata().map_err(|source| Error::InspectRootAbiEntry {
+        path: root.join(&name),
+        source,
+    })?;
+    let symlink_target = metadata
+        .file_type()
+        .is_symlink()
+        .then(|| read_root_abi_symlink(&entry, &root.join(&name)))
+        .transpose()?;
+    Err(Error::RootAbiStagingConflict {
+        path: root.join(name),
+        actual_type: root_abi_entry_type(metadata.mode()),
+        symlink_target,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RootAbiLinkWitness {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+    owner: u32,
+    group: u32,
+    length: u64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl RootAbiLinkWitness {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            links: metadata.nlink(),
+            owner: metadata.uid(),
+            group: metadata.gid(),
+            length: metadata.len(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PinnedRootAbiLink {
+    entry: fs::File,
+    witness: RootAbiLinkWitness,
+}
+
+/// Return a retained exact link, or `None` only for an allowed absence.
+fn pin_root_abi_link(
+    directory: &fs::File,
+    root: &Path,
+    source: &'static str,
+    target: &'static str,
+    allow_missing: bool,
+) -> Result<Option<PinnedRootAbiLink>, Error> {
+    let path = root.join(target);
+    let Some(entry) = open_root_abi_entry(directory, root, target)? else {
+        return if allow_missing {
+            Ok(None)
+        } else {
+            Err(Error::RootAbiLinkMissing {
+                path,
+                target: source.to_owned(),
+            })
+        };
+    };
+    let metadata = entry.metadata().map_err(|source| Error::InspectRootAbiEntry {
+        path: path.clone(),
+        source,
+    })?;
+    if !metadata.file_type().is_symlink() {
+        return Err(Error::RootAbiLinkTypeConflict {
+            path,
+            target: source.to_owned(),
+            actual_type: root_abi_entry_type(metadata.mode()),
+        });
+    }
+    let actual = read_root_abi_symlink(&entry, &path)?;
+    if actual.as_bytes() != source.as_bytes() {
+        return Err(Error::RootAbiLinkTargetConflict {
+            path,
+            expected: source.to_owned(),
+            actual,
+        });
+    }
+    Ok(Some(PinnedRootAbiLink {
+        witness: RootAbiLinkWitness::from_metadata(&metadata),
+        entry,
+    }))
+}
+
+fn require_pinned_root_abi_link(
+    directory: &fs::File,
+    root: &Path,
+    source: &'static str,
+    target: &'static str,
+    expected: &PinnedRootAbiLink,
+) -> Result<(), Error> {
+    let path = root.join(target);
+    let retained = expected
+        .entry
+        .metadata()
+        .map(|metadata| RootAbiLinkWitness::from_metadata(&metadata))
+        .map_err(|source| Error::InspectRootAbiEntry {
+            path: path.clone(),
+            source,
+        })?;
+    let named =
+        pin_root_abi_link(directory, root, source, target, false)?.expect("a required root ABI link cannot be absent");
+    if retained != expected.witness || named.witness != expected.witness {
+        return Err(Error::RootAbiLinkReplaced(path));
+    }
+    Ok(())
+}
+
+fn read_root_abi_symlink(entry: &fs::File, path: &Path) -> Result<OsString, Error> {
+    let mut target = vec![0_u8; nix::libc::PATH_MAX as usize + 1];
+    // O_PATH|O_NOFOLLOW pins the symlink inode; an empty readlinkat path reads
+    // that exact inode rather than resolving its public name a second time.
+    // SAFETY: `entry` is live and `target` is writable for its full length.
+    let read = unsafe {
+        nix::libc::readlinkat(
+            entry.as_raw_fd(),
+            c"".as_ptr(),
+            target.as_mut_ptr().cast(),
+            target.len(),
+        )
+    };
+    if read < 0 {
+        return Err(Error::ReadRootAbiLink {
+            path: path.to_owned(),
+            source: io::Error::last_os_error(),
+        });
+    }
+    let read = usize::try_from(read).map_err(|_| Error::ReadRootAbiLink {
+        path: path.to_owned(),
+        source: io::Error::other("readlinkat returned a negative size"),
+    })?;
+    if read == target.len() {
+        return Err(Error::RootAbiLinkTargetTooLong {
+            path: path.to_owned(),
+            limit: target.len() - 1,
+        });
+    }
+    target.truncate(read);
+    Ok(OsString::from_vec(target))
+}
+
+fn root_abi_entry_type(mode: u32) -> &'static str {
+    match mode & nix::libc::S_IFMT {
+        nix::libc::S_IFREG => "regular file",
+        nix::libc::S_IFDIR => "directory",
+        nix::libc::S_IFLNK => "symlink",
+        nix::libc::S_IFIFO => "fifo",
+        nix::libc::S_IFSOCK => "socket",
+        nix::libc::S_IFCHR => "character device",
+        nix::libc::S_IFBLK => "block device",
+        _ => "unknown inode",
+    }
+}
+
+fn root_abi_directory_identity(directory: &fs::File) -> io::Result<FrozenRootIdentity> {
+    directory
+        .metadata()
+        .map(|metadata| FrozenRootIdentity::from_metadata(&metadata))
+}
+
+fn require_root_abi_directory(root: &Path, directory: &fs::File, expected: FrozenRootIdentity) -> Result<(), Error> {
+    let retained = root_abi_directory_identity(directory).map_err(|source| Error::StatRootAbiDirectory {
+        root: root.to_owned(),
+        source,
+    })?;
+    let Ok(named) = open_root_abi_directory(root) else {
+        return Err(Error::RootAbiDirectoryReplaced(root.to_owned()));
+    };
+    let named = root_abi_directory_identity(&named).map_err(|source| Error::StatRootAbiDirectory {
+        root: root.to_owned(),
+        source,
+    })?;
+    if retained != expected || named != expected {
+        return Err(Error::RootAbiDirectoryReplaced(root.to_owned()));
+    }
     Ok(())
 }
 
@@ -6249,6 +6548,71 @@ pub enum Error {
     StateAlreadyActive(state::Id),
     #[error("state {0} doesn't exist")]
     StateDoesntExist(state::Id),
+    #[error("open merged-/usr root ABI directory {root:?}")]
+    OpenRootAbiDirectory {
+        root: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("stat merged-/usr root ABI directory {root:?}")]
+    StatRootAbiDirectory {
+        root: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("merged-/usr root ABI directory was replaced while linking: {0:?}")]
+    RootAbiDirectoryReplaced(PathBuf),
+    #[error("inspect merged-/usr root ABI entry {path:?}")]
+    InspectRootAbiEntry {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read merged-/usr root ABI symlink {path:?}")]
+    ReadRootAbiLink {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("merged-/usr root ABI symlink {path:?} exceeds {limit} target bytes")]
+    RootAbiLinkTargetTooLong { path: PathBuf, limit: usize },
+    #[error(
+        "legacy merged-/usr staging entry {path:?} must be absent, found {actual_type} with target {symlink_target:?}"
+    )]
+    RootAbiStagingConflict {
+        path: PathBuf,
+        actual_type: &'static str,
+        symlink_target: Option<OsString>,
+    },
+    #[error("merged-/usr root ABI link {path:?} must target {target:?}, found {actual_type}")]
+    RootAbiLinkTypeConflict {
+        path: PathBuf,
+        target: String,
+        actual_type: &'static str,
+    },
+    #[error("merged-/usr root ABI link {path:?} must target {expected:?}, found {actual:?}")]
+    RootAbiLinkTargetConflict {
+        path: PathBuf,
+        expected: String,
+        actual: OsString,
+    },
+    #[error("merged-/usr root ABI link {path:?} targeting {target:?} is missing after publication")]
+    RootAbiLinkMissing { path: PathBuf, target: String },
+    #[error("merged-/usr root ABI link was replaced across its durability boundary: {0:?}")]
+    RootAbiLinkReplaced(PathBuf),
+    #[error("create absent merged-/usr root ABI link {path:?} targeting {target:?}")]
+    CreateRootAbiLink {
+        path: PathBuf,
+        target: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("sync merged-/usr root ABI directory {root:?}")]
+    SyncRootAbiDirectory {
+        root: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(
         "state transition for candidate {candidate} failed before /usr was exchanged; the candidate was preserved outside the active root and arbitrary trigger side effects may remain: {primary}"
     )]
@@ -6791,7 +7155,11 @@ mod tests {
     use std::{
         collections::BTreeSet,
         fs::Permissions,
-        os::unix::fs::{MetadataExt, PermissionsExt},
+        os::unix::{
+            ffi::OsStringExt as _,
+            fs::{MetadataExt, PermissionsExt, symlink},
+            net::UnixListener,
+        },
         process::Command,
     };
 
@@ -6928,6 +7296,411 @@ mod tests {
             .repositories(repository::Map::default())
             .build()
             .unwrap()
+    }
+
+    fn root_abi_inode(path: &Path) -> (u64, u64) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        (metadata.dev(), metadata.ino())
+    }
+
+    fn assert_root_abi_absent(path: &Path) {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to inspect expected-absent root ABI path {path:?}: {error}"),
+            Ok(metadata) => panic!(
+                "expected root ABI path to be absent, found mode {:#o} at {path:?}",
+                metadata.mode()
+            ),
+        }
+    }
+
+    fn assert_root_abi_links(root: &Path) {
+        for (source, target) in ROOT_ABI_LINKS {
+            assert_eq!(
+                fs::read_link(root.join(target)).unwrap().as_os_str().as_bytes(),
+                source.as_bytes()
+            );
+            assert_root_abi_absent(&root.join(format!("{target}.next")));
+        }
+    }
+
+    #[test]
+    fn root_abi_entry_open_distinguishes_absence_and_pins_symlink_itself() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let directory = open_root_abi_directory(root).unwrap();
+        assert!(open_root_abi_entry(&directory, root, "bin").unwrap().is_none());
+
+        symlink("usr/bin", root.join("bin")).unwrap();
+        let entry = open_root_abi_entry(&directory, root, "bin").unwrap().unwrap();
+        assert!(entry.metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            read_root_abi_symlink(&entry, &root.join("bin")).unwrap().as_bytes(),
+            b"usr/bin"
+        );
+    }
+
+    #[test]
+    fn root_abi_links_create_only_absent_names_and_canonical_noop_is_inode_stable_and_synced() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+
+        create_root_links(root).unwrap();
+        assert_root_abi_links(root);
+        let identities = ROOT_ABI_LINKS.map(|(_, target)| root_abi_inode(&root.join(target)));
+
+        let mut syncs = 0;
+        create_root_links_with(
+            root,
+            |_| {},
+            |directory| {
+                syncs += 1;
+                directory.sync_all()
+            },
+        )
+        .unwrap();
+        assert_eq!(syncs, 1, "an idempotent no-op must still fsync the root directory");
+        assert_root_abi_links(root);
+        assert_eq!(
+            identities,
+            ROOT_ABI_LINKS.map(|(_, target)| root_abi_inode(&root.join(target))),
+            "canonical dangling links must be accepted without replacement"
+        );
+    }
+
+    #[test]
+    fn root_abi_links_reject_wrong_dangling_and_non_utf8_targets_for_every_final_name() {
+        let targets = [
+            OsString::from("usr/wrong-live"),
+            OsString::from("usr/wrong-dangling"),
+            OsString::from_vec(b"usr/wrong-\xff".to_vec()),
+        ];
+        for (source, target) in ROOT_ABI_LINKS {
+            for actual in &targets {
+                let temporary = tempfile::tempdir().unwrap();
+                let root = temporary.path();
+                fs::create_dir_all(root.join("usr")).unwrap();
+                fs::write(root.join("usr/wrong-live"), b"live").unwrap();
+                symlink(actual, root.join(target)).unwrap();
+                let identity = root_abi_inode(&root.join(target));
+
+                let error = create_root_links(root).unwrap_err();
+                assert!(matches!(
+                    error,
+                    Error::RootAbiLinkTargetConflict {
+                        path,
+                        expected,
+                        actual: found,
+                    } if path == root.join(target)
+                        && expected == source
+                        && found.as_bytes() == actual.as_bytes()
+                ));
+                assert_eq!(root_abi_inode(&root.join(target)), identity);
+                assert_eq!(
+                    fs::read_link(root.join(target)).unwrap().as_os_str().as_bytes(),
+                    actual.as_bytes()
+                );
+                for (_, other) in ROOT_ABI_LINKS {
+                    if other != target {
+                        assert_root_abi_absent(&root.join(other));
+                    }
+                }
+            }
+        }
+    }
+
+    fn assert_root_abi_type_conflict(actual_type: &'static str, setup: impl FnOnce(&Path)) {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let path = root.join("bin");
+        setup(&path);
+        let identity = root_abi_inode(&path);
+
+        let error = create_root_links(root).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::RootAbiLinkTypeConflict {
+                path: found,
+                target,
+                actual_type: found_type,
+            } if found == path && target == "usr/bin" && found_type == actual_type
+        ));
+        assert_eq!(root_abi_inode(&path), identity);
+        assert_root_abi_absent(&root.join("sbin"));
+    }
+
+    #[test]
+    fn root_abi_links_reject_regular_directory_fifo_and_socket_without_mutation() {
+        assert_root_abi_type_conflict("regular file", |path| fs::write(path, b"foreign").unwrap());
+        assert_root_abi_type_conflict("directory", |path| {
+            fs::create_dir(path).unwrap();
+            fs::write(path.join("marker"), b"foreign").unwrap();
+        });
+        assert_root_abi_type_conflict("fifo", |path| {
+            nix::unistd::mkfifo(path, Mode::from_bits_truncate(0o600)).unwrap();
+        });
+
+        // Some test sandboxes prohibit AF_UNIX creation. Regular files,
+        // directories, and FIFOs above always exercise the non-symlink path;
+        // exercise its socket classification whenever the host permits the
+        // fixture rather than treating a capability denial as success.
+        let socket_root = tempfile::tempdir().unwrap();
+        let socket = socket_root.path().join("bin");
+        match UnixListener::bind(&socket) {
+            Ok(listener) => {
+                drop(listener);
+                let identity = root_abi_inode(&socket);
+                let error = create_root_links(socket_root.path()).unwrap_err();
+                assert!(matches!(
+                    error,
+                    Error::RootAbiLinkTypeConflict {
+                        path,
+                        target,
+                        actual_type: "socket",
+                    } if path == socket && target == "usr/bin"
+                ));
+                assert_eq!(root_abi_inode(&socket), identity);
+                assert_root_abi_absent(&socket_root.path().join("sbin"));
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => panic!("create root ABI socket conflict fixture: {error}"),
+        }
+    }
+
+    #[test]
+    fn root_abi_links_reject_every_legacy_next_name_without_cleanup_or_partial_creation() {
+        for (_, target) in ROOT_ABI_LINKS {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path();
+            let next = root.join(format!("{target}.next"));
+            fs::write(&next, b"foreign stage").unwrap();
+            let identity = root_abi_inode(&next);
+
+            let error = create_root_links(root).unwrap_err();
+            assert!(matches!(
+                error,
+                Error::RootAbiStagingConflict {
+                    path,
+                    actual_type: "regular file",
+                    symlink_target: None,
+                } if path == next
+            ));
+            assert_eq!(root_abi_inode(&next), identity);
+            assert_eq!(fs::read(&next).unwrap(), b"foreign stage");
+            for (_, final_name) in ROOT_ABI_LINKS {
+                assert_root_abi_absent(&root.join(final_name));
+            }
+        }
+
+        for actual in [OsString::from("usr/bin"), OsString::from_vec(b"usr/\xff".to_vec())] {
+            let temporary = tempfile::tempdir().unwrap();
+            let next = temporary.path().join("bin.next");
+            symlink(&actual, &next).unwrap();
+            let identity = root_abi_inode(&next);
+            let error = create_root_links(temporary.path()).unwrap_err();
+            assert!(matches!(
+                error,
+                Error::RootAbiStagingConflict {
+                    path,
+                    actual_type: "symlink",
+                    symlink_target: Some(found),
+                } if path == next && found.as_bytes() == actual.as_bytes()
+            ));
+            assert_eq!(root_abi_inode(&next), identity);
+        }
+    }
+
+    #[test]
+    fn root_abi_links_authenticate_absent_name_races_without_overwriting() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let raced = root.join("sbin");
+        create_root_links_with(
+            root,
+            |checkpoint| {
+                if checkpoint == RootAbiLinkCheckpoint::PreflightComplete {
+                    fs::write(&raced, b"raced foreign entry").unwrap();
+                }
+            },
+            |directory| directory.sync_all(),
+        )
+        .unwrap_err();
+        assert_eq!(fs::read(&raced).unwrap(), b"raced foreign entry");
+        assert_root_abi_absent(&root.join("bin"));
+
+        let exact = tempfile::tempdir().unwrap();
+        create_root_links_with(
+            exact.path(),
+            |checkpoint| {
+                if checkpoint == RootAbiLinkCheckpoint::PreflightComplete {
+                    symlink("usr/sbin", exact.path().join("sbin")).unwrap();
+                }
+            },
+            |directory| directory.sync_all(),
+        )
+        .unwrap();
+        assert_root_abi_links(exact.path());
+    }
+
+    #[test]
+    fn root_abi_links_leave_raced_next_and_exact_partial_links_retry_safe() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let raced = root.join("sbin.next");
+        let error = create_root_links_with(
+            root,
+            |checkpoint| {
+                if checkpoint == RootAbiLinkCheckpoint::PreflightComplete {
+                    fs::write(&raced, b"raced stage").unwrap();
+                }
+            },
+            |directory| directory.sync_all(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RootAbiStagingConflict { path, .. } if path == raced));
+        assert_eq!(fs::read(&raced).unwrap(), b"raced stage");
+        assert_root_abi_links_except_next(root, "sbin.next");
+        let identities = ROOT_ABI_LINKS.map(|(_, target)| root_abi_inode(&root.join(target)));
+
+        fs::remove_file(&raced).unwrap();
+        create_root_links(root).unwrap();
+        assert_root_abi_links(root);
+        assert_eq!(
+            identities,
+            ROOT_ABI_LINKS.map(|(_, target)| root_abi_inode(&root.join(target)))
+        );
+    }
+
+    fn assert_root_abi_links_except_next(root: &Path, allowed_next: &str) {
+        for (source, target) in ROOT_ABI_LINKS {
+            assert_eq!(
+                fs::read_link(root.join(target)).unwrap().as_os_str().as_bytes(),
+                source.as_bytes()
+            );
+            let next = format!("{target}.next");
+            if next != allowed_next {
+                assert_root_abi_absent(&root.join(next));
+            }
+        }
+    }
+
+    #[test]
+    fn root_abi_links_sync_failure_is_retryable_without_replacing_exact_links() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let error = create_root_links_with(
+            root,
+            |_| {},
+            |_| Err(io::Error::other("injected root directory sync failure")),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::SyncRootAbiDirectory { .. }));
+        assert_root_abi_links(root);
+        let identities = ROOT_ABI_LINKS.map(|(_, target)| root_abi_inode(&root.join(target)));
+
+        create_root_links(root).unwrap();
+        assert_eq!(
+            identities,
+            ROOT_ABI_LINKS.map(|(_, target)| root_abi_inode(&root.join(target)))
+        );
+    }
+
+    #[test]
+    fn root_abi_links_revalidate_post_sync_name_races_without_repairing_them() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let bin = root.join("bin");
+        let error = create_root_links_with(
+            root,
+            |checkpoint| {
+                if checkpoint == RootAbiLinkCheckpoint::AfterSync {
+                    fs::remove_file(&bin).unwrap();
+                    symlink("usr/wrong-after-sync", &bin).unwrap();
+                }
+            },
+            |directory| directory.sync_all(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::RootAbiLinkTargetConflict {
+                path,
+                expected,
+                actual,
+            } if path == bin && expected == "usr/bin" && actual.as_bytes() == b"usr/wrong-after-sync"
+        ));
+        assert_eq!(fs::read_link(&bin).unwrap(), Path::new("usr/wrong-after-sync"));
+    }
+
+    #[test]
+    fn root_abi_links_reject_exact_target_aba_across_sync_and_preserve_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        let bin = root.join("bin");
+        let mut replacement = None;
+        let error = create_root_links_with(
+            root,
+            |checkpoint| {
+                if checkpoint == RootAbiLinkCheckpoint::AfterSync {
+                    fs::remove_file(&bin).unwrap();
+                    symlink("usr/bin", &bin).unwrap();
+                    replacement = Some(root_abi_inode(&bin));
+                }
+            },
+            |directory| directory.sync_all(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RootAbiLinkReplaced(path) if path == bin));
+        assert_eq!(root_abi_inode(&bin), replacement.unwrap());
+        assert_eq!(fs::read_link(&bin).unwrap(), Path::new("usr/bin"));
+    }
+
+    #[test]
+    fn root_abi_links_detect_public_root_replacement_and_never_touch_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        let detached = temporary.path().join("detached");
+        fs::create_dir(&root).unwrap();
+
+        let error = create_root_links_with(
+            &root,
+            |checkpoint| {
+                if checkpoint == RootAbiLinkCheckpoint::RootOpened {
+                    fs::rename(&root, &detached).unwrap();
+                    fs::create_dir(&root).unwrap();
+                    fs::write(root.join("replacement-marker"), b"replacement").unwrap();
+                }
+            },
+            |directory| directory.sync_all(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RootAbiDirectoryReplaced(path) if path == root));
+        assert_eq!(fs::read(root.join("replacement-marker")).unwrap(), b"replacement");
+        assert_root_abi_absent(&root.join("bin"));
+        assert_root_abi_links(&detached);
+    }
+
+    #[test]
+    fn root_abi_links_reject_terminal_and_intermediate_root_symlinks_before_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let real = temporary.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = temporary.path().join("alias");
+        symlink(&real, &alias).unwrap();
+        assert!(matches!(
+            create_root_links(&alias),
+            Err(Error::OpenRootAbiDirectory { root, .. }) if root == alias
+        ));
+        assert_root_abi_absent(&real.join("bin"));
+
+        let child = real.join("child");
+        fs::create_dir(&child).unwrap();
+        let through_alias = alias.join("child");
+        assert!(matches!(
+            create_root_links(&through_alias),
+            Err(Error::OpenRootAbiDirectory { root, .. }) if root == through_alias
+        ));
+        assert_root_abi_absent(&child.join("bin"));
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -10295,6 +11068,121 @@ let cast = import! cast.system.v1
             &fixture.candidate_snapshot,
             "candidate-package",
         );
+    }
+
+    #[test]
+    fn live_root_abi_conflict_reverses_usr_exchange_without_touching_foreign_entry() {
+        let fixture = stateful_transition_fixture(true);
+        let foreign = fixture.client.installation.root.join("bin");
+        fs::write(&foreign, b"foreign live root entry").unwrap();
+        let identity = root_abi_inode(&foreign);
+
+        let error = fixture
+            .client
+            .activate_state_with_checkpoint(fixture.candidate.id, true, true, |_| Ok(()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::StatefulTransitionUsrRestored {
+                primary,
+                candidate,
+                previous: Some(previous),
+            } if candidate == fixture.candidate.id
+                && previous == fixture.previous.id
+                && matches!(
+                    primary.as_ref(),
+                    Error::RootAbiLinkTypeConflict { path, .. } if path == &foreign
+                )
+        ));
+        assert_eq!(root_abi_inode(&foreign), identity);
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign live root entry");
+        assert_root_abi_absent(&fixture.client.installation.root.join("sbin"));
+        assert_recovered_stateful_transition(&fixture);
+    }
+
+    #[test]
+    fn isolation_root_abi_conflict_fails_before_usr_exchange_and_preserves_foreign_entry() {
+        let fixture = stateful_transition_fixture(false);
+        let foreign = fixture.client.installation.isolation_dir().join("bin");
+        fs::write(&foreign, b"foreign isolation entry").unwrap();
+        let identity = root_abi_inode(&foreign);
+        let candidate_model = generated_system_snapshot("candidate-package");
+
+        let error = fixture
+            .client
+            .apply_stateful_blit_with_checkpoint(
+                vfs(Vec::new()).unwrap(),
+                &fixture.candidate,
+                Some(fixture.previous.id),
+                candidate_model,
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::StatefulCandidatePreserved {
+                primary,
+                candidate,
+                previous: Some(previous),
+            } if candidate == fixture.candidate.id
+                && previous == fixture.previous.id
+                && matches!(
+                    primary.as_ref(),
+                    Error::RootAbiLinkTypeConflict { path, .. } if path == &foreign
+                )
+        ));
+        assert_eq!(root_abi_inode(&foreign), identity);
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign isolation entry");
+        assert_root_abi_absent(&fixture.client.installation.isolation_dir().join("sbin"));
+        assert_fresh_candidate_quarantined_and_invalidated(&fixture);
+    }
+
+    #[test]
+    fn ephemeral_root_and_isolation_root_abi_conflicts_are_both_non_destructive() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let blit_root = temporary.path().join("ephemeral");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir_all(blit_root.join("usr/lib")).unwrap();
+        let installation = Installation::open(&installation_root, None).unwrap();
+        let client = Client::builder("root-abi-ephemeral-test", installation)
+            .repositories(repository::Map::default())
+            .ephemeral(&blit_root)
+            .build()
+            .unwrap();
+
+        let foreign = blit_root.join("bin");
+        fs::write(&foreign, b"foreign ephemeral entry").unwrap();
+        let identity = root_abi_inode(&foreign);
+        let error = client
+            .apply_ephemeral_blit(
+                vfs(Vec::new()).unwrap(),
+                &blit_root,
+                generated_system_snapshot("ephemeral-package"),
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::RootAbiLinkTypeConflict { path, .. } if path == foreign));
+        assert_eq!(root_abi_inode(&foreign), identity);
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign ephemeral entry");
+        fs::remove_file(&foreign).unwrap();
+
+        let isolation_foreign = client.installation.isolation_dir().join("bin");
+        fs::write(&isolation_foreign, b"foreign isolation entry").unwrap();
+        let isolation_identity = root_abi_inode(&isolation_foreign);
+        let error = client
+            .apply_ephemeral_blit(
+                vfs(Vec::new()).unwrap(),
+                &blit_root,
+                generated_system_snapshot("ephemeral-package"),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::RootAbiLinkTypeConflict { path, .. } if path == isolation_foreign
+        ));
+        assert_eq!(root_abi_inode(&isolation_foreign), isolation_identity);
+        assert_eq!(fs::read(&isolation_foreign).unwrap(), b"foreign isolation entry");
+        assert_root_abi_links(&blit_root);
     }
 
     #[test]
