@@ -7,11 +7,13 @@
 //!
 //! Trigger intent is loaded from `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu`
 //! and do not yet support local triggers
+mod process;
+
 use std::{
     io,
     os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
-    process::{self, Stdio},
+    process::{self as std_process, Stdio},
 };
 
 use crate::Installation;
@@ -248,7 +250,12 @@ fn execute_trigger_directly(trigger: &CompiledHandler) -> Result<(), Error> {
 fn execute_handler_directly(trigger: &Handler) -> Result<(), Error> {
     match trigger {
         Handler::Run { run, args } => {
-            let output = trigger_command(run, args).spawn()?.wait_with_output()?;
+            let mut command = trigger_command(run, args);
+            let output = process::output(&mut command).map_err(|source| Error::TriggerExecution {
+                command: run.clone(),
+                args: args.clone(),
+                source: Box::new(source),
+            })?;
             if output.status.success() {
                 return Ok(());
             }
@@ -341,10 +348,10 @@ fn validate_delete_path(path: &str) -> Result<&Path, Error> {
 /// The contract is `PATH=/usr/sbin:/usr/bin:/sbin:/bin`, `HOME=/`,
 /// `TMPDIR=/tmp`, `LANG=C`, `LC_ALL=C`, `TZ=UTC`, working directory `/`, umask
 /// `0022`, null standard input, and captured standard output/error.
-fn trigger_command(run: &str, args: &[String]) -> process::Command {
+fn trigger_command(run: &str, args: &[String]) -> std_process::Command {
     const TRIGGER_PATH: &str = "/usr/sbin:/usr/bin:/sbin:/bin";
 
-    let mut command = process::Command::new(run);
+    let mut command = std_process::Command::new(run);
     command
         .args(args)
         .current_dir("/")
@@ -393,6 +400,14 @@ pub enum Error {
 
     #[error("triggers")]
     Triggers(#[from] triggers::Error),
+
+    #[error("trigger command `{command}` {args:?} failed: {source}")]
+    TriggerExecution {
+        command: String,
+        args: Vec<String>,
+        #[source]
+        source: Box<process::Error>,
+    },
 
     #[error("trigger command `{command}` {args:?} exited with status {code}; stdout: {stdout:?}; stderr: {stderr:?}")]
     TriggerExited {
