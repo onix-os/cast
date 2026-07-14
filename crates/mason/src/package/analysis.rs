@@ -365,7 +365,7 @@ mod tests {
     fn replacement_is_routed_to_the_output_selected_for_the_new_path() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
@@ -404,7 +404,7 @@ mod tests {
     fn generated_replacement_is_published_then_routed_to_its_selected_output() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
@@ -445,7 +445,7 @@ mod tests {
     fn any_failure_after_generated_admission_poisons_the_inventory() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
@@ -476,7 +476,7 @@ mod tests {
     fn chain_uses_only_the_declared_handlers_in_exact_order() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();

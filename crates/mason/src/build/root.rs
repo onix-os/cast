@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{io, path::PathBuf};
+use std::path::PathBuf;
 
-use forge::{Installation, package, repository, util};
-use fs_err as fs;
+use forge::{FrozenRootGuard, Installation, MaterializedFrozenRoot, package, repository};
 use stone_recipe::{
     ToolchainSpec,
     build_policy::{
@@ -21,7 +20,33 @@ use stone_recipe::{
 use thiserror::Error;
 
 use crate::build::{Builder, job::Job};
-use crate::{Timing, container, timing};
+use crate::{Timing, timing};
+
+/// A materialized root whose final root-visible inputs have not yet been
+/// verified. Runtime setup retains this client while locked sources and mount
+/// targets are prepared, then consumes it to issue the activation guard as
+/// the last operation before the container is constructed.
+#[must_use = "a materialized frozen root must be verified before activation"]
+pub struct PendingFrozenRoot {
+    client: forge::Client,
+    materialized_root: MaterializedFrozenRoot,
+    package_ids: Vec<package::Id>,
+    executable_bindings: Vec<forge::FrozenExecutableBinding>,
+}
+
+impl PendingFrozenRoot {
+    pub fn materialized_root(&self) -> &MaterializedFrozenRoot {
+        &self.materialized_root
+    }
+
+    pub fn verify(self) -> Result<FrozenRootGuard, Error> {
+        Ok(self.client.require_materialized_frozen_executables(
+            self.materialized_root,
+            &self.package_ids,
+            &self.executable_bindings,
+        )?)
+    }
+}
 
 pub fn populate_frozen(
     paths: &crate::Paths,
@@ -30,77 +55,63 @@ pub fn populate_frozen(
     plan: &DerivationPlan,
     timing: &mut Timing,
     initialize_timer: timing::Timer,
-) -> Result<(), Error> {
+) -> Result<PendingFrozenRoot, Error> {
     let rootfs = paths.rootfs().host;
     let build_lock = &plan.build_lock;
 
     // Create the Forge client.
     let repositories = locked_repositories(&repositories, &build_lock.repositories)?;
     let installation = Installation::open_frozen(forge_dir, None)?;
-    let mut forge_client = forge::Client::frozen("cast", installation, repositories, rootfs)?;
+    let mut forge_client = forge::Client::frozen(
+        super::BUILD_REPOSITORY_CACHE_IDENTITY,
+        installation,
+        repositories,
+        rootfs,
+    )?;
     require_locked_repositories(&forge_client, build_lock)?;
     let package_ids = exact_package_ids(&forge_client, build_lock)?;
+    let executable_bindings = frozen_executable_bindings(plan)?;
 
     timing.finish(initialize_timer);
 
     // The planner already selected the complete package closure. Installing
     // provider strings here would silently cross the freeze boundary and allow
     // a newer candidate to replace a locked package.
-    let install_timing = forge_client.materialize_frozen_root(&package_ids, plan.source_date_epoch)?;
-    let executable_bindings = frozen_executable_bindings(plan)?;
-    forge_client.require_frozen_executables(&package_ids, &executable_bindings)?;
+    // Publication is strictly no-replace. Explicitly discard a previous
+    // completed workspace through Forge's bounded descriptor boundary before
+    // asking it to publish the new private staging tree.
+    forge_client.discard_frozen_root()?;
+    let materialization = forge_client.materialize_frozen_root(&package_ids, plan.source_date_epoch)?;
+    let (install_timing, materialized_root) = materialization.into_parts();
 
     timing.record(timing::Populate::Resolve, install_timing.resolve);
     timing.record(timing::Populate::Fetch, install_timing.fetch);
     timing.record(timing::Populate::Blit, install_timing.blit);
 
-    Ok(())
+    Ok(PendingFrozenRoot {
+        client: forge_client,
+        materialized_root,
+        package_ids,
+        executable_bindings,
+    })
 }
 
-pub fn recreate_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
+pub fn discard_frozen(
+    paths: &crate::Paths,
+    forge_dir: &std::path::Path,
+    repositories: repository::Map,
+    plan: &DerivationPlan,
+) -> Result<(), Error> {
     require_frozen_layout(paths, plan)?;
-    if paths.rootfs().host.exists() {
-        remove_frozen(paths, plan)?;
-    }
-    util::recreate_dir(&paths.rootfs().host)?;
-    Ok(())
-}
-
-pub fn remove_frozen(paths: &crate::Paths, plan: &DerivationPlan) -> Result<(), Error> {
-    require_frozen_layout(paths, plan)?;
-    if !paths.rootfs().host.exists() {
-        return Ok(());
-    }
-    let build_root = PathBuf::from(&plan.layout.build_dir);
-    let unsafe_job_path = plan
-        .jobs
-        .iter()
-        .flat_map(|job| [&job.work_dir, &job.build_dir].into_iter().chain(job.pgo_dir.iter()))
-        .map(PathBuf::from)
-        .any(|path| !safe_child(&build_root, &path));
-    if unsafe_job_path {
-        return Err(Error::UnsafeFrozenJobPath);
-    }
-
-    container::exec_frozen(paths, plan, || {
-        let install_dir = PathBuf::from(&plan.layout.install_dir);
-        if install_dir.exists() {
-            fs::remove_dir_all(&install_dir)?;
-        }
-        if build_root.exists() {
-            for entry in fs::read_dir(&build_root)? {
-                let entry = entry?;
-                let path = entry.path();
-                if entry.file_type()?.is_dir() {
-                    fs::remove_dir_all(path)?;
-                } else {
-                    fs::remove_file(path)?;
-                }
-            }
-        }
-        Ok(()) as io::Result<()>
-    })?;
-    fs::remove_dir_all(&paths.rootfs().host)?;
+    let repositories = locked_repositories(&repositories, &plan.build_lock.repositories)?;
+    let installation = Installation::open_frozen(forge_dir, None)?;
+    let client = forge::Client::frozen(
+        super::BUILD_REPOSITORY_CACHE_IDENTITY,
+        installation,
+        repositories,
+        &paths.rootfs().host,
+    )?;
+    client.discard_frozen_root()?;
     Ok(())
 }
 
@@ -110,17 +121,6 @@ fn require_frozen_layout(paths: &crate::Paths, plan: &DerivationPlan) -> Result<
     } else {
         Err(Error::FrozenSandboxLayoutMismatch)
     }
-}
-
-fn safe_child(root: &std::path::Path, path: &std::path::Path) -> bool {
-    path.is_absolute()
-        && path.starts_with(root)
-        && !path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir | std::path::Component::CurDir
-            )
-        })
 }
 
 fn require_locked_repositories(client: &forge::Client, build_lock: &BuildLock) -> Result<(), Error> {
@@ -685,14 +685,10 @@ fn declared_inputs_for(package: &PackageSpec, profile: Option<&str>) -> Result<V
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("io")]
-    Io(#[from] io::Error),
     #[error("Forge client")]
     ForgeClient(#[from] forge::client::Error),
     #[error("Forge installation")]
     ForgeInstallation(#[from] forge::installation::Error),
-    #[error("container")]
-    Container(#[from] container::Error),
     #[error("repository indexes no longer match build.lock.glu")]
     RepositorySnapshotMismatch {
         locked: Vec<RepositorySnapshot>,
@@ -710,8 +706,6 @@ pub enum Error {
     DuplicateFrozenExecutableRequest(String),
     #[error("frozen plan sandbox layout does not match runtime paths")]
     FrozenSandboxLayoutMismatch,
-    #[error("frozen job cleanup path escapes the runtime build directory")]
-    UnsafeFrozenJobPath,
     #[error("selected package input {field}[{index}] is invalid")]
     InvalidDeclaredInput {
         field: String,

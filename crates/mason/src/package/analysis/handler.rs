@@ -2889,7 +2889,7 @@ mod tests {
         let mut info = collector.path(&path, &mut hasher).unwrap();
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         let program = pkg_config_program();
@@ -2934,7 +2934,7 @@ mod tests {
         let mut info = collector.path(&path, &mut hasher).unwrap();
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         plan.analysis.compress_man = true;
@@ -2989,7 +2989,7 @@ mod tests {
         let mut link_info = collector.path(&link, &mut hasher).unwrap();
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         plan.analysis.compress_man = true;

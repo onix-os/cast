@@ -184,6 +184,61 @@ pub struct FrozenExecutableBinding {
     pub path: PathBuf,
 }
 
+/// The exact directory inode published by one frozen-root materialization.
+///
+/// The descriptor is opened while the root still has its private staging name
+/// and is retained across the atomic publication rename.  Consequently this
+/// value is provenance for the materialized inode, not merely for the pathname
+/// at which it was published.  It is deliberately non-cloneable and must be
+/// consumed by [`Client::require_materialized_frozen_executables`] to issue an
+/// activation guard.
+#[derive(Debug)]
+#[must_use = "the materialized-root token must be retained through root preparation and verification"]
+pub struct MaterializedFrozenRoot {
+    root_path: PathBuf,
+    root: fs::File,
+    identity: FrozenRootIdentity,
+}
+
+impl MaterializedFrozenRoot {
+    /// The destination at which the retained inode was published.
+    pub fn root_path(&self) -> &Path {
+        &self.root_path
+    }
+
+    /// Revalidate that the public destination still names the retained inode.
+    pub fn revalidate(&self) -> Result<(), Error> {
+        require_materialized_frozen_root(&self.root_path, &self.root, self.identity)
+    }
+
+    /// Revalidate the public name, then borrow the exact staged-root
+    /// descriptor for immediate descriptor-relative preparation.
+    pub fn revalidated_anchor(&self) -> Result<BorrowedFd<'_>, Error> {
+        self.revalidate()?;
+        Ok(self.root.as_fd())
+    }
+
+    fn into_guard_root(self) -> Result<(PathBuf, fs::File, FrozenExecutableWitness), Error> {
+        self.revalidate()?;
+        let root_witness = frozen_root_anchor_witness(&self.root, &self.root_path)?;
+        Ok((self.root_path, self.root, root_witness))
+    }
+}
+
+/// Timings plus the non-cloneable inode proof produced by frozen
+/// materialization.
+#[must_use = "frozen materialization returns an inode token required for activation"]
+pub struct FrozenMaterialization {
+    pub timing: install::Timing,
+    pub root: MaterializedFrozenRoot,
+}
+
+impl FrozenMaterialization {
+    pub fn into_parts(self) -> (install::Timing, MaterializedFrozenRoot) {
+        (self.timing, self.root)
+    }
+}
+
 /// A retained proof for revalidating that one exact frozen root and every
 /// executable required from it still name the inodes verified by
 /// [`Client::require_frozen_executables`].
@@ -364,7 +419,7 @@ impl Client {
         &mut self,
         packages: &[package::Id],
         source_date_epoch: i64,
-    ) -> Result<install::Timing, Error> {
+    ) -> Result<FrozenMaterialization, Error> {
         install::materialize_frozen_root(self, packages, source_date_epoch)
             .map_err(|error| Error::Install(Box::new(error)))
     }
@@ -395,14 +450,32 @@ impl Client {
     /// provider, pinned, fully verified, and rechecked before return. The
     /// returned guard must remain live through activation; callers borrow its
     /// revalidated root anchor immediately before constructing the container.
-    pub fn require_frozen_executables(
+    pub fn require_materialized_frozen_executables(
+        &self,
+        materialized_root: MaterializedFrozenRoot,
+        packages: &[package::Id],
+        bindings: &[FrozenExecutableBinding],
+    ) -> Result<FrozenRootGuard, Error> {
+        if materialized_root.root_path() != self.frozen_root()? {
+            return Err(Error::ForeignMaterializedFrozenRoot {
+                expected: self.frozen_root()?.to_owned(),
+                found: materialized_root.root_path().to_owned(),
+            });
+        }
+        let packages = self.canonical_frozen_package_ids(packages)?;
+        require_frozen_executables(self, materialized_root, &packages, bindings, |_, _| {})
+    }
+
+    /// Unit-test adapter for verifier cases which construct their filesystem
+    /// fixture directly rather than through the production materializer.
+    #[cfg(test)]
+    fn require_frozen_executables(
         &self,
         packages: &[package::Id],
         bindings: &[FrozenExecutableBinding],
     ) -> Result<FrozenRootGuard, Error> {
-        let root = self.frozen_root()?;
-        let packages = self.canonical_frozen_package_ids(packages)?;
-        require_frozen_executables(self, root, &packages, bindings, |_, _| {})
+        let root = test_materialized_frozen_root(self.frozen_root()?)?;
+        self.require_materialized_frozen_executables(root, packages, bindings)
     }
 
     /// Perform package removals
@@ -1132,7 +1205,11 @@ impl Client {
     /// Materialize already-cached package layouts through the frozen-root
     /// filesystem path. This deliberately bypasses every stateful and legacy
     /// ephemeral post-blit operation.
-    fn blit_frozen_root(&self, packages: &[package::Id], source_date_epoch: i64) -> Result<(), Error> {
+    fn blit_frozen_root(
+        &self,
+        packages: &[package::Id],
+        source_date_epoch: i64,
+    ) -> Result<MaterializedFrozenRoot, Error> {
         let blit_target = self.frozen_root()?.to_owned();
         let deadline = Instant::now() + FROZEN_MATERIALIZATION_TIMEOUT;
         require_frozen_materialization_deadline(deadline)?;
@@ -1159,7 +1236,7 @@ impl Client {
         // publishable root can therefore carry its final 0755 mode without
         // exposing partial contents before the atomic rename.
         let stage_path = stage_wrapper.join("root");
-        let result = (|| -> Result<(), Error> {
+        let result = (|| -> Result<MaterializedFrozenRoot, Error> {
             mkdir(&stage_path, Mode::from_bits_truncate(0o755))?;
             let root = open_owned(
                 &stage_path,
@@ -1179,11 +1256,16 @@ impl Client {
             create_frozen_root_links(root.as_raw_fd(), deadline)?;
             normalize_frozen_tree(&stage_path, FileTime::from_unix_time(source_date_epoch, 0), deadline)?;
             require_frozen_materialization_deadline(deadline)?;
-            publish_frozen_root(&stage_path, &blit_target)
+            // Open the provenance anchor while the completed root still has
+            // its unguessable private staging name, retain it across rename,
+            // and authenticate the public destination against that same
+            // inode before returning it to the caller.
+            let staged_root = open_frozen_root_anchor(&stage_path)?;
+            publish_frozen_root(&stage_path, &blit_target, staged_root)
         })();
 
         match result {
-            Ok(()) => {
+            Ok(materialized_root) => {
                 // `stage_path` moved out atomically; the private wrapper is
                 // now empty and can be removed without traversal.
                 if let Err(error) = fs::remove_dir(&stage_wrapper) {
@@ -1193,7 +1275,8 @@ impl Client {
                     // interrupted.
                     trace!(path = ?stage_wrapper, %error, "failed to remove empty frozen stage wrapper");
                 }
-                Ok(())
+                materialized_root.revalidate()?;
+                Ok(materialized_root)
             }
             Err(primary) => {
                 let cleanup = discard_frozen_root_path(&stage_path)
@@ -1417,6 +1500,31 @@ struct FrozenExecutableWitness {
     changed_nanoseconds: i64,
 }
 
+/// Stable root-inode properties which remain invariant while callers add
+/// build-visible descendants.  Directory mtime/ctime/link-count deliberately
+/// do not participate: creating source and mount-target directories changes
+/// those values without changing the root inode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrozenRootIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    owner: u32,
+    group: u32,
+}
+
+impl FrozenRootIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            owner: metadata.uid(),
+            group: metadata.gid(),
+        }
+    }
+}
+
 impl FrozenExecutableWitness {
     fn from_metadata(metadata: &std::fs::Metadata) -> Self {
         Self {
@@ -1614,7 +1722,7 @@ fn bounded_frozen_layouts(
 
 fn require_frozen_executables<F>(
     client: &Client,
-    root: &Path,
+    materialized_root: MaterializedFrozenRoot,
     packages: &[package::Id],
     bindings: &[FrozenExecutableBinding],
     mut checkpoint: F,
@@ -1660,9 +1768,10 @@ where
     bindings.sort();
     bindings.dedup();
 
-    let root_path = root.to_owned();
-    let root = open_frozen_root_anchor(&root_path)?;
-    let root_witness = frozen_root_anchor_witness(&root, &root_path)?;
+    // Consume the exact descriptor opened before publication.  No successful
+    // verification path is allowed to reopen the configured destination and
+    // treat that newly found inode as the materialized root.
+    let (root_path, root, root_witness) = materialized_root.into_guard_root()?;
     if bindings.is_empty() {
         let guard = FrozenRootGuard {
             root_path,
@@ -3179,6 +3288,38 @@ fn frozen_root_anchor_witness(file: &fs::File, path: &Path) -> Result<FrozenExec
         })
 }
 
+fn frozen_root_identity(file: &fs::File, path: &Path) -> Result<FrozenRootIdentity, Error> {
+    file.metadata()
+        .map(|metadata| FrozenRootIdentity::from_metadata(&metadata))
+        .map_err(|source| Error::StatFrozenExecutableRoot {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn require_materialized_frozen_root(path: &Path, pinned: &fs::File, expected: FrozenRootIdentity) -> Result<(), Error> {
+    let descriptor = frozen_root_identity(pinned, path)?;
+    let Ok(reopened) = open_frozen_root_anchor(path) else {
+        return Err(Error::MaterializedFrozenRootReplaced(path.to_owned()));
+    };
+    let named = frozen_root_identity(&reopened, path)?;
+    if descriptor != expected || named != expected {
+        return Err(Error::MaterializedFrozenRootReplaced(path.to_owned()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn test_materialized_frozen_root(path: &Path) -> Result<MaterializedFrozenRoot, Error> {
+    let root = open_frozen_root_anchor(path)?;
+    let identity = frozen_root_identity(&root, path)?;
+    Ok(MaterializedFrozenRoot {
+        root_path: path.to_owned(),
+        root,
+        identity,
+    })
+}
+
 fn require_pinned_frozen_root_anchor(
     path: &Path,
     pinned: &fs::File,
@@ -3460,9 +3601,31 @@ fn create_frozen_root_links(root: RawFd, deadline: Instant) -> Result<(), Error>
     Ok(())
 }
 
-fn publish_frozen_root(stage: &Path, destination: &Path) -> Result<(), Error> {
+fn publish_frozen_root(
+    stage: &Path,
+    destination: &Path,
+    staged_root: fs::File,
+) -> Result<MaterializedFrozenRoot, Error> {
+    let staged_identity = frozen_root_identity(&staged_root, stage)?;
     match rename_noreplace(stage, destination) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            let published_identity = frozen_root_identity(&staged_root, destination)?;
+            // rename(2) may update directory ctime, but cannot legitimately
+            // change inode identity, type, ownership, or mode.
+            if published_identity != staged_identity {
+                return Err(Error::FrozenRootChangedDuringPublication {
+                    stage: stage.to_owned(),
+                    destination: destination.to_owned(),
+                });
+            }
+            let materialized = MaterializedFrozenRoot {
+                root_path: destination.to_owned(),
+                root: staged_root,
+                identity: published_identity,
+            };
+            materialized.revalidate()?;
+            Ok(materialized)
+        }
         Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
             Err(Error::FrozenRootDestinationExists(destination.to_owned()))
         }
@@ -5216,6 +5379,10 @@ pub enum Error {
     },
     #[error("frozen executable root path was replaced during verification: {0:?}")]
     FrozenExecutableRootReplaced(PathBuf),
+    #[error("materialized frozen root destination was replaced after publication: {0:?}")]
+    MaterializedFrozenRootReplaced(PathBuf),
+    #[error("materialized frozen root belongs to {found:?}, expected this client destination {expected:?}")]
+    ForeignMaterializedFrozenRoot { expected: PathBuf, found: PathBuf },
     #[error("open frozen executable from provider {package} at {path:?}")]
     OpenFrozenExecutable {
         package: package::Id,
@@ -5354,6 +5521,8 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("frozen root inode changed while publishing {stage:?} to {destination:?}")]
+    FrozenRootChangedDuringPublication { stage: PathBuf, destination: PathBuf },
     #[error(
         "frozen-root materialization failed at stage {stage:?}: {primary}; bounded stage cleanup also failed: {cleanup}"
     )]
@@ -6675,7 +6844,7 @@ let cast = import! cast.system.v1
             fs::write(path, bytes).unwrap();
         }
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
 
         let binding = FrozenExecutableBinding {
             package: script_package.clone(),
@@ -6729,7 +6898,7 @@ let cast = import! cast.system.v1
         fs::create_dir_all(interpreted_loader_asset.parent().unwrap()).unwrap();
         fs::write(interpreted_loader_asset, interpreted_loader_bytes).unwrap();
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
         assert!(matches!(
             client.require_frozen_executables(&packages, std::slice::from_ref(&binding)),
             Err(Error::FrozenElfInterpreterIsInterpreted { package, path })
@@ -6740,7 +6909,7 @@ let cast = import! cast.system.v1
             .batch_add([(&loader_package, &lib_directory), (&loader_package, &loader_layout)])
             .unwrap();
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
 
         // A file which happens to exist in the root is not an interpreter
         // provider when its package is absent from the exact frozen closure.
@@ -6761,13 +6930,13 @@ let cast = import! cast.system.v1
         ));
         fs::remove_file(frozen_root.join("usr/bin/interpreter-escape")).unwrap();
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
 
         let moved_root = temporary.path().join("moved-frozen-root");
         let mut root_raced = false;
         let error = require_frozen_executables(
             &client,
-            &frozen_root,
+            test_materialized_frozen_root(&frozen_root).unwrap(),
             &packages,
             std::slice::from_ref(&binding),
             |checked, checkpoint| {
@@ -6791,7 +6960,7 @@ let cast = import! cast.system.v1
         let mut raced = false;
         let error = require_frozen_executables(
             &client,
-            &frozen_root,
+            test_materialized_frozen_root(&frozen_root).unwrap(),
             &packages,
             std::slice::from_ref(&binding),
             |checked, checkpoint| {
@@ -6833,7 +7002,7 @@ let cast = import! cast.system.v1
         fs::create_dir_all(cycle_asset.parent().unwrap()).unwrap();
         fs::write(cycle_asset, cycle_bytes).unwrap();
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, 1_700_000_123).unwrap();
         assert!(matches!(
             client.require_frozen_executables(&packages, &[binding]),
             Err(Error::FrozenExecutableInterpreterCycle { package, path })
@@ -7091,7 +7260,7 @@ let cast = import! cast.system.v1
         nix::sys::stat::umask(Mode::from_bits_truncate(0o077));
         const EPOCH: i64 = 1_700_000_123;
         client.discard_frozen_root().unwrap();
-        client
+        let _materialized = client
             .blit_frozen_root(&[second.clone(), first.clone()], EPOCH)
             .unwrap();
 
@@ -7252,7 +7421,7 @@ let cast = import! cast.system.v1
                     && actual == OsString::from("../share/empty")
         ));
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         let non_executable = FrozenExecutableBinding {
             package: first.clone(),
@@ -7286,7 +7455,7 @@ let cast = import! cast.system.v1
                     && actual == nix::libc::S_IFREG | 0o700
         ));
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         let hardlink = blit_root.join("usr/bin/tool-hardlink");
         fs::hard_link(&tool, &hardlink).unwrap();
@@ -7297,7 +7466,7 @@ let cast = import! cast.system.v1
         ));
         fs::remove_file(&hardlink).unwrap();
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         let oversized = fs::OpenOptions::new().write(true).open(&tool).unwrap();
         oversized.set_len(MAX_FROZEN_EXECUTABLE_BYTES + 1).unwrap();
@@ -7311,7 +7480,7 @@ let cast = import! cast.system.v1
                     && actual == MAX_FROZEN_EXECUTABLE_BYTES + 1
         ));
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         fs::write(&tool, &adversarial_asset_bytes).unwrap();
         assert_eq!(fs::metadata(&tool).unwrap().len(), asset_bytes.len() as u64);
@@ -7321,7 +7490,7 @@ let cast = import! cast.system.v1
                 if package == first && path == Path::new("/usr/bin/tool")
         ));
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         let runtime_symlink = blit_root.join("usr/bin/tool-runtime-link");
         fs::remove_file(&tool).unwrap();
@@ -7335,12 +7504,12 @@ let cast = import! cast.system.v1
         ));
         fs::remove_file(&runtime_symlink).unwrap();
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         let mut changed_after_digest = false;
         let error = require_frozen_executables(
             &client,
-            &blit_root,
+            test_materialized_frozen_root(&blit_root).unwrap(),
             &packages,
             std::slice::from_ref(&tool_binding),
             |binding, checkpoint| {
@@ -7360,7 +7529,7 @@ let cast = import! cast.system.v1
                 if package == first && path == Path::new("/usr/bin/tool")
         ));
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         let replacement = blit_root.join("usr/bin/tool-replacement");
         fs::write(&replacement, &asset_bytes).unwrap();
@@ -7368,7 +7537,7 @@ let cast = import! cast.system.v1
         let mut replaced_before_reopen = false;
         let error = require_frozen_executables(
             &client,
-            &blit_root,
+            test_materialized_frozen_root(&blit_root).unwrap(),
             &packages,
             std::slice::from_ref(&tool_binding),
             |binding, checkpoint| {
@@ -7387,7 +7556,7 @@ let cast = import! cast.system.v1
                 if package == first && path == Path::new("/usr/bin/tool")
         ));
         client.discard_frozen_root().unwrap();
-        client.blit_frozen_root(&packages, EPOCH).unwrap();
+        let _materialized = client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         // A second materialization reverses caller and database order, changes
         // the process umask, and still reproduces all enforceable metadata.
@@ -7399,7 +7568,7 @@ let cast = import! cast.system.v1
             .unwrap();
         nix::sys::stat::umask(Mode::from_bits_truncate(0o022));
         client.discard_frozen_root().unwrap();
-        client
+        let _materialized = client
             .blit_frozen_root(&[first.clone(), second.clone()], EPOCH)
             .unwrap();
         assert_eq!(frozen_enforceable_manifest(&blit_root), first_manifest);
@@ -7552,8 +7721,9 @@ let cast = import! cast.system.v1
         fs::write(raced_stage.join("candidate"), b"candidate").unwrap();
         fs::create_dir(&raced_destination).unwrap();
         fs::write(raced_destination.join("winner"), b"winner").unwrap();
+        let raced_anchor = open_frozen_root_anchor(&raced_stage).unwrap();
         assert!(matches!(
-            publish_frozen_root(&raced_stage, &raced_destination),
+            publish_frozen_root(&raced_stage, &raced_destination, raced_anchor),
             Err(Error::FrozenRootDestinationExists(path)) if path == raced_destination
         ));
         assert_eq!(fs::read(raced_stage.join("candidate")).unwrap(), b"candidate");
@@ -7643,7 +7813,7 @@ let cast = import! cast.system.v1
             )
             .unwrap();
 
-        client
+        let _materialized = client
             .blit_frozen_root(std::slice::from_ref(&package), 1_700_000_000)
             .unwrap();
         assert_eq!(

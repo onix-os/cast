@@ -125,7 +125,7 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     // This process-level flock is intentionally held across every destructive
     // operation on the derivation workspace, including optional cleanup.
     let execution_lock = runtime.acquire_execution_lock(&plan)?;
-    runtime.setup(&plan, &execution_lock, &mut timing, timer)?;
+    let prepared = runtime.setup(&plan, &execution_lock, &mut timing, timer)?;
 
     let paths = &runtime.paths;
 
@@ -138,7 +138,8 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
     );
 
     // Build & package from within container
-    container::exec_frozen::<Error>(paths, &plan, || {
+    prepared.require_for(paths, &plan)?;
+    container::exec_frozen::<Error>(paths, &plan, prepared.sandbox(), prepared.root_guard(), || {
         executor.run(&mut timing)?;
         packager.package(&execution_lock, &mut timing)?;
 
@@ -152,12 +153,15 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
         package::ManifestVerification::None,
         package::ManifestVerification::ExactBinary,
     );
-    package::publish_artefacts(paths, &plan, &execution_lock, verification).map_err(Error::PublishArtefacts)?;
+    package::publish_artefacts(paths, &plan, &execution_lock, prepared.artefacts()?, verification)
+        .map_err(Error::PublishArtefacts)?;
 
     if cleanup {
         runtime
-            .cleanup(&plan, &execution_lock)
+            .cleanup(&plan, &execution_lock, prepared)
             .map_err(|error| Error::Cleanup(Box::new(error)))?;
+    } else {
+        drop(prepared);
     }
 
     println!(

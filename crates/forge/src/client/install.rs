@@ -17,7 +17,7 @@ use tui::{
 
 use crate::{
     Package, Provider,
-    client::{self, Client},
+    client::{self, Client, FrozenMaterialization},
     package::{self, Flags},
     registry::transaction,
     runtime,
@@ -84,7 +84,7 @@ pub fn materialize_frozen_root(
     client: &mut Client,
     packages: &[package::Id],
     source_date_epoch: i64,
-) -> Result<Timing, Error> {
+) -> Result<FrozenMaterialization, Error> {
     // Scope validation precedes registry, cache, database, or root side
     // effects. A stateful caller must fail closed.
     client.frozen_root()?;
@@ -100,10 +100,10 @@ pub fn materialize_frozen_root(
     timing.fetch = instant.elapsed();
 
     instant = Instant::now();
-    client.blit_frozen_root(&packages, source_date_epoch)?;
+    let root = client.blit_frozen_root(&packages, source_date_epoch)?;
     timing.blit = instant.elapsed();
 
-    Ok(timing)
+    Ok(FrozenMaterialization { timing, root })
 }
 
 fn resolve_exact_packages(client: &Client, packages: &[package::Id]) -> Result<Vec<Package>, Error> {
@@ -586,7 +586,7 @@ mod tests {
         }
         assert!(!asset_pool.exists());
 
-        client.materialize_frozen_root(&ids, 1_700_000_000).unwrap();
+        let materialization = client.materialize_frozen_root(&ids, 1_700_000_000).unwrap();
 
         let frozen_root = temporary.path().join("frozen-root");
         let root_metadata = fs_err::symlink_metadata(&frozen_root).unwrap();
@@ -611,8 +611,25 @@ mod tests {
             "atomic publication must not leak its private stage wrapper"
         );
 
-        let guard = client.require_frozen_executables(&ids, &[]).unwrap();
-        guard.revalidate().unwrap();
+        let retained_root = temporary.path().join("retained-frozen-root");
+        fs_err::rename(&frozen_root, &retained_root).unwrap();
+        fs_err::create_dir(&frozen_root).unwrap();
+        fs_err::set_permissions(&frozen_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs_err::write(frozen_root.join("replacement-marker"), b"must remain untouched").unwrap();
+
+        assert!(matches!(
+            materialization.root.revalidate(),
+            Err(client::Error::MaterializedFrozenRootReplaced(path)) if path == frozen_root
+        ));
+        assert!(matches!(
+            client.require_materialized_frozen_executables(materialization.root, &ids, &[]),
+            Err(client::Error::MaterializedFrozenRootReplaced(path)) if path == frozen_root
+        ));
+        assert_eq!(
+            fs_err::read(frozen_root.join("replacement-marker")).unwrap(),
+            b"must remain untouched"
+        );
+        assert!(fs_err::read_dir(&frozen_root).unwrap().count() == 1);
     }
 
     #[test]

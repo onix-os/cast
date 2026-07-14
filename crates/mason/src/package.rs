@@ -498,7 +498,7 @@ mod tests {
     fn frozen_packager_uses_only_plan_outputs_rules_analysis_and_identity() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
@@ -601,7 +601,7 @@ mod tests {
     fn frozen_packager_rejects_runtime_and_plan_layout_mismatch() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
@@ -675,7 +675,7 @@ mod tests {
     fn frozen_packager_rejects_a_lock_for_an_unbound_workspace_before_mutation() {
         let (_bound_root, plan, bound_paths) = publication_fixture();
         let execution_lock = bound_paths.acquire_execution_lock(&plan).unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         let output = root.path().join("output");
         fs::create_dir(&output).unwrap();
         let recipe =
@@ -687,7 +687,7 @@ mod tests {
     }
 
     fn publication_fixture() -> (tempfile::TempDir, DerivationPlan, Paths) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         let output = root.path().join("output");
         fs::create_dir(&output).unwrap();
         let recipe =
@@ -696,7 +696,8 @@ mod tests {
         let mut paths = Paths::new(&recipe, plan.layout.clone(), root.path(), output).unwrap();
         paths.bind_to_plan(&plan).unwrap();
         fs::set_permissions(paths.output_dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(&paths.artefacts().host, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let staged_anchor = paths.prepare_private_host_directory(&paths.artefacts().host).unwrap();
+        assert_eq!(staged_anchor.metadata().unwrap().permissions().mode() & 0o7777, 0o700);
         (root, plan, paths)
     }
 
@@ -704,7 +705,10 @@ mod tests {
         let execution_lock = paths
             .acquire_execution_lock(plan)
             .map_err(PublishError::InvalidExecutionLock)?;
-        super::publish_artefacts(paths, plan, &execution_lock, ManifestVerification::None)
+        let staged_anchor = paths
+            .prepare_private_host_directory(&paths.artefacts().host)
+            .map_err(PublishError::InvalidFrozenPaths)?;
+        super::publish_artefacts(paths, plan, &execution_lock, &staged_anchor, ManifestVerification::None)
     }
 
     fn publish_artefacts_with<F>(
@@ -730,10 +734,14 @@ mod tests {
         let execution_lock = paths
             .acquire_execution_lock(plan)
             .map_err(PublishError::InvalidExecutionLock)?;
+        let staged_anchor = paths
+            .prepare_private_host_directory(&paths.artefacts().host)
+            .map_err(PublishError::InvalidFrozenPaths)?;
         super::publish_artefacts(
             paths,
             plan,
             &execution_lock,
+            &staged_anchor,
             ManifestVerification::ExactBinary(expected),
         )
     }
@@ -845,20 +853,59 @@ mod tests {
         let (_root, plan, paths) = publication_fixture();
         let (_other_root, other_plan, other_paths) = publication_fixture();
         let wrong_lock = other_paths.acquire_execution_lock(&other_plan).unwrap();
+        let staged_anchor = paths.prepare_private_host_directory(&paths.artefacts().host).unwrap();
 
-        let error = super::publish_artefacts(&paths, &plan, &wrong_lock, ManifestVerification::None).unwrap_err();
+        let error = super::publish_artefacts(&paths, &plan, &wrong_lock, &staged_anchor, ManifestVerification::None)
+            .unwrap_err();
 
         assert!(matches!(error, PublishError::InvalidExecutionLock(_)));
         assert!(output_entries(&paths).is_empty());
     }
 
     #[test]
+    fn production_publication_rejects_staged_path_substitution_after_anchor_is_pinned() {
+        let (root, plan, paths) = publication_fixture();
+        stage_expected_bundle(&plan, &paths);
+        let execution_lock = paths.acquire_execution_lock(&plan).unwrap();
+        let staged_path = paths.artefacts().host;
+        let staged_anchor = paths.prepare_private_host_directory(&staged_path).unwrap();
+        let detached = root.path().join("detached-staged");
+        fs::rename(&staged_path, &detached).unwrap();
+        let replacement_anchor = paths.prepare_private_host_directory(&staged_path).unwrap();
+
+        let error = super::publish_artefacts(
+            &paths,
+            &plan,
+            &execution_lock,
+            &staged_anchor,
+            ManifestVerification::None,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, PublishError::OwnershipChanged { path } if path == staged_path));
+        assert!(output_entries(&paths).is_empty());
+        assert_ne!(
+            staged_anchor.metadata().unwrap().ino(),
+            replacement_anchor.metadata().unwrap().ino()
+        );
+    }
+
+    #[test]
     fn publication_rejects_group_or_other_writable_roots() {
         let (_root, plan, paths) = publication_fixture();
         stage_expected_bundle(&plan, &paths);
+        let execution_lock = paths.acquire_execution_lock(&plan).unwrap();
+        let staged_anchor = paths.prepare_private_host_directory(&paths.artefacts().host).unwrap();
         fs::set_permissions(paths.output_dir(), std::fs::Permissions::from_mode(0o775)).unwrap();
 
-        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        let error = super::publish_artefacts(
+            &paths,
+            &plan,
+            &execution_lock,
+            &staged_anchor,
+            ManifestVerification::None,
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             PublishError::WritableRoot {
@@ -871,7 +918,14 @@ mod tests {
 
         fs::set_permissions(paths.output_dir(), std::fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(&paths.artefacts().host, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let error = publish_artefacts(&paths, &plan).unwrap_err();
+        let error = super::publish_artefacts(
+            &paths,
+            &plan,
+            &execution_lock,
+            &staged_anchor,
+            ManifestVerification::None,
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             PublishError::WritableRoot {

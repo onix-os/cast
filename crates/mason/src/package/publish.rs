@@ -144,12 +144,14 @@ pub fn publish_artefacts(
     paths: &Paths,
     plan: &DerivationPlan,
     execution_lock: &ExecutionLock,
+    staged_anchor: &File,
     verification: ManifestVerification<'_>,
 ) -> Result<Publication, PublishError> {
     publish_with(
         paths,
         plan,
         execution_lock,
+        Some(staged_anchor),
         verification,
         PublishLimits::default(),
         |_| Ok(()),
@@ -168,13 +170,14 @@ pub(super) fn publish_artefacts_with<F>(
 where
     F: FnMut(PublishCheckpoint) -> Result<(), PublishError>,
 {
-    publish_with(paths, plan, execution_lock, verification, limits, hook)
+    publish_with(paths, plan, execution_lock, None, verification, limits, hook)
 }
 
 fn publish_with<F>(
     paths: &Paths,
     plan: &DerivationPlan,
     execution_lock: &ExecutionLock,
+    staged_anchor: Option<&File>,
     verification: ManifestVerification<'_>,
     limits: PublishLimits,
     mut hook: F,
@@ -193,7 +196,13 @@ where
     let manifest_name = binary_manifest_filename(frozen_architecture(&plan.package.architecture)).into_bytes();
     validate_component(&manifest_name, "generated binary manifest")?;
 
-    let staged_root = DirectoryHandle::open_root(&paths.artefacts().host, "staged")?;
+    let staged_root = match staged_anchor {
+        Some(anchor) => DirectoryHandle::open_pinned_root(&paths.artefacts().host, anchor, "staged")?,
+        #[cfg(test)]
+        None => DirectoryHandle::open_root(&paths.artefacts().host, "staged")?,
+        #[cfg(not(test))]
+        None => unreachable!("production artefact publication requires a retained descriptor"),
+    };
     let mut staged = VerifiedBundle::open(staged_root, &specs, "staged", None, limits.max_bundle_bytes, &deadline)?;
     let (reference, expected_manifest_digest) = match verification {
         ManifestVerification::None => (None, None),
@@ -732,6 +741,36 @@ struct DirectoryHandle {
 impl DirectoryHandle {
     fn open_root(path: &Path, role: &'static str) -> Result<Self, PublishError> {
         Self::open_root_with_policy(path, role, false)
+    }
+
+    fn open_pinned_root(path: &Path, pinned: &File, role: &'static str) -> Result<Self, PublishError> {
+        let path = std::path::absolute(path).map_err(|source| PublishError::Io {
+            operation: "make pinned publication root absolute",
+            path: path.to_owned(),
+            source,
+        })?;
+        let file = pinned.try_clone().map_err(|source| PublishError::Io {
+            operation: "duplicate pinned publication root",
+            path: path.clone(),
+            source,
+        })?;
+        let metadata = file.metadata().map_err(|source| PublishError::Io {
+            operation: "inspect pinned publication root",
+            path: path.clone(),
+            source,
+        })?;
+        if !metadata.file_type().is_dir() {
+            return Err(PublishError::UnexpectedRoot { role, path });
+        }
+        require_effective_owner(role, &path, &metadata)?;
+        require_protected_root_mode(role, &path, &metadata)?;
+        let root = Self {
+            path,
+            file,
+            identity: Identity::from_metadata(&metadata),
+        };
+        root.require_path_identity(role)?;
+        Ok(root)
     }
 
     fn open_reference_root(path: &Path) -> Result<Self, PublishError> {

@@ -38,7 +38,11 @@ impl Env {
         let data_dir = resolve_data_dir(is_root, data_dir)?;
         let forge_dir = resolve_forge_root(is_root, forge_root)?;
 
-        util::ensure_dir_exists(&cache_dir)?;
+        // Frozen build workspaces sit below this dedicated root. Bootstrap it
+        // through a descriptor and normalize only safe/new directories so an
+        // ambient umask cannot create a group-writable workspace and an
+        // existing unsafe cache cannot be silently "repaired" in place.
+        let cache_dir = crate::paths::prepare_private_workspace_root(&cache_dir)?;
         util::ensure_dir_exists(&data_dir)?;
         util::ensure_dir_exists(&forge_dir)?;
 
@@ -113,7 +117,11 @@ impl From<config::CreateUserError> for Error {
 
 #[cfg(test)]
 mod test {
+    use std::{os::unix::fs::PermissionsExt, process::Command};
+
     use super::*;
+
+    const UMASK_CHILD: &str = "CAST_PRIVATE_CACHE_UMASK_CHILD";
 
     #[test]
     fn reject_forge_system_root() {
@@ -125,5 +133,61 @@ mod test {
             resolve_forge_root(true, Some(PathBuf::from("/"))),
             Err(Error::ForgeSystemRoot)
         ));
+    }
+
+    #[test]
+    fn dedicated_build_cache_root_is_exact_private_under_umask_0002() {
+        if let Some(path) = std::env::var_os(UMASK_CHILD) {
+            // This branch runs in an isolated test subprocess because umask is
+            // process-global and changing it in the parallel test runner would
+            // make unrelated filesystem tests nondeterministic.
+            // SAFETY: the subprocess performs no concurrent setup before exit.
+            unsafe { nix::libc::umask(0o002) };
+            let root = crate::paths::prepare_private_workspace_root(Path::new(&path)).unwrap();
+            assert_eq!(std::fs::metadata(root).unwrap().permissions().mode() & 0o7777, 0o700);
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = temporary.path().join("cast/build");
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("env::test::dedicated_build_cache_root_is_exact_private_under_umask_0002")
+            .arg("--nocapture")
+            .env(UMASK_CHILD, &root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for path in [temporary.path().join("cast"), root] {
+            assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o7777, 0o700);
+        }
+    }
+
+    #[test]
+    fn dedicated_build_cache_root_rejects_existing_unsafe_leaf_and_intermediate() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = temporary.path().join("cast");
+        let leaf = parent.join("build");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(&leaf).unwrap();
+        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o770)).unwrap();
+
+        let error = crate::paths::prepare_private_workspace_root(&leaf).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::metadata(&leaf).unwrap().permissions().mode() & 0o7777, 0o770);
+
+        std::fs::remove_dir(&leaf).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let error = crate::paths::prepare_private_workspace_root(&leaf).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!leaf.exists());
+        assert_eq!(std::fs::metadata(parent).unwrap().permissions().mode() & 0o7777, 0o770);
     }
 }

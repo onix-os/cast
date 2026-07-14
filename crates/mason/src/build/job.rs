@@ -146,7 +146,7 @@ mod tests {
         }
         policy.spec.validate().unwrap();
         let layout = BuilderLayout::from_policy(&policy.spec.sandbox, &policy.spec.build_root.compiler_cache);
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let paths = Paths::new(&recipe, layout, runtime.path(), runtime.path()).unwrap();
         let target = policy.target("x86_64").unwrap();
 

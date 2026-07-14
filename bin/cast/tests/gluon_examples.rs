@@ -285,6 +285,8 @@ impl Isolation {
     fn new() -> Self {
         let temporary = tempfile::tempdir().expect("create isolated Cast example environment");
         let root = temporary.path().to_path_buf();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .expect("make isolated Cast example root owner-private");
         for directory in [
             "home",
             "xdg/cache",
@@ -299,12 +301,11 @@ impl Isolation {
             "resolver",
             "system-root",
         ] {
-            fs::create_dir_all(root.join(directory)).unwrap_or_else(|error| {
-                panic!(
-                    "create isolated Cast directory {}: {error}",
-                    root.join(directory).display()
-                )
-            });
+            let path = root.join(directory);
+            fs::create_dir_all(&path)
+                .unwrap_or_else(|error| panic!("create isolated Cast directory {}: {error}", path.display()));
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .unwrap_or_else(|error| panic!("make isolated Cast directory {} private: {error}", path.display()));
         }
         Self {
             _temporary: temporary,

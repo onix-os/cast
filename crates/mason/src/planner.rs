@@ -276,7 +276,7 @@ fn resolve_build_lock(
     refresh: bool,
 ) -> Result<BuildLock, Error> {
     let installation = Installation::open(&builder.env.forge_dir, None)?;
-    let mut client = forge::Client::builder("cast-plan", installation)
+    let mut client = forge::Client::builder(build::BUILD_REPOSITORY_CACHE_IDENTITY, installation)
         .repositories(builder.repositories().clone())
         .build()?;
     if refresh {

@@ -112,7 +112,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         let cache_dir = root.path().join("cache");
         let config_dir = root.path().join("config");
         let data_dir = root.path().join("data");
@@ -199,8 +199,8 @@ cast.profiles [
         }
     }
 
-    fn requested_packages(&self) -> Vec<String> {
-        let builder = Builder::new(BuilderRequest {
+    fn builder(&self) -> Builder {
+        Builder::new(BuilderRequest {
             recipe_path: self.recipe_path.clone(),
             env: self.env(),
             profile: profile::Id::new(PROFILE),
@@ -210,7 +210,11 @@ cast.profiles [
             source_date_epoch: Some(SOURCE_DATE_EPOCH),
             requested_target: TARGET.to_owned(),
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    fn requested_packages(&self) -> Vec<String> {
+        let builder = self.builder();
         let mut requested = build::root::inputs(&builder)
             .unwrap()
             .into_iter()
@@ -243,7 +247,7 @@ struct PackageExampleMatrix {
 
 impl PackageExampleMatrix {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         let cache_dir = root.path().join("cache");
         let config_dir = root.path().join("config");
         let data_dir = root.path().join("data");
@@ -344,20 +348,24 @@ cast.profiles [
         }
     }
 
+    fn builder(&self, example: &PackageExample) -> Builder {
+        Builder::new(BuilderRequest {
+            recipe_path: example.recipe_path.clone(),
+            env: self.env(),
+            profile: profile::Id::new(EXAMPLE_PROFILE),
+            compiler_cache: false,
+            output_dir: self.output_dir.clone(),
+            jobs: NonZeroUsize::new(1).unwrap(),
+            source_date_epoch: Some(SOURCE_DATE_EPOCH),
+            requested_target: TARGET.to_owned(),
+        })
+        .unwrap_or_else(|error| panic!("{}: create matrix builder: {error:#}", example.name))
+    }
+
     fn requested_packages(&self) -> Vec<String> {
         let mut requested = Vec::new();
         for example in &self.examples {
-            let builder = Builder::new(BuilderRequest {
-                recipe_path: example.recipe_path.clone(),
-                env: self.env(),
-                profile: profile::Id::new(EXAMPLE_PROFILE),
-                compiler_cache: false,
-                output_dir: self.output_dir.clone(),
-                jobs: NonZeroUsize::new(1).unwrap(),
-                source_date_epoch: Some(SOURCE_DATE_EPOCH),
-                requested_target: TARGET.to_owned(),
-            })
-            .unwrap_or_else(|error| panic!("{}: create matrix builder: {error:#}", example.name));
+            let builder = self.builder(example);
             requested.extend(
                 build::root::inputs(&builder)
                     .unwrap_or_else(|error| panic!("{}: collect build inputs: {error:#}", example.name))
@@ -411,7 +419,7 @@ fn package_example_roots() -> Vec<(String, PathBuf)> {
 
 #[test]
 fn offline_execution_fixture_archives_are_real_locked_and_complete() {
-    let temporary = tempfile::tempdir().unwrap();
+    let temporary = crate::private_tempdir();
     let cache = temporary.path().join("source-cache");
     let shared = temporary.path().join("shared");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
@@ -650,27 +658,111 @@ fn execute_and_publish(planned: &Planned) -> Result<Publication, Box<dyn StdErro
     let execution_lock = planned.runtime.acquire_execution_lock(&planned.plan)?;
     let mut timing = Timing::default();
     let initialize_timer = timing.begin(crate::timing::Kind::Initialize);
-    let stored = planned
+    let prepared = planned
         .runtime
         .setup(&planned.plan, &execution_lock, &mut timing, initialize_timer)?;
-    assert_eq!(
-        stored.len(),
-        planned.plan.sources.len(),
-        "runtime setup must materialize exactly the frozen source set"
-    );
 
-    crate::container::exec_frozen::<FrozenExamplePayloadError>(&planned.runtime.paths, &planned.plan, || {
-        executor.run(&mut timing)?;
-        packager.package(&execution_lock, &mut timing)?;
-        Ok(())
-    })?;
+    prepared.require_for(&planned.runtime.paths, &planned.plan)?;
+    crate::container::exec_frozen::<FrozenExamplePayloadError>(
+        &planned.runtime.paths,
+        &planned.plan,
+        prepared.sandbox(),
+        prepared.root_guard(),
+        || {
+            executor.run(&mut timing)?;
+            packager.package(&execution_lock, &mut timing)?;
+            Ok(())
+        },
+    )?;
 
     Ok(package::publish_artefacts(
         &planned.runtime.paths,
         &planned.plan,
         &execution_lock,
+        prepared.artefacts()?,
         package::ManifestVerification::None,
     )?)
+}
+
+fn assert_runtime_reopens_planner_repository_snapshot(
+    forge_dir: &Path,
+    output_dir: &Path,
+    repositories: forge::repository::Map,
+    planned: &Planned,
+) {
+    let expected = planned
+        .plan
+        .build_lock
+        .repositories
+        .iter()
+        .map(|snapshot| {
+            (
+                snapshot.id.clone(),
+                snapshot.index_uri.clone(),
+                snapshot.snapshot.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !expected.is_empty(),
+        "the snapshot regression must exercise a repository used by the locked closure"
+    );
+
+    let installation = forge::Installation::open_frozen(forge_dir, None).unwrap();
+    let client = forge::Client::frozen(
+        build::BUILD_REPOSITORY_CACHE_IDENTITY,
+        installation,
+        repositories.clone(),
+        output_dir.join("repository-snapshot-proof"),
+    )
+    .unwrap();
+    let actual = client
+        .repository_index_snapshots()
+        .unwrap()
+        .into_iter()
+        .map(|snapshot| (snapshot.id.to_string(), snapshot.index_uri.to_string(), snapshot.sha256))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual, expected,
+        "frozen execution must reopen the exact index generation authenticated by planning"
+    );
+    drop(client);
+
+    // A different client identity is a deliberately independent cache
+    // namespace. It must fail closed instead of borrowing the planner's DB or
+    // immutable index generation merely because the repository URI matches.
+    const ISOLATED_CACHE_IDENTITY: &str = "cast-plan-isolated-regression";
+    assert_ne!(
+        ISOLATED_CACHE_IDENTITY,
+        build::BUILD_REPOSITORY_CACHE_IDENTITY,
+        "the adversarial client must use an independent repository namespace"
+    );
+    let installation = forge::Installation::open_frozen(forge_dir, None).unwrap();
+    let isolated = forge::Client::frozen(
+        ISOLATED_CACHE_IDENTITY,
+        installation,
+        repositories,
+        output_dir.join("isolated-repository-snapshot-proof"),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            isolated.repository_index_snapshots(),
+            Err(forge::client::Error::Repository(
+                forge::repository::manager::Error::MissingActiveSnapshot(repository)
+            )) if repository == forge::repository::Id::new("fixture")
+        ),
+        "an unrelated cache identity must not inherit the planner's active snapshot"
+    );
+}
+
+#[test]
+fn planner_and_frozen_runtime_share_one_authenticated_repository_snapshot_namespace() {
+    let fixture = Fixture::new();
+    let repositories = fixture.builder().repositories().clone();
+    let planned = plan(fixture.env(), fixture.request()).unwrap();
+
+    assert_runtime_reopens_planner_repository_snapshot(&fixture.forge_dir, &fixture.output_dir, repositories, &planned);
 }
 
 fn capability_errno(error: &(dyn StdError + 'static)) -> bool {
@@ -834,10 +926,10 @@ fn assert_frozen_provenance(records: &[stone::StonePayloadMetaRecord], planned: 
             (StonePayloadMetaTag::SourceRef, StonePayloadMetaPrimitive::String(value)) => Some(value.as_str()),
             _ => None,
         })
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     let recipe = format!("gluon-evaluation-sha256:{}", planned.plan.provenance.recipe.sha256);
     let derivation = format!("derivation-sha256:{}", planned.plan.derivation_id());
-    assert_eq!(source_refs, BTreeSet::from([recipe.as_str(), derivation.as_str()]));
+    assert_eq!(source_refs, [recipe.as_str(), derivation.as_str()]);
 }
 
 fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -1113,6 +1205,13 @@ fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivat
     );
     let first_plan = first.plan.canonical_bytes();
     let derivation_id = first.plan.derivation_id();
+
+    assert_runtime_reopens_planner_repository_snapshot(
+        &matrix.forge_dir,
+        &matrix.output_dir,
+        matrix.builder(example).repositories().clone(),
+        &first,
+    );
 
     let Some(first_publication) = run_or_skip_capability(&first) else {
         return;

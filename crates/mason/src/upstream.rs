@@ -221,6 +221,7 @@ pub(crate) fn refresh_source_lock(recipe: &Recipe, storage_dir: &Path) -> Result
 /// Fetch and share only the exact source identities frozen into a derivation.
 ///
 /// This path does not load or rewrite authored recipe/source-lock state.
+#[cfg(test)]
 pub fn sync_locked(
     sources: &[LockedSource],
     storage_dir: &Path,
@@ -229,6 +230,24 @@ pub fn sync_locked(
 ) -> Result<Vec<Stored>, Error> {
     let upstreams = locked_upstreams(sources)?;
     sync_upstreams(&upstreams, storage_dir, share_dir, source_date_epoch)
+}
+
+/// Fetch and share the exact locked sources beneath the descriptor retained by
+/// one Forge materialization.  The configured global root pathname is never
+/// reopened to create or populate the build-visible source directory.
+pub fn sync_locked_into_root(
+    sources: &[LockedSource],
+    storage_dir: &Path,
+    root: &forge::MaterializedFrozenRoot,
+    share_dir: &Path,
+    source_date_epoch: i64,
+) -> Result<Vec<Stored>, Error> {
+    let upstreams = locked_upstreams(sources)?;
+    root.revalidate().map_err(share_root::Error::MaterializedRoot)?;
+    let share_root = ShareRoot::prepare_in(root, share_dir)?;
+    let stored = sync_upstreams_into(&upstreams, storage_dir, &share_root, source_date_epoch)?;
+    root.revalidate().map_err(share_root::Error::MaterializedRoot)?;
+    Ok(stored)
 }
 
 /// Seed one HTTPS-identified archive into the normal content-addressed cache
@@ -284,6 +303,7 @@ fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
         .collect()
 }
 
+#[cfg(test)]
 fn sync_upstreams(
     upstreams: &[Upstream],
     storage_dir: &Path,
@@ -291,6 +311,15 @@ fn sync_upstreams(
     source_date_epoch: i64,
 ) -> Result<Vec<Stored>, Error> {
     let share_root = ShareRoot::prepare(share_dir)?;
+    sync_upstreams_into(upstreams, storage_dir, &share_root, source_date_epoch)
+}
+
+fn sync_upstreams_into(
+    upstreams: &[Upstream],
+    storage_dir: &Path,
+    share_root: &ShareRoot,
+    source_date_epoch: i64,
+) -> Result<Vec<Stored>, Error> {
     println!();
     println!("Sharing {} upstream(s) with the build container:", upstreams.len());
 

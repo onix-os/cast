@@ -174,7 +174,7 @@ mod tests {
     fn assert_requested_tool_failure_is_propagated(debug: bool, strip: bool) {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let tools = tempfile::tempdir().unwrap();
         let marker = tools.path().join("invoked");
@@ -241,7 +241,7 @@ mod tests {
     fn strip_mutates_only_a_private_copy_then_commits_transactionally() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();
@@ -305,7 +305,7 @@ mod tests {
     fn debug_link_mutates_private_copy_and_generated_debug_is_admitted() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();
@@ -374,7 +374,7 @@ mod tests {
     fn failed_private_strip_leaves_collected_file_and_witness_unchanged() {
         let recipe =
             Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = tempfile::tempdir().unwrap();
+        let runtime = crate::private_tempdir();
         let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
         plan.layout.install_dir = runtime.path().join("install").to_string_lossy().into_owned();

@@ -30,6 +30,124 @@ const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const BOOTSTRAP_PROFILE: &str = "planner-contentful-bootstrap";
+const REQUIRED_EXECUTION_FIXTURES: [&str; 6] = ["autotools", "cargo", "cmake", "custom", "meson", "split"];
+
+#[derive(Debug, PartialEq, Eq)]
+enum FrozenStepShape {
+    Run {
+        program: String,
+        first_argument: Option<String>,
+    },
+    Shell {
+        interpreter: String,
+        declared_programs: Vec<String>,
+        script: String,
+    },
+}
+
+fn step_shape(step: &stone_recipe::derivation::StepPlan) -> FrozenStepShape {
+    match step {
+        stone_recipe::derivation::StepPlan::Run { program, args, .. } => FrozenStepShape::Run {
+            program: program.path.clone(),
+            first_argument: args.first().cloned(),
+        },
+        stone_recipe::derivation::StepPlan::Shell {
+            interpreter,
+            declared_programs,
+            script,
+            ..
+        } => FrozenStepShape::Shell {
+            interpreter: interpreter.path.clone(),
+            declared_programs: declared_programs.iter().map(|program| program.path.clone()).collect(),
+            script: script.clone(),
+        },
+    }
+}
+
+fn run(program: &str, first_argument: &str) -> FrozenStepShape {
+    FrozenStepShape::Run {
+        program: format!("/usr/bin/{program}"),
+        first_argument: Some(first_argument.to_owned()),
+    }
+}
+
+fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation::DerivationPlan) {
+    assert_eq!(EXECUTION_FIXTURES, REQUIRED_EXECUTION_FIXTURES);
+    let [job] = plan.jobs.as_slice() else {
+        panic!("{name}: execution fixture must freeze exactly one non-PGO job");
+    };
+    assert_eq!(job.pgo_stage, None, "{name}: unexpected PGO stage");
+    assert_eq!(job.pgo_dir, None, "{name}: unexpected PGO directory");
+
+    let prepare = vec![run("mkdir", "-p"), run("bsdtar-static", "xf")];
+    let expected = match name {
+        "cmake" => vec![
+            ("Prepare", prepare),
+            ("Setup", vec![run("cmake", "-G")]),
+            ("Build", vec![run("cmake", "--build")]),
+            ("Install", vec![run("cmake", "--install")]),
+            ("Check", vec![run("ctest", "--test-dir")]),
+        ],
+        "split" => vec![
+            ("Prepare", prepare),
+            ("Setup", vec![run("cmake", "-G")]),
+            ("Build", vec![run("cmake", "--build")]),
+            ("Install", vec![run("cmake", "--install")]),
+            ("Check", vec![run("ctest", "--test-dir")]),
+        ],
+        "meson" => vec![
+            ("Prepare", prepare),
+            ("Setup", vec![run("meson", "setup")]),
+            ("Build", vec![run("meson", "compile")]),
+            ("Install", vec![run("meson", "install")]),
+            ("Check", vec![run("meson", "test")]),
+        ],
+        "cargo" => vec![
+            ("Prepare", prepare),
+            ("Build", vec![run("cargo", "build")]),
+            ("Install", vec![run("install", "-Dm00755")]),
+            ("Check", vec![run("cargo", "test")]),
+        ],
+        "autotools" => vec![
+            ("Prepare", prepare),
+            ("Setup", vec![run("dash", "./configure")]),
+            ("Build", vec![run("make", "VERBOSE=1")]),
+            ("Install", vec![run("make", "install")]),
+            ("Check", vec![run("make", "check")]),
+        ],
+        "custom" => vec![
+            ("Prepare", prepare),
+            ("Setup", vec![run("mkdir", "-p")]),
+            ("Build", vec![run("cp", "payload.txt")]),
+            (
+                "Install",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/dash".to_owned(),
+                    declared_programs: vec!["/usr/bin/install".to_owned()],
+                    script: r#"install -Dm644 build/payload.txt "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast-custom-fixture/payload.txt""#
+                        .to_owned(),
+                }],
+            ),
+            ("Check", vec![run("cmp", "payload.txt")]),
+        ],
+        other => panic!("unexpected execution fixture {other:?}"),
+    };
+
+    let actual = job
+        .phases
+        .iter()
+        .map(|phase| {
+            assert!(phase.pre.is_empty(), "{name}/{}: unexpected pre-hook", phase.name);
+            assert!(phase.post.is_empty(), "{name}/{}: unexpected post-hook", phase.name);
+            assert!(!phase.steps.is_empty(), "{name}/{}: empty frozen phase", phase.name);
+            (
+                phase.name.as_str(),
+                phase.steps.iter().map(step_shape).collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
+}
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct BootstrapClosure {
@@ -332,7 +450,7 @@ struct BootstrapPlanningMatrix {
 
 impl BootstrapPlanningMatrix {
     fn new(closure: &BootstrapClosure) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir();
         let cache_dir = root.path().join("cache");
         let config_dir = root.path().join("config");
         let data_dir = root.path().join("data");
@@ -541,6 +659,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
     for (name, recipe) in &matrix.recipes {
         let first = plan_for_build(matrix.env(), matrix.request(recipe, true), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: plan contentful execution: {error:#}"));
+        assert_execution_fixture_topology(name, &first.plan);
         matrix.import_sources(&first.plan.sources);
         let canonical_plan = first.plan.canonical_bytes();
         let derivation_id = first.plan.derivation_id();
@@ -605,7 +724,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
         assert_eq!(preserved, published, "{name}: published generation changed");
     }
 
-    assert_eq!(executed, EXECUTION_FIXTURES.len());
+    assert_eq!(executed, REQUIRED_EXECUTION_FIXTURES.len());
 }
 
 #[test]
@@ -622,6 +741,7 @@ fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
             .plan
             .validate()
             .unwrap_or_else(|error| panic!("{name}: validate contentful plan: {error:#}"));
+        assert_execution_fixture_topology(name, &first.plan);
         assert_eq!(first.lock_outcome, Some(WriteOutcome::Written));
         assert_eq!(first.plan.build_lock.repositories.len(), 1);
         let repository = &first.plan.build_lock.repositories[0];

@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{io, num::NonZeroUsize, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::{io, num::NonZeroUsize, path::PathBuf};
 
-use forge::{repository, util};
-use fs_err as fs;
+use forge::repository;
 use stone_recipe::build_policy::TargetPolicySpec;
 use stone_recipe::derivation::{BuilderLayout, DerivationPlan, ProfileFragmentProvenance};
 use thiserror::Error;
@@ -18,6 +17,15 @@ pub mod job;
 pub mod pgo;
 pub(crate) mod root;
 pub mod tuning;
+
+/// Forge repository-cache identity shared by build-lock resolution and frozen
+/// root materialization.
+///
+/// Forge deliberately gives different identities independent metadata and
+/// immutable-index namespaces. Both halves of one build must therefore use
+/// this exact identity or the runtime cannot authenticate the index generation
+/// recorded by the planner.
+pub(crate) const BUILD_REPOSITORY_CACHE_IDENTITY: &str = "cast-plan";
 
 pub struct Builder {
     pub target: Target,
@@ -52,6 +60,51 @@ pub struct Runtime {
     pub paths: Paths,
     forge_dir: PathBuf,
     repositories: repository::Map,
+}
+
+/// All descriptor-backed state required to execute one verified derivation.
+///
+/// The frozen-root guard and the pinned external mount sources intentionally
+/// share one lifetime. Dropping or consuming this value is the only supported
+/// transition from an executable workspace to cleanup.
+#[must_use = "a prepared execution must be retained through the frozen build"]
+pub struct PreparedExecution {
+    derivation_id: String,
+    sandbox: crate::container::FrozenSandbox,
+    root_guard: forge::FrozenRootGuard,
+}
+
+impl PreparedExecution {
+    pub(crate) fn sandbox(&self) -> &crate::container::FrozenSandbox {
+        &self.sandbox
+    }
+
+    pub(crate) fn root_guard(&self) -> &forge::FrozenRootGuard {
+        &self.root_guard
+    }
+
+    /// Borrow the exact artefact directory mounted for this execution after
+    /// revalidating every retained external mount witness.
+    pub(crate) fn artefacts(&self) -> Result<&std::fs::File, Error> {
+        Ok(self.sandbox.revalidated_artefacts()?)
+    }
+
+    pub(crate) fn require_for(&self, paths: &Paths, plan: &DerivationPlan) -> Result<(), Error> {
+        let expected_derivation = plan.derivation_id().to_string();
+        if self.derivation_id != expected_derivation {
+            return Err(Error::PreparedDerivationMismatch {
+                expected: expected_derivation,
+                found: self.derivation_id.clone(),
+            });
+        }
+        if self.root_guard.root_path() != paths.rootfs().host {
+            return Err(Error::PreparedRootMismatch {
+                expected: paths.rootfs().host,
+                found: self.root_guard.root_path().to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Builder {
@@ -165,15 +218,13 @@ impl Runtime {
         execution_lock: &crate::paths::ExecutionLock,
         timing: &mut Timing,
         initialize_timer: timing::Timer,
-    ) -> Result<Vec<upstream::Stored>, Error> {
+    ) -> Result<PreparedExecution, Error> {
         self.paths.require_execution_lock(execution_lock, plan)?;
-        let artefacts = &self.paths.artefacts().host;
-        util::recreate_dir(artefacts).map_err(Error::RecreateArtefactsDir)?;
-        // The publisher rejects roots which another UID could mutate. Make
-        // the plan-owned staging root private independently of ambient umask.
-        fs::set_permissions(artefacts, std::fs::Permissions::from_mode(0o700))?;
-        root::recreate_frozen(&self.paths, plan)?;
-        root::populate_frozen(
+        // Scratch roots are atomically detached, boundedly discarded, created
+        // exact-private, and pinned before any frozen-root work begins. Caches
+        // are authenticated and retained by this same preparation boundary.
+        let sandbox = crate::container::prepare_frozen_sandbox(&self.paths, plan)?;
+        let pending_root = root::populate_frozen(
             &self.paths,
             &self.forge_dir,
             self.repositories.clone(),
@@ -182,23 +233,50 @@ impl Runtime {
             initialize_timer,
         )?;
         let timer = timing.begin(timing::Kind::Fetch);
-        let stored = upstream::sync_locked(
+        let stored = upstream::sync_locked_into_root(
             &plan.sources,
             &self.paths.upstreams().host,
-            &self.paths.guest_host_path(&self.paths.upstreams()),
+            pending_root.materialized_root(),
+            std::path::Path::new(&plan.layout.source_dir),
             plan.source_date_epoch,
         )?;
         timing.finish(timer);
-        Ok(stored)
+        if stored.len() != plan.sources.len() {
+            return Err(Error::PreparedSourceCountMismatch {
+                expected: plan.sources.len(),
+                found: stored.len(),
+            });
+        }
+        drop(stored);
+
+        // Every root-visible mutation happens before verification. External
+        // writable sources are also opened and retained before the final
+        // root proof is issued, so activation performs no path-based setup.
+        crate::container::prepare_frozen_mount_targets(&self.paths, plan, pending_root.materialized_root())?;
+        let root_guard = pending_root.verify()?;
+        let prepared = PreparedExecution {
+            derivation_id: plan.derivation_id().to_string(),
+            sandbox,
+            root_guard,
+        };
+        prepared.require_for(&self.paths, plan)?;
+        Ok(prepared)
     }
 
-    pub fn cleanup(&self, plan: &DerivationPlan, execution_lock: &crate::paths::ExecutionLock) -> Result<(), Error> {
+    pub fn cleanup(
+        &self,
+        plan: &DerivationPlan,
+        execution_lock: &crate::paths::ExecutionLock,
+        prepared: PreparedExecution,
+    ) -> Result<(), Error> {
         self.paths.require_execution_lock(execution_lock, plan)?;
-        root::remove_frozen(&self.paths, plan)?;
+        prepared.require_for(&self.paths, plan)?;
+        // Cleanup cannot race a live activation proof because it consumes and
+        // drops the proof before asking Forge to detach the root.
+        drop(prepared);
+        root::discard_frozen(&self.paths, &self.forge_dir, self.repositories.clone(), plan)?;
         for path in [self.paths.artefacts().host, self.paths.build().host] {
-            if path.exists() {
-                fs::remove_dir_all(path)?;
-            }
+            self.paths.remove_private_host_directory(&path)?;
         }
         Ok(())
     }
@@ -247,8 +325,14 @@ pub enum Error {
     Recipe(#[from] recipe::Error),
     #[error("io")]
     Io(#[from] io::Error),
-    #[error("recreate artefacts dir")]
-    RecreateArtefactsDir(#[source] io::Error),
+    #[error("container")]
+    Container(#[from] crate::container::Error),
+    #[error("prepared execution belongs to derivation {found}, expected {expected}")]
+    PreparedDerivationMismatch { expected: String, found: String },
+    #[error("prepared execution anchors root {found:?}, expected {expected:?}")]
+    PreparedRootMismatch { expected: PathBuf, found: PathBuf },
+    #[error("prepared execution contains {found} locked sources, expected {expected}")]
+    PreparedSourceCountMismatch { expected: usize, found: usize },
     #[error(transparent)]
     ForgeClient(#[from] forge::client::Error),
     #[error(transparent)]

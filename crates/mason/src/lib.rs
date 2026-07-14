@@ -27,3 +27,13 @@ mod recipe;
 pub mod source_lock;
 mod timing;
 mod upstream;
+
+#[cfg(test)]
+pub(crate) fn private_tempdir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir().expect("create private test directory");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("normalize private test directory");
+    directory
+}
