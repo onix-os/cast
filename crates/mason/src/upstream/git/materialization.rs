@@ -2373,10 +2373,13 @@ mod tests {
         for index in 0..512 {
             fs::write(wide.path().join(format!("entry-{index:04}")), b"wide").unwrap();
         }
-        let before = open_descriptor_count();
+        assert!(
+            open_descriptors_beneath(wide.path()).is_empty(),
+            "wide fixture unexpectedly had an open descriptor before traversal"
+        );
         normalize_and_hash(wide.path(), EPOCH).unwrap();
-        let after = open_descriptor_count();
-        assert!(after <= before + 1, "descriptor leak: before={before}, after={after}");
+        let leaked = open_descriptors_beneath(wide.path());
+        assert!(leaked.is_empty(), "descriptor leak beneath wide fixture: {leaked:?}");
     }
 
     #[test]
@@ -2589,8 +2592,17 @@ mod tests {
         );
     }
 
-    fn open_descriptor_count() -> usize {
-        fs::read_dir("/proc/self/fd").unwrap().count()
+    fn open_descriptors_beneath(root: &Path) -> Vec<(OsString, PathBuf)> {
+        let mut descriptors = fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let target = fs::read_link(entry.path()).ok()?;
+                target.starts_with(root).then(|| (entry.file_name(), target))
+            })
+            .collect::<Vec<_>>();
+        descriptors.sort();
+        descriptors
     }
 
     fn assert_mode(path: &Path, expected: u32) {
