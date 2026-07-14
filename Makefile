@@ -97,11 +97,11 @@ examples:
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks -- \
 		--exact --nocapture
-	@echo "Executing and packaging the minimal frozen Gluon example..."
+	@echo "Proving metadata-only providers fail before frozen execution..."
 	@$(CARGO) test -p mason --lib -- --list | \
-		grep -Fqx 'planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation: test'
-	@CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
-		planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation -- \
+		grep -Fqx 'planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution -- \
 		--exact --nocapture
 
 fixture-sources:
@@ -217,7 +217,7 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
-	@echo "  examples      Check, evaluate, freeze, and execute the Gluon package examples"
+	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  bootstrap-fixtures  Fetch the pinned closure and build all six real fixtures twice"
 	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"

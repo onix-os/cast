@@ -519,21 +519,21 @@ partial cache, staging object, or ambiguous fallback eligible for reuse.
 - [x] Freeze every example using hermetic content-addressed fixtures, write and
   reuse its exact build lock, and require identical canonical plan bytes and
   derivation IDs.
-- [x] Exercise the source-less minimal package through the actual frozen
-  executor and Stone packager twice when the host supports the required
-  unprivileged namespace; capability skips must not hide payload failures.
-- [x] Make the complete check/evaluate/freeze/execute proof a discoverable,
+- [x] Prove that the metadata-only closure used to check and freeze documented
+  examples is rejected at the exact executable boundary before container
+  entry or artifact publication.
+- [x] Make the complete check/evaluate/freeze/fail-closed proof a discoverable,
   zero-test-resistant `make examples` gate and document what it does and does
-  not prove.
+  not prove. Real execution remains exclusive to contentful fixture closures.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for CMake, Meson, Cargo, Autotools, custom-step, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
-- [x] Replace metadata-only execution providers with a pinned, contentful Stone
-  bootstrap closure containing the real declared tools and their runtime
-  dependencies. Test-only command shims, undeclared host tools, and a mounted
-  host or Nix store do not count as frozen execution.
-- [ ] Before entering the container, require every frozen executable binding to
+- [x] Add a pinned, contentful Stone bootstrap closure for the six real
+  execution fixtures containing their declared tools and runtime dependencies.
+  Test-only command shims, undeclared host tools, and a mounted host or Nix
+  store do not count as frozen execution.
+- [x] Before entering the container, require every frozen executable binding to
   resolve to the declared regular executable inside the materialized package
   root. Provider metadata without its promised executable must fail closed.
 - [ ] Actually configure, compile, check, install, analyze, package, and publish

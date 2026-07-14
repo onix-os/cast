@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     error::Error as StdError,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    os::unix::fs::{MetadataExt, PermissionsExt},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
@@ -15,10 +15,7 @@ use forge::{
 };
 use fs_err as fs;
 use sha2::{Digest, Sha256};
-use stone::{
-    StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StonePayloadMetaPrimitive, StonePayloadMetaTag,
-    StoneWriter, relation::Kind as RelationKind,
-};
+use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
 use stone_recipe::{
     UpstreamSpec,
     derivation::{FilesystemPolicy, InputOrigin, NetworkMode, encode_build_lock},
@@ -859,155 +856,6 @@ fn execution_capability_required() -> bool {
     }
 }
 
-fn run_or_skip_capability(planned: &Planned) -> Option<Publication> {
-    match execute_and_publish(planned) {
-        Ok(publication) => Some(publication),
-        Err(error) if container_capability_unavailable(error.as_ref()) && !execution_capability_required() => {
-            eprintln!(
-                "skipping frozen execution proof: this host cannot create the required user/mount namespaces: {}",
-                error_chain(error.as_ref())
-            );
-            None
-        }
-        Err(error) => panic!(
-            "frozen checked-in example failed after planning: {}",
-            error_chain(error.as_ref())
-        ),
-    }
-}
-
-fn bundle_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
-    fs::read_dir(root)
-        .unwrap()
-        .map(|entry| {
-            let entry = entry.unwrap();
-            assert!(
-                entry.file_type().unwrap().is_file(),
-                "bundle entries must be regular files"
-            );
-            (
-                entry.file_name().into_string().unwrap(),
-                fs::read(entry.path()).unwrap(),
-            )
-        })
-        .collect()
-}
-
-fn metadata_payloads(
-    path: &Path,
-    expected_file_type: StoneHeaderV1FileType,
-) -> Vec<Vec<stone::StonePayloadMetaRecord>> {
-    let mut reader = stone::read(fs::File::open(path).unwrap()).unwrap();
-    assert!(
-        matches!(
-            reader.header,
-            StoneHeader::V1(header) if header.file_type == expected_file_type
-        ),
-        "unexpected Stone file type for {path:?}: {:?}",
-        reader.header
-    );
-    reader
-        .payloads()
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
-        .into_iter()
-        .filter_map(|payload| match payload {
-            StoneDecodedPayload::Meta(meta) => Some(meta.body),
-            _ => None,
-        })
-        .collect()
-}
-
-fn assert_frozen_provenance(records: &[stone::StonePayloadMetaRecord], planned: &Planned) {
-    let source_refs = records
-        .iter()
-        .filter_map(|record| match (&record.tag, &record.primitive) {
-            (StonePayloadMetaTag::SourceRef, StonePayloadMetaPrimitive::String(value)) => Some(value.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let recipe = format!("gluon-evaluation-sha256:{}", planned.plan.provenance.recipe.sha256);
-    let derivation = format!("derivation-sha256:{}", planned.plan.derivation_id());
-    assert_eq!(source_refs, [recipe.as_str(), derivation.as_str()]);
-}
-
-fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec<u8>> {
-    let bundle = bundle_bytes(root);
-    let package_names = planned
-        .plan
-        .outputs
-        .iter()
-        .filter(|output| output.include_in_manifest)
-        .map(|output| output.package_name.as_str())
-        .collect::<BTreeSet<_>>();
-    let expected_files = planned
-        .plan
-        .outputs
-        .iter()
-        .map(|output| {
-            format!(
-                "{}-{}-{}-{}-{}.stone",
-                output.package_name,
-                planned.plan.package.version,
-                planned.plan.package.source_release,
-                planned.plan.package.build_release,
-                planned.plan.package.architecture,
-            )
-        })
-        .chain([
-            format!("manifest.{}.bin", planned.plan.package.architecture),
-            format!("manifest.{}.jsonc", planned.plan.package.architecture),
-        ])
-        .collect::<BTreeSet<_>>();
-    assert_eq!(bundle.keys().cloned().collect::<BTreeSet<_>>(), expected_files);
-
-    for output in &planned.plan.outputs {
-        let filename = format!(
-            "{}-{}-{}-{}-{}.stone",
-            output.package_name,
-            planned.plan.package.version,
-            planned.plan.package.source_release,
-            planned.plan.package.build_release,
-            planned.plan.package.architecture,
-        );
-        let payloads = metadata_payloads(&root.join(filename), StoneHeaderV1FileType::Binary);
-        assert_eq!(payloads.len(), 1, "every emitted package has one metadata payload");
-        let meta = Meta::from_stone_payload(&payloads[0]).unwrap();
-        assert_eq!(meta.name.as_str(), output.package_name);
-        assert_eq!(meta.version_identifier, planned.plan.package.version);
-        assert_eq!(meta.source_release, planned.plan.package.source_release);
-        assert_eq!(meta.build_release, planned.plan.package.build_release);
-        assert_eq!(meta.architecture, planned.plan.package.architecture);
-        assert_frozen_provenance(&payloads[0], planned);
-    }
-
-    let manifest_path = root.join(format!("manifest.{}.bin", planned.plan.package.architecture));
-    let manifest_payloads = metadata_payloads(&manifest_path, StoneHeaderV1FileType::BuildManifest);
-    assert_eq!(manifest_payloads.len(), package_names.len());
-    assert_eq!(
-        manifest_payloads
-            .iter()
-            .map(|payload| {
-                assert_frozen_provenance(payload, planned);
-                Meta::from_stone_payload(payload).unwrap().name.to_string()
-            })
-            .collect::<BTreeSet<_>>(),
-        package_names.iter().map(|name| (*name).to_owned()).collect()
-    );
-
-    let jsonc_path = root.join(format!("manifest.{}.jsonc", planned.plan.package.architecture));
-    let jsonc = fs::read_to_string(jsonc_path).unwrap();
-    let (_, json) = jsonc.split_once('\n').unwrap();
-    let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    assert_eq!(json["derivation-id"], planned.plan.derivation_id().as_str());
-    assert_eq!(json["recipe-fingerprint"], planned.plan.provenance.recipe.sha256);
-    assert_eq!(json["source-name"], planned.plan.package.name);
-    assert_eq!(json["packages"].as_object().unwrap().len(), package_names.len());
-
-    bundle
-}
-
 #[test]
 fn identical_explicit_inputs_produce_identical_plans_and_locks() {
     let fixture = Fixture::new();
@@ -1167,7 +1015,7 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
 }
 
 #[test]
-fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation() {
+fn checked_in_metadata_only_example_fails_closed_before_execution() {
     let matrix = PackageExampleMatrix::new();
     let example = matrix
         .examples
@@ -1188,7 +1036,7 @@ fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivat
             .iter()
             .flat_map(|job| &job.phases)
             .all(|phase| { phase.pre.is_empty() && phase.steps.is_empty() && phase.post.is_empty() }),
-        "minimal must prove executor/container/package plumbing without invoking host or package tools"
+        "minimal must isolate frozen-root verification without invoking package build steps"
     );
     assert!(
         first
@@ -1203,7 +1051,6 @@ fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivat
                     .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())),
         "the frozen runtime closure must use the real SHA-256 identities of local Stone artifacts"
     );
-    let first_plan = first.plan.canonical_bytes();
     let derivation_id = first.plan.derivation_id();
 
     assert_runtime_reopens_planner_repository_snapshot(
@@ -1213,37 +1060,18 @@ fn checked_in_minimal_example_executes_packages_and_reuses_the_published_derivat
         &first,
     );
 
-    let Some(first_publication) = run_or_skip_capability(&first) else {
-        return;
-    };
-    assert_eq!(first_publication, Publication::Published);
-    let published_root = matrix.output_dir.join(derivation_id.as_str());
-    assert_eq!(
-        fs::metadata(&published_root).unwrap().permissions().mode() & 0o7777,
-        0o555
-    );
-    let published = assert_emitted_bundle(&first, &published_root);
+    let error = execute_and_publish(&first)
+        .expect_err("metadata-only providers must never satisfy a frozen executable binding");
+    let error = error_chain(error.as_ref());
     assert!(
-        published
-            .keys()
-            .all(|name| { fs::metadata(published_root.join(name)).unwrap().permissions().mode() & 0o7777 == 0o444 })
+        error.contains("frozen executable provider") && error.contains("has no regular layout entry"),
+        "metadata-only closure must fail at the exact executable boundary, got: {error}"
     );
-
-    let locked = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir).unwrap();
-    assert_eq!(locked.lock_outcome, None);
-    assert_eq!(locked.plan.canonical_bytes(), first_plan);
-    assert_eq!(locked.plan.derivation_id(), derivation_id);
-
-    let Some(second_publication) = run_or_skip_capability(&locked) else {
-        return;
-    };
-    assert_eq!(second_publication, Publication::Reused);
-    assert_eq!(
-        assert_emitted_bundle(&locked, &locked.runtime.paths.artefacts().host),
-        published,
-        "a second isolated execution must reproduce every staged artifact byte-for-byte"
+    let published_root = matrix.output_dir.join(derivation_id.as_str());
+    assert!(
+        !published_root.exists(),
+        "an unauthenticated metadata-only closure must not publish a derivation"
     );
-    assert_eq!(bundle_bytes(&published_root), published);
 }
 
 #[test]

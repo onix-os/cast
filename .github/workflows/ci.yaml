@@ -101,8 +101,8 @@ jobs:
           fi
           unshare --user --map-root-user --mount true
 
-      - name: Probe the production Mason container boundary
-        run: make examples REQUIRE_EXECUTION=1
+      - name: Check and freeze the documented Gluon examples
+        run: make examples
 
       - name: Build and reproduce all frozen fixtures
         run: make fixtures-ci

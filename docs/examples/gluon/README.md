@@ -44,14 +44,14 @@ That target:
 2. freezes every example with hermetic local source and repository fixtures,
    writes and reuses its exact `build.lock.glu`, and requires identical plan
    bytes and derivation IDs; and
-3. runs the source-less minimal example through the frozen executor and Stone
-   packager twice when the host permits an unprivileged build namespace.
+3. proves that the synthetic metadata-only providers used for planning cannot
+   cross the frozen executable boundary or publish a derivation.
 
 The example URLs intentionally use `example.invalid`; `make examples` never
 depends on those remote endpoints. The planner proof substitutes
-content-addressed local fixtures. The execution proof is limited to `minimal`,
-so this corpus does not claim that the fictional upstream projects themselves
-can be built.
+content-addressed local fixtures. This lane deliberately does not claim that
+the fictional upstream projects can be built. Real compilation and packaging
+belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
