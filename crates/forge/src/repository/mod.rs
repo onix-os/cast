@@ -29,7 +29,7 @@ pub mod manager;
 pub const DEFAULT_CHANNEL: &str = "main";
 pub const DEFAULT_ARCH: &str = "x86_64";
 // This upstream wire-protocol filename is fixed by existing repository servers.
-const ROOT_INDEX_WIRE_FILENAME: &str = "moss-root-index.json";
+pub const ROOT_INDEX_WIRE_FILENAME: &str = "moss-root-index.json";
 const MIB: u64 = 1024 * 1024;
 pub(crate) const REPOSITORY_INDEX_DOWNLOAD_LIMITS: request::DownloadLimits =
     request::DownloadLimits::new(16 * MIB, Duration::from_secs(120));

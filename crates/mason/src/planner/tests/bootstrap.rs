@@ -367,7 +367,9 @@ impl BootstrapPlanningMatrix {
         let index_path = history_dir.join("stone.index");
         fs::copy(bootstrap_root().join("stone.index"), &index_path).unwrap();
         fs::write(
-            mirror.join(&closure.repository.channel).join("moss-root-index.json"),
+            mirror
+                .join(&closure.repository.channel)
+                .join(forge::repository::ROOT_INDEX_WIRE_FILENAME),
             format!(
                 concat!(
                     "{{\n",
