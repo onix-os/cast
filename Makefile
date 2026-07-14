@@ -14,6 +14,7 @@ LICENSE_DIR ?= $(TOP_DIR)/target/license-list-data
 EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 REQUIRE_EXECUTION ?= 0
+BOOTSTRAP_TMP_DIR := $(TOP_DIR)/target/bootstrap-fixtures/tmp
 
 .DEFAULT_GOAL := cast
 
@@ -137,28 +138,41 @@ execution-fixtures: fixture-sources-check
 		--exact --nocapture
 
 bootstrap-fixtures:
+	@set -eu; \
+	tmpdir="$(BOOTSTRAP_TMP_DIR)"; \
+	if [[ -L "$$tmpdir" || -e "$$tmpdir" && ! -d "$$tmpdir" ]]; then \
+		echo "Refusing unsafe bootstrap TMPDIR: $$tmpdir" >&2; \
+		exit 1; \
+	fi; \
+	if [[ -e "$$tmpdir" && ! -O "$$tmpdir" ]]; then \
+		echo "Refusing bootstrap TMPDIR not owned by the current user: $$tmpdir" >&2; \
+		exit 1; \
+	fi; \
+	install -d -m 700 "$$tmpdir"; \
+	chmod 700 "$$tmpdir"; \
+	[[ "$$(stat -c '%a' "$$tmpdir")" == 700 ]]
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
-	@$(CARGO) test -p mason --lib \
+	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
 		--ignored --exact --list | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files: test'
-	@$(CARGO) test -p mason --lib \
+	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
 		--ignored --exact --nocapture
 	@echo "Materializing the complete closure as a production-format offline root mirror..."
-	@$(CARGO) test -p mason --lib \
+	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
 		--ignored --exact --list | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror: test'
-	@$(CARGO) test -p mason --lib \
+	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
 		--ignored --exact --nocapture
 	@echo "Building, packaging, and reproducing all nine fixtures from the contentful closure..."
-	@$(CARGO) test -p mason --lib \
+	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --list | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure: test'
-	@CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
+	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --nocapture
 

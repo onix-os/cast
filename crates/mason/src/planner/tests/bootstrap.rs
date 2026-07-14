@@ -17,7 +17,7 @@ use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1Fi
 use url::Url;
 
 use super::{
-    EXECUTION_FIXTURES, Env, Publication, Request, SOURCE_DATE_EPOCH, TARGET, WriteOutcome,
+    EXECUTION_FIXTURES, Env, Planned, Publication, Request, SOURCE_DATE_EPOCH, TARGET, WriteOutcome,
     container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain, execute_and_publish,
     execution_capability_required, plan_for_build, profile,
 };
@@ -692,9 +692,14 @@ cast.profiles [
         }
     }
 
-    fn import_sources(&self, sources: &[stone_recipe::derivation::LockedSource]) {
+    fn import_sources(&self, planned: &Planned) {
         let archives = bootstrap_root().parent().unwrap().join("archives");
-        for source in sources {
+        // Frozen setup reads from the upstream mapping owned by this exact
+        // runtime, not from the workspace root itself. Keep fixture admission
+        // on that authoritative path so a contentful test never falls through
+        // to the deliberately unreachable HTTPS fixture URL.
+        let storage_dir = planned.runtime.paths.upstreams().host;
+        for source in &planned.plan.sources {
             let stone_recipe::derivation::LockedSource::Archive { url, .. } = source else {
                 panic!("execution fixtures must remain archive-only");
             };
@@ -704,9 +709,13 @@ cast.profiles [
                 .and_then(Iterator::last)
                 .expect("locked execution archive URL has a basename")
                 .to_owned();
-            crate::upstream::import_locked_archive_fixture(source, &self.cache_dir, &archives.join(&filename))
+            crate::upstream::import_locked_archive_fixture(source, &storage_dir, &archives.join(&filename))
                 .unwrap_or_else(|error| panic!("import offline execution source {filename}: {error:#}"));
         }
+        assert!(
+            !self.cache_dir.join("fetched").exists(),
+            "offline fixtures must not be admitted beside the runtime upstream cache"
+        );
     }
 }
 
@@ -730,7 +739,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
         let first = plan_for_build(matrix.env(), matrix.request(recipe, true), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: plan contentful execution: {error:#}"));
         assert_execution_fixture_topology(name, &first.plan);
-        matrix.import_sources(&first.plan.sources);
+        matrix.import_sources(&first);
         let canonical_plan = first.plan.canonical_bytes();
         let derivation_id = first.plan.derivation_id();
 
@@ -812,6 +821,7 @@ fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
             .validate()
             .unwrap_or_else(|error| panic!("{name}: validate contentful plan: {error:#}"));
         assert_execution_fixture_topology(name, &first.plan);
+        matrix.import_sources(&first);
         assert_eq!(first.lock_outcome, Some(WriteOutcome::Written));
         assert_eq!(first.plan.build_lock.repositories.len(), 1);
         let repository = &first.plan.build_lock.repositories[0];
