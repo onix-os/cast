@@ -13,10 +13,11 @@ CONFIG_DIR ?= $(HOME)/.config
 LICENSE_DIR ?= $(TOP_DIR)/target/license-list-data
 EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
+REQUIRE_EXECUTION ?= 0
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples execution-fixtures fixture-sources check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures fixture-sources check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -99,7 +100,7 @@ examples:
 	@echo "Executing and packaging the minimal frozen Gluon example..."
 	@$(CARGO) test -p mason --lib -- --list | \
 		grep -Fqx 'planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation: test'
-	@$(CARGO) test -p mason --lib \
+	@CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::checked_in_minimal_example_executes_packages_and_reuses_the_published_derivation -- \
 		--exact --nocapture
 
@@ -111,6 +112,28 @@ execution-fixtures:
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
 		--exact --nocapture
+	@echo "Checking the declarative pinned Stone bootstrap manifest and index..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
+		--exact --nocapture
+	@echo "Resolving all six execution fixtures against the pinned real Stone index..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
+		--exact --nocapture
+
+bootstrap-fixtures:
+	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
+		--ignored --exact --nocapture
+	@echo "Materializing the complete closure as a production-format offline root mirror..."
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
+		--ignored --exact --nocapture
+	@echo "Building, packaging, and reproducing all six fixtures from the contentful closure..."
+	@CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) $(CARGO) test -p mason --lib \
+		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
+		--ignored --exact --nocapture
 
 check:
 	@$(CARGO) check --workspace --all-targets
@@ -166,6 +189,8 @@ help:
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  examples      Check, evaluate, freeze, and execute the Gluon package examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
+	@echo "  bootstrap-fixtures  Fetch the pinned closure and build all six real fixtures twice"
+	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"
 	@echo "  fixture-sources  Rebuild deterministic offline execution-source archives"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"

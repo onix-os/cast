@@ -69,6 +69,9 @@ const PACKAGE_EXAMPLES: [&str; 17] = [
 ];
 const EXECUTION_FIXTURES: [&str; 6] = ["autotools", "cargo", "cmake", "custom", "meson", "split"];
 
+#[path = "tests/bootstrap.rs"]
+mod bootstrap;
+
 const RECIPE: &str = r#"let b = import! cast.package.v3
 
 let scripts = b.scripts {
@@ -752,10 +755,22 @@ fn error_chain(error: &(dyn StdError + 'static)) -> String {
     messages.join(": ")
 }
 
+fn execution_capability_required() -> bool {
+    match std::env::var("CAST_REQUIRE_EXECUTION") {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(value) if value == "0" => false,
+        Ok(value) if value == "1" => true,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("CAST_REQUIRE_EXECUTION must be the UTF-8 value 0 or 1")
+        }
+        Ok(value) => panic!("CAST_REQUIRE_EXECUTION must be 0 or 1, found {value:?}"),
+    }
+}
+
 fn run_or_skip_capability(planned: &Planned) -> Option<Publication> {
     match execute_and_publish(planned) {
         Ok(publication) => Some(publication),
-        Err(error) if container_capability_unavailable(error.as_ref()) => {
+        Err(error) if container_capability_unavailable(error.as_ref()) && !execution_capability_required() => {
             eprintln!(
                 "skipping frozen execution proof: this host cannot create the required user/mount namespaces: {}",
                 error_chain(error.as_ref())
@@ -831,6 +846,7 @@ fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec
         .plan
         .outputs
         .iter()
+        .filter(|output| output.include_in_manifest)
         .map(|output| output.package_name.as_str())
         .collect::<BTreeSet<_>>();
     let expected_files = planned
@@ -876,7 +892,7 @@ fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec
 
     let manifest_path = root.join(format!("manifest.{}.bin", planned.plan.package.architecture));
     let manifest_payloads = metadata_payloads(&manifest_path, StoneHeaderV1FileType::BuildManifest);
-    assert_eq!(manifest_payloads.len(), planned.plan.outputs.len());
+    assert_eq!(manifest_payloads.len(), package_names.len());
     assert_eq!(
         manifest_payloads
             .iter()
@@ -885,7 +901,7 @@ fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec
                 Meta::from_stone_payload(payload).unwrap().name.to_string()
             })
             .collect::<BTreeSet<_>>(),
-        package_names.into_iter().map(str::to_owned).collect()
+        package_names.iter().map(|name| (*name).to_owned()).collect()
     );
 
     let jsonc_path = root.join(format!("manifest.{}.jsonc", planned.plan.package.architecture));
@@ -894,8 +910,8 @@ fn assert_emitted_bundle(planned: &Planned, root: &Path) -> BTreeMap<String, Vec
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
     assert_eq!(json["derivation-id"], planned.plan.derivation_id().as_str());
     assert_eq!(json["recipe-fingerprint"], planned.plan.provenance.recipe.sha256);
-    assert_eq!(json["source-name"], "minimal-hello");
-    assert_eq!(json["packages"].as_object().unwrap().len(), planned.plan.outputs.len());
+    assert_eq!(json["source-name"], planned.plan.package.name);
+    assert_eq!(json["packages"].as_object().unwrap().len(), package_names.len());
 
     bundle
 }
