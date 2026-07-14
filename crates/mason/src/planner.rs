@@ -1294,6 +1294,11 @@ let base = b.mk_package (b.meta {{
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
 #[path = "planner/tests.rs"]
 mod hermetic_tests;
+
+#[cfg(feature = "delegated-fixture-test-support")]
+pub(crate) fn run_delegated_execution_fixture() {
+    hermetic_tests::run_delegated_execution_fixture();
+}

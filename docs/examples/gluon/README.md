@@ -78,6 +78,7 @@ Zstandard command-line encoders.
 make execution-fixtures
 make bootstrap-fixtures
 make bootstrap-fixtures FIXTURE=cmake
+make delegated-execution-fixtures FIXTURE=cmake
 make fixtures-ci
 ```
 
@@ -98,12 +99,27 @@ that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
 selection, runs all nine, and always requires execution.
 
+The execution stage does not run under Rust's multithreaded test harness. Its
+runner first builds Mason's feature-gated `harness = false` test target outside
+the delegated unit, selects the one exact Cargo-reported test executable with
+`jq`, and only then starts that executable as the transient delegated service.
+`make delegated-execution-fixtures` runs this stage directly against an
+already prepared package store. Cast remains the workspace's sole binary
+target.
+
 Execution requires Linux user and mount namespaces plus a systemd cgroup-v2
 unit configured with `Delegate=cpu memory pids` and
-`DelegateSubgroup=cast-supervisor`. Cast does not synthesize or migrate into a
-delegation: `/proc/self/cgroup` must already contain exactly one unified entry
-ending in `/cast-supervisor`, or execution fails before the container child is
-created. For an unprivileged caller, the current mapper specifically requires
+`DelegateSubgroup=cast-supervisor`. The fixture runner creates this transient
+`Type=exec` service with cgroup-lifetime exit and control-group cleanup
+semantics. Each invocation owns a random, authenticated unit name, stops that
+unit on interruption, and imposes a two-hour runtime plus a thirty-second
+stop deadline; a leaked descendant therefore cannot keep the Make invocation
+alive forever. A reachable systemd user manager is optional only for the
+ordinary developer lane and is mandatory when `REQUIRE_EXECUTION=1`. Cast
+itself does not synthesize or migrate into a delegation:
+`/proc/self/cgroup` must already contain exactly one unified entry ending in
+`/cast-supervisor`, or execution fails before the container child is created.
+For an unprivileged caller, the current mapper specifically requires
 `/usr/bin/newgidmap` and at least one delegated GID in `/etc/subgid`; the usual
 `uidmap` package provides the helper. The UID map is written directly, so
 `/usr/bin/newuidmap` and `/etc/subuid` are not currently consumed. Check the

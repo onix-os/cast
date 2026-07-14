@@ -8,6 +8,12 @@ version.workspace = true
 rust-version.workspace = true
 autobins = false
 
+[features]
+# This feature exists only so Cargo can link the harness-free delegated
+# execution fixture below against Mason's existing contentful test machinery.
+# Production consumers and the Cast binary never enable it.
+delegated-fixture-test-support = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -60,6 +66,12 @@ xz2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[test]]
+name = "delegated_execution_fixture"
+path = "tests/delegated_execution_fixture.rs"
+harness = false
+required-features = ["delegated-fixture-test-support"]
 
 [lints]
 workspace = true

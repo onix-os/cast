@@ -891,9 +891,19 @@ fn contentful_bootstrap_materializes_a_complete_offline_root_mirror() {
     matrix.materialize_package_pool(&closure, &indexed);
 }
 
-#[test]
-#[ignore = "requires make bootstrap-fixtures and unprivileged user/mount namespaces"]
-fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure() {
+#[cfg(feature = "delegated-fixture-test-support")]
+pub(super) fn run_delegated_execution_fixture() {
+    run_execution_fixtures_from_contentful_closure();
+}
+
+// Keep the existing implementation type-checked by ordinary unit-test builds
+// without registering it with libtest. Only the feature-gated harness-free
+// entry point above is allowed to execute it.
+#[cfg(test)]
+const _: fn() = run_execution_fixtures_from_contentful_closure;
+
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+fn run_execution_fixtures_from_contentful_closure() {
     let selection = execution_fixture_selection_from_env()
         .unwrap_or_else(|error| panic!("invalid execution-fixture selector: {error}"));
     let (closure, indexed) = validated_bootstrap();

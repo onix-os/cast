@@ -21,11 +21,14 @@ VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
 # as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
 FIXTURE_SELECTION := $(strip $(value FIXTURE))
 VALID_FIXTURE_SELECTION := $(if $(word 2,$(FIXTURE_SELECTION)),,$(filter $(VALID_EXECUTION_FIXTURES),$(FIXTURE_SELECTION)))
+EXECUTION_REQUIREMENT := $(strip $(value REQUIRE_EXECUTION))
+VALID_EXECUTION_REQUIREMENT := $(if $(word 2,$(EXECUTION_REQUIREMENT)),,$(filter 0 1,$(EXECUTION_REQUIREMENT)))
 BOOTSTRAP_TMP_DIR := $(TOP_DIR)/target/bootstrap-fixtures/tmp
+BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -71,6 +74,9 @@ fix:
 lint: binary-layout product-names config-formats
 	@echo "Running clippy..."
 	@$(CARGO) clippy --workspace -- --no-deps
+	@echo "Running clippy on the feature-gated harness-free Mason fixture..."
+	@$(CARGO) clippy -p mason --features delegated-fixture-test-support \
+		--test delegated_execution_fixture -- --no-deps
 	@echo "Running cargo fmt..."
 	@$(CARGO) fmt --all -- --check
 	@echo "Checking for typos..."
@@ -90,8 +96,8 @@ product-names:
 
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
-# separately by the harness-free container integration binary.
-test: lint config-formats-test
+# separately by harness-free container and delegated Mason integration targets.
+test: lint config-formats-test delegated-fixture-runner-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
@@ -165,6 +171,9 @@ bootstrap-fixtures-tmp:
 bootstrap-fixture-selection:
 	@$(if $(VALID_FIXTURE_SELECTION),:,$(error FIXTURE must be exactly 'all' or one of: $(EXECUTION_FIXTURE_NAMES)))
 
+bootstrap-execution-requirement:
+	@$(if $(VALID_EXECUTION_REQUIREMENT),:,$(error REQUIRE_EXECUTION must be exactly '0' or '1'))
+
 bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
 	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
@@ -175,7 +184,7 @@ bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
 		--ignored --exact --nocapture
 
-bootstrap-fixtures-offline: bootstrap-fixture-selection bootstrap-fixtures-tmp
+bootstrap-fixtures-offline: bootstrap-fixture-selection bootstrap-execution-requirement bootstrap-fixtures-tmp
 	@echo "Requiring the complete verified bootstrap store; this lane performs no downloads..."
 	@echo "Materializing the complete closure as a production-format offline root mirror..."
 	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
@@ -185,17 +194,23 @@ bootstrap-fixtures-offline: bootstrap-fixture-selection bootstrap-fixtures-tmp
 	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
 		--ignored --exact --nocapture
-	@echo "Building, packaging, and reproducing fixture selection '$(FIXTURE_SELECTION)' from the contentful closure..."
-	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
-		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
-		--ignored --exact --list | \
-		grep -Fqx 'planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure: test'
-	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" CAST_REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) CAST_EXECUTION_FIXTURE="$(FIXTURE_SELECTION)" $(CARGO) test -p mason --lib \
-		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
-		--ignored --exact --nocapture
+	@$(MAKE) --no-print-directory delegated-execution-fixtures \
+		FIXTURE=$(FIXTURE_SELECTION) REQUIRE_EXECUTION=$(EXECUTION_REQUIREMENT)
 
-bootstrap-fixtures: bootstrap-fixture-selection bootstrap-fixtures-prepare
-	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=$(REQUIRE_EXECUTION) FIXTURE=$(FIXTURE_SELECTION)
+delegated-execution-fixtures: bootstrap-fixture-selection bootstrap-execution-requirement bootstrap-fixtures-tmp
+	@echo "Building, packaging, and reproducing fixture selection '$(FIXTURE_SELECTION)' in an explicit delegated unit..."
+	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" \
+		CAST_BOOTSTRAP_PACKAGE_STORE="$(BOOTSTRAP_PACKAGE_STORE)" \
+		CAST_REQUIRE_EXECUTION="$(EXECUTION_REQUIREMENT)" \
+		CARGO="$(CARGO)" \
+		"$(TOP_DIR)/misc/scripts/run-delegated-execution-fixture.sh" "$(FIXTURE_SELECTION)"
+
+delegated-fixture-runner-test:
+	@"$(TOP_DIR)/misc/scripts/test-run-delegated-execution-fixture.sh"
+
+bootstrap-fixtures: bootstrap-fixture-selection bootstrap-execution-requirement bootstrap-fixtures-prepare
+	@$(MAKE) --no-print-directory bootstrap-fixtures-offline \
+		FIXTURE=$(FIXTURE_SELECTION) REQUIRE_EXECUTION=$(EXECUTION_REQUIREMENT)
 
 fixtures-ci: execution-fixtures
 	@$(MAKE) --no-print-directory bootstrap-fixtures-prepare
@@ -203,6 +218,8 @@ fixtures-ci: execution-fixtures
 
 check:
 	@$(CARGO) check --workspace --all-targets
+	@$(CARGO) check -p mason --features delegated-fixture-test-support \
+		--test delegated_execution_fixture
 
 fmt:
 	@$(CARGO) fmt --all
@@ -255,6 +272,8 @@ help:
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
+	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
+	@echo "  delegated-fixture-runner-test  Test delegated-unit timeout and interruption cleanup"
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"
 	@echo "  bootstrap-fixtures-prepare  Fetch and verify the pinned 107-package Stone closure"
 	@echo "  bootstrap-fixtures-offline  Build selected fixtures twice without downloading"

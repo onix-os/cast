@@ -101,6 +101,24 @@ jobs:
           fi
           unshare --user --map-root-user --mount true
 
+      - name: Establish the required systemd user manager
+        run: |
+          user_id="$(id -u)"
+          user_name="$(id -un)"
+          runtime_dir="/run/user/$user_id"
+          sudo loginctl enable-linger "$user_name"
+          sudo systemctl start "user@$user_id.service"
+          for _ in {1..100}; do
+            [[ -S "$runtime_dir/bus" ]] && break
+            sleep 0.1
+          done
+          test -S "$runtime_dir/bus"
+          export XDG_RUNTIME_DIR="$runtime_dir"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus"
+          systemctl --user show-environment >/dev/null
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+
       - name: Check and freeze the documented Gluon examples
         run: make examples
 

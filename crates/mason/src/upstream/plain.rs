@@ -115,16 +115,17 @@ impl Plain {
     /// Admit one tracked offline fixture through the same content-addressed
     /// cache used by production HTTPS downloads.
     ///
-    /// This boundary exists only in test builds. It never changes the source
-    /// URL or cache key and publishes only bytes which match the lock's exact
-    /// SHA-256. Production binaries therefore retain the HTTPS-only source
-    /// policy instead of gaining a local-file recipe escape hatch.
-    #[cfg(test)]
+    /// This boundary exists only in test builds or the narrowly feature-gated
+    /// harness-free fixture target. It never changes the source URL or cache
+    /// key and publishes only bytes which match the lock's exact SHA-256.
+    /// Production binaries therefore retain the HTTPS-only source policy
+    /// instead of gaining a local-file recipe escape hatch.
+    #[cfg(any(test, feature = "delegated-fixture-test-support"))]
     pub(crate) fn import_fixture(&self, storage_dir: &Path, fixture: &Path) -> Result<StoredPlain, Error> {
         self.import_fixture_with_max_bytes(storage_dir, fixture, ARCHIVE_DOWNLOAD_LIMITS.max_bytes)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "delegated-fixture-test-support"))]
     fn import_fixture_with_max_bytes(
         &self,
         storage_dir: &Path,

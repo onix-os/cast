@@ -256,7 +256,7 @@ pub fn sync_locked_into_root(
 /// This function is deliberately absent from production binaries. Tests can
 /// prove real frozen execution without adding `file:` sources or mounting the
 /// mutable recipe/fixture tree inside the build container.
-#[cfg(test)]
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
 pub(crate) fn import_locked_archive_fixture(
     source: &LockedSource,
     storage_dir: &Path,
@@ -461,7 +461,7 @@ pub enum Error {
         #[source]
         source: UpstreamValidationError,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "delegated-fixture-test-support"))]
     #[error("offline fixture import requires one locked archive source")]
     FixtureImportRequiresArchive,
     #[error("prepare build-visible source root")]

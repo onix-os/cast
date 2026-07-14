@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
+#![cfg_attr(
+    all(feature = "delegated-fixture-test-support", not(test)),
+    allow(dead_code, unused_imports)
+)]
+
 use std::{
     collections::BTreeSet,
     error::Error as StdError,
@@ -85,6 +90,11 @@ const EXECUTION_FIXTURES: [&str; 9] = [
 
 #[path = "tests/bootstrap.rs"]
 mod bootstrap;
+
+#[cfg(feature = "delegated-fixture-test-support")]
+pub(super) fn run_delegated_execution_fixture() {
+    bootstrap::run_delegated_execution_fixture();
+}
 
 const RECIPE: &str = r#"let b = import! cast.package.v3
 
