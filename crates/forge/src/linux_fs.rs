@@ -73,6 +73,82 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
     Ok(())
 }
 
+/// Set access and modification times on the exact inode retained by an
+/// `O_PATH` descriptor.
+///
+/// Linux `utimensat(2)` with `AT_EMPTY_PATH` operates on the descriptor
+/// itself, including mode-000 files and symlinks opened with
+/// `O_PATH | O_NOFOLLOW`.  There is deliberately no pathname fallback: an
+/// older or incompatible kernel must fail instead of resolving a mutable name.
+pub(crate) fn set_path_descriptor_times(file: &std::fs::File, seconds: i64, nanoseconds: i64) -> io::Result<()> {
+    let seconds = nix::libc::time_t::try_from(seconds)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timestamp is outside time_t"))?;
+    let nanoseconds = nix::libc::c_long::try_from(nanoseconds)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timestamp nanoseconds are outside c_long"))?;
+    if !(0..1_000_000_000).contains(&nanoseconds) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "timestamp nanoseconds are outside 0..1_000_000_000",
+        ));
+    }
+
+    let before = file.metadata()?;
+    let expected = inode_identity(&before);
+    let kind = before.mode() & nix::libc::S_IFMT;
+    if !matches!(kind, nix::libc::S_IFREG | nix::libc::S_IFDIR | nix::libc::S_IFLNK) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "descriptor timestamp target is not a regular file, directory, or symlink",
+        ));
+    }
+    let timestamp = nix::libc::timespec {
+        tv_sec: seconds,
+        tv_nsec: nanoseconds,
+    };
+    let times = [timestamp, timestamp];
+    let flags = nix::libc::AT_EMPTY_PATH
+        | if kind == nix::libc::S_IFLNK {
+            nix::libc::AT_SYMLINK_NOFOLLOW
+        } else {
+            0
+        };
+
+    loop {
+        // SAFETY: `file` is live, the empty path is NUL-terminated, and
+        // `times` contains the two initialized timespec values required by
+        // Linux. AT_EMPTY_PATH binds the mutation to the retained descriptor.
+        if unsafe { nix::libc::utimensat(file.as_raw_fd(), c"".as_ptr(), times.as_ptr(), flags) } == 0 {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
+    }
+
+    let after = file.metadata()?;
+    require_same_inode(expected, inode_identity(&after))?;
+    if after.mode() & nix::libc::S_IFMT != kind {
+        return Err(io::Error::other("retained timestamp capability changed inode type"));
+    }
+    if after.atime() != i64::from(seconds)
+        || after.atime_nsec() != i64::from(nanoseconds)
+        || after.mtime() != i64::from(seconds)
+        || after.mtime_nsec() != i64::from(nanoseconds)
+    {
+        return Err(io::Error::other(format!(
+            "retained timestamp capability has atime {}.{:09} and mtime {}.{:09}, expected {}.{:09}",
+            after.atime(),
+            after.atime_nsec(),
+            after.mtime(),
+            after.mtime_nsec(),
+            seconds,
+            nanoseconds,
+        )));
+    }
+    Ok(())
+}
+
 /// Give an unnamed retained inode one no-replace name in an authenticated
 /// target directory.
 ///
@@ -673,6 +749,101 @@ mod tests {
         let after = retained.metadata().unwrap();
         assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
         assert_eq!(after.permissions().mode() & 0o7777, 0o700);
+    }
+
+    #[test]
+    fn descriptor_times_update_the_retained_regular_inode_not_its_replacement() {
+        let temporary = tempfile::tempdir().unwrap();
+        let named = temporary.path().join("named");
+        let displaced = temporary.path().join("displaced");
+        std::fs::write(&named, b"retained").unwrap();
+        std::fs::set_permissions(&named, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let encoded = CString::new(named.as_os_str().as_encoded_bytes()).unwrap();
+        let retained = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        )
+        .unwrap();
+        std::fs::rename(&named, &displaced).unwrap();
+        std::fs::write(&named, b"replacement").unwrap();
+        filetime::set_file_times(
+            &named,
+            filetime::FileTime::from_unix_time(222, 0),
+            filetime::FileTime::from_unix_time(222, 0),
+        )
+        .unwrap();
+
+        set_path_descriptor_times(&retained, 123, 456_789).unwrap();
+
+        let retained_metadata = std::fs::symlink_metadata(&displaced).unwrap();
+        let replacement_metadata = std::fs::symlink_metadata(&named).unwrap();
+        assert_eq!(retained_metadata.atime(), 123);
+        assert_eq!(retained_metadata.atime_nsec(), 456_789);
+        assert_eq!(retained_metadata.mtime(), 123);
+        assert_eq!(retained_metadata.mtime_nsec(), 456_789);
+        assert_eq!(replacement_metadata.atime(), 222);
+        assert_eq!(replacement_metadata.mtime(), 222);
+        std::fs::set_permissions(&displaced, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn descriptor_times_support_a_mode_zero_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let encoded = CString::new(directory.as_os_str().as_encoded_bytes()).unwrap();
+        let retained = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        )
+        .unwrap();
+
+        set_path_descriptor_times(&retained, 321, 0).unwrap();
+
+        let metadata = retained.metadata().unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o000);
+        assert_eq!((metadata.atime(), metadata.mtime()), (321, 321));
+        chmod_path_descriptor(&retained, 0o700).unwrap();
+    }
+
+    #[test]
+    fn descriptor_times_update_a_symlink_without_touching_its_target() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("target");
+        let link = temporary.path().join("link");
+        std::fs::write(&target, b"outside sentinel").unwrap();
+        filetime::set_file_times(
+            &target,
+            filetime::FileTime::from_unix_time(444, 0),
+            filetime::FileTime::from_unix_time(444, 0),
+        )
+        .unwrap();
+        symlink(&target, &link).unwrap();
+        let encoded = CString::new(link.as_os_str().as_encoded_bytes()).unwrap();
+        let retained = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        )
+        .unwrap();
+
+        set_path_descriptor_times(&retained, 555, 123).unwrap();
+
+        let link_metadata = std::fs::symlink_metadata(&link).unwrap();
+        let target_metadata = std::fs::symlink_metadata(&target).unwrap();
+        assert_eq!((link_metadata.atime(), link_metadata.atime_nsec()), (555, 123));
+        assert_eq!((link_metadata.mtime(), link_metadata.mtime_nsec()), (555, 123));
+        assert_eq!((target_metadata.atime(), target_metadata.mtime()), (444, 444));
+        assert_eq!(std::fs::read(&target).unwrap(), b"outside sentinel");
     }
 
     #[test]
