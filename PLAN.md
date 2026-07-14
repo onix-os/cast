@@ -533,9 +533,20 @@ rejecting `N + 1`.
   symlink-target and regular-content verification, mode-zero support, stable
   timestamps, and bottom-up final witnesses. Retained-capability helpers cap
   interrupted-syscall retries, while normalization-local retries recheck the
-  materialization deadline. That deadline remains cooperative around
-  individual syscalls rather than a claim that an arbitrary blocking
-  filesystem can be preempted in-process.
+  materialization deadline. Private stage wrappers are now kernel-random 0700
+  directories created beneath a retained destination-parent descriptor. A
+  finite advisory parent lock serializes cooperating Forge writers, and
+  publication uses descriptor-relative no-replace rename, pre/post durability
+  barriers, and exact reconciliation of both names after every syscall result,
+  including an error reported after the move applied. Internal failure cleanup
+  can recurse only when the wrapper name still identifies the retained root;
+  foreign source or destination substitutions are preserved. Linux cannot
+  make rename or unlink conditional on an earlier inode observation, so the
+  final-component guarantee deliberately remains the private-stage and
+  cooperating-writer boundary rather than a claim of safety against an
+  uncooperative same-EUID process. The materialization deadline likewise
+  remains cooperative around individual syscalls rather than a claim that an
+  arbitrary blocking filesystem can be preempted in-process.
 
 **Exit gate:** malformed, oversized, changing, blocking, or resource-exhausting
 inputs are rejected with structured diagnostics; no error path leaves a child,

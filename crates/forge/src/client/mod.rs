@@ -56,9 +56,9 @@ use crate::{
     client::fetch::fetch,
     db, environment, installation,
     linux_fs::{
-        chmod_path_descriptor, chmod_path_descriptor_until, normalize_new_directory_until,
-        open_path_descriptor_readonly_until, openat2_file, openat2_file_until, require_no_access_acl_until,
-        require_no_default_acl, require_no_default_acl_until, set_path_descriptor_times_until,
+        chmod_path_descriptor, chmod_path_descriptor_until, open_path_descriptor_readonly_until, openat2_file,
+        openat2_file_until, renameat2_noreplace_until, require_no_access_acl_until, require_no_default_acl,
+        require_no_default_acl_until, set_path_descriptor_times_until, sync_filesystem_until,
     },
     package,
     registry::plugin::{self, Plugin},
@@ -405,10 +405,14 @@ impl Client {
         if !parent.is_dir() {
             return Err(Error::InvalidFrozenRootDestination(requested_root));
         }
+        let destination_name = CString::new(root_name.as_bytes())
+            .map_err(|_| Error::InvalidFrozenRootDestination(requested_root.clone()))?;
         let blit_root = parent.join(root_name);
         if blit_root == installation.root.canonicalize()? {
             return Err(Error::EphemeralInstallationRoot);
         }
+        let destination_parent = open_frozen_destination_parent(&parent)?;
+        let destination_parent_identity = frozen_root_identity(&destination_parent, &parent)?;
 
         let install_db = db::meta::Database::new(installation.db_path("install").to_str().unwrap_or_default())?;
         let state_db = db::state::Database::new(":memory:")?;
@@ -424,7 +428,15 @@ impl Client {
             layout_db,
             config: None,
             repositories,
-            scope: Scope::Frozen { blit_root },
+            scope: Scope::Frozen {
+                destination: FrozenRootDestination {
+                    root_path: blit_root,
+                    parent_path: parent,
+                    name: destination_name,
+                    parent: destination_parent,
+                    parent_identity: destination_parent_identity,
+                },
+            },
         })
     }
 
@@ -1843,7 +1855,14 @@ impl Client {
 
     fn frozen_root(&self) -> Result<&Path, Error> {
         match &self.scope {
-            Scope::Frozen { blit_root } => Ok(blit_root),
+            Scope::Frozen { destination } => Ok(&destination.root_path),
+            Scope::Stateful | Scope::Ephemeral { .. } => Err(Error::FrozenRootRequiresFrozenClient),
+        }
+    }
+
+    fn frozen_destination(&self) -> Result<&FrozenRootDestination, Error> {
+        match &self.scope {
+            Scope::Frozen { destination } => Ok(destination),
             Scope::Stateful | Scope::Ephemeral { .. } => Err(Error::FrozenRootRequiresFrozenClient),
         }
     }
@@ -1856,43 +1875,31 @@ impl Client {
         packages: &[package::Id],
         source_date_epoch: i64,
     ) -> Result<MaterializedFrozenRoot, Error> {
-        let blit_target = self.frozen_root()?.to_owned();
+        let destination = self.frozen_destination()?;
+        let blit_target = destination.root_path.clone();
         let deadline = Instant::now() + FROZEN_MATERIALIZATION_TIMEOUT;
         require_frozen_materialization_deadline(deadline)?;
+        let _destination_lock = lock_frozen_destination_until(destination, deadline)?;
         let packages = self.canonical_frozen_package_ids(packages)?;
         let layouts = bounded_frozen_layouts(self, &packages, deadline, FrozenLayoutQueryOperation::Materialization)?;
         let fstree = frozen_vfs_until(&packages, layouts, deadline)?;
         let expected_tree = FrozenExpectedTree::from_vfs(&fstree, deadline)?;
 
-        match fs::symlink_metadata(&blit_target) {
-            Ok(_) => return Err(Error::FrozenRootDestinationExists(blit_target)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+        if frozen_named_identity_until(&destination.parent, &destination.name, &blit_target, deadline)?.is_some() {
+            return Err(Error::FrozenRootDestinationExists(blit_target));
         }
-        let parent = blit_target
-            .parent()
-            .ok_or_else(|| Error::InvalidFrozenRootDestination(blit_target.clone()))?;
         // Authenticate and account every independent regular-file copy before
         // creating staging state. Duplicate digests are charged once per
         // output inode, while canonical empty files consume zero bytes.
         let copy_manifest = FrozenCopyManifest::from_tree(&self.installation, &fstree, deadline)?;
-        let stage = tempfile::Builder::new()
-            .prefix(".forge-frozen-stage-")
-            .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir_in(parent)?;
-        // From this point onward generic TempDir recursion is disabled. Every
-        // failure cleans the bounded generated tree through the same anchored
-        // discard boundary used for completed roots.
-        let stage_wrapper = stage.keep();
+        let stage = create_frozen_private_directory(destination, b".forge-frozen-stage-", deadline)?;
         // The random sibling wrapper remains 0700 for the entire build. The
         // publishable root can therefore carry its final 0755 mode without
         // exposing partial contents before the atomic rename.
+        let stage_wrapper = stage.path.clone();
         let stage_path = stage_wrapper.join("root");
-        let stage_wrapper_file = fs::File::from_parts(
-            normalize_new_directory_until(&stage_wrapper, 0o700, deadline)
-                .map_err(|source| frozen_materialization_io_error(deadline, source, Error::from))?,
-            stage_wrapper.clone(),
-        );
+        let stage_wrapper_file = &stage.file;
+        let mut retained_root = None;
         let result = (|| -> Result<MaterializedFrozenRoot, Error> {
             mkdirat(stage_wrapper_file.as_raw_fd(), "root", Mode::from_bits_truncate(0o755))?;
             let resolution = (nix::libc::RESOLVE_BENEATH
@@ -1941,6 +1948,10 @@ impl Client {
                 deadline,
             )
             .map_err(|source| frozen_materialization_io_error(deadline, source, Error::from))?;
+            retained_root = Some(root);
+            let root = retained_root
+                .as_ref()
+                .expect("retained frozen root was assigned immediately above");
             let normalized_root = root_residue.with_permissions(0o755);
             require_frozen_normalization_witness(Path::new("/"), &root_anchor, normalized_root)?;
             require_frozen_normalization_witness(Path::new("/"), &root, normalized_root)?;
@@ -1968,14 +1979,14 @@ impl Client {
             // Keep the descriptor opened before blitting as provenance across
             // normalization and publication. A replacement staging name can
             // never become the returned root token.
-            publish_frozen_root(&stage_path, &blit_target, root)
+            publish_frozen_root(&stage, destination, root, deadline)
         })();
 
         match result {
             Ok(materialized_root) => {
                 // `stage_path` moved out atomically; the private wrapper is
                 // now empty and can be removed without traversal.
-                if let Err(error) = fs::remove_dir(&stage_wrapper) {
+                if let Err(error) = remove_empty_frozen_private_directory(&stage, destination, deadline) {
                     // Publication is already complete and cannot be reported
                     // as a failed materialization. The random 0700 wrapper is
                     // never a reusable root even if its empty-dir cleanup is
@@ -1986,8 +1997,11 @@ impl Client {
                 Ok(materialized_root)
             }
             Err(primary) => {
-                let cleanup = discard_frozen_root_path(&stage_path)
-                    .and_then(|()| fs::remove_dir(&stage_wrapper).map_err(Error::from));
+                let cleanup = match retained_root.as_ref() {
+                    Some(root) => discard_retained_frozen_stage(&stage, destination, root, deadline),
+                    None => require_frozen_private_directory_entries(&stage, &[], deadline),
+                }
+                .and_then(|()| remove_empty_frozen_private_directory(&stage, destination, deadline));
                 match cleanup {
                     Ok(()) => Err(primary),
                     Err(cleanup) => Err(Error::CleanupFrozenStage {
@@ -2185,6 +2199,10 @@ const MAX_FROZEN_ELF_INTERPRETER_BYTES: usize = MAX_FROZEN_EXECUTABLE_PATH_BYTES
 const MAX_FROZEN_EXECUTABLE_PINNED_FILES: usize = 512;
 const FROZEN_EXECUTABLE_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(120);
 const FROZEN_MATERIALIZATION_TIMEOUT: Duration = Duration::from_secs(600);
+const FROZEN_DESTINATION_LOCK_RETRY: Duration = Duration::from_millis(10);
+const MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS: usize = 1_024;
+const MAX_FROZEN_PRIVATE_DIRECTORY_ATTEMPTS: usize = 128;
+const FROZEN_PRIVATE_DIRECTORY_RANDOM_BYTES: usize = 16;
 // Independent frozen-root copies densify every regular output inode. Match the
 // existing Mason archive-staging ceiling: one cached asset remains bounded at
 // 8 GiB and the complete copied userspace at 32 GiB of logical file bytes.
@@ -4398,6 +4416,142 @@ fn open_frozen_root_anchor(root: &Path) -> Result<fs::File, Error> {
     open_frozen_root_anchor_with_deadline(root, None)
 }
 
+/// Retain the exact directory selected as the frozen publication namespace.
+///
+/// `Client::frozen` canonicalizes the authored parent once, then opens it from
+/// the filesystem root without following symlinks.  Every later staging,
+/// publication, and discard operation is relative to this descriptor; the
+/// pathname is retained only so we can fail closed if the public namespace is
+/// renamed or replaced while the client is alive.
+fn open_frozen_destination_parent(parent: &Path) -> Result<fs::File, Error> {
+    let relative = parent
+        .strip_prefix(Path::new("/"))
+        .ok()
+        .filter(|relative| {
+            relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+        })
+        .ok_or_else(|| Error::InvalidFrozenRootDestination(parent.to_owned()))?;
+    let system_root = fs::File::open("/").map_err(|source| Error::OpenFrozenRootDestinationParent {
+        path: parent.to_owned(),
+        source,
+    })?;
+    let relative = if relative.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        relative
+    };
+    let resolution =
+        (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64;
+    let pinned = openat2_frozen(
+        system_root.as_raw_fd(),
+        relative,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        resolution,
+    )
+    .map_err(|source| Error::OpenFrozenRootDestinationParent {
+        path: parent.to_owned(),
+        source,
+    })?;
+    let readable = openat2_frozen(
+        system_root.as_raw_fd(),
+        relative,
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        resolution,
+    )
+    .map_err(|source| Error::OpenFrozenRootDestinationParent {
+        path: parent.to_owned(),
+        source,
+    })?;
+    if frozen_root_identity(&pinned, parent)? != frozen_root_identity(&readable, parent)? {
+        return Err(Error::FrozenRootDestinationParentChanged(parent.to_owned()));
+    }
+    Ok(readable)
+}
+
+fn require_frozen_destination_parent(destination: &FrozenRootDestination) -> Result<(), Error> {
+    let retained = frozen_root_identity(&destination.parent, &destination.parent_path)?;
+    let named = open_frozen_destination_parent(&destination.parent_path)?;
+    if retained != destination.parent_identity
+        || frozen_root_identity(&named, &destination.parent_path)? != destination.parent_identity
+    {
+        return Err(Error::FrozenRootDestinationParentChanged(
+            destination.parent_path.clone(),
+        ));
+    }
+    Ok(())
+}
+
+fn lock_frozen_destination_until(
+    destination: &FrozenRootDestination,
+    deadline: Instant,
+) -> Result<FrozenDestinationLock, Error> {
+    require_frozen_materialization_deadline(deadline)?;
+    require_frozen_destination_parent(destination)?;
+    let directory = openat2_frozen_until(
+        destination.parent.as_raw_fd(),
+        Path::new("."),
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+        deadline,
+    )
+    .map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::LockFrozenRootDestinationParent {
+            path: destination.parent_path.clone(),
+            source,
+        })
+    })?;
+    if frozen_root_identity(&directory, &destination.parent_path)? != destination.parent_identity {
+        return Err(Error::FrozenRootDestinationParentChanged(
+            destination.parent_path.clone(),
+        ));
+    }
+
+    let mut interruptions = 0usize;
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        // SAFETY: directory remains open for the guard's lifetime. LOCK_NB
+        // keeps the materialization deadline observable while another
+        // cooperating Forge process owns this namespace.
+        if unsafe { nix::libc::flock(directory.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) } == 0 {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        match source.raw_os_error() {
+            Some(code) if code == nix::libc::EWOULDBLOCK || code == nix::libc::EAGAIN => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    require_frozen_materialization_deadline(deadline)?;
+                }
+                std::thread::sleep(remaining.min(FROZEN_DESTINATION_LOCK_RETRY));
+            }
+            Some(nix::libc::EINTR) if interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS => {
+                interruptions += 1;
+            }
+            _ => {
+                return Err(Error::LockFrozenRootDestinationParent {
+                    path: destination.parent_path.clone(),
+                    source,
+                });
+            }
+        }
+    }
+    require_frozen_destination_parent(destination)?;
+    Ok(FrozenDestinationLock { _directory: directory })
+}
+
 fn open_frozen_root_anchor_until(root: &Path, deadline: Instant) -> Result<fs::File, Error> {
     open_frozen_root_anchor_with_deadline(root, Some(deadline))
 }
@@ -5061,50 +5215,613 @@ fn create_frozen_root_links(root: RawFd, deadline: Instant) -> Result<(), Error>
     Ok(())
 }
 
-fn publish_frozen_root(
-    stage: &Path,
-    destination: &Path,
-    staged_root: fs::File,
-) -> Result<MaterializedFrozenRoot, Error> {
-    let staged_identity = frozen_root_identity(&staged_root, stage)?;
-    match rename_noreplace(stage, destination) {
-        Ok(()) => {
-            let published_identity = frozen_root_identity(&staged_root, destination)?;
-            // rename(2) may update directory ctime, but cannot legitimately
-            // change inode identity, type, ownership, or mode.
-            if published_identity != staged_identity {
-                return Err(Error::FrozenRootChangedDuringPublication {
-                    stage: stage.to_owned(),
-                    destination: destination.to_owned(),
-                });
+#[derive(Debug)]
+struct FrozenPrivateDirectory {
+    name: CString,
+    path: PathBuf,
+    file: fs::File,
+    identity: FrozenRootIdentity,
+}
+
+fn open_frozen_named_entry_until(
+    parent: &fs::File,
+    name: &CStr,
+    path: &Path,
+    deadline: Instant,
+) -> Result<Option<fs::File>, Error> {
+    let relative = Path::new(OsStr::from_bytes(name.to_bytes()));
+    match openat2_frozen_until(
+        parent.as_raw_fd(),
+        relative,
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+        deadline,
+    ) {
+        Ok(file) => Ok(Some(file)),
+        Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => Ok(None),
+        Err(source) => Err(frozen_materialization_io_error(deadline, source, |source| {
+            Error::InspectFrozenPublicationName {
+                path: path.to_owned(),
+                source,
             }
-            let materialized = MaterializedFrozenRoot {
-                root_path: destination.to_owned(),
-                root: staged_root,
-                identity: published_identity,
-            };
-            materialized.revalidate()?;
-            Ok(materialized)
+        })),
+    }
+}
+
+fn frozen_named_identity_until(
+    parent: &fs::File,
+    name: &CStr,
+    path: &Path,
+    deadline: Instant,
+) -> Result<Option<FrozenRootIdentity>, Error> {
+    open_frozen_named_entry_until(parent, name, path, deadline)?
+        .map(|file| frozen_root_identity(&file, path))
+        .transpose()
+}
+
+fn random_frozen_private_name(prefix: &[u8], deadline: Instant) -> Result<CString, Error> {
+    let mut random = [0_u8; FROZEN_PRIVATE_DIRECTORY_RANDOM_BYTES];
+    let mut filled = 0usize;
+    let mut interruptions = 0usize;
+    while filled < random.len() {
+        require_frozen_materialization_deadline(deadline)?;
+        // SAFETY: the remaining slice is writable for the supplied length.
+        // GRND_NONBLOCK avoids an unbounded entropy wait inside a supposedly
+        // finite materialization operation.
+        let result = unsafe {
+            syscall(
+                nix::libc::SYS_getrandom,
+                random[filled..].as_mut_ptr(),
+                random.len() - filled,
+                nix::libc::GRND_NONBLOCK,
+            )
+        };
+        if result == -1 {
+            let source = io::Error::last_os_error();
+            if source.kind() == io::ErrorKind::Interrupted && interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS {
+                interruptions += 1;
+                continue;
+            }
+            return Err(source.into());
         }
-        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
-            Err(Error::FrozenRootDestinationExists(destination.to_owned()))
+        let read = usize::try_from(result).map_err(|_| io::Error::other("getrandom returned an invalid length"))?;
+        if read == 0 || read > random.len() - filled {
+            return Err(
+                io::Error::new(io::ErrorKind::UnexpectedEof, "getrandom returned an invalid short read").into(),
+            );
         }
-        Err(source) => Err(Error::PublishFrozenRoot {
-            stage: stage.to_owned(),
-            destination: destination.to_owned(),
+        filled += read;
+    }
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = Vec::with_capacity(prefix.len() + random.len() * 2);
+    encoded.extend_from_slice(prefix);
+    for byte in random {
+        encoded.push(HEX[usize::from(byte >> 4)]);
+        encoded.push(HEX[usize::from(byte & 0x0f)]);
+    }
+    CString::new(encoded).map_err(|_| io::Error::other("generated frozen private name contains NUL").into())
+}
+
+fn create_frozen_private_directory(
+    destination: &FrozenRootDestination,
+    prefix: &[u8],
+    deadline: Instant,
+) -> Result<FrozenPrivateDirectory, Error> {
+    'attempts: for _ in 0..MAX_FROZEN_PRIVATE_DIRECTORY_ATTEMPTS {
+        require_frozen_materialization_deadline(deadline)?;
+        let name = random_frozen_private_name(prefix, deadline)?;
+        let path = destination.parent_path.join(OsStr::from_bytes(name.to_bytes()));
+        let mut interruptions = 0usize;
+        loop {
+            require_frozen_materialization_deadline(deadline)?;
+            // SAFETY: the retained parent and generated single-component name
+            // remain live. mkdirat never follows or replaces the final name.
+            if unsafe { nix::libc::mkdirat(destination.parent.as_raw_fd(), name.as_ptr(), 0o700) } == 0 {
+                break;
+            }
+            let source = io::Error::last_os_error();
+            match source.kind() {
+                io::ErrorKind::Interrupted if interruptions < MAX_FROZEN_DESTINATION_LOCK_INTERRUPTS => {
+                    interruptions += 1;
+                }
+                io::ErrorKind::AlreadyExists => continue 'attempts,
+                _ => {
+                    return Err(Error::CreateFrozenPrivateDirectory { path, source });
+                }
+            }
+        }
+
+        let resolution = (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64;
+        let relative = Path::new(OsStr::from_bytes(name.to_bytes()));
+        let pinned = match openat2_frozen_until(
+            destination.parent.as_raw_fd(),
+            relative,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            resolution,
+            deadline,
+        ) {
+            Ok(pinned) => pinned,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(Error::OpenFrozenPrivateDirectory { path, source });
+            }
+        };
+        let parent_metadata = destination.parent.metadata()?;
+        let metadata = pinned.metadata()?;
+        let mode = metadata.mode() & 0o7777;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let effective_owner = unsafe { nix::libc::geteuid() };
+        if !metadata.is_dir()
+            || metadata.uid() != effective_owner
+            || metadata.dev() != parent_metadata.dev()
+            || mode & !0o700 != 0
+        {
+            return Err(Error::FrozenPrivateDirectoryChanged { path });
+        }
+        chmod_path_descriptor_until(pinned.file(), 0o700, deadline).map_err(|source| {
+            frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenPrivateDirectory {
+                path: path.clone(),
+                source,
+            })
+        })?;
+        let readable = openat2_frozen_until(
+            destination.parent.as_raw_fd(),
+            relative,
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_CLOEXEC
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_NONBLOCK,
+            resolution,
+            deadline,
+        )
+        .map_err(|source| Error::OpenFrozenPrivateDirectory {
+            path: path.clone(),
             source,
+        })?;
+        let identity = frozen_root_identity(&pinned, &path)?;
+        if identity != frozen_root_identity(&readable, &path)? || identity.mode & 0o7777 != 0o700 {
+            return Err(Error::FrozenPrivateDirectoryChanged { path });
+        }
+        require_no_access_acl_until(readable.file(), &path, deadline).map_err(|source| {
+            frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenPrivateDirectory {
+                path: path.clone(),
+                source,
+            })
+        })?;
+        require_no_default_acl_until(readable.file(), &path, deadline).map_err(|source| {
+            frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenPrivateDirectory {
+                path: path.clone(),
+                source,
+            })
+        })?;
+        let mut entries = 0usize;
+        if !frozen_discard_entry_names(readable.as_raw_fd(), &mut entries, deadline)?.is_empty() {
+            return Err(Error::FrozenPrivateDirectoryChanged { path });
+        }
+        return Ok(FrozenPrivateDirectory {
+            name,
+            path,
+            file: readable,
+            identity,
+        });
+    }
+    Err(Error::CreateFrozenPrivateDirectory {
+        path: destination.parent_path.clone(),
+        source: io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "failed to reserve a unique private directory after {MAX_FROZEN_PRIVATE_DIRECTORY_ATTEMPTS} attempts"
+            ),
+        ),
+    })
+}
+
+fn publish_frozen_root(
+    stage: &FrozenPrivateDirectory,
+    destination: &FrozenRootDestination,
+    staged_root: &fs::File,
+    deadline: Instant,
+) -> Result<MaterializedFrozenRoot, Error> {
+    publish_frozen_root_with(
+        stage,
+        destination,
+        staged_root,
+        deadline,
+        |source_directory, source_name, destination_directory, destination_name| {
+            renameat2_noreplace_until(
+                source_directory.file(),
+                source_name,
+                destination_directory.file(),
+                destination_name,
+                deadline,
+            )
+        },
+    )
+}
+
+fn publish_frozen_root_with(
+    stage: &FrozenPrivateDirectory,
+    destination: &FrozenRootDestination,
+    staged_root: &fs::File,
+    deadline: Instant,
+    rename: impl FnOnce(&fs::File, &CStr, &fs::File, &CStr) -> io::Result<()>,
+) -> Result<MaterializedFrozenRoot, Error> {
+    require_frozen_materialization_deadline(deadline)?;
+    require_frozen_destination_parent(destination)?;
+    require_frozen_private_directory_named(stage, destination, deadline)?;
+    require_frozen_private_directory_entries(stage, &[b"root"], deadline)?;
+
+    let staged_identity = frozen_root_identity(staged_root, &stage.path.join("root"))?;
+    if staged_identity.device != destination.parent_identity.device || staged_identity.device != stage.identity.device {
+        return Err(Error::FrozenPublicationNamespaceMismatch {
+            stage: stage.path.clone(),
+            destination: destination.root_path.clone(),
+            reason: "the retained root and publication parents are not on one filesystem",
+        });
+    }
+    match frozen_publication_name_state(
+        &stage.file,
+        c"root",
+        &stage.path.join("root"),
+        staged_identity,
+        deadline,
+    )? {
+        FrozenPublicationNameState::Expected => {}
+        FrozenPublicationNameState::Absent | FrozenPublicationNameState::Foreign => {
+            return Err(Error::FrozenPublicationNamespaceMismatch {
+                stage: stage.path.clone(),
+                destination: destination.root_path.clone(),
+                reason: "the private stage name does not identify the retained root",
+            });
+        }
+    }
+    if !matches!(
+        frozen_publication_name_state(
+            &destination.parent,
+            &destination.name,
+            &destination.root_path,
+            staged_identity,
+            deadline,
+        )?,
+        FrozenPublicationNameState::Absent
+    ) {
+        return Err(Error::FrozenRootDestinationExists(destination.root_path.clone()));
+    }
+
+    sync_frozen_publication_file(staged_root, &stage.path.join("root"), "sync staged root", deadline)?;
+    sync_filesystem_until(staged_root.file(), deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::SyncFrozenPublication {
+            path: stage.path.join("root"),
+            operation: "sync staged filesystem before publication",
+            source,
+        })
+    })?;
+    sync_frozen_publication_file(&stage.file, &stage.path, "sync stage wrapper", deadline)?;
+    sync_frozen_publication_file(
+        &destination.parent,
+        &destination.parent_path,
+        "sync destination parent before publication",
+        deadline,
+    )?;
+
+    // Repeat the complete namespace proof at the last userspace boundary.
+    // The advisory parent lock serializes cooperating Forge writers; Linux has
+    // no rename primitive which can additionally compare the source inode.
+    require_frozen_destination_parent(destination)?;
+    require_frozen_private_directory_named(stage, destination, deadline)?;
+    require_frozen_private_directory_entries(stage, &[b"root"], deadline)?;
+    if !matches!(
+        frozen_publication_name_state(
+            &stage.file,
+            c"root",
+            &stage.path.join("root"),
+            staged_identity,
+            deadline,
+        )?,
+        FrozenPublicationNameState::Expected
+    ) || !matches!(
+        frozen_publication_name_state(
+            &destination.parent,
+            &destination.name,
+            &destination.root_path,
+            staged_identity,
+            deadline,
+        )?,
+        FrozenPublicationNameState::Absent
+    ) {
+        return Err(Error::FrozenPublicationNamespaceMismatch {
+            stage: stage.path.clone(),
+            destination: destination.root_path.clone(),
+            reason: "the source or destination name changed before the publication syscall",
+        });
+    }
+
+    let rename_error = rename(&stage.file, c"root", &destination.parent, &destination.name).err();
+    require_frozen_materialization_deadline(deadline)?;
+    let source_state = frozen_publication_name_state(
+        &stage.file,
+        c"root",
+        &stage.path.join("root"),
+        staged_identity,
+        deadline,
+    )?;
+    let destination_state = frozen_publication_name_state(
+        &destination.parent,
+        &destination.name,
+        &destination.root_path,
+        staged_identity,
+        deadline,
+    )?;
+
+    if source_state == FrozenPublicationNameState::Absent && destination_state == FrozenPublicationNameState::Expected {
+        // Some filesystems may report an error after the namespace operation
+        // has already taken effect. Exact two-name reconciliation is stronger
+        // evidence than the syscall return value, so adopt the applied move.
+        sync_frozen_publication_file(staged_root, &destination.root_path, "sync published root", deadline)?;
+        sync_frozen_publication_file(&stage.file, &stage.path, "sync emptied stage wrapper", deadline)?;
+        sync_frozen_publication_file(
+            &destination.parent,
+            &destination.parent_path,
+            "sync destination parent after publication",
+            deadline,
+        )?;
+        sync_filesystem_until(destination.parent.file(), deadline).map_err(|source| {
+            frozen_materialization_io_error(deadline, source, |source| Error::SyncFrozenPublication {
+                path: destination.parent_path.clone(),
+                operation: "sync published frozen-root namespace",
+                source,
+            })
+        })?;
+        require_frozen_destination_parent(destination)?;
+        require_frozen_private_directory_named(stage, destination, deadline)?;
+        require_frozen_private_directory_entries(stage, &[], deadline)?;
+        if frozen_publication_name_state(
+            &stage.file,
+            c"root",
+            &stage.path.join("root"),
+            staged_identity,
+            deadline,
+        )? != FrozenPublicationNameState::Absent
+            || frozen_publication_name_state(
+                &destination.parent,
+                &destination.name,
+                &destination.root_path,
+                staged_identity,
+                deadline,
+            )? != FrozenPublicationNameState::Expected
+            || frozen_root_identity(staged_root, &destination.root_path)? != staged_identity
+        {
+            return Err(Error::FrozenPublicationNamespaceMismatch {
+                stage: stage.path.clone(),
+                destination: destination.root_path.clone(),
+                reason: "the published root changed during the durability barrier",
+            });
+        }
+        let materialized = MaterializedFrozenRoot {
+            root_path: destination.root_path.clone(),
+            root: staged_root.try_clone()?,
+            identity: staged_identity,
+        };
+        materialized.revalidate()?;
+        return Ok(materialized);
+    }
+
+    match (source_state, destination_state, rename_error) {
+        (FrozenPublicationNameState::Expected, FrozenPublicationNameState::Absent, Some(source)) => {
+            Err(Error::PublishFrozenRoot {
+                stage: stage.path.join("root"),
+                destination: destination.root_path.clone(),
+                source,
+            })
+        }
+        (FrozenPublicationNameState::Expected, FrozenPublicationNameState::Foreign, Some(source))
+            if source.kind() == io::ErrorKind::AlreadyExists =>
+        {
+            Err(Error::FrozenRootDestinationExists(destination.root_path.clone()))
+        }
+        _ => Err(Error::FrozenPublicationNamespaceMismatch {
+            stage: stage.path.clone(),
+            destination: destination.root_path.clone(),
+            reason: "publication did not leave the retained root at exactly one authoritative name",
         }),
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrozenPublicationNameState {
+    Absent,
+    Expected,
+    Foreign,
+}
+
+fn frozen_publication_name_state(
+    parent: &fs::File,
+    name: &CStr,
+    path: &Path,
+    expected: FrozenRootIdentity,
+    deadline: Instant,
+) -> Result<FrozenPublicationNameState, Error> {
+    Ok(match frozen_named_identity_until(parent, name, path, deadline)? {
+        None => FrozenPublicationNameState::Absent,
+        Some(actual) if actual == expected => FrozenPublicationNameState::Expected,
+        Some(_) => FrozenPublicationNameState::Foreign,
+    })
+}
+
+fn require_frozen_private_directory_named(
+    directory: &FrozenPrivateDirectory,
+    destination: &FrozenRootDestination,
+    deadline: Instant,
+) -> Result<(), Error> {
+    if frozen_root_identity(&directory.file, &directory.path)? != directory.identity
+        || frozen_named_identity_until(&destination.parent, &directory.name, &directory.path, deadline)?
+            != Some(directory.identity)
+    {
+        return Err(Error::FrozenPrivateDirectoryChanged {
+            path: directory.path.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn require_frozen_private_directory_entries(
+    directory: &FrozenPrivateDirectory,
+    expected: &[&[u8]],
+    deadline: Instant,
+) -> Result<(), Error> {
+    let mut entries = 0usize;
+    let mut actual = frozen_discard_entry_names(directory.file.as_raw_fd(), &mut entries, deadline)?
+        .into_iter()
+        .map(|name| name.into_bytes())
+        .collect::<Vec<_>>();
+    let mut expected = expected.iter().map(|name| name.to_vec()).collect::<Vec<_>>();
+    actual.sort();
+    expected.sort();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(Error::FrozenPrivateDirectoryChanged {
+            path: directory.path.clone(),
+        })
+    }
+}
+
+fn sync_frozen_publication_file(
+    file: &fs::File,
+    path: &Path,
+    operation: &'static str,
+    deadline: Instant,
+) -> Result<(), Error> {
+    require_frozen_materialization_deadline(deadline)?;
+    file.sync_all().map_err(|source| Error::SyncFrozenPublication {
+        path: path.to_owned(),
+        operation,
+        source,
+    })?;
+    require_frozen_materialization_deadline(deadline)
+}
+
+fn discard_retained_frozen_stage(
+    stage: &FrozenPrivateDirectory,
+    destination: &FrozenRootDestination,
+    staged_root: &fs::File,
+    deadline: Instant,
+) -> Result<(), Error> {
+    require_frozen_destination_parent(destination)?;
+    require_frozen_private_directory_named(stage, destination, deadline)?;
+    require_frozen_private_directory_entries(stage, &[b"root"], deadline)?;
+    let expected = frozen_root_identity(staged_root, &stage.path.join("root"))?;
+    if frozen_publication_name_state(&stage.file, c"root", &stage.path.join("root"), expected, deadline)?
+        != FrozenPublicationNameState::Expected
+    {
+        return Err(Error::FrozenRetainedStageChanged {
+            stage: stage.path.clone(),
+        });
+    }
+
+    let mode = staged_root.metadata()?.mode() & 0o7777;
+    chmod_path_descriptor_until(staged_root.file(), mode | 0o700, deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenPrivateDirectory {
+            path: stage.path.join("root"),
+            source,
+        })
+    })?;
+    let readable = openat2_frozen_until(
+        stage.file.as_raw_fd(),
+        Path::new("root"),
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+        deadline,
+    )
+    .map_err(|source| Error::OpenFrozenPrivateDirectory {
+        path: stage.path.join("root"),
+        source,
+    })?;
+    let expected_after_chmod = frozen_root_identity(staged_root, &stage.path.join("root"))?;
+    if frozen_root_identity(&readable, &stage.path.join("root"))? != expected_after_chmod {
+        return Err(Error::FrozenRetainedStageChanged {
+            stage: stage.path.clone(),
+        });
+    }
+    let mut entries = 1usize;
+    discard_frozen_directory(readable.as_raw_fd(), 0, &mut entries, deadline)?;
+    drop(readable);
+    if frozen_publication_name_state(
+        &stage.file,
+        c"root",
+        &stage.path.join("root"),
+        expected_after_chmod,
+        deadline,
+    )? != FrozenPublicationNameState::Expected
+    {
+        return Err(Error::FrozenRetainedStageChanged {
+            stage: stage.path.clone(),
+        });
+    }
+    require_frozen_materialization_deadline(deadline)?;
+    unlinkat(Some(stage.file.as_raw_fd()), c"root", UnlinkatFlags::RemoveDir)?;
+    require_frozen_private_directory_entries(stage, &[], deadline)?;
+    sync_frozen_publication_file(&stage.file, &stage.path, "sync discarded private stage", deadline)
+}
+
+fn remove_empty_frozen_private_directory(
+    directory: &FrozenPrivateDirectory,
+    destination: &FrozenRootDestination,
+    deadline: Instant,
+) -> Result<(), Error> {
+    require_frozen_destination_parent(destination)?;
+    require_frozen_private_directory_named(directory, destination, deadline)?;
+    require_frozen_private_directory_entries(directory, &[], deadline)?;
+    require_frozen_materialization_deadline(deadline)?;
+    let result = unlinkat(
+        Some(destination.parent.as_raw_fd()),
+        directory.name.as_c_str(),
+        UnlinkatFlags::RemoveDir,
+    );
+    let named = frozen_named_identity_until(&destination.parent, &directory.name, &directory.path, deadline)?;
+    match (result, named) {
+        (_, None) => {
+            sync_frozen_publication_file(
+                &destination.parent,
+                &destination.parent_path,
+                "sync removed private frozen-root directory",
+                deadline,
+            )?;
+            Ok(())
+        }
+        (Err(source), Some(identity)) if identity == directory.identity => Err(source.into()),
+        _ => Err(Error::FrozenPrivateDirectoryChanged {
+            path: directory.path.clone(),
+        }),
+    }
+}
+
+/// Transitional pathname helper still used by the stateful coordinator.
+/// Frozen-root publication and private-stage cleanup must use retained-parent
+/// operations instead; the remaining stateful callers are tracked by Phase 11.
 fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
     let source_name = CString::new(source.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
     let destination_name = CString::new(destination.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "destination path contains NUL"))?;
     // SAFETY: both C strings remain live for the syscall. RENAME_NOREPLACE
-    // atomically publishes the fully normalized sibling without ever
-    // overwriting a root created by another process.
+    // prevents replacement but does not authenticate either parent; do not
+    // introduce new callers.
     let result = unsafe {
         syscall(
             SYS_renameat2,
@@ -8863,11 +9580,33 @@ fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(
     Ok(())
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum Scope {
     Stateful,
     Ephemeral { blit_root: PathBuf },
-    Frozen { blit_root: PathBuf },
+    Frozen { destination: FrozenRootDestination },
+}
+
+#[derive(Debug)]
+struct FrozenRootDestination {
+    root_path: PathBuf,
+    parent_path: PathBuf,
+    name: CString,
+    parent: fs::File,
+    parent_identity: FrozenRootIdentity,
+}
+
+/// Exclusive cooperating-writer guard for one frozen publication namespace.
+///
+/// Linux rename and unlink syscalls cannot make their source operation
+/// conditional on a previously observed inode. Forge clients therefore hold
+/// this advisory directory lock across every preflight, namespace mutation,
+/// reconciliation, and durability barrier. The separately opened descriptor
+/// is intentionally owned by the guard: closing it releases the lock even
+/// while the client's retained parent capability remains alive.
+#[derive(Debug)]
+struct FrozenDestinationLock {
+    _directory: fs::File,
 }
 
 impl Scope {
@@ -9624,8 +10363,63 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("open frozen-root destination parent {path:?}")]
+    OpenFrozenRootDestinationParent {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("frozen-root destination parent changed while retained: {0:?}")]
+    FrozenRootDestinationParentChanged(PathBuf),
+    #[error("lock frozen-root destination parent {path:?}")]
+    LockFrozenRootDestinationParent {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("create private frozen-root directory {path:?}")]
+    CreateFrozenPrivateDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("open private frozen-root directory {path:?}")]
+    OpenFrozenPrivateDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("normalize private frozen-root directory {path:?}")]
+    NormalizeFrozenPrivateDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("private frozen-root directory changed while retained: {path:?}")]
+    FrozenPrivateDirectoryChanged { path: PathBuf },
+    #[error("retained frozen-root stage changed before bounded cleanup: {stage:?}")]
+    FrozenRetainedStageChanged { stage: PathBuf },
+    #[error("inspect frozen-root publication name {path:?}")]
+    InspectFrozenPublicationName {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("frozen root inode changed while publishing {stage:?} to {destination:?}")]
     FrozenRootChangedDuringPublication { stage: PathBuf, destination: PathBuf },
+    #[error("frozen-root publication namespace changed from {stage:?} to {destination:?}: {reason}")]
+    FrozenPublicationNamespaceMismatch {
+        stage: PathBuf,
+        destination: PathBuf,
+        reason: &'static str,
+    },
+    #[error("{operation} at {path:?}")]
+    SyncFrozenPublication {
+        path: PathBuf,
+        operation: &'static str,
+        #[source]
+        source: io::Error,
+    },
     #[error(
         "frozen-root materialization failed at stage {stage:?}: {primary}; bounded stage cleanup also failed: {cleanup}"
     )]
@@ -13959,6 +14753,39 @@ let cast = import! cast.system.v1
         assert_eq!(fs::read(marker).unwrap(), b"original root");
     }
 
+    fn frozen_publication_fixture(
+        parent_path: &Path,
+    ) -> (FrozenRootDestination, FrozenPrivateDirectory, fs::File, Instant) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let parent = open_frozen_destination_parent(parent_path).unwrap();
+        let destination = FrozenRootDestination {
+            root_path: parent_path.join("published"),
+            parent_path: parent_path.to_owned(),
+            name: CString::new("published").unwrap(),
+            parent_identity: frozen_root_identity(&parent, parent_path).unwrap(),
+            parent,
+        };
+        let stage = create_frozen_private_directory(&destination, b".publication-test-", deadline).unwrap();
+        mkdirat(stage.file.as_raw_fd(), "root", Mode::from_bits_truncate(0o755)).unwrap();
+        fs::write(stage.path.join("root/candidate"), b"retained candidate").unwrap();
+        let root = openat2_frozen_until(
+            stage.file.as_raw_fd(),
+            Path::new("root"),
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_CLOEXEC
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_NONBLOCK,
+            (nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_SYMLINKS
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_XDEV) as u64,
+            deadline,
+        )
+        .unwrap();
+        (destination, stage, root, deadline)
+    }
+
     #[test]
     fn frozen_root_publication_never_replaces_an_existing_destination() {
         let temporary = tempfile::tempdir().unwrap();
@@ -13999,19 +14826,213 @@ let cast = import! cast.system.v1
         // Exercise the publication syscall itself, not only the early
         // destination preflight: a destination appearing in that interval is
         // never exchanged or overwritten.
-        let raced_stage = temporary.path().join("raced-stage");
+        let deadline = Instant::now() + FROZEN_MATERIALIZATION_TIMEOUT;
         let raced_destination = temporary.path().join("raced-destination");
-        fs::create_dir(&raced_stage).unwrap();
-        fs::write(raced_stage.join("candidate"), b"candidate").unwrap();
+        let raced_parent = open_frozen_destination_parent(temporary.path()).unwrap();
+        let raced_destination_authority = FrozenRootDestination {
+            root_path: raced_destination.clone(),
+            parent_path: temporary.path().to_owned(),
+            name: CString::new("raced-destination").unwrap(),
+            parent_identity: frozen_root_identity(&raced_parent, temporary.path()).unwrap(),
+            parent: raced_parent,
+        };
+        let _lock = lock_frozen_destination_until(&raced_destination_authority, deadline).unwrap();
+        let raced_stage =
+            create_frozen_private_directory(&raced_destination_authority, b".publication-test-", deadline).unwrap();
+        mkdirat(raced_stage.file.as_raw_fd(), "root", Mode::from_bits_truncate(0o755)).unwrap();
+        fs::write(raced_stage.path.join("root/candidate"), b"candidate").unwrap();
         fs::create_dir(&raced_destination).unwrap();
         fs::write(raced_destination.join("winner"), b"winner").unwrap();
-        let raced_anchor = open_frozen_root_anchor(&raced_stage).unwrap();
+        let raced_anchor = openat2_frozen_until(
+            raced_stage.file.as_raw_fd(),
+            Path::new("root"),
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_CLOEXEC
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_NONBLOCK,
+            (nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_SYMLINKS
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_XDEV) as u64,
+            deadline,
+        )
+        .unwrap();
         assert!(matches!(
-            publish_frozen_root(&raced_stage, &raced_destination, raced_anchor),
+            publish_frozen_root(
+                &raced_stage,
+                &raced_destination_authority,
+                &raced_anchor,
+                deadline,
+            ),
             Err(Error::FrozenRootDestinationExists(path)) if path == raced_destination
         ));
-        assert_eq!(fs::read(raced_stage.join("candidate")).unwrap(), b"candidate");
+        assert_eq!(fs::read(raced_stage.path.join("root/candidate")).unwrap(), b"candidate");
         assert_eq!(fs::read(raced_destination.join("winner")).unwrap(), b"winner");
+    }
+
+    #[test]
+    fn frozen_publication_adopts_an_applied_rename_even_when_the_syscall_reports_error() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+
+        let materialized = publish_frozen_root_with(
+            &stage,
+            &destination,
+            &root,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )?;
+                Err(io::Error::from_raw_os_error(nix::libc::EIO))
+            },
+        )
+        .unwrap();
+
+        materialized.revalidate().unwrap();
+        assert_eq!(
+            fs::read(destination.root_path.join("candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert!(!stage.path.join("root").exists());
+        remove_empty_frozen_private_directory(&stage, &destination, deadline).unwrap();
+    }
+
+    #[test]
+    fn frozen_publication_error_before_rename_preserves_the_retained_stage_for_bounded_cleanup() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+
+        let error = publish_frozen_root_with(&stage, &destination, &root, deadline, |_, _, _, _| {
+            Err(io::Error::from_raw_os_error(nix::libc::EIO))
+        })
+        .unwrap_err();
+        assert!(matches!(error, Error::PublishFrozenRoot { .. }));
+        assert_eq!(
+            fs::read(stage.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert!(!destination.root_path.exists());
+
+        discard_retained_frozen_stage(&stage, &destination, &root, deadline).unwrap();
+        remove_empty_frozen_private_directory(&stage, &destination, deadline).unwrap();
+        assert!(!stage.path.exists());
+    }
+
+    #[test]
+    fn frozen_publication_reconciles_a_racing_destination_without_replacing_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let winner = destination.root_path.clone();
+
+        let error = publish_frozen_root_with(
+            &stage,
+            &destination,
+            &root,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                fs::create_dir(&winner)?;
+                fs::write(winner.join("winner"), b"foreign winner")?;
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::FrozenRootDestinationExists(path) if path == winner));
+        assert_eq!(fs::read(winner.join("winner")).unwrap(), b"foreign winner");
+        assert_eq!(
+            fs::read(stage.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        discard_retained_frozen_stage(&stage, &destination, &root, deadline).unwrap();
+        remove_empty_frozen_private_directory(&stage, &destination, deadline).unwrap();
+        assert_eq!(fs::read(winner.join("winner")).unwrap(), b"foreign winner");
+    }
+
+    #[test]
+    fn frozen_publication_detects_destination_substitution_and_never_deletes_the_foreign_tree() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let public = destination.root_path.clone();
+        let displaced = temporary.path().join("displaced-retained-root");
+
+        let error = publish_frozen_root_with(
+            &stage,
+            &destination,
+            &root,
+            deadline,
+            |source_directory, source_name, destination_directory, destination_name| {
+                renameat2_noreplace_until(
+                    source_directory.file(),
+                    source_name,
+                    destination_directory.file(),
+                    destination_name,
+                    deadline,
+                )?;
+                fs::rename(&public, &displaced)?;
+                fs::create_dir(&public)?;
+                fs::write(public.join("foreign"), b"must survive")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::FrozenPublicationNamespaceMismatch { .. }));
+        assert_eq!(fs::read(public.join("foreign")).unwrap(), b"must survive");
+        assert_eq!(fs::read(displaced.join("candidate")).unwrap(), b"retained candidate");
+        assert!(discard_retained_frozen_stage(&stage, &destination, &root, deadline).is_err());
+        assert_eq!(fs::read(public.join("foreign")).unwrap(), b"must survive");
+        remove_empty_frozen_private_directory(&stage, &destination, deadline).unwrap();
+    }
+
+    #[test]
+    fn frozen_publication_rejects_a_foreign_stage_name_without_publishing_or_deleting_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let displaced = temporary.path().join("displaced-intended-root");
+        fs::rename(stage.path.join("root"), &displaced).unwrap();
+        fs::create_dir(stage.path.join("root")).unwrap();
+        fs::write(stage.path.join("root/foreign"), b"must survive").unwrap();
+
+        let error = publish_frozen_root(&stage, &destination, &root, deadline).unwrap_err();
+        assert!(matches!(error, Error::FrozenPublicationNamespaceMismatch { .. }));
+        assert!(!destination.root_path.exists());
+        assert_eq!(fs::read(stage.path.join("root/foreign")).unwrap(), b"must survive");
+        assert_eq!(fs::read(displaced.join("candidate")).unwrap(), b"retained candidate");
+        assert!(discard_retained_frozen_stage(&stage, &destination, &root, deadline).is_err());
+        assert_eq!(fs::read(stage.path.join("root/foreign")).unwrap(), b"must survive");
+    }
+
+    #[test]
+    fn frozen_destination_lock_serializes_cooperating_publishers_with_a_finite_wait() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, _stage, _root, deadline) = frozen_publication_fixture(temporary.path());
+        let _first = lock_frozen_destination_until(&destination, deadline).unwrap();
+        let second_parent = open_frozen_destination_parent(temporary.path()).unwrap();
+        let second = FrozenRootDestination {
+            root_path: destination.root_path.clone(),
+            parent_path: destination.parent_path.clone(),
+            name: destination.name.clone(),
+            parent_identity: frozen_root_identity(&second_parent, temporary.path()).unwrap(),
+            parent: second_parent,
+        };
+
+        let error = lock_frozen_destination_until(&second, Instant::now() + Duration::from_millis(20)).unwrap_err();
+        assert!(matches!(error, Error::FrozenMaterializationTimeout { .. }));
     }
 
     #[test]

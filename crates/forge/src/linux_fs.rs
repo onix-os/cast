@@ -343,6 +343,39 @@ pub(crate) fn renameat2_noreplace(
     destination_directory: &std::fs::File,
     destination_name: &CStr,
 ) -> io::Result<()> {
+    renameat2_noreplace_with_deadline(
+        source_directory,
+        source_name,
+        destination_directory,
+        destination_name,
+        None,
+    )
+}
+
+/// Deadline-aware form used by finite frozen-root publication and cleanup.
+pub(crate) fn renameat2_noreplace_until(
+    source_directory: &std::fs::File,
+    source_name: &CStr,
+    destination_directory: &std::fs::File,
+    destination_name: &CStr,
+    deadline: Instant,
+) -> io::Result<()> {
+    renameat2_noreplace_with_deadline(
+        source_directory,
+        source_name,
+        destination_directory,
+        destination_name,
+        Some(deadline),
+    )
+}
+
+fn renameat2_noreplace_with_deadline(
+    source_directory: &std::fs::File,
+    source_name: &CStr,
+    destination_directory: &std::fs::File,
+    destination_name: &CStr,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
     for (role, name) in [("source", source_name), ("destination", destination_name)] {
         if name.to_bytes().is_empty() || name.to_bytes().contains(&b'/') || matches!(name.to_bytes(), b"." | b"..") {
             return Err(io::Error::new(
@@ -352,7 +385,7 @@ pub(crate) fn renameat2_noreplace(
         }
     }
 
-    retry_interrupted(None, || {
+    retry_interrupted(deadline, || {
         // SAFETY: both retained directory descriptors and both C strings stay
         // live for the syscall. RENAME_NOREPLACE prevents destination loss.
         if unsafe {
@@ -378,7 +411,16 @@ pub(crate) fn renameat2_noreplace(
 /// failed-candidate preservation must not delete its database correlation
 /// while trigger-created descendants are still only dirty cache state.
 pub(crate) fn sync_filesystem(file: &std::fs::File) -> io::Result<()> {
-    retry_interrupted(None, || {
+    sync_filesystem_with_deadline(file, None)
+}
+
+/// Deadline-aware form used by finite frozen-root publication and cleanup.
+pub(crate) fn sync_filesystem_until(file: &std::fs::File, deadline: Instant) -> io::Result<()> {
+    sync_filesystem_with_deadline(file, Some(deadline))
+}
+
+fn sync_filesystem_with_deadline(file: &std::fs::File, deadline: Option<Instant>) -> io::Result<()> {
+    retry_interrupted(deadline, || {
         // SAFETY: the retained descriptor remains live and identifies the
         // filesystem whose pending data and metadata must reach stable storage.
         if unsafe { nix::libc::syncfs(file.as_raw_fd()) } == 0 {
@@ -537,11 +579,6 @@ fn require_no_acl_xattr(
 /// a replacement cannot be reported as the normalized temporary root.
 pub(crate) fn normalize_new_directory(path: &Path, mode: u32) -> io::Result<std::fs::File> {
     normalize_new_directory_with_deadline(path, mode, None)
-}
-
-/// Deadline-aware form used by finite frozen-root materialization.
-pub(crate) fn normalize_new_directory_until(path: &Path, mode: u32, deadline: Instant) -> io::Result<std::fs::File> {
-    normalize_new_directory_with_deadline(path, mode, Some(deadline))
 }
 
 fn normalize_new_directory_with_deadline(
@@ -919,6 +956,41 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert_eq!(attempts.get(), 0);
+    }
+
+    #[test]
+    fn expired_rename_deadline_preserves_both_namespaces() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let source_directory = std::fs::File::open(source.path()).unwrap();
+        let destination_directory = std::fs::File::open(destination.path()).unwrap();
+        std::fs::write(source.path().join("candidate"), b"retained candidate").unwrap();
+
+        let error = renameat2_noreplace_until(
+            &source_directory,
+            c"candidate",
+            &destination_directory,
+            c"published",
+            Instant::now() - Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            std::fs::read(source.path().join("candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert!(!destination.path().join("published").exists());
+    }
+
+    #[test]
+    fn expired_sync_filesystem_deadline_fails_before_syncfs() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = std::fs::File::open(temporary.path()).unwrap();
+
+        let error = sync_filesystem_until(&directory, Instant::now() - Duration::from_millis(1)).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
     #[test]

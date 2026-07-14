@@ -28,7 +28,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-frozen-normalization-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-frozen-normalization-test forge-frozen-publication-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -170,6 +170,24 @@ forge-frozen-normalization-test:
 		client::tests::frozen_root_normalizes_and_discards_a_mode_zero_directory; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		CAST_REQUIRE_POSIX_ACL_TESTS=1 $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-frozen-publication-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		linux_fs::tests::expired_rename_deadline_preserves_both_namespaces \
+		linux_fs::tests::expired_sync_filesystem_deadline_fails_before_syncfs \
+		client::tests::frozen_root_publication_never_replaces_an_existing_destination \
+		client::tests::frozen_publication_adopts_an_applied_rename_even_when_the_syscall_reports_error \
+		client::tests::frozen_publication_error_before_rename_preserves_the_retained_stage_for_bounded_cleanup \
+		client::tests::frozen_publication_reconciles_a_racing_destination_without_replacing_it \
+		client::tests::frozen_publication_detects_destination_substitution_and_never_deletes_the_foreign_tree \
+		client::tests::frozen_publication_rejects_a_foreign_stage_name_without_publishing_or_deleting_it \
+		client::tests::frozen_destination_lock_serializes_cooperating_publishers_with_a_finite_wait \
+		client::tests::failed_frozen_root_blit_never_publishes_or_leaves_a_reusable_stage; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 cache-clean-test:
