@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+let patch_series = import! "./patches.glu"
+
+let base = b.mk_package (b.meta {
+    pname = "patched-archive",
+    version = "9.1.0",
+    release = 3,
+    homepage = "https://example.invalid/patched-archive",
+    license = ["BSD-3-Clause"],
+})
+
+{
+    builder = cmake.builder {
+        flags = ["-DUSE_SYSTEM_DEPENDENCIES=ON"],
+        .. cmake.defaults
+    },
+    hooks = b.hooks {
+        pre_setup = patch_series,
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "patch"],
+    build_inputs = [b.dep.pkgconfig "libarchive"],
+    sources = [
+        b.source.archive
+            "https://example.invalid/patched-archive-9.1.0.tar.xz"
+            "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+    ],
+    .. base
+}

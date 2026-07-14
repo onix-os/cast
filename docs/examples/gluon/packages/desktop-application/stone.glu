@@ -1,0 +1,62 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let root = b.output_with {
+    summary = b.optional.set "Lumen desktop document viewer",
+    description = b.optional.set "Viewer, desktop metadata, icons, and D-Bus activation service.",
+    runtime_inputs = [
+        b.dep.package "shared-mime-info",
+        b.dep.soname "libgtk-4.so.1",
+    ],
+    paths = [
+        b.path.exe "/usr/bin/lumen-viewer",
+        b.path.any "/usr/share/applications/io.lumen.Viewer.desktop",
+        b.path.any "/usr/share/dbus-1/services/io.lumen.Viewer.service",
+        b.path.any "/usr/share/icons/hicolor/*/apps/io.lumen.Viewer.*",
+        b.path.any "/usr/share/metainfo/io.lumen.Viewer.metainfo.xml",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "lumen-viewer",
+    version = "2.8.1",
+    release = 2,
+    homepage = "https://example.invalid/lumen-viewer",
+    license = ["GPL-3.0-or-later"],
+})
+
+{
+    builder = meson.builder {
+        flags = [
+            "-Ddbus_activation=enabled",
+            "-Dtests=enabled",
+        ],
+        run_tests = b.boolean.true,
+    },
+    hooks = b.hooks {
+        pre_check = [
+            b.step.run
+                (b.program.binary "desktop-file-validate")
+                ["data/io.lumen.Viewer.desktop"],
+        ],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "desktop-file-validate"],
+    build_inputs = [
+        b.dep.pkgconfig "gtk4",
+        b.dep.pkgconfig "libadwaita-1",
+        b.dep.pkgconfig "poppler-glib",
+    ],
+    outputs = [root],
+    sources = [
+        b.source.archive
+            "https://example.invalid/lumen-viewer-2.8.1.tar.xz"
+            "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+    ],
+    architectures = ["x86_64", "aarch64"],
+    .. base
+}

@@ -46,21 +46,27 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 17] = [
+const PACKAGE_EXAMPLES: [&str; 23] = [
     "autotools",
+    "binary-release",
     "cargo",
     "cmake",
     "conditionals",
     "conflicts",
     "custom-steps",
     "dependency-roles",
+    "desktop-application",
     "factory-override",
+    "font-family",
     "hooks",
     "meson",
     "meta-package",
     "minimal",
     "multiple-sources",
     "options-tuning",
+    "output-tool-wrapper",
+    "patch-series",
+    "pgo-workload",
     "profiles-emul32",
     "realistic-daemon",
     "split-outputs",

@@ -1,0 +1,57 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+install -d "${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster"
+install -m644 fonts/*.otf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster/"
+install -Dm644 OFL.txt "${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/aster-fonts/OFL.txt"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Aster text and display fonts",
+    paths = [b.path.any "/usr/share/fonts/truetype/aster"],
+    .. b.output "out"
+}
+
+let docs = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Aster font license",
+    paths = [b.path.any "/usr/share/doc/aster-fonts"],
+    .. b.output "docs"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "aster-fonts",
+    version = "1.3.0",
+    release = 1,
+    homepage = "https://example.invalid/aster-fonts",
+    license = ["OFL-1.1"],
+})
+
+{
+    builder = b.builder.custom phases [b.dep.binary "install"],
+    outputs = [root, docs],
+    sources = [
+        b.source.archive_with {
+            url = "https://example.invalid/aster-fonts-1.3.0.tar.gz",
+            hash = "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+            rename = b.optional.unset,
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "aster-fonts",
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

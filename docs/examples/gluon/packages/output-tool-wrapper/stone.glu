@@ -1,0 +1,60 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+let engine = b.package_ref "protocol-engine"
+let engine_tools = b.output_ref engine "tools"
+
+let phases = b.scripts {
+    build = b.phase [
+        // The generator lives at a nonstandard path in one named dependency
+        // output. Both its path and provider are frozen into the plan.
+        b.step.run
+            (b.program.output engine_tools "/opt/protocol-engine/bin/protocol-inspect")
+            ["--emit-completions", "protocol-inspect.completions"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+printf '%s\n' '#!/usr/bin/bash' 'exec /opt/protocol-engine/bin/protocol-inspect "$@"' > protocol-inspect
+install -Dm755 protocol-inspect "${CAST_INSTALL_ROOT}${CAST_BINDIR}/protocol-inspect"
+install -Dm644 protocol-inspect.completions "${CAST_INSTALL_ROOT}${CAST_DATADIR}/bash-completion/completions/protocol-inspect"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Protocol inspection command wrapper",
+    runtime_inputs = [
+        b.dep.output engine "tools",
+        b.dep.interpreter "bash",
+    ],
+    paths = [
+        b.path.exe "/usr/bin/protocol-inspect",
+        b.path.any "/usr/share/bash-completion/completions/protocol-inspect",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "protocol-inspect-wrapper",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/protocol-engine",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.output engine "tools",
+        b.dep.binary "install",
+    ],
+    outputs = [root],
+    architectures = ["native"],
+    .. base
+}

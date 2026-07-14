@@ -1,0 +1,12 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let b = import! cast.package.v3
+
+// Patch order is an evaluated Gluon value shared with the package root. Each
+// element remains a typed program invocation rather than an opaque macro.
+[
+    b.step.run (b.program.binary "patch") ["-p1", "-i", "packaging/0001-reproducible-build.patch"],
+    b.step.run (b.program.binary "patch") ["-p1", "-i", "packaging/0002-usr-layout.patch"],
+    b.step.run (b.program.binary "patch") ["-p1", "-i", "packaging/0003-offline-tests.patch"],
+]
