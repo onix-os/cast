@@ -27,4 +27,9 @@ pub mod runtime;
 pub mod signal;
 pub mod state;
 pub mod system_model;
+// The journal codec and storage are intentionally landed before activation
+// recovery starts consuming them. Keeping the boundary isolated makes the
+// on-disk contract independently testable before it can affect `/usr`.
+#[allow(dead_code)]
+pub(crate) mod transition_journal;
 pub mod util;
