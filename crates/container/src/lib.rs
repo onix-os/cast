@@ -103,6 +103,12 @@ pub enum DevPolicy {
 /// nodes are added based on host state.
 pub const MINIMAL_DEV_NODES: &[&str] = &["null", "zero", "full"];
 
+// Linux's stable memory-device identities from include/uapi/linux/major.h and
+// drivers/char/mem.c. Keep the identity next to the declared name: accepting
+// an arbitrary character device under one of these names would let a hostile
+// host substitute an entropy, terminal, or otherwise privileged device.
+const MINIMAL_DEV_IDENTITIES: &[(&str, u64, u64)] = &[("null", 1, 3), ("zero", 1, 5), ("full", 1, 7)];
+
 /// Policy for changing the loopback interface before entering the root tree.
 ///
 /// The default preserves the historical best-effort `/usr/sbin/ip` behavior.
@@ -227,9 +233,11 @@ impl Container {
     ///
     /// `label` is retained only for diagnostics. Container activation clones
     /// and attaches the mount referenced by `anchor` through descriptor-empty
-    /// paths; it never resolves `label`. The descriptor is duplicated
-    /// immediately, so the caller may close its copy after this function
-    /// returns.
+    /// paths; it never resolves `label`. Only the referenced mount is cloned:
+    /// nested mounts present below the directory are deliberately excluded and
+    /// must be requested through [`PseudoFilesystemPolicy`] or an explicit
+    /// bind. The descriptor is duplicated immediately, so the caller may close
+    /// its copy after this function returns.
     pub fn new_anchored(label: impl Into<PathBuf>, anchor: &impl AsRawFd) -> io::Result<Self> {
         let root_anchor = duplicate_root_anchor(anchor.as_raw_fd())?;
         Ok(Self {
@@ -295,7 +303,9 @@ impl Container {
     /// The source is resolved beneath the retained root descriptor, never
     /// through the diagnostic root pathname. This is the correct operation for
     /// a writable install directory that otherwise lives inside a recursively
-    /// read-only frozen root. Both source and guest paths must be absolute.
+    /// read-only frozen root. The exact directory mount is cloned without any
+    /// nested mounts that may have been injected below it. Both source and
+    /// guest paths must be absolute.
     pub fn bind_rw_from_root(mut self, source: impl Into<PathBuf>, guest: impl Into<PathBuf>) -> io::Result<Self> {
         if self.root_anchor.is_none() {
             return Err(io::Error::new(
@@ -319,7 +329,9 @@ impl Container {
     /// The descriptor is duplicated immediately. Anchored containers reject
     /// ordinary pathname binds at execution time, so external build, artifact,
     /// and cache directories must be opened by the supervising runtime and
-    /// supplied through this API. The guest path must be absolute.
+    /// supplied through this API. Directory binds clone only the referenced
+    /// mount and never import nested mounts from the host. The guest path must
+    /// be absolute.
     pub fn bind_rw_pinned(
         self,
         source: &impl AsRawFd,
@@ -918,13 +930,15 @@ fn pivot_anchored(
 
 fn clone_anchored_root(label: &Path, anchor: RawFd) -> Result<OwnedFd, ContainerError> {
     // SAFETY: `anchor` is the live duplicate owned by Container and an empty
-    // path is explicitly admitted by AT_EMPTY_PATH. A successful call returns
-    // a fresh detached mount descriptor.
+    // path is explicitly admitted by AT_EMPTY_PATH. Deliberately omitting
+    // AT_RECURSIVE clones only the authenticated root mount, so undeclared
+    // nested mounts cannot enter the frozen root. A successful call returns a
+    // fresh detached mount descriptor.
     let descriptor = unsafe {
         open_tree(
             anchor,
             Path::new(""),
-            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32 | AT_RECURSIVE as u32,
+            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32,
         )
     }
     .map_err(Errno::from_i32)
@@ -1048,14 +1062,11 @@ fn prepare_anchored_binds(
     bind_sources
         .iter()
         .map(|bind| {
-            let flags = OPEN_TREE_CLONE
-                | OPEN_TREE_CLOEXEC
-                | AT_EMPTY_PATH as u32
-                | if matches!(bind.target_kind, AnchoredMountTargetKind::Directory) {
-                    AT_RECURSIVE as u32
-                } else {
-                    0
-                };
+            // Clone exactly the pinned object. In particular, a directory
+            // source must not recursively import mounts that appeared below
+            // it on the host; pseudo-filesystem trees are the only explicitly
+            // recursive anchored imports.
+            let flags = OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32;
             // SAFETY: source is the live O_PATH descriptor pinned before
             // clone(2), the empty path is admitted explicitly, and a
             // successful open_tree returns a fresh detached mount descriptor.
@@ -1067,12 +1078,7 @@ fn prepare_anchored_binds(
             // SAFETY: successful open_tree returned a fresh owned descriptor.
             let source_mount = unsafe { OwnedFd::from_raw_fd(descriptor) };
             if bind.read_only {
-                set_mount_access_fd(
-                    source_mount.as_raw_fd(),
-                    true,
-                    matches!(bind.target_kind, AnchoredMountTargetKind::Directory),
-                )
-                .with_context(|_| MountSnafu {
+                set_mount_access_fd(source_mount.as_raw_fd(), true, false).with_context(|_| MountSnafu {
                     target: bind.source_label.clone(),
                 })?;
             }
@@ -1570,8 +1576,8 @@ fn detached_host_mount(source: &Path, read_only: bool) -> Result<OwnedFd, Contai
 
 fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
     let dev_mount = detached_filesystem_mount(c"tmpfs", false, Path::new("dev"))?;
-    for device in MINIMAL_DEV_NODES {
-        let name = std::ffi::CString::new(*device).expect("fixed device names contain no NUL");
+    for &(device, expected_major, expected_minor) in MINIMAL_DEV_IDENTITIES {
+        let name = std::ffi::CString::new(device).expect("fixed device names contain no NUL");
         let placeholder = openat_anchored(
             dev_mount.as_raw_fd(),
             &name,
@@ -1599,7 +1605,7 @@ fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
             })?;
         // SAFETY: successful open_tree returned a fresh owned descriptor.
         let device_mount = unsafe { OwnedFd::from_raw_fd(device_mount) };
-        validate_minimal_device_source(device_mount.as_raw_fd(), &host_device)?;
+        validate_minimal_device_source(device_mount.as_raw_fd(), &host_device, expected_major, expected_minor)?;
         set_mount_access_fd(device_mount.as_raw_fd(), true, false).with_context(|_| MountSnafu {
             target: PathBuf::from("dev").join(device),
         })?;
@@ -1623,13 +1629,29 @@ fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
     Ok(dev_mount)
 }
 
-fn validate_minimal_device_source(fd: RawFd, label: &Path) -> Result<(), ContainerError> {
+fn validate_minimal_device_source(
+    fd: RawFd,
+    label: &Path,
+    expected_major: u64,
+    expected_minor: u64,
+) -> Result<(), ContainerError> {
     let stat = descriptor_stat(fd).context(FsErrSnafu)?;
     let mode = stat.st_mode & nix::libc::S_IFMT;
     if mode != nix::libc::S_IFCHR {
         return Err(ContainerError::UnsupportedAnchoredMountSource {
             path: label.to_owned(),
             mode,
+        });
+    }
+    let actual_major = nix::libc::major(stat.st_rdev) as u64;
+    let actual_minor = nix::libc::minor(stat.st_rdev) as u64;
+    if (actual_major, actual_minor) != (expected_major, expected_minor) {
+        return Err(ContainerError::UnexpectedMinimalDeviceIdentity {
+            path: label.to_owned(),
+            expected_major,
+            expected_minor,
+            actual_major,
+            actual_minor,
         });
     }
     Ok(())
@@ -1657,16 +1679,65 @@ fn mount_minimal_dev(old_path: &str) -> Result<(), ContainerError> {
         Some("tmpfs"),
         MsFlags::empty(),
     )?;
-    for device in MINIMAL_DEV_NODES {
-        bind_minimal_device(old_path, device)?;
+    for &(device, expected_major, expected_minor) in MINIMAL_DEV_IDENTITIES {
+        bind_minimal_device(old_path, device, expected_major, expected_minor)?;
     }
     Ok(())
 }
 
-fn bind_minimal_device(old_path: &str, device: &str) -> Result<(), ContainerError> {
+fn bind_minimal_device(
+    old_path: &str,
+    device: &str,
+    expected_major: u64,
+    expected_minor: u64,
+) -> Result<(), ContainerError> {
     let source = Path::new("/").join(old_path).join("dev").join(device);
     let target = Path::new("dev").join(device);
-    bind_mount(&source, &target, true)
+    let source_name =
+        std::ffi::CString::new(source.as_os_str().as_bytes()).expect("constructed device path has no NUL");
+    let source_descriptor = openat_anchored(
+        AT_FDCWD,
+        &source_name,
+        nix::libc::O_PATH | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
+        0,
+    )
+    .map_err(|source_error| ContainerError::OpenAnchoredMountSource {
+        path: source.clone(),
+        source: source_error,
+    })?;
+    validate_minimal_device_source(source_descriptor.as_raw_fd(), &source, expected_major, expected_minor)?;
+
+    ensure_empty_file(&target)?;
+    // Clone from the identity-validated descriptor, not the pathname, so a
+    // concurrent host replacement cannot change the device that is attached.
+    // SAFETY: source_descriptor remains live, AT_EMPTY_PATH admits the empty
+    // path, and success returns a fresh detached mount descriptor.
+    let device_mount = unsafe {
+        open_tree(
+            source_descriptor.as_raw_fd(),
+            Path::new(""),
+            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .with_context(|_| MountSnafu { target: source.clone() })?;
+    // SAFETY: successful open_tree returned a fresh owned descriptor.
+    let device_mount = unsafe { OwnedFd::from_raw_fd(device_mount) };
+    set_mount_access_fd(device_mount.as_raw_fd(), true, false).with_context(|_| MountSnafu { target: source })?;
+    // SAFETY: device_mount is a live detached mount descriptor and target is
+    // a controlled placeholder in the fresh minimal-dev tmpfs.
+    unsafe {
+        move_mount(
+            device_mount.as_raw_fd(),
+            Path::new(""),
+            AT_FDCWD,
+            &target,
+            MOVE_MOUNT_F_EMPTY_PATH,
+        )
+    }
+    .map_err(Errno::from_i32)
+    .with_context(|_| MountSnafu { target })?;
+    Ok(())
 }
 
 fn set_mount_access(target: &Path, read_only: bool, recursive: bool) -> Result<(), ContainerError> {
@@ -2563,6 +2634,17 @@ enum ContainerError {
     AnchoredBindOnPathContainer { path: PathBuf },
     #[snafu(display("unsupported anchored mount source {} with mode {mode:o}", path.display()))]
     UnsupportedAnchoredMountSource { path: PathBuf, mode: nix::libc::mode_t },
+    #[snafu(display(
+        "minimal device source {} has Linux device identity ({actual_major},{actual_minor}); expected ({expected_major},{expected_minor})",
+        path.display()
+    ))]
+    UnexpectedMinimalDeviceIdentity {
+        path: PathBuf,
+        expected_major: u64,
+        expected_minor: u64,
+        actual_major: u64,
+        actual_minor: u64,
+    },
     #[snafu(display("anchored container declares {actual} mounts; limit is {limit}"))]
     TooManyAnchoredMounts { actual: usize, limit: usize },
     #[snafu(display(
@@ -2623,13 +2705,14 @@ mod tests {
     use super::{
         AnchoredMountTargetKind, Bind, BindSource, CAP_SYS_ADMIN, CLONE_STACK_BYTES, CapabilityData, CloneStack,
         Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
-        MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy,
-        PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncPipe,
-        SysPolicy, TmpPolicy, capability_is_set, checked_prctl_value, clear_capability, descriptor_stat,
-        duplicate_cloexec, format_error, namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target,
-        open_anchored_resolver_target, pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions,
-        read_capabilities, read_child_error, reopen_pinned_readonly, resolver_stat_stable, root_mount_decisions,
-        sealed_resolver_file, set_mount_access, validate_anchored_mount_topology, validate_minimal_device_source,
+        MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
+        PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
+        RootMountDecision, SignalOverride, SyncPipe, SysPolicy, TmpPolicy, capability_is_set, checked_prctl_value,
+        clear_capability, descriptor_stat, duplicate_cloexec, format_error, namespace_flags,
+        normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
+        pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions, read_capabilities,
+        read_child_error, reopen_pinned_readonly, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
+        set_mount_access, validate_anchored_mount_topology, validate_minimal_device_source,
         validate_payload_credentials, validate_resolver_target,
     };
 
@@ -3427,7 +3510,7 @@ mod tests {
     }
 
     #[test]
-    fn anchored_root_clone_preserves_nested_mount_identity() {
+    fn anchored_root_clone_excludes_undeclared_nested_mounts() {
         const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
 
         let anchor = open_path_directory(Path::new("/"));
@@ -3444,18 +3527,22 @@ mod tests {
         drop(anchor);
 
         let result = container.run::<io::Error>(|| {
-            let _ = fs::read("/proc/self/stat")?;
             // SAFETY: the path is static and NUL terminated; statfs points to
             // a fully initialized output object for the duration of the call.
             let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
             if unsafe { nix::libc::statfs(c"/proc".as_ptr(), &mut stat) } == -1 {
                 return Err(io::Error::last_os_error());
             }
-            if stat.f_type != PROC_SUPER_MAGIC {
+            if stat.f_type == PROC_SUPER_MAGIC {
                 return Err(io::Error::other(format!(
-                    "nested /proc mount identity was lost: filesystem magic={:#x}",
+                    "undeclared nested /proc mount was imported: filesystem magic={:#x}",
                     stat.f_type
                 )));
+            }
+            match fs::metadata("/proc/self/stat") {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+                Ok(_) => return Err(io::Error::other("undeclared nested /proc contents were imported")),
             }
             Ok(())
         });
@@ -3469,11 +3556,71 @@ mod tests {
                         != Some(std::ffi::OsStr::new("1"))
                 {
                     eprintln!(
-                        "SKIP anchored nested-mount test: required host capability unavailable: {classification}: {error}"
+                        "SKIP anchored root nested-mount exclusion test: required host capability unavailable: {classification}: {error}"
                     );
                     return;
                 }
-                panic!("anchored nested-mount test failed: {error}");
+                panic!("anchored root nested-mount exclusion test failed: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn anchored_directory_bind_excludes_undeclared_nested_mounts() {
+        const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("import")).unwrap();
+        let root_anchor = open_path_directory(root.path());
+        let host_root = open_path_directory(Path::new("/"));
+        let container = Container::new_anchored(root.path(), &root_anchor)
+            .unwrap()
+            .bind_ro_pinned(&host_root, "/", "/import")
+            .unwrap()
+            .pseudo_filesystems(PseudoFilesystemPolicy {
+                proc: ProcPolicy::None,
+                tmp: TmpPolicy::Disabled,
+                sys: SysPolicy::None,
+                dev: DevPolicy::None,
+            })
+            .loopback(LoopbackPolicy::KernelDefault);
+
+        let result = container.run::<io::Error>(|| {
+            // SAFETY: the path is static and NUL terminated; statfs points to
+            // a fully initialized output object for the duration of the call.
+            let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
+            if unsafe { nix::libc::statfs(c"/import/proc".as_ptr(), &mut stat) } == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if stat.f_type == PROC_SUPER_MAGIC {
+                return Err(io::Error::other(format!(
+                    "directory bind imported nested /proc mount: filesystem magic={:#x}",
+                    stat.f_type
+                )));
+            }
+            match fs::metadata("/import/proc/self/stat") {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+                Ok(_) => Err(io::Error::other(
+                    "directory bind imported undeclared nested /proc contents",
+                )),
+            }
+        });
+
+        match result {
+            Ok(()) => {}
+            Err(error) => {
+                let classification = classify_anchored_activation_unavailable(&error, root.path());
+                if let Some(classification) = classification
+                    && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
+                        != Some(std::ffi::OsStr::new("1"))
+                {
+                    eprintln!(
+                        "SKIP anchored bind nested-mount exclusion test: required host capability unavailable: {classification}: {error}"
+                    );
+                    return;
+                }
+                panic!("anchored bind nested-mount exclusion test failed: {error}");
             }
         }
     }
@@ -3626,19 +3773,47 @@ mod tests {
     #[test]
     fn minimal_dev_has_an_exact_non_entropy_device_set() {
         assert_eq!(MINIMAL_DEV_NODES, ["null", "zero", "full"]);
+        assert_eq!(MINIMAL_DEV_IDENTITIES, [("null", 1, 3), ("zero", 1, 5), ("full", 1, 7)]);
     }
 
     #[test]
-    fn minimal_dev_accepts_only_character_device_sources() {
-        let device = open_path_file(Path::new("/dev/null"));
-        validate_minimal_device_source(device.as_raw_fd(), Path::new("/dev/null")).unwrap();
+    fn minimal_dev_accepts_only_exact_linux_character_device_identities() {
+        for &(name, major, minor) in MINIMAL_DEV_IDENTITIES {
+            let path = Path::new("/dev").join(name);
+            let device = open_path_file(&path);
+            validate_minimal_device_source(device.as_raw_fd(), &path, major, minor).unwrap();
+        }
 
         let regular = tempfile::NamedTempFile::new().unwrap();
         let regular = open_path_file(regular.path());
         assert!(matches!(
-            validate_minimal_device_source(regular.as_raw_fd(), Path::new("regular")),
+            validate_minimal_device_source(regular.as_raw_fd(), Path::new("regular"), 1, 3),
             Err(ContainerError::UnsupportedAnchoredMountSource { mode, .. }) if mode == nix::libc::S_IFREG
         ));
+
+        for (source, label, expected_major, expected_minor, actual_major, actual_minor) in [
+            ("/dev/zero", "/dev/null", 1, 3, 1, 5),
+            ("/dev/full", "/dev/zero", 1, 5, 1, 7),
+            ("/dev/null", "/dev/full", 1, 7, 1, 3),
+        ] {
+            let wrong_device = open_path_file(Path::new(source));
+            assert!(matches!(
+                validate_minimal_device_source(
+                    wrong_device.as_raw_fd(),
+                    Path::new(label),
+                    expected_major,
+                    expected_minor,
+                ),
+                Err(ContainerError::UnexpectedMinimalDeviceIdentity {
+                    expected_major: error_expected_major,
+                    expected_minor: error_expected_minor,
+                    actual_major: error_actual_major,
+                    actual_minor: error_actual_minor,
+                    ..
+                }) if (error_expected_major, error_expected_minor, error_actual_major, error_actual_minor)
+                    == (expected_major, expected_minor, actual_major, actual_minor)
+            ));
+        }
     }
 
     #[test]
