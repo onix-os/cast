@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{collections::BTreeMap, slice};
+use std::{collections::BTreeMap, io, os::unix::fs::PermissionsExt as _, path::PathBuf, slice};
 
 use thiserror::Error;
 use tracing::{Instrument, instrument};
@@ -9,7 +9,9 @@ use tracing::{Instrument, instrument};
 use crate::{
     Installation, Provider, Repository,
     client::{self, Client},
-    db, dependency, package, repository, runtime,
+    db, dependency, installation,
+    linux_fs::{normalize_new_directory, require_named_directory},
+    package, repository, runtime,
     state::{self, Selection},
 };
 
@@ -47,7 +49,15 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
 
     // Tempdir to fetch intermediate `upgrade_via` index files
     // to so we can find the `cast` package from this index
-    let temp_dir = tempfile::tempdir().expect("TODO");
+    let temp_dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .map_err(Error::CreateTemporaryInstallationRoot)?;
+    let temp_anchor =
+        normalize_new_directory(temp_dir.path(), 0o700).map_err(|source| Error::PrepareTemporaryInstallationRoot {
+            path: temp_dir.path().to_owned(),
+            source,
+        })?;
 
     // If multiple repos are unsupported and have Cast, upgrade
     // from the highest priority repo
@@ -58,20 +68,34 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
     for unsupported_repo in unsupported_repos {
         match &unsupported_repo.upgrade_via_index_uri {
             Some(uri) => {
-                let mut temp_client = Client::builder(
-                    "temp-self-upgrade",
-                    Installation::open(temp_dir.path(), None).expect("TODO"),
-                )
-                .repositories(repository::Map::from_iter([(
-                    unsupported_repo.repository.id.clone(),
-                    Repository {
-                        description: "...".to_owned(),
-                        source: repository::Source::DirectIndex(uri.clone()),
-                        priority: 0.into(),
-                        active: true,
-                    },
-                )]))
-                .build()?;
+                require_named_directory(temp_dir.path(), &temp_anchor, 0o700).map_err(|source| {
+                    Error::PrepareTemporaryInstallationRoot {
+                        path: temp_dir.path().to_owned(),
+                        source,
+                    }
+                })?;
+                let temp_installation =
+                    Installation::open(temp_dir.path(), None).map_err(|source| Error::OpenTemporaryInstallation {
+                        path: temp_dir.path().to_owned(),
+                        source,
+                    })?;
+                require_named_directory(temp_dir.path(), &temp_anchor, 0o700).map_err(|source| {
+                    Error::PrepareTemporaryInstallationRoot {
+                        path: temp_dir.path().to_owned(),
+                        source,
+                    }
+                })?;
+                let mut temp_client = Client::builder("temp-self-upgrade", temp_installation)
+                    .repositories(repository::Map::from_iter([(
+                        unsupported_repo.repository.id.clone(),
+                        Repository {
+                            description: "...".to_owned(),
+                            source: repository::Source::DirectIndex(uri.clone()),
+                            priority: 0.into(),
+                            active: true,
+                        },
+                    )]))
+                    .build()?;
 
                 runtime::block_on(temp_client.ensure_repos_initialized().in_current_span())?;
 
@@ -165,4 +189,21 @@ pub enum Error {
 
     #[error("get state {0} from state_db")]
     MissingActiveStateFromDb(#[source] db::Error, state::Id),
+
+    #[error("create temporary self-upgrade installation root")]
+    CreateTemporaryInstallationRoot(#[source] io::Error),
+
+    #[error("prepare temporary self-upgrade installation root `{}`", path.display())]
+    PrepareTemporaryInstallationRoot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("open temporary self-upgrade installation `{}`", path.display())]
+    OpenTemporaryInstallation {
+        path: PathBuf,
+        #[source]
+        source: installation::Error,
+    },
 }

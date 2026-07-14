@@ -2573,7 +2573,7 @@ mod tests {
     }
 
     fn test_installation() -> (tempfile::TempDir, Installation) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::test_support::private_installation_tempdir();
         let installation = Installation::open(root.path(), None).unwrap();
         (root, installation)
     }

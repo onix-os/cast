@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn authored_system_intent_rejects_imperative_repository_changes() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = crate::test_support::private_installation_tempdir();
         let intent_path = system_model::intent_path(temporary.path());
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
         let authored = r#"// Repository intent remains administrator-owned.

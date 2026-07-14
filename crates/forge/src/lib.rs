@@ -28,6 +28,8 @@ pub mod runtime;
 pub mod signal;
 pub mod state;
 pub mod system_model;
+#[cfg(test)]
+pub(crate) mod test_support;
 // The journal codec and storage are intentionally landed before activation
 // recovery starts consuming them. Keeping the boundary isolated makes the
 // on-disk contract independently testable before it can affect `/usr`.

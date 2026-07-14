@@ -325,7 +325,7 @@ mod tests {
     }
 
     static TEST_FIXTURE: LazyLock<TestFixture> = LazyLock::new(|| {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::test_support::private_installation_tempdir();
         let installation = Installation::open(root.path(), None).unwrap();
         let registry = test_registry();
         let client = Client::mocked(installation, registry).unwrap();

@@ -7166,6 +7166,17 @@ mod tests {
     use gluon_config::Source;
 
     use super::*;
+    use crate::test_support::prepare_private_installation_root;
+
+    fn test_installation(root: &Path) -> Installation {
+        prepare_private_installation_root(root);
+        Installation::open(root, None).unwrap()
+    }
+
+    fn frozen_test_installation(root: &Path) -> Installation {
+        prepare_private_installation_root(root);
+        Installation::open_frozen(root, None).unwrap()
+    }
 
     fn test_elf(interpreter: Option<&str>, program_count: usize) -> Vec<u8> {
         assert!(program_count >= 1);
@@ -7291,7 +7302,7 @@ mod tests {
     }
 
     fn stateful_test_client(root: &Path) -> Client {
-        let installation = Installation::open(root, None).unwrap();
+        let installation = test_installation(root);
         Client::builder("state-snapshot-test", installation)
             .repositories(repository::Map::default())
             .build()
@@ -7980,7 +7991,7 @@ let cast = import! cast.system.v1
 "#;
         fs::write(&intent_path, authored).unwrap();
 
-        let installation = Installation::open(&installation_root, None).unwrap();
+        let installation = test_installation(&installation_root);
         let client = Client::builder("ephemeral-import-test", installation)
             .system_intent_path(&intent_path)
             .ephemeral(&blit_root)
@@ -8018,7 +8029,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir(&blit_root).unwrap();
 
-        let installation = Installation::open(&installation_root, None).unwrap();
+        let installation = test_installation(&installation_root);
         let client = Client::builder("ephemeral-asset-isolation-test", installation)
             .repositories(repository::Map::default())
             .ephemeral(&blit_root)
@@ -8078,7 +8089,7 @@ let cast = import! cast.system.v1
 
     fn asset_copy_fixture(bytes: &[u8]) -> AssetCopyFixture {
         let temporary = tempfile::tempdir().unwrap();
-        let installation = Installation::open(temporary.path(), None).unwrap();
+        let installation = test_installation(temporary.path());
         let digest = xxhash_rust::xxh3::xxh3_128(bytes);
         let source_path = cache::asset_path(&installation, &format!("{digest:02x}"));
         fs::create_dir_all(source_path.parent().unwrap()).unwrap();
@@ -8497,7 +8508,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&frozen_root).unwrap();
         let client = Client::frozen(
             "frozen-raw-binding-preflight-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -8517,7 +8528,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&frozen_root).unwrap();
         let client = Client::frozen(
             "empty-frozen-root-guard-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -9258,7 +9269,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir(&frozen_root).unwrap();
 
-        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let installation = frozen_test_installation(&installation_root);
         let client = Client::frozen(
             "frozen-shebang-test",
             installation,
@@ -9507,7 +9518,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir_all(frozen_root.join("usr/bin")).unwrap();
 
-        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let installation = frozen_test_installation(&installation_root);
         let client = Client::frozen(
             "frozen-shebang-depth-test",
             installation,
@@ -9597,7 +9608,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir(&blit_root).unwrap();
 
-        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let installation = frozen_test_installation(&installation_root);
         let client = Client::frozen("frozen-root-test", installation, repository::Map::default(), &blit_root).unwrap();
         let isolation_marker = client.installation.isolation_dir().join("must-remain");
         fs::create_dir_all(isolation_marker.parent().unwrap()).unwrap();
@@ -10122,7 +10133,7 @@ let cast = import! cast.system.v1
         let marker = blit_root.join("untouched");
         fs::write(&marker, b"original root").unwrap();
 
-        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let installation = frozen_test_installation(&installation_root);
         let client = Client::frozen(
             "frozen-collision-test",
             installation,
@@ -10173,7 +10184,7 @@ let cast = import! cast.system.v1
         fs::write(&marker, b"original root").unwrap();
         let client = Client::frozen(
             "frozen-existing-destination-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -10225,7 +10236,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&installation_root).unwrap();
         let client = Client::frozen(
             "frozen-partial-stage-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -10279,7 +10290,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&installation_root).unwrap();
         let client = Client::frozen(
             "frozen-mode-zero-directory-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -10324,7 +10335,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&blit_root).unwrap();
         let marker = blit_root.join("untouched");
         fs::write(&marker, b"original root").unwrap();
-        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let installation = frozen_test_installation(&installation_root);
         let client = Client::frozen(
             "frozen-ownership-test",
             installation,
@@ -10373,7 +10384,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&blit_root).unwrap();
         let marker = blit_root.join("untouched");
         fs::write(&marker, b"original root").unwrap();
-        let installation = Installation::open_frozen(&installation_root, None).unwrap();
+        let installation = frozen_test_installation(&installation_root);
         let client = Client::frozen(
             "frozen-invalid-layout-test",
             installation,
@@ -10421,7 +10432,7 @@ let cast = import! cast.system.v1
         fs::create_dir(&frozen_root).unwrap();
         let client = Client::frozen(
             "frozen-invalid-executable-layout-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -10784,7 +10795,7 @@ let cast = import! cast.system.v1
         fs::write(&marker, b"original root").unwrap();
         let client = Client::frozen(
             "frozen-directory-redirect-test",
-            Installation::open_frozen(&installation_root, None).unwrap(),
+            frozen_test_installation(&installation_root),
             repository::Map::default(),
             &frozen_root,
         )
@@ -11144,7 +11155,7 @@ let cast = import! cast.system.v1
         let blit_root = temporary.path().join("ephemeral");
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir_all(blit_root.join("usr/lib")).unwrap();
-        let installation = Installation::open(&installation_root, None).unwrap();
+        let installation = test_installation(&installation_root);
         let client = Client::builder("root-abi-ephemeral-test", installation)
             .repositories(repository::Map::default())
             .ephemeral(&blit_root)

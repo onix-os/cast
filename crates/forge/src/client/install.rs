@@ -345,6 +345,7 @@ mod tests {
         repository,
         state::{self, Selection},
         system_model,
+        test_support::prepare_private_installation_root,
     };
 
     fn package(id: &str, dependencies: BTreeSet<Dependency>) -> Package {
@@ -373,6 +374,7 @@ mod tests {
     }
 
     fn stateful_client(root: &std::path::Path, packages: Vec<Package>) -> Client {
+        prepare_private_installation_root(root);
         let installation = Installation::open(root, None).unwrap();
         let mut registry = Registry::default();
         registry.add_plugin(plugin::Plugin::Test(plugin::Test::new(1, packages)));
@@ -382,6 +384,7 @@ mod tests {
     fn frozen_client(root: &std::path::Path, packages: Vec<Package>) -> Client {
         let blit_root = root.join("frozen-root");
         fs_err::create_dir(&blit_root).unwrap();
+        prepare_private_installation_root(root);
         let installation = Installation::open_frozen(root, None).unwrap();
         let repositories = repository::Map::with([(
             repository::Id::new("explicit"),

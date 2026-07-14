@@ -1834,6 +1834,7 @@ mod download_limit_tests {
         let temporary = private_tempdir();
         let installation_root = temporary.path().join("root");
         std::fs::create_dir(&installation_root).unwrap();
+        crate::test_support::prepare_private_installation_root(&installation_root);
         let installation = Installation::open(&installation_root, None).unwrap();
         std::fs::set_permissions(
             installation.cache_path(""),

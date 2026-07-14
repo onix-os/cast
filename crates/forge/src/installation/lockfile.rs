@@ -1,15 +1,8 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{
-    fmt,
-    io::{self},
-    os::fd::AsRawFd,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{fmt, os::fd::AsRawFd, sync::Arc};
 
-use fs_err::File;
 use nix::fcntl::{FlockArg, flock};
 use thiserror::Error;
 
@@ -20,18 +13,11 @@ use thiserror::Error;
 /// of this ref counted lock are dropped.
 #[derive(Debug, Clone)]
 #[allow(unused)]
-pub struct Lock(Arc<File>);
+pub struct Lock(Arc<std::fs::File>);
 
-/// Acquires a file lock at the provided path. If the file is currently
-/// locked, `block_msg` will be displayed and the function will block
-/// until the lock is released.
-///
-/// Returns the acquired [`Lock`] that will be held until dropped.
-pub fn acquire(path: impl Into<PathBuf>, block_msg: impl fmt::Display) -> Result<Lock, Error> {
-    let path = path.into();
-
-    let file = File::options().create(true).write(true).truncate(false).open(path)?;
-
+/// Acquire a lock on an already authenticated file descriptor. Path opening
+/// belongs to the installation capability boundary in the parent module.
+pub(super) fn acquire_file(file: std::fs::File, block_msg: impl fmt::Display) -> Result<Lock, Error> {
     match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
         Ok(_) => {}
         Err(nix::errno::Errno::EWOULDBLOCK) => {
@@ -46,8 +32,6 @@ pub fn acquire(path: impl Into<PathBuf>, block_msg: impl fmt::Display) -> Result
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("io")]
-    Io(#[from] io::Error),
     #[error("obtaining exclusive file lock")]
     Flock(#[from] nix::Error),
 }

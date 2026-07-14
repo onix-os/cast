@@ -86,6 +86,7 @@ mod tests {
         let intent = temporary.path().join("import.glu");
         fs::create_dir(&root).unwrap();
         fs::create_dir(&target).unwrap();
+        crate::test_support::prepare_private_installation_root(&root);
         let authored = r#"// This source is owned by the caller.
 let cast = import! cast.system.v1
 {
