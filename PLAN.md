@@ -700,18 +700,18 @@ The final architecture must demonstrate:
 - existing `.stone` reading and package-management behavior remains covered by
   regression tests.
 
-## Explicit non-goals
+## Not objectives of this plan
 
-These are out of scope for this plan, not permanent compatibility
-prohibitions. Future Nix interoperability may be considered on its own merits
-after the Stone-native Gluon model is solid; this work is not organized around
-providing it.
+Nix compatibility is deliberately undecided, not rejected. This plan neither
+promises nor prohibits a future compatibility or interoperability layer. Such
+work can be evaluated on its own merits after the Stone-native Gluon model is
+solid; the current work is simply not organized around delivering it.
 
 - Reimplementing the Nix language or Nix store.
 - Building a lazy recursive Nixpkgs clone inside Gluon.
-- Translating Nix expressions or evaluated Nix derivations into Gluon recipes.
-  Nixpkgs is design and example inspiration for this plan, not a required
-  compatibility input or alternate package-authoring frontend.
+- Delivering translation of Nix expressions or evaluated Nix derivations into
+  Gluon recipes as part of this plan. Nixpkgs is design and example inspiration
+  here; a future translator or alternate frontend remains an open decision.
 - Automatic `callPackage` argument-name reflection in the initial design.
 - Evaluation-time fetching or import-from-derivation.
 - Accepting mutable recipe-directory inputs before a content-addressed local
