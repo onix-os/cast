@@ -27,6 +27,8 @@ use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutR
 use stone_recipe::derivation::PathRuleKind;
 use thiserror::Error as ThisError;
 
+mod mutation;
+
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
@@ -1457,6 +1459,35 @@ impl WitnessGraph {
         Ok(id)
     }
 
+    fn require_rewitnessed_directory(
+        &self,
+        parent: DirectoryId,
+        name: &OsStr,
+        collected: FileSnapshot,
+        current: FileSnapshot,
+        path: &Path,
+    ) -> Result<(), Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        require_usable_phase(&state, "verify rewitnessed directory")?;
+        let child = find_child(&state.directories, parent, name)
+            .ok_or_else(|| Error::UnwitnessedPath { path: path.to_owned() })?;
+        let WitnessChildKind::Directory(directory) = &child.kind else {
+            return Err(changed(path, "collected directory changed to a non-directory entry"));
+        };
+        let expected = state
+            .directories
+            .get(*directory)
+            .ok_or_else(|| Error::UnwitnessedPath { path: path.to_owned() })?;
+        if stable_directory_snapshot(collected, current) && expected.snapshot == current {
+            Ok(())
+        } else {
+            Err(changed(
+                path,
+                "collected directory changed without an authenticated transition",
+            ))
+        }
+    }
+
     fn require_directory(&self, id: DirectoryId, snapshot: FileSnapshot, path: &Path) -> Result<(), Error> {
         let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
         require_usable_phase(&state, "verify witnessed directory")?;
@@ -2245,6 +2276,18 @@ impl VerifiedPath {
         let parent = self.open_parent("verify package entry parent")?;
         let handle = open_entry_handle(&parent, &self.name, &path)?;
         let current = metadata(&handle, "verify collected package entry", &path)?;
+        if matches!(self.kind, VerifiedKind::Directory) {
+            if !current.file_type().is_dir() {
+                return Err(changed(&path, "collected directory changed type"));
+            }
+            return self.witness.require_rewitnessed_directory(
+                self.parent_id,
+                &self.name,
+                self.snapshot,
+                FileSnapshot::from_metadata(&current),
+                &path,
+            );
+        }
         require_snapshot(&path, self.snapshot, &current)?;
         match &self.kind {
             VerifiedKind::Regular { .. } if !current.file_type().is_file() => {
@@ -2261,9 +2304,6 @@ impl VerifiedPath {
                 } else {
                     Err(changed(&path, "collected symlink target changed"))
                 }
-            }
-            VerifiedKind::Directory if !current.file_type().is_dir() => {
-                Err(changed(&path, "collected directory changed type"))
             }
             VerifiedKind::Special if !is_supported_special(&current.file_type()) => {
                 Err(changed(&path, "collected special entry changed type"))
@@ -2466,6 +2506,15 @@ impl PathInfo {
             verified.witness.poison();
         }
         result
+    }
+
+    /// Replace one collected single-link regular file from bounded in-memory
+    /// bytes. The collector owns publication and witness updates; callers
+    /// never write through the mutable output-tree pathname, and no caller-
+    /// supplied reader can block while the mutation transaction is held.
+    #[allow(dead_code)]
+    pub(crate) fn replace_regular_from(&mut self, replacement: &[u8]) -> Result<(), Error> {
+        mutation::replace_regular_from(self, replacement)
     }
 
     pub(crate) fn check_deadline(&self) -> Result<(), Error> {
@@ -3708,6 +3757,14 @@ pub enum Error {
     },
     #[error("collection accounting lock was poisoned")]
     StatePoisoned,
+    #[error("regular-file replacement failed and rollback was incomplete at {path}: primary={primary}; cleanup={cleanup}", path = path.display())]
+    MutationRollback {
+        path: PathBuf,
+        primary: Box<Error>,
+        cleanup: Box<Error>,
+    },
+    #[error("regular-file replacement committed at {path}, but finalization is ambiguous: {primary}", path = path.display())]
+    MutationCommitAmbiguous { path: PathBuf, primary: Box<Error> },
     #[error("{operation} failed for {path}", path = path.display())]
     Io {
         operation: &'static str,
