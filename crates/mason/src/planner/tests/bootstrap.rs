@@ -22,6 +22,9 @@ use super::{
     execute_and_publish, execution_capability_required, plan_for_build, profile,
 };
 
+#[path = "bootstrap/bundle.rs"]
+mod bundle;
+
 const BOOTSTRAP_SCHEMA_VERSION: i64 = 1;
 const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
@@ -565,6 +568,7 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
 
         let published_root = matrix.output_dir.join(derivation_id.as_str());
         let published = assert_emitted_bundle(&first, &published_root);
+        bundle::assert_fixture_bundle(name, &first, &published_root, bundle::BundleRootRole::Published);
 
         let locked = plan_for_build(matrix.env(), matrix.request(recipe, false), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: reuse contentful build lock: {error:#}"));
@@ -590,11 +594,14 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
             )
         });
         assert_eq!(second_publication, Publication::Reused, "{name}: repeated publication");
-        assert_eq!(
-            assert_emitted_bundle(&locked, &locked.runtime.paths.artefacts().host),
-            published,
-            "{name}: repeated build changed emitted bytes"
+        let repeated = assert_emitted_bundle(&locked, &locked.runtime.paths.artefacts().host);
+        bundle::assert_fixture_bundle(
+            name,
+            &locked,
+            &locked.runtime.paths.artefacts().host,
+            bundle::BundleRootRole::Staged,
         );
+        assert_eq!(repeated, published, "{name}: repeated build changed emitted bytes");
         assert_eq!(
             bundle_bytes(&published_root),
             published,
