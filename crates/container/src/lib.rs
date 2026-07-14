@@ -20,7 +20,6 @@ use nc::{
     SYS_MOUNT_SETATTR, mount_attr_t, move_mount, open_tree,
 };
 use nix::errno::Errno;
-use nix::fcntl::OFlag;
 use nix::libc::{
     AT_RECURSIVE, PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_DROP, PR_CAPBSET_READ,
     SIGCHLD, SYS_capget, SYS_capset, prctl, syscall,
@@ -33,8 +32,8 @@ use nix::sys::signalfd::SigSet;
 use nix::sys::stat::{Mode, umask};
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{
-    Pid, close, fchdir, getegid, geteuid, getgid, getgroups, getuid, pipe2, pivot_root, read, setgroups, sethostname,
-    tcsetpgrp, write,
+    Pid, close, fchdir, getegid, geteuid, getgid, getgroups, getuid, pivot_root, read, setgroups, sethostname,
+    tcsetpgrp,
 };
 use snafu::{ResultExt, Snafu};
 
@@ -48,8 +47,8 @@ mod seccomp;
 
 // linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
 const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
-// Smaller than Linux PIPE_BUF, so the child's single nonblocking write is
-// atomic whenever the synchronization pipe has room.
+// One bounded SOCK_SEQPACKET diagnostic; the kernel delivers or rejects the
+// complete message without stream fragmentation.
 const MAX_CHILD_ERROR_BYTES: usize = 2048;
 const MAX_ERROR_SOURCE_DEPTH: usize = 16;
 const MAX_CONTROL_EINTR_RETRIES: usize = 3;
@@ -439,7 +438,10 @@ impl Container {
     ///
     /// This compatibility path preserves legacy `clone(2)` activation. Frozen
     /// derivations must use [`Container::run_in_cgroup`] so aggregate resource
-    /// accounting begins atomically at process creation.
+    /// accounting begins atomically at process creation. Legacy activation is
+    /// also fail-closed: it blocks catchable signals and requires the calling
+    /// process to have exactly one authenticated procfs task before clone. It
+    /// is therefore not a fork-after-threads compatibility escape hatch.
     pub fn run<E>(self, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
     where
         E: std::error::Error + Send + Sync + 'static,
@@ -452,7 +454,9 @@ impl Container {
     /// There is deliberately no numeric `cgroup.procs` migration and no
     /// fallback to legacy clone. The kernel must create both the child and its
     /// pidfd with `clone3(CLONE_INTO_CGROUP | CLONE_PIDFD)` before any child
-    /// instruction is released into trusted setup.
+    /// instruction is released into trusted setup. Writable exposure of the
+    /// host `/sys` tree is rejected because it would give the payload direct
+    /// access to cgroup migration controls outside its leaf.
     pub fn run_in_cgroup<E>(self, leaf: cgroup::CgroupLeaf, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
     where
         E: std::error::Error + Send + Sync + 'static,
@@ -468,11 +472,25 @@ impl Container {
     where
         E: std::error::Error + Send + Sync + 'static,
     {
+        #[cfg(test)]
+        let _legacy_test_activation = if cgroup_leaf.is_none() {
+            Some(
+                LEGACY_TEST_ACTIVATION_LOCK
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            )
+        } else {
+            None
+        };
+
         // Pin every anchored bind source in the supervising process. The
         // child later clones mounts from these descriptors through an empty
         // path, so neither a pathname substitution after `run` starts nor a
         // cwd change during setup can redirect a declared source.
         let preparation = (|| {
+            if cgroup_leaf.is_some() {
+                require_atomic_cgroup_policy(&self)?;
+            }
             let anchored_bind_sources = if let Some(root_anchor) = &self.root_anchor {
                 pin_anchored_bind_sources(root_anchor.as_raw_fd(), &self.binds).map_err(|error| Error::Failure {
                     message: format_error(error),
@@ -480,6 +498,9 @@ impl Container {
             } else {
                 Vec::new()
             };
+            if cgroup_leaf.is_some() {
+                require_atomic_cgroup_bind_policy(&anchored_bind_sources)?;
+            }
 
             // clone(2) needs a caller-owned stack. Fork-like clone3 without
             // CLONE_VM must instead use stack=0/stack_size=0 and resumes on the
@@ -494,7 +515,7 @@ impl Container {
 
             // Both ends are close-on-exec. The child retains the writer only
             // long enough to return one bounded setup/payload diagnostic.
-            let sync = SyncPipe::new()?;
+            let sync = SyncSocket::new()?;
             Ok::<_, Error>((anchored_bind_sources, stack, sync))
         })();
         let (mut anchored_bind_sources, mut stack, mut sync) = match preparation {
@@ -513,19 +534,64 @@ impl Container {
             let result = (|| {
                 let placement = leaf.placement().map_err(|source| Error::CgroupLifecycle { source })?;
                 let inherited = placement.inherited_raw_fds();
+                let mut signal_mask = BlockedSignalMask::block_all().map_err(|source| Error::CloneIntoCgroup {
+                    source: io::Error::new(
+                        source.kind(),
+                        format!("block signals before clone3 task audit: {source}"),
+                    ),
+                })?;
                 // SAFETY: the child outcome below closes both cgroup
                 // descriptors, never unwinds, and terminates through _exit.
-                let outcome = unsafe { clone3_into_cgroup(flags.bits() as u64, placement.target()) }
-                    .map_err(|source| Error::CloneIntoCgroup { source })?;
-                Ok::<_, Error>((outcome, inherited))
+                let outcome = match unsafe { clone3_into_cgroup(flags.bits() as u64, placement.target()) } {
+                    Ok(outcome) => outcome,
+                    Err(source) => {
+                        if let Err(restore) = signal_mask.restore() {
+                            return Err(Error::CloneIntoCgroup {
+                                source: io::Error::new(
+                                    source.kind(),
+                                    format!(
+                                        "{source}; additionally failed to restore the supervisor signal mask: {restore}"
+                                    ),
+                                ),
+                            });
+                        }
+                        return Err(Error::CloneIntoCgroup { source });
+                    }
+                };
+                Ok::<_, Error>((outcome, inherited, signal_mask))
             })();
             match result {
-                Ok((Clone3Outcome::Parent { pid, pidfd }, _)) => Ok((pid, Some(pidfd))),
-                Ok((Clone3Outcome::Child, inherited)) => {
-                    let exit_code = match close_inherited_cgroup_descriptors(inherited) {
-                        Ok(()) => child_exit_code(&mut self, &mut anchored_bind_sources, child_sync, &mut f),
-                        Err(error) => report_child_error(child_sync.1, error),
-                    };
+                Ok((Clone3Outcome::Parent { pid, pidfd }, _, mut signal_mask)) => {
+                    if let Err(source) = signal_mask.restore() {
+                        abort_child(pid);
+                        Err(Error::CloneIntoCgroup {
+                            source: io::Error::new(
+                                source.kind(),
+                                format!("restore supervisor signal mask after clone3: {source}"),
+                            ),
+                        })
+                    } else {
+                        Ok((pid, Some(pidfd)))
+                    }
+                }
+                Ok((Clone3Outcome::Child, inherited, mut signal_mask)) => {
+                    // This is the raw fork-like child. If setup fails before
+                    // the explicit pre-payload restore, inherited signal
+                    // handlers must remain blocked until `_exit` rather than
+                    // running against copied userspace lock state.
+                    signal_mask.retain_blocked_on_drop();
+                    let exit_code = contain_raw_clone_child_panic(child_sync.1, || {
+                        match close_inherited_cgroup_descriptors(inherited) {
+                            Ok(()) => child_exit_code(
+                                &mut self,
+                                &mut anchored_bind_sources,
+                                child_sync,
+                                Some(signal_mask),
+                                &mut f,
+                            ),
+                            Err(error) => report_child_error(child_sync.1, error),
+                        }
+                    });
                     // SAFETY: this is the raw fork-like clone3 child. Running
                     // destructors or unwinding through pre-clone frames is not
                     // sound; _exit terminates only this process immediately.
@@ -534,12 +600,87 @@ impl Container {
                 Err(failure) => Err(failure),
             }
         } else {
-            let clone_cb =
-                Box::new(|| child_exit_code(&mut self, &mut anchored_bind_sources, child_sync, &mut f) as isize);
-            let stack = stack.as_mut().expect("legacy activation owns a clone stack");
-            unsafe { clone(clone_cb, stack.as_mut_slice(), flags, Some(SIGCHLD)) }
-                .map(|pid| (pid, None))
-                .map_err(|source| Error::CloneNamespaces { source })
+            (|| {
+                let signal_mask = BlockedSignalMask::block_all().map_err(|source| Error::Failure {
+                    message: format!("block signals before legacy clone task audit: {source}"),
+                })?;
+
+                // Production legacy activation is a compatibility boundary,
+                // not permission to fork after threads. Container's unit-test
+                // build can only prevent concurrent test activations; libtest
+                // still owns other tasks, so that gate is not a single-task
+                // proof. A harness-free integration binary exercises this
+                // exact production audit from a genuinely single-task process.
+                #[cfg(not(test))]
+                let signal_mask = {
+                    let mut signal_mask = signal_mask;
+                    if let Err(source) = clone3::require_single_threaded_process() {
+                        let message = match signal_mask.restore() {
+                            Ok(()) => {
+                                format!("legacy clone requires an authenticated single-task supervisor: {source}")
+                            }
+                            Err(restore) => format!(
+                                "legacy clone requires an authenticated single-task supervisor: {source}; additionally failed to restore the supervisor signal mask: {restore}"
+                            ),
+                        };
+                        return Err(Error::Failure { message });
+                    }
+                    signal_mask
+                };
+
+                let mut child_signal_mask = Some(signal_mask);
+                let clone_result = {
+                    let clone_cb = Box::new(|| {
+                        let exit_code = if let Some(mut signal_mask) = child_signal_mask.take() {
+                            signal_mask.retain_blocked_on_drop();
+                            contain_raw_clone_child_panic(child_sync.1, || {
+                                child_exit_code(
+                                    &mut self,
+                                    &mut anchored_bind_sources,
+                                    child_sync,
+                                    Some(signal_mask),
+                                    &mut f,
+                                )
+                            })
+                        } else {
+                            report_child_error_bytes(
+                                child_sync.1,
+                                b"legacy clone child lost its blocked signal-mask guard before trusted setup",
+                            )
+                        };
+                        // SAFETY: this is the raw fork-like legacy child. It
+                        // must not run destructors or return through frames
+                        // copied from the supervising process.
+                        unsafe { nix::libc::_exit(exit_code) }
+                    });
+                    let stack = stack.as_mut().expect("legacy activation owns a clone stack");
+                    // SAFETY: the guarded stack remains live through clone;
+                    // the child retains its blocked signal mask through
+                    // trusted setup and restores it only before the payload.
+                    unsafe { clone(clone_cb, stack.as_mut_slice(), flags, Some(SIGCHLD)) }
+                };
+
+                let mut signal_mask = child_signal_mask.take().ok_or_else(|| Error::Failure {
+                    message: "recover the parent signal-mask guard after legacy clone: legacy clone callback unexpectedly consumed parent state"
+                        .to_owned(),
+                })?;
+                let restore = signal_mask.restore();
+                match (clone_result, restore) {
+                    (Ok(pid), Ok(())) => Ok((pid, None)),
+                    (Err(source), Ok(())) => Err(Error::CloneNamespaces { source }),
+                    (Ok(pid), Err(source)) => {
+                        abort_child(pid);
+                        Err(Error::Failure {
+                            message: format!("restore the supervisor signal mask after legacy clone: {source}"),
+                        })
+                    }
+                    (Err(clone), Err(restore)) => Err(Error::Failure {
+                        message: format!(
+                            "restore the supervisor signal mask after failed legacy clone: {restore}; clone also failed: {clone}"
+                        ),
+                    }),
+                }
+            })()
         };
 
         let (pid, pidfd) = match spawn {
@@ -551,6 +692,15 @@ impl Container {
                 });
             }
         };
+
+        if let Err(source) = sync.close_child_endpoint() {
+            abort_child(pid);
+            let failure = Err(Error::Nix { source });
+            return match cgroup_leaf.take() {
+                Some(leaf) => finalize_started_cgroup(failure, leaf),
+                None => failure,
+            };
+        }
 
         // Keep the pidfd live until every wait or abort path has reaped the
         // exact child. Numeric PID reuse is therefore never part of cgroup
@@ -595,7 +745,7 @@ impl Container {
                 None
             };
 
-            match write(sync.write_fd(), &[Message::Continue as u8]) {
+            match send_packet_no_signal(sync.supervisor_fd(), &[Message::Continue as u8]) {
                 Ok(1) => {}
                 Ok(_) => {
                     abort_child(pid);
@@ -606,10 +756,6 @@ impl Container {
                     return Err(Error::Nix { source });
                 }
             }
-            // Linux closes the descriptor even when close reports EINTR. Keep
-            // the diagnostic but never abandon the already released child.
-            let close_write_error = sync.close_write().err();
-
             let status = match wait_for_child(pid) {
                 Ok(status) => status,
                 Err(source) => {
@@ -622,10 +768,10 @@ impl Container {
                 override_.restore().context(NixSnafu)?;
             }
 
-            let result = match status {
+            match status {
                 WaitStatus::Exited(_, 0) => Ok(()),
                 WaitStatus::Exited(..) => {
-                    let error = read_child_error(sync.read_fd()).context(NixSnafu)?;
+                    let error = read_child_error(sync.supervisor_fd()).context(NixSnafu)?;
                     Err(Error::Failure { message: error })
                 }
                 WaitStatus::Signaled(_, signal, _) => Err(Error::Signaled { signal }),
@@ -637,11 +783,6 @@ impl Container {
                     abort_child(pid);
                     Err(Error::UnknownExit)
                 }
-            };
-
-            match (result, close_write_error) {
-                (Ok(()), Some(source)) => Err(Error::Nix { source }),
-                (result, _) => result,
             }
         })();
 
@@ -652,16 +793,76 @@ impl Container {
     }
 }
 
+const CGROUP_SUPER_MAGIC: nix::libc::c_long = 0x0027_e0eb;
+const CGROUP2_SUPER_MAGIC: nix::libc::c_long = 0x6367_7270;
+
+fn require_atomic_cgroup_policy(container: &Container) -> Result<(), Error> {
+    let Some(root) = container.root_anchor.as_ref() else {
+        return Err(Error::AtomicCgroupRequiresAnchoredRoot);
+    };
+    let filesystem =
+        descriptor_filesystem_magic(root.as_raw_fd()).map_err(|source| Error::InspectCgroupFilesystem {
+            label: container.root.clone(),
+            source,
+        })?;
+    if is_cgroup_filesystem(filesystem) {
+        return Err(Error::UnsafeCgroupRootFilesystem {
+            label: container.root.clone(),
+        });
+    }
+    if container.pseudo_filesystems.sys == SysPolicy::HostReadWrite {
+        return Err(Error::UnsafeCgroupSysPolicy);
+    }
+    Ok(())
+}
+
+fn require_atomic_cgroup_bind_policy(bind_sources: &[PinnedAnchoredBindSource]) -> Result<(), Error> {
+    for bind in bind_sources.iter().filter(|bind| !bind.read_only) {
+        let filesystem =
+            descriptor_filesystem_magic(bind.source.as_raw_fd()).map_err(|source| Error::InspectCgroupFilesystem {
+                label: bind.source_label.clone(),
+                source,
+            })?;
+        if is_cgroup_filesystem(filesystem) {
+            return Err(Error::UnsafeCgroupBindSource {
+                label: bind.source_label.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn descriptor_filesystem_magic(fd: RawFd) -> Result<nix::libc::c_long, Errno> {
+    // SAFETY: stat is a live writable output object and fd remains live for
+    // the complete fstatfs call.
+    let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::fstatfs(fd, &mut stat) } == -1 {
+        return Err(Errno::last());
+    }
+    Ok(stat.f_type)
+}
+
+fn is_cgroup_filesystem(filesystem: nix::libc::c_long) -> bool {
+    matches!(filesystem, CGROUP_SUPER_MAGIC | CGROUP2_SUPER_MAGIC)
+}
+
 fn child_exit_code<E>(
     container: &mut Container,
     anchored_bind_sources: &mut Vec<PinnedAnchoredBindSource>,
     sync: (RawFd, RawFd),
+    signal_mask: Option<BlockedSignalMask>,
     f: &mut impl FnMut() -> Result<(), E>,
 ) -> i32
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    match enter(container, anchored_bind_sources, sync, f) {
+    match close_sync_endpoint(sync.0) {
+        Ok(()) => {}
+        Err(source) => {
+            return report_child_error(sync.1, ContainerError::CloseSupervisorSync { source });
+        }
+    }
+    match enter(container, anchored_bind_sources, sync.1, signal_mask, f) {
         Ok(()) => 0,
         Err(error) => report_child_error(sync.1, error),
     }
@@ -669,8 +870,13 @@ where
 
 fn report_child_error(error_writer: RawFd, error: ContainerError) -> i32 {
     let error = format_error(error);
+    report_child_error_bytes(error_writer, error.as_bytes())
+}
+
+fn report_child_error_bytes(error_writer: RawFd, error: &[u8]) -> i32 {
+    let error = &error[..error.len().min(MAX_CHILD_ERROR_BYTES)];
     for _ in 0..3 {
-        match write(error_writer, error.as_bytes()) {
+        match send_packet_no_signal(error_writer, error) {
             Ok(_) => break,
             Err(Errno::EINTR) => continue,
             Err(_) => break,
@@ -678,6 +884,16 @@ fn report_child_error(error_writer: RawFd, error: ContainerError) -> i32 {
     }
     let _ = close(error_writer);
     1
+}
+
+fn contain_raw_clone_child_panic(error_writer: RawFd, child: impl FnOnce() -> i32) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(child)) {
+        Ok(exit_code) => exit_code,
+        Err(_) => report_child_error_bytes(
+            error_writer,
+            b"raw fork-like clone child panicked; payload setup was aborted before returning through the cloned parent stack",
+        ),
+    }
 }
 
 fn close_inherited_cgroup_descriptors(descriptors: [RawFd; 2]) -> Result<(), ContainerError> {
@@ -738,7 +954,9 @@ fn read_child_error(fd: RawFd) -> Result<String, Errno> {
     set_fd_nonblocking(fd)?;
 
     let mut bytes = Vec::with_capacity(MAX_CHILD_ERROR_BYTES);
-    let mut buffer = [0_u8; 512];
+    // One SOCK_SEQPACKET diagnostic is at most this size. Reading it into a
+    // smaller buffer would truncate and discard the packet remainder.
+    let mut buffer = [0_u8; MAX_CHILD_ERROR_BYTES];
     let mut interrupted = 0;
     while bytes.len() < MAX_CHILD_ERROR_BYTES {
         let remaining = MAX_CHILD_ERROR_BYTES - bytes.len();
@@ -776,7 +994,8 @@ fn namespace_flags(networking: bool) -> CloneFlags {
 fn enter<E>(
     container: &mut Container,
     anchored_bind_sources: &mut Vec<PinnedAnchoredBindSource>,
-    sync: (i32, i32),
+    sync: RawFd,
+    mut signal_mask: Option<BlockedSignalMask>,
     mut f: impl FnMut() -> Result<(), E>,
 ) -> Result<(), ContainerError>
 where
@@ -787,13 +1006,10 @@ where
 
     // Wait for continue message
     let mut message = [0u8; 1];
-    let len = read(sync.0, &mut message).context(ReadContinueMsgSnafu)?;
+    let len = read(sync, &mut message).context(ReadContinueMsgSnafu)?;
     if len != 1 || message[0] != Message::Continue as u8 {
         return InvalidContinueMsgSnafu.fail();
     }
-
-    // Close unused read end
-    close(sync.0).context(CloseReadFdSnafu)?;
 
     // The parent deliberately leaves setgroups enabled until this point.  A
     // rootless user namespace otherwise freezes the caller's ambient
@@ -822,16 +1038,24 @@ where
     // payload can use namespace-root capabilities to recreate setup-only
     // authority such as the auxiliary GID or arbitrary device nodes.
     validate_payload_standard_fds()?;
-    sanitize_payload_fds(sync.1)?;
+    sanitize_payload_fds(sync)?;
     restrict_payload_scheduler()?;
     drop_all_payload_capabilities()?;
     seccomp::install_payload_filter().context(InstallPayloadSeccompSnafu)?;
+
+    // Both fork-like activation paths block every catchable signal before
+    // their exact task audit. Keep that mask through trusted setup, then
+    // restore it only inside the child boundary immediately before arbitrary
+    // payload code.
+    if let Some(signal_mask) = signal_mask.as_mut() {
+        signal_mask.restore().context(RestoreCloneSignalMaskSnafu)?;
+    }
 
     let result = f().boxed().context(RunSnafu);
     if result.is_ok() {
         // Errors retain the write end so the outer clone callback can report
         // them. A successful Rust payload has nothing left to report.
-        let _ = close(sync.1);
+        let _ = close(sync);
     }
     result
 }
@@ -863,9 +1087,18 @@ fn validate_payload_standard_fds() -> Result<(), ContainerError> {
         if status_flags == -1 {
             return Err(Errno::last()).context(InspectPayloadStandardDescriptorSnafu { fd });
         }
+        let filesystem = descriptor_filesystem_magic(fd).context(InspectPayloadStandardDescriptorSnafu { fd })?;
         let kind = stat.st_mode & nix::libc::S_IFMT;
         if standard_descriptor_is_unsafe(kind, status_flags) {
             return UnsafePayloadStandardDescriptorSnafu { fd, kind, status_flags }.fail();
+        }
+        if is_cgroup_filesystem(filesystem) && status_flags & nix::libc::O_ACCMODE != nix::libc::O_RDONLY {
+            return UnsafeCgroupStandardDescriptorSnafu {
+                fd,
+                filesystem,
+                status_flags,
+            }
+            .fail();
         }
     }
     Ok(())
@@ -2457,6 +2690,76 @@ fn set_current_dir(path: impl AsRef<Path>) -> Result<(), ContainerError> {
 
 static SIGNAL_OVERRIDE_LOCK: Mutex<()> = Mutex::new(());
 
+// libtest runs unit tests on a thread pool, while the legacy compatibility
+// path must exercise a fork-like clone child that executes Rust setup code.
+// Production builds do not get this escape hatch: they authenticate an exact
+// single-task supervisor immediately before clone. Serializing the live unit
+// fixtures prevents several test-only activations from cloning across one
+// another; the harness-free integration test exercises the production guard.
+#[cfg(test)]
+static LEGACY_TEST_ACTIVATION_LOCK: Mutex<()> = Mutex::new(());
+
+struct BlockedSignalMask {
+    previous: nix::libc::sigset_t,
+    active: bool,
+    restore_on_drop: bool,
+}
+
+impl BlockedSignalMask {
+    fn block_all() -> io::Result<Self> {
+        // SAFETY: both sets are fully initialized output objects and
+        // pthread_sigmask changes only the calling thread's mask.
+        let mut blocked: nix::libc::sigset_t = unsafe { std::mem::zeroed() };
+        if unsafe { nix::libc::sigfillset(&mut blocked) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: zero is a valid initial representation for this output set;
+        // pthread_sigmask fills it with the previous mask on success.
+        let mut previous: nix::libc::sigset_t = unsafe { std::mem::zeroed() };
+        let status = unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, &blocked, &mut previous) };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status));
+        }
+        Ok(Self {
+            previous,
+            active: true,
+            restore_on_drop: true,
+        })
+    }
+
+    /// Preserve the blocked mask if this guard is dropped before its explicit
+    /// restore point. The raw clone child uses this immediately after the
+    /// fork-like return: any setup error or panic must reach `_exit` without
+    /// permitting inherited signal handlers to run against copied userspace
+    /// state. The parent's copy keeps ordinary RAII restoration enabled.
+    fn retain_blocked_on_drop(&mut self) {
+        self.restore_on_drop = false;
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        // SAFETY: previous was produced by pthread_sigmask for this same
+        // thread before clone. A zero third argument discards the old mask.
+        let status =
+            unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, &self.previous, std::ptr::null_mut()) };
+        if status != 0 {
+            return Err(io::Error::from_raw_os_error(status));
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for BlockedSignalMask {
+    fn drop(&mut self) {
+        if self.restore_on_drop {
+            let _ = self.restore();
+        }
+    }
+}
+
 struct SignalOverride {
     signal: Signal,
     previous: SigAction,
@@ -2700,57 +3003,101 @@ impl Drop for CloneStack {
     }
 }
 
-/// Parent-owned synchronization descriptors. The child receives raw copies
-/// after `clone`; this guard closes every parent copy on both ordinary and
-/// early-return paths.
-struct SyncPipe {
-    read: Option<RawFd>,
-    write: Option<RawFd>,
+/// Parent-owned bidirectional synchronization socket. `SOCK_SEQPACKET` keeps
+/// the release byte and one bounded diagnostic as distinct atomic messages;
+/// `MSG_NOSIGNAL` ensures child death can never terminate the supervisor.
+struct SyncSocket {
+    supervisor: Option<RawFd>,
+    child: Option<RawFd>,
 }
 
-impl SyncPipe {
+impl SyncSocket {
     fn new() -> Result<Self, Error> {
-        let (raw_read, raw_write) = pipe2(OFlag::O_CLOEXEC).context(NixSnafu)?;
-        let read = match rehome_sync_fd(raw_read) {
-            Ok(fd) => fd,
-            Err(source) => {
-                let _ = close(raw_write);
-                return Err(Error::Nix { source });
-            }
-        };
-        let write = match rehome_sync_fd(raw_write) {
-            Ok(fd) => fd,
-            Err(source) => {
-                let _ = close(read);
-                return Err(Error::Nix { source });
-            }
-        };
-        if let Err(source) = set_fd_nonblocking(write) {
-            let _ = close(read);
-            let _ = close(write);
-            return Err(Error::Nix { source });
+        let mut endpoints = [-1_i32; 2];
+        // SAFETY: endpoints is a writable two-element output array and all
+        // socket domain/type/protocol values are valid Linux constants.
+        if unsafe {
+            nix::libc::socketpair(
+                nix::libc::AF_UNIX,
+                nix::libc::SOCK_SEQPACKET | nix::libc::SOCK_CLOEXEC,
+                0,
+                endpoints.as_mut_ptr(),
+            )
+        } == -1
+        {
+            return Err(Error::Nix { source: Errno::last() });
         }
+        let supervisor = match rehome_sync_fd(endpoints[0]) {
+            Ok(fd) => fd,
+            Err(source) => {
+                let _ = close(endpoints[1]);
+                return Err(Error::Nix { source });
+            }
+        };
+        let child = match rehome_sync_fd(endpoints[1]) {
+            Ok(fd) => fd,
+            Err(source) => {
+                let _ = close(supervisor);
+                return Err(Error::Nix { source });
+            }
+        };
         Ok(Self {
-            read: Some(read),
-            write: Some(write),
+            supervisor: Some(supervisor),
+            child: Some(child),
         })
     }
 
     fn raw(&self) -> (RawFd, RawFd) {
-        (self.read_fd(), self.write_fd())
+        (self.supervisor_fd(), self.child_fd())
     }
 
-    fn read_fd(&self) -> RawFd {
-        self.read.expect("sync pipe read end must remain open")
+    fn supervisor_fd(&self) -> RawFd {
+        self.supervisor.unwrap_or(-1)
     }
 
-    fn write_fd(&self) -> RawFd {
-        self.write.expect("sync pipe write end must remain open")
+    fn child_fd(&self) -> RawFd {
+        self.child.unwrap_or(-1)
     }
 
-    fn close_write(&mut self) -> Result<(), nix::Error> {
-        let fd = self.write.take().expect("sync pipe write end must remain open");
-        close(fd)
+    fn close_child_endpoint(&mut self) -> Result<(), nix::Error> {
+        let Some(fd) = self.child.take() else {
+            return Err(Errno::EBADF);
+        };
+        close_sync_endpoint(fd)
+    }
+}
+
+fn close_sync_endpoint(fd: RawFd) -> Result<(), Errno> {
+    match close(fd) {
+        Ok(()) | Err(Errno::EINTR) => Ok(()),
+        Err(source) => Err(source),
+    }
+}
+
+fn send_packet_no_signal(fd: RawFd, bytes: &[u8]) -> Result<usize, Errno> {
+    let mut interrupted = 0;
+    loop {
+        // SAFETY: bytes remains readable for its declared length and send does
+        // not retain the pointer. MSG_NOSIGNAL converts peer closure to EPIPE;
+        // MSG_DONTWAIT prevents a compromised child-side producer from ever
+        // turning the supervisor's control path into an unbounded wait.
+        let sent = unsafe {
+            nix::libc::send(
+                fd,
+                bytes.as_ptr().cast(),
+                bytes.len(),
+                nix::libc::MSG_NOSIGNAL | nix::libc::MSG_DONTWAIT,
+            )
+        };
+        if sent >= 0 {
+            return usize::try_from(sent).map_err(|_| Errno::EOVERFLOW);
+        }
+        let source = Errno::last();
+        if source == Errno::EINTR && interrupted < MAX_CONTROL_EINTR_RETRIES {
+            interrupted += 1;
+            continue;
+        }
+        return Err(source);
     }
 }
 
@@ -2786,12 +3133,12 @@ fn set_fd_nonblocking(fd: RawFd) -> Result<(), Errno> {
     Ok(())
 }
 
-impl Drop for SyncPipe {
+impl Drop for SyncSocket {
     fn drop(&mut self) {
-        if let Some(fd) = self.read.take() {
+        if let Some(fd) = self.supervisor.take() {
             let _ = close(fd);
         }
-        if let Some(fd) = self.write.take() {
+        if let Some(fd) = self.child.take() {
             let _ = close(fd);
         }
     }
@@ -2835,6 +3182,22 @@ pub enum Error {
     CloneNamespaces { source: nix::Error },
     #[snafu(display("clone child atomically into the derivation cgroup"))]
     CloneIntoCgroup { source: io::Error },
+    #[snafu(display("atomic cgroup execution requires a descriptor-anchored root"))]
+    AtomicCgroupRequiresAnchoredRoot,
+    #[snafu(display("inspect filesystem authority exposed by {}", label.display()))]
+    InspectCgroupFilesystem { label: PathBuf, source: nix::Error },
+    #[snafu(display(
+        "atomic cgroup execution forbids a cgroup filesystem as container root {}",
+        label.display()
+    ))]
+    UnsafeCgroupRootFilesystem { label: PathBuf },
+    #[snafu(display(
+        "atomic cgroup execution forbids writable cgroup filesystem bind source {}",
+        label.display()
+    ))]
+    UnsafeCgroupBindSource { label: PathBuf },
+    #[snafu(display("atomic cgroup execution forbids writable host /sys exposure"))]
+    UnsafeCgroupSysPolicy,
     #[snafu(display("authenticate derivation cgroup lifecycle"))]
     CgroupLifecycle { source: cgroup::CgroupError },
     #[snafu(display("remove derivation cgroup after execution: {cleanup}"))]
@@ -2883,8 +3246,8 @@ enum ContainerError {
     ReadContinueMsg { source: nix::Error },
     #[snafu(display("invalid continue message"))]
     InvalidContinueMsg,
-    #[snafu(display("close read end of pipe"))]
-    CloseReadFd { source: nix::Error },
+    #[snafu(display("close the supervisor synchronization endpoint in the clone child"))]
+    CloseSupervisorSync { source: nix::Error },
     #[snafu(display("clear inherited supplementary groups"))]
     ClearSupplementaryGroups { source: nix::Error },
     #[snafu(display("read isolated supplementary groups"))]
@@ -2915,6 +3278,8 @@ enum ContainerError {
     PayloadRetainsCapability { capability: u32 },
     #[snafu(display("install mandatory payload seccomp policy"))]
     InstallPayloadSeccomp { source: io::Error },
+    #[snafu(display("restore the clone child's inherited signal mask before payload execution"))]
+    RestoreCloneSignalMask { source: io::Error },
     #[snafu(display("inspect payload standard descriptor {fd}"))]
     InspectPayloadStandardDescriptor { fd: RawFd, source: nix::Error },
     #[snafu(display(
@@ -2923,6 +3288,14 @@ enum ContainerError {
     UnsafePayloadStandardDescriptor {
         fd: RawFd,
         kind: nix::libc::mode_t,
+        status_flags: nix::libc::c_int,
+    },
+    #[snafu(display(
+        "payload standard descriptor {fd} is a writable cgroup filesystem capability: filesystem={filesystem:#x}, status_flags={status_flags:#x}"
+    ))]
+    UnsafeCgroupStandardDescriptor {
+        fd: RawFd,
+        filesystem: nix::libc::c_long,
         status_flags: nix::libc::c_int,
     },
     #[snafu(display("sanitize payload descriptors"))]
@@ -3046,19 +3419,20 @@ mod tests {
     use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, sigaction};
     use nix::sys::signalfd::SigSet;
     use nix::sys::stat::Mode;
-    use nix::unistd::mkfifo;
+    use nix::unistd::{mkfifo, read};
 
     use super::{
-        AnchoredMountTargetKind, Bind, BindSource, CLONE_STACK_BYTES, CapabilityData, CloneStack, Container,
-        ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
-        MAX_LINUX_CAPABILITY_NUMBER, MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET,
-        PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision,
-        RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncPipe, SysPolicy, TmpPolicy, capability_is_set,
-        checked_prctl_value, descriptor_stat, duplicate_cloexec, format_error, namespace_flags,
-        normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
-        pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions, read_capabilities,
-        read_child_error, reopen_pinned_readonly, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
-        set_mount_access, standard_descriptor_is_unsafe, supported_capability_numbers,
+        AnchoredMountTargetKind, Bind, BindSource, BlockedSignalMask, CLONE_STACK_BYTES, CapabilityData, CloneStack,
+        Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
+        MAX_LINUX_CAPABILITY_NUMBER, MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT,
+        PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy,
+        PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TmpPolicy,
+        capability_is_set, checked_prctl_value, close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat,
+        duplicate_cloexec, format_error, namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target,
+        open_anchored_resolver_target, pin_anchored_bind_sources, prctl, prepare_bind_target, pseudo_mount_decisions,
+        read_capabilities, read_child_error, reopen_pinned_readonly, require_atomic_cgroup_bind_policy,
+        require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
+        send_packet_no_signal, set_mount_access, standard_descriptor_is_unsafe, supported_capability_numbers,
         validate_anchored_mount_topology, validate_minimal_device_source, validate_payload_credentials,
         validate_resolver_target,
     };
@@ -3387,30 +3761,31 @@ mod tests {
     }
 
     #[test]
-    fn child_error_read_does_not_wait_for_a_leaked_descendant_writer() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        let mut sync = SyncPipe::new().unwrap();
-        let leaked_writer = duplicate_cloexec(sync.write_fd()).unwrap();
-        nix::unistd::write(sync.write_fd(), b"bounded child error").unwrap();
-        sync.close_write().unwrap();
-        let read_fd = sync.read.take().unwrap();
-        drop(sync);
-
-        let (result_tx, result_rx) = mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            let result = read_child_error(read_fd);
-            let _ = nix::unistd::close(read_fd);
-            result_tx.send(result).unwrap();
+    fn raw_clone_child_panic_is_contained_and_reported() {
+        let mut sync = SyncSocket::new().unwrap();
+        let error_writer = sync.child.take().unwrap();
+        let exit_code = contain_raw_clone_child_panic(error_writer, || -> i32 {
+            panic!("panic must not unwind through the raw clone boundary")
         });
-        let result = result_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("a leaked writer must not block bounded error supervision")
-            .unwrap();
+        assert_eq!(exit_code, 1);
+        let message = read_child_error(sync.supervisor_fd()).unwrap();
+        assert_eq!(
+            message,
+            "raw fork-like clone child panicked; payload setup was aborted before returning through the cloned parent stack"
+        );
+    }
+
+    #[test]
+    fn child_error_read_does_not_wait_for_a_leaked_descendant_socket() {
+        let mut sync = SyncSocket::new().unwrap();
+        let child = sync.child.take().unwrap();
+        let leaked_child = duplicate_cloexec(child).unwrap();
+        assert_eq!(send_packet_no_signal(child, b"bounded child error").unwrap(), 19);
+        close_sync_endpoint(child).unwrap();
+
+        let result = read_child_error(sync.supervisor_fd()).unwrap();
         assert_eq!(result, "bounded child error");
-        drop(leaked_writer);
-        reader.join().unwrap();
+        drop(leaked_child);
     }
 
     #[test]
@@ -3484,6 +3859,60 @@ mod tests {
                 PseudoMountDecision::HostDev { read_only: false },
             ]
         );
+    }
+
+    #[test]
+    fn atomic_cgroup_execution_never_exposes_writable_host_sysfs() {
+        let root = tempfile::tempdir().unwrap();
+        let root_anchor = open_path_directory(root.path());
+        let mut container = Container::new_anchored(root.path(), &root_anchor).unwrap();
+        assert!(matches!(
+            require_atomic_cgroup_policy(&container),
+            Err(ContainerRunError::UnsafeCgroupSysPolicy)
+        ));
+
+        container.pseudo_filesystems.sys = SysPolicy::HostReadOnly;
+        require_atomic_cgroup_policy(&container).unwrap();
+        container.pseudo_filesystems.sys = SysPolicy::None;
+        require_atomic_cgroup_policy(&container).unwrap();
+
+        assert!(matches!(
+            require_atomic_cgroup_policy(&Container::new(root.path())),
+            Err(ContainerRunError::AtomicCgroupRequiresAnchoredRoot)
+        ));
+    }
+
+    #[test]
+    fn atomic_cgroup_execution_rejects_direct_cgroup_filesystem_authority() {
+        let cgroup_anchor = open_path_directory(Path::new("/sys/fs/cgroup"));
+        let mut cgroup_root = Container::new_anchored("/sys/fs/cgroup", &cgroup_anchor).unwrap();
+        cgroup_root.pseudo_filesystems.sys = SysPolicy::None;
+        assert!(matches!(
+            require_atomic_cgroup_policy(&cgroup_root),
+            Err(ContainerRunError::UnsafeCgroupRootFilesystem { .. })
+        ));
+
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("work")).unwrap();
+        let root_anchor = open_path_directory(root.path());
+        let writable = Container::new_anchored(root.path(), &root_anchor)
+            .unwrap()
+            .bind_rw_pinned(&cgroup_anchor, "/sys/fs/cgroup", "/work")
+            .unwrap();
+        let writable_sources =
+            pin_anchored_bind_sources(writable.root_anchor.as_ref().unwrap().as_raw_fd(), &writable.binds).unwrap();
+        assert!(matches!(
+            require_atomic_cgroup_bind_policy(&writable_sources),
+            Err(ContainerRunError::UnsafeCgroupBindSource { .. })
+        ));
+
+        let read_only = Container::new_anchored(root.path(), &root_anchor)
+            .unwrap()
+            .bind_ro_pinned(&cgroup_anchor, "/sys/fs/cgroup", "/work")
+            .unwrap();
+        let read_only_sources =
+            pin_anchored_bind_sources(read_only.root_anchor.as_ref().unwrap().as_raw_fd(), &read_only.binds).unwrap();
+        require_atomic_cgroup_bind_policy(&read_only_sources).unwrap();
     }
 
     #[test]
@@ -4284,24 +4713,66 @@ mod tests {
     }
 
     #[test]
-    fn synchronization_pipe_is_close_on_exec() {
-        let mut sync = SyncPipe::new().unwrap();
-        let read_fd = sync.read_fd();
-        let write_fd = sync.write_fd();
+    fn synchronization_socket_is_close_on_exec_blocking_and_nosignal() {
+        let mut sync = SyncSocket::new().unwrap();
+        let supervisor_fd = sync.supervisor_fd();
+        let child_fd = sync.child_fd();
 
-        assert!(read_fd >= 3);
-        assert!(write_fd >= 3);
-        for fd in [read_fd, write_fd] {
+        assert!(supervisor_fd >= 3);
+        assert!(child_fd >= 3);
+        for fd in [supervisor_fd, child_fd] {
             let flags = FdFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFD).unwrap());
             assert!(flags.contains(FdFlag::FD_CLOEXEC));
+            let status = OFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFL).unwrap());
+            assert!(!status.contains(OFlag::O_NONBLOCK));
         }
-        let write_status = OFlag::from_bits_truncate(fcntl(write_fd, FcntlArg::F_GETFL).unwrap());
-        assert!(write_status.contains(OFlag::O_NONBLOCK));
 
-        sync.close_write().unwrap();
-        assert_eq!(fcntl(write_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+        sync.close_child_endpoint().unwrap();
+        assert_eq!(fcntl(child_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+        assert_eq!(send_packet_no_signal(supervisor_fd, b"release"), Err(Errno::EPIPE));
         drop(sync);
-        assert_eq!(fcntl(read_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+        assert_eq!(fcntl(supervisor_fd, FcntlArg::F_GETFD), Err(Errno::EBADF));
+    }
+
+    #[test]
+    fn synchronization_socket_blocks_child_until_one_atomic_release() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let sync = SyncSocket::new().unwrap();
+        let supervisor_fd = sync.supervisor_fd();
+        let child_fd = sync.child_fd();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (message_tx, message_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let mut message = [0_u8; 1];
+            let result = read(child_fd, &mut message).map(|length| (length, message));
+            message_tx.send(result).unwrap();
+        });
+
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(message_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert_eq!(send_packet_no_signal(supervisor_fd, &[Message::Continue as u8]), Ok(1));
+        assert_eq!(
+            message_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap(),
+            (1, [Message::Continue as u8])
+        );
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn synchronization_socket_preserves_the_maximum_diagnostic_packet() {
+        let sync = SyncSocket::new().unwrap();
+        let diagnostic = vec![b'x'; MAX_CHILD_ERROR_BYTES];
+        assert_eq!(
+            send_packet_no_signal(sync.child_fd(), &diagnostic),
+            Ok(MAX_CHILD_ERROR_BYTES)
+        );
+        assert_eq!(
+            read_child_error(sync.supervisor_fd()).unwrap().as_bytes(),
+            diagnostic.as_slice()
+        );
     }
 
     #[test]
@@ -4348,6 +4819,67 @@ mod tests {
         assert_eq!(restored.handler(), SigHandler::Handler(custom_handler));
         assert!(restored.flags().contains(SaFlags::SA_RESTART));
         assert!(restored.mask().contains(Signal::SIGUSR1));
+    }
+
+    #[test]
+    fn blocked_clone_signal_mask_restores_the_exact_previous_mask() {
+        fn current_mask() -> nix::libc::sigset_t {
+            // SAFETY: a null set pointer requests a read-only mask query and
+            // current is a live output object.
+            let mut current = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, std::ptr::null(), &mut current) },
+                0
+            );
+            current
+        }
+
+        let before = current_mask();
+        let mut blocked = BlockedSignalMask::block_all().unwrap();
+        let during = current_mask();
+        // SAFETY: both sets are initialized and SIGUSR1 is a valid signal.
+        assert_eq!(unsafe { nix::libc::sigismember(&during, nix::libc::SIGUSR1) }, 1);
+        blocked.restore().unwrap();
+        let after = current_mask();
+        // Linux x86_64 exposes signal numbers 1 through 64. The container
+        // seccomp and clone3 paths are intentionally restricted to that ABI.
+        for signal in 1..=64 {
+            // SAFETY: signal spans the Linux signal range and both masks were
+            // initialized by pthread_sigmask.
+            assert_eq!(
+                unsafe { nix::libc::sigismember(&before, signal) },
+                unsafe { nix::libc::sigismember(&after, signal) },
+                "signal {signal} mask membership changed"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_clone_child_guard_can_retain_blocked_mask_until_exit() {
+        // SAFETY: a null set pointer requests a read-only mask query.
+        let mut before = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, std::ptr::null(), &mut before) },
+            0
+        );
+
+        let mut blocked = BlockedSignalMask::block_all().unwrap();
+        blocked.retain_blocked_on_drop();
+        drop(blocked);
+        // SAFETY: current is a live output object.
+        let mut current = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, std::ptr::null(), &mut current) },
+            0
+        );
+        // Restore before asserting so a failed assertion cannot leak the
+        // intentionally retained mask into this libtest worker.
+        assert_eq!(
+            unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, &before, std::ptr::null_mut()) },
+            0
+        );
+        // SAFETY: current is initialized and SIGUSR1 is valid.
+        assert_eq!(unsafe { nix::libc::sigismember(&current, nix::libc::SIGUSR1) }, 1);
     }
 
     #[test]

@@ -10,10 +10,13 @@
 //! `pidfd_open(2)` fallback: either the kernel performs the cgroup placement
 //! and pidfd allocation as one operation, or the call fails.
 
+use std::ffi::{CStr, CString};
 use std::io;
 use std::mem::{align_of, size_of};
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::ptr::NonNull;
 
+use nix::errno::Errno;
 use nix::libc;
 use nix::unistd::Pid;
 
@@ -21,6 +24,15 @@ use nix::unistd::Pid;
 // CLONE_INTO_CGROUP cannot be represented by the c_int used by old bindings.
 const CLONE_PIDFD: u64 = 1_u64 << 12;
 const CLONE_INTO_CGROUP: u64 = 1_u64 << 33;
+const PROC_SUPER_MAGIC: libc::c_long = 0x0000_9fa0;
+const CURRENT_TASK_DIRECTORY_LABEL: &str = "/proc/<getpid>/task";
+
+// A valid Cast supervisor has exactly one task. The larger bound is only for
+// deterministic diagnostics and fail-closed behavior when this guard is
+// accidentally called in a highly threaded process. It also bounds readdir(3)
+// work if procfs changes while it is being inspected.
+const MAX_OBSERVED_TASKS: usize = 1024;
+const MAX_TASK_DIRECTORY_READS: usize = MAX_OBSERVED_TASKS + 3;
 
 const NAMESPACE_FLAGS: u64 = libc::CLONE_NEWTIME as u64
     | libc::CLONE_NEWNS as u64
@@ -78,13 +90,29 @@ pub(crate) enum Clone3Outcome {
 ///
 /// # Safety
 ///
-/// Like `fork(2)` in a multi-threaded process, the child branch may observe
-/// library state whose locks were held by vanished threads. The caller must
-/// make the [`Clone3Outcome::Child`] branch perform only its audited post-clone
-/// sequence, must not unwind through frames that existed before this call, and
-/// must ultimately terminate it with `_exit(2)`. The child should wait on the
-/// caller's synchronization channel before doing privileged setup so the
-/// parent can validate its pidfd and cgroup membership first.
+/// The primitive refuses to call `clone3` unless an authenticated, pinned
+/// procfs walk through `/proc/<getpid>/task` observes the caller as the
+/// process's exact sole task. It never trusts procfs magic links such as
+/// `/proc/self`. The caller must block every catchable signal before entering
+/// this function and retain that mask through the returned child panic
+/// boundary, so a signal handler cannot create a task between the audit and
+/// syscall.
+///
+/// This audit is an operational Cast-supervisor guard, not a kernel-atomic
+/// proof against hostile thread churn: procfs enumeration and `clone3` are
+/// separate kernel operations. Cast must exclusively own a cooperative
+/// supervisor process that neither runs attacker-controlled code nor exposes
+/// another thread-creation path around this call. Under that invariant, the
+/// signal mask and exact task audit prevent the child from inheriting userspace
+/// locks held by vanished threads. Do not use this primitive as a general
+/// fork-after-threads API.
+///
+/// The caller must still make the [`Clone3Outcome::Child`] branch perform only
+/// its audited post-clone sequence, contain panics so they cannot unwind
+/// through frames that existed before this call, and ultimately terminate it
+/// with `_exit(2)`. The child should wait on the caller's synchronization
+/// channel before doing privileged setup so the parent can validate its pidfd
+/// and cgroup membership first.
 pub(crate) unsafe fn clone3_into_cgroup(namespace_flags: u64, cgroup: BorrowedFd<'_>) -> io::Result<Clone3Outcome> {
     validate_namespace_flags(namespace_flags)?;
 
@@ -95,6 +123,12 @@ pub(crate) unsafe fn clone3_into_cgroup(namespace_flags: u64, cgroup: BorrowedFd
             "clone3 cgroup descriptor must be non-negative",
         )
     })?;
+    // This is intentionally the last operation before constructing the local
+    // syscall arguments. Cast's operational supervisor invariant forbids a
+    // thread-creation path here; procfs itself cannot make that guarantee
+    // atomic against hostile task churn.
+    require_single_threaded_process()?;
+
     let mut pidfd = -1_i32;
     let args = clone_args(namespace_flags, cgroup_fd, &mut pidfd);
 
@@ -121,6 +155,278 @@ pub(crate) unsafe fn clone3_into_cgroup(namespace_flags: u64, cgroup: BorrowedFd
             io::ErrorKind::InvalidData,
             format!("clone3 returned unexpected negative result {result}"),
         )),
+    }
+}
+
+pub(crate) fn require_single_threaded_process() -> io::Result<()> {
+    let current = current_task_id()?;
+    let tasks = authenticated_current_process_tasks()?;
+    require_single_task(current, tasks.as_slice())
+}
+
+fn current_task_id() -> io::Result<i32> {
+    // SAFETY: gettid has no arguments and returns the current kernel task ID.
+    let current = unsafe { libc::syscall(libc::SYS_gettid) };
+    i32::try_from(current)
+        .ok()
+        .filter(|tid| *tid > 0)
+        .ok_or_else(|| io::Error::other(format!("gettid returned invalid task ID {current}")))
+}
+
+fn current_process_id() -> io::Result<i32> {
+    // SAFETY: getpid has no arguments and returns the current process ID.
+    let current = unsafe { libc::getpid() };
+    if current > 0 {
+        Ok(current)
+    } else {
+        Err(io::Error::other(format!(
+            "getpid returned invalid process ID {current}"
+        )))
+    }
+}
+
+fn authenticated_current_process_tasks() -> io::Result<TaskSnapshot> {
+    let proc_root = open_directory_at(libc::AT_FDCWD, c"/proc", "open procfs root")?;
+    require_procfs(&proc_root, "/proc")?;
+
+    // Use the numeric getpid directory rather than procfs's `self` magic link.
+    // The process cannot have its PID recycled while this code is running.
+    let process_id = current_process_id()?;
+    let process_name = CString::new(process_id.to_string()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("getpid returned process ID containing NUL: {process_id}"),
+        )
+    })?;
+    let process = open_directory_at(
+        proc_root.as_raw_fd(),
+        &process_name,
+        "open numeric current-process directory under authenticated procfs",
+    )?;
+    require_procfs(&process, "/proc/<getpid>")?;
+
+    // Both path components are opened relative to already pinned directory
+    // descriptors with O_NOFOLLOW. No `/proc/self`, `/proc/thread-self`, or
+    // `/proc/*/fd` magic-link resolution participates in the audit.
+    let tasks = open_directory_at(
+        process.as_raw_fd(),
+        c"task",
+        "open task directory under authenticated numeric procfs process",
+    )?;
+    require_procfs(&tasks, CURRENT_TASK_DIRECTORY_LABEL)?;
+    enumerate_task_ids(tasks)
+}
+
+fn open_directory_at(parent: RawFd, name: &CStr, operation: &'static str) -> io::Result<OwnedFd> {
+    loop {
+        // SAFETY: `name` is NUL-terminated, `parent` is either AT_FDCWD or a
+        // live pinned directory descriptor, and openat does not retain either.
+        let descriptor = unsafe {
+            libc::openat(
+                parent,
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+                0,
+            )
+        };
+        if descriptor >= 0 {
+            // SAFETY: successful openat returned a fresh owned descriptor.
+            return Ok(unsafe { OwnedFd::from_raw_fd(descriptor) });
+        }
+        let source = io::Error::last_os_error();
+        if source.raw_os_error() != Some(libc::EINTR) {
+            return Err(io::Error::new(source.kind(), format!("{operation}: {source}")));
+        }
+    }
+}
+
+fn require_procfs(descriptor: &impl AsRawFd, label: &str) -> io::Result<()> {
+    // SAFETY: all-zero statfs storage is valid output and `descriptor` remains
+    // live for the duration of fstatfs.
+    let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstatfs(descriptor.as_raw_fd(), &mut stat) } == -1 {
+        let source = io::Error::last_os_error();
+        return Err(io::Error::new(
+            source.kind(),
+            format!("authenticate {label} as procfs: {source}"),
+        ));
+    }
+    if stat.f_type != PROC_SUPER_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing unauthenticated task audit through {label}: expected procfs magic {PROC_SUPER_MAGIC:#x}, found {:#x}",
+                stat.f_type
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct TaskSnapshot {
+    ids: [i32; MAX_OBSERVED_TASKS],
+    len: usize,
+}
+
+impl TaskSnapshot {
+    fn new() -> Self {
+        Self {
+            ids: [0; MAX_OBSERVED_TASKS],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, tid: i32) -> io::Result<()> {
+        let slot = self.ids.get_mut(self.len).ok_or_else(|| {
+            io::Error::other(format!(
+                "refusing unbounded task audit in {CURRENT_TASK_DIRECTORY_LABEL}: more than {MAX_OBSERVED_TASKS} task IDs"
+            ))
+        })?;
+        *slot = tid;
+        self.len += 1;
+        Ok(())
+    }
+
+    fn as_slice(&self) -> &[i32] {
+        &self.ids[..self.len]
+    }
+}
+
+struct DirectoryStream(Option<NonNull<libc::DIR>>);
+
+impl DirectoryStream {
+    fn from_descriptor(descriptor: OwnedFd) -> io::Result<Self> {
+        let descriptor = descriptor.into_raw_fd();
+        // SAFETY: fdopendir consumes this fresh descriptor on success.
+        let stream = unsafe { libc::fdopendir(descriptor) };
+        match NonNull::new(stream) {
+            Some(stream) => Ok(Self(Some(stream))),
+            None => {
+                let source = io::Error::last_os_error();
+                // SAFETY: fdopendir failed and therefore did not consume the
+                // descriptor. Reconstruct ownership so it is closed once.
+                drop(unsafe { OwnedFd::from_raw_fd(descriptor) });
+                Err(io::Error::new(
+                    source.kind(),
+                    format!("open {CURRENT_TASK_DIRECTORY_LABEL} directory stream: {source}"),
+                ))
+            }
+        }
+    }
+
+    fn close(mut self) -> io::Result<()> {
+        let stream = self
+            .0
+            .take()
+            .ok_or_else(|| io::Error::other("task directory stream was already closed"))?;
+        // SAFETY: this takes the sole ownership of the live DIR stream and its
+        // underlying descriptor.
+        if unsafe { libc::closedir(stream.as_ptr()) } == -1 {
+            let source = io::Error::last_os_error();
+            Err(io::Error::new(
+                source.kind(),
+                format!("close {CURRENT_TASK_DIRECTORY_LABEL} directory stream: {source}"),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for DirectoryStream {
+    fn drop(&mut self) {
+        if let Some(stream) = self.0.take() {
+            // SAFETY: Drop owns the remaining live DIR stream. There is no
+            // useful recovery path for a close error while unwinding another
+            // task-audit error.
+            unsafe { libc::closedir(stream.as_ptr()) };
+        }
+    }
+}
+
+fn enumerate_task_ids(descriptor: OwnedFd) -> io::Result<TaskSnapshot> {
+    let stream = DirectoryStream::from_descriptor(descriptor)?;
+    let result = (|| {
+        let mut snapshot = TaskSnapshot::new();
+        for _ in 0..MAX_TASK_DIRECTORY_READS {
+            Errno::clear();
+            // SAFETY: the live DIR stream is exclusively borrowed for this
+            // call. readdir returns storage valid until the next call.
+            let entry = unsafe {
+                libc::readdir(
+                    stream
+                        .0
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("task directory stream closed during enumeration"))?
+                        .as_ptr(),
+                )
+            };
+            if entry.is_null() {
+                let error = Errno::last();
+                if error == Errno::UnknownErrno {
+                    return Ok(snapshot);
+                }
+                let source = io::Error::from_raw_os_error(error as i32);
+                return Err(io::Error::new(
+                    source.kind(),
+                    format!("enumerate {CURRENT_TASK_DIRECTORY_LABEL}: {source}"),
+                ));
+            }
+
+            // SAFETY: readdir returned a live dirent whose d_name is
+            // NUL-terminated until the next directory operation.
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+            if matches!(name, b"." | b"..") {
+                continue;
+            }
+            snapshot.push(parse_task_id(name)?)?;
+        }
+        Err(io::Error::other(format!(
+            "refusing unbounded task audit in {CURRENT_TASK_DIRECTORY_LABEL}: exceeded {MAX_TASK_DIRECTORY_READS} directory reads"
+        )))
+    })();
+    let close = stream.close();
+    match (result, close) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(snapshot), Ok(())) => Ok(snapshot),
+    }
+}
+
+fn parse_task_id(name: &[u8]) -> io::Result<i32> {
+    if name.is_empty() || name[0] == b'0' || !name.iter().all(u8::is_ascii_digit) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("noncanonical task entry in {CURRENT_TASK_DIRECTORY_LABEL}"),
+        ));
+    }
+    name.iter().try_fold(0_i32, |value, digit| {
+        value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i32::from(*digit - b'0')))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("task ID exceeds pid_t in {CURRENT_TASK_DIRECTORY_LABEL}"),
+                )
+            })
+    })
+}
+
+fn require_single_task(current: i32, tasks: &[i32]) -> io::Result<()> {
+    match tasks {
+        [tid] if *tid == current => Ok(()),
+        [tid] => Err(io::Error::other(format!(
+            "fork-like container clone requires current task {current} to be the sole supervisor task; found {tid}"
+        ))),
+        [] => Err(io::Error::other(format!(
+            "fork-like container clone could not find current task {current} in {CURRENT_TASK_DIRECTORY_LABEL}"
+        ))),
+        [first, second, ..] => Err(io::Error::other(format!(
+            "fork-like container clone requires an exactly single-threaded supervisor; observed {} tasks, beginning with task IDs {first} and {second}",
+            tasks.len()
+        ))),
     }
 }
 
@@ -266,6 +572,8 @@ fn kill_and_reap(pid: libc::pid_t) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, offset_of, size_of};
+    use std::sync::mpsc;
+    use std::thread;
 
     use super::*;
 
@@ -351,5 +659,68 @@ mod tests {
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
             assert!(error.to_string().contains("non-namespace bits"));
         }
+    }
+
+    #[test]
+    fn task_ids_are_canonical_positive_pid_t_values() {
+        assert_eq!(parse_task_id(b"1").unwrap(), 1);
+        assert_eq!(parse_task_id(b"2147483647").unwrap(), i32::MAX);
+        for invalid in [
+            b"".as_slice(),
+            b"0".as_slice(),
+            b"01".as_slice(),
+            b"-1".as_slice(),
+            b"1a".as_slice(),
+            b"2147483648".as_slice(),
+        ] {
+            assert!(parse_task_id(invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
+    fn clone_supervisor_requires_its_exact_sole_task() {
+        require_single_task(42, &[42]).unwrap();
+        assert!(require_single_task(42, &[]).is_err());
+        assert!(require_single_task(42, &[41]).is_err());
+        assert!(require_single_task(42, &[42, 43]).is_err());
+    }
+
+    #[test]
+    fn task_audit_authenticates_procfs_and_rejects_an_ordinary_directory() {
+        let proc_root = open_directory_at(libc::AT_FDCWD, c"/proc", "open procfs for test").unwrap();
+        require_procfs(&proc_root, "/proc").unwrap();
+
+        let ordinary = tempfile::tempdir().unwrap();
+        let ordinary = std::fs::File::open(ordinary.path()).unwrap();
+        let error = require_procfs(&ordinary, "ordinary test directory").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("expected procfs magic"));
+    }
+
+    #[test]
+    fn real_parked_second_thread_is_observed_and_rejected() {
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
+        let (release_sender, release_receiver) = mpsc::sync_channel::<()>(0);
+        let parked = thread::spawn(move || {
+            let tid = current_task_id();
+            let _ = ready_sender.send(tid);
+            let _ = release_receiver.recv();
+        });
+
+        let parked_tid = ready_receiver.recv().unwrap();
+        let snapshot = authenticated_current_process_tasks();
+        let guard = require_single_threaded_process();
+        drop(release_sender);
+        parked.join().unwrap();
+
+        let parked_tid = parked_tid.unwrap();
+        let snapshot = snapshot.unwrap();
+        assert!(
+            snapshot.as_slice().contains(&parked_tid),
+            "authenticated task snapshot did not contain parked task {parked_tid}: {:?}",
+            snapshot.as_slice()
+        );
+        let error = guard.unwrap_err();
+        assert!(error.to_string().contains("exactly single-threaded supervisor"));
     }
 }

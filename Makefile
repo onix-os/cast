@@ -88,9 +88,12 @@ binary-layout:
 product-names:
 	@"$(TOP_DIR)/misc/scripts/check-product-names.sh"
 
+# Container activation uses fork-like namespace creation. Keep each libtest
+# process to one active test worker; production single-task behavior is proved
+# separately by the harness-free container integration binary.
 test: lint config-formats-test
 	@echo "Running tests in all packages..."
-	@$(CARGO) test --all --no-fail-fast
+	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
 examples:
 	@echo "Checking every Gluon package example through the public Cast CLI..."

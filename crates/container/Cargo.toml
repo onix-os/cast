@@ -18,5 +18,10 @@ snafu.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[[test]]
+name = "legacy_single_task"
+path = "tests/legacy_single_task.rs"
+harness = false
+
 [lints]
 workspace = true
