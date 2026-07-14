@@ -35,6 +35,8 @@ use tar::{Archive, EntryType};
 use thiserror::Error;
 use xz2::{read::XzDecoder, stream::Stream as XzStream};
 
+use crate::linux_fs::chmod_path_descriptor;
+
 const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
@@ -1197,16 +1199,7 @@ fn ensure_directories(root: &File, components: &[Vec<u8>]) -> Result<File, Error
     let mut current = root.try_clone()?;
     for component in components {
         let component = CString::new(component.as_slice()).map_err(|_| Error::InteriorNul)?;
-        let result = unsafe { libc::mkdirat(current.as_raw_fd(), component.as_ptr(), 0o700) };
-        if result == -1 {
-            let source = io::Error::last_os_error();
-            if source.kind() != io::ErrorKind::AlreadyExists {
-                return Err(Error::DescriptorOperation {
-                    operation: "create archive directory",
-                    source,
-                });
-            }
-        }
+        let created = mkdirat_directory(&current, &component, 0o700, "create archive directory")?;
         let path = openat2(
             current.as_raw_fd(),
             &component,
@@ -1219,21 +1212,128 @@ fn ensure_directories(root: &File, components: &[Vec<u8>]) -> Result<File, Error
         })?;
         let path = unsafe { File::from_raw_fd(path) };
         validate_directory(&path, "pin archive directory")?;
-        chmod_path_descriptor(&path, 0o700)?;
-        let fd = openat2(
-            current.as_raw_fd(),
-            &component,
+        current = open_and_normalize_archive_directory(&current, &component, &path, created, "open archive directory")?;
+    }
+    Ok(current)
+}
+
+fn mkdirat_directory(parent: &File, name: &CStr, mode: u32, operation: &'static str) -> Result<bool, Error> {
+    loop {
+        // SAFETY: `parent` and the single NUL-terminated component remain
+        // live; mkdirat never follows the final component.
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), mode) } == 0 {
+            return Ok(true);
+        }
+        let source = io::Error::last_os_error();
+        match source.kind() {
+            io::ErrorKind::Interrupted => continue,
+            io::ErrorKind::AlreadyExists => return Ok(false),
+            _ => return Err(Error::DescriptorOperation { operation, source }),
+        }
+    }
+}
+
+fn open_and_normalize_archive_directory(
+    parent: &File,
+    name: &CStr,
+    pinned: &File,
+    created: bool,
+    operation: &'static str,
+) -> Result<File, Error> {
+    let open_readable = || {
+        openat2(
+            parent.as_raw_fd(),
+            name,
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
             0,
         )
-        .map_err(|source| Error::DescriptorOperation {
-            operation: "open archive directory",
-            source,
-        })?;
-        current = unsafe { File::from_raw_fd(fd) };
-        validate_directory(&current, "open archive directory")?;
+    };
+    let descriptor = match open_readable() {
+        Ok(descriptor) => descriptor,
+        Err(source) if created && source.kind() == io::ErrorKind::PermissionDenied => {
+            // A hostile umask can remove every access bit from a directory we
+            // just created. Only that exact same-owner O_PATH-pinned inode may
+            // use the authenticated task-local procfs recovery path. An
+            // unreadable pre-existing directory is evidence and fails
+            // unchanged instead of being chmod-laundered.
+            require_recoverable_created_directory(pinned, operation)?;
+            #[cfg(test)]
+            TEST_PROC_CHMOD_RECOVERIES.with(|recoveries| recoveries.set(recoveries.get() + 1));
+            chmod_path_descriptor(pinned, 0o700).map_err(|source| Error::DescriptorOperation {
+                operation: "recover unreadable newly-created archive directory",
+                source,
+            })?;
+            open_readable().map_err(|source| Error::DescriptorOperation { operation, source })?
+        }
+        Err(source) => return Err(Error::DescriptorOperation { operation, source }),
+    };
+    let directory = unsafe { File::from_raw_fd(descriptor) };
+    validate_directory(&directory, operation)?;
+    require_same_directory(pinned, &directory, operation)?;
+    fchmod_directory(&directory, 0o700, operation)?;
+    Ok(directory)
+}
+
+fn require_recoverable_created_directory(file: &File, operation: &'static str) -> Result<(), Error> {
+    let metadata = file.metadata()?;
+    let mode = metadata.mode() & 0o7777;
+    // SAFETY: geteuid has no memory-safety preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.file_type().is_dir() && metadata.uid() == effective_uid && mode & !0o700 == 0 {
+        Ok(())
+    } else {
+        Err(Error::DescriptorOperation {
+            operation,
+            source: io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "new archive directory is not a recoverable same-owner mkdir residue (uid={}, mode={mode:04o})",
+                    metadata.uid()
+                ),
+            ),
+        })
     }
-    Ok(current)
+}
+
+fn require_same_directory(pinned: &File, readable: &File, operation: &'static str) -> Result<(), Error> {
+    let pinned = pinned.metadata()?;
+    let readable = readable.metadata()?;
+    if pinned.file_type().is_dir()
+        && readable.file_type().is_dir()
+        && (pinned.dev(), pinned.ino()) == (readable.dev(), readable.ino())
+    {
+        Ok(())
+    } else {
+        Err(Error::DescriptorOperation {
+            operation,
+            source: io::Error::other("readable archive directory does not match its retained O_PATH inode"),
+        })
+    }
+}
+
+fn fchmod_directory(file: &File, mode: u32, operation: &'static str) -> Result<(), Error> {
+    loop {
+        // SAFETY: `file` is a live readable directory descriptor and the mode
+        // is restricted to ordinary permission bits.
+        if unsafe { libc::fchmod(file.as_raw_fd(), mode) } == 0 {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(Error::DescriptorOperation { operation, source });
+        }
+    }
+    let actual = file.metadata()?.mode() & 0o7777;
+    if actual == mode {
+        Ok(())
+    } else {
+        Err(Error::DescriptorOperation {
+            operation,
+            source: io::Error::other(format!(
+                "archive directory mode is {actual:04o} after fchmod, expected {mode:04o}"
+            )),
+        })
+    }
 }
 
 fn normalize_destination_parents(root: &File, components: &[Vec<u8>], source_date_epoch: i64) -> Result<(), Error> {
@@ -1243,23 +1343,6 @@ fn normalize_destination_parents(root: &File, components: &[Vec<u8>], source_dat
         directory.sync_all()?;
     }
     Ok(())
-}
-
-fn chmod_path_descriptor(file: &File, mode: u32) -> Result<(), Error> {
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_fchmodat2,
-            file.as_raw_fd(),
-            c"".as_ptr(),
-            mode,
-            libc::AT_EMPTY_PATH,
-        )
-    };
-    if result == -1 {
-        Err(io::Error::last_os_error().into())
-    } else {
-        Ok(())
-    }
 }
 
 fn create_regular_beneath(root: &File, path: &[Vec<u8>], source_date_epoch: i64) -> Result<File, Error> {
@@ -1292,6 +1375,7 @@ std::thread_local! {
     static TEST_STAGE_WRITES_BEFORE_FAILURE: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
     static TEST_FAIL_STAGE_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TEST_FAIL_PUBLISH_AFTER_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TEST_PROC_CHMOD_RECOVERIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1443,11 +1527,16 @@ fn openat2(parent: RawFd, path: &CStr, flags: i32, mode: libc::mode_t) -> io::Re
         mode: mode as u64,
         resolve: RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV,
     };
-    let result = unsafe { libc::syscall(libc::SYS_openat2, parent, path.as_ptr(), &how, size_of::<OpenHow>()) };
-    if result == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(result as RawFd)
+    loop {
+        let result = unsafe { libc::syscall(libc::SYS_openat2, parent, path.as_ptr(), &how, size_of::<OpenHow>()) };
+        if result != -1 {
+            return RawFd::try_from(result)
+                .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {result}")));
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(source);
+        }
     }
 }
 
@@ -1465,16 +1554,8 @@ impl PrivateStage {
             let sequence = NEXT_STAGE.fetch_add(1, Ordering::Relaxed);
             let name = CString::new(format!(".cast-archive-stage-{}-{sequence}", std::process::id()))
                 .expect("stage name has no NUL");
-            let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
-            if result == -1 {
-                let source = io::Error::last_os_error();
-                if source.kind() == io::ErrorKind::AlreadyExists {
-                    continue;
-                }
-                return Err(Error::DescriptorOperation {
-                    operation: "create private archive stage",
-                    source,
-                });
+            if !mkdirat_directory(&parent, &name, 0o700, "create private archive stage")? {
+                continue;
             }
             let opened = (|| -> Result<File, Error> {
                 inject_test_stage_open_failure()?;
@@ -1490,20 +1571,7 @@ impl PrivateStage {
                 })?;
                 let path = unsafe { File::from_raw_fd(path) };
                 validate_directory(&path, "pin private archive stage")?;
-                chmod_path_descriptor(&path, 0o700)?;
-                let fd = openat2(
-                    parent.as_raw_fd(),
-                    &name,
-                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-                    0,
-                )
-                .map_err(|source| Error::DescriptorOperation {
-                    operation: "open private archive stage",
-                    source,
-                })?;
-                let root = unsafe { File::from_raw_fd(fd) };
-                validate_directory(&root, "open private archive stage")?;
-                Ok(root)
+                open_and_normalize_archive_directory(&parent, &name, &path, true, "open private archive stage")
             })();
             let root = match opened {
                 Ok(root) => root,
@@ -2580,6 +2648,25 @@ mod tests {
             assert_eq!(metadata.mtime(), 1_700_000_000, "{directory}");
         }
         assert_eq!(fs::read(build.join("nested/parents/out/a")).unwrap(), b"a");
+    }
+
+    #[test]
+    fn ordinary_archive_extraction_is_procfs_independent() {
+        let bytes = archive(|builder| {
+            append(builder, "root/nested/a", EntryType::Regular, None, b"a");
+        });
+        TEST_PROC_CHMOD_RECOVERIES.with(|recoveries| recoveries.set(0));
+
+        let (_root, output) = install(&bytes, limits()).unwrap();
+
+        assert_eq!(fs::read(output.join("nested/a")).unwrap(), b"a");
+        TEST_PROC_CHMOD_RECOVERIES.with(|recoveries| {
+            assert_eq!(
+                recoveries.get(),
+                0,
+                "ordinary archive extraction must use readable-fd fchmod and remain valid in a ProcPolicy::None sandbox"
+            );
+        });
     }
 
     #[test]
