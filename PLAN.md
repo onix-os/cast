@@ -614,8 +614,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   owner-private descriptor-relative store. Canonical creation, advancement,
   and deletion must be conditional, process- and thread-serialized, atomic,
   fsync-ordered, crash-reopenable, and locked by an exact full-frame v1 golden
-  fixture. Linux 5.6 remains the runtime floor; restrictive-umask repair may
-  use only an authenticated procfs alias to the retained descriptor.
+  fixture. The payload binds permanent per-tree tokens to a creation boot and
+  mount-namespace epoch plus boot-scoped device, inode, and mount witnesses;
+  those runtime witnesses are historical evidence after an epoch change, not
+  durable identity. Linux 5.6 remains the runtime floor; restrictive-umask
+  repair may use only an authenticated procfs alias to the retained descriptor.
 - [ ] Open mutable system clients in recovery order: installation lock,
   databases, journal lock, journal reconciliation, orphan-token audit, strict
   live-state discovery, then repositories and the active registry. Frozen
@@ -623,15 +626,22 @@ and instant rollback mechanism; it hardens their failure semantics.
   non-mutating snapshot lock and fail closed on any unresolved journal.
 - [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
   with one retained capability namespace. Resolve beneath authenticated
-  directory descriptors without symlink, magic-link, or mount traversal;
-  identify every `/usr` tree by device, inode, and mount ID; keep all
-  descriptors close-on-exec; and fsync every changed parent before recording
-  completion.
+  directory descriptors without symlink, magic-link, or mount traversal. Give
+  every `/usr` tree one reserved, permanent random token which follows that
+  logical tree through staging, exchange, archive, and quarantine; treat
+  device, inode, and mount ID only as boot- and mount-namespace-scoped runtime
+  witnesses. Require candidate and previous to have distinct tokens and
+  filesystem objects on the same exchange-capable mount, keep all descriptors
+  close-on-exec, and fsync every changed parent before recording completion.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
-  recursively sync the candidate, synthesize and sync an empty live `/usr`
-  only when genuinely absent, classify managed, corrupt, empty, and unmanaged
-  previous trees from strict evidence, and preflight every root ABI name.
+  recursively sync the candidate, create or adopt its strictly validated tree
+  marker and fsync both marker and `/usr` before journal creation, synthesize
+  and sync an empty live `/usr` only when genuinely absent, classify managed,
+  corrupt, empty, and unmanaged previous trees from strict evidence, reject
+  missing, malformed, or duplicate tokens where recovery requires identity,
+  reserve the marker path from package and trigger output, and preflight every
+  root ABI name.
 - [ ] Drive new-state creation, archived-state activation, and active-state
   reblits through the same journal coordinator. Persist each intent before DB
   allocation, candidate decoration, trigger execution, `/usr` exchange,
@@ -659,9 +669,10 @@ and instant rollback mechanism; it hardens their failure semantics.
 persisted boundary, reopening Cast either completes the committed transition,
 restores the exact previous `/usr` and preserves the candidate, or stops on a
 structured manual-recovery record. It never starts a second transition while
-the first is unresolved, never infers success from a pathname alone, and never
-weakens atomic updates, state separation, merged-/usr compliance, container
-trigger isolation, or fast rollback.
+the first is unresolved, never infers success from a pathname or an
+out-of-epoch runtime witness alone, and never weakens atomic updates, state
+separation, merged-/usr compliance, container trigger isolation, or fast
+rollback.
 
 ## Validation gates
 
