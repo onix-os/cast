@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-previous-tree-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -135,6 +135,32 @@ forge-transition-identity-test:
 		client::tests::first_install_rejects_a_preexisting_nonempty_unmanaged_usr_unchanged \
 		client::tests::first_install_rejects_a_racing_nonempty_usr_occupant_unchanged \
 		client::tests::duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-previous-tree-move-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::retained_previous_moves_reconcile_before_and_after_rename_faults \
+		client::tests::retained_previous_archive_applied_faults_resume_only_the_sync_suffix \
+		client::tests::retained_previous_restore_applied_faults_resume_only_the_sync_suffix \
+		client::tests::retained_previous_slot_creation_faults_retire_the_state_name_before_retry \
+		client::tests::retained_previous_parking_scan_skips_occupied_non_mount_file_types \
+		client::tests::retained_previous_parking_scan_uses_the_final_bounded_candidate \
+		client::tests::retained_previous_parking_exhaustion_preserves_both_namespaces \
+		client::tests::retained_previous_restore_retirement_faults_resume_without_a_second_rename \
+		client::tests::retained_previous_moves_adopt_exact_pre_syscall_archive_and_restore_layouts \
+		client::tests::retained_previous_slot_retirement_preserves_a_racing_replacement \
+		client::tests::previous_archive_abort_retirement_faults_resume_in_production_recovery \
+		client::tests::applied_previous_archive_and_restore_faults_use_full_client_suffix_routing \
+		client::tests::retained_previous_moves_reject_roots_and_restore_staging_substitution \
+		client::tests::fresh_identity_can_archive_after_a_complete_compensating_recovery \
+		client::tests::retained_previous_archive_never_adopts_an_ambient_empty_state_slot \
+		client::tests::retained_previous_archive_rejects_slot_replacement_before_retention \
+		client::tests::retained_previous_archive_rejects_state_slot_parent_substitution_before_rename \
+		client::tests::retained_previous_archive_rejects_same_token_child_substitution_before_rename; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
@@ -401,6 +427,7 @@ help:
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
+	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"

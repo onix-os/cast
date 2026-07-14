@@ -725,8 +725,31 @@ and instant rollback mechanism; it hardens their failure semantics.
   its root filesystem before the changed parents are synced, and the complete
   retained name/inode proof is repeated before a fresh database row may be
   invalidated. Nested-mount rejection and any other-filesystem descendants
-  remain part of the pending descriptor-recursive coordinator. Archive and
-  restore moves no longer replace racing empty occupants. Failed preparation
+  remain part of the pending descriptor-recursive coordinator. The primary
+  previous-tree archive and compensating restore now retain the roots,
+  staging, and state-slot parents beneath the authenticated installation root.
+  A missing slot is first created as an exact owner-private, ACL-free directory
+  at one of 256 bounded non-state parking names, then published to the canonical
+  positive-decimal state name with one descriptor-relative no-replace rename;
+  partial preparation can therefore leave only inert hidden residue, and
+  ambient empty state slots are never adopted. Each archive/restore direction
+  pre-syncs and revalidates the exact previous tree, makes one descriptor-relative
+  `RENAME_NOREPLACE` attempt, reconciles both names by permanent token and
+  directory inode after every syscall result, fsyncs every changed parent, and
+  performs a final namespace proof. Exact pre-syscall `after` layouts are
+  adopted as applied; an unprovable layout is ambiguous rather than mislabeled
+  not-applied. After an aborted archive or compensating restore, the exact empty
+  wrapper is non-destructively renamed back to its private parking name and the
+  canonical absence is synced. It is never unlinked by a mutable final name, so
+  a racing replacement is preserved; post-retirement durability faults resume
+  only the idempotent sync/revalidation suffix, with one bounded production
+  retry before recovery reverses `/usr`. Proven post-move durability failures
+  likewise resume only their idempotent suffix and never rename the tree a
+  second time. The bounded scan deliberately fails closed after all 256 names
+  are occupied, preserving both canonical and staged namespaces; reclaiming
+  inert parked wrappers across process restarts belongs to the later durable
+  coordinator, with manual cleanup required before that baseline exists.
+  Failed preparation
   retains the candidate at its authenticated pre-transition location and keeps
   its database row; any preservation durability fault retains the database
   correlation and the exact candidate either in staging or in its retained
@@ -734,8 +757,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   cannot make a filesystem rename and SQLite deletion atomic against an
   uncooperative same-UID writer. It does not create a journal record, reconcile
   a reboot, durably fence an ambiguous post-exchange namespace, replace the
-  still-path-based archive, restore, repaired-archive, and archived-candidate
-  staging moves, perform the bounded
+  still-path-based initial archived-candidate staging, repaired-archive
+  publication, and archived-candidate rearchive moves, perform the bounded
   descriptor-recursive stable-inventory proof, authenticate the entire
   activation namespace, or finish the pre-journal baseline and coordinator
   items below.
@@ -840,3 +863,21 @@ Gluon function, all policy and package relationships are typed and explicit, a
 canonical target-specific `DerivationPlan` fully describes the build before it
 runs, Mason executes only that plan, and no YAML, KDL, legacy recipe, or
 macro compatibility path remains.
+
+## Repository closure
+
+- [ ] After every implementation and validation gate is complete, merge all
+  surviving feature branches into `develop`, verify the combined tree through
+  the Makefile, then delete every merged branch locally and remotely. Leave
+  exactly `develop` and `main`; `main` must remain untouched throughout this
+  work (no merge, rebase, reset, or direct commit).
+- [ ] Enforce a hard maximum of 1,000 lines for every repository-owned source,
+  test, script, configuration, and documentation file before repository
+  closure, regardless of whether it is fork-authored or inherited. Add a
+  Makefile gate that inventories tracked files and fails above the limit; split
+  every oversized file, including original AerynOS sources, into cohesive
+  modules named for their actual functionality (never numbered placeholders
+  such as `file_01` or `part_02`). Preserve behavior and public APIs through
+  focused tests. When an inherited AerynOS file is split, retain its existing
+  copyright/license header only in the original first file; do not copy that
+  attribution header into the new fork-authored modules.

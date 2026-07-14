@@ -407,6 +407,48 @@ pub(crate) fn renameat2_exchange_once(
     }
 }
 
+/// Move one single-component name between retained parents without replacing
+/// the destination, making exactly one syscall attempt.
+///
+/// Unlike [`renameat2_noreplace`], this primitive must not retry `EINTR`: an
+/// error can be reported after the kernel has already moved the name.  The
+/// caller is responsible for retaining both parents and reconciling both
+/// names after every result.
+pub(crate) fn renameat2_noreplace_once(
+    source_directory: &std::fs::File,
+    source_name: &CStr,
+    destination_directory: &std::fs::File,
+    destination_name: &CStr,
+) -> io::Result<()> {
+    for (role, name) in [("source", source_name), ("destination", destination_name)] {
+        if name.to_bytes().is_empty() || name.to_bytes().contains(&b'/') || matches!(name.to_bytes(), b"." | b"..") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("descriptor-relative rename {role} must be one nonempty component"),
+            ));
+        }
+    }
+
+    // SAFETY: both retained directory descriptors and both validated C
+    // strings remain live for this one syscall attempt. RENAME_NOREPLACE
+    // prevents destination loss; the caller reconciles an ambiguous result.
+    if unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_renameat2,
+            source_directory.as_raw_fd(),
+            source_name.as_ptr(),
+            destination_directory.as_raw_fd(),
+            destination_name.as_ptr(),
+            nix::libc::RENAME_NOREPLACE,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 fn renameat2_noreplace_with_deadline(
     source_directory: &std::fs::File,
     source_name: &CStr,
