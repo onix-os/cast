@@ -17,9 +17,9 @@ use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1Fi
 use url::Url;
 
 use super::{
-    EXECUTION_FIXTURES, Env, Planned, Publication, Request, SOURCE_DATE_EPOCH, SOURCE_LOCK_FILE_NAME, TARGET,
-    WriteOutcome, container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain,
-    execute_and_publish, execution_capability_required, plan_for_build, profile,
+    EXECUTION_FIXTURES, Env, Planned, Publication, Request, SOURCE_DATE_EPOCH, TARGET, WriteOutcome,
+    container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain, execute_and_publish,
+    execution_capability_required, plan_for_build, profile,
 };
 
 #[path = "bootstrap/bundle.rs"]
@@ -30,13 +30,14 @@ const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const BOOTSTRAP_PROFILE: &str = "planner-contentful-bootstrap";
-const REQUIRED_EXECUTION_FIXTURES: [&str; 9] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 10] = [
     "autotools",
     "cargo",
     "cargo-vendored",
     "cmake",
     "custom",
     "daemon-generated",
+    "factory-override",
     "hooks-patch",
     "meson",
     "split",
@@ -190,8 +191,12 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
 
     let prepare = |destination: &str| phase("Prepare", vec![extract(destination)]);
     let expected = match name {
-        "cmake" => vec![
-            prepare("cast-cmake-fixture"),
+        "cmake" | "factory-override" => vec![
+            prepare(if name == "cmake" {
+                "cast-cmake-fixture"
+            } else {
+                "cast-factory-override-fixture"
+            }),
             phase("Setup", vec![run("cmake", "-G")]),
             phase("Build", vec![run("cmake", "--build")]),
             phase("Install", vec![run("cmake", "--install")]),
@@ -278,6 +283,26 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
+    if name == "factory-override" {
+        let setup = job
+            .phases
+            .iter()
+            .find(|phase| phase.name == "Setup")
+            .expect("factory-override: frozen CMake Setup phase is missing");
+        let [stone_recipe::derivation::StepPlan::Run { args, .. }] = setup.steps.as_slice() else {
+            panic!("factory-override: frozen CMake Setup phase has unexpected steps");
+        };
+        assert!(
+            args.iter()
+                .any(|argument| argument == "-DCAST_FACTORY_VARIANT=stone-override"),
+            "factory-override: frozen Setup command omits the explicit package patch"
+        );
+        assert!(
+            args.iter()
+                .all(|argument| argument != "-DCAST_FACTORY_VARIANT=factory-default"),
+            "factory-override: frozen Setup command retained the factory default"
+        );
+    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -378,33 +403,67 @@ fn assert_fixture_package_closure(
 
 #[derive(Debug)]
 struct ExecutionInputSnapshot {
-    recipe: Vec<u8>,
-    source_lock: Vec<u8>,
+    authored_files: BTreeMap<PathBuf, Vec<u8>>,
     build_lock: Vec<u8>,
 }
 
 impl ExecutionInputSnapshot {
     fn capture(recipe: &Path, build_lock: &Path) -> Self {
         Self {
-            recipe: fs::read(recipe)
-                .unwrap_or_else(|error| panic!("read execution fixture recipe {recipe:?}: {error}")),
-            source_lock: fs::read(recipe.with_file_name(SOURCE_LOCK_FILE_NAME))
-                .unwrap_or_else(|error| panic!("read execution fixture source lock beside {recipe:?}: {error}")),
+            authored_files: snapshot_authored_inputs(recipe, build_lock),
             build_lock: fs::read(build_lock)
                 .unwrap_or_else(|error| panic!("read generated execution fixture build lock {build_lock:?}: {error}")),
         }
     }
 
     fn assert_unchanged(&self, fixture: &str, checkpoint: &str, recipe: &Path, build_lock: &Path) {
-        assert_file_bytes_unchanged(fixture, checkpoint, "stone.glu", recipe, &self.recipe);
-        assert_file_bytes_unchanged(
-            fixture,
-            checkpoint,
-            SOURCE_LOCK_FILE_NAME,
-            &recipe.with_file_name(SOURCE_LOCK_FILE_NAME),
-            &self.source_lock,
+        let actual = snapshot_authored_inputs(recipe, build_lock);
+        assert_eq!(
+            actual.keys().collect::<Vec<_>>(),
+            self.authored_files.keys().collect::<Vec<_>>(),
+            "{fixture}: authored package input set changed {checkpoint}"
         );
+        let root = recipe.parent().expect("execution fixture recipe has no parent");
+        for (relative, expected) in &self.authored_files {
+            assert_file_bytes_unchanged(
+                fixture,
+                checkpoint,
+                relative.to_string_lossy().as_ref(),
+                &root.join(relative),
+                expected,
+            );
+        }
         assert_file_bytes_unchanged(fixture, checkpoint, "build.lock.glu", build_lock, &self.build_lock);
+    }
+}
+
+fn snapshot_authored_inputs(recipe: &Path, build_lock: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let root = recipe.parent().expect("execution fixture recipe has no parent");
+    let mut snapshot = BTreeMap::new();
+    snapshot_authored_directory(root, root, build_lock, &mut snapshot);
+    snapshot
+}
+
+fn snapshot_authored_directory(
+    root: &Path,
+    directory: &Path,
+    build_lock: &Path,
+    snapshot: &mut BTreeMap<PathBuf, Vec<u8>>,
+) {
+    for entry in fs::read_dir(directory).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        let file_type = entry.file_type().unwrap();
+        if file_type.is_dir() {
+            snapshot_authored_directory(root, &path, build_lock, snapshot);
+        } else if file_type.is_file() {
+            if path != build_lock {
+                let relative = path.strip_prefix(root).unwrap().to_owned();
+                assert!(snapshot.insert(relative, fs::read(&path).unwrap()).is_none());
+            }
+        } else {
+            panic!("execution fixture contains unsupported authored input: {path:?}");
+        }
     }
 }
 

@@ -46,6 +46,7 @@ for fixture in \
     cast-cmake-fixture-1.0.0 \
     cast-custom-fixture-1.0.0 \
     cast-daemon-fixture-1.0.0 \
+    cast-factory-override-fixture-1.0.0 \
     cast-hooks-fixture-1.0.0 \
     cast-meson-fixture-1.0.0 \
     cast-split-fixture-1.0.0
@@ -147,6 +148,7 @@ for entry in "$archive_root"/*; do
         cast-cmake-fixture-1.0.0.tar|\
         cast-custom-fixture-1.0.0.tar|\
         cast-daemon-fixture-1.0.0.tar.zst|\
+        cast-factory-override-fixture-1.0.0.tar|\
         cast-hooks-fixture-1.0.0.tar.xz|\
         cast-meson-fixture-1.0.0.tar|\
         cast-split-fixture-1.0.0.tar) ;;
@@ -155,7 +157,7 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 9 || {
-    printf 'expected exactly nine execution fixture archives, found %s\n' "$count" >&2
+test "$count" -eq 10 || {
+    printf 'expected exactly ten execution fixture archives, found %s\n' "$count" >&2
     exit 1
 }

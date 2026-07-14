@@ -562,7 +562,7 @@ that evidence.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the nine exact closure declarations and their aggregate 107-package
+  each of the ten exact closure declarations and their aggregate 107-package
   pool before the delegated runner materializes the production-format root.
 - [x] Before entering the container, require every frozen executable binding's
   entry point to belong to its declared provider and resolve to a regular

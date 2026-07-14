@@ -11,10 +11,10 @@ fi
 
 fixture=$1
 case "$fixture" in
-    all|autotools|cargo|cargo-vendored|cmake|custom|daemon-generated|hooks-patch|meson|split) ;;
+    all|autotools|cargo|cargo-vendored|cmake|custom|daemon-generated|factory-override|hooks-patch|meson|split) ;;
     *)
         printf '%s\n' \
-            'fixture must be exactly `all` or one of: autotools cargo cargo-vendored cmake custom daemon-generated hooks-patch meson split' >&2
+            'fixture must be exactly `all` or one of: autotools cargo cargo-vendored cmake custom daemon-generated factory-override hooks-patch meson split' >&2
         exit 2
         ;;
 esac

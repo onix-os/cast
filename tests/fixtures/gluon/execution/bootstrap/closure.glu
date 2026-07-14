@@ -575,6 +575,7 @@ let meson_packages = [
         { name = "cmake", package_ids = cmake_packages },
         { name = "custom", package_ids = custom_packages },
         { name = "daemon-generated", package_ids = cmake_packages },
+        { name = "factory-override", package_ids = cmake_packages },
         { name = "hooks-patch", package_ids = hooks_patch_packages },
         { name = "meson", package_ids = meson_packages },
         { name = "split", package_ids = cmake_packages },

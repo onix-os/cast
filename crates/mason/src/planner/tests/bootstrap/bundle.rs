@@ -442,6 +442,7 @@ pub(super) fn assert_fixture_bundle(
                 | "cmake"
                 | "custom"
                 | "daemon-generated"
+                | "factory-override"
                 | "hooks-patch"
                 | "meson"
                 | "split"
@@ -1659,6 +1660,7 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
                 "autotools" => "cast autotools fixture",
                 "cargo" => "cast cargo fixture",
                 "cmake" => "cast cmake fixture",
+                "factory-override" => "Stone-native factory override: stone-override",
                 "meson" => "cast meson fixture",
                 other => panic!("{other}: simple fixture needs an explicit payload golden"),
             }],

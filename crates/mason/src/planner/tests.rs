@@ -86,13 +86,14 @@ const PACKAGE_EXAMPLES: [&str; 29] = [
     "split-outputs",
     "system-integration-assets",
 ];
-const EXECUTION_FIXTURES: [&str; 9] = [
+const EXECUTION_FIXTURES: [&str; 10] = [
     "autotools",
     "cargo",
     "cargo-vendored",
     "cmake",
     "custom",
     "daemon-generated",
+    "factory-override",
     "hooks-patch",
     "meson",
     "split",
@@ -481,6 +482,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-cmake-fixture-1.0.0",
             "cast-custom-fixture-1.0.0",
             "cast-daemon-fixture-1.0.0",
+            "cast-factory-override-fixture-1.0.0",
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
             "cast-split-fixture-1.0.0",
@@ -493,6 +495,26 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         let recipe_path = packages.join(name).join("stone.glu");
         let recipe = crate::Recipe::load_authored(&recipe_path)
             .unwrap_or_else(|error| panic!("{name}: evaluate execution fixture: {error:#}"));
+        if name == "factory-override" {
+            let factory = recipe
+                .fingerprint
+                .imported_modules
+                .iter()
+                .find(|module| module.logical_name == "factory.glu")
+                .expect("factory-override: local Gluon factory is absent from recipe provenance");
+            assert_eq!(
+                factory.sha256,
+                hex::encode(Sha256::digest(
+                    fs::read(packages.join(name).join("factory.glu")).unwrap()
+                )),
+                "factory-override: recipe provenance does not bind the exact imported factory"
+            );
+            assert_eq!(recipe.declaration.architectures, ["x86_64"]);
+            let [StepSpec::CMakeConfigure { flags }] = recipe.declaration.builder.phases.setup.steps.as_slice() else {
+                panic!("factory-override: package patch did not select the CMake builder");
+            };
+            assert_eq!(flags.as_slice(), ["-DCAST_FACTORY_VARIANT=stone-override"]);
+        }
         let lock_path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
         let lock_bytes = fs::read(&lock_path).unwrap();
         let lock = decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes)
@@ -637,8 +659,8 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     );
     assert_eq!(
         archive_format_counts,
-        [6, 1, 1, 1],
-        "execution fixtures must cover six plain tar streams plus one each of gzip, XZ, and Zstandard"
+        [7, 1, 1, 1],
+        "execution fixtures must cover seven plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
 }
 
