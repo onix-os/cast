@@ -1134,14 +1134,22 @@ impl Client {
                 total_progress.set_message("Storing DB layouts");
                 total_progress.tick();
 
-                // Add layouts
-                layout_db.batch_add(cached.iter().flat_map(|(p, u)| {
-                    u.payloads
-                        .iter()
-                        .flat_map(StoneDecodedPayload::layout)
-                        .flat_map(|p| p.body.as_slice())
-                        .map(|layout| (&p.id, layout))
-                }))?;
+                // Validate the complete decoded batch before opening the
+                // layout transaction. Stone targets are canonically relative
+                // to `/usr`; accepting an absolute target would bypass the
+                // sole prefix supplied by `PendingFile::path` and could place
+                // a package outside the stateful tree. Invalid packages must
+                // not leave even partial layout rows behind.
+                ingest_stone_layouts(
+                    &layout_db,
+                    cached.iter().flat_map(|(p, u)| {
+                        u.payloads
+                            .iter()
+                            .flat_map(StoneDecodedPayload::layout)
+                            .flat_map(|p| p.body.as_slice())
+                            .map(|layout| (&p.id, layout))
+                    }),
+                )?;
 
                 total_progress.inc(1);
                 total_progress.set_message("Storing DB packages");
@@ -1802,24 +1810,10 @@ where
         if !package_set.contains(&package) {
             return Err(Error::UnexpectedFrozenLayoutPackage(package));
         }
-        let raw_path = frozen_executable_layout_path(&layout.file);
-        match require_frozen_layout_path_policy(raw_path) {
-            Ok(()) => {}
-            Err(FrozenLayoutPathPolicyError::TooLong { actual }) => {
-                return Err(Error::FrozenLayoutPathTooLong {
-                    package,
-                    limit: MAX_FROZEN_EXECUTABLE_PATH_BYTES,
-                    actual,
-                });
-            }
-            Err(FrozenLayoutPathPolicyError::TooDeep { actual }) => {
-                return Err(Error::FrozenLayoutPathTooDeep {
-                    package,
-                    limit: MAX_FROZEN_LAYOUT_PATH_COMPONENTS,
-                    actual,
-                });
-            }
-        }
+        // Direct database fixtures can bypass normal Stone ingestion. Apply
+        // the same canonical raw-target contract again before executable
+        // verification materializes or accounts any layout path.
+        let raw_path = require_usr_relative_stone_layout(&package, &layout)?;
         let path = PathBuf::from(materialized_frozen_layout_path(raw_path));
         let Some(path_str) = path.to_str() else {
             return Err(Error::InvalidFrozenLayoutPath {
@@ -2916,7 +2910,7 @@ fn require_frozen_executable_path(binding: &FrozenExecutableBinding) -> Result<&
     }
 
     let path = std::str::from_utf8(raw).map_err(|_| Error::FrozenExecutablePathEncoding { bytes: raw.len() })?;
-    if require_frozen_layout_path_policy(path).is_err() || !is_normalized_frozen_path(path) {
+    if require_materialized_frozen_path_policy(path).is_err() || !is_normalized_frozen_path(path) {
         // The path is known to be bounded before it is copied into this
         // diagnostic. Oversized or non-UTF-8 inputs never reach this branch.
         return Err(Error::InvalidFrozenExecutablePath {
@@ -3031,19 +3025,6 @@ fn frozen_executable_layout_auxiliary_bytes(file: &StonePayloadLayoutFile) -> us
         | StonePayloadLayoutFile::BlockDevice(_)
         | StonePayloadLayoutFile::Fifo(_)
         | StonePayloadLayoutFile::Socket(_) => 0,
-    }
-}
-
-fn frozen_executable_layout_path(file: &StonePayloadLayoutFile) -> &str {
-    match file {
-        StonePayloadLayoutFile::Regular(_, path)
-        | StonePayloadLayoutFile::Symlink(_, path)
-        | StonePayloadLayoutFile::Directory(path)
-        | StonePayloadLayoutFile::CharacterDevice(path)
-        | StonePayloadLayoutFile::BlockDevice(path)
-        | StonePayloadLayoutFile::Fifo(path)
-        | StonePayloadLayoutFile::Socket(path)
-        | StonePayloadLayoutFile::Unknown(_, path) => path,
     }
 }
 
@@ -3991,6 +3972,11 @@ pub fn vfs(layouts: Vec<(package::Id, StonePayloadLayoutRecord)>) -> Result<vfs:
     let mut tbuild = TreeBuilder::new();
 
     for (id, layout) in layouts {
+        // Revalidate database rows and direct Stone extraction input at the
+        // final stateful/ephemeral VFS boundary. Normal cache ingestion already
+        // enforces this contract atomically, but corrupted or test-populated
+        // databases must not recover an escape path here.
+        require_usr_relative_stone_layout(&id, &layout)?;
         tbuild.push(PendingFile { id: id.clone(), layout });
     }
 
@@ -3999,29 +3985,114 @@ pub fn vfs(layouts: Vec<(package::Id, StonePayloadLayoutRecord)>) -> Result<vfs:
     Ok(tbuild.tree()?)
 }
 
+const MAX_STONE_LAYOUT_COMPONENT_BYTES: usize = nix::libc::NAME_MAX as usize;
+const MAX_STONE_LAYOUT_TARGET_DIAGNOSTIC_BYTES: usize = 256;
+
+/// Proof that a raw Stone target has the one admitted representation.
+///
+/// Keeping materialization behind this type prevents a future caller from
+/// accidentally restoring the old absolute-path compatibility spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UsrRelativeStoneTarget<'a>(&'a str);
+
+/// Store decoded Stone layouts only after proving that every raw target uses
+/// the one canonical package namespace.
+///
+/// Stone omits the leading `/usr/`; [`PendingFile::path`] adds it exactly once.
+/// Requiring a non-empty normalized relative target here therefore makes every
+/// persisted row strictly `/usr`-only and prevents alternate spellings of the
+/// same materialized path. The iterator is cloned so the complete batch is
+/// preflighted before `batch_add` can remove or insert any database rows.
+fn ingest_stone_layouts<'a, I>(layout_db: &db::layout::Database, layouts: I) -> Result<(), Error>
+where
+    I: Iterator<Item = (&'a package::Id, &'a StonePayloadLayoutRecord)> + Clone,
+{
+    for (package, layout) in layouts.clone() {
+        require_usr_relative_stone_layout(package, layout)?;
+    }
+    layout_db.batch_add(layouts)?;
+    Ok(())
+}
+
+fn require_usr_relative_stone_layout<'a>(
+    package: &package::Id,
+    layout: &'a StonePayloadLayoutRecord,
+) -> Result<UsrRelativeStoneTarget<'a>, Error> {
+    let target = layout.file.target();
+    require_usr_relative_stone_target(target).map_err(|reason| Error::InvalidStoneLayoutTarget {
+        package: package.clone(),
+        target: stone_layout_target_diagnostic(target),
+        reason,
+    })
+}
+
+fn stone_layout_target_diagnostic(target: &str) -> String {
+    if target.len() <= MAX_STONE_LAYOUT_TARGET_DIAGNOSTIC_BYTES {
+        return target.to_owned();
+    }
+
+    let mut end = MAX_STONE_LAYOUT_TARGET_DIAGNOSTIC_BYTES;
+    while !target.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &target[..end])
+}
+
+fn require_usr_relative_stone_target(target: &str) -> Result<UsrRelativeStoneTarget<'_>, &'static str> {
+    if target.is_empty() {
+        return Err("the target is empty");
+    }
+    if target.starts_with('/') {
+        return Err("the target is absolute");
+    }
+    if target.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("the target contains an ASCII control byte");
+    }
+    if target.ends_with('/') {
+        return Err("the target has a trailing separator");
+    }
+    if target.contains("//") {
+        return Err("the target contains a repeated separator");
+    }
+
+    let materialized_bytes = "/usr/"
+        .len()
+        .checked_add(target.len())
+        .ok_or("the materialized path length overflows")?;
+    if materialized_bytes > MAX_FROZEN_EXECUTABLE_PATH_BYTES {
+        return Err("the materialized path exceeds Linux PATH_MAX");
+    }
+
+    let mut components = 1usize; // the materialized `/usr` component
+    for component in target.split('/') {
+        if component == "." || component == ".." {
+            return Err("the target contains a dot component");
+        }
+        if component.len() > MAX_STONE_LAYOUT_COMPONENT_BYTES {
+            return Err("a target component exceeds Linux NAME_MAX");
+        }
+        components = components
+            .checked_add(1)
+            .ok_or("the materialized component count overflows")?;
+        if components > MAX_FROZEN_LAYOUT_PATH_COMPONENTS {
+            return Err("the materialized path is too deep");
+        }
+    }
+    Ok(UsrRelativeStoneTarget(target))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrozenLayoutPathPolicyError {
     TooLong { actual: usize },
     TooDeep { actual: usize },
 }
 
-fn require_frozen_layout_path_policy(raw_path: &str) -> Result<(), FrozenLayoutPathPolicyError> {
-    let is_absolute = raw_path.starts_with('/');
-    let materialized_bytes = raw_path
-        .len()
-        .checked_add(if is_absolute { 0 } else { "/usr/".len() })
-        .unwrap_or(usize::MAX);
-    if materialized_bytes > MAX_FROZEN_EXECUTABLE_PATH_BYTES {
-        return Err(FrozenLayoutPathPolicyError::TooLong {
-            actual: materialized_bytes,
-        });
+fn require_materialized_frozen_path_policy(path: &str) -> Result<(), FrozenLayoutPathPolicyError> {
+    if path.len() > MAX_FROZEN_EXECUTABLE_PATH_BYTES {
+        return Err(FrozenLayoutPathPolicyError::TooLong { actual: path.len() });
     }
 
-    let materialized_components = raw_path
-        .split('/')
-        .filter(|component| !component.is_empty())
-        .count()
-        .saturating_add(usize::from(!is_absolute));
+    let materialized_components = path.split('/').filter(|component| !component.is_empty()).count();
     if materialized_components > MAX_FROZEN_LAYOUT_PATH_COMPONENTS {
         return Err(FrozenLayoutPathPolicyError::TooDeep {
             actual: materialized_components,
@@ -4053,12 +4124,8 @@ fn require_frozen_layout_symlink_target(package: &package::Id, target: &str) -> 
     Ok(())
 }
 
-fn materialized_frozen_layout_path(raw_path: &str) -> String {
-    if raw_path.starts_with('/') {
-        raw_path.to_owned()
-    } else {
-        format!("/usr/{raw_path}")
-    }
+fn materialized_frozen_layout_path(raw_path: UsrRelativeStoneTarget<'_>) -> String {
+    format!("/usr/{}", raw_path.0)
 }
 
 #[derive(Debug)]
@@ -4073,24 +4140,9 @@ struct FrozenLayoutEntry {
 
 impl FrozenLayoutEntry {
     fn new(package: package::Id, layout: StonePayloadLayoutRecord, package_order: usize) -> Result<Self, Error> {
-        let raw_path = frozen_executable_layout_path(&layout.file);
-        match require_frozen_layout_path_policy(raw_path) {
-            Ok(()) => {}
-            Err(FrozenLayoutPathPolicyError::TooLong { actual }) => {
-                return Err(Error::FrozenLayoutPathTooLong {
-                    package,
-                    limit: MAX_FROZEN_EXECUTABLE_PATH_BYTES,
-                    actual,
-                });
-            }
-            Err(FrozenLayoutPathPolicyError::TooDeep { actual }) => {
-                return Err(Error::FrozenLayoutPathTooDeep {
-                    package,
-                    limit: MAX_FROZEN_LAYOUT_PATH_COMPONENTS,
-                    actual,
-                });
-            }
-        }
+        // Keep frozen materialization fail-closed even for callers which
+        // populate the layout database without going through Stone ingestion.
+        let raw_path = require_usr_relative_stone_layout(&package, &layout)?;
         if let StonePayloadLayoutFile::Symlink(target, _) = &layout.file {
             require_frozen_layout_symlink_target(&package, target)?;
         }
@@ -5702,6 +5754,12 @@ pub enum Error {
     StateDoesntExist(state::Id),
     #[error("No metadata found for package {0:?}")]
     MissingMetadata(package::Id),
+    #[error("package {package} has invalid /usr-relative Stone layout target {target:?}: {reason}")]
+    InvalidStoneLayoutTarget {
+        package: package::Id,
+        target: String,
+        reason: &'static str,
+    },
     #[error("Ephemeral client not allowed on installation root")]
     EphemeralInstallationRoot,
     #[error("Operation not allowed with ephemeral client")]
@@ -6325,6 +6383,204 @@ mod tests {
             .repositories(repository::Map::default())
             .build()
             .unwrap()
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestStoneLayoutKind {
+        Regular,
+        Symlink,
+        Directory,
+        CharacterDevice,
+        BlockDevice,
+        Fifo,
+        Socket,
+        Unknown,
+    }
+
+    const ALL_STONE_LAYOUT_KINDS: [TestStoneLayoutKind; 8] = [
+        TestStoneLayoutKind::Regular,
+        TestStoneLayoutKind::Symlink,
+        TestStoneLayoutKind::Directory,
+        TestStoneLayoutKind::CharacterDevice,
+        TestStoneLayoutKind::BlockDevice,
+        TestStoneLayoutKind::Fifo,
+        TestStoneLayoutKind::Socket,
+        TestStoneLayoutKind::Unknown,
+    ];
+
+    fn test_stone_layout(kind: TestStoneLayoutKind, target: impl Into<AStr>) -> StonePayloadLayoutRecord {
+        let target = target.into();
+        let file = match kind {
+            TestStoneLayoutKind::Regular => StonePayloadLayoutFile::Regular(42, target),
+            TestStoneLayoutKind::Symlink => StonePayloadLayoutFile::Symlink("tool".into(), target),
+            TestStoneLayoutKind::Directory => StonePayloadLayoutFile::Directory(target),
+            TestStoneLayoutKind::CharacterDevice => StonePayloadLayoutFile::CharacterDevice(target),
+            TestStoneLayoutKind::BlockDevice => StonePayloadLayoutFile::BlockDevice(target),
+            TestStoneLayoutKind::Fifo => StonePayloadLayoutFile::Fifo(target),
+            TestStoneLayoutKind::Socket => StonePayloadLayoutFile::Socket(target),
+            TestStoneLayoutKind::Unknown => StonePayloadLayoutFile::Unknown("opaque".into(), target),
+        };
+        StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: 0,
+            tag: 0,
+            file,
+        }
+    }
+
+    #[test]
+    fn stone_layout_ingestion_confines_every_inode_variant_to_canonical_usr_relative_targets() {
+        let package = package::Id::from("layout-path-policy");
+        for (index, kind) in ALL_STONE_LAYOUT_KINDS.into_iter().enumerate() {
+            let target = format!("share/layout-kind-{index}");
+            let valid = test_stone_layout(kind, target.clone());
+            require_usr_relative_stone_layout(&package, &valid).unwrap();
+            assert_eq!(
+                PendingFile {
+                    id: package.clone(),
+                    layout: valid
+                }
+                .path()
+                .to_string(),
+                format!("/usr/{target}")
+            );
+
+            let absolute = format!("/usr/{target}");
+            let invalid = test_stone_layout(kind, absolute.clone());
+            assert!(matches!(
+                require_usr_relative_stone_layout(&package, &invalid),
+                Err(Error::InvalidStoneLayoutTarget {
+                    package: rejected_package,
+                    target: rejected_target,
+                    reason: "the target is absolute",
+                }) if rejected_package == package && rejected_target == absolute
+            ));
+            assert!(matches!(
+                vfs(vec![(package.clone(), invalid)]),
+                Err(Error::InvalidStoneLayoutTarget {
+                    package: rejected_package,
+                    target: rejected_target,
+                    reason: "the target is absolute",
+                }) if rejected_package == package && rejected_target == absolute
+            ));
+        }
+    }
+
+    #[test]
+    fn stone_layout_ingestion_rejects_every_noncanonical_or_escaping_target() {
+        let package = package::Id::from("invalid-layout-path");
+        let cases = [
+            ("", "the target is empty"),
+            ("/", "the target is absolute"),
+            ("/usr", "the target is absolute"),
+            ("/usr/bin/tool", "the target is absolute"),
+            ("/etc/passwd", "the target is absolute"),
+            (".", "the target contains a dot component"),
+            ("..", "the target contains a dot component"),
+            ("./bin/tool", "the target contains a dot component"),
+            ("bin/./tool", "the target contains a dot component"),
+            ("bin/../tool", "the target contains a dot component"),
+            ("bin//tool", "the target contains a repeated separator"),
+            ("bin/tool/", "the target has a trailing separator"),
+            ("bin/\0tool", "the target contains an ASCII control byte"),
+            ("bin/\ntool", "the target contains an ASCII control byte"),
+            ("bin/\u{7f}tool", "the target contains an ASCII control byte"),
+        ];
+
+        for (target, expected_reason) in cases {
+            let layout = test_stone_layout(TestStoneLayoutKind::Regular, target);
+            assert!(
+                matches!(
+                    require_usr_relative_stone_layout(&package, &layout),
+                    Err(Error::InvalidStoneLayoutTarget {
+                        package: rejected_package,
+                        target: rejected_target,
+                        reason,
+                    }) if rejected_package == package && rejected_target == target && reason == expected_reason
+                ),
+                "accepted invalid Stone layout target {target:?}"
+            );
+        }
+
+        let oversized_absolute = format!("/{}", "工".repeat(MAX_STONE_LAYOUT_TARGET_DIAGNOSTIC_BYTES));
+        let layout = test_stone_layout(TestStoneLayoutKind::Regular, oversized_absolute);
+        let Error::InvalidStoneLayoutTarget {
+            target,
+            reason: "the target is absolute",
+            ..
+        } = require_usr_relative_stone_layout(&package, &layout).unwrap_err()
+        else {
+            panic!("oversized absolute target returned the wrong error");
+        };
+        assert!(target.ends_with('…'));
+        assert!(target.len() <= MAX_STONE_LAYOUT_TARGET_DIAGNOSTIC_BYTES + '…'.len_utf8());
+    }
+
+    #[test]
+    fn stone_layout_ingestion_accepts_utf8_and_exact_linux_path_boundaries() {
+        // Layout targets are AStr values, so non-UTF-8 bytes cannot enter this
+        // validator. Non-ASCII UTF-8 remains part of the admitted domain.
+        for target in ["bin/tool", ".hidden", "share/Grüße/工具", "usr/bin/nested"] {
+            require_usr_relative_stone_target(target).unwrap();
+        }
+
+        let exact_component = "a".repeat(MAX_STONE_LAYOUT_COMPONENT_BYTES);
+        require_usr_relative_stone_target(&exact_component).unwrap();
+        assert_eq!(
+            require_usr_relative_stone_target(&format!("{exact_component}a")),
+            Err("a target component exceeds Linux NAME_MAX")
+        );
+
+        let exact_depth = std::iter::repeat_n("a", MAX_FROZEN_LAYOUT_PATH_COMPONENTS - 1)
+            .collect::<Vec<_>>()
+            .join("/");
+        require_usr_relative_stone_target(&exact_depth).unwrap();
+        let excessive_depth = format!("{exact_depth}/a");
+        assert_eq!(
+            require_usr_relative_stone_target(&excessive_depth),
+            Err("the materialized path is too deep")
+        );
+
+        let exact_path = std::iter::repeat_n("a".repeat(MAX_STONE_LAYOUT_COMPONENT_BYTES), 15)
+            .chain(std::iter::once("a".repeat(250)))
+            .collect::<Vec<_>>()
+            .join("/");
+        assert_eq!("/usr/".len() + exact_path.len(), MAX_FROZEN_EXECUTABLE_PATH_BYTES);
+        require_usr_relative_stone_target(&exact_path).unwrap();
+        assert_eq!(
+            require_usr_relative_stone_target(&format!("{exact_path}a")),
+            Err("the materialized path exceeds Linux PATH_MAX")
+        );
+    }
+
+    #[test]
+    fn invalid_stone_layout_batch_cannot_replace_or_insert_database_rows() {
+        let layout_db = db::layout::Database::new(":memory:").unwrap();
+        let retained_package = package::Id::from("retained-layout");
+        let rejected_package = package::Id::from("rejected-layout");
+        let retained = test_stone_layout(TestStoneLayoutKind::Regular, "bin/original");
+        layout_db.add(&retained_package, &retained).unwrap();
+
+        let replacement = test_stone_layout(TestStoneLayoutKind::Regular, "bin/replacement");
+        let invalid = test_stone_layout(TestStoneLayoutKind::Directory, "/etc");
+        assert!(matches!(
+            ingest_stone_layouts(
+                &layout_db,
+                [(&retained_package, &replacement), (&rejected_package, &invalid)].into_iter(),
+            ),
+            Err(Error::InvalidStoneLayoutTarget {
+                package,
+                target,
+                reason: "the target is absolute",
+            }) if package == rejected_package && target == "/etc"
+        ));
+
+        assert_eq!(
+            layout_db.query([&retained_package]).unwrap(),
+            vec![(retained_package, retained)]
+        );
+        assert!(layout_db.query([&rejected_package]).unwrap().is_empty());
     }
 
     fn generated_system_snapshot(package: &str) -> SystemModel {
@@ -8714,6 +8970,60 @@ let cast = import! cast.system.v1
     }
 
     #[test]
+    fn frozen_consumers_reject_absolute_raw_stone_targets_without_a_compatibility_spelling() {
+        let layout = StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFREG | 0o755,
+            tag: 0,
+            file: StonePayloadLayoutFile::Regular(1, "/usr/bin/tool".into()),
+        };
+
+        assert_frozen_layout_rejected_before_touching_destination(layout.clone(), |error| {
+            assert!(matches!(
+                error,
+                Error::InvalidStoneLayoutTarget {
+                    package,
+                    target,
+                    reason: "the target is absolute",
+                } if package == package::Id::from("invalid-layout")
+                    && target == "/usr/bin/tool"
+            ));
+        });
+
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let frozen_root = temporary.path().join("frozen-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&frozen_root).unwrap();
+        let client = Client::frozen(
+            "frozen-invalid-executable-layout-test",
+            Installation::open_frozen(&installation_root, None).unwrap(),
+            repository::Map::default(),
+            &frozen_root,
+        )
+        .unwrap();
+        let package = package::Id::from("absolute-executable-layout");
+        client.layout_db.add(&package, &layout).unwrap();
+        let binding = FrozenExecutableBinding {
+            package: package.clone(),
+            path: PathBuf::from("/usr/bin/tool"),
+        };
+
+        assert!(matches!(
+            client.require_frozen_executables(
+                std::slice::from_ref(&package),
+                std::slice::from_ref(&binding),
+            ),
+            Err(Error::InvalidStoneLayoutTarget {
+                package: rejected_package,
+                target,
+                reason: "the target is absolute",
+            }) if rejected_package == package && target == "/usr/bin/tool"
+        ));
+    }
+
+    #[test]
     fn frozen_root_rejects_inconsistent_or_unenforceable_modes_before_touching_destination() {
         let cases = [
             StonePayloadLayoutRecord {
@@ -8779,7 +9089,17 @@ let cast = import! cast.system.v1
                 tag: 0,
                 file: StonePayloadLayoutFile::Regular(1, "share/nul\0path".into()),
             },
-            |error| assert!(matches!(error, Error::InvalidFrozenLayoutPath { .. })),
+            |error| {
+                assert!(matches!(
+                    error,
+                    Error::InvalidStoneLayoutTarget {
+                        package,
+                        target,
+                        reason: "the target contains an ASCII control byte",
+                    } if package == package::Id::from("invalid-layout")
+                        && target == "share/nul\0path"
+                ));
+            },
         );
     }
 
@@ -8796,19 +9116,19 @@ let cast = import! cast.system.v1
     fn frozen_layout_path_policy_accepts_exact_limits_and_rejects_n_plus_one() {
         let exact_bytes = format!("/usr/{}", "a".repeat(MAX_FROZEN_EXECUTABLE_PATH_BYTES - "/usr/".len()));
         assert_eq!(exact_bytes.len(), MAX_FROZEN_EXECUTABLE_PATH_BYTES);
-        assert!(require_frozen_layout_path_policy(&exact_bytes).is_ok());
+        assert!(require_materialized_frozen_path_policy(&exact_bytes).is_ok());
         let oversized = format!("{exact_bytes}a");
         assert!(matches!(
-            require_frozen_layout_path_policy(&oversized),
+            require_materialized_frozen_path_policy(&oversized),
             Err(FrozenLayoutPathPolicyError::TooLong { actual })
                 if actual == MAX_FROZEN_EXECUTABLE_PATH_BYTES + 1
         ));
 
         let exact_depth = frozen_path_with_components(MAX_FROZEN_LAYOUT_PATH_COMPONENTS);
-        assert!(require_frozen_layout_path_policy(&exact_depth).is_ok());
+        assert!(require_materialized_frozen_path_policy(&exact_depth).is_ok());
         let excessive_depth = frozen_path_with_components(MAX_FROZEN_LAYOUT_PATH_COMPONENTS + 1);
         assert!(matches!(
-            require_frozen_layout_path_policy(&excessive_depth),
+            require_materialized_frozen_path_policy(&excessive_depth),
             Err(FrozenLayoutPathPolicyError::TooDeep { actual })
                 if actual == MAX_FROZEN_LAYOUT_PATH_COMPONENTS + 1
         ));
@@ -8842,10 +9162,7 @@ let cast = import! cast.system.v1
 
     #[test]
     fn frozen_root_rejects_oversized_paths_targets_and_depth_before_touching_destination() {
-        let oversized_path = format!(
-            "/usr/{}",
-            "a".repeat(MAX_FROZEN_EXECUTABLE_PATH_BYTES + 1 - "/usr/".len())
-        );
+        let oversized_path = "a".repeat(MAX_FROZEN_EXECUTABLE_PATH_BYTES + 1 - "/usr/".len());
         assert_frozen_layout_rejected_before_touching_destination(
             StonePayloadLayoutRecord {
                 uid: 0,
@@ -8857,9 +9174,11 @@ let cast = import! cast.system.v1
             |error| {
                 assert!(matches!(
                     error,
-                    Error::FrozenLayoutPathTooLong { limit, actual, .. }
-                        if limit == MAX_FROZEN_EXECUTABLE_PATH_BYTES
-                            && actual == MAX_FROZEN_EXECUTABLE_PATH_BYTES + 1
+                    Error::InvalidStoneLayoutTarget {
+                        package,
+                        reason: "the materialized path exceeds Linux PATH_MAX",
+                        ..
+                    } if package == package::Id::from("invalid-layout")
                 ));
             },
         );
@@ -8893,15 +9212,20 @@ let cast = import! cast.system.v1
                 tag: 0,
                 file: StonePayloadLayoutFile::Regular(
                     1,
-                    frozen_path_with_components(MAX_FROZEN_LAYOUT_PATH_COMPONENTS + 1).into(),
+                    std::iter::repeat_n("a", MAX_FROZEN_LAYOUT_PATH_COMPONENTS)
+                        .collect::<Vec<_>>()
+                        .join("/")
+                        .into(),
                 ),
             },
             |error| {
                 assert!(matches!(
                     error,
-                    Error::FrozenLayoutPathTooDeep { limit, actual, .. }
-                        if limit == MAX_FROZEN_LAYOUT_PATH_COMPONENTS
-                            && actual == MAX_FROZEN_LAYOUT_PATH_COMPONENTS + 1
+                    Error::InvalidStoneLayoutTarget {
+                        package,
+                        reason: "the materialized path is too deep",
+                        ..
+                    } if package == package::Id::from("invalid-layout")
                 ));
             },
         );
