@@ -8,6 +8,7 @@ diesel::table! {
         created -> BigInt,
         summary -> Nullable<Text>,
         description -> Nullable<Text>,
+        transition_id -> Nullable<Text>,
     }
 }
 
@@ -22,4 +23,4 @@ diesel::table! {
 
 diesel::joinable!(state_selections -> state (state_id));
 
-diesel::allow_tables_to_appear_in_same_query!(state, state_selections);
+diesel::allow_tables_to_appear_in_same_query!(state, state_selections,);

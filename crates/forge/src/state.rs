@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::io::Write;
+use std::{fmt, io::Write, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use derive_more::{Debug, Display, From, Into};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use thiserror::Error;
 use tui::{Styled, pretty};
 
 use crate::package;
@@ -20,6 +22,69 @@ impl Id {
         Self(self.0 + 1)
     }
 }
+
+/// Durable correlation identifier for one state transition.
+///
+/// The same value is written to the activation journal and, while a fresh
+/// state is in flight, to the state database. Keeping one validated type on
+/// both sides prevents recovery from relying on a free-form lookup key.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub(crate) struct TransitionId(String);
+
+impl TransitionId {
+    pub(crate) const TEXT_LENGTH: usize = 32;
+
+    pub(crate) fn parse(value: impl Into<String>) -> Result<Self, TransitionIdError> {
+        let value = value.into();
+        if value.len() != Self::TEXT_LENGTH
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(TransitionIdError);
+        }
+        Ok(Self(value))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TransitionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for TransitionId {
+    type Err = TransitionIdError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl AsRef<str> for TransitionId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl<'de> Deserialize<'de> for TransitionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(D::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+#[error("transition ID must be exactly 32 lowercase hexadecimal characters")]
+pub(crate) struct TransitionIdError;
 
 /// State types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display, strum::EnumString)]
@@ -104,5 +169,42 @@ impl pretty::ColumnDisplay for ColumnDisplay<'_> {
 
     fn display_column(&self, writer: &mut impl Write, _col: pretty::Column, width: usize) {
         let _ = write!(writer, "State {}{:width$}", self.0.id.to_string().bold(), " ");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALID_TRANSITION_ID: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn transition_id_has_one_canonical_text_encoding() {
+        let transition_id = TransitionId::parse(VALID_TRANSITION_ID).unwrap();
+        assert_eq!(transition_id.as_str(), VALID_TRANSITION_ID);
+        assert_eq!(transition_id.to_string(), VALID_TRANSITION_ID);
+        assert_eq!(
+            serde_json::to_string(&transition_id).unwrap(),
+            format!("\"{VALID_TRANSITION_ID}\"")
+        );
+        assert_eq!(
+            serde_json::from_str::<TransitionId>(&format!("\"{VALID_TRANSITION_ID}\"")).unwrap(),
+            transition_id
+        );
+    }
+
+    #[test]
+    fn transition_id_rejects_noncanonical_lengths_and_characters() {
+        for invalid in [
+            "",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcdeg",
+            "0123456789abcdef0123456789abcde-",
+        ] {
+            assert_eq!(TransitionId::parse(invalid), Err(TransitionIdError));
+            assert!(serde_json::from_str::<TransitionId>(&format!("\"{invalid}\"")).is_err());
+        }
     }
 }
