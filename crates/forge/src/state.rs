@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: 2023 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{fmt, io::Write, str::FromStr};
+use std::{
+    fmt,
+    io::{self, Write},
+    str::FromStr,
+};
 
 use chrono::{DateTime, Utc};
 use derive_more::{Debug, Display, From, Into};
@@ -34,6 +38,51 @@ pub(crate) struct TransitionId(String);
 
 impl TransitionId {
     pub(crate) const TEXT_LENGTH: usize = 32;
+    const RANDOM_BYTES: usize = Self::TEXT_LENGTH / 2;
+
+    /// Generate one canonical transition identifier from the kernel CSPRNG.
+    ///
+    /// Recovery depends on this value being unguessable and collision-resistant;
+    /// there is deliberately no time-, PID-, counter-, or userspace fallback.
+    #[allow(dead_code)] // consumed by the activation-coordinator integration slice
+    pub(crate) fn generate() -> io::Result<Self> {
+        let mut random = [0_u8; Self::RANDOM_BYTES];
+        let mut filled = 0;
+        while filled < random.len() {
+            // SAFETY: getrandom writes at most the supplied remaining length
+            // into the live array and retains no pointer after returning.
+            let result = unsafe {
+                nix::libc::syscall(
+                    nix::libc::SYS_getrandom,
+                    random[filled..].as_mut_ptr(),
+                    random.len() - filled,
+                    0,
+                )
+            };
+            if result == -1 {
+                let source = io::Error::last_os_error();
+                if source.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(source);
+            }
+            let read = usize::try_from(result)
+                .map_err(|_| io::Error::other("getrandom returned a negative transition-ID length"))?;
+            if read == 0 || read > random.len() - filled {
+                return Err(io::Error::other("getrandom returned an invalid transition-ID length"));
+            }
+            filled += read;
+        }
+
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = [0_u8; Self::TEXT_LENGTH];
+        for (index, byte) in random.into_iter().enumerate() {
+            encoded[index * 2] = HEX[usize::from(byte >> 4)];
+            encoded[index * 2 + 1] = HEX[usize::from(byte & 0x0f)];
+        }
+        let encoded = String::from_utf8(encoded.to_vec()).expect("lowercase hexadecimal is valid UTF-8");
+        Self::parse(encoded).map_err(|_| io::Error::other("kernel randomness encoded to a noncanonical transition ID"))
+    }
 
     pub(crate) fn parse(value: impl Into<String>) -> Result<Self, TransitionIdError> {
         let value = value.into();
@@ -205,6 +254,20 @@ mod tests {
         ] {
             assert_eq!(TransitionId::parse(invalid), Err(TransitionIdError));
             assert!(serde_json::from_str::<TransitionId>(&format!("\"{invalid}\"")).is_err());
+        }
+    }
+
+    #[test]
+    fn generated_transition_ids_are_canonical_and_distinct() {
+        let mut generated = std::collections::BTreeSet::new();
+        for _ in 0..64 {
+            let transition_id = TransitionId::generate().unwrap();
+            assert_eq!(transition_id.as_str().len(), TransitionId::TEXT_LENGTH);
+            assert_eq!(TransitionId::parse(transition_id.to_string()).unwrap(), transition_id);
+            assert!(
+                generated.insert(transition_id),
+                "kernel CSPRNG repeated a 128-bit transition ID"
+            );
         }
     }
 }
