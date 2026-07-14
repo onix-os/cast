@@ -166,6 +166,24 @@ impl Paths {
 
     /// Acquire the process-level lock that serializes identical derivations.
     pub fn acquire_execution_lock(&self, plan: &DerivationPlan) -> io::Result<ExecutionLock> {
+        let started = Instant::now();
+        let deadline = started
+            .checked_add(EXECUTION_LOCK_WAIT_TIMEOUT)
+            .ok_or_else(|| io::Error::other("execution lock deadline overflowed"))?;
+        self.acquire_execution_lock_until(plan, deadline, Instant::now, std::thread::sleep)
+    }
+
+    fn acquire_execution_lock_until<N, W>(
+        &self,
+        plan: &DerivationPlan,
+        deadline: Instant,
+        mut now: N,
+        mut wait: W,
+    ) -> io::Result<ExecutionLock>
+    where
+        N: FnMut() -> Instant,
+        W: FnMut(Duration),
+    {
         let path = self.execution_lock_path(plan)?;
         let leaf = execution_lock_leaf(plan.derivation_id().as_str())?;
 
@@ -179,7 +197,14 @@ impl Paths {
         self.revalidate_host_root()?;
         let workspace_gate = open_directory_nofollow(&self.host_root)?;
         require_same_directory(&self.host_root_anchor, &workspace_gate, &self.host_root)?;
-        lock_exclusive(&workspace_gate)?;
+        lock_exclusive_until(
+            &workspace_gate,
+            "workspace execution gate",
+            &self.host_root,
+            deadline,
+            &mut now,
+            &mut wait,
+        )?;
         self.revalidate_host_root()?;
 
         let lock_dir = self.prepare_private_host_directory(&self.execution_lock_dir())?;
@@ -189,7 +214,7 @@ impl Paths {
 
         let file = open_or_create_execution_lock_file(&lock_dir, &leaf)?;
         let file_identity = require_controlled_lock_file(&file, &root_metadata, &path)?;
-        lock_exclusive(&file)?;
+        lock_exclusive_until(&file, "derivation execution lock", &path, deadline, &mut now, &mut wait)?;
         if require_controlled_lock_file(&file, &root_metadata, &path)? != file_identity {
             return Err(io::Error::other(format!(
                 "execution lock file changed while flocking it: {path:?}"
@@ -515,9 +540,81 @@ impl ExecutionLock {
     }
 }
 
+fn lock_exclusive_until<N, W>(
+    file: &impl AsRawFd,
+    description: &str,
+    path: &Path,
+    deadline: Instant,
+    now: &mut N,
+    wait: &mut W,
+) -> io::Result<()>
+where
+    N: FnMut() -> Instant,
+    W: FnMut(Duration),
+{
+    lock_exclusive_until_with(description, path, deadline, now, wait, || try_lock_exclusive(file))
+}
+
+fn lock_exclusive_until_with<N, W, L>(
+    description: &str,
+    path: &Path,
+    deadline: Instant,
+    now: &mut N,
+    wait: &mut W,
+    mut try_lock: L,
+) -> io::Result<()>
+where
+    N: FnMut() -> Instant,
+    W: FnMut(Duration),
+    L: FnMut() -> io::Result<bool>,
+{
+    loop {
+        // A lock which is immediately available exactly at the deadline may
+        // still be acquired once. A clock already past the absolute deadline
+        // must not issue another flock, including the first attempt for the
+        // second lock or a retry after an overslept polling interval.
+        if now() > deadline {
+            return Err(execution_lock_timeout(description, path));
+        }
+        match try_lock() {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                let current = now();
+                if current >= deadline {
+                    return Err(execution_lock_timeout(description, path));
+                }
+                wait(EXECUTION_LOCK_RETRY_INTERVAL.min(deadline.saturating_duration_since(current)));
+            }
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                if now() >= deadline {
+                    return Err(execution_lock_timeout(description, path));
+                }
+            }
+            Err(source) => return Err(source),
+        }
+    }
+}
+
 #[allow(deprecated)]
-fn lock_exclusive(file: &impl AsRawFd) -> io::Result<()> {
-    flock(file.as_raw_fd(), FlockArg::LockExclusive).map_err(errno_to_io)
+fn try_lock_exclusive(file: &impl AsRawFd) -> io::Result<bool> {
+    match flock(file.as_raw_fd(), FlockArg::LockExclusiveNonblock) {
+        Ok(()) => Ok(true),
+        Err(error) => {
+            let source = errno_to_io(error);
+            if source.kind() == io::ErrorKind::WouldBlock {
+                Ok(false)
+            } else {
+                Err(source)
+            }
+        }
+    }
+}
+
+fn execution_lock_timeout(description: &str, path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("timed out waiting for {description} at {path:?}"),
+    )
 }
 
 fn errno_to_io(error: nix::errno::Errno) -> io::Error {
@@ -532,6 +629,14 @@ const MAX_PRIVATE_HOST_PATH_BYTES: usize = 4095;
 const MAX_PRIVATE_HOST_PATH_COMPONENTS: usize = 32;
 const MAX_EXECUTION_LOCK_NAME_BYTES: usize = 255;
 const EXECUTION_LOCK_SUFFIX: &[u8] = b".lock";
+const EXECUTION_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
+// There is no single whole-derivation wall-time ceiling: this guard spans
+// setup, every build step, analysis, publication, and cleanup. Use the
+// executor's longest authoritative single-step ceiling as a conservative
+// contention bound. It also exceeds the two-hour delegated-fixture runtime,
+// without pretending that waiting can cover the theoretical maximum of every
+// admitted step in one derivation.
+const EXECUTION_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn execution_lock_leaf(derivation_id: &str) -> io::Result<CString> {
     let id = derivation_id.as_bytes();
@@ -1431,6 +1536,7 @@ fn require_same_directory(expected: &StdFile, found: &StdFile, path: &Path) -> i
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::{Cell, RefCell},
         ffi::OsStr,
         os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     };
@@ -1600,6 +1706,305 @@ mod tests {
 
         drop(guard);
         flock(contender.as_raw_fd(), FlockArg::LockExclusiveNonblock).unwrap();
+    }
+
+    #[test]
+    fn execution_lock_immediately_times_out_under_real_contention() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let mut paths = test_paths(&root, &plan);
+        paths.bind_to_plan(&plan).unwrap();
+        let guard = paths.acquire_execution_lock(&plan).unwrap();
+
+        let deadline = Instant::now();
+        let waits = Cell::new(0usize);
+        let error = paths
+            .acquire_execution_lock_until(&plan, deadline, || deadline, |_| waits.set(waits.get() + 1))
+            .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("workspace execution gate"));
+        assert_eq!(waits.get(), 0);
+        paths.require_execution_lock(&guard, &plan).unwrap();
+    }
+
+    #[test]
+    fn execution_lock_overshoot_never_attempts_after_the_deadline() {
+        let started = Instant::now();
+        let remaining = Duration::from_millis(7);
+        let deadline = started + remaining;
+        let clock = Cell::new(started);
+        let attempts = Cell::new(0usize);
+        let waits = RefCell::new(Vec::new());
+        let mut now = || clock.get();
+        let mut wait = |duration| {
+            waits.borrow_mut().push(duration);
+            clock.set(deadline + Duration::from_nanos(1));
+        };
+
+        let error = lock_exclusive_until_with(
+            "overshoot test lock",
+            Path::new("overshoot"),
+            deadline,
+            &mut now,
+            &mut wait,
+            || {
+                attempts.set(attempts.get() + 1);
+                Ok(false)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(waits.into_inner(), vec![remaining]);
+    }
+
+    #[test]
+    fn execution_lock_partial_final_interval_retries_once_at_the_exact_deadline() {
+        let started = Instant::now();
+        let remaining = Duration::from_millis(7);
+        assert!(remaining < EXECUTION_LOCK_RETRY_INTERVAL);
+        let deadline = started + remaining;
+        let clock = Cell::new(started);
+        let attempts = Cell::new(0usize);
+        let waits = RefCell::new(Vec::new());
+        let mut now = || clock.get();
+        let mut wait = |duration| {
+            waits.borrow_mut().push(duration);
+            clock.set(clock.get() + duration);
+        };
+
+        lock_exclusive_until_with(
+            "partial interval test lock",
+            Path::new("partial"),
+            deadline,
+            &mut now,
+            &mut wait,
+            || {
+                attempts.set(attempts.get() + 1);
+                Ok(attempts.get() == 2)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(clock.get(), deadline);
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(waits.into_inner(), vec![remaining]);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn execution_lock_workspace_and_derivation_contention_share_one_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let mut paths = test_paths(&root, &plan);
+        paths.bind_to_plan(&plan).unwrap();
+
+        let workspace_holder = open_directory_nofollow(&paths.host_root).unwrap();
+        flock(workspace_holder.as_raw_fd(), FlockArg::LockExclusiveNonblock).unwrap();
+        let workspace_holder = RefCell::new(Some(workspace_holder));
+
+        let lock_dir = paths
+            .prepare_private_host_directory(&paths.execution_lock_dir())
+            .unwrap();
+        let leaf = execution_lock_leaf(plan.derivation_id().as_str()).unwrap();
+        let derivation_holder = open_or_create_execution_lock_file(&lock_dir, &leaf).unwrap();
+        flock(derivation_holder.as_raw_fd(), FlockArg::LockExclusiveNonblock).unwrap();
+
+        let started = Instant::now();
+        let deadline = started + EXECUTION_LOCK_RETRY_INTERVAL.saturating_mul(2);
+        let clock = Cell::new(started);
+        let waits = RefCell::new(Vec::new());
+        let error = paths
+            .acquire_execution_lock_until(
+                &plan,
+                deadline,
+                || clock.get(),
+                |duration| {
+                    waits.borrow_mut().push(duration);
+                    clock.set(clock.get() + duration);
+                    drop(workspace_holder.borrow_mut().take());
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("derivation execution lock"));
+        assert_eq!(clock.get(), deadline);
+        assert_eq!(
+            waits.into_inner(),
+            vec![EXECUTION_LOCK_RETRY_INTERVAL, EXECUTION_LOCK_RETRY_INTERVAL]
+        );
+
+        drop(derivation_holder);
+        let guard = paths.acquire_execution_lock(&plan).unwrap();
+        paths.require_execution_lock(&guard, &plan).unwrap();
+    }
+
+    #[test]
+    fn execution_lock_expired_before_the_second_lock_cannot_acquire_it() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let mut paths = test_paths(&root, &plan);
+        paths.bind_to_plan(&plan).unwrap();
+
+        let started = Instant::now();
+        let deadline = started + EXECUTION_LOCK_RETRY_INTERVAL;
+        let past_deadline = deadline + Duration::from_nanos(1);
+        let clock_reads = Cell::new(0usize);
+        let waits = Cell::new(0usize);
+        let error = paths
+            .acquire_execution_lock_until(
+                &plan,
+                deadline,
+                || {
+                    let read = clock_reads.get();
+                    clock_reads.set(read + 1);
+                    if read == 0 { started } else { past_deadline }
+                },
+                |_| waits.set(waits.get() + 1),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(error.to_string().contains("derivation execution lock"));
+        assert_eq!(clock_reads.get(), 2);
+        assert_eq!(waits.get(), 0);
+
+        // The derivation lock was free. A successful result above would prove
+        // that an attempt was incorrectly made after the shared deadline.
+        let guard = paths.acquire_execution_lock(&plan).unwrap();
+        paths.require_execution_lock(&guard, &plan).unwrap();
+    }
+
+    #[test]
+    fn execution_lock_retry_can_acquire_at_the_exact_deadline_and_retains_the_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = test_derivation_plan();
+        let mut paths = test_paths(&root, &plan);
+        paths.bind_to_plan(&plan).unwrap();
+        let original = RefCell::new(Some(paths.acquire_execution_lock(&plan).unwrap()));
+
+        let started = Instant::now();
+        let deadline = started + EXECUTION_LOCK_RETRY_INTERVAL;
+        let clock = Cell::new(started);
+        let waits = Cell::new(0usize);
+        let replacement = paths
+            .acquire_execution_lock_until(
+                &plan,
+                deadline,
+                || clock.get(),
+                |duration| {
+                    waits.set(waits.get() + 1);
+                    clock.set(clock.get() + duration);
+                    drop(original.borrow_mut().take());
+                },
+            )
+            .unwrap();
+
+        assert_eq!(waits.get(), 1);
+        assert_eq!(clock.get(), deadline);
+        assert!(original.into_inner().is_none());
+        paths.require_execution_lock(&replacement, &plan).unwrap();
+
+        let contender = File::options()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(replacement.path())
+            .unwrap();
+        assert_eq!(
+            flock(contender.as_raw_fd(), FlockArg::LockExclusiveNonblock),
+            Err(nix::errno::Errno::EWOULDBLOCK)
+        );
+    }
+
+    #[test]
+    fn execution_lock_non_contention_error_is_not_reported_as_timeout() {
+        struct InvalidDescriptor;
+
+        impl AsRawFd for InvalidDescriptor {
+            fn as_raw_fd(&self) -> RawFd {
+                -1
+            }
+        }
+
+        let current = Instant::now();
+        let mut now = || current;
+        let mut wait = |_| panic!("a non-contention flock error must not be retried");
+        let error = lock_exclusive_until(
+            &InvalidDescriptor,
+            "invalid test lock",
+            Path::new("invalid"),
+            current,
+            &mut now,
+            &mut wait,
+        )
+        .unwrap_err();
+
+        assert_ne!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.raw_os_error(), Some(nix::libc::EBADF));
+    }
+
+    #[test]
+    fn execution_lock_retries_interruption_without_treating_it_as_contention() {
+        let current = Instant::now();
+        let attempts = Cell::new(0usize);
+        let waits = Cell::new(0usize);
+        let mut now = || current;
+        let mut wait = |_| waits.set(waits.get() + 1);
+
+        lock_exclusive_until_with(
+            "interrupted test lock",
+            Path::new("interrupted"),
+            current + EXECUTION_LOCK_RETRY_INTERVAL,
+            &mut now,
+            &mut wait,
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() == 1 {
+                    Err(io::Error::from(io::ErrorKind::Interrupted))
+                } else {
+                    Ok(true)
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(waits.get(), 0);
+    }
+
+    #[test]
+    fn execution_lock_repeated_interruptions_stop_at_the_deadline_without_waiting() {
+        let started = Instant::now();
+        let deadline = started + EXECUTION_LOCK_RETRY_INTERVAL;
+        let clock = Cell::new(started);
+        let attempts = Cell::new(0usize);
+        let waits = Cell::new(0usize);
+        let mut now = || clock.get();
+        let mut wait = |_| waits.set(waits.get() + 1);
+
+        let error = lock_exclusive_until_with(
+            "repeated interruption test lock",
+            Path::new("repeated-interruption"),
+            deadline,
+            &mut now,
+            &mut wait,
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() == 2 {
+                    clock.set(deadline);
+                }
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(waits.get(), 0);
     }
 
     #[test]
