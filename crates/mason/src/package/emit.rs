@@ -2508,6 +2508,37 @@ pub(crate) fn test_derivation_plan() -> stone_recipe::derivation::DerivationPlan
 }
 
 #[cfg(test)]
+pub(crate) fn set_test_compiler_cache(plan: &mut stone_recipe::derivation::DerivationPlan, enabled: bool) {
+    use stone_recipe::derivation::{CompilerCacheRole, InputOrigin};
+
+    let program = plan.toolchain_commands.compilers[0].command.program.clone();
+    plan.execution.compiler_cache = enabled;
+    plan.toolchain_commands.ccache = enabled.then(|| program.clone());
+    plan.toolchain_commands.sccache = enabled.then_some(program);
+
+    let request = plan
+        .build_lock
+        .requests
+        .iter_mut()
+        .find(|request| request.request == "binary(pkg-config)")
+        .expect("test compiler-cache executable must be locked");
+    request
+        .origins
+        .retain(|origin| !matches!(origin, InputOrigin::CompilerCache { .. }));
+    if enabled {
+        request.origins.extend([
+            InputOrigin::CompilerCache {
+                role: CompilerCacheRole::Ccache,
+            },
+            InputOrigin::CompilerCache {
+                role: CompilerCacheRole::Sccache,
+            },
+        ]);
+    }
+    plan.build_lock.normalize();
+}
+
+#[cfg(test)]
 fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> gluon_config::EvaluationFingerprint {
     gluon_config::Evaluator::default()
         .evaluate_with_inputs::<i64>(&gluon_config::Source::new(logical_name, source), explicit_inputs)
@@ -2519,11 +2550,11 @@ fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> 
 fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
     use stone_recipe::build_policy::{AnalyzerKind, layers::BuildPolicyOperation};
     use stone_recipe::derivation::{
-        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, DerivationProvenance, ExecutablePlan,
-        ExecutionCredentials, InputOrigin, LockedIdentity, LockedOutput, LockedPackage, LockedRequest, OutputPlan,
-        PackageIdentity, Platform, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
-        ProfileFragmentProvenance, RelationKind, RelationPlan, RepositorySnapshot, policy_composition_identity,
-        profile_aggregate_fingerprint,
+        BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CompilerCommandPlan, DerivationProvenance,
+        ExecutableCommandPlan, ExecutablePlan, ExecutionCredentials, InputOrigin, LockedIdentity, LockedOutput,
+        LockedPackage, LockedRequest, OutputPlan, PackageIdentity, Platform, PolicyLayerProvenance, PolicyProvenance,
+        PolicyTransitionProvenance, ProfileFragmentProvenance, RelationKind, RelationPlan, RepositorySnapshot,
+        ToolchainCommandsPlan, policy_composition_identity, profile_aggregate_fingerprint,
     };
 
     const SOURCE_LOCK_BYTES: &[u8] = b"test source lock bytes";
@@ -2577,15 +2608,25 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
             "strip",
         ]
         .into_iter()
-        .map(|name| LockedRequest {
-            request: format!("binary({name})"),
-            package_id: "analyzer-tools-id".to_owned(),
-            output: "out".to_owned(),
-            origins: vec![InputOrigin::Policy {
+        .map(|name| {
+            let mut origins = vec![InputOrigin::Policy {
                 source: "policy.glu".to_owned(),
                 field: "build_root.base".to_owned(),
                 index: 0,
-            }],
+            }];
+            if name == "pkg-config" {
+                origins.extend(
+                    ToolchainCommandsPlan::COMPILER_ROLES
+                        .into_iter()
+                        .map(|role| InputOrigin::CompilerExecutable { role }),
+                );
+            }
+            LockedRequest {
+                request: format!("binary({name})"),
+                package_id: "analyzer-tools-id".to_owned(),
+                output: "out".to_owned(),
+                origins,
+            }
         })
         .collect(),
         packages: vec![LockedPackage {
@@ -2668,6 +2709,16 @@ fn build_test_derivation_plan() -> stone_recipe::derivation::DerivationPlan {
             name: name.to_owned(),
         },
     };
+    plan.toolchain_commands.compilers = ToolchainCommandsPlan::COMPILER_ROLES
+        .into_iter()
+        .map(|role| CompilerCommandPlan {
+            role,
+            command: ExecutableCommandPlan {
+                program: analyzer_tool("pkg-config"),
+                args: Vec::new(),
+            },
+        })
+        .collect();
     plan.analysis.tools.pkg_config = Some(analyzer_tool("pkg-config"));
     plan.analysis.tools.python = Some(analyzer_tool("python3"));
     plan.analysis.tools.strip = Some(analyzer_tool("llvm-strip"));

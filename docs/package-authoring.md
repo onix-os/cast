@@ -387,7 +387,7 @@ step.
 
 ## Build closure and derivation planning
 
-`build.lock.glu` is also generated beside `stone.glu`. Schema v5 records the
+`build.lock.glu` is also generated beside `stone.glu`. Schema v6 records the
 exact reachable package/output closure, its used repository index snapshots,
 platform roles, and separate policy-root, target, profile, toolchain, and
 selected structural-builder identities. Each resolved provider records all

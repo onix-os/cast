@@ -11,9 +11,9 @@ use std::{cell::Cell, collections::BTreeMap};
 use stone_recipe::{
     ToolchainSpec,
     build_policy::{
-        BuildPolicyConversionError, BuildPolicySpec, BuildPolicyValidationLimits, BuildProgramSpec, BuilderCommandSpec,
-        CompilerFlagsSpec, CompilerToolsSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
-        TargetPolicySpec, TextSpec, validate_environment_bindings_with_limits,
+        BuildCommandSpec, BuildPolicyConversionError, BuildPolicySpec, BuildPolicyValidationLimits, BuildProgramSpec,
+        BuilderCommandSpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue, EnvironmentBindingSpec,
+        EnvironmentCondition, TargetPolicySpec, TextSpec, validate_environment_bindings_with_limits,
     },
     derivation::{ExecutablePlan, RelationPlan, StepPlan, StepPlan::Run},
     package::StepSpec,
@@ -116,7 +116,6 @@ pub struct ResolvedCompilerTools {
     pub cpp: String,
     pub objcpp: String,
     pub objcxxcpp: String,
-    pub d: String,
     pub ar: String,
     pub ld: String,
     pub objcopy: String,
@@ -126,7 +125,7 @@ pub struct ResolvedCompilerTools {
 }
 
 impl ResolvedCompilerTools {
-    const RESOLVED_ITEMS: usize = 14;
+    const RESOLVED_ITEMS: usize = 13;
 }
 
 /// Concrete, shell-environment representations of tokenized compiler flags.
@@ -375,6 +374,48 @@ pub(crate) fn freeze_policy_program(program: &BuildProgramSpec) -> ExecutablePla
         path: program.path.clone(),
         requirement: RelationPlan::from(dependency),
     }
+}
+
+/// Render a structurally tokenized command for build-system environment
+/// variables such as `CC` and `CPP`.
+///
+/// The executable path remains absolute and every argument is quoted as one
+/// POSIX-shell word. A compiler-cache wrapper is an explicit first executable,
+/// never a `PATH` mutation or basename lookup.
+fn render_build_command(command: &BuildCommandSpec, wrapper: Option<&BuildProgramSpec>) -> String {
+    let mut rendered = String::new();
+    if let Some(wrapper) = wrapper {
+        push_shell_word(&mut rendered, &wrapper.path);
+    }
+    push_shell_word(&mut rendered, &command.program.path);
+    for argument in &command.args {
+        push_shell_word(&mut rendered, argument);
+    }
+    rendered
+}
+
+fn push_shell_word(rendered: &mut String, word: &str) {
+    if !rendered.is_empty() {
+        rendered.push(' ');
+    }
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/._+,-:=@%".contains(&byte))
+    {
+        rendered.push_str(word);
+        return;
+    }
+
+    rendered.push('\'');
+    for character in word.chars() {
+        if character == '\'' {
+            rendered.push_str("'\"'\"'");
+        } else {
+            rendered.push(character);
+        }
+    }
+    rendered.push('\'');
 }
 
 fn append_cargo_features(args: &mut Vec<String>, features: &[String], before: Option<&str>) {
@@ -908,32 +949,29 @@ impl<'a> TextResolver<'a> {
             ContextValue::ValaFlags => ContextExpansion::Flags(&input.flags.vala, &mold.vala),
             ContextValue::GoFlags => ContextExpansion::Flags(&input.flags.go, &mold.go),
             ContextValue::LdFlags => ContextExpansion::Flags(&input.flags.ld, &mold.ld),
-            ContextValue::Cc => ContextExpansion::Text(&tools.cc),
-            ContextValue::Cxx => ContextExpansion::Text(&tools.cxx),
-            ContextValue::Objc => ContextExpansion::Text(&tools.objc),
-            ContextValue::Objcxx => ContextExpansion::Text(&tools.objcxx),
-            ContextValue::Cpp => ContextExpansion::Text(&tools.cpp),
-            ContextValue::Objcpp => ContextExpansion::Text(&tools.objcpp),
-            ContextValue::Objcxxcpp => ContextExpansion::Text(&tools.objcxxcpp),
-            ContextValue::D => ContextExpansion::Text(&tools.d),
-            ContextValue::Ar => ContextExpansion::Text(&tools.ar),
-            ContextValue::Ld if input.mold_enabled => ContextExpansion::Text(&self.policy.build_root.mold.linker),
-            ContextValue::Ld => ContextExpansion::Text(&tools.ld),
-            ContextValue::Objcopy => ContextExpansion::Text(&tools.objcopy),
-            ContextValue::Nm => ContextExpansion::Text(&tools.nm),
-            ContextValue::Ranlib => ContextExpansion::Text(&tools.ranlib),
-            ContextValue::Strip => ContextExpansion::Text(&tools.strip),
-            ContextValue::CompilerPath if input.compiler_cache_enabled => {
-                ContextExpansion::Borrowed(&cache.compiler_path)
+            ContextValue::Cc => ContextExpansion::Owned(self.render_compiler_command(&tools.cc)),
+            ContextValue::Cxx => ContextExpansion::Owned(self.render_compiler_command(&tools.cxx)),
+            ContextValue::Objc => ContextExpansion::Owned(self.render_compiler_command(&tools.objc)),
+            ContextValue::Objcxx => ContextExpansion::Owned(self.render_compiler_command(&tools.objcxx)),
+            ContextValue::Cpp => ContextExpansion::Owned(self.render_compiler_command(&tools.cpp)),
+            ContextValue::Objcpp => ContextExpansion::Owned(self.render_compiler_command(&tools.objcpp)),
+            ContextValue::Objcxxcpp => ContextExpansion::Owned(self.render_compiler_command(&tools.objcxxcpp)),
+            ContextValue::Ar => ContextExpansion::Owned(render_build_command(&tools.ar, None)),
+            ContextValue::Ld if input.mold_enabled => {
+                ContextExpansion::Owned(render_build_command(&self.policy.build_root.mold.linker, None))
             }
-            ContextValue::CompilerPath => ContextExpansion::Borrowed(&cache.default_path),
+            ContextValue::Ld => ContextExpansion::Owned(render_build_command(&tools.ld, None)),
+            ContextValue::Objcopy => ContextExpansion::Owned(render_build_command(&tools.objcopy, None)),
+            ContextValue::Nm => ContextExpansion::Owned(render_build_command(&tools.nm, None)),
+            ContextValue::Ranlib => ContextExpansion::Owned(render_build_command(&tools.ranlib, None)),
+            ContextValue::Strip => ContextExpansion::Owned(render_build_command(&tools.strip, None)),
             ContextValue::CcacheDir => ContextExpansion::Borrowed(&cache.ccache_dir),
             ContextValue::SccacheDir => ContextExpansion::Borrowed(&cache.sccache_dir),
             ContextValue::GoCacheDir => ContextExpansion::Borrowed(&cache.go_cache_dir),
             ContextValue::GoModCacheDir => ContextExpansion::Borrowed(&cache.go_mod_cache_dir),
             ContextValue::CargoCacheDir => ContextExpansion::Borrowed(&cache.cargo_cache_dir),
             ContextValue::ZigCacheDir => ContextExpansion::Borrowed(&cache.zig_cache_dir),
-            ContextValue::RustcWrapper => ContextExpansion::Borrowed(&cache.rustc_wrapper),
+            ContextValue::RustcWrapper => ContextExpansion::Borrowed(&cache.sccache.path),
             ContextValue::SourcePath => ContextExpansion::Borrowed(
                 self.overlay
                     .source_path
@@ -960,6 +998,14 @@ impl<'a> TextResolver<'a> {
             ToolchainSpec::Llvm => &self.policy.toolchains.llvm,
             ToolchainSpec::Gnu => &self.policy.toolchains.gnu,
         }
+    }
+
+    fn render_compiler_command(&self, command: &BuildCommandSpec) -> String {
+        let wrapper = self
+            .inputs
+            .compiler_cache_enabled
+            .then_some(&self.policy.build_root.compiler_cache.ccache);
+        render_build_command(command, wrapper)
     }
 
     fn mold_flags(&self) -> &CompilerFlagsSpec {
@@ -1032,7 +1078,6 @@ impl<'a> TextResolver<'a> {
             cpp: value(ContextValue::Cpp)?,
             objcpp: value(ContextValue::Objcpp)?,
             objcxxcpp: value(ContextValue::Objcxxcpp)?,
-            d: value(ContextValue::D)?,
             ar: value(ContextValue::Ar)?,
             ld: value(ContextValue::Ld)?,
             objcopy: value(ContextValue::Objcopy)?,
@@ -1193,8 +1238,9 @@ mod tests {
 
         assert_eq!(context.layout.libdir, "/usr/lib");
         assert_eq!(context.layout.libexecdir, "/usr/lib/example");
-        assert_eq!(context.tools.cc, "clang");
-        assert_eq!(context.tools.ld, "ld.mold");
+        assert_eq!(context.tools.cc, "/usr/bin/clang");
+        assert_eq!(context.tools.objcpp, "/usr/bin/clang -E -");
+        assert_eq!(context.tools.ld, "/usr/bin/ld.mold");
         assert_eq!(context.flags.c, "-O2 -flto=8 -fuse-ld=mold");
         assert_eq!(
             context.flags.rust,
@@ -1211,9 +1257,12 @@ mod tests {
         assert!(!context.environment.contains_key("CCACHE_DIR"));
 
         let cached = fixture_context("x86_64", true, false);
-        assert_eq!(cached.environment["PATH"], "/usr/lib/ccache/bin:/usr/bin:/bin");
+        assert_eq!(cached.environment["PATH"], "/usr/bin:/bin");
         assert_eq!(cached.environment["CCACHE_DIR"], "/mason/ccache");
-        assert_eq!(cached.tools.ld, "ld.lld");
+        assert_eq!(cached.environment["RUSTC_WRAPPER"], "/usr/bin/sccache");
+        assert_eq!(cached.tools.cc, "/usr/bin/ccache /usr/bin/clang");
+        assert_eq!(cached.tools.objcpp, "/usr/bin/ccache /usr/bin/clang -E -");
+        assert_eq!(cached.tools.ld, "/usr/bin/ld.lld");
         assert!(!cached.flags.c.contains("mold"));
     }
 
@@ -1235,12 +1284,38 @@ mod tests {
     }
 
     #[test]
+    fn compiler_command_tokens_are_shell_quoted_without_path_lookup() {
+        let command = BuildCommandSpec {
+            program: BuildProgramSpec {
+                path: "/usr/bin/clang".to_owned(),
+                requirement: BuildToolSpec::Binary("clang".to_owned()),
+            },
+            args: vec![
+                "-E".to_owned(),
+                "two words".to_owned(),
+                "has'quote".to_owned(),
+                "$HOME".to_owned(),
+                String::new(),
+            ],
+        };
+        let wrapper = BuildProgramSpec {
+            path: "/usr/bin/ccache".to_owned(),
+            requirement: BuildToolSpec::Binary("ccache".to_owned()),
+        };
+
+        assert_eq!(
+            render_build_command(&command, Some(&wrapper)),
+            "/usr/bin/ccache /usr/bin/clang -E 'two words' 'has'\"'\"'quote' '$HOME' ''"
+        );
+    }
+
+    #[test]
     fn target_environment_overrides_global_tool_values() {
         let context = fixture_context("emul32/x86_64", false, false);
 
-        assert_eq!(context.environment["CC"], "clang -m32");
-        assert_eq!(context.environment["CXX"], "clang++ -m32");
-        assert_eq!(context.environment["CPP"], "clang-cpp -m32");
+        assert_eq!(context.environment["CC"], "/usr/bin/clang -m32");
+        assert_eq!(context.environment["CXX"], "/usr/bin/clang++ -m32");
+        assert_eq!(context.environment["CPP"], "/usr/bin/clang-cpp -m32");
         assert_eq!(
             context.environment["PKG_CONFIG_PATH"],
             "/usr/lib32/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"

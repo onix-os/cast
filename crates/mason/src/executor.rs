@@ -1089,7 +1089,7 @@ mod tests {
     use stone_recipe::derivation::BuilderLayout;
 
     use super::*;
-    use crate::package::test_derivation_plan;
+    use crate::package::{set_test_compiler_cache, test_derivation_plan};
 
     fn compatible_executor_plan() -> DerivationPlan {
         let mut plan = test_derivation_plan();
@@ -1575,7 +1575,7 @@ mod tests {
 
         let mut plan = test_derivation_plan();
         plan.layout = execution_layout(&guest_root);
-        plan.execution.compiler_cache = true;
+        set_test_compiler_cache(&mut plan, true);
         plan.validate().unwrap();
         let build_dir = PathBuf::from(&plan.layout.build_dir);
         let cache_dirs = plan
@@ -1602,7 +1602,7 @@ mod tests {
         for cache_dir in &cache_dirs {
             poison_directory(cache_dir, &sentinel);
         }
-        plan.execution.compiler_cache = false;
+        set_test_compiler_cache(&mut plan, false);
         plan.validate().unwrap();
 
         prepare_execution_scratch(&plan).unwrap();

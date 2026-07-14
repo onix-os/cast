@@ -12,15 +12,15 @@ use std::{
 use forge::{Installation, runtime};
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
-    AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, DerivationPlan,
-    DerivationProvenance, DerivationValidationError, ExecutablePlan, ExecutionCredentials, ExecutionPolicy,
-    FilesystemPolicy, InputOrigin, JobPlan, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage,
-    LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation, PackageIdentity, Platform, RelationPlan,
-    RepositorySnapshot, RequestedInput, RootMaterializationMode, StepPlan, profile_aggregate_fingerprint,
-    requested_inputs_digest,
+    AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, CompilerCommandPlan,
+    CompilerExecutableRole, DerivationPlan, DerivationProvenance, DerivationValidationError, ExecutableCommandPlan,
+    ExecutablePlan, ExecutionCredentials, ExecutionPolicy, FilesystemPolicy, InputOrigin, JobPlan, LockedIdentity,
+    LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, LockedSource, NetworkMode, OutputPlan, OutputRelation,
+    PackageIdentity, Platform, RelationPlan, RepositorySnapshot, RequestedInput, RootMaterializationMode, StepPlan,
+    ToolchainCommandsPlan, profile_aggregate_fingerprint, requested_inputs_digest,
 };
 use stone_recipe::{
-    build_policy::{BuildPolicySpec, BuildToolSpec},
+    build_policy::{BuildCommandSpec, BuildPolicySpec, BuildToolSpec, CompilerToolsSpec},
     package::{
         BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PackageSpec, PhaseSpec, ProgramSpec, StepSpec,
     },
@@ -152,7 +152,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     };
     let input_provenance_digest = requested_inputs_digest(&requested_inputs);
     let request_fingerprint = hash_fields([
-        "cast-build-lock-request-v7",
+        "cast-build-lock-request-v8",
         builder.recipe.fingerprint.sha256.as_str(),
         source_lock_digest.as_str(),
         target_name.as_str(),
@@ -220,7 +220,7 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     plan.jobs = jobs;
     plan.environment = BTreeMap::from([
         ("HOME".to_owned(), target.jobs[0].build_dir.display().to_string()),
-        ("PATH".to_owned(), "/usr/bin:/usr/sbin".to_owned()),
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
         ("SOURCE_DATE_EPOCH".to_owned(), request.source_date_epoch.to_string()),
     ]);
     plan.layout = builder.paths.layout().clone();
@@ -239,6 +239,12 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
         compiler_cache: request.compiler_cache,
         jobs: request.jobs.get(),
     };
+    plan.toolchain_commands = freeze_toolchain_commands(
+        &target.build_policy.spec,
+        &builder.recipe.declaration.options.toolchain,
+        request.compiler_cache,
+        builder.recipe.declaration.mold,
+    );
     plan.analysis = analysis;
     plan.manifest_build_inputs = build::root::declared_inputs(&builder.recipe, target_policy)?;
     plan.collection_rules = packager
@@ -425,6 +431,56 @@ fn freeze_analyzer_tool(
     }
 
     Ok(ExecutablePlan { path, requirement })
+}
+
+fn freeze_toolchain_commands(
+    policy: &BuildPolicySpec,
+    toolchain: &stone_recipe::ToolchainSpec,
+    compiler_cache: bool,
+    mold: bool,
+) -> ToolchainCommandsPlan {
+    let tools = match toolchain {
+        stone_recipe::ToolchainSpec::Llvm => &policy.toolchains.llvm,
+        stone_recipe::ToolchainSpec::Gnu => &policy.toolchains.gnu,
+    };
+    ToolchainCommandsPlan {
+        compilers: freeze_compiler_commands(tools),
+        ccache: compiler_cache.then(|| build::context::freeze_policy_program(&policy.build_root.compiler_cache.ccache)),
+        sccache: compiler_cache
+            .then(|| build::context::freeze_policy_program(&policy.build_root.compiler_cache.sccache)),
+        mold: mold.then(|| freeze_command(&policy.build_root.mold.linker)),
+    }
+}
+
+fn freeze_compiler_commands(tools: &CompilerToolsSpec) -> Vec<CompilerCommandPlan> {
+    [
+        (CompilerExecutableRole::Cc, &tools.cc),
+        (CompilerExecutableRole::Cxx, &tools.cxx),
+        (CompilerExecutableRole::Objc, &tools.objc),
+        (CompilerExecutableRole::Objcxx, &tools.objcxx),
+        (CompilerExecutableRole::Cpp, &tools.cpp),
+        (CompilerExecutableRole::Objcpp, &tools.objcpp),
+        (CompilerExecutableRole::Objcxxcpp, &tools.objcxxcpp),
+        (CompilerExecutableRole::Ar, &tools.ar),
+        (CompilerExecutableRole::Ld, &tools.ld),
+        (CompilerExecutableRole::Objcopy, &tools.objcopy),
+        (CompilerExecutableRole::Nm, &tools.nm),
+        (CompilerExecutableRole::Ranlib, &tools.ranlib),
+        (CompilerExecutableRole::Strip, &tools.strip),
+    ]
+    .into_iter()
+    .map(|(role, command)| CompilerCommandPlan {
+        role,
+        command: freeze_command(command),
+    })
+    .collect()
+}
+
+fn freeze_command(command: &BuildCommandSpec) -> ExecutableCommandPlan {
+    ExecutableCommandPlan {
+        program: build::context::freeze_policy_program(&command.program),
+        args: command.args.clone(),
+    }
 }
 
 fn freeze_jobs(target: &build::Target) -> Result<Vec<JobPlan>, Error> {

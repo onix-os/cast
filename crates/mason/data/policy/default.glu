@@ -4,7 +4,7 @@
 // Repository-owned build policy. This file contains data only; every dynamic
 // value is an explicit member of the finite build context.
 
-let p = import! cast.build_policy.v3
+let p = import! cast.build_policy.v4
 
 let lit = p.text.literal
 let ctx = \value -> p.text.context value
@@ -41,6 +41,11 @@ let command = \program args environment -> p.command {
     working_dir = ctx c.work_dir,
 }
 
+let tool_command = \program args -> {
+    program = p.program.binary program,
+    args,
+}
+
 let destdir = p.env.always "DESTDIR" (ctx c.install_root)
 let config_shell = [
     p.env.always "CONFIG_SHELL" (lit "/usr/bin/dash"),
@@ -74,37 +79,35 @@ let layout = {
 }
 
 let llvm_tools = {
-    cc = lit "clang",
-    cxx = lit "clang++",
-    objc = lit "clang",
-    objcxx = lit "clang++",
-    cpp = lit "clang-cpp",
-    objcpp = lit "clang -E -",
-    objcxxcpp = lit "clang++ -E",
-    d = lit "ldc2",
-    ar = lit "llvm-ar",
-    ld = lit "ld.lld",
-    objcopy = lit "llvm-objcopy",
-    nm = lit "llvm-nm",
-    ranlib = lit "llvm-ranlib",
-    strip = lit "llvm-strip",
+    cc = tool_command "clang" [],
+    cxx = tool_command "clang++" [],
+    objc = tool_command "clang" [],
+    objcxx = tool_command "clang++" [],
+    cpp = tool_command "clang-cpp" [],
+    objcpp = tool_command "clang" ["-E", "-"],
+    objcxxcpp = tool_command "clang++" ["-E"],
+    ar = tool_command "llvm-ar" [],
+    ld = tool_command "ld.lld" [],
+    objcopy = tool_command "llvm-objcopy" [],
+    nm = tool_command "llvm-nm" [],
+    ranlib = tool_command "llvm-ranlib" [],
+    strip = tool_command "llvm-strip" [],
 }
 
 let gnu_tools = {
-    cc = lit "gcc",
-    cxx = lit "g++",
-    objc = lit "gcc",
-    objcxx = lit "g++",
-    cpp = lit "gcc -E",
-    objcpp = lit "gcc -E",
-    objcxxcpp = lit "g++ -E",
-    d = lit "ldc2",
-    ar = lit "gcc-ar",
-    ld = lit "ld.bfd",
-    objcopy = lit "objcopy",
-    nm = lit "gcc-nm",
-    ranlib = lit "gcc-ranlib",
-    strip = lit "strip",
+    cc = tool_command "gcc" [],
+    cxx = tool_command "g++" [],
+    objc = tool_command "gcc" [],
+    objcxx = tool_command "g++" [],
+    cpp = tool_command "gcc" ["-E"],
+    objcpp = tool_command "gcc" ["-E"],
+    objcxxcpp = tool_command "g++" ["-E"],
+    ar = tool_command "gcc-ar" [],
+    ld = tool_command "ld.bfd" [],
+    objcopy = tool_command "objcopy" [],
+    nm = tool_command "gcc-nm" [],
+    ranlib = tool_command "gcc-ranlib" [],
+    strip = tool_command "strip" [],
 }
 
 let platform = \architecture -> {
@@ -227,47 +230,27 @@ let sandbox = {
 }
 
 let base_inputs = [
-    p.tool.package "bash",
-    p.tool.package "cast",
-    p.tool.package "coreutils",
-    p.tool.package "dash",
-    p.tool.package "diffutils",
-    p.tool.package "findutils",
-    p.tool.package "gawk",
+    // The base is a target development sysroot, not an interactive shell
+    // environment. Executables are selected by structural builder/source/job
+    // commands instead of being ambient packages on PATH.
     p.tool.package "glibc-devel",
-    p.tool.package "grep",
     p.tool.package "layout",
-    p.tool.package "libarchive",
     p.tool.package "linux-headers",
-    p.tool.package "os-info",
-    p.tool.package "pkgconf",
-    p.tool.package "sed",
-    p.tool.package "util-linux",
-    p.tool.binary "git",
-    p.tool.binary "hx",
-    p.tool.binary "less",
-    p.tool.binary "nano",
-    p.tool.binary "ps",
-    p.tool.binary "rg",
-    p.tool.binary "vim",
 ]
 
 let compiler_cache = {
-    required_tools = [p.tool.binary "ccache", p.tool.binary "sccache"],
-    default_path = "/usr/bin:/bin",
-    compiler_path = "/usr/lib/ccache/bin:/usr/bin:/bin",
+    ccache = p.program.binary "ccache",
+    sccache = p.program.binary "sccache",
     ccache_dir = "/mason/ccache",
     sccache_dir = "/mason/sccache",
     go_cache_dir = "/mason/gocache",
     go_mod_cache_dir = "/mason/gomodcache",
     cargo_cache_dir = "/mason/cargocache",
     zig_cache_dir = "/mason/zigcache",
-    rustc_wrapper = "/usr/bin/sccache",
 }
 
 let mold = {
-    required_tools = [p.tool.binary "mold"],
-    linker = lit "ld.mold",
+    linker = tool_command "ld.mold" [],
     flags = {
         c = [lit "-fuse-ld=mold"],
         cxx = [lit "-fuse-ld=mold"],
@@ -361,8 +344,7 @@ let environment = [
     p.env.always "LANG" (lit "en_US.UTF-8"),
     p.env.always "LC_ALL" (lit "en_US.UTF-8"),
     p.env.always "NINJA_STATUS" (lit "[%f/%t %es (%P)] "),
-    p.env.with_compiler_cache "PATH" (ctx c.compiler_path),
-    p.env.without_compiler_cache "PATH" (lit "/usr/bin:/bin"),
+    p.env.always "PATH" (lit "/usr/bin:/bin"),
     p.env.always "CAST_PREFIX" (ctx c.prefix),
     p.env.always "CAST_BINDIR" (ctx c.bindir),
     p.env.always "CAST_LIBDIR" (ctx c.libdir),

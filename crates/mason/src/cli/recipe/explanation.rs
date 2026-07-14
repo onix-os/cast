@@ -7,9 +7,9 @@
 use std::fmt::{Arguments, Write as _};
 
 use stone_recipe::derivation::{
-    AnalyzerRole, BuildLock, DerivationPlan, ExecutablePlan, InputOrigin, JobExecutableRole, JobStepSection,
-    LockedIdentity, LockedSource, NetworkMode, OutputRelation, PackageInputSelection, PathRuleKind, Platform,
-    RelationKind, RelationPlan, StepPlan,
+    AnalyzerRole, BuildLock, CompilerCacheRole, CompilerExecutableRole, DerivationPlan, ExecutableCommandPlan,
+    ExecutablePlan, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedSource, NetworkMode,
+    OutputRelation, PackageInputSelection, PathRuleKind, Platform, RelationKind, RelationPlan, StepPlan,
 };
 
 use stone_recipe::build_policy::layers::BuildPolicyOperation;
@@ -43,6 +43,7 @@ impl Explanation<'_> {
         self.environment(&mut formatter);
         self.layout(&mut formatter);
         self.execution(&mut formatter);
+        self.toolchain_commands(&mut formatter);
         self.analyzers(&mut formatter);
         self.analysis(&mut formatter);
         self.manifest_build_inputs(&mut formatter);
@@ -443,6 +444,30 @@ impl Explanation<'_> {
         formatter.close(1);
     }
 
+    fn toolchain_commands(&self, formatter: &mut Formatter) {
+        formatter.open(1, "toolchain_commands");
+        formatter.open(2, "compilers");
+        for (index, compiler) in self.plan.toolchain_commands.compilers.iter().enumerate() {
+            formatter.indexed_open(3, "compiler", index);
+            formatter.string(4, "role", compiler_executable_role(compiler.role));
+            format_executable_command(formatter, 4, "command", &compiler.command, &self.plan.build_lock);
+            formatter.close(3);
+        }
+        formatter.close(2);
+        for (name, program) in [
+            ("ccache", self.plan.toolchain_commands.ccache.as_ref()),
+            ("sccache", self.plan.toolchain_commands.sccache.as_ref()),
+        ] {
+            if let Some(program) = program {
+                format_executable(formatter, 2, name, program, &self.plan.build_lock);
+            }
+        }
+        if let Some(mold) = &self.plan.toolchain_commands.mold {
+            format_executable_command(formatter, 2, "mold", mold, &self.plan.build_lock);
+        }
+        formatter.close(1);
+    }
+
     fn collection_rules(&self, formatter: &mut Formatter) {
         formatter.open(1, "collection_rules");
         for (order, rule) in self.plan.collection_rules.iter().enumerate() {
@@ -582,6 +607,15 @@ fn format_input_origin(formatter: &mut Formatter, indent: usize, origin: &InputO
             formatter.string(indent, "kind", "analyzer");
             formatter.string(indent, "role", analyzer_role(*role));
         }
+        InputOrigin::CompilerExecutable { role } => {
+            formatter.string(indent, "kind", "compiler_executable");
+            formatter.string(indent, "role", compiler_executable_role(*role));
+        }
+        InputOrigin::CompilerCache { role } => {
+            formatter.string(indent, "kind", "compiler_cache");
+            formatter.string(indent, "role", compiler_cache_role(*role));
+        }
+        InputOrigin::MoldLinker => formatter.string(indent, "kind", "mold_linker"),
     }
 }
 
@@ -609,6 +643,31 @@ fn analyzer_role(role: AnalyzerRole) -> &'static str {
         AnalyzerRole::Python => "python",
         AnalyzerRole::Objcopy => "objcopy",
         AnalyzerRole::Strip => "strip",
+    }
+}
+
+fn compiler_executable_role(role: CompilerExecutableRole) -> &'static str {
+    match role {
+        CompilerExecutableRole::Cc => "cc",
+        CompilerExecutableRole::Cxx => "cxx",
+        CompilerExecutableRole::Objc => "objc",
+        CompilerExecutableRole::Objcxx => "objcxx",
+        CompilerExecutableRole::Cpp => "cpp",
+        CompilerExecutableRole::Objcpp => "objcpp",
+        CompilerExecutableRole::Objcxxcpp => "objcxxcpp",
+        CompilerExecutableRole::Ar => "ar",
+        CompilerExecutableRole::Ld => "ld",
+        CompilerExecutableRole::Objcopy => "objcopy",
+        CompilerExecutableRole::Nm => "nm",
+        CompilerExecutableRole::Ranlib => "ranlib",
+        CompilerExecutableRole::Strip => "strip",
+    }
+}
+
+fn compiler_cache_role(role: CompilerCacheRole) -> &'static str {
+    match role {
+        CompilerCacheRole::Ccache => "ccache",
+        CompilerCacheRole::Sccache => "sccache",
     }
 }
 
@@ -745,6 +804,19 @@ fn format_executable(
     formatter.close(indent);
 }
 
+fn format_executable_command(
+    formatter: &mut Formatter,
+    indent: usize,
+    name: &str,
+    command: &ExecutableCommandPlan,
+    build_lock: &BuildLock,
+) {
+    formatter.open(indent, name);
+    format_executable(formatter, indent + 1, "program", &command.program, build_lock);
+    formatter.string_list(indent + 1, "args", command.args.iter().map(String::as_str));
+    formatter.close(indent);
+}
+
 fn format_relation(formatter: &mut Formatter, indent: usize, label: &str, index: usize, relation: &RelationPlan) {
     formatter.indexed_open(indent, label, index);
     formatter.string(indent + 1, "kind", relation_kind(relation.kind));
@@ -846,11 +918,12 @@ mod tests {
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
             AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuilderLayout, CollectionRulePlan,
-            DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance, ExecutablePlan, ExecutionCredentials,
-            ExecutionPolicy, InputOrigin, JobExecutableRole, JobPlan, JobStepSection, LockedOutput, LockedOutputRef,
-            LockedPackage, LockedRequest, OutputPlan, PackageIdentity, PackageInputSelection, PhasePlan,
-            PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, ProfileFragmentProvenance,
-            RepositorySnapshot, RootMaterializationMode, policy_composition_identity, profile_aggregate_fingerprint,
+            CompilerCommandPlan, CompilerExecutableRole, DERIVATION_PLAN_SCHEMA_VERSION, DerivationProvenance,
+            ExecutableCommandPlan, ExecutablePlan, ExecutionCredentials, ExecutionPolicy, InputOrigin,
+            JobExecutableRole, JobPlan, JobStepSection, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest,
+            OutputPlan, PackageIdentity, PackageInputSelection, PhasePlan, PolicyLayerProvenance, PolicyProvenance,
+            PolicyTransitionProvenance, ProfileFragmentProvenance, RepositorySnapshot, RootMaterializationMode,
+            ToolchainCommandsPlan, policy_composition_identity, profile_aggregate_fingerprint,
         },
     };
 
@@ -970,24 +1043,38 @@ mod tests {
                     request: "binary(alpha)".to_owned(),
                     package_id: "alpha-id".to_owned(),
                     output: "out".to_owned(),
-                    origins: vec![
-                        InputOrigin::Build {
-                            selection: PackageInputSelection::Package,
-                            index: 0,
-                        },
-                        InputOrigin::OutputRuntime {
-                            output: "out".to_owned(),
-                            index: 0,
-                        },
-                        InputOrigin::JobExecutable {
-                            job: 0,
-                            phase: 0,
-                            phase_name: "build".to_owned(),
-                            section: JobStepSection::Steps,
-                            step: 0,
-                            role: JobExecutableRole::ShellDeclaredProgram { index: 0 },
-                        },
-                    ],
+                    origins: {
+                        let mut origins = vec![
+                            InputOrigin::Build {
+                                selection: PackageInputSelection::Package,
+                                index: 0,
+                            },
+                            InputOrigin::OutputRuntime {
+                                output: "out".to_owned(),
+                                index: 0,
+                            },
+                            InputOrigin::JobExecutable {
+                                job: 0,
+                                phase: 0,
+                                phase_name: "build".to_owned(),
+                                section: JobStepSection::Steps,
+                                step: 0,
+                                role: JobExecutableRole::ShellDeclaredProgram { index: 0 },
+                            },
+                            InputOrigin::CompilerCache {
+                                role: CompilerCacheRole::Ccache,
+                            },
+                            InputOrigin::CompilerCache {
+                                role: CompilerCacheRole::Sccache,
+                            },
+                        ];
+                        origins.extend(
+                            ToolchainCommandsPlan::COMPILER_ROLES
+                                .into_iter()
+                                .map(|role| InputOrigin::CompilerExecutable { role }),
+                        );
+                        origins
+                    },
                 },
                 LockedRequest {
                     request: "binary(objcopy)".to_owned(),
@@ -1215,6 +1302,23 @@ mod tests {
                 filesystems: Default::default(),
                 compiler_cache: true,
                 jobs: 8,
+            },
+            toolchain_commands: ToolchainCommandsPlan {
+                compilers: ToolchainCommandsPlan::COMPILER_ROLES
+                    .into_iter()
+                    .map(|role| CompilerCommandPlan {
+                        role,
+                        command: ExecutableCommandPlan {
+                            program: executable("alpha"),
+                            args: (role == CompilerExecutableRole::Cpp)
+                                .then(|| vec!["-E".to_owned()])
+                                .unwrap_or_default(),
+                        },
+                    })
+                    .collect(),
+                ccache: Some(executable("alpha")),
+                sccache: Some(executable("alpha")),
+                mold: None,
             },
             analysis: AnalysisPlan {
                 handlers: vec![AnalyzerKind::Elf, AnalyzerKind::Binary, AnalyzerKind::IncludeAny],

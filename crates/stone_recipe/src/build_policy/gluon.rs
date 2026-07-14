@@ -8,11 +8,11 @@ use thiserror::Error;
 
 use super::{
     AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArchivePreparationPolicySpec, ArrayPatch,
-    BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec, BuildProgramSpec, BuildRootPolicySpec,
-    BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec, CompilerFlagsSpec,
-    CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition,
-    GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec,
-    NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
+    BuildCommandSpec, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec, BuildProgramSpec,
+    BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
+    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
+    EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec,
+    NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
     RetiredTargetPolicySpec, SandboxCredentialPolicySpec, SandboxDevPolicySpec, SandboxFilesystemPolicySpec,
     SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, SourcePreparationPolicySpec,
     StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec,
@@ -20,9 +20,9 @@ use super::{
 };
 
 /// Version of the typed repository build-policy ABI.
-pub const BUILD_POLICY_ABI_VERSION: u32 = 3;
+pub const BUILD_POLICY_ABI_VERSION: u32 = 4;
 
-/// Pure helpers imported by policy roots as `cast.build_policy.v3`.
+/// Pure helpers imported by policy roots as `cast.build_policy.v4`.
 pub const GLUON_BUILD_POLICY_ABI: &str = include_str!("../../gluon/build_policy.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
@@ -124,14 +124,12 @@ enum GluonContextValue {
     Cpp,
     Objcpp,
     Objcxxcpp,
-    D,
     Ar,
     Ld,
     Objcopy,
     Nm,
     Ranlib,
     Strip,
-    CompilerPath,
     CcacheDir,
     SccacheDir,
     GoCacheDir,
@@ -184,20 +182,19 @@ struct GluonInstallLayoutSpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonCompilerToolsSpec {
-    cc: GluonTextSpec,
-    cxx: GluonTextSpec,
-    objc: GluonTextSpec,
-    objcxx: GluonTextSpec,
-    cpp: GluonTextSpec,
-    objcpp: GluonTextSpec,
-    objcxxcpp: GluonTextSpec,
-    d: GluonTextSpec,
-    ar: GluonTextSpec,
-    ld: GluonTextSpec,
-    objcopy: GluonTextSpec,
-    nm: GluonTextSpec,
-    ranlib: GluonTextSpec,
-    strip: GluonTextSpec,
+    cc: GluonBuildCommandSpec,
+    cxx: GluonBuildCommandSpec,
+    objc: GluonBuildCommandSpec,
+    objcxx: GluonBuildCommandSpec,
+    cpp: GluonBuildCommandSpec,
+    objcpp: GluonBuildCommandSpec,
+    objcxxcpp: GluonBuildCommandSpec,
+    ar: GluonBuildCommandSpec,
+    ld: GluonBuildCommandSpec,
+    objcopy: GluonBuildCommandSpec,
+    nm: GluonBuildCommandSpec,
+    ranlib: GluonBuildCommandSpec,
+    strip: GluonBuildCommandSpec,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -303,22 +300,19 @@ struct GluonAnalyzerToolsPolicySpec {
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonCompilerCachePolicySpec {
-    required_tools: Vec<GluonBuildToolSpec>,
-    default_path: String,
-    compiler_path: String,
+    ccache: GluonBuildProgramSpec,
+    sccache: GluonBuildProgramSpec,
     ccache_dir: String,
     sccache_dir: String,
     go_cache_dir: String,
     go_mod_cache_dir: String,
     cargo_cache_dir: String,
     zig_cache_dir: String,
-    rustc_wrapper: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonMoldPolicySpec {
-    required_tools: Vec<GluonBuildToolSpec>,
-    linker: GluonTextSpec,
+    linker: GluonBuildCommandSpec,
     flags: GluonCompilerFlagsSpec,
 }
 
@@ -386,6 +380,12 @@ struct GluonBuilderCommandSpec {
 struct GluonBuildProgramSpec {
     path: String,
     requirement: GluonBuildToolSpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuildCommandSpec {
+    program: GluonBuildProgramSpec,
+    args: Vec<String>,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -631,14 +631,12 @@ impl From<GluonContextValue> for ContextValue {
             GluonContextValue::Cpp => Self::Cpp,
             GluonContextValue::Objcpp => Self::Objcpp,
             GluonContextValue::Objcxxcpp => Self::Objcxxcpp,
-            GluonContextValue::D => Self::D,
             GluonContextValue::Ar => Self::Ar,
             GluonContextValue::Ld => Self::Ld,
             GluonContextValue::Objcopy => Self::Objcopy,
             GluonContextValue::Nm => Self::Nm,
             GluonContextValue::Ranlib => Self::Ranlib,
             GluonContextValue::Strip => Self::Strip,
-            GluonContextValue::CompilerPath => Self::CompilerPath,
             GluonContextValue::CcacheDir => Self::CcacheDir,
             GluonContextValue::SccacheDir => Self::SccacheDir,
             GluonContextValue::GoCacheDir => Self::GoCacheDir,
@@ -700,7 +698,7 @@ convert_record!(GluonInstallLayoutSpec => InstallLayoutSpec {
     bash_completions_dir, fish_completions_dir, elvish_completions_dir, zsh_completions_dir,
 });
 convert_record!(GluonCompilerToolsSpec => CompilerToolsSpec {
-    cc, cxx, objc, objcxx, cpp, objcpp, objcxxcpp, d, ar, ld, objcopy, nm, ranlib, strip,
+    cc, cxx, objc, objcxx, cpp, objcpp, objcxxcpp, ar, ld, objcopy, nm, ranlib, strip,
 });
 convert_record!(GluonToolchainsSpec => ToolchainsSpec { llvm, gnu });
 convert_record!(GluonPlatformPolicySpec => PlatformPolicySpec {
@@ -781,6 +779,15 @@ impl From<GluonBuildProgramSpec> for BuildProgramSpec {
     }
 }
 
+impl From<GluonBuildCommandSpec> for BuildCommandSpec {
+    fn from(value: GluonBuildCommandSpec) -> Self {
+        Self {
+            program: value.program.into(),
+            args: value.args,
+        }
+    }
+}
+
 fn convert_tools(tools: Vec<GluonBuildToolSpec>) -> Vec<BuildToolSpec> {
     tools.into_iter().map(Into::into).collect()
 }
@@ -826,16 +833,14 @@ impl From<GluonAnalyzerToolsPolicySpec> for AnalyzerToolsPolicySpec {
 impl From<GluonCompilerCachePolicySpec> for CompilerCachePolicySpec {
     fn from(value: GluonCompilerCachePolicySpec) -> Self {
         Self {
-            required_tools: convert_tools(value.required_tools),
-            default_path: value.default_path,
-            compiler_path: value.compiler_path,
+            ccache: value.ccache.into(),
+            sccache: value.sccache.into(),
             ccache_dir: value.ccache_dir,
             sccache_dir: value.sccache_dir,
             go_cache_dir: value.go_cache_dir,
             go_mod_cache_dir: value.go_mod_cache_dir,
             cargo_cache_dir: value.cargo_cache_dir,
             zig_cache_dir: value.zig_cache_dir,
-            rustc_wrapper: value.rustc_wrapper,
         }
     }
 }
@@ -843,7 +848,6 @@ impl From<GluonCompilerCachePolicySpec> for CompilerCachePolicySpec {
 impl From<GluonMoldPolicySpec> for MoldPolicySpec {
     fn from(value: GluonMoldPolicySpec) -> Self {
         Self {
-            required_tools: convert_tools(value.required_tools),
             linker: value.linker.into(),
             flags: value.flags.into(),
         }
@@ -1102,7 +1106,7 @@ pub fn evaluate_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("cast.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("cast.build_policy.v4", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)?;
 
@@ -1143,7 +1147,7 @@ pub fn evaluate_patch_gluon_with_inputs(
     import_policy.enable_array_primitives();
     import_policy.enable_string_primitives();
     import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("cast.build_policy.v3", GLUON_BUILD_POLICY_ABI)?;
+    import_policy.insert_embedded_module("cast.build_policy.v4", GLUON_BUILD_POLICY_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)?;
 

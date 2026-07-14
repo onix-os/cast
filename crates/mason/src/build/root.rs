@@ -7,10 +7,14 @@ use forge::{Installation, package, repository, util};
 use fs_err as fs;
 use stone_recipe::{
     ToolchainSpec,
-    build_policy::{AnalyzerKind, BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
+    build_policy::{
+        AnalyzerKind, BuildCommandSpec, BuildPolicySpec, BuildProgramSpec, BuildToolSpec, CompilerToolsSpec,
+        TargetEmulationSpec, TargetPolicySpec,
+    },
     derivation::{
-        AnalyzerRole, BuildLock, DerivationPlan, ExecutablePlan, InputOrigin, JobExecutableRole, JobStepSection,
-        LockedPackage, PackageInputSelection, RelationPlan, RepositorySnapshot, StepPlan,
+        AnalyzerRole, BuildLock, CompilerCacheRole, CompilerExecutableRole, DerivationPlan, ExecutablePlan,
+        InputOrigin, JobExecutableRole, JobStepSection, LockedPackage, PackageInputSelection, RelationPlan,
+        RepositorySnapshot, StepPlan,
     },
     package::{DependencySpec, PackageSpec},
 };
@@ -176,6 +180,21 @@ fn exact_package_ids(client: &forge::Client, build_lock: &BuildLock) -> Result<V
 fn frozen_executable_bindings(plan: &DerivationPlan) -> Result<Vec<forge::FrozenExecutableBinding>, Error> {
     let mut executables = Vec::<&ExecutablePlan>::new();
     executables.extend(
+        plan.toolchain_commands
+            .compilers
+            .iter()
+            .map(|compiler| &compiler.command.program),
+    );
+    executables.extend(
+        [
+            plan.toolchain_commands.ccache.as_ref(),
+            plan.toolchain_commands.sccache.as_ref(),
+            plan.toolchain_commands.mold.as_ref().map(|command| &command.program),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    executables.extend(
         [
             plan.analysis.tools.pkg_config.as_ref(),
             plan.analysis.tools.python.as_ref(),
@@ -278,6 +297,11 @@ fn inputs_for(
         ToolchainSpec::Gnu => ("build_root.toolchains.gnu", &policy.build_root.toolchains.gnu),
     };
     extend_policy_tools(&mut inputs, policy_source, toolchain_field, toolchain_tools)?;
+    let (compiler_field, compiler_tools) = match package.options.toolchain {
+        ToolchainSpec::Llvm => ("toolchains.llvm", &policy.toolchains.llvm),
+        ToolchainSpec::Gnu => ("toolchains.gnu", &policy.toolchains.gnu),
+    };
+    extend_compiler_commands(&mut inputs, policy_source, compiler_field, compiler_tools)?;
 
     if matches!(&target.emulation, TargetEmulationSpec::Emul32 { .. }) {
         extend_policy_tools(
@@ -300,19 +324,32 @@ fn inputs_for(
     }
 
     if package.mold {
-        extend_policy_tools(
+        push_policy_program_input(
             &mut inputs,
             policy_source,
-            "build_root.mold.required_tools",
-            &policy.build_root.mold.required_tools,
+            "build_root.mold.linker.program",
+            &policy.build_root.mold.linker.program,
+            InputOrigin::MoldLinker,
         )?;
     }
     if compiler_cache {
-        extend_policy_tools(
+        push_policy_program_input(
             &mut inputs,
             policy_source,
-            "build_root.compiler_cache.required_tools",
-            &policy.build_root.compiler_cache.required_tools,
+            "build_root.compiler_cache.ccache",
+            &policy.build_root.compiler_cache.ccache,
+            InputOrigin::CompilerCache {
+                role: CompilerCacheRole::Ccache,
+            },
+        )?;
+        push_policy_program_input(
+            &mut inputs,
+            policy_source,
+            "build_root.compiler_cache.sccache",
+            &policy.build_root.compiler_cache.sccache,
+            InputOrigin::CompilerCache {
+                role: CompilerCacheRole::Sccache,
+            },
         )?;
     }
 
@@ -429,6 +466,72 @@ fn extend_job_executables(inputs: &mut Vec<UnresolvedInput>, jobs: &[Job]) -> Re
             }
         }
     }
+    Ok(())
+}
+
+fn extend_compiler_commands(
+    inputs: &mut Vec<UnresolvedInput>,
+    policy_source: &str,
+    field: &str,
+    tools: &CompilerToolsSpec,
+) -> Result<(), Error> {
+    for (name, role, command) in [
+        ("cc", CompilerExecutableRole::Cc, &tools.cc),
+        ("cxx", CompilerExecutableRole::Cxx, &tools.cxx),
+        ("objc", CompilerExecutableRole::Objc, &tools.objc),
+        ("objcxx", CompilerExecutableRole::Objcxx, &tools.objcxx),
+        ("cpp", CompilerExecutableRole::Cpp, &tools.cpp),
+        ("objcpp", CompilerExecutableRole::Objcpp, &tools.objcpp),
+        ("objcxxcpp", CompilerExecutableRole::Objcxxcpp, &tools.objcxxcpp),
+        ("ar", CompilerExecutableRole::Ar, &tools.ar),
+        ("ld", CompilerExecutableRole::Ld, &tools.ld),
+        ("objcopy", CompilerExecutableRole::Objcopy, &tools.objcopy),
+        ("nm", CompilerExecutableRole::Nm, &tools.nm),
+        ("ranlib", CompilerExecutableRole::Ranlib, &tools.ranlib),
+        ("strip", CompilerExecutableRole::Strip, &tools.strip),
+    ] {
+        push_policy_command_input(
+            inputs,
+            policy_source,
+            &format!("{field}.{name}.program"),
+            command,
+            InputOrigin::CompilerExecutable { role },
+        )?;
+    }
+    Ok(())
+}
+
+fn push_policy_command_input(
+    inputs: &mut Vec<UnresolvedInput>,
+    policy_source: &str,
+    field: &str,
+    command: &BuildCommandSpec,
+    origin: InputOrigin,
+) -> Result<(), Error> {
+    push_policy_program_input(inputs, policy_source, field, &command.program, origin)
+}
+
+fn push_policy_program_input(
+    inputs: &mut Vec<UnresolvedInput>,
+    policy_source: &str,
+    field: &str,
+    program: &BuildProgramSpec,
+    origin: InputOrigin,
+) -> Result<(), Error> {
+    let request = build_tool_name(&program.requirement).map_err(|source| Error::InvalidPolicyInput {
+        field: field.to_owned(),
+        index: 0,
+        source,
+    })?;
+    inputs.push(UnresolvedInput {
+        request: request.clone(),
+        origin: InputOrigin::Policy {
+            source: policy_source.to_owned(),
+            field: field.to_owned(),
+            index: 0,
+        },
+    });
+    inputs.push(UnresolvedInput { request, origin });
     Ok(())
 }
 
@@ -760,6 +863,46 @@ let base = cast.mk_package (cast.meta {
     }
 
     #[test]
+    fn repository_base_does_not_request_ambient_or_interactive_tools() {
+        let policy = repository_policy();
+        let package = selected_inputs_package();
+        let target = policy.targets.iter().find(|target| target.name == "x86_64").unwrap();
+        let requests = inputs_for(&policy, "policy.glu", &package, None, target, false)
+            .unwrap()
+            .into_iter()
+            .map(|input| input.request)
+            .collect::<BTreeSet<_>>();
+
+        for removed in [
+            "bash",
+            "cast",
+            "coreutils",
+            "dash",
+            "diffutils",
+            "findutils",
+            "gawk",
+            "grep",
+            "libarchive",
+            "os-info",
+            "pkgconf",
+            "sed",
+            "util-linux",
+            "binary(git)",
+            "binary(hx)",
+            "binary(less)",
+            "binary(nano)",
+            "binary(ps)",
+            "binary(rg)",
+            "binary(vim)",
+        ] {
+            assert!(!requests.contains(removed), "unexpected ambient request {removed}");
+        }
+        assert!(requests.contains("glibc-devel"));
+        assert!(requests.contains("layout"));
+        assert!(requests.contains("linux-headers"));
+    }
+
+    #[test]
     fn selected_root_features_combine_typed_policy_and_builder_tools() {
         let mut policy = repository_policy();
         policy.build_root.base = vec![BuildToolSpec::Package("policy-base".to_owned())];
@@ -768,8 +911,18 @@ let base = cast.mk_package (cast.meta {
         policy.build_root.emul32.base = vec![BuildToolSpec::SystemBinary("policy-emul-base".to_owned())];
         policy.build_root.emul32.toolchains.llvm = vec![BuildToolSpec::Package("wrong-llvm32".to_owned())];
         policy.build_root.emul32.toolchains.gnu = vec![BuildToolSpec::Package("policy-gnu32".to_owned())];
-        policy.build_root.mold.required_tools = vec![BuildToolSpec::Binary("policy-mold".to_owned())];
-        policy.build_root.compiler_cache.required_tools = vec![BuildToolSpec::Binary("policy-cache".to_owned())];
+        policy.build_root.mold.linker.program = BuildProgramSpec {
+            path: "/usr/bin/policy-mold".to_owned(),
+            requirement: BuildToolSpec::Binary("policy-mold".to_owned()),
+        };
+        policy.build_root.compiler_cache.ccache = BuildProgramSpec {
+            path: "/usr/bin/policy-cache".to_owned(),
+            requirement: BuildToolSpec::Binary("policy-cache".to_owned()),
+        };
+        policy.build_root.compiler_cache.sccache = BuildProgramSpec {
+            path: "/usr/bin/policy-scache".to_owned(),
+            requirement: BuildToolSpec::Binary("policy-scache".to_owned()),
+        };
 
         let mut package = selected_inputs_package();
         package.options.toolchain = ToolchainSpec::Gnu;
@@ -815,11 +968,18 @@ let base = cast.mk_package (cast.meta {
             "base-check",
             "base-native",
             "binary(ninja)",
+            "binary(g++)",
+            "binary(gcc)",
+            "binary(gcc-ar)",
+            "binary(gcc-nm)",
+            "binary(gcc-ranlib)",
+            "binary(ld.bfd)",
             "binary(objcopy)",
             "binary(pkg-config)",
             "binary(policy-cache)",
             "binary(policy-gnu)",
             "binary(policy-mold)",
+            "binary(policy-scache)",
             "binary(python3)",
             "binary(strip)",
             "policy-base",
@@ -890,6 +1050,19 @@ let base = cast.mk_package (cast.meta {
                     role: AnalyzerRole::Objcopy,
                 },
             ),
+            (
+                "binary(gcc)",
+                InputOrigin::CompilerExecutable {
+                    role: CompilerExecutableRole::Cc,
+                },
+            ),
+            (
+                "binary(policy-cache)",
+                InputOrigin::CompilerCache {
+                    role: CompilerCacheRole::Ccache,
+                },
+            ),
+            ("binary(policy-mold)", InputOrigin::MoldLinker),
         ] {
             assert!(
                 inputs
@@ -898,6 +1071,7 @@ let base = cast.mk_package (cast.meta {
                 "missing {request:?} origin {origin:?}"
             );
         }
+        assert!(!packages.contains("binary(ldc2)"));
     }
 
     #[test]
@@ -1039,7 +1213,7 @@ let base = cast.mk_package (cast.meta {
         let plan = crate::package::test_derivation_plan();
         let bindings = frozen_executable_bindings(&plan).unwrap();
 
-        assert_eq!(bindings.len(), 3);
+        assert_eq!(bindings.len(), 16);
         assert_eq!(
             bindings
                 .iter()

@@ -78,14 +78,18 @@ fn evaluates_repository_build_policy_as_typed_data() {
     );
     assert_eq!(
         evaluated.fingerprint.imported_modules[0].logical_name,
-        "cast.build_policy.v3"
+        "cast.build_policy.v4"
     );
 }
 
 #[test]
-fn build_policy_v3_is_a_hard_abi_boundary() {
-    assert_eq!(BUILD_POLICY_ABI_VERSION, 3);
-    for retired in ["boulder.build_policy.v3", "cast.build_policy.v2"] {
+fn build_policy_v4_is_a_hard_abi_boundary() {
+    assert_eq!(BUILD_POLICY_ABI_VERSION, 4);
+    for retired in [
+        "boulder.build_policy.v3",
+        "cast.build_policy.v3",
+        "cast.build_policy.v2",
+    ] {
         let error = evaluate_gluon(&Source::new("retired-policy.glu", format!("import! {retired}"))).unwrap_err();
         assert!(error.to_string().contains(retired));
     }
@@ -628,28 +632,10 @@ fn repository_build_root_inputs_preserve_relation_kinds_and_conditions() {
 
     assert_eq!(
         root.base,
-        [
-            "bash",
-            "cast",
-            "coreutils",
-            "dash",
-            "diffutils",
-            "findutils",
-            "gawk",
-            "glibc-devel",
-            "grep",
-            "layout",
-            "libarchive",
-            "linux-headers",
-            "os-info",
-            "pkgconf",
-            "sed",
-            "util-linux",
-        ]
-        .map(|name| BuildToolSpec::Package(name.to_owned()))
-        .into_iter()
-        .chain(["git", "hx", "less", "nano", "ps", "rg", "vim"].map(|name| BuildToolSpec::Binary(name.to_owned())),)
-        .collect::<Vec<_>>()
+        ["glibc-devel", "layout", "linux-headers"]
+            .map(|name| BuildToolSpec::Package(name.to_owned()))
+            .into_iter()
+            .collect::<Vec<_>>()
     );
     assert_eq!(root.toolchains.llvm, [BuildToolSpec::Package("clang".to_owned())]);
     assert_eq!(
@@ -671,12 +657,15 @@ fn repository_build_root_inputs_preserve_relation_kinds_and_conditions() {
             BuildToolSpec::Package("libstdc++-32bit-devel".to_owned()),
         ]
     );
+    assert_eq!(root.compiler_cache.ccache.path, "/usr/bin/ccache");
     assert_eq!(
-        root.compiler_cache.required_tools,
-        [
-            BuildToolSpec::Binary("ccache".to_owned()),
-            BuildToolSpec::Binary("sccache".to_owned()),
-        ]
+        root.compiler_cache.ccache.requirement,
+        BuildToolSpec::Binary("ccache".to_owned())
+    );
+    assert_eq!(root.compiler_cache.sccache.path, "/usr/bin/sccache");
+    assert_eq!(
+        root.compiler_cache.sccache.requirement,
+        BuildToolSpec::Binary("sccache".to_owned())
     );
     assert_eq!(
         root.analyzer_tools.pkg_config,
@@ -711,15 +700,14 @@ fn repository_sandbox_and_cache_paths_are_explicit_guest_abi() {
     assert_eq!(policy.sandbox.install_dir, "/mason/install");
 
     let cache = policy.build_root.compiler_cache;
-    assert_eq!(cache.default_path, "/usr/bin:/bin");
-    assert_eq!(cache.compiler_path, "/usr/lib/ccache/bin:/usr/bin:/bin");
+    assert_eq!(cache.ccache.path, "/usr/bin/ccache");
+    assert_eq!(cache.sccache.path, "/usr/bin/sccache");
     assert_eq!(cache.ccache_dir, "/mason/ccache");
     assert_eq!(cache.sccache_dir, "/mason/sccache");
     assert_eq!(cache.go_cache_dir, "/mason/gocache");
     assert_eq!(cache.go_mod_cache_dir, "/mason/gomodcache");
     assert_eq!(cache.cargo_cache_dir, "/mason/cargocache");
     assert_eq!(cache.zig_cache_dir, "/mason/zigcache");
-    assert_eq!(cache.rustc_wrapper, "/usr/bin/sccache");
 }
 
 #[test]
@@ -772,8 +760,12 @@ fn repository_source_preparation_is_argv_preserving_policy() {
 #[test]
 fn repository_mold_policy_owns_linker_closure_and_flags() {
     let mold = repository_policy_value().build_root.mold;
-    assert_eq!(mold.required_tools, [BuildToolSpec::Binary("mold".to_owned())]);
-    assert_eq!(mold.linker, TextSpec::Literal("ld.mold".to_owned()));
+    assert_eq!(mold.linker.program.path, "/usr/bin/ld.mold");
+    assert_eq!(
+        mold.linker.program.requirement,
+        BuildToolSpec::Binary("ld.mold".to_owned())
+    );
+    assert!(mold.linker.args.is_empty());
     assert_eq!(mold.flags.c, [TextSpec::Literal("-fuse-ld=mold".to_owned())]);
     assert_eq!(mold.flags.cxx, [TextSpec::Literal("-fuse-ld=mold".to_owned())]);
     assert_eq!(
@@ -913,6 +905,14 @@ fn repository_environment_preserves_base_and_target_specific_values() {
         environment_binding(&policy.environment, "NINJA_STATUS").value,
         TextSpec::Literal("[%f/%t %es (%P)] ".to_owned())
     );
+    let path_bindings = policy
+        .environment
+        .iter()
+        .filter(|binding| binding.name == "PATH")
+        .collect::<Vec<_>>();
+    assert_eq!(path_bindings.len(), 1);
+    assert_eq!(path_bindings[0].condition, EnvironmentCondition::Always);
+    assert_eq!(path_bindings[0].value, TextSpec::Literal("/usr/bin:/bin".to_owned()));
 }
 
 #[test]
@@ -953,13 +953,40 @@ fn pgo_command_policy_is_complete_before_lowering() {
 }
 
 #[test]
+fn compiler_commands_are_absolute_tokenized_and_provider_bound() {
+    let policy = repository_policy_value();
+    assert_eq!(policy.toolchains.llvm.cc.program.path, "/usr/bin/clang");
+    assert_eq!(
+        policy.toolchains.llvm.cc.program.requirement,
+        BuildToolSpec::Binary("clang".to_owned())
+    );
+    assert!(policy.toolchains.llvm.cc.args.is_empty());
+    assert_eq!(policy.toolchains.llvm.objcpp.args, ["-E", "-"]);
+    assert_eq!(policy.toolchains.gnu.cpp.args, ["-E"]);
+    assert!(!include_str!("../../mason/data/policy/default.glu").contains("ldc2"));
+
+    let mut mismatched = policy;
+    mismatched.toolchains.llvm.cc.program.path = "/usr/bin/gcc".to_owned();
+    assert!(matches!(
+        mismatched.validate(),
+        Err(BuildPolicyConversionError::ProgramPathMismatch {
+            field,
+            expected,
+            found,
+        }) if field == "toolchains.llvm.cc.program.path"
+            && expected == "/usr/bin/clang"
+            && found == "/usr/bin/gcc"
+    ));
+}
+
+#[test]
 fn root_source_sandbox_and_platform_semantics_are_rejected_early() {
     let mut policy = repository_policy_value();
     policy.build_root.base.push(policy.build_root.base[0].clone());
     assert!(matches!(
         policy.validate(),
         Err(BuildPolicyConversionError::Duplicate { field, value })
-            if field == "build_root.base" && value == "bash"
+            if field == "build_root.base" && value == "glibc-devel"
     ));
 
     for path in [

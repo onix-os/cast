@@ -587,7 +587,7 @@ mod direct_tests {
         assert_eq!(environment["CAST_PACKAGE_NAME"], "hello");
         assert_eq!(environment["CAST_JOBS"], "3");
         assert_eq!(environment["SOURCE_DATE_EPOCH"], "1700000000");
-        assert_eq!(environment["CC"], "clang");
+        assert_eq!(environment["CC"], "/usr/bin/clang");
     }
 
     #[test]

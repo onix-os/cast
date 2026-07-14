@@ -1,14 +1,14 @@
 derivation_explain {
   schema {
-    derivation_plan = 13
-    build_lock = 5
+    derivation_plan = 14
+    build_lock = 6
   }
   identity {
     cast_version = "0.26.6"
     cast_fingerprint = "sha256:cast"
     recipe = "9a77dd152cbee683b8f15a7f9747c7c3bd9bc00c1532cbf58b4c917dbdb0ad69"
     source_lock = "0c8daa837ae85ce563712fb58b7f3bedb0e9bd36a8d69e89499c05b1e9f13950"
-    build_lock = "d896b38287f6b8c019941abe839e2ebd786442cf762bdbb9b183e3df01c8efda"
+    build_lock = "49f3c5f4f1fa5fabec3b9b985b2572f5cad7e2ae6663b8288f7744e88e9078a7"
     request = "locked-request-fingerprint"
   }
   recipe_provenance {
@@ -269,6 +269,66 @@ derivation_explain {
           role = "shell_declared_program"
           program_index = 0
         }
+        origin 3 {
+          kind = "compiler_executable"
+          role = "cc"
+        }
+        origin 4 {
+          kind = "compiler_executable"
+          role = "cxx"
+        }
+        origin 5 {
+          kind = "compiler_executable"
+          role = "objc"
+        }
+        origin 6 {
+          kind = "compiler_executable"
+          role = "objcxx"
+        }
+        origin 7 {
+          kind = "compiler_executable"
+          role = "cpp"
+        }
+        origin 8 {
+          kind = "compiler_executable"
+          role = "objcpp"
+        }
+        origin 9 {
+          kind = "compiler_executable"
+          role = "objcxxcpp"
+        }
+        origin 10 {
+          kind = "compiler_executable"
+          role = "ar"
+        }
+        origin 11 {
+          kind = "compiler_executable"
+          role = "ld"
+        }
+        origin 12 {
+          kind = "compiler_executable"
+          role = "objcopy"
+        }
+        origin 13 {
+          kind = "compiler_executable"
+          role = "nm"
+        }
+        origin 14 {
+          kind = "compiler_executable"
+          role = "ranlib"
+        }
+        origin 15 {
+          kind = "compiler_executable"
+          role = "strip"
+        }
+        origin 16 {
+          kind = "compiler_cache"
+          role = "ccache"
+        }
+        origin 17 {
+          kind = "compiler_cache"
+          role = "sccache"
+        }
       }
     }
     request 1 {
@@ -515,6 +575,178 @@ derivation_explain {
     compiler_cache = true
     jobs = 8
   }
+  toolchain_commands {
+    compilers {
+      compiler 0 {
+        role = "cc"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 1 {
+        role = "cxx"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 2 {
+        role = "objc"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 3 {
+        role = "objcxx"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 4 {
+        role = "cpp"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = ["-E"]
+        }
+      }
+      compiler 5 {
+        role = "objcpp"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 6 {
+        role = "objcxxcpp"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 7 {
+        role = "ar"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 8 {
+        role = "ld"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 9 {
+        role = "objcopy"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 10 {
+        role = "nm"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 11 {
+        role = "ranlib"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+      compiler 12 {
+        role = "strip"
+        command {
+          program {
+            path = "/usr/bin/alpha"
+            requirement = "binary(alpha)"
+            package_id = "alpha-id"
+            output = "out"
+          }
+          args = []
+        }
+      }
+    }
+    ccache {
+      path = "/usr/bin/alpha"
+      requirement = "binary(alpha)"
+      package_id = "alpha-id"
+      output = "out"
+    }
+    sccache {
+      path = "/usr/bin/alpha"
+      requirement = "binary(alpha)"
+      package_id = "alpha-id"
+      output = "out"
+    }
+  }
   analyzers {
     analyzer 0 {
       order = 0
@@ -617,6 +849,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "9d99231f6d91afbb3167331b4f41f0500bb39cc1e77bc0ac5736b34d929931b0"
+    derivation_id = "6e24f4248fea34c4ee2a7fa3e8d131eb8425c985c0694f309bb71260f8ba2f20"
   }
 }

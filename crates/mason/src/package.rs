@@ -33,7 +33,7 @@ use publish::{
 };
 
 #[cfg(test)]
-pub(crate) use emit::test_derivation_plan;
+pub(crate) use emit::{set_test_compiler_cache, test_derivation_plan};
 
 pub struct Packager {
     packages: BTreeMap<String, ResolvedOutput>,

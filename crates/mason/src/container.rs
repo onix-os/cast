@@ -286,7 +286,7 @@ mod tests {
         let default_id = default_plan.derivation_id();
         let mut plan = default_plan;
         plan.layout = non_default_layout();
-        plan.execution.compiler_cache = true;
+        package::set_test_compiler_cache(&mut plan, true);
         plan.validate().unwrap();
         let derivation_id = plan.derivation_id();
         let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();

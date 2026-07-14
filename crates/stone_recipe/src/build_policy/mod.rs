@@ -75,14 +75,12 @@ pub enum ContextValue {
     Cpp,
     Objcpp,
     Objcxxcpp,
-    D,
     Ar,
     Ld,
     Objcopy,
     Nm,
     Ranlib,
     Strip,
-    CompilerPath,
     CcacheDir,
     SccacheDir,
     GoCacheDir,
@@ -245,20 +243,32 @@ pub struct InstallLayoutSpec {
 /// Executable names selected by one compiler toolchain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompilerToolsSpec {
-    pub cc: TextSpec,
-    pub cxx: TextSpec,
-    pub objc: TextSpec,
-    pub objcxx: TextSpec,
-    pub cpp: TextSpec,
-    pub objcpp: TextSpec,
-    pub objcxxcpp: TextSpec,
-    pub d: TextSpec,
-    pub ar: TextSpec,
-    pub ld: TextSpec,
-    pub objcopy: TextSpec,
-    pub nm: TextSpec,
-    pub ranlib: TextSpec,
-    pub strip: TextSpec,
+    pub cc: BuildCommandSpec,
+    pub cxx: BuildCommandSpec,
+    pub objc: BuildCommandSpec,
+    pub objcxx: BuildCommandSpec,
+    pub cpp: BuildCommandSpec,
+    pub objcpp: BuildCommandSpec,
+    pub objcxxcpp: BuildCommandSpec,
+    pub ar: BuildCommandSpec,
+    pub ld: BuildCommandSpec,
+    pub objcopy: BuildCommandSpec,
+    pub nm: BuildCommandSpec,
+    pub ranlib: BuildCommandSpec,
+    pub strip: BuildCommandSpec,
+}
+
+/// One executable and its exact, already-tokenized command arguments.
+///
+/// Unlike [`BuilderCommandSpec`], compiler commands are static repository
+/// policy: they have no working directory, environment overlay, or context
+/// expansion. This makes every executable capability visible to dependency
+/// locking while still allowing tools such as preprocessors to carry fixed
+/// arguments without embedding shell syntax in a string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildCommandSpec {
+    pub program: BuildProgramSpec,
+    pub args: Vec<String>,
 }
 
 /// Both supported compiler toolchains are named fields rather than a dynamic
@@ -453,27 +463,24 @@ pub struct AnalyzerToolsPolicySpec {
     pub gnu: AnalyzerToolchainPolicySpec,
 }
 
-/// Fixed compiler-cache inputs and guest paths.
+/// Fixed compiler-cache executables and guest cache paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompilerCachePolicySpec {
-    pub required_tools: Vec<BuildToolSpec>,
-    pub default_path: String,
-    pub compiler_path: String,
+    pub ccache: BuildProgramSpec,
+    pub sccache: BuildProgramSpec,
     pub ccache_dir: String,
     pub sccache_dir: String,
     pub go_cache_dir: String,
     pub go_mod_cache_dir: String,
     pub cargo_cache_dir: String,
     pub zig_cache_dir: String,
-    pub rustc_wrapper: String,
 }
 
 /// Mold is a selectable repository feature, not a package-authored shell
 /// fragment. Its linker executable, closure and language flags are all data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MoldPolicySpec {
-    pub required_tools: Vec<BuildToolSpec>,
-    pub linker: TextSpec,
+    pub linker: BuildCommandSpec,
     pub flags: CompilerFlagsSpec,
 }
 
@@ -956,6 +963,8 @@ pub enum BuildPolicyConversionError {
     },
     #[error("{field}: package-bound executable path `{value}` must not use the binary provider namespaces")]
     AmbiguousPackageProgram { field: String, value: String },
+    #[error("{field}: command argument contains an embedded NUL byte")]
+    InvalidCommandArgument { field: String },
 }
 
 struct ResourceValidator {
@@ -1187,7 +1196,6 @@ impl ResourceValidator {
             ("cpp", &tools.cpp),
             ("objcpp", &tools.objcpp),
             ("objcxxcpp", &tools.objcxxcpp),
-            ("d", &tools.d),
             ("ar", &tools.ar),
             ("ld", &tools.ld),
             ("objcopy", &tools.objcopy),
@@ -1195,7 +1203,7 @@ impl ResourceValidator {
             ("ranlib", &tools.ranlib),
             ("strip", &tools.strip),
         ] {
-            self.text(&format!("{field}.{name}"), value)?;
+            self.build_command(&format!("{field}.{name}"), value)?;
         }
         Ok(())
     }
@@ -1271,22 +1279,19 @@ impl ResourceValidator {
             self.tool(field, tool)?;
         }
         let cache = &root.compiler_cache;
-        self.tools("build_root.compiler_cache.required_tools", &cache.required_tools)?;
+        self.program("build_root.compiler_cache.ccache", &cache.ccache)?;
+        self.program("build_root.compiler_cache.sccache", &cache.sccache)?;
         for (name, value) in [
-            ("default_path", &cache.default_path),
-            ("compiler_path", &cache.compiler_path),
             ("ccache_dir", &cache.ccache_dir),
             ("sccache_dir", &cache.sccache_dir),
             ("go_cache_dir", &cache.go_cache_dir),
             ("go_mod_cache_dir", &cache.go_mod_cache_dir),
             ("cargo_cache_dir", &cache.cargo_cache_dir),
             ("zig_cache_dir", &cache.zig_cache_dir),
-            ("rustc_wrapper", &cache.rustc_wrapper),
         ] {
             self.string(&format!("build_root.compiler_cache.{name}"), value)?;
         }
-        self.tools("build_root.mold.required_tools", &root.mold.required_tools)?;
-        self.text("build_root.mold.linker", &root.mold.linker)?;
+        self.build_command("build_root.mold.linker", &root.mold.linker)?;
         self.compiler_flags("build_root.mold.flags", &root.mold.flags)
     }
 
@@ -1395,6 +1400,19 @@ impl ResourceValidator {
             self.limits.max_builder_arguments,
         )?;
         self.bindings(&format!("{field}.environment"), &command.environment)
+    }
+
+    fn build_command(&mut self, field: &str, command: &BuildCommandSpec) -> Result<(), BuildPolicyConversionError> {
+        self.program(&format!("{field}.program"), &command.program)?;
+        self.collection(
+            &format!("{field}.args"),
+            command.args.len(),
+            self.limits.max_builder_arguments,
+        )?;
+        for (index, argument) in command.args.iter().enumerate() {
+            self.string(&format!("{field}.args[{index}]"), argument)?;
+        }
+        Ok(())
     }
 
     fn program(&mut self, field: &str, program: &BuildProgramSpec) -> Result<(), BuildPolicyConversionError> {
@@ -1763,9 +1781,8 @@ fn validate_build_root(
     validate_analyzer_tools(&build_root.analyzer_tools)?;
 
     let cache = &build_root.compiler_cache;
-    validate_tools("build_root.compiler_cache.required_tools", &cache.required_tools)?;
-    require_string("build_root.compiler_cache.default_path", &cache.default_path)?;
-    require_string("build_root.compiler_cache.compiler_path", &cache.compiler_path)?;
+    validate_program("build_root.compiler_cache.ccache", &cache.ccache)?;
+    validate_program("build_root.compiler_cache.sccache", &cache.sccache)?;
     for (name, value) in [
         ("ccache_dir", &cache.ccache_dir),
         ("sccache_dir", &cache.sccache_dir),
@@ -1789,10 +1806,7 @@ fn validate_build_root(
         ("build_root.compiler_cache.cargo_cache_dir", &cache.cargo_cache_dir),
         ("build_root.compiler_cache.zig_cache_dir", &cache.zig_cache_dir),
     ])?;
-    validate_guest_path("build_root.compiler_cache.rustc_wrapper", &cache.rustc_wrapper)?;
-
-    validate_tools("build_root.mold.required_tools", &build_root.mold.required_tools)?;
-    require_text("build_root.mold.linker", &build_root.mold.linker)?;
+    validate_build_command("build_root.mold.linker", &build_root.mold.linker)?;
     validate_compiler_flags("build_root.mold.flags", &build_root.mold.flags)
 }
 
@@ -2090,7 +2104,6 @@ fn validate_tools_record(field: &str, tools: &CompilerToolsSpec) -> Result<(), B
         ("cpp", &tools.cpp),
         ("objcpp", &tools.objcpp),
         ("objcxxcpp", &tools.objcxxcpp),
-        ("d", &tools.d),
         ("ar", &tools.ar),
         ("ld", &tools.ld),
         ("objcopy", &tools.objcopy),
@@ -2098,7 +2111,19 @@ fn validate_tools_record(field: &str, tools: &CompilerToolsSpec) -> Result<(), B
         ("ranlib", &tools.ranlib),
         ("strip", &tools.strip),
     ] {
-        require_text(&format!("{field}.{name}"), value)?;
+        validate_build_command(&format!("{field}.{name}"), value)?;
+    }
+    Ok(())
+}
+
+fn validate_build_command(field: &str, command: &BuildCommandSpec) -> Result<(), BuildPolicyConversionError> {
+    validate_program(&format!("{field}.program"), &command.program)?;
+    for (index, argument) in command.args.iter().enumerate() {
+        if argument.contains('\0') {
+            return Err(BuildPolicyConversionError::InvalidCommandArgument {
+                field: format!("{field}.args[{index}]"),
+            });
+        }
     }
     Ok(())
 }

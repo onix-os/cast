@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 // Embedded, pure API imported by repository build policy as
-// `cast.build_policy.v3`.
+// `cast.build_policy.v4`.
 
 let _ = import! std.types
 let arrays = import! std.array.prim
@@ -60,14 +60,12 @@ type ContextValue =
     | Cpp
     | Objcpp
     | Objcxxcpp
-    | D
     | Ar
     | Ld
     | Objcopy
     | Nm
     | Ranlib
     | Strip
-    | CompilerPath
     | CcacheDir
     | SccacheDir
     | GoCacheDir
@@ -113,21 +111,35 @@ type InstallLayoutSpec = {
     zsh_completions_dir : TextSpec,
 }
 
+type BuildToolSpec =
+    | Package { target : String }
+    | Binary { target : String }
+    | SystemBinary { target : String }
+
+type BuildProgramSpec = {
+    path : String,
+    requirement : BuildToolSpec,
+}
+
+type BuildCommandSpec = {
+    program : BuildProgramSpec,
+    args : Array String,
+}
+
 type CompilerToolsSpec = {
-    cc : TextSpec,
-    cxx : TextSpec,
-    objc : TextSpec,
-    objcxx : TextSpec,
-    cpp : TextSpec,
-    objcpp : TextSpec,
-    objcxxcpp : TextSpec,
-    d : TextSpec,
-    ar : TextSpec,
-    ld : TextSpec,
-    objcopy : TextSpec,
-    nm : TextSpec,
-    ranlib : TextSpec,
-    strip : TextSpec,
+    cc : BuildCommandSpec,
+    cxx : BuildCommandSpec,
+    objc : BuildCommandSpec,
+    objcxx : BuildCommandSpec,
+    cpp : BuildCommandSpec,
+    objcpp : BuildCommandSpec,
+    objcxxcpp : BuildCommandSpec,
+    ar : BuildCommandSpec,
+    ld : BuildCommandSpec,
+    objcopy : BuildCommandSpec,
+    nm : BuildCommandSpec,
+    ranlib : BuildCommandSpec,
+    strip : BuildCommandSpec,
 }
 
 type ToolchainsSpec = {
@@ -194,16 +206,6 @@ type RetiredTargetPolicySpec = {
     reason : String,
 }
 
-type BuildToolSpec =
-    | Package { target : String }
-    | Binary { target : String }
-    | SystemBinary { target : String }
-
-type BuildProgramSpec = {
-    path : String,
-    requirement : BuildToolSpec,
-}
-
 type ToolchainInputPolicySpec = {
     llvm : Array BuildToolSpec,
     gnu : Array BuildToolSpec,
@@ -230,21 +232,18 @@ type AnalyzerToolsPolicySpec = {
 }
 
 type CompilerCachePolicySpec = {
-    required_tools : Array BuildToolSpec,
-    default_path : String,
-    compiler_path : String,
+    ccache : BuildProgramSpec,
+    sccache : BuildProgramSpec,
     ccache_dir : String,
     sccache_dir : String,
     go_cache_dir : String,
     go_mod_cache_dir : String,
     cargo_cache_dir : String,
     zig_cache_dir : String,
-    rustc_wrapper : String,
 }
 
 type MoldPolicySpec = {
-    required_tools : Array BuildToolSpec,
-    linker : TextSpec,
+    linker : BuildCommandSpec,
     flags : CompilerFlagsSpec,
 }
 
@@ -507,7 +506,7 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
 }
 
 {
-    abi_version = 3,
+    abi_version = 4,
     policy,
     policy_patch,
     text = {
@@ -563,14 +562,12 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
         cpp = Cpp,
         objcpp = Objcpp,
         objcxxcpp = Objcxxcpp,
-        d = D,
         ar = Ar,
         ld = Ld,
         objcopy = Objcopy,
         nm = Nm,
         ranlib = Ranlib,
         strip = Strip,
-        compiler_path = CompilerPath,
         ccache_dir = CcacheDir,
         sccache_dir = SccacheDir,
         go_cache_dir = GoCacheDir,

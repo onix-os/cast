@@ -90,11 +90,11 @@ freeze I/O-backed resolution:
 
 - `sources.lock.glu` schema v2 records archive hashes and binds each Git
   request to a commit and canonical normalized-checkout digest;
-- `build.lock.glu` schema v5 records the exact reachable package/output
+- `build.lock.glu` schema v6 records the exact reachable package/output
   closure, repository snapshots, platforms, policy identities, and typed input
   provenance.
 
-The derivation-plan schema is v13. It binds the Cast implementation identity,
+The derivation-plan schema is v14. It binds the Cast implementation identity,
 recipe and policy provenance, locks, resolved commands, environment, outputs,
 and reproducibility inputs into one SHA-256 derivation identity.
 

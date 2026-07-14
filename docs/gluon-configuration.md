@@ -22,7 +22,7 @@ constructed only during that conversion.
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
 | Cast package | `stone.glu` | `cast.package.v3` and `cast.builders.*.v2` |
-| Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v3` |
+| Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v4` |
 | Cast profile | `profile.glu` or `profile.d/*.glu` | `cast.profile.v1` |
 | Cast repository | `repo.glu` or `repo.d/*.glu` | `cast.repository.v1` |
 | Packaged Cast trigger | `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` | `cast.trigger.v1` |
@@ -290,7 +290,7 @@ schema freezes the executor ABI and implementation fingerprint separately inside
 `ExecutionPolicy`, so changing execution compatibility cannot be
 mistaken for changing authored builder structure. It also freezes the selected
 credential contract and every reachable analyzer program and provider request.
-The current derivation schema is v13; build-lock origins participate in both
+The current derivation schema is v14; build-lock origins participate in both
 the lock digest and the canonical derivation identity.
 
 The Cast implementation fingerprint is produced at compile time from the

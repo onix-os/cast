@@ -34,15 +34,15 @@ use crate::{
 
 pub use self::build_lock::{
     AnalyzerRole, BUILD_LOCK_FILE_NAME, BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError,
-    BuildLockValidationError, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedOutput,
-    LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection, Platform, RepositorySnapshot, RequestedInput,
-    decode_build_lock, encode_build_lock, requested_inputs_digest,
+    BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole, InputOrigin, JobExecutableRole,
+    JobStepSection, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection,
+    Platform, RepositorySnapshot, RequestedInput, decode_build_lock, encode_build_lock, requested_inputs_digest,
 };
 
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 13;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 14;
 
 /// Resource limits for process-facing data in one frozen derivation.
 ///
@@ -399,6 +399,7 @@ pub struct DerivationPlan {
     pub environment: BTreeMap<String, String>,
     pub layout: BuilderLayout,
     pub execution: ExecutionPolicy,
+    pub toolchain_commands: ToolchainCommandsPlan,
     pub analysis: AnalysisPlan,
     pub manifest_build_inputs: Vec<RelationPlan>,
     pub collection_rules: Vec<CollectionRulePlan>,
@@ -422,6 +423,7 @@ impl DerivationPlan {
             environment: BTreeMap::new(),
             layout: BuilderLayout::default(),
             execution: ExecutionPolicy::default(),
+            toolchain_commands: ToolchainCommandsPlan::default(),
             analysis: AnalysisPlan::default(),
             manifest_build_inputs: Vec::new(),
             collection_rules: Vec::new(),
@@ -473,6 +475,8 @@ impl DerivationPlan {
         }
         self.layout.validate()?;
         self.execution.validate()?;
+        self.toolchain_commands
+            .validate(&self.build_lock, self.execution.compiler_cache)?;
 
         let mut source_orders = BTreeSet::new();
         let mut source_destinations = BTreeMap::new();
@@ -605,6 +609,7 @@ impl DerivationPlan {
         encoder.map(&self.environment);
         self.layout.encode(&mut encoder);
         self.execution.encode(&mut encoder);
+        self.toolchain_commands.encode(&mut encoder);
 
         self.analysis.encode(&mut encoder);
         let mut manifest_build_inputs = self.manifest_build_inputs.clone();
@@ -1402,6 +1407,177 @@ impl ExecutablePlan {
     }
 }
 
+/// One frozen executable command with argv token identity preserved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutableCommandPlan {
+    pub program: ExecutablePlan,
+    pub args: Vec<String>,
+}
+
+impl ExecutableCommandPlan {
+    fn validate(&self, field: &str, build_lock: &BuildLock) -> Result<(), DerivationValidationError> {
+        self.program.validate(&format!("{field}.program"), build_lock)
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        self.program.encode(encoder);
+        encoder.strings(&self.args);
+    }
+}
+
+/// One semantic compiler role and its exact executable command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompilerCommandPlan {
+    pub role: CompilerExecutableRole,
+    pub command: ExecutableCommandPlan,
+}
+
+/// Every selected compiler, cache wrapper, and optional Mold command.
+///
+/// Compiler commands use a closed role sequence so a plan cannot silently
+/// omit an environment-visible tool or introduce an unclassified executable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolchainCommandsPlan {
+    pub compilers: Vec<CompilerCommandPlan>,
+    pub ccache: Option<ExecutablePlan>,
+    pub sccache: Option<ExecutablePlan>,
+    pub mold: Option<ExecutableCommandPlan>,
+}
+
+impl ToolchainCommandsPlan {
+    pub const COMPILER_ROLES: [CompilerExecutableRole; 13] = [
+        CompilerExecutableRole::Cc,
+        CompilerExecutableRole::Cxx,
+        CompilerExecutableRole::Objc,
+        CompilerExecutableRole::Objcxx,
+        CompilerExecutableRole::Cpp,
+        CompilerExecutableRole::Objcpp,
+        CompilerExecutableRole::Objcxxcpp,
+        CompilerExecutableRole::Ar,
+        CompilerExecutableRole::Ld,
+        CompilerExecutableRole::Objcopy,
+        CompilerExecutableRole::Nm,
+        CompilerExecutableRole::Ranlib,
+        CompilerExecutableRole::Strip,
+    ];
+
+    fn validate(&self, build_lock: &BuildLock, compiler_cache: bool) -> Result<(), DerivationValidationError> {
+        if self.compilers.len() != Self::COMPILER_ROLES.len() {
+            return Err(DerivationValidationError::CompilerCommandCount {
+                found: self.compilers.len(),
+                expected: Self::COMPILER_ROLES.len(),
+            });
+        }
+        for (index, (compiler, expected)) in self.compilers.iter().zip(Self::COMPILER_ROLES).enumerate() {
+            if compiler.role != expected {
+                return Err(DerivationValidationError::UnexpectedCompilerCommandRole {
+                    index,
+                    expected,
+                    found: compiler.role,
+                });
+            }
+            compiler
+                .command
+                .validate(&format!("toolchain_commands.compilers[{index}].command"), build_lock)?;
+            require_executable_origin(
+                build_lock,
+                &compiler.command.program,
+                &format!("toolchain_commands.compilers[{index}].command.program.requirement"),
+                &InputOrigin::CompilerExecutable { role: expected },
+            )?;
+        }
+
+        if self.ccache.is_some() != compiler_cache || self.sccache.is_some() != compiler_cache {
+            return Err(DerivationValidationError::CompilerCacheCommandMismatch {
+                enabled: compiler_cache,
+                ccache: self.ccache.is_some(),
+                sccache: self.sccache.is_some(),
+            });
+        }
+        if let Some(ccache) = &self.ccache {
+            ccache.validate("toolchain_commands.ccache", build_lock)?;
+            require_executable_origin(
+                build_lock,
+                ccache,
+                "toolchain_commands.ccache.requirement",
+                &InputOrigin::CompilerCache {
+                    role: CompilerCacheRole::Ccache,
+                },
+            )?;
+        }
+        if let Some(sccache) = &self.sccache {
+            sccache.validate("toolchain_commands.sccache", build_lock)?;
+            require_executable_origin(
+                build_lock,
+                sccache,
+                "toolchain_commands.sccache.requirement",
+                &InputOrigin::CompilerCache {
+                    role: CompilerCacheRole::Sccache,
+                },
+            )?;
+        }
+        if let Some(mold) = &self.mold {
+            mold.validate("toolchain_commands.mold", build_lock)?;
+            require_executable_origin(
+                build_lock,
+                &mold.program,
+                "toolchain_commands.mold.program.requirement",
+                &InputOrigin::MoldLinker,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn encode(&self, encoder: &mut CanonicalEncoder) {
+        encoder.sequence(&self.compilers, |encoder, compiler| {
+            compiler.role.encode(encoder);
+            compiler.command.encode(encoder);
+        });
+        encode_optional_executable(encoder, self.ccache.as_ref());
+        encode_optional_executable(encoder, self.sccache.as_ref());
+        match &self.mold {
+            Some(mold) => {
+                encoder.variant(1);
+                mold.encode(encoder);
+            }
+            None => encoder.variant(0),
+        }
+    }
+}
+
+fn require_executable_origin(
+    build_lock: &BuildLock,
+    executable: &ExecutablePlan,
+    field: &str,
+    expected: &InputOrigin,
+) -> Result<(), DerivationValidationError> {
+    let request = executable.requirement.canonical_name();
+    if build_lock
+        .requests
+        .iter()
+        .find(|locked| locked.request == request)
+        .is_some_and(|locked| locked.origins.contains(expected))
+    {
+        Ok(())
+    } else {
+        Err(DerivationValidationError::MissingExecutableInputOrigin {
+            field: field.to_owned(),
+            request,
+            expected: format!("{expected:?}"),
+        })
+    }
+}
+
+fn encode_optional_executable(encoder: &mut CanonicalEncoder, executable: Option<&ExecutablePlan>) {
+    match executable {
+        Some(executable) => {
+            encoder.variant(1);
+            executable.encode(encoder);
+        }
+        None => encoder.variant(0),
+    }
+}
+
 /// Exact analyzer programs reachable from the frozen handler/options graph.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnalysisToolsPlan {
@@ -1844,6 +2020,29 @@ impl ProcessDataBudget {
             }
         }
 
+        self.collection_with_limit(
+            "toolchain_commands.compilers",
+            plan.toolchain_commands.compilers.len(),
+            ToolchainCommandsPlan::COMPILER_ROLES.len(),
+        )?;
+        for (index, compiler) in plan.toolchain_commands.compilers.iter().enumerate() {
+            self.executable_command(
+                &format!("toolchain_commands.compilers[{index}].command"),
+                &compiler.command,
+            )?;
+        }
+        for (field, program) in [
+            ("toolchain_commands.ccache", plan.toolchain_commands.ccache.as_ref()),
+            ("toolchain_commands.sccache", plan.toolchain_commands.sccache.as_ref()),
+        ] {
+            if let Some(program) = program {
+                self.executable(field, program)?;
+            }
+        }
+        if let Some(mold) = &plan.toolchain_commands.mold {
+            self.executable_command("toolchain_commands.mold", mold)?;
+        }
+
         for (job_index, job) in plan.jobs.iter().enumerate() {
             let field = format!("jobs[{job_index}]");
             self.path(&format!("{field}.build_dir"), &job.build_dir)?;
@@ -1965,6 +2164,23 @@ impl ProcessDataBudget {
             self.limits.max_process_string_bytes,
             "bytes",
         )
+    }
+
+    fn executable_command(
+        &mut self,
+        field: &str,
+        command: &ExecutableCommandPlan,
+    ) -> Result<(), DerivationValidationError> {
+        self.executable(&format!("{field}.program"), &command.program)?;
+        self.collection_with_limit(
+            &format!("{field}.args"),
+            command.args.len(),
+            self.limits.max_arguments_per_step,
+        )?;
+        for (index, argument) in command.args.iter().enumerate() {
+            self.process_string(&format!("{field}.args[{index}]"), argument)?;
+        }
+        Ok(())
     }
 
     fn environment(
@@ -2260,6 +2476,26 @@ pub enum DerivationValidationError {
     AmbiguousPackageExecutable { field: String, value: String },
     #[error("{field}: executable provider request {request:?} is absent from build_lock.requests")]
     UnlockedExecutable { field: String, request: String },
+    #[error("{field}: locked request {request:?} is missing typed input origin {expected}")]
+    MissingExecutableInputOrigin {
+        field: String,
+        request: String,
+        expected: String,
+    },
+    #[error("toolchain_commands.compilers: expected {expected} compiler commands, found {found}")]
+    CompilerCommandCount { found: usize, expected: usize },
+    #[error(
+        "toolchain_commands.compilers[{index}].role: expected {expected:?} in canonical role order, found {found:?}"
+    )]
+    UnexpectedCompilerCommandRole {
+        index: usize,
+        expected: CompilerExecutableRole,
+        found: CompilerExecutableRole,
+    },
+    #[error(
+        "toolchain_commands cache selection does not match execution.compiler_cache={enabled} (ccache={ccache}, sccache={sccache})"
+    )]
+    CompilerCacheCommandMismatch { enabled: bool, ccache: bool, sccache: bool },
     #[error("{field}: unknown locked output `{package}:{output}`")]
     UnknownOutputReference {
         field: String,
@@ -2751,15 +2987,25 @@ mod tests {
                 "bash",
             ]
             .into_iter()
-            .map(|name| LockedRequest {
-                request: format!("binary({name})"),
-                package_id: "hello-id".to_owned(),
-                output: "out".to_owned(),
-                origins: vec![InputOrigin::Policy {
+            .map(|name| {
+                let mut origins = vec![InputOrigin::Policy {
                     source: "policy.glu".to_owned(),
                     field: "build_root.base".to_owned(),
                     index: 0,
-                }],
+                }];
+                if name == "cmake" {
+                    origins.extend(
+                        ToolchainCommandsPlan::COMPILER_ROLES
+                            .into_iter()
+                            .map(|role| InputOrigin::CompilerExecutable { role }),
+                    );
+                }
+                LockedRequest {
+                    request: format!("binary({name})"),
+                    package_id: "hello-id".to_owned(),
+                    output: "out".to_owned(),
+                    origins,
+                }
             }),
         );
         build_lock.policy.name = provenance.policy.name.clone();
@@ -2843,6 +3089,18 @@ mod tests {
             compiler_cache: false,
             jobs: 4,
         };
+        plan.toolchain_commands.compilers = ToolchainCommandsPlan::COMPILER_ROLES
+            .into_iter()
+            .map(|role| CompilerCommandPlan {
+                role,
+                command: ExecutableCommandPlan {
+                    program: sample_analyzer_tool("cmake"),
+                    args: (role == CompilerExecutableRole::Cpp)
+                        .then(|| vec!["-E".to_owned()])
+                        .unwrap_or_default(),
+                },
+            })
+            .collect();
         plan.analysis.handlers = vec![AnalyzerKind::Elf, AnalyzerKind::Python, AnalyzerKind::IncludeAny];
         plan.analysis.tools.python = Some(sample_analyzer_tool("python3"));
         plan.analysis.tools.strip = Some(sample_analyzer_tool("llvm-strip"));
@@ -2963,14 +3221,14 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_pre_cast_schema_twelve() {
+    fn validation_rejects_pre_toolchain_command_schema_thirteen() {
         let mut plan = sample_plan();
-        plan.schema_version = 12;
+        plan.schema_version = 13;
 
         assert!(matches!(
             plan.validate(),
             Err(DerivationValidationError::UnsupportedSchema {
-                found: 12,
+                found: 13,
                 expected: DERIVATION_PLAN_SCHEMA_VERSION,
             })
         ));
@@ -3002,6 +3260,21 @@ mod tests {
                 Box::new(|plan| {
                     plan.jobs[0].pgo_stage = Some("one".to_owned());
                     plan.jobs[0].pgo_dir = Some("/mason/pgo\0one".to_owned());
+                }),
+            ),
+            (
+                "toolchain_commands.compilers[0].command.program.path",
+                Box::new(|plan| {
+                    plan.toolchain_commands.compilers[0].command.program.path = "/usr/bin/cm\0ake".to_owned();
+                }),
+            ),
+            (
+                "toolchain_commands.compilers[0].command.args[0]",
+                Box::new(|plan| {
+                    plan.toolchain_commands.compilers[0]
+                        .command
+                        .args
+                        .push("bad\0argument".to_owned());
                 }),
             ),
             (
@@ -4449,6 +4722,36 @@ mod tests {
                 }),
             ),
             (
+                "compiler-command-path",
+                Box::new(|plan| {
+                    plan.toolchain_commands.compilers[0]
+                        .command
+                        .program
+                        .path
+                        .push_str("-changed");
+                }),
+            ),
+            (
+                "compiler-command-requirement",
+                Box::new(|plan| {
+                    plan.toolchain_commands.compilers[0]
+                        .command
+                        .program
+                        .requirement
+                        .name
+                        .push_str("-changed");
+                }),
+            ),
+            (
+                "compiler-command-argument",
+                Box::new(|plan| {
+                    plan.toolchain_commands.compilers[0]
+                        .command
+                        .args
+                        .push("--identity".to_owned());
+                }),
+            ),
+            (
                 "environment",
                 Box::new(|plan| {
                     plan.environment.insert("LANG".to_owned(), "C".to_owned());
@@ -4528,6 +4831,114 @@ mod tests {
             mutate(&mut changed);
             assert_ne!(original_id, changed.derivation_id(), "{name} mutation was not hashed");
         }
+    }
+
+    #[test]
+    fn toolchain_commands_are_complete_exact_locked_and_cache_consistent() {
+        let original = sample_plan();
+        original.validate().unwrap();
+
+        let mut missing = original.clone();
+        missing.toolchain_commands.compilers.pop();
+        assert!(matches!(
+            missing.validate(),
+            Err(DerivationValidationError::CompilerCommandCount {
+                found: 12,
+                expected: 13,
+            })
+        ));
+
+        let mut reordered = original.clone();
+        reordered.toolchain_commands.compilers.swap(0, 1);
+        assert!(matches!(
+            reordered.validate(),
+            Err(DerivationValidationError::UnexpectedCompilerCommandRole {
+                index: 0,
+                expected: CompilerExecutableRole::Cc,
+                found: CompilerExecutableRole::Cxx,
+            })
+        ));
+
+        let mut mismatched = original.clone();
+        mismatched.toolchain_commands.compilers[0].command.program.path = "/usr/bin/not-cmake".to_owned();
+        assert!(matches!(
+            mismatched.validate(),
+            Err(DerivationValidationError::ExecutablePathMismatch { field, .. })
+                if field == "toolchain_commands.compilers[0].command.program.path"
+        ));
+
+        let mut unlocked = original.clone();
+        unlocked.toolchain_commands.compilers[0].command.program = ExecutablePlan {
+            path: "/usr/bin/unlocked-compiler".to_owned(),
+            requirement: RelationPlan {
+                kind: RelationKind::Binary,
+                name: "unlocked-compiler".to_owned(),
+            },
+        };
+        assert!(matches!(
+            unlocked.validate(),
+            Err(DerivationValidationError::UnlockedExecutable { field, request })
+                if field == "toolchain_commands.compilers[0].command.program.requirement"
+                    && request == "binary(unlocked-compiler)"
+        ));
+
+        let mut missing_cache = original.clone();
+        missing_cache.execution.compiler_cache = true;
+        assert!(matches!(
+            missing_cache.validate(),
+            Err(DerivationValidationError::CompilerCacheCommandMismatch {
+                enabled: true,
+                ccache: false,
+                sccache: false,
+            })
+        ));
+
+        let mut cached = original.clone();
+        cached.execution.compiler_cache = true;
+        cached.toolchain_commands.ccache = Some(sample_analyzer_tool("cmake"));
+        cached.toolchain_commands.sccache = Some(sample_analyzer_tool("cmake"));
+        let cache_origins = &mut cached
+            .build_lock
+            .requests
+            .iter_mut()
+            .find(|request| request.request == "binary(cmake)")
+            .unwrap()
+            .origins;
+        cache_origins.extend([
+            InputOrigin::CompilerCache {
+                role: CompilerCacheRole::Ccache,
+            },
+            InputOrigin::CompilerCache {
+                role: CompilerCacheRole::Sccache,
+            },
+        ]);
+        cached.build_lock.normalize();
+        cached.validate().unwrap();
+        assert_ne!(original.derivation_id(), cached.derivation_id());
+
+        let mut mold = original.clone();
+        mold.toolchain_commands.mold = Some(ExecutableCommandPlan {
+            program: sample_analyzer_tool("cmake"),
+            args: vec!["--mold-identity".to_owned()],
+        });
+        mold.build_lock
+            .requests
+            .iter_mut()
+            .find(|request| request.request == "binary(cmake)")
+            .unwrap()
+            .origins
+            .push(InputOrigin::MoldLinker);
+        mold.build_lock.normalize();
+        mold.validate().unwrap();
+        assert_ne!(original.derivation_id(), mold.derivation_id());
+
+        let mut arguments = original.clone();
+        arguments.toolchain_commands.compilers[0]
+            .command
+            .args
+            .push("argument identity".to_owned());
+        arguments.validate().unwrap();
+        assert_ne!(original.derivation_id(), arguments.derivation_id());
     }
 
     #[test]
