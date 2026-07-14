@@ -1,0 +1,22 @@
+let b = import! cast.package.v3
+
+// The patch is an independently locked raw source rather than an untracked
+// file beside the recipe or hidden inside the primary source archive.
+[
+    b.source.archive_with {
+        url = "https://example.invalid/portable-check-4.0.0.tar.xz",
+        hash = "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+        rename = b.optional.set "portable-check.tar.xz",
+        strip_dirs = b.optional.set 1,
+        unpack = b.boolean.true,
+        unpack_dir = b.optional.set "portable-check",
+    },
+    b.source.archive_with {
+        url = "https://example.invalid/patches/portable-check-musl.patch",
+        hash = "56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+        rename = b.optional.set "portability.patch",
+        strip_dirs = b.optional.unset,
+        unpack = b.boolean.false,
+        unpack_dir = b.optional.unset,
+    },
+]

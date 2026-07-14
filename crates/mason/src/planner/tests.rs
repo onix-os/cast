@@ -52,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 37] = [
+const PACKAGE_EXAMPLES: [&str; 43] = [
     "autotools",
     "binary-release",
     "cargo",
@@ -62,12 +62,14 @@ const PACKAGE_EXAMPLES: [&str; 37] = [
     "custom-steps",
     "dependency-roles",
     "desktop-application",
+    "external-patch-source",
     "factory-override",
     "firmware-bundle",
     "font-family",
     "generated-schema-library",
     "gettext-catalogs",
     "go-module",
+    "header-only-library",
     "hooks",
     "kernel-module-factory",
     "layered-overrides",
@@ -83,10 +85,14 @@ const PACKAGE_EXAMPLES: [&str; 37] = [
     "output-tool-wrapper",
     "patch-series",
     "pgo-workload",
+    "platform-binary-factory",
     "platform-factory",
+    "post-install-smoke-test",
     "profiles-emul32",
     "python-module",
+    "raw-script-package",
     "realistic-daemon",
+    "release-source-factory",
     "split-outputs",
     "system-integration-assets",
     "zig-project",
@@ -106,6 +112,8 @@ const EXECUTION_FIXTURES: [&str; 10] = [
 
 #[path = "tests/bootstrap.rs"]
 mod bootstrap;
+#[path = "tests/documented_semantics.rs"]
+mod documented_semantics;
 
 #[cfg(feature = "delegated-fixture-test-support")]
 pub(super) fn run_delegated_execution_fixture() {
@@ -1156,7 +1164,7 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
         "zig-project" => assert_zig_project_semantics(declaration, plan),
-        _ => {}
+        _ => documented_semantics::assert_semantics(name, declaration, plan),
     }
 }
 

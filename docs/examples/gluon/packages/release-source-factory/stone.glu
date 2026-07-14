@@ -1,0 +1,4 @@
+let make_package = import! "./package.glu"
+let release = import! "./release.glu"
+
+make_package release

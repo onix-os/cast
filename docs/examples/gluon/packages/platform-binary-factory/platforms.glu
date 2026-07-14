@@ -1,0 +1,18 @@
+// Platform data includes the source identity and runtime loader capability.
+// Selecting a platform is an authored choice, never a uname or host lookup.
+{
+    x86_64 = {
+        architecture = "x86_64",
+        archive = "orbit-monitor-5.1.0-x86_64.tar.xz",
+        url = "https://example.invalid/platform-binary/orbit-monitor-5.1.0-x86_64.tar.xz",
+        sha256 = "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+        interpreter_path = "/usr/lib/ld-linux-x86-64.so.2(x86_64)",
+    },
+    aarch64 = {
+        architecture = "aarch64",
+        archive = "orbit-monitor-5.1.0-aarch64.tar.xz",
+        url = "https://example.invalid/platform-binary/orbit-monitor-5.1.0-aarch64.tar.xz",
+        sha256 = "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+        interpreter_path = "/usr/lib/ld-linux-aarch64.so.1(aarch64)",
+    },
+}

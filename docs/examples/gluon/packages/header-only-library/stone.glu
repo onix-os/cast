@@ -1,0 +1,60 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    check = b.phase [
+        // The compiler verifies a consumer, but the package itself emits no
+        // runtime library or executable.
+        b.step.run (b.program.binary "cc") ["-Iinclude", "-fsyntax-only", "tests/smoke.c"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+install -d "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header"
+install -m644 include/*.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header/"
+install -Dm644 vector-header.pc "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/vector-header.pc"
+install -Dm644 LICENSE "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/vector-header/LICENSE"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Vector header license metadata",
+    paths = [b.path.any "/usr/share/licenses/vector-header"],
+    .. b.output "out"
+}
+
+let development = b.output_with {
+    summary = b.optional.set "Header-only vector interfaces",
+    paths = [
+        b.path.any "/usr/include/vector-header",
+        b.path.any "/usr/lib/pkgconfig/vector-header.pc",
+    ],
+    .. b.output "devel"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "vector-header",
+    version = "1.8.0",
+    release = 1,
+    homepage = "https://example.invalid/vector-header",
+    license = ["MIT"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "cc",
+        b.dep.binary "install",
+    ],
+    outputs = [root, development],
+    sources = [
+        b.source.archive
+            "https://example.invalid/vector-header-1.8.0.tar.xz"
+            "6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345",
+    ],
+    architectures = ["native"],
+    .. base
+}
