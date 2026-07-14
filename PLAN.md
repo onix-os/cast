@@ -609,6 +609,9 @@ The final architecture must demonstrate:
 
 - Reimplementing the Nix language or Nix store.
 - Building a lazy recursive Nixpkgs clone inside Gluon.
+- Translating Nix expressions or evaluated Nix derivations into Gluon recipes.
+  Nixpkgs is design and example inspiration only, not a compatibility input or
+  alternate package-authoring frontend.
 - Automatic `callPackage` argument-name reflection in the initial design.
 - Evaluation-time fetching or import-from-derivation.
 - Accepting mutable recipe-directory inputs before a content-addressed local
