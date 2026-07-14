@@ -11,10 +11,16 @@
 use std::{
     borrow::Borrow,
     collections::{BTreeMap, BTreeSet},
-    fmt, io,
+    ffi::{CString, OsString},
+    fmt,
+    io::{self, Read},
+    mem::size_of,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
-        unix::fs::{PermissionsExt, symlink},
+        unix::{
+            ffi::{OsStrExt, OsStringExt},
+            fs::{MetadataExt, PermissionsExt, symlink},
+        },
     },
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -34,7 +40,7 @@ use nix::{
 };
 use postblit::TriggerScope;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use stone::{StoneDecodedPayload, StonePayloadLayoutFile, StonePayloadLayoutRecord};
+use stone::{StoneDecodedPayload, StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutRecord};
 use thiserror::Error;
 use tracing::{info, info_span, trace};
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
@@ -170,6 +176,14 @@ pub struct Client {
     scope: Scope,
 }
 
+/// One executable path that must be supplied by one exact package in a
+/// materialized frozen closure.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FrozenExecutableBinding {
+    pub package: package::Id,
+    pub path: PathBuf,
+}
+
 impl Client {
     /// Construct a new ClientBuilder for the given [`Installation`]
     pub fn builder(client_name: impl ToString, installation: Installation) -> ClientBuilder {
@@ -275,6 +289,25 @@ impl Client {
     ) -> Result<install::Timing, Error> {
         install::materialize_frozen_root(self, packages, source_date_epoch)
             .map_err(|error| Error::Install(Box::new(error)))
+    }
+
+    /// Prove that every frozen executable binding is supplied by its exact
+    /// resolved package and names the unchanged regular executable now present
+    /// in the materialized root.
+    ///
+    /// This is deliberately separate from provider resolution. Callers first
+    /// materialize the already-locked closure, then invoke this method before
+    /// entering the build container. A metadata-only package which advertises
+    /// `binary(foo)` but has no `/usr/bin/foo` layout entry therefore fails
+    /// closed instead of borrowing an ambient executable from another package.
+    pub fn require_frozen_executables(
+        &self,
+        packages: &[package::Id],
+        bindings: &[FrozenExecutableBinding],
+    ) -> Result<(), Error> {
+        let root = self.frozen_root()?;
+        let packages = self.canonical_frozen_package_ids(packages)?;
+        require_frozen_executables(self, root, &packages, bindings, |_, _| {})
     }
 
     /// Perform package removals
@@ -1136,6 +1169,717 @@ impl Client {
             layout_db,
             scope: Scope::Stateful,
         })
+    }
+}
+
+const MIB: u64 = 1024 * 1024;
+const GIB: u64 = 1024 * MIB;
+const MAX_FROZEN_EXECUTABLE_BINDINGS: usize = 4_096;
+const MAX_FROZEN_EXECUTABLE_BYTES: u64 = 512 * MIB;
+const MAX_TOTAL_FROZEN_EXECUTABLE_BYTES: u64 = 2 * GIB;
+const MAX_FROZEN_EXECUTABLE_SYMLINKS: usize = 32;
+const MAX_FROZEN_EXECUTABLE_SYMLINK_TARGET_BYTES: usize = 4_096;
+const FROZEN_EXECUTABLE_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrozenExecutableCheckpoint {
+    AfterOpen,
+    AfterDigest,
+    BeforeReopen,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrozenExecutableWitness {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+    length: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl FrozenExecutableWitness {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            links: metadata.nlink(),
+            length: metadata.len(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ExpectedFrozenExecutable {
+    digest: u128,
+    mode: u32,
+    resolved_path: PathBuf,
+    symlinks: Vec<ExpectedFrozenSymlink>,
+}
+
+#[derive(Debug, Clone)]
+struct ExpectedFrozenSymlink {
+    path: PathBuf,
+    target: String,
+    mode: u32,
+}
+
+#[derive(Debug, Clone)]
+enum FrozenExecutableLayout {
+    Regular { digest: u128, mode: u32 },
+    Symlink { target: String, mode: u32 },
+    Other,
+}
+
+#[derive(Debug)]
+struct PinnedFrozenSymlink {
+    file: fs::File,
+    witness: FrozenExecutableWitness,
+    expected: ExpectedFrozenSymlink,
+}
+
+fn require_frozen_executables<F>(
+    client: &Client,
+    root: &Path,
+    packages: &[package::Id],
+    bindings: &[FrozenExecutableBinding],
+    mut checkpoint: F,
+) -> Result<(), Error>
+where
+    F: FnMut(&FrozenExecutableBinding, FrozenExecutableCheckpoint),
+{
+    require_frozen_executable_binding_count(bindings.len())?;
+
+    let package_set = packages.iter().collect::<BTreeSet<_>>();
+    let mut bindings = bindings.to_vec();
+    bindings.sort();
+    bindings.dedup();
+
+    let mut requested = BTreeMap::<package::Id, BTreeSet<PathBuf>>::new();
+    for binding in &bindings {
+        if !package_set.contains(&binding.package) {
+            return Err(Error::FrozenExecutableProviderOutsideClosure {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+            });
+        }
+        let path = binding
+            .path
+            .to_str()
+            .ok_or_else(|| Error::InvalidFrozenExecutablePath {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+            })?;
+        if !is_normalized_frozen_path(path) {
+            return Err(Error::InvalidFrozenExecutablePath {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+            });
+        }
+        requested
+            .entry(binding.package.clone())
+            .or_default()
+            .insert(binding.path.clone());
+    }
+
+    if bindings.is_empty() {
+        return Ok(());
+    }
+
+    let provider_ids = requested.keys().cloned().collect::<Vec<_>>();
+    let layouts = client.layout_db.query(provider_ids.iter())?;
+    let mut provider_layouts = BTreeMap::<package::Id, BTreeMap<PathBuf, FrozenExecutableLayout>>::new();
+    for (package, layout) in layouts {
+        let path = PathBuf::from(
+            PendingFile {
+                id: package.clone(),
+                layout: layout.clone(),
+            }
+            .path()
+            .as_str(),
+        );
+        if !path.to_str().is_some_and(is_normalized_frozen_path) {
+            return Err(Error::InvalidFrozenLayoutPath {
+                package,
+                path: path.to_string_lossy().into_owned(),
+            });
+        }
+        let entry = match layout.file {
+            StonePayloadLayoutFile::Regular(digest, _) => FrozenExecutableLayout::Regular {
+                digest,
+                mode: layout.mode,
+            },
+            StonePayloadLayoutFile::Symlink(target, _) => FrozenExecutableLayout::Symlink {
+                target: target.to_string(),
+                mode: layout.mode,
+            },
+            StonePayloadLayoutFile::Directory(_)
+            | StonePayloadLayoutFile::CharacterDevice(_)
+            | StonePayloadLayoutFile::BlockDevice(_)
+            | StonePayloadLayoutFile::Fifo(_)
+            | StonePayloadLayoutFile::Socket(_)
+            | StonePayloadLayoutFile::Unknown(..) => FrozenExecutableLayout::Other,
+        };
+        if provider_layouts
+            .entry(package.clone())
+            .or_default()
+            .insert(path.clone(), entry)
+            .is_some()
+        {
+            return Err(Error::DuplicateFrozenExecutableLayout { package, path });
+        }
+    }
+
+    let mut expected = BTreeMap::<(package::Id, PathBuf), ExpectedFrozenExecutable>::new();
+    for binding in &bindings {
+        let layouts = provider_layouts.get(&binding.package);
+        let executable = resolve_frozen_executable_layout(binding, layouts)?;
+        expected.insert((binding.package.clone(), binding.path.clone()), executable);
+    }
+
+    let root = open_frozen_root_anchor(root)?;
+    let deadline = Instant::now() + FROZEN_EXECUTABLE_VERIFICATION_TIMEOUT;
+    let mut total_bytes = 0u64;
+    for binding in &bindings {
+        let key = (binding.package.clone(), binding.path.clone());
+        let expected = expected
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| Error::MissingFrozenExecutableLayout {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+            })?;
+        require_frozen_executable_deadline(deadline)?;
+        let pinned_symlinks = expected
+            .symlinks
+            .iter()
+            .map(|symlink| pin_frozen_symlink(&root, binding, symlink))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let mut file = open_frozen_executable(&root, binding, &expected.resolved_path)?;
+        let before = frozen_executable_witness(&file, binding)?;
+        require_frozen_executable_metadata(binding, &expected, before)?;
+        account_frozen_executable_bytes(binding, before.length, &mut total_bytes)?;
+
+        checkpoint(binding, FrozenExecutableCheckpoint::AfterOpen);
+        let digest = digest_frozen_executable(&mut file, before.length, deadline, binding)?;
+        checkpoint(binding, FrozenExecutableCheckpoint::AfterDigest);
+        let after = frozen_executable_witness(&file, binding)?;
+        if after != before {
+            return Err(Error::FrozenExecutableChanged {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+            });
+        }
+        if digest != expected.digest {
+            return Err(Error::FrozenExecutableDigestMismatch {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+                expected: expected.digest,
+                actual: digest,
+            });
+        }
+
+        checkpoint(binding, FrozenExecutableCheckpoint::BeforeReopen);
+        let reopened = open_frozen_executable(&root, binding, &expected.resolved_path)?;
+        let named = frozen_executable_witness(&reopened, binding)?;
+        if named != before {
+            return Err(Error::FrozenExecutablePathReplaced {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+            });
+        }
+        for symlink in &pinned_symlinks {
+            require_pinned_frozen_symlink(&root, binding, symlink)?;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_frozen_executable_layout(
+    binding: &FrozenExecutableBinding,
+    layouts: Option<&BTreeMap<PathBuf, FrozenExecutableLayout>>,
+) -> Result<ExpectedFrozenExecutable, Error> {
+    let mut current = binding.path.clone();
+    let mut visited = BTreeSet::new();
+    let mut symlinks = Vec::new();
+    loop {
+        if !visited.insert(current.clone()) {
+            return Err(Error::FrozenExecutableSymlinkCycle {
+                package: binding.package.clone(),
+                path: current,
+            });
+        }
+        let Some(layout) = layouts.and_then(|layouts| layouts.get(&current)) else {
+            if symlinks.is_empty() {
+                return Err(Error::MissingFrozenExecutableLayout {
+                    package: binding.package.clone(),
+                    path: binding.path.clone(),
+                });
+            }
+            return Err(Error::MissingFrozenExecutableSymlinkTarget {
+                package: binding.package.clone(),
+                binding: binding.path.clone(),
+                target: current,
+            });
+        };
+        match layout {
+            FrozenExecutableLayout::Regular { digest, mode } => {
+                if mode & nix::libc::S_IFMT != nix::libc::S_IFREG || mode & 0o111 == 0 {
+                    return Err(Error::FrozenExecutableLayoutNotExecutable {
+                        package: binding.package.clone(),
+                        path: current,
+                        mode: *mode,
+                    });
+                }
+                return Ok(ExpectedFrozenExecutable {
+                    digest: *digest,
+                    mode: *mode,
+                    resolved_path: current,
+                    symlinks,
+                });
+            }
+            FrozenExecutableLayout::Symlink { target, mode } => {
+                if symlinks.len() == MAX_FROZEN_EXECUTABLE_SYMLINKS {
+                    return Err(Error::FrozenExecutableSymlinkLimit {
+                        package: binding.package.clone(),
+                        path: binding.path.clone(),
+                        limit: MAX_FROZEN_EXECUTABLE_SYMLINKS,
+                    });
+                }
+                if mode & nix::libc::S_IFMT != nix::libc::S_IFLNK || mode & 0o7777 != 0o777 {
+                    return Err(Error::FrozenExecutableLayoutNotRegular {
+                        package: binding.package.clone(),
+                        path: current,
+                    });
+                }
+                let next = resolve_frozen_symlink_target(&current, target).ok_or_else(|| {
+                    Error::InvalidFrozenExecutableSymlinkTarget {
+                        package: binding.package.clone(),
+                        path: current.clone(),
+                        target: target.clone(),
+                    }
+                })?;
+                symlinks.push(ExpectedFrozenSymlink {
+                    path: current,
+                    target: target.clone(),
+                    mode: *mode,
+                });
+                current = next;
+            }
+            FrozenExecutableLayout::Other => {
+                return Err(Error::FrozenExecutableLayoutNotRegular {
+                    package: binding.package.clone(),
+                    path: current,
+                });
+            }
+        }
+    }
+}
+
+fn require_frozen_executable_binding_count(actual: usize) -> Result<(), Error> {
+    if actual > MAX_FROZEN_EXECUTABLE_BINDINGS {
+        Err(Error::FrozenExecutableBindingLimit {
+            limit: MAX_FROZEN_EXECUTABLE_BINDINGS,
+            actual,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn account_frozen_executable_bytes(
+    binding: &FrozenExecutableBinding,
+    length: u64,
+    total: &mut u64,
+) -> Result<(), Error> {
+    if length > MAX_FROZEN_EXECUTABLE_BYTES {
+        return Err(Error::FrozenExecutableByteLimit {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+            limit: MAX_FROZEN_EXECUTABLE_BYTES,
+            actual: length,
+        });
+    }
+    let next = total.checked_add(length).ok_or(Error::FrozenExecutableTotalByteLimit {
+        limit: MAX_TOTAL_FROZEN_EXECUTABLE_BYTES,
+        actual: u64::MAX,
+    })?;
+    if next > MAX_TOTAL_FROZEN_EXECUTABLE_BYTES {
+        return Err(Error::FrozenExecutableTotalByteLimit {
+            limit: MAX_TOTAL_FROZEN_EXECUTABLE_BYTES,
+            actual: next,
+        });
+    }
+    *total = next;
+    Ok(())
+}
+
+fn resolve_frozen_symlink_target(link: &Path, target: &str) -> Option<PathBuf> {
+    if target.is_empty()
+        || target.len() > MAX_FROZEN_EXECUTABLE_SYMLINK_TARGET_BYTES
+        || target.as_bytes().contains(&0)
+        || target.ends_with('/')
+        || target.contains("//")
+    {
+        return None;
+    }
+
+    let target_path = Path::new(target);
+    let mut components = Vec::<OsString>::new();
+    if !target_path.is_absolute() {
+        for component in link.parent()?.components() {
+            match component {
+                std::path::Component::RootDir => {}
+                std::path::Component::Normal(component) => components.push(component.to_owned()),
+                std::path::Component::CurDir | std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                    return None;
+                }
+            }
+        }
+    }
+    for component in target_path.components() {
+        match component {
+            std::path::Component::RootDir => {
+                if !target_path.is_absolute() {
+                    return None;
+                }
+                components.clear();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                components.pop()?;
+            }
+            std::path::Component::Normal(component) => components.push(component.to_owned()),
+            std::path::Component::Prefix(_) => return None,
+        }
+    }
+
+    let mut resolved = PathBuf::from("/");
+    resolved.extend(components);
+    if resolved.to_str().is_some_and(is_normalized_frozen_path) {
+        Some(resolved)
+    } else {
+        None
+    }
+}
+
+fn pin_frozen_symlink(
+    root: &fs::File,
+    binding: &FrozenExecutableBinding,
+    expected: &ExpectedFrozenSymlink,
+) -> Result<PinnedFrozenSymlink, Error> {
+    let file = open_frozen_symlink(root, binding, &expected.path)?;
+    let witness = frozen_symlink_witness(&file, binding, &expected.path)?;
+    if witness.mode != expected.mode || witness.mode & nix::libc::S_IFMT != nix::libc::S_IFLNK || witness.links != 1 {
+        return Err(Error::FrozenExecutableSymlinkMetadataMismatch {
+            package: binding.package.clone(),
+            path: expected.path.clone(),
+            expected: expected.mode,
+            actual: witness.mode,
+            links: witness.links,
+        });
+    }
+    let actual = read_frozen_symlink(&file, binding, &expected.path)?;
+    if actual.as_os_str().as_bytes() != expected.target.as_bytes() {
+        return Err(Error::FrozenExecutableSymlinkTargetMismatch {
+            package: binding.package.clone(),
+            path: expected.path.clone(),
+            expected: expected.target.clone(),
+            actual,
+        });
+    }
+    Ok(PinnedFrozenSymlink {
+        file,
+        witness,
+        expected: expected.clone(),
+    })
+}
+
+fn require_pinned_frozen_symlink(
+    root: &fs::File,
+    binding: &FrozenExecutableBinding,
+    pinned: &PinnedFrozenSymlink,
+) -> Result<(), Error> {
+    let descriptor = frozen_symlink_witness(&pinned.file, binding, &pinned.expected.path)?;
+    let reopened = open_frozen_symlink(root, binding, &pinned.expected.path)?;
+    let named = frozen_symlink_witness(&reopened, binding, &pinned.expected.path)?;
+    if descriptor != pinned.witness || named != pinned.witness {
+        return Err(Error::FrozenExecutableSymlinkChanged {
+            package: binding.package.clone(),
+            path: pinned.expected.path.clone(),
+        });
+    }
+    let descriptor_target = read_frozen_symlink(&pinned.file, binding, &pinned.expected.path)?;
+    let named_target = read_frozen_symlink(&reopened, binding, &pinned.expected.path)?;
+    if descriptor_target.as_os_str().as_bytes() != pinned.expected.target.as_bytes()
+        || named_target.as_os_str().as_bytes() != pinned.expected.target.as_bytes()
+    {
+        return Err(Error::FrozenExecutableSymlinkChanged {
+            package: binding.package.clone(),
+            path: pinned.expected.path.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn require_frozen_executable_metadata(
+    binding: &FrozenExecutableBinding,
+    expected: &ExpectedFrozenExecutable,
+    witness: FrozenExecutableWitness,
+) -> Result<(), Error> {
+    if witness.mode & nix::libc::S_IFMT != nix::libc::S_IFREG || witness.links != 1 {
+        return Err(Error::FrozenExecutableNotIndependentRegular {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+            mode: witness.mode,
+            links: witness.links,
+        });
+    }
+    if witness.mode != expected.mode || witness.mode & 0o111 == 0 {
+        return Err(Error::FrozenExecutableModeMismatch {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+            expected: expected.mode,
+            actual: witness.mode,
+        });
+    }
+    Ok(())
+}
+
+fn open_frozen_root_anchor(root: &Path) -> Result<fs::File, Error> {
+    let relative = root
+        .strip_prefix(Path::new("/"))
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .filter(|relative| {
+            relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_)))
+        })
+        .ok_or_else(|| Error::InvalidFrozenExecutableRoot(root.to_owned()))?;
+    let system_root = fs::File::open("/").map_err(|source| Error::OpenFrozenExecutableRoot {
+        path: root.to_owned(),
+        source,
+    })?;
+    openat2_frozen(
+        system_root.as_raw_fd(),
+        relative,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC,
+        (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+    )
+    .map_err(|source| Error::OpenFrozenExecutableRoot {
+        path: root.to_owned(),
+        source,
+    })
+}
+
+fn open_frozen_executable(
+    root: &fs::File,
+    binding: &FrozenExecutableBinding,
+    resolved_path: &Path,
+) -> Result<fs::File, Error> {
+    let relative = resolved_path
+        .strip_prefix(Path::new("/"))
+        .map_err(|_| Error::InvalidFrozenExecutablePath {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+        })?;
+    openat2_frozen(
+        root.as_raw_fd(),
+        relative,
+        nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+    )
+    .map_err(|source| Error::OpenFrozenExecutable {
+        package: binding.package.clone(),
+        path: binding.path.clone(),
+        source,
+    })
+}
+
+fn open_frozen_symlink(root: &fs::File, binding: &FrozenExecutableBinding, path: &Path) -> Result<fs::File, Error> {
+    let relative = path
+        .strip_prefix(Path::new("/"))
+        .map_err(|_| Error::InvalidFrozenExecutablePath {
+            package: binding.package.clone(),
+            path: path.to_owned(),
+        })?;
+    openat2_frozen(
+        root.as_raw_fd(),
+        relative,
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+    )
+    .map_err(|source| Error::OpenFrozenExecutableSymlink {
+        package: binding.package.clone(),
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn openat2_frozen(dirfd: RawFd, path: &Path, flags: i32, resolve: u64) -> io::Result<fs::File> {
+    #[repr(C)]
+    struct OpenHow {
+        flags: u64,
+        mode: u64,
+        resolve: u64,
+    }
+
+    let display_path = path.to_owned();
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let how = OpenHow {
+        flags: flags as u64,
+        mode: 0,
+        resolve,
+    };
+    // SAFETY: `path` and `how` remain live for the syscall. A successful
+    // openat2 returns a fresh descriptor owned by the resulting File.
+    let descriptor = unsafe {
+        syscall(
+            nix::libc::SYS_openat2,
+            dirfd,
+            path.as_ptr(),
+            &how as *const OpenHow,
+            size_of::<OpenHow>(),
+        )
+    };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let descriptor = i32::try_from(descriptor)
+        .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
+    // SAFETY: successful openat2 returned one fresh owned descriptor.
+    let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    Ok(fs::File::from_parts(file, display_path))
+}
+
+fn frozen_executable_witness(
+    file: &fs::File,
+    binding: &FrozenExecutableBinding,
+) -> Result<FrozenExecutableWitness, Error> {
+    file.metadata()
+        .map(|metadata| FrozenExecutableWitness::from_metadata(&metadata))
+        .map_err(|source| Error::StatFrozenExecutable {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+            source,
+        })
+}
+
+fn frozen_symlink_witness(
+    file: &fs::File,
+    binding: &FrozenExecutableBinding,
+    path: &Path,
+) -> Result<FrozenExecutableWitness, Error> {
+    file.metadata()
+        .map(|metadata| FrozenExecutableWitness::from_metadata(&metadata))
+        .map_err(|source| Error::StatFrozenExecutableSymlink {
+            package: binding.package.clone(),
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn read_frozen_symlink(file: &fs::File, binding: &FrozenExecutableBinding, path: &Path) -> Result<OsString, Error> {
+    let mut target = [0_u8; MAX_FROZEN_EXECUTABLE_SYMLINK_TARGET_BYTES + 1];
+    // Linux reads the exact symlink pinned by an O_PATH|O_NOFOLLOW descriptor
+    // when readlinkat receives an empty relative path.
+    // SAFETY: `file` is live and `target` is writable for its complete length.
+    let read =
+        unsafe { nix::libc::readlinkat(file.as_raw_fd(), c"".as_ptr(), target.as_mut_ptr().cast(), target.len()) };
+    if read < 0 {
+        return Err(Error::ReadFrozenExecutableSymlink {
+            package: binding.package.clone(),
+            path: path.to_owned(),
+            source: io::Error::last_os_error(),
+        });
+    }
+    let read = usize::try_from(read).map_err(|_| Error::ReadFrozenExecutableSymlink {
+        package: binding.package.clone(),
+        path: path.to_owned(),
+        source: io::Error::other("readlinkat returned a negative size"),
+    })?;
+    if read > MAX_FROZEN_EXECUTABLE_SYMLINK_TARGET_BYTES {
+        return Err(Error::FrozenExecutableSymlinkTargetTooLong {
+            package: binding.package.clone(),
+            path: path.to_owned(),
+            limit: MAX_FROZEN_EXECUTABLE_SYMLINK_TARGET_BYTES,
+            actual: read,
+        });
+    }
+    Ok(OsString::from_vec(target[..read].to_vec()))
+}
+
+fn digest_frozen_executable(
+    file: &mut fs::File,
+    expected_length: u64,
+    deadline: Instant,
+    binding: &FrozenExecutableBinding,
+) -> Result<u128, Error> {
+    let mut hasher = StoneDigestWriterHasher::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut actual = 0u64;
+    loop {
+        require_frozen_executable_deadline(deadline)?;
+        let read = file.read(&mut buffer).map_err(|source| Error::ReadFrozenExecutable {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        actual = actual
+            .checked_add(read as u64)
+            .ok_or_else(|| Error::FrozenExecutableLengthChanged {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+                expected: expected_length,
+                actual: u64::MAX,
+            })?;
+        if actual > expected_length {
+            return Err(Error::FrozenExecutableLengthChanged {
+                package: binding.package.clone(),
+                path: binding.path.clone(),
+                expected: expected_length,
+                actual,
+            });
+        }
+        hasher.update(&buffer[..read]);
+    }
+    if actual != expected_length {
+        return Err(Error::FrozenExecutableLengthChanged {
+            package: binding.package.clone(),
+            path: binding.path.clone(),
+            expected: expected_length,
+            actual,
+        });
+    }
+    Ok(hasher.digest128())
+}
+
+fn require_frozen_executable_deadline(deadline: Instant) -> Result<(), Error> {
+    if Instant::now() > deadline {
+        Err(Error::FrozenExecutableVerificationTimeout {
+            seconds: FROZEN_EXECUTABLE_VERIFICATION_TIMEOUT.as_secs(),
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -2191,6 +2935,173 @@ pub enum Error {
     FrozenSymlinkRedirectCycle { path: String },
     #[error("package {package} redirects a frozen-root path outside /usr: {path:?}")]
     FrozenRedirectOutsideUsr { package: package::Id, path: String },
+    #[error("frozen executable binding count exceeds {limit} (got {actual})")]
+    FrozenExecutableBindingLimit { limit: usize, actual: usize },
+    #[error("frozen executable provider {package} at {path:?} is outside the materialized closure")]
+    FrozenExecutableProviderOutsideClosure { package: package::Id, path: PathBuf },
+    #[error("frozen executable provider {package} has invalid path {path:?}")]
+    InvalidFrozenExecutablePath { package: package::Id, path: PathBuf },
+    #[error("frozen executable provider {package} has duplicate layout entries at {path:?}")]
+    DuplicateFrozenExecutableLayout { package: package::Id, path: PathBuf },
+    #[error("frozen executable provider {package} has no regular layout entry at {path:?}")]
+    MissingFrozenExecutableLayout { package: package::Id, path: PathBuf },
+    #[error(
+        "frozen executable provider {package} binding {binding:?} resolves to {target:?}, which is absent from that same package"
+    )]
+    MissingFrozenExecutableSymlinkTarget {
+        package: package::Id,
+        binding: PathBuf,
+        target: PathBuf,
+    },
+    #[error("frozen executable provider {package} names a non-regular layout entry at {path:?}")]
+    FrozenExecutableLayoutNotRegular { package: package::Id, path: PathBuf },
+    #[error("frozen executable provider {package} has non-executable layout mode {mode:#o} at {path:?}")]
+    FrozenExecutableLayoutNotExecutable {
+        package: package::Id,
+        path: PathBuf,
+        mode: u32,
+    },
+    #[error("frozen executable provider {package} has invalid symlink target {target:?} at {path:?}")]
+    InvalidFrozenExecutableSymlinkTarget {
+        package: package::Id,
+        path: PathBuf,
+        target: String,
+    },
+    #[error("frozen executable provider {package} has a symlink cycle at {path:?}")]
+    FrozenExecutableSymlinkCycle { package: package::Id, path: PathBuf },
+    #[error("frozen executable provider {package} binding {path:?} exceeds the symlink-chain limit {limit}")]
+    FrozenExecutableSymlinkLimit {
+        package: package::Id,
+        path: PathBuf,
+        limit: usize,
+    },
+    #[error("frozen executable root path is invalid: {0:?}")]
+    InvalidFrozenExecutableRoot(PathBuf),
+    #[error("open frozen executable root {path:?}")]
+    OpenFrozenExecutableRoot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("open frozen executable from provider {package} at {path:?}")]
+    OpenFrozenExecutable {
+        package: package::Id,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("stat frozen executable from provider {package} at {path:?}")]
+    StatFrozenExecutable {
+        package: package::Id,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("open frozen executable symlink from provider {package} at {path:?}")]
+    OpenFrozenExecutableSymlink {
+        package: package::Id,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("stat frozen executable symlink from provider {package} at {path:?}")]
+    StatFrozenExecutableSymlink {
+        package: package::Id,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read frozen executable symlink from provider {package} at {path:?}")]
+    ReadFrozenExecutableSymlink {
+        package: package::Id,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "frozen executable symlink from provider {package} at {path:?} has mode {actual:#o} and {links} links; expected mode {expected:#o} and one link"
+    )]
+    FrozenExecutableSymlinkMetadataMismatch {
+        package: package::Id,
+        path: PathBuf,
+        expected: u32,
+        actual: u32,
+        links: u64,
+    },
+    #[error(
+        "frozen executable symlink from provider {package} at {path:?} points to {actual:?}; expected {expected:?}"
+    )]
+    FrozenExecutableSymlinkTargetMismatch {
+        package: package::Id,
+        path: PathBuf,
+        expected: String,
+        actual: OsString,
+    },
+    #[error("frozen executable symlink from provider {package} changed during verification at {path:?}")]
+    FrozenExecutableSymlinkChanged { package: package::Id, path: PathBuf },
+    #[error(
+        "frozen executable symlink from provider {package} at {path:?} exceeds the target limit {limit} bytes (got at least {actual})"
+    )]
+    FrozenExecutableSymlinkTargetTooLong {
+        package: package::Id,
+        path: PathBuf,
+        limit: usize,
+        actual: usize,
+    },
+    #[error("read frozen executable from provider {package} at {path:?}")]
+    ReadFrozenExecutable {
+        package: package::Id,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "frozen executable from provider {package} at {path:?} is not an independent regular file (mode {mode:#o}, links {links})"
+    )]
+    FrozenExecutableNotIndependentRegular {
+        package: package::Id,
+        path: PathBuf,
+        mode: u32,
+        links: u64,
+    },
+    #[error("frozen executable from provider {package} at {path:?} has mode {actual:#o}; expected {expected:#o}")]
+    FrozenExecutableModeMismatch {
+        package: package::Id,
+        path: PathBuf,
+        expected: u32,
+        actual: u32,
+    },
+    #[error("frozen executable from provider {package} at {path:?} exceeds {limit} bytes (got {actual})")]
+    FrozenExecutableByteLimit {
+        package: package::Id,
+        path: PathBuf,
+        limit: u64,
+        actual: u64,
+    },
+    #[error("total frozen executable bytes exceed {limit} (got {actual})")]
+    FrozenExecutableTotalByteLimit { limit: u64, actual: u64 },
+    #[error(
+        "frozen executable from provider {package} at {path:?} changed length while hashing: expected {expected}, got {actual}"
+    )]
+    FrozenExecutableLengthChanged {
+        package: package::Id,
+        path: PathBuf,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("frozen executable from provider {package} changed while hashing at {path:?}")]
+    FrozenExecutableChanged { package: package::Id, path: PathBuf },
+    #[error("frozen executable from provider {package} at {path:?} has digest {actual:032x}; expected {expected:032x}")]
+    FrozenExecutableDigestMismatch {
+        package: package::Id,
+        path: PathBuf,
+        expected: u128,
+        actual: u128,
+    },
+    #[error("frozen executable path from provider {package} was replaced during verification: {path:?}")]
+    FrozenExecutablePathReplaced { package: package::Id, path: PathBuf },
+    #[error("frozen executable verification exceeded {seconds} seconds")]
+    FrozenExecutableVerificationTimeout { seconds: u64 },
     #[error("installation")]
     Installation(#[from] installation::Error),
     #[error("fetch package {1}")]
@@ -2382,7 +3293,7 @@ let cast = import! cast.system.v1
             .build()
             .unwrap();
 
-        let asset_id = 0x1234_5678_90ab_cdef_1234_5678_90ab_cdef_u128;
+        let asset_id = xxhash_rust::xxh3::xxh3_128(b"persistent cached bytes");
         let asset_path = cache::asset_path(&client.installation, &format!("{asset_id:02x}"));
         fs::create_dir_all(asset_path.parent().unwrap()).unwrap();
         fs::write(&asset_path, b"persistent cached bytes").unwrap();
@@ -2423,6 +3334,114 @@ let cast = import! cast.system.v1
     }
 
     #[test]
+    fn frozen_executable_limits_accept_the_boundary_and_reject_the_next_value() {
+        assert!(require_frozen_executable_binding_count(MAX_FROZEN_EXECUTABLE_BINDINGS).is_ok());
+        assert!(matches!(
+            require_frozen_executable_binding_count(MAX_FROZEN_EXECUTABLE_BINDINGS + 1),
+            Err(Error::FrozenExecutableBindingLimit { limit, actual })
+                if limit == MAX_FROZEN_EXECUTABLE_BINDINGS
+                    && actual == MAX_FROZEN_EXECUTABLE_BINDINGS + 1
+        ));
+
+        let binding = FrozenExecutableBinding {
+            package: package::Id::from("limit-provider"),
+            path: PathBuf::from("/usr/bin/limit-tool"),
+        };
+        let mut total = MAX_TOTAL_FROZEN_EXECUTABLE_BYTES - MAX_FROZEN_EXECUTABLE_BYTES;
+        account_frozen_executable_bytes(&binding, MAX_FROZEN_EXECUTABLE_BYTES, &mut total).unwrap();
+        assert_eq!(total, MAX_TOTAL_FROZEN_EXECUTABLE_BYTES);
+
+        let mut empty = 0;
+        assert!(matches!(
+            account_frozen_executable_bytes(&binding, MAX_FROZEN_EXECUTABLE_BYTES + 1, &mut empty),
+            Err(Error::FrozenExecutableByteLimit { limit, actual, .. })
+                if limit == MAX_FROZEN_EXECUTABLE_BYTES
+                    && actual == MAX_FROZEN_EXECUTABLE_BYTES + 1
+        ));
+
+        let mut full = MAX_TOTAL_FROZEN_EXECUTABLE_BYTES;
+        assert!(matches!(
+            account_frozen_executable_bytes(&binding, 1, &mut full),
+            Err(Error::FrozenExecutableTotalByteLimit { limit, actual })
+                if limit == MAX_TOTAL_FROZEN_EXECUTABLE_BYTES
+                    && actual == MAX_TOTAL_FROZEN_EXECUTABLE_BYTES + 1
+        ));
+        assert_eq!(full, MAX_TOTAL_FROZEN_EXECUTABLE_BYTES);
+    }
+
+    #[test]
+    fn frozen_executable_symlink_targets_are_resolved_lexically_beneath_usr() {
+        let link = Path::new("/usr/bin/tool");
+        assert_eq!(
+            resolve_frozen_symlink_target(link, "tool-1"),
+            Some(PathBuf::from("/usr/bin/tool-1"))
+        );
+        assert_eq!(
+            resolve_frozen_symlink_target(link, "../libexec/tool-1"),
+            Some(PathBuf::from("/usr/libexec/tool-1"))
+        );
+        assert_eq!(
+            resolve_frozen_symlink_target(link, "/usr/libexec/tool-1"),
+            Some(PathBuf::from("/usr/libexec/tool-1"))
+        );
+        assert_eq!(resolve_frozen_symlink_target(link, "../../etc/passwd"), None);
+        assert_eq!(resolve_frozen_symlink_target(link, "/etc/passwd"), None);
+        assert_eq!(resolve_frozen_symlink_target(link, "tool-1/"), None);
+        assert_eq!(resolve_frozen_symlink_target(link, "tool//1"), None);
+    }
+
+    #[test]
+    fn frozen_executable_symlink_chain_accepts_n_and_rejects_n_plus_one() {
+        let binding = FrozenExecutableBinding {
+            package: package::Id::from("symlink-chain-provider"),
+            path: PathBuf::from("/usr/bin/link-0"),
+        };
+        let mut layouts = BTreeMap::new();
+        for index in 0..MAX_FROZEN_EXECUTABLE_SYMLINKS {
+            layouts.insert(
+                PathBuf::from(format!("/usr/bin/link-{index}")),
+                FrozenExecutableLayout::Symlink {
+                    target: format!("link-{}", index + 1),
+                    mode: nix::libc::S_IFLNK | 0o777,
+                },
+            );
+        }
+        let final_path = PathBuf::from(format!("/usr/bin/link-{MAX_FROZEN_EXECUTABLE_SYMLINKS}"));
+        layouts.insert(
+            final_path.clone(),
+            FrozenExecutableLayout::Regular {
+                digest: 7,
+                mode: nix::libc::S_IFREG | 0o755,
+            },
+        );
+        let expected = resolve_frozen_executable_layout(&binding, Some(&layouts)).unwrap();
+        assert_eq!(expected.symlinks.len(), MAX_FROZEN_EXECUTABLE_SYMLINKS);
+        assert_eq!(expected.resolved_path, final_path);
+
+        layouts.insert(
+            final_path,
+            FrozenExecutableLayout::Symlink {
+                target: format!("link-{}", MAX_FROZEN_EXECUTABLE_SYMLINKS + 1),
+                mode: nix::libc::S_IFLNK | 0o777,
+            },
+        );
+        layouts.insert(
+            PathBuf::from(format!("/usr/bin/link-{}", MAX_FROZEN_EXECUTABLE_SYMLINKS + 1)),
+            FrozenExecutableLayout::Regular {
+                digest: 7,
+                mode: nix::libc::S_IFREG | 0o755,
+            },
+        );
+        assert!(matches!(
+            resolve_frozen_executable_layout(&binding, Some(&layouts)),
+            Err(Error::FrozenExecutableSymlinkLimit { package, path, limit })
+                if package == binding.package
+                    && path == binding.path
+                    && limit == MAX_FROZEN_EXECUTABLE_SYMLINKS
+        ));
+    }
+
+    #[test]
     fn frozen_root_normalizes_enforceable_metadata_in_canonical_order() {
         const CHILD: &str = "CAST_FROZEN_ROOT_TEST_CHILD";
         if std::env::var_os(CHILD).is_some() {
@@ -2457,7 +3476,7 @@ let cast = import! cast.system.v1
         let first = package::Id::from("a-frozen-package");
         let second = package::Id::from("z-frozen-package");
         let omitted = package::Id::from("zz-omitted-package");
-        let asset_id = 0x1234_5678_90ab_cdef_1234_5678_90ab_cdef_u128;
+        let asset_id = xxhash_rust::xxh3::xxh3_128(b"persistent cached bytes");
         let empty_id = 0x99aa_06d3_0147_98d8_6001_c324_468d_497f_u128;
         let layouts = [
             (
@@ -2488,6 +3507,36 @@ let cast = import! cast.system.v1
                     mode: nix::libc::S_IFLNK | 0o777,
                     tag: 0,
                     file: StonePayloadLayoutFile::Symlink("tool".into(), "bin/tool-link".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFLNK | 0o777,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Symlink("other-tool".into(), "bin/cross-tool".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFLNK | 0o777,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Symlink("cycle-b".into(), "bin/cycle-a".into()),
+                },
+            ),
+            (
+                &first,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFLNK | 0o777,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Symlink("cycle-a".into(), "bin/cycle-b".into()),
                 },
             ),
             (
@@ -2529,6 +3578,16 @@ let cast = import! cast.system.v1
                     mode: nix::libc::S_IFDIR | 0o751,
                     tag: 0,
                     file: StonePayloadLayoutFile::Directory("bin".into()),
+                },
+            ),
+            (
+                &second,
+                StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFREG | 0o755,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Regular(asset_id, "bin/other-tool".into()),
                 },
             ),
             (
@@ -2637,6 +3696,207 @@ let cast = import! cast.system.v1
         assert_eq!(fs::read(&isolation_marker).unwrap(), b"isolation root is out of scope");
         assert_eq!(fs::read(&asset_path).unwrap(), b"persistent cached bytes");
         assert_eq!(fs::metadata(&asset_path).unwrap().permissions().mode() & 0o7777, 0o640);
+
+        let packages = [second.clone(), first.clone()];
+        let tool_binding = FrozenExecutableBinding {
+            package: first.clone(),
+            path: PathBuf::from("/usr/bin/tool"),
+        };
+        client
+            .require_frozen_executables(&packages, std::slice::from_ref(&tool_binding))
+            .unwrap();
+
+        let outside = FrozenExecutableBinding {
+            package: omitted.clone(),
+            path: PathBuf::from("/usr/share/omitted"),
+        };
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[outside]),
+            Err(Error::FrozenExecutableProviderOutsideClosure { package, path })
+                if package == omitted && path == Path::new("/usr/share/omitted")
+        ));
+
+        let wrong_provider = FrozenExecutableBinding {
+            package: second.clone(),
+            path: PathBuf::from("/usr/bin/tool"),
+        };
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[wrong_provider]),
+            Err(Error::MissingFrozenExecutableLayout { package, path })
+                if package == second && path == Path::new("/usr/bin/tool")
+        ));
+
+        let cross_provider_symlink = FrozenExecutableBinding {
+            package: first.clone(),
+            path: PathBuf::from("/usr/bin/cross-tool"),
+        };
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[cross_provider_symlink]),
+            Err(Error::MissingFrozenExecutableSymlinkTarget { package, binding, target })
+                if package == first
+                    && binding == Path::new("/usr/bin/cross-tool")
+                    && target == Path::new("/usr/bin/other-tool")
+        ));
+
+        let cyclic_symlink = FrozenExecutableBinding {
+            package: first.clone(),
+            path: PathBuf::from("/usr/bin/cycle-a"),
+        };
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[cyclic_symlink]),
+            Err(Error::FrozenExecutableSymlinkCycle { package, path })
+                if package == first && path == Path::new("/usr/bin/cycle-a")
+        ));
+
+        let symlink_binding = FrozenExecutableBinding {
+            package: first.clone(),
+            path: PathBuf::from("/usr/bin/tool-link"),
+        };
+        client
+            .require_frozen_executables(&packages, std::slice::from_ref(&symlink_binding))
+            .unwrap();
+        fs::remove_file(&tool_link).unwrap();
+        symlink("../share/empty", &tool_link).unwrap();
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[symlink_binding]),
+            Err(Error::FrozenExecutableSymlinkTargetMismatch { package, path, expected, actual })
+                if package == first
+                    && path == Path::new("/usr/bin/tool-link")
+                    && expected == "tool"
+                    && actual == OsString::from("../share/empty")
+        ));
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        let non_executable = FrozenExecutableBinding {
+            package: first.clone(),
+            path: PathBuf::from("/usr/share/empty"),
+        };
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[non_executable]),
+            Err(Error::FrozenExecutableLayoutNotExecutable { package, path, mode })
+                if package == first
+                    && path == Path::new("/usr/share/empty")
+                    && mode == nix::libc::S_IFREG | 0o640
+        ));
+
+        let invalid_path = FrozenExecutableBinding {
+            package: first.clone(),
+            path: PathBuf::from("/usr/bin/../bin/tool"),
+        };
+        assert!(matches!(
+            client.require_frozen_executables(&packages, &[invalid_path]),
+            Err(Error::InvalidFrozenExecutablePath { package, path })
+                if package == first && path == Path::new("/usr/bin/../bin/tool")
+        ));
+
+        fs::set_permissions(&tool, Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            client.require_frozen_executables(&packages, std::slice::from_ref(&tool_binding)),
+            Err(Error::FrozenExecutableModeMismatch { package, path, expected, actual })
+                if package == first
+                    && path == Path::new("/usr/bin/tool")
+                    && expected == nix::libc::S_IFREG | 0o755
+                    && actual == nix::libc::S_IFREG | 0o700
+        ));
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        let hardlink = blit_root.join("usr/bin/tool-hardlink");
+        fs::hard_link(&tool, &hardlink).unwrap();
+        assert!(matches!(
+            client.require_frozen_executables(&packages, std::slice::from_ref(&tool_binding)),
+            Err(Error::FrozenExecutableNotIndependentRegular { package, path, links: 2, .. })
+                if package == first && path == Path::new("/usr/bin/tool")
+        ));
+        fs::remove_file(&hardlink).unwrap();
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        let oversized = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+        oversized.set_len(MAX_FROZEN_EXECUTABLE_BYTES + 1).unwrap();
+        drop(oversized);
+        assert!(matches!(
+            client.require_frozen_executables(&packages, std::slice::from_ref(&tool_binding)),
+            Err(Error::FrozenExecutableByteLimit { package, path, limit, actual })
+                if package == first
+                    && path == Path::new("/usr/bin/tool")
+                    && limit == MAX_FROZEN_EXECUTABLE_BYTES
+                    && actual == MAX_FROZEN_EXECUTABLE_BYTES + 1
+        ));
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        fs::write(&tool, b"adversarial cached data").unwrap();
+        assert_eq!(
+            fs::metadata(&tool).unwrap().len(),
+            b"persistent cached bytes".len() as u64
+        );
+        assert!(matches!(
+            client.require_frozen_executables(&packages, std::slice::from_ref(&tool_binding)),
+            Err(Error::FrozenExecutableDigestMismatch { package, path, .. })
+                if package == first && path == Path::new("/usr/bin/tool")
+        ));
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        let runtime_symlink = blit_root.join("usr/bin/tool-runtime-link");
+        fs::remove_file(&tool).unwrap();
+        symlink("tool-runtime-link", &tool).unwrap();
+        fs::write(&runtime_symlink, b"persistent cached bytes").unwrap();
+        fs::set_permissions(&runtime_symlink, Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            client.require_frozen_executables(&packages, std::slice::from_ref(&tool_binding)),
+            Err(Error::OpenFrozenExecutable { package, path, .. })
+                if package == first && path == Path::new("/usr/bin/tool")
+        ));
+        fs::remove_file(&runtime_symlink).unwrap();
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        let mut changed_after_digest = false;
+        let error = require_frozen_executables(
+            &client,
+            &blit_root,
+            &packages,
+            std::slice::from_ref(&tool_binding),
+            |binding, checkpoint| {
+                if checkpoint == FrozenExecutableCheckpoint::AfterDigest && !changed_after_digest {
+                    assert_eq!(binding, &tool_binding);
+                    fs::write(&tool, b"adversarial cached data").unwrap();
+                    fs::set_permissions(&tool, Permissions::from_mode(0o700)).unwrap();
+                    changed_after_digest = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(changed_after_digest);
+        assert!(matches!(
+            error,
+            Error::FrozenExecutableChanged { package, path }
+                if package == first && path == Path::new("/usr/bin/tool")
+        ));
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
+
+        let replacement = blit_root.join("usr/bin/tool-replacement");
+        fs::write(&replacement, b"persistent cached bytes").unwrap();
+        fs::set_permissions(&replacement, Permissions::from_mode(0o755)).unwrap();
+        let mut replaced_before_reopen = false;
+        let error = require_frozen_executables(
+            &client,
+            &blit_root,
+            &packages,
+            std::slice::from_ref(&tool_binding),
+            |binding, checkpoint| {
+                if checkpoint == FrozenExecutableCheckpoint::BeforeReopen && !replaced_before_reopen {
+                    assert_eq!(binding, &tool_binding);
+                    fs::rename(&replacement, &tool).unwrap();
+                    replaced_before_reopen = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(replaced_before_reopen);
+        assert!(matches!(
+            error,
+            Error::FrozenExecutablePathReplaced { package, path }
+                if package == first && path == Path::new("/usr/bin/tool")
+        ));
+        client.blit_frozen_root(&packages, EPOCH).unwrap();
 
         // A second materialization reverses caller and database order, changes
         // the process umask, and still reproduces all enforceable metadata.

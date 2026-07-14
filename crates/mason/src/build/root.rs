@@ -9,8 +9,8 @@ use stone_recipe::{
     ToolchainSpec,
     build_policy::{AnalyzerKind, BuildPolicySpec, BuildToolSpec, TargetEmulationSpec, TargetPolicySpec},
     derivation::{
-        AnalyzerRole, BuildLock, DerivationPlan, InputOrigin, JobExecutableRole, JobStepSection, LockedPackage,
-        PackageInputSelection, RelationPlan, RepositorySnapshot, StepPlan,
+        AnalyzerRole, BuildLock, DerivationPlan, ExecutablePlan, InputOrigin, JobExecutableRole, JobStepSection,
+        LockedPackage, PackageInputSelection, RelationPlan, RepositorySnapshot, StepPlan,
     },
     package::{DependencySpec, PackageSpec},
 };
@@ -23,12 +23,12 @@ pub fn populate_frozen(
     paths: &crate::Paths,
     forge_dir: &std::path::Path,
     repositories: repository::Map,
-    build_lock: &BuildLock,
-    source_date_epoch: i64,
+    plan: &DerivationPlan,
     timing: &mut Timing,
     initialize_timer: timing::Timer,
 ) -> Result<(), Error> {
     let rootfs = paths.rootfs().host;
+    let build_lock = &plan.build_lock;
 
     // Create the Forge client.
     let repositories = locked_repositories(&repositories, &build_lock.repositories)?;
@@ -42,7 +42,9 @@ pub fn populate_frozen(
     // The planner already selected the complete package closure. Installing
     // provider strings here would silently cross the freeze boundary and allow
     // a newer candidate to replace a locked package.
-    let install_timing = forge_client.materialize_frozen_root(&package_ids, source_date_epoch)?;
+    let install_timing = forge_client.materialize_frozen_root(&package_ids, plan.source_date_epoch)?;
+    let executable_bindings = frozen_executable_bindings(plan)?;
+    forge_client.require_frozen_executables(&package_ids, &executable_bindings)?;
 
     timing.record(timing::Populate::Resolve, install_timing.resolve);
     timing.record(timing::Populate::Fetch, install_timing.fetch);
@@ -167,6 +169,57 @@ fn exact_package_ids(client: &forge::Client, build_lock: &BuildLock) -> Result<V
             let package = client.resolve_package(&id)?;
             require_locked_metadata(locked, &package)?;
             Ok(id)
+        })
+        .collect()
+}
+
+fn frozen_executable_bindings(plan: &DerivationPlan) -> Result<Vec<forge::FrozenExecutableBinding>, Error> {
+    let mut executables = Vec::<&ExecutablePlan>::new();
+    executables.extend(
+        [
+            plan.analysis.tools.pkg_config.as_ref(),
+            plan.analysis.tools.python.as_ref(),
+            plan.analysis.tools.objcopy.as_ref(),
+            plan.analysis.tools.strip.as_ref(),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    for phase in plan.jobs.iter().flat_map(|job| &job.phases) {
+        for step in phase.pre.iter().chain(&phase.steps).chain(&phase.post) {
+            match step {
+                StepPlan::Run { program, .. } => executables.push(program),
+                StepPlan::Shell {
+                    interpreter,
+                    declared_programs,
+                    ..
+                } => {
+                    executables.push(interpreter);
+                    executables.extend(declared_programs);
+                }
+            }
+        }
+    }
+
+    executables
+        .into_iter()
+        .map(|executable| {
+            let request = executable.requirement.canonical_name();
+            let mut matching = plan
+                .build_lock
+                .requests
+                .iter()
+                .filter(|locked| locked.request == request);
+            let locked = matching
+                .next()
+                .ok_or_else(|| Error::MissingFrozenExecutableRequest(request.clone()))?;
+            if matching.next().is_some() {
+                return Err(Error::DuplicateFrozenExecutableRequest(request));
+            }
+            Ok(forge::FrozenExecutableBinding {
+                package: package::Id::from(locked.package_id.clone()),
+                path: PathBuf::from(&executable.path),
+            })
         })
         .collect()
 }
@@ -548,6 +601,10 @@ pub enum Error {
     InvalidLockedRepositoryId(String),
     #[error("locked metadata no longer matches package {package_id}")]
     LockedPackageMetadataMismatch { package_id: String },
+    #[error("frozen executable request is absent from build.lock.glu: {0}")]
+    MissingFrozenExecutableRequest(String),
+    #[error("frozen executable request appears more than once in build.lock.glu: {0}")]
+    DuplicateFrozenExecutableRequest(String),
     #[error("frozen plan sandbox layout does not match runtime paths")]
     FrozenSandboxLayoutMismatch,
     #[error("frozen job cleanup path escapes the runtime build directory")]
@@ -899,8 +956,8 @@ let base = cast.mk_package (cast.meta {
         );
     }
 
-    fn executable(name: &str) -> stone_recipe::derivation::ExecutablePlan {
-        stone_recipe::derivation::ExecutablePlan {
+    fn executable(name: &str) -> ExecutablePlan {
+        ExecutablePlan {
             path: format!("/usr/bin/{name}"),
             requirement: RelationPlan {
                 kind: stone_recipe::derivation::RelationKind::Binary,
@@ -975,6 +1032,54 @@ let base = cast.mk_package (cast.meta {
                         }
             }));
         }
+    }
+
+    #[test]
+    fn frozen_executable_bindings_name_exact_locked_provider_packages() {
+        let plan = crate::package::test_derivation_plan();
+        let bindings = frozen_executable_bindings(&plan).unwrap();
+
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| (binding.package.as_str(), binding.path.as_path()))
+                .collect::<BTreeSet<_>>(),
+            [
+                ("analyzer-tools-id", std::path::Path::new("/usr/bin/llvm-strip")),
+                ("analyzer-tools-id", std::path::Path::new("/usr/bin/pkg-config")),
+                ("analyzer-tools-id", std::path::Path::new("/usr/bin/python3")),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn frozen_executable_binding_rejects_missing_or_duplicate_request_mapping() {
+        let mut missing = crate::package::test_derivation_plan();
+        missing
+            .build_lock
+            .requests
+            .retain(|request| request.request != "binary(python3)");
+        assert!(matches!(
+            frozen_executable_bindings(&missing),
+            Err(Error::MissingFrozenExecutableRequest(request)) if request == "binary(python3)"
+        ));
+
+        let mut duplicate = crate::package::test_derivation_plan();
+        let repeated = duplicate
+            .build_lock
+            .requests
+            .iter()
+            .find(|request| request.request == "binary(pkg-config)")
+            .unwrap()
+            .clone();
+        duplicate.build_lock.requests.push(repeated);
+        assert!(matches!(
+            frozen_executable_bindings(&duplicate),
+            Err(Error::DuplicateFrozenExecutableRequest(request)) if request == "binary(pkg-config)"
+        ));
     }
 
     #[test]

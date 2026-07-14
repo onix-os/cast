@@ -177,8 +177,7 @@ impl Runtime {
             &self.paths,
             &self.forge_dir,
             self.repositories.clone(),
-            &plan.build_lock,
-            plan.source_date_epoch,
+            plan,
             timing,
             initialize_timer,
         )?;
