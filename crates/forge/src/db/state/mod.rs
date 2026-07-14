@@ -20,6 +20,26 @@ pub struct Database {
     conn: Connection,
 }
 
+/// Durable ownership evidence for an exact state/transition pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransitionOwnership {
+    /// The row exists and carries the requested transition ID.
+    Matching,
+    /// The row exists but its transition ID has already been cleared.
+    Cleared,
+    /// The state row does not exist.
+    Missing,
+    /// The row exists but belongs to another transition.
+    Foreign,
+}
+
+/// The single transition-bearing state row admitted by a global audit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InFlightTransition {
+    pub(crate) state_id: Id,
+    pub(crate) transition_id: TransitionId,
+}
+
 impl Database {
     pub fn new(url: &str) -> Result<Self, Error> {
         let mut conn = SqliteConnection::establish(url)?;
@@ -85,6 +105,79 @@ impl Database {
 
     pub fn get(&self, id: Id) -> Result<State, Error> {
         self.conn.exec(|conn| load_state(conn, id))
+    }
+
+    /// Inspect an exact state/transition pair without mutating either row.
+    ///
+    /// Stored transition text is parsed back through [`TransitionId`] before
+    /// it is trusted, so bypassed or corrupted database constraints fail
+    /// structurally instead of being reported as foreign ownership.
+    #[allow(dead_code)] // consumed by the activation-recovery integration slice
+    pub(crate) fn transition_ownership(
+        &self,
+        state_id: Id,
+        transition_id: &TransitionId,
+    ) -> Result<TransitionOwnership, TransitionEvidenceError> {
+        self.conn.exec(|conn| {
+            let stored = model::state::table
+                .find(i32::from(state_id))
+                .select(model::state::transition_id)
+                .first::<Option<String>>(conn)
+                .optional()
+                .map_err(Error::from)?;
+
+            let ownership = match stored {
+                None => TransitionOwnership::Missing,
+                Some(None) => TransitionOwnership::Cleared,
+                Some(Some(raw)) => {
+                    let stored = parse_transition_evidence(state_id, raw)?;
+                    if stored == *transition_id {
+                        TransitionOwnership::Matching
+                    } else {
+                        TransitionOwnership::Foreign
+                    }
+                }
+            };
+            Ok(ownership)
+        })
+    }
+
+    /// Audit all transition-bearing state rows using a bounded query.
+    ///
+    /// A valid database has either no in-flight row or exactly one. Loading at
+    /// most two rows is sufficient to prove that cardinality without letting
+    /// corrupt database contents drive an unbounded recovery allocation.
+    #[allow(dead_code)] // consumed by the activation-recovery integration slice
+    pub(crate) fn audit_in_flight_transition(&self) -> Result<Option<InFlightTransition>, TransitionEvidenceError> {
+        self.conn.exec(|conn| {
+            let rows = model::state::table
+                .filter(model::state::transition_id.is_not_null())
+                .select((model::state::id, model::state::transition_id))
+                .order(model::state::id.asc())
+                .limit(2)
+                .load::<(i32, Option<String>)>(conn)
+                .map_err(Error::from)?;
+
+            let mut rows = rows
+                .into_iter()
+                .map(|(state_id, transition_id)| {
+                    let state_id = Id::from(state_id);
+                    let transition_id = transition_id.ok_or(TransitionEvidenceError::UnexpectedNullTransitionId {
+                        state_id: i32::from(state_id),
+                    })?;
+                    Ok(InFlightTransition {
+                        state_id,
+                        transition_id: parse_transition_evidence(state_id, transition_id)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, TransitionEvidenceError>>()?;
+
+            match rows.len() {
+                0 => Ok(None),
+                1 => Ok(rows.pop()),
+                _ => Err(TransitionEvidenceError::MultipleInFlightTransitions),
+            }
+        })
     }
 
     /// Look up the fresh state durably correlated with one in-flight
@@ -260,6 +353,13 @@ fn load_selected_state(conn: &mut SqliteConnection, state: model::State) -> Resu
     })
 }
 
+fn parse_transition_evidence(state_id: Id, transition_id: String) -> Result<TransitionId, TransitionEvidenceError> {
+    TransitionId::parse(transition_id).map_err(|source| TransitionEvidenceError::InvalidTransitionId {
+        state_id: i32::from(state_id),
+        source,
+    })
+}
+
 #[allow(dead_code)] // consumed by the activation-journal integration slice
 fn require_one_transition_row(changed: usize, state: Id) -> Result<(), TransitionMutationError> {
     if changed == 1 {
@@ -275,6 +375,22 @@ fn require_one_transition_row(changed: usize, state: Id) -> Result<(), Transitio
 pub(crate) enum TransitionMutationError {
     #[error("state {state_id} is not correlated with the requested transition")]
     Mismatch { state_id: i32 },
+    #[error(transparent)]
+    Database(#[from] Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TransitionEvidenceError {
+    #[error("state {state_id} contains a noncanonical transition ID")]
+    InvalidTransitionId {
+        state_id: i32,
+        #[source]
+        source: state::TransitionIdError,
+    },
+    #[error("state {state_id} unexpectedly has a null in-flight transition ID")]
+    UnexpectedNullTransitionId { state_id: i32 },
+    #[error("state database contains more than one in-flight transition row")]
+    MultipleInFlightTransitions,
     #[error(transparent)]
     Database(#[from] Error),
 }
@@ -351,7 +467,10 @@ mod model {
 #[cfg(test)]
 mod test {
     use chrono::Utc;
-    use diesel::{RunQueryDsl as _, sql_types::Text};
+    use diesel::{
+        RunQueryDsl as _,
+        sql_types::{Integer, Text},
+    };
 
     use super::*;
     use crate::package;
@@ -398,6 +517,102 @@ mod test {
             .unwrap();
         assert_ne!(ordinary.id, correlated.id);
         assert_eq!(database.get_by_transition(&token).unwrap(), Some(correlated));
+    }
+
+    #[test]
+    fn transition_ownership_distinguishes_matching_cleared_missing_and_foreign() {
+        let database = Database::new(":memory:").unwrap();
+        let first_token = transition_id('1');
+        let foreign_token = transition_id('2');
+        let first = database
+            .add_with_transition(&first_token, &[], Some("first"), None)
+            .unwrap();
+        let cleared = database.add(&[], Some("cleared"), None).unwrap();
+
+        assert_eq!(
+            database.transition_ownership(first.id, &first_token).unwrap(),
+            TransitionOwnership::Matching
+        );
+        assert_eq!(
+            database.transition_ownership(first.id, &foreign_token).unwrap(),
+            TransitionOwnership::Foreign
+        );
+        assert_eq!(
+            database.transition_ownership(cleared.id, &first_token).unwrap(),
+            TransitionOwnership::Cleared
+        );
+        assert_eq!(
+            database.transition_ownership(Id::from(10_000), &first_token).unwrap(),
+            TransitionOwnership::Missing
+        );
+
+        database.clear_transition_if_matches(first.id, &first_token).unwrap();
+        assert_eq!(
+            database.transition_ownership(first.id, &first_token).unwrap(),
+            TransitionOwnership::Cleared
+        );
+    }
+
+    #[test]
+    fn global_transition_audit_accepts_zero_or_one_and_rejects_multiple_rows() {
+        let database = Database::new(":memory:").unwrap();
+        assert_eq!(database.audit_in_flight_transition().unwrap(), None);
+
+        database.add(&[], Some("ordinary"), None).unwrap();
+        assert_eq!(database.audit_in_flight_transition().unwrap(), None);
+
+        let first_token = transition_id('3');
+        let first = database
+            .add_with_transition(&first_token, &[], Some("first"), None)
+            .unwrap();
+        assert_eq!(
+            database.audit_in_flight_transition().unwrap(),
+            Some(InFlightTransition {
+                state_id: first.id,
+                transition_id: first_token,
+            })
+        );
+
+        let second_token = transition_id('4');
+        database
+            .add_with_transition(&second_token, &[], Some("second"), None)
+            .unwrap();
+        assert!(matches!(
+            database.audit_in_flight_transition(),
+            Err(TransitionEvidenceError::MultipleInFlightTransitions)
+        ));
+    }
+
+    #[test]
+    fn transition_evidence_rejects_noncanonical_stored_tokens() {
+        let database = Database::new(":memory:").unwrap();
+        let state = database.add(&[], Some("corrupt me"), None).unwrap();
+        let malformed = "g".repeat(TransitionId::TEXT_LENGTH);
+        database.conn.exec(|conn| {
+            diesel::sql_query("PRAGMA ignore_check_constraints = ON")
+                .execute(conn)
+                .unwrap();
+            diesel::sql_query("UPDATE state SET transition_id = ? WHERE id = ?")
+                .bind::<Text, _>(&malformed)
+                .bind::<Integer, _>(i32::from(state.id))
+                .execute(conn)
+                .unwrap();
+            diesel::sql_query("PRAGMA ignore_check_constraints = OFF")
+                .execute(conn)
+                .unwrap();
+        });
+
+        let requested = transition_id('5');
+        assert!(matches!(
+            database.transition_ownership(state.id, &requested),
+            Err(TransitionEvidenceError::InvalidTransitionId { state_id, .. })
+                if state_id == i32::from(state.id)
+        ));
+        assert!(matches!(
+            database.audit_in_flight_transition(),
+            Err(TransitionEvidenceError::InvalidTransitionId { state_id, .. })
+                if state_id == i32::from(state.id)
+        ));
     }
 
     #[test]
