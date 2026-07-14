@@ -1,4 +1,3 @@
-
 //! Frozen, canonical build plans.
 //!
 //! [`DerivationPlan`] is the semantic boundary between resolution and

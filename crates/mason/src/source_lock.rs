@@ -1,4 +1,3 @@
-
 //! Canonical generated lock data for resolved recipe sources.
 //!
 //! This module deliberately decodes and emits a standalone Gluon value instead

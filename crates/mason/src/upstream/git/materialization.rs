@@ -1,4 +1,3 @@
-
 //! Canonical normalization and hashing for a checked-out Git tree.
 
 use std::{

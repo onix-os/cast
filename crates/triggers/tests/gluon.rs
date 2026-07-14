@@ -1,4 +1,3 @@
-
 use gluon_config::{DiagnosticCategory, Evaluator, Source};
 use triggers::{
     Collection, TRIGGER_ABI_VERSION, TriggerEvaluationError, evaluate_gluon, evaluate_gluon_with_inputs,

@@ -1,4 +1,3 @@
-
 use gluon_config::Source;
 use stone_recipe::package::{
     BuilderEnvironmentSpec, DependencySpec, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,

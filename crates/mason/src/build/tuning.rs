@@ -1,4 +1,3 @@
-
 //! Resolve authored tuning selections against the typed repository catalog.
 
 use std::collections::{BTreeMap, BTreeSet};

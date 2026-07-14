@@ -1,4 +1,3 @@
-
 //! Harness-free proof for the production legacy-clone boundary.
 //!
 //! Rust's ordinary test harness owns a thread pool, so a unit test cannot

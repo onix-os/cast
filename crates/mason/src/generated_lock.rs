@@ -1,4 +1,3 @@
-
 //! Bounded, race-resistant reads of generated Gluon lock files.
 //!
 //! Generated locks are evaluator inputs, so they share the evaluator's

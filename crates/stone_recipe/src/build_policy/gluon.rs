@@ -1,4 +1,3 @@
-
 //! Restricted Gluon evaluation boundary for typed build policy.
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};

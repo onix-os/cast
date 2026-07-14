@@ -1,4 +1,3 @@
-
 // This test deliberately exercises raw descriptor boundaries. `std::fs::File`
 // keeps those operations explicit instead of attaching path context after the
 // descriptor has already been authenticated.

@@ -1,4 +1,3 @@
-
 //! Generated build-lock lifecycle.
 
 use std::{

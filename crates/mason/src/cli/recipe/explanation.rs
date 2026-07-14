@@ -1,4 +1,3 @@
-
 //! Stable, comprehensive presentation of a frozen derivation and its
 //! evaluation provenance.
 

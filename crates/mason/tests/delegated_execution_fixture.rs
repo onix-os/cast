@@ -1,4 +1,3 @@
-
 //! Harness-free delegated contentful execution fixture.
 //!
 //! libtest owns a worker pool and therefore cannot supervise the production

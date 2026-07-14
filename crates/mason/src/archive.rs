@@ -1,4 +1,3 @@
-
 //! Fail-closed extraction for locked authored-source tar archives.
 //!
 //! Archive bytes are parsed twice.  The first pass admits a finite canonical

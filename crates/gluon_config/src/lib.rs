@@ -1,4 +1,3 @@
-
 //! Restricted Gluon evaluation for repository-owned declarative configuration.
 //!
 //! This crate intentionally constructs an empty [`gluon::RootedThread`]. It

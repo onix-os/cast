@@ -1,4 +1,3 @@
-
 //! Format-neutral data transfer objects for declarative system configuration.
 //!
 //! These types deliberately contain only primitive values, collections,

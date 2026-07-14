@@ -1,4 +1,3 @@
-
 //! Resolve and freeze a target-specific Cast derivation plan.
 
 use std::{

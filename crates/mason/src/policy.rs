@@ -1,4 +1,3 @@
-
 //! Explicit, ordered repository build policy.
 //!
 //! Cast evaluates one authored Gluon manifest and applies exactly the

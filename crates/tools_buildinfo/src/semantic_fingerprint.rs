@@ -1,4 +1,3 @@
-
 //! Deterministic discovery and hashing for the OS Tools implementation input.
 //!
 //! This module is compiled by `build.rs`.  The library itself only exposes the

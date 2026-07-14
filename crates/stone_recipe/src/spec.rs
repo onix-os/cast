@@ -1,4 +1,3 @@
-
 //! Primitive, format-neutral values shared by the package and policy ABIs.
 
 use thiserror::Error;

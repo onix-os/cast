@@ -1,4 +1,3 @@
-
 //! Descriptor-rooted publication of one complete derivation bundle.
 
 // Publication constructs and transfers raw Linux descriptors directly. Using

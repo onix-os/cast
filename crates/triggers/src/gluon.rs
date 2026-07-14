@@ -1,4 +1,3 @@
-
 //! Versioned restricted Gluon boundary for triggers.
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};

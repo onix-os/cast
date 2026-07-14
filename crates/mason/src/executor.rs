@@ -1,4 +1,3 @@
-
 //! Execution of an already-frozen derivation plan.
 //!
 //! This module deliberately has no access to recipes, policy macros,

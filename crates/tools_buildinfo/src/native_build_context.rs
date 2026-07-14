@@ -1,4 +1,3 @@
-
 //! Normalization of native compiler, linker, and dependency build inputs.
 //!
 //! Cargo exposes these values to every native dependency build script, but it

@@ -1,4 +1,3 @@
-
 //! Typed repository policy used to lower package builders into frozen plans.
 //!
 //! Policy text is deliberately finite: authored values may only contain

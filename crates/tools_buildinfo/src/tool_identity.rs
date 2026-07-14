@@ -1,4 +1,3 @@
-
 //! Content-strong identity for executables selected by a build.
 //!
 //! A version string is not an executable identity: two independently built

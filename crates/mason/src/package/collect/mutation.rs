@@ -1,4 +1,3 @@
-
 //! Collector-owned regular-file replacement.
 //!
 //! A replacement is constructed as an anonymous inode in the witnessed file's

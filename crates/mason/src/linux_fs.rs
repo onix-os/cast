@@ -1,4 +1,3 @@
-
 //! Linux 5.6-compatible operations on retained filesystem capabilities.
 //!
 //! `O_PATH` descriptors cannot be passed to `fchmod(2)`, while

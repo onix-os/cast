@@ -1,4 +1,3 @@
-
 //! Versioned Gluon boundary for repository configuration fragments.
 //!
 //! Gluon arrays retain authored order at the language boundary. Conversion

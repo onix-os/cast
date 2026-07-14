@@ -1,4 +1,3 @@
-
 //! Bounded Linux subprocess supervision for post-blit trigger handlers.
 
 use std::{

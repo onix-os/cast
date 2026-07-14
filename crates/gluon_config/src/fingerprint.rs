@@ -1,4 +1,3 @@
-
 use std::{collections::BTreeMap, convert::Infallible, error::Error as StdError, fmt};
 
 use sha2::{Digest, Sha256};

@@ -1,4 +1,3 @@
-
 //! Canonical generated dependency and policy resolution data.
 
 use std::{

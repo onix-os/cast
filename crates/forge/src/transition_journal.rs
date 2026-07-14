@@ -1,4 +1,3 @@
-
 //! Strict, durable storage for the single in-flight state transition.
 //!
 //! This module deliberately contains no recovery policy. It defines only the

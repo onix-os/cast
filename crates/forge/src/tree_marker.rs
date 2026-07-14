@@ -1,4 +1,3 @@
-
 //! Durable logical identity for one retained `/usr` tree.
 //!
 //! Runtime inode and mount identifiers are useful witnesses only inside their

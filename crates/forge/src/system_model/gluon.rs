@@ -1,4 +1,3 @@
-
 //! Versioned Gluon boundary for authored Cast system intent and snapshots.
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, ImportPolicy, Source};

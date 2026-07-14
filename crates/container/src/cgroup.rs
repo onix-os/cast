@@ -1,4 +1,3 @@
-
 //! Descriptor-pinned cgroup v2 lifecycle primitives.
 //!
 //! This module deliberately stops below container activation. It expects a

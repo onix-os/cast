@@ -1,4 +1,3 @@
-
 //! Typed package declarations for the `cast.package.v3` Gluon ABI.
 //!
 //! A package factory is evaluated completely inside Gluon and produces one

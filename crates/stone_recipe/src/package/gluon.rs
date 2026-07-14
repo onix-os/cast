@@ -1,4 +1,3 @@
-
 //! Gluon evaluation boundary for package declarations.
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};

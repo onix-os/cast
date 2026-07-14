@@ -1,4 +1,3 @@
-
 //! Restricted Gluon boundary for ordered build-policy composition manifests.
 //!
 //! The manifest contains only data: Rust applies each operation and records

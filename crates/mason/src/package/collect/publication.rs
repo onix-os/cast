@@ -1,4 +1,3 @@
-
 //! Collector-owned publication and admission of analyzer-generated paths.
 
 #![allow(clippy::disallowed_types)]

@@ -1,4 +1,3 @@
-
 use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 
 const PRIVATE_INSTALLATION_ROOT_MODE: u32 = 0o700;

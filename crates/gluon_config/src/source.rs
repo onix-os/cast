@@ -1,4 +1,3 @@
-
 use std::{
     ffi::CString,
     fmt,

@@ -1,4 +1,3 @@
-
 //! Typed lowering context for standard package-v3 build steps.
 //!
 //! This boundary deliberately accepts concrete values. It does not know about

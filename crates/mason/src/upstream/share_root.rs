@@ -1,4 +1,3 @@
-
 //! Descriptor-pinned build-visible source root.
 
 use std::{

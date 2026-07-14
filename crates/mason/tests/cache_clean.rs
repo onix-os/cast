@@ -1,4 +1,3 @@
-
 //! Harness-free proof for descriptor-anchored package-cache cleaning.
 //!
 //! The production container boundary authenticates an exactly single-tasked

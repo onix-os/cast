@@ -1,4 +1,3 @@
-
 //! Read-only package closure resolution for build planning.
 
 use thiserror::Error;
