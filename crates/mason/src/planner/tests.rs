@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error as StdError,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -408,6 +408,9 @@ fn package_example_roots() -> Vec<(String, PathBuf)> {
 
 #[test]
 fn offline_execution_fixture_archives_are_real_locked_and_complete() {
+    let temporary = tempfile::tempdir().unwrap();
+    let cache = temporary.path().join("source-cache");
+    let shared = temporary.path().join("shared");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
     let packages = root.join("packages");
     let archives = root.join("archives");
@@ -482,6 +485,28 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         assert!(
             admitted_archives.insert(filename.to_owned()),
             "duplicate execution archive"
+        );
+
+        let materialization_name = recipe.declaration.sources[0].materialization_name().unwrap();
+        let locked = stone_recipe::derivation::LockedSource::Archive {
+            order: 0,
+            url: source.url.clone(),
+            sha256: source.sha256.clone(),
+            filename: materialization_name.clone(),
+        };
+        crate::upstream::import_locked_archive_fixture(&locked, &cache, &archive_path)
+            .unwrap_or_else(|error| panic!("{name}: import locked fixture into source cache: {error:#}"));
+        let share = shared.join(name);
+        crate::upstream::sync_locked(std::slice::from_ref(&locked), &cache, &share, SOURCE_DATE_EPOCH)
+            .unwrap_or_else(|error| panic!("{name}: share imported fixture through frozen source path: {error:#}"));
+        let shared_archive = share.join(materialization_name);
+        assert_eq!(fs::read(&shared_archive).unwrap(), bytes);
+        let shared_metadata = fs::metadata(&shared_archive).unwrap();
+        let fixture_metadata = fs::metadata(&archive_path).unwrap();
+        assert_ne!(
+            (shared_metadata.dev(), shared_metadata.ino()),
+            (fixture_metadata.dev(), fixture_metadata.ino()),
+            "{name}: build-visible source must not alias the tracked fixture"
         );
     }
 

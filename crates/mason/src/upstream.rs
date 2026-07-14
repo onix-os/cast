@@ -231,6 +231,26 @@ pub fn sync_locked(
     sync_upstreams(&upstreams, storage_dir, share_dir, source_date_epoch)
 }
 
+/// Seed one HTTPS-identified archive into the normal content-addressed cache
+/// from a tracked offline fixture.
+///
+/// This function is deliberately absent from production binaries. Tests can
+/// prove real frozen execution without adding `file:` sources or mounting the
+/// mutable recipe/fixture tree inside the build container.
+#[cfg(test)]
+pub(crate) fn import_locked_archive_fixture(
+    source: &LockedSource,
+    storage_dir: &Path,
+    fixture: &Path,
+) -> Result<(), Error> {
+    let upstreams = locked_upstreams(std::slice::from_ref(source))?;
+    let [Upstream::Plain(plain)] = upstreams.as_slice() else {
+        return Err(Error::FixtureImportRequiresArchive);
+    };
+    plain.import_fixture(storage_dir, fixture)?;
+    Ok(())
+}
+
 fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
     sources
         .iter()
@@ -412,6 +432,9 @@ pub enum Error {
         #[source]
         source: UpstreamValidationError,
     },
+    #[cfg(test)]
+    #[error("offline fixture import requires one locked archive source")]
+    FixtureImportRequiresArchive,
     #[error("prepare build-visible source root")]
     ShareRoot(#[from] share_root::Error),
     #[error("io")]
@@ -525,6 +548,43 @@ let base = cast.mk_package (cast.meta {{
         };
         assert_eq!(git.commit, FULL_COMMIT);
         assert_eq!(git.materialization_sha256.as_deref(), Some(MATERIALIZATION_SHA256));
+    }
+
+    #[test]
+    fn offline_fixture_import_preserves_https_identity_and_rejects_git() {
+        use sha2::{Digest, Sha256};
+
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = directory.path().join("source.tar");
+        let storage = directory.path().join("storage");
+        fs::write(&fixture, b"offline archive").unwrap();
+        let archive = LockedSource::Archive {
+            order: 0,
+            url: "https://fixtures.invalid/source.tar".to_owned(),
+            sha256: hex::encode(Sha256::digest(b"offline archive")),
+            filename: "source.tar".to_owned(),
+        };
+
+        import_locked_archive_fixture(&archive, &storage, &fixture).unwrap();
+        let upstreams = locked_upstreams(std::slice::from_ref(&archive)).unwrap();
+        let [Upstream::Plain(plain)] = upstreams.as_slice() else {
+            panic!("locked archive did not remain a plain HTTPS upstream");
+        };
+        assert_eq!(plain.url.scheme(), "https");
+        assert!(plain.stored(&storage).is_ok());
+
+        let git = LockedSource::Git {
+            order: 0,
+            url: "https://fixtures.invalid/source.git".to_owned(),
+            requested_ref: "main".to_owned(),
+            commit: FULL_COMMIT.to_owned(),
+            materialization_sha256: MATERIALIZATION_SHA256.to_owned(),
+            directory: "source.git".to_owned(),
+        };
+        assert!(matches!(
+            import_locked_archive_fixture(&git, &storage, &fixture),
+            Err(Error::FixtureImportRequiresArchive)
+        ));
     }
 
     #[test]

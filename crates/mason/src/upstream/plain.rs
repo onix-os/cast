@@ -5,7 +5,7 @@ use std::{
     fs::Permissions,
     io::{self, Read, Write},
     ops::Deref,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -112,6 +112,67 @@ impl Plain {
         })
     }
 
+    /// Admit one tracked offline fixture through the same content-addressed
+    /// cache used by production HTTPS downloads.
+    ///
+    /// This boundary exists only in test builds. It never changes the source
+    /// URL or cache key and publishes only bytes which match the lock's exact
+    /// SHA-256. Production binaries therefore retain the HTTPS-only source
+    /// policy instead of gaining a local-file recipe escape hatch.
+    #[cfg(test)]
+    pub(crate) fn import_fixture(&self, storage_dir: &Path, fixture: &Path) -> Result<StoredPlain, Error> {
+        self.import_fixture_with_max_bytes(storage_dir, fixture, ARCHIVE_DOWNLOAD_LIMITS.max_bytes)
+    }
+
+    #[cfg(test)]
+    fn import_fixture_with_max_bytes(
+        &self,
+        storage_dir: &Path,
+        fixture: &Path,
+        max_bytes: u64,
+    ) -> Result<StoredPlain, Error> {
+        match self.stored_with_max_bytes(storage_dir, max_bytes) {
+            Ok(stored) => return Ok(stored),
+            Err(Error::Io(source)) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source),
+        }
+
+        let target = self.stored_path(storage_dir);
+        let parent = target
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "archive cache path has no parent"))?;
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, Permissions::from_mode(0o700))?;
+
+        let mut source = open_regular_archive(fixture, self.name())?;
+        reject_file_size(&source, self.name(), max_bytes)?;
+        let mut staging = tempfile::Builder::new()
+            .prefix(".cast-fixture-import-")
+            .tempfile_in(parent)
+            .map_err(|source| Error::CreateStaging {
+                parent: parent.to_owned(),
+                source,
+            })?;
+        let found = copy_and_hash_bounded(&mut source, staging.as_file_mut(), self.name(), max_bytes)?;
+        if found != self.hash {
+            return Err(Error::HashMismatch {
+                name: self.name().to_owned(),
+                expected: self.hash.to_string(),
+                got: found,
+            });
+        }
+
+        staging.as_file().set_permissions(Permissions::from_mode(0o644))?;
+        staging.as_file().sync_all()?;
+        staging.persist_noclobber(&target).map_err(|error| Error::Install {
+            target: target.clone(),
+            source: error.error,
+        })?;
+        fs::File::open(parent)?.sync_all()?;
+
+        self.stored_with_max_bytes(storage_dir, max_bytes)
+    }
+
     /// Returns a relative PathBuf where this source archive
     /// should be stored within the storage directory.
     fn stored_path(&self, storage_dir: &Path) -> PathBuf {
@@ -195,8 +256,15 @@ fn open_regular_archive(path: &Path, name: &str) -> Result<fs::File, Error> {
         .read(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
         .open(path)?;
-    if !file.metadata()?.file_type().is_file() {
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
         return Err(Error::NotRegular { name: name.to_owned() });
+    }
+    if metadata.nlink() != 1 {
+        return Err(Error::LinkCount {
+            name: name.to_owned(),
+            links: metadata.nlink(),
+        });
     }
     Ok(file)
 }
@@ -281,6 +349,115 @@ mod tests {
         fs::write(&build_visible, b"mutated by build").unwrap();
         assert_eq!(fs::read(&cached).unwrap(), b"verified archive");
         assert_eq!(fs::read(&build_visible).unwrap(), b"mutated by build");
+    }
+
+    #[test]
+    fn fixture_import_copies_exact_locked_bytes_into_the_normal_cache_namespace() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = directory.path().join("fixture.tar");
+        let storage = directory.path().join("storage");
+        fs::write(&fixture, b"locked offline fixture").unwrap();
+        let plain = Plain {
+            url: Url::parse("https://fixtures.invalid/source.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"locked offline fixture"))),
+            rename: Some("source.tar".to_owned()),
+        };
+
+        let stored = plain.import_fixture(&storage, &fixture).unwrap();
+
+        assert!(stored.was_cached);
+        assert_eq!(stored.path, plain.stored_path(&storage));
+        assert_eq!(fs::read(&stored.path).unwrap(), b"locked offline fixture");
+        let fixture_metadata = fs::metadata(fixture).unwrap();
+        let cached_metadata = fs::metadata(&stored.path).unwrap();
+        assert_ne!(
+            (fixture_metadata.dev(), fixture_metadata.ino()),
+            (cached_metadata.dev(), cached_metadata.ino())
+        );
+        assert_eq!(cached_metadata.mode() & 0o7777, 0o644);
+        assert_eq!(cached_metadata.nlink(), 1);
+    }
+
+    #[test]
+    fn fixture_import_is_bounded_and_hash_checked_before_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = directory.path().join("storage");
+        let exact_fixture = directory.path().join("exact.tar");
+        fs::write(&exact_fixture, b"1234").unwrap();
+        let exact = Plain {
+            url: Url::parse("https://fixtures.invalid/exact.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"1234"))),
+            rename: None,
+        };
+        assert!(exact.import_fixture_with_max_bytes(&storage, &exact_fixture, 4).is_ok());
+
+        let oversized_fixture = directory.path().join("oversized.tar");
+        fs::write(&oversized_fixture, b"12345").unwrap();
+        let oversized = Plain {
+            url: Url::parse("https://fixtures.invalid/oversized.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"12345"))),
+            rename: None,
+        };
+        assert!(matches!(
+            oversized.import_fixture_with_max_bytes(&storage, &oversized_fixture, 4),
+            Err(Error::TooLarge { limit: 4, .. })
+        ));
+        assert!(!oversized.stored_path(&storage).exists());
+
+        let mismatched_fixture = directory.path().join("mismatched.tar");
+        fs::write(&mismatched_fixture, b"not admitted").unwrap();
+        let mismatched = Plain {
+            url: Url::parse("https://fixtures.invalid/mismatched.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"expected"))),
+            rename: None,
+        };
+        assert!(matches!(
+            mismatched.import_fixture(&storage, &mismatched_fixture),
+            Err(Error::HashMismatch { .. })
+        ));
+        assert!(!mismatched.stored_path(&storage).exists());
+        let mismatch_parent = mismatched.stored_path(&storage).parent().unwrap().to_owned();
+        assert!(fs::read_dir(mismatch_parent).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn fixture_import_rejects_aliases_and_never_replaces_existing_cache_state() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let storage = directory.path().join("storage");
+        let original = directory.path().join("original.tar");
+        let hardlink = directory.path().join("hardlink.tar");
+        fs::write(&original, b"locked bytes").unwrap();
+        fs::hard_link(&original, &hardlink).unwrap();
+        let plain = Plain {
+            url: Url::parse("https://fixtures.invalid/source.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"locked bytes"))),
+            rename: None,
+        };
+        assert!(matches!(
+            plain.import_fixture(&storage, &hardlink),
+            Err(Error::LinkCount { links: 2, .. })
+        ));
+        assert!(!plain.stored_path(&storage).exists());
+
+        fs::remove_file(hardlink).unwrap();
+        let symlink_fixture = directory.path().join("symlink.tar");
+        symlink(&original, &symlink_fixture).unwrap();
+        assert!(matches!(
+            plain.import_fixture(&storage, &symlink_fixture),
+            Err(Error::Io(_))
+        ));
+        assert!(!plain.stored_path(&storage).exists());
+
+        let target = plain.stored_path(&storage);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"preexisting corrupt state").unwrap();
+        assert!(matches!(
+            plain.import_fixture(&storage, &original),
+            Err(Error::HashMismatch { .. })
+        ));
+        assert_eq!(fs::read(target).unwrap(), b"preexisting corrupt state");
     }
 
     #[test]
@@ -486,6 +663,9 @@ pub enum Error {
     /// The cache path did not name an ordinary archive file.
     #[error("archive {name:?} is not a regular file")]
     NotRegular { name: String },
+    /// A cache or fixture inode had aliases outside the admitted path.
+    #[error("archive {name:?} has {links} hard links; expected exactly one")]
+    LinkCount { name: String, links: u64 },
     #[error("request")]
     /// A local or remote fetch failed.
     Request(#[from] request::Error),
