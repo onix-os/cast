@@ -140,11 +140,36 @@ forge-frozen-normalization-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
+		linux_fs::tests::interrupted_retry_limit_accepts_n_and_rejects_n_plus_one \
+		linux_fs::tests::expired_retry_deadline_fails_before_another_syscall \
 		linux_fs::tests::descriptor_times_update_the_retained_regular_inode_not_its_replacement \
 		linux_fs::tests::descriptor_times_support_a_mode_zero_directory \
-		linux_fs::tests::descriptor_times_update_a_symlink_without_touching_its_target; do \
+		linux_fs::tests::descriptor_times_update_a_symlink_without_touching_its_target \
+		linux_fs::tests::descriptor_read_uses_the_retained_inode_and_preserves_atime \
+		linux_fs::tests::descriptor_read_rejects_non_regular_capabilities \
+		client::tests::frozen_copy_manifest_counts_output_inodes_and_enforces_exact_byte_limit \
+		client::tests::frozen_capability_retry_timeout_remains_a_materialization_timeout \
+		client::tests::independent_copy_rejects_length_changed_after_byte_preflight_before_creation \
+		client::tests::frozen_normalization_handles_mode_zero_entries_and_never_follows_symlinks \
+		client::tests::frozen_normalization_rejects_unplanned_missing_and_extra_entries \
+		client::tests::frozen_normalization_directory_to_symlink_race_cannot_escape_root \
+		client::tests::frozen_normalization_hardlink_substitution_is_rejected_before_mutation \
+		client::tests::frozen_normalization_rejects_stage_root_name_substitution \
+		client::tests::frozen_normalization_limits_accept_n_and_reject_n_plus_one \
+		client::tests::frozen_normalization_runtime_walk_enforces_the_inode_limit \
+		client::tests::frozen_normalization_rejects_regular_content_outside_the_declaration \
+		client::tests::frozen_normalization_detects_same_inode_mutation_before_final_revalidation \
+		client::tests::frozen_normalization_final_pass_detects_deep_content_mutation \
+		client::tests::frozen_normalization_root_inventory_detects_post_digest_child_mutation \
+		client::tests::frozen_normalization_detects_entry_added_after_final_inventory \
+		client::tests::frozen_normalization_orders_non_utf8_names_as_raw_bytes \
+		client::tests::frozen_normalization_rejects_cross_mount_entries_before_mutation \
+		client::tests::frozen_normalization_rejects_access_acl_after_active_mode_change \
+		client::tests::frozen_normalization_rejects_default_acl_after_active_mode_change \
+		client::tests::frozen_root_normalizes_enforceable_metadata_in_canonical_order \
+		client::tests::frozen_root_normalizes_and_discards_a_mode_zero_directory; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
-		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+		CAST_REQUIRE_POSIX_ACL_TESTS=1 $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 cache-clean-test:

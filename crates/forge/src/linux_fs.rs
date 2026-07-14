@@ -16,6 +16,7 @@ use std::{
         unix::fs::{MetadataExt as _, PermissionsExt as _},
     },
     path::Path,
+    time::Instant,
 };
 
 const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
@@ -23,6 +24,37 @@ const POSIX_ACCESS_ACL_XATTR: &CStr = c"system.posix_acl_access";
 const POSIX_DEFAULT_ACL_XATTR: &CStr = c"system.posix_acl_default";
 const MAX_DECIMAL_PID_BYTES: usize = 16;
 const MAX_THREAD_SELF_BYTES: usize = MAX_DECIMAL_PID_BYTES * 2 + 6;
+// Retrying EINTR forever would turn every higher-level timeout into a best-
+// effort hint.  Linux syscalls normally make progress immediately after a
+// signal, so this generous ceiling is a fail-closed backstop even for callers
+// which do not supply an operation deadline.
+const MAX_INTERRUPTED_SYSCALL_RETRIES: usize = 1_024;
+
+fn retry_interrupted<T>(deadline: Option<Instant>, mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut interruptions = 0usize;
+    loop {
+        if deadline.is_some_and(|deadline| Instant::now() > deadline) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "retained filesystem operation exceeded its deadline",
+            ));
+        }
+        match operation() {
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                if interruptions >= MAX_INTERRUPTED_SYSCALL_RETRIES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        format!(
+                            "retained filesystem operation exceeded {MAX_INTERRUPTED_SYSCALL_RETRIES} interrupted retries"
+                        ),
+                    ));
+                }
+                interruptions += 1;
+            }
+            result => return result,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InodeIdentity {
@@ -38,6 +70,15 @@ struct InodeIdentity {
 /// The retained descriptor is revalidated after the call so success means the
 /// same inode has exactly the requested mode.
 pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Result<()> {
+    chmod_path_descriptor_with_deadline(file, mode, None)
+}
+
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn chmod_path_descriptor_until(file: &std::fs::File, mode: u32, deadline: Instant) -> io::Result<()> {
+    chmod_path_descriptor_with_deadline(file, mode, Some(deadline))
+}
+
+fn chmod_path_descriptor_with_deadline(file: &std::fs::File, mode: u32, deadline: Option<Instant>) -> io::Result<()> {
     if mode & !0o7777 != 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -45,19 +86,17 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
         ));
     }
 
-    let (descriptors, descriptor, expected) = authenticated_descriptor_name(file)?;
-    loop {
+    let (descriptors, descriptor, expected) = authenticated_descriptor_name_with_deadline(file, deadline)?;
+    retry_interrupted(deadline, || {
         // SAFETY: the directory is authenticated procfs, the component is the
         // live target descriptor's canonical decimal number, and flags=0
         // deliberately follows that procfs magic link to the pinned inode.
         if unsafe { nix::libc::fchmodat(descriptors.as_raw_fd(), descriptor.as_ptr(), mode, 0) } == 0 {
-            break;
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
+    })?;
 
     let metadata = file.metadata()?;
     let actual = inode_identity(&metadata);
@@ -68,7 +107,7 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
             "retained filesystem capability has mode {actual_mode:04o} after chmod, expected {mode:04o}"
         )));
     }
-    let post_alias = open_descriptor_alias(&descriptors, &descriptor)?;
+    let post_alias = open_descriptor_alias_with_deadline(&descriptors, &descriptor, deadline)?;
     require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
     Ok(())
 }
@@ -80,7 +119,27 @@ pub(crate) fn chmod_path_descriptor(file: &std::fs::File, mode: u32) -> io::Resu
 /// itself, including mode-000 files and symlinks opened with
 /// `O_PATH | O_NOFOLLOW`.  There is deliberately no pathname fallback: an
 /// older or incompatible kernel must fail instead of resolving a mutable name.
+#[cfg(test)]
 pub(crate) fn set_path_descriptor_times(file: &std::fs::File, seconds: i64, nanoseconds: i64) -> io::Result<()> {
+    set_path_descriptor_times_with_deadline(file, seconds, nanoseconds, None)
+}
+
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn set_path_descriptor_times_until(
+    file: &std::fs::File,
+    seconds: i64,
+    nanoseconds: i64,
+    deadline: Instant,
+) -> io::Result<()> {
+    set_path_descriptor_times_with_deadline(file, seconds, nanoseconds, Some(deadline))
+}
+
+fn set_path_descriptor_times_with_deadline(
+    file: &std::fs::File,
+    seconds: i64,
+    nanoseconds: i64,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
     let seconds = nix::libc::time_t::try_from(seconds)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "timestamp is outside time_t"))?;
     let nanoseconds = nix::libc::c_long::try_from(nanoseconds)
@@ -113,18 +172,16 @@ pub(crate) fn set_path_descriptor_times(file: &std::fs::File, seconds: i64, nano
             0
         };
 
-    loop {
+    retry_interrupted(deadline, || {
         // SAFETY: `file` is live, the empty path is NUL-terminated, and
         // `times` contains the two initialized timespec values required by
         // Linux. AT_EMPTY_PATH binds the mutation to the retained descriptor.
         if unsafe { nix::libc::utimensat(file.as_raw_fd(), c"".as_ptr(), times.as_ptr(), flags) } == 0 {
-            break;
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
+    })?;
 
     let after = file.metadata()?;
     require_same_inode(expected, inode_identity(&after))?;
@@ -147,6 +204,64 @@ pub(crate) fn set_path_descriptor_times(file: &std::fs::File, seconds: i64, nano
         )));
     }
     Ok(())
+}
+
+/// Reopen one retained regular inode for side-effect-free content reads.
+///
+/// The only followed name is the descriptor magic link below this thread's
+/// authenticated procfs fd table.  This avoids reopening a mutable package
+/// pathname as a FIFO, device, or replacement regular file. `O_NOATIME` is
+/// mandatory so a final digest cannot perturb the timestamp witness it is
+/// meant to authenticate; freshly materialized package files are required to
+/// be owned by the effective user, so lack of permission fails closed.
+#[cfg(test)]
+pub(crate) fn open_path_descriptor_readonly(file: &std::fs::File) -> io::Result<std::fs::File> {
+    open_path_descriptor_readonly_with_deadline(file, None)
+}
+
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn open_path_descriptor_readonly_until(
+    file: &std::fs::File,
+    deadline: Instant,
+) -> io::Result<std::fs::File> {
+    open_path_descriptor_readonly_with_deadline(file, Some(deadline))
+}
+
+fn open_path_descriptor_readonly_with_deadline(
+    file: &std::fs::File,
+    deadline: Option<Instant>,
+) -> io::Result<std::fs::File> {
+    let metadata = file.metadata()?;
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let effective_owner = unsafe { nix::libc::geteuid() };
+    if !metadata.file_type().is_file() || metadata.uid() != effective_owner {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "readable descriptor target is not a same-owner regular inode",
+        ));
+    }
+
+    let (descriptors, descriptor, expected) = authenticated_descriptor_name_with_deadline(file, deadline)?;
+    let readable = openat2_file_with_deadline(
+        descriptors.as_raw_fd(),
+        &descriptor,
+        nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NONBLOCK | nix::libc::O_NOATIME,
+        0,
+        0,
+        deadline,
+    )?;
+    let readable_metadata = readable.metadata()?;
+    require_same_inode(expected, inode_identity(&readable_metadata))?;
+    if !readable_metadata.file_type().is_file() || readable_metadata.uid() != effective_owner {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "authenticated descriptor alias is not the expected same-owner regular inode",
+        ));
+    }
+    require_same_inode(expected, inode_identity(&file.metadata()?))?;
+    let post_alias = open_descriptor_alias_with_deadline(&descriptors, &descriptor, deadline)?;
+    require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
+    Ok(readable)
 }
 
 /// Give an unnamed retained inode one no-replace name in an authenticated
@@ -179,7 +294,7 @@ pub(crate) fn link_path_descriptor_noreplace(
     }
 
     let (descriptors, descriptor, expected) = authenticated_descriptor_name(file)?;
-    loop {
+    retry_interrupted(None, || {
         // SAFETY: both directory descriptors and names remain live. The source
         // parent is an authenticated procfs fd table and AT_SYMLINK_FOLLOW is
         // intentional: it follows only the proven descriptor magic link.
@@ -193,13 +308,11 @@ pub(crate) fn link_path_descriptor_noreplace(
             )
         } == 0
         {
-            break;
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
+    })?;
 
     let linked_metadata = file.metadata()?;
     require_same_inode(expected, inode_identity(&linked_metadata))?;
@@ -239,7 +352,7 @@ pub(crate) fn renameat2_noreplace(
         }
     }
 
-    loop {
+    retry_interrupted(None, || {
         // SAFETY: both retained directory descriptors and both C strings stay
         // live for the syscall. RENAME_NOREPLACE prevents destination loss.
         if unsafe {
@@ -253,13 +366,11 @@ pub(crate) fn renameat2_noreplace(
             )
         } == 0
         {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
+    })
 }
 
 /// Flush every pending write on the filesystem containing a retained
@@ -267,58 +378,67 @@ pub(crate) fn renameat2_noreplace(
 /// failed-candidate preservation must not delete its database correlation
 /// while trigger-created descendants are still only dirty cache state.
 pub(crate) fn sync_filesystem(file: &std::fs::File) -> io::Result<()> {
-    loop {
+    retry_interrupted(None, || {
         // SAFETY: the retained descriptor remains live and identifies the
         // filesystem whose pending data and metadata must reach stable storage.
         if unsafe { nix::libc::syncfs(file.as_raw_fd()) } == 0 {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
+    })
 }
 
 fn authenticated_descriptor_name(file: &std::fs::File) -> io::Result<(std::fs::File, CString, InodeIdentity)> {
+    authenticated_descriptor_name_with_deadline(file, None)
+}
+
+fn authenticated_descriptor_name_with_deadline(
+    file: &std::fs::File,
+    deadline: Option<Instant>,
+) -> io::Result<(std::fs::File, CString, InodeIdentity)> {
     let expected = inode_identity(&file.metadata()?);
-    let proc = openat2_file(
+    let proc = openat2_file_with_deadline(
         nix::libc::AT_FDCWD,
         c"/proc",
         nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        deadline,
     )?;
-    require_procfs(&proc, Path::new("/proc"))?;
+    require_procfs_with_deadline(&proc, Path::new("/proc"), deadline)?;
 
-    let (process_name, thread_name) = proc_thread_self_components(&proc)?;
-    let process = openat2_file(
+    let (process_name, thread_name) = proc_thread_self_components_with_deadline(&proc, deadline)?;
+    let process = openat2_file_with_deadline(
         proc.as_raw_fd(),
         &process_name,
         nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
+        deadline,
     )?;
-    require_procfs(&process, Path::new("/proc/<pid>"))?;
+    require_procfs_with_deadline(&process, Path::new("/proc/<pid>"), deadline)?;
 
-    let tasks = openat2_file(
+    let tasks = openat2_file_with_deadline(
         process.as_raw_fd(),
         c"task",
         nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
+        deadline,
     )?;
-    require_procfs(&tasks, Path::new("/proc/<pid>/task"))?;
-    let thread = openat2_file(
+    require_procfs_with_deadline(&tasks, Path::new("/proc/<pid>/task"), deadline)?;
+    let thread = openat2_file_with_deadline(
         tasks.as_raw_fd(),
         &thread_name,
         nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
+        deadline,
     )?;
-    require_procfs(&thread, Path::new("/proc/<pid>/task/<tid>"))?;
+    require_procfs_with_deadline(&thread, Path::new("/proc/<pid>/task/<tid>"), deadline)?;
 
-    let descriptors = openat2_file(
+    let descriptors = openat2_file_with_deadline(
         thread.as_raw_fd(),
         c"fd",
         nix::libc::O_RDONLY
@@ -328,11 +448,12 @@ fn authenticated_descriptor_name(file: &std::fs::File) -> io::Result<(std::fs::F
             | nix::libc::O_NONBLOCK,
         0,
         controlled_resolution(),
+        deadline,
     )?;
-    require_procfs(&descriptors, Path::new("/proc/thread-self/fd"))?;
+    require_procfs_with_deadline(&descriptors, Path::new("/proc/thread-self/fd"), deadline)?;
 
     let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
-    let alias = open_descriptor_alias(&descriptors, &descriptor)?;
+    let alias = open_descriptor_alias_with_deadline(&descriptors, &descriptor, deadline)?;
     require_same_inode(expected, inode_identity(&alias.metadata()?))?;
     Ok((descriptors, descriptor, expected))
 }
@@ -344,7 +465,18 @@ fn authenticated_descriptor_name(file: &std::fs::File) -> io::Result<(std::fs::F
 /// but a default ACL is not. Admitting one would let later children inherit
 /// authority that an otherwise-safe directory mode does not reveal.
 pub(crate) fn require_no_default_acl(file: &std::fs::File, path: &Path) -> io::Result<()> {
-    require_no_acl_xattr(file, path, POSIX_DEFAULT_ACL_XATTR, "inheritable POSIX default")
+    require_no_acl_xattr(file, path, POSIX_DEFAULT_ACL_XATTR, "inheritable POSIX default", None)
+}
+
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn require_no_default_acl_until(file: &std::fs::File, path: &Path, deadline: Instant) -> io::Result<()> {
+    require_no_acl_xattr(
+        file,
+        path,
+        POSIX_DEFAULT_ACL_XATTR,
+        "inheritable POSIX default",
+        Some(deadline),
+    )
 }
 
 /// Reject an explicit POSIX access ACL on an authenticated readable inode.
@@ -353,28 +485,46 @@ pub(crate) fn require_no_default_acl(file: &std::fs::File, path: &Path) -> io::R
 /// authority model. Existing trees continue to rely on the mode mask plus the
 /// separate default-ACL check above.
 pub(crate) fn require_no_access_acl(file: &std::fs::File, path: &Path) -> io::Result<()> {
-    require_no_acl_xattr(file, path, POSIX_ACCESS_ACL_XATTR, "POSIX access")
+    require_no_acl_xattr(file, path, POSIX_ACCESS_ACL_XATTR, "POSIX access", None)
 }
 
-fn require_no_acl_xattr(file: &std::fs::File, path: &Path, name: &CStr, role: &'static str) -> io::Result<()> {
-    loop {
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn require_no_access_acl_until(file: &std::fs::File, path: &Path, deadline: Instant) -> io::Result<()> {
+    require_no_acl_xattr(file, path, POSIX_ACCESS_ACL_XATTR, "POSIX access", Some(deadline))
+}
+
+fn require_no_acl_xattr(
+    file: &std::fs::File,
+    path: &Path,
+    name: &CStr,
+    role: &'static str,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
+    let result = retry_interrupted(deadline, || {
         // SAFETY: `file` and the supplied static xattr name remain live. A null value
         // with size zero is the documented existence/size query and does not
         // copy attribute bytes into userspace.
         let result = unsafe { nix::libc::fgetxattr(file.as_raw_fd(), name.as_ptr(), std::ptr::null_mut(), 0) };
         if result >= 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("capability inode carries a {role} ACL: {}", path.display()),
-            ));
+            Ok(result)
+        } else {
+            Err(io::Error::last_os_error())
         }
-
-        let source = io::Error::last_os_error();
-        match source.raw_os_error() {
-            Some(nix::libc::EINTR) => {}
-            Some(nix::libc::ENODATA) | Some(nix::libc::EOPNOTSUPP) => return Ok(()),
-            _ => return Err(source),
+    });
+    match result {
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("capability inode carries a {role} ACL: {}", path.display()),
+        )),
+        Err(source)
+            if matches!(
+                source.raw_os_error(),
+                Some(nix::libc::ENODATA) | Some(nix::libc::EOPNOTSUPP)
+            ) =>
+        {
+            Ok(())
         }
+        Err(source) => Err(source),
     }
 }
 
@@ -386,6 +536,19 @@ fn require_no_acl_xattr(file: &std::fs::File, path: &Path, name: &CStr, role: &'
 /// directory owned by another user. The public name is reopened after chmod so
 /// a replacement cannot be reported as the normalized temporary root.
 pub(crate) fn normalize_new_directory(path: &Path, mode: u32) -> io::Result<std::fs::File> {
+    normalize_new_directory_with_deadline(path, mode, None)
+}
+
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn normalize_new_directory_until(path: &Path, mode: u32, deadline: Instant) -> io::Result<std::fs::File> {
+    normalize_new_directory_with_deadline(path, mode, Some(deadline))
+}
+
+fn normalize_new_directory_with_deadline(
+    path: &Path,
+    mode: u32,
+    deadline: Option<Instant>,
+) -> io::Result<std::fs::File> {
     if !path.is_absolute() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -403,12 +566,12 @@ pub(crate) fn normalize_new_directory(path: &Path, mode: u32) -> io::Result<std:
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "new directory path contains NUL"))?;
     let flags = nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW;
     let resolve = (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64;
-    let pinned = openat2_file(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve)?;
+    let pinned = openat2_file_with_deadline(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve, deadline)?;
     require_new_directory_residue(&pinned, path, mode)?;
     let expected = inode_identity(&pinned.metadata()?);
-    chmod_path_descriptor(&pinned, mode)?;
+    chmod_path_descriptor_with_deadline(&pinned, mode, deadline)?;
 
-    let named = openat2_file(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve)?;
+    let named = openat2_file_with_deadline(nix::libc::AT_FDCWD, &encoded, flags, 0, resolve, deadline)?;
     require_same_inode(expected, inode_identity(&named.metadata()?))?;
     require_exact_directory(&pinned, path, mode)?;
     require_exact_directory(&named, path, mode)?;
@@ -485,20 +648,32 @@ fn require_same_inode(expected: InodeIdentity, actual: InodeIdentity) -> io::Res
 }
 
 fn open_descriptor_alias(descriptors: &std::fs::File, descriptor: &CStr) -> io::Result<std::fs::File> {
+    open_descriptor_alias_with_deadline(descriptors, descriptor, None)
+}
+
+fn open_descriptor_alias_with_deadline(
+    descriptors: &std::fs::File,
+    descriptor: &CStr,
+    deadline: Option<Instant>,
+) -> io::Result<std::fs::File> {
     // This is the single intentional magic-link resolution. The parent has
     // already been pinned and authenticated as this thread's procfs fd table.
-    openat2_file(
+    openat2_file_with_deadline(
         descriptors.as_raw_fd(),
         descriptor,
         nix::libc::O_PATH | nix::libc::O_CLOEXEC,
         0,
         0,
+        deadline,
     )
 }
 
-fn proc_thread_self_components(proc: &std::fs::File) -> io::Result<(CString, CString)> {
+fn proc_thread_self_components_with_deadline(
+    proc: &std::fs::File,
+    deadline: Option<Instant>,
+) -> io::Result<(CString, CString)> {
     let mut bytes = [0_u8; MAX_THREAD_SELF_BYTES + 1];
-    let length = loop {
+    let length = retry_interrupted(deadline, || {
         // SAFETY: proc is a live authenticated directory, `thread-self` is a
         // fixed NUL-terminated component, and bytes is writable for its size.
         let length = unsafe {
@@ -510,13 +685,11 @@ fn proc_thread_self_components(proc: &std::fs::File) -> io::Result<(CString, CSt
             )
         };
         if length >= 0 {
-            break usize::try_from(length).map_err(|_| io::Error::other("negative procfs self length"))?;
+            usize::try_from(length).map_err(|_| io::Error::other("negative procfs self length"))
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    };
+    })?;
     parse_thread_self(&bytes[..length])
 }
 
@@ -594,19 +767,22 @@ fn parse_decimal_pid(bytes: &[u8]) -> io::Result<u32> {
     Ok(value)
 }
 
+#[cfg(test)]
 fn require_procfs(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    require_procfs_with_deadline(file, path, None)
+}
+
+fn require_procfs_with_deadline(file: &std::fs::File, path: &Path, deadline: Option<Instant>) -> io::Result<()> {
     // SAFETY: zeroed statfs storage is a valid output buffer and the file
     // descriptor remains live throughout fstatfs.
     let mut stat: nix::libc::statfs = unsafe { zeroed() };
-    loop {
+    retry_interrupted(deadline, || {
         if unsafe { nix::libc::fstatfs(file.as_raw_fd(), &mut stat) } == 0 {
-            break;
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    }
+    })?;
     if stat.f_type != PROC_SUPER_MAGIC {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -633,12 +809,35 @@ pub(crate) fn openat2_file(
     mode: u32,
     resolve: u64,
 ) -> io::Result<std::fs::File> {
+    openat2_file_with_deadline(dirfd, path, flags, mode, resolve, None)
+}
+
+/// Deadline-aware form used by finite frozen-root materialization.
+pub(crate) fn openat2_file_until(
+    dirfd: RawFd,
+    path: &CStr,
+    flags: i32,
+    mode: u32,
+    resolve: u64,
+    deadline: Instant,
+) -> io::Result<std::fs::File> {
+    openat2_file_with_deadline(dirfd, path, flags, mode, resolve, Some(deadline))
+}
+
+fn openat2_file_with_deadline(
+    dirfd: RawFd,
+    path: &CStr,
+    flags: i32,
+    mode: u32,
+    resolve: u64,
+    deadline: Option<Instant>,
+) -> io::Result<std::fs::File> {
     // SAFETY: zero is valid for every public open_how field.
     let mut how: nix::libc::open_how = unsafe { zeroed() };
     how.flags = u64::from(flags as u32);
     how.mode = u64::from(mode);
     how.resolve = resolve;
-    let descriptor = loop {
+    let descriptor = retry_interrupted(deadline, || {
         // SAFETY: the descriptor, C string, and open_how remain live. Success
         // returns one fresh descriptor owned below.
         let descriptor = unsafe {
@@ -651,13 +850,11 @@ pub(crate) fn openat2_file(
             )
         };
         if descriptor != -1 {
-            break descriptor;
+            Ok(descriptor)
+        } else {
+            Err(io::Error::last_os_error())
         }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    };
+    })?;
     let descriptor = i32::try_from(descriptor)
         .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
     // SAFETY: successful openat2 returned this fresh owned descriptor.
@@ -677,12 +874,52 @@ pub(crate) fn controlled_resolution() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::Write as _,
+        cell::Cell,
+        io::{Read as _, Write as _},
         os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
         process::Command,
+        time::Duration,
     };
 
     use super::*;
+
+    #[test]
+    fn interrupted_retry_limit_accepts_n_and_rejects_n_plus_one() {
+        let accepted_attempts = Cell::new(0usize);
+        retry_interrupted(None, || {
+            let attempt = accepted_attempts.get();
+            accepted_attempts.set(attempt + 1);
+            if attempt < MAX_INTERRUPTED_SYSCALL_RETRIES {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
+        assert_eq!(accepted_attempts.get(), MAX_INTERRUPTED_SYSCALL_RETRIES + 1);
+
+        let rejected_attempts = Cell::new(0usize);
+        let error = retry_interrupted(None, || -> io::Result<()> {
+            rejected_attempts.set(rejected_attempts.get() + 1);
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(rejected_attempts.get(), MAX_INTERRUPTED_SYSCALL_RETRIES + 1);
+    }
+
+    #[test]
+    fn expired_retry_deadline_fails_before_another_syscall() {
+        let attempts = Cell::new(0usize);
+        let deadline = Instant::now() - Duration::from_millis(1);
+        let error = retry_interrupted(Some(deadline), || {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(attempts.get(), 0);
+    }
 
     #[test]
     fn procfs_authentication_rejects_an_ordinary_filesystem() {
@@ -787,6 +1024,74 @@ mod tests {
         assert_eq!(replacement_metadata.atime(), 222);
         assert_eq!(replacement_metadata.mtime(), 222);
         std::fs::set_permissions(&displaced, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn descriptor_read_uses_the_retained_inode_and_preserves_atime() {
+        let temporary = tempfile::tempdir().unwrap();
+        let named = temporary.path().join("named");
+        let displaced = temporary.path().join("displaced");
+        std::fs::write(&named, b"retained bytes").unwrap();
+        std::fs::set_permissions(&named, std::fs::Permissions::from_mode(0o600)).unwrap();
+        filetime::set_file_times(
+            &named,
+            filetime::FileTime::from_unix_time(111, 0),
+            filetime::FileTime::from_unix_time(222, 0),
+        )
+        .unwrap();
+        let encoded = CString::new(named.as_os_str().as_encoded_bytes()).unwrap();
+        let retained = openat2_file(
+            nix::libc::AT_FDCWD,
+            &encoded,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        )
+        .unwrap();
+        std::fs::rename(&named, &displaced).unwrap();
+        std::fs::write(&named, b"replacement bytes").unwrap();
+
+        let mut readable = open_path_descriptor_readonly(&retained).unwrap();
+        let mut bytes = Vec::new();
+        readable.read_to_end(&mut bytes).unwrap();
+
+        assert_eq!(bytes, b"retained bytes");
+        assert_eq!(retained.metadata().unwrap().atime(), 111);
+        assert_eq!(std::fs::read(&named).unwrap(), b"replacement bytes");
+    }
+
+    #[test]
+    fn descriptor_read_rejects_non_regular_capabilities() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = CString::new(temporary.path().as_os_str().as_encoded_bytes()).unwrap();
+        let retained_directory = openat2_file(
+            nix::libc::AT_FDCWD,
+            &directory,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        )
+        .unwrap();
+        assert_eq!(
+            open_path_descriptor_readonly(&retained_directory).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+
+        let link = temporary.path().join("link");
+        symlink("target", &link).unwrap();
+        let link = CString::new(link.as_os_str().as_encoded_bytes()).unwrap();
+        let retained_link = openat2_file(
+            nix::libc::AT_FDCWD,
+            &link,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        )
+        .unwrap();
+        assert_eq!(
+            open_path_descriptor_readonly(&retained_link).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]

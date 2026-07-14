@@ -13,7 +13,7 @@ use std::{
     ffi::{CStr, CString, OsStr, OsString},
     fmt,
     io::{self, Read},
-    mem::{MaybeUninit, size_of},
+    mem::MaybeUninit,
     os::{
         fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
         unix::{
@@ -27,7 +27,7 @@ use std::{
 };
 
 use astr::AStr;
-use filetime::{FileTime, set_file_times, set_symlink_file_times};
+use filetime::FileTime;
 use fs_err as fs;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
@@ -55,7 +55,11 @@ use crate::{
     Installation, Package, Provider, Registry, Signal, State, SystemModel,
     client::fetch::fetch,
     db, environment, installation,
-    linux_fs::{chmod_path_descriptor, require_no_default_acl},
+    linux_fs::{
+        chmod_path_descriptor, chmod_path_descriptor_until, normalize_new_directory_until,
+        open_path_descriptor_readonly_until, openat2_file, openat2_file_until, require_no_access_acl_until,
+        require_no_default_acl, require_no_default_acl_until, set_path_descriptor_times_until,
+    },
     package,
     registry::plugin::{self, Plugin},
     repository, runtime, signal,
@@ -1858,6 +1862,7 @@ impl Client {
         let packages = self.canonical_frozen_package_ids(packages)?;
         let layouts = bounded_frozen_layouts(self, &packages, deadline, FrozenLayoutQueryOperation::Materialization)?;
         let fstree = frozen_vfs_until(&packages, layouts, deadline)?;
+        let expected_tree = FrozenExpectedTree::from_vfs(&fstree, deadline)?;
 
         match fs::symlink_metadata(&blit_target) {
             Ok(_) => return Err(Error::FrozenRootDestinationExists(blit_target)),
@@ -1867,8 +1872,13 @@ impl Client {
         let parent = blit_target
             .parent()
             .ok_or_else(|| Error::InvalidFrozenRootDestination(blit_target.clone()))?;
+        // Authenticate and account every independent regular-file copy before
+        // creating staging state. Duplicate digests are charged once per
+        // output inode, while canonical empty files consume zero bytes.
+        let copy_manifest = FrozenCopyManifest::from_tree(&self.installation, &fstree, deadline)?;
         let stage = tempfile::Builder::new()
             .prefix(".forge-frozen-stage-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(parent)?;
         // From this point onward generic TempDir recursion is disabled. Every
         // failure cleans the bounded generated tree through the same anchored
@@ -1878,14 +1888,64 @@ impl Client {
         // publishable root can therefore carry its final 0755 mode without
         // exposing partial contents before the atomic rename.
         let stage_path = stage_wrapper.join("root");
+        let stage_wrapper_file = fs::File::from_parts(
+            normalize_new_directory_until(&stage_wrapper, 0o700, deadline)
+                .map_err(|source| frozen_materialization_io_error(deadline, source, Error::from))?,
+            stage_wrapper.clone(),
+        );
         let result = (|| -> Result<MaterializedFrozenRoot, Error> {
-            mkdir(&stage_path, Mode::from_bits_truncate(0o755))?;
-            let root = open_owned(
-                &stage_path,
-                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY | OFlag::O_NOFOLLOW,
-                Mode::empty(),
-            )?;
-            fchmod(root.as_raw_fd(), Mode::from_bits_truncate(0o755))?;
+            mkdirat(stage_wrapper_file.as_raw_fd(), "root", Mode::from_bits_truncate(0o755))?;
+            let resolution = (nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_SYMLINKS
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_XDEV) as u64;
+            let root_anchor = openat2_frozen_until(
+                stage_wrapper_file.as_raw_fd(),
+                Path::new("root"),
+                nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+                resolution,
+                deadline,
+            )
+            .map_err(|source| frozen_materialization_io_error(deadline, source, Error::from))?;
+            let wrapper_metadata = stage_wrapper_file.metadata()?;
+            let root_metadata = root_anchor.metadata()?;
+            // SAFETY: geteuid takes no arguments and cannot fail.
+            let effective_owner = unsafe { nix::libc::geteuid() };
+            if !root_metadata.is_dir()
+                || root_metadata.uid() != effective_owner
+                || root_metadata.dev() != wrapper_metadata.dev()
+                || root_metadata.mode() & 0o7777 & !0o755 != 0
+            {
+                return Err(Error::FrozenNormalizationInventoryMismatch {
+                    path: stage_path.clone(),
+                    reason: "the descriptor-relative stage root is not a same-owner same-filesystem creation residue",
+                });
+            }
+            let root_residue = FrozenNormalizationWitness::from_metadata(&root_metadata);
+            chmod_path_descriptor_until(root_anchor.file(), 0o755, deadline).map_err(|source| {
+                frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenEntryMode {
+                    path: stage_path.clone(),
+                    source,
+                })
+            })?;
+            let root = openat2_frozen_until(
+                stage_wrapper_file.as_raw_fd(),
+                Path::new("root"),
+                nix::libc::O_RDONLY
+                    | nix::libc::O_DIRECTORY
+                    | nix::libc::O_CLOEXEC
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_NONBLOCK
+                    | nix::libc::O_NOATIME,
+                resolution,
+                deadline,
+            )
+            .map_err(|source| frozen_materialization_io_error(deadline, source, Error::from))?;
+            let normalized_root = root_residue.with_permissions(0o755);
+            require_frozen_normalization_witness(Path::new("/"), &root_anchor, normalized_root)?;
+            require_frozen_normalization_witness(Path::new("/"), &root, normalized_root)?;
+            let empty = frozen_normalization_inventory(&root, Path::new("/"), 0, None, deadline)?;
+            debug_assert!(empty.is_empty());
 
             blit_tree_into_open_root(
                 &self.installation,
@@ -1893,17 +1953,22 @@ impl Client {
                 root.as_raw_fd(),
                 AssetMaterialization::IndependentCopy,
                 BlitExecution::Sequential,
+                Some(&copy_manifest),
                 Some(deadline),
             )?;
             create_frozen_root_links(root.as_raw_fd(), deadline)?;
-            normalize_frozen_tree(&stage_path, FileTime::from_unix_time(source_date_epoch, 0), deadline)?;
+            normalize_frozen_tree(
+                &root,
+                &stage_path,
+                &expected_tree,
+                FileTime::from_unix_time(source_date_epoch, 0),
+                deadline,
+            )?;
             require_frozen_materialization_deadline(deadline)?;
-            // Open the provenance anchor while the completed root still has
-            // its unguessable private staging name, retain it across rename,
-            // and authenticate the public destination against that same
-            // inode before returning it to the caller.
-            let staged_root = open_frozen_root_anchor(&stage_path)?;
-            publish_frozen_root(&stage_path, &blit_target, staged_root)
+            // Keep the descriptor opened before blitting as provenance across
+            // normalization and publication. A replacement staging name can
+            // never become the returned root token.
+            publish_frozen_root(&stage_path, &blit_target, root)
         })();
 
         match result {
@@ -2120,7 +2185,421 @@ const MAX_FROZEN_ELF_INTERPRETER_BYTES: usize = MAX_FROZEN_EXECUTABLE_PATH_BYTES
 const MAX_FROZEN_EXECUTABLE_PINNED_FILES: usize = 512;
 const FROZEN_EXECUTABLE_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(120);
 const FROZEN_MATERIALIZATION_TIMEOUT: Duration = Duration::from_secs(600);
+// Independent frozen-root copies densify every regular output inode. Match the
+// existing Mason archive-staging ceiling: one cached asset remains bounded at
+// 8 GiB and the complete copied userspace at 32 GiB of logical file bytes.
+const MAX_TOTAL_FROZEN_BLIT_BYTES: u64 = 32 * GIB;
 const MAX_FROZEN_NORMALIZED_INODES: usize = MAX_FROZEN_EXECUTABLE_LAYOUTS + MAX_FROZEN_EXECUTABLE_DIRECTORY_PATHS + 6;
+
+#[derive(Debug, Default)]
+struct FrozenCopyManifest {
+    lengths: BTreeMap<u128, u64>,
+    total_bytes: u64,
+}
+
+impl FrozenCopyManifest {
+    fn from_tree(installation: &Installation, tree: &vfs::Tree<PendingFile>, deadline: Instant) -> Result<Self, Error> {
+        Self::from_tree_with_limit(installation, tree, deadline, MAX_TOTAL_FROZEN_BLIT_BYTES)
+    }
+
+    fn from_tree_with_limit(
+        installation: &Installation,
+        tree: &vfs::Tree<PendingFile>,
+        deadline: Instant,
+        limit: u64,
+    ) -> Result<Self, Error> {
+        let mut digests = tree.iter().filter_map(|item| match item.layout.file {
+            StonePayloadLayoutFile::Regular(digest, _) if digest != EMPTY_FILE_DIGEST => Some(digest),
+            _ => None,
+        });
+        let Some(first) = digests.next() else {
+            return Ok(Self::default());
+        };
+        let pool = AssetPool::open(installation)?;
+        let manifest = Self::from_digests_with_limit(std::iter::once(first).chain(digests), limit, |digest| {
+            require_frozen_materialization_deadline(deadline)?;
+            let asset = pool.open_asset(&frozen_asset_path(digest))?;
+            Ok(asset.witness.length)
+        })?;
+        require_frozen_materialization_deadline(deadline)?;
+        pool.revalidate()?;
+        Ok(manifest)
+    }
+
+    fn from_digests_with_limit(
+        digests: impl IntoIterator<Item = u128>,
+        limit: u64,
+        mut length: impl FnMut(u128) -> Result<u64, Error>,
+    ) -> Result<Self, Error> {
+        let mut manifest = Self::default();
+        for digest in digests {
+            if digest == EMPTY_FILE_DIGEST {
+                continue;
+            }
+            let actual = length(digest)?;
+            if let Some(expected) = manifest.lengths.get(&digest) {
+                if *expected != actual {
+                    return Err(Error::FrozenMaterializationAssetLengthChanged {
+                        digest,
+                        expected: *expected,
+                        actual,
+                    });
+                }
+            } else {
+                manifest.lengths.insert(digest, actual);
+            }
+            account_frozen_blit_bytes(&mut manifest.total_bytes, actual, limit)?;
+        }
+        Ok(manifest)
+    }
+
+    fn require_length(&self, digest: u128, actual: u64) -> Result<(), Error> {
+        match self.lengths.get(&digest) {
+            Some(expected) if *expected == actual => Ok(()),
+            Some(expected) => Err(Error::FrozenMaterializationAssetLengthChanged {
+                digest,
+                expected: *expected,
+                actual,
+            }),
+            None => Err(Error::FrozenMaterializationAssetMissingFromManifest { digest }),
+        }
+    }
+}
+
+fn account_frozen_blit_bytes(total: &mut u64, additional: u64, limit: u64) -> Result<(), Error> {
+    let actual = total
+        .checked_add(additional)
+        .ok_or(Error::FrozenMaterializationTotalByteLimit {
+            limit,
+            actual: u64::MAX,
+        })?;
+    if actual > limit {
+        return Err(Error::FrozenMaterializationTotalByteLimit { limit, actual });
+    }
+    *total = actual;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrozenNormalizationLimits {
+    inodes: usize,
+    depth: usize,
+}
+
+impl FrozenNormalizationLimits {
+    const PRODUCTION: Self = Self {
+        inodes: MAX_FROZEN_NORMALIZED_INODES,
+        depth: MAX_FROZEN_LAYOUT_PATH_COMPONENTS,
+    };
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FrozenExpectedKind {
+    Directory,
+    Regular { digest: u128 },
+    Symlink { target: Vec<u8> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrozenExpectedEntry {
+    kind: FrozenExpectedKind,
+    mode: u32,
+}
+
+#[derive(Debug)]
+struct FrozenExpectedTree {
+    entries: BTreeMap<PathBuf, FrozenExpectedEntry>,
+    children: BTreeMap<PathBuf, BTreeMap<OsString, PathBuf>>,
+}
+
+impl FrozenExpectedTree {
+    fn from_vfs(tree: &vfs::Tree<PendingFile>, deadline: Instant) -> Result<Self, Error> {
+        let mut entries = BTreeMap::new();
+        Self::insert_entry(
+            &mut entries,
+            PathBuf::from("/"),
+            FrozenExpectedEntry {
+                kind: FrozenExpectedKind::Directory,
+                mode: 0o755,
+            },
+        )?;
+
+        for item in tree.iter() {
+            require_frozen_materialization_deadline(deadline)?;
+            let path = PathBuf::from(item.path().as_str());
+            let kind = match &item.layout.file {
+                StonePayloadLayoutFile::Directory(_) => FrozenExpectedKind::Directory,
+                StonePayloadLayoutFile::Regular(digest, _) => FrozenExpectedKind::Regular { digest: *digest },
+                StonePayloadLayoutFile::Symlink(target, _) => FrozenExpectedKind::Symlink {
+                    target: target.as_bytes().to_vec(),
+                },
+                StonePayloadLayoutFile::CharacterDevice(_)
+                | StonePayloadLayoutFile::BlockDevice(_)
+                | StonePayloadLayoutFile::Fifo(_)
+                | StonePayloadLayoutFile::Socket(_)
+                | StonePayloadLayoutFile::Unknown(..) => {
+                    return Err(Error::InvalidFrozenNormalizationDeclaration {
+                        path,
+                        reason: "the declarative tree contains an unsupported inode type",
+                    });
+                }
+            };
+            Self::insert_entry(
+                &mut entries,
+                path,
+                FrozenExpectedEntry {
+                    kind,
+                    mode: item.layout.mode & 0o7777,
+                },
+            )?;
+        }
+
+        for (target, name) in ROOT_ABI_LINKS {
+            require_frozen_materialization_deadline(deadline)?;
+            Self::insert_entry(
+                &mut entries,
+                Path::new("/").join(name),
+                FrozenExpectedEntry {
+                    kind: FrozenExpectedKind::Symlink {
+                        target: target.as_bytes().to_vec(),
+                    },
+                    mode: 0o777,
+                },
+            )?;
+        }
+        require_frozen_materialization_deadline(deadline)?;
+        Self::from_entries(entries, FrozenNormalizationLimits::PRODUCTION)
+    }
+
+    fn insert_entry(
+        entries: &mut BTreeMap<PathBuf, FrozenExpectedEntry>,
+        path: PathBuf,
+        entry: FrozenExpectedEntry,
+    ) -> Result<(), Error> {
+        match entries.entry(path.clone()) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(entry);
+                Ok(())
+            }
+            std::collections::btree_map::Entry::Occupied(slot) if slot.get() == &entry => Ok(()),
+            std::collections::btree_map::Entry::Occupied(_) => Err(Error::InvalidFrozenNormalizationDeclaration {
+                path,
+                reason: "two declarations disagree about one path",
+            }),
+        }
+    }
+
+    fn from_entries(
+        entries: BTreeMap<PathBuf, FrozenExpectedEntry>,
+        limits: FrozenNormalizationLimits,
+    ) -> Result<Self, Error> {
+        let actual = entries.len();
+        if actual > limits.inodes {
+            return Err(Error::FrozenNormalizationInodeLimit {
+                limit: limits.inodes,
+                actual,
+            });
+        }
+        let Some(root) = entries.get(Path::new("/")) else {
+            return Err(Error::InvalidFrozenNormalizationDeclaration {
+                path: PathBuf::from("/"),
+                reason: "the declarative tree has no root",
+            });
+        };
+        if root
+            != &(FrozenExpectedEntry {
+                kind: FrozenExpectedKind::Directory,
+                mode: 0o755,
+            })
+        {
+            return Err(Error::InvalidFrozenNormalizationDeclaration {
+                path: PathBuf::from("/"),
+                reason: "the declarative root is not a mode-0755 directory",
+            });
+        }
+
+        let mut children: BTreeMap<PathBuf, BTreeMap<OsString, PathBuf>> = BTreeMap::new();
+        for path in entries.keys() {
+            let depth =
+                frozen_normalization_path_depth(path).ok_or_else(|| Error::InvalidFrozenNormalizationDeclaration {
+                    path: path.clone(),
+                    reason: "the declarative path is not normalized and absolute",
+                })?;
+            if depth > limits.depth {
+                return Err(Error::FrozenNormalizationDepthLimit {
+                    limit: limits.depth,
+                    actual: depth,
+                });
+            }
+            if path == Path::new("/") {
+                continue;
+            }
+            let parent = path
+                .parent()
+                .ok_or_else(|| Error::InvalidFrozenNormalizationDeclaration {
+                    path: path.clone(),
+                    reason: "the declarative path has no parent",
+                })?;
+            let Some(parent_entry) = entries.get(parent) else {
+                return Err(Error::InvalidFrozenNormalizationDeclaration {
+                    path: path.clone(),
+                    reason: "the declarative path has no declared parent",
+                });
+            };
+            if !matches!(parent_entry.kind, FrozenExpectedKind::Directory) {
+                return Err(Error::InvalidFrozenNormalizationDeclaration {
+                    path: path.clone(),
+                    reason: "the declarative path has a non-directory parent",
+                });
+            }
+            let name = path
+                .file_name()
+                .ok_or_else(|| Error::InvalidFrozenNormalizationDeclaration {
+                    path: path.clone(),
+                    reason: "the declarative path has no final component",
+                })?
+                .to_owned();
+            if children
+                .entry(parent.to_owned())
+                .or_default()
+                .insert(name, path.clone())
+                .is_some()
+            {
+                return Err(Error::InvalidFrozenNormalizationDeclaration {
+                    path: path.clone(),
+                    reason: "the declarative directory contains a duplicate name",
+                });
+            }
+        }
+        Ok(Self { entries, children })
+    }
+
+    fn entry(&self, path: &Path) -> Result<&FrozenExpectedEntry, Error> {
+        self.entries
+            .get(path)
+            .ok_or_else(|| Error::InvalidFrozenNormalizationDeclaration {
+                path: path.to_owned(),
+                reason: "the normalizer requested an undeclared path",
+            })
+    }
+
+    fn children(&self, path: &Path) -> impl Iterator<Item = (&OsString, &PathBuf)> {
+        self.children.get(path).into_iter().flat_map(BTreeMap::iter)
+    }
+}
+
+fn frozen_normalization_path_depth(path: &Path) -> Option<usize> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut depth = 0usize;
+    for component in path.components() {
+        match component {
+            PathComponent::RootDir => {}
+            PathComponent::Normal(_) => depth = depth.saturating_add(1),
+            PathComponent::CurDir | PathComponent::ParentDir | PathComponent::Prefix(_) => return None,
+        }
+    }
+    Some(depth)
+}
+
+fn frozen_normalization_declared_children<'a>(
+    expected: &'a FrozenExpectedTree,
+    path: &Path,
+) -> Result<Vec<(&'a OsString, &'a PathBuf)>, Error> {
+    let count = expected.children.get(path).map_or(0, BTreeMap::len);
+    let mut children = Vec::new();
+    children
+        .try_reserve_exact(count)
+        .map_err(|source| Error::ReserveFrozenNormalizationInventory {
+            path: path.to_owned(),
+            source,
+        })?;
+    children.extend(expected.children(path));
+    Ok(children)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrozenNormalizationCheckpoint {
+    EntryPinned,
+    DirectoryTraversalModeApplied,
+    DirectoryEnumerated,
+    BeforeFinalTreeConfirmation,
+    AfterRegularDigest,
+    BeforeDirectoryFinalInventory,
+    AfterDirectoryFinalInventory,
+    BeforeEntryRevalidation,
+    BeforeRootRevalidation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrozenNormalizationOpen {
+    Anchor,
+    Directory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrozenNormalizationWitness {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    owner: u32,
+    group: u32,
+    links: u64,
+    length: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrozenNormalizationFinalWitness {
+    stable: FrozenNormalizationWitness,
+    accessed_seconds: i64,
+    accessed_nanoseconds: i64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl FrozenNormalizationFinalWitness {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            stable: FrozenNormalizationWitness::from_metadata(metadata),
+            accessed_seconds: metadata.atime(),
+            accessed_nanoseconds: metadata.atime_nsec(),
+            modified_seconds: metadata.mtime(),
+            modified_nanoseconds: metadata.mtime_nsec(),
+            changed_seconds: metadata.ctime(),
+            changed_nanoseconds: metadata.ctime_nsec(),
+        }
+    }
+}
+
+impl FrozenNormalizationWitness {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            owner: metadata.uid(),
+            group: metadata.gid(),
+            links: metadata.nlink(),
+            length: metadata.len(),
+        }
+    }
+
+    fn with_permissions(self, mode: u32) -> Self {
+        Self {
+            mode: (self.mode & nix::libc::S_IFMT) | mode,
+            ..self
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrozenNormalizationInventoryEntry {
+    name: CString,
+    witness: FrozenNormalizationWitness,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrozenExecutableCheckpoint {
@@ -3916,6 +4395,14 @@ fn require_frozen_executable_metadata(
 }
 
 fn open_frozen_root_anchor(root: &Path) -> Result<fs::File, Error> {
+    open_frozen_root_anchor_with_deadline(root, None)
+}
+
+fn open_frozen_root_anchor_until(root: &Path, deadline: Instant) -> Result<fs::File, Error> {
+    open_frozen_root_anchor_with_deadline(root, Some(deadline))
+}
+
+fn open_frozen_root_anchor_with_deadline(root: &Path, deadline: Option<Instant>) -> Result<fs::File, Error> {
     let relative = root
         .strip_prefix(Path::new("/"))
         .ok()
@@ -3930,15 +4417,30 @@ fn open_frozen_root_anchor(root: &Path) -> Result<fs::File, Error> {
         path: root.to_owned(),
         source,
     })?;
-    openat2_frozen(
-        system_root.as_raw_fd(),
-        relative,
-        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC,
-        (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
-    )
-    .map_err(|source| Error::OpenFrozenExecutableRoot {
-        path: root.to_owned(),
-        source,
+    let opened = match deadline {
+        Some(deadline) => openat2_frozen_until(
+            system_root.as_raw_fd(),
+            relative,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC,
+            (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+            deadline,
+        ),
+        None => openat2_frozen(
+            system_root.as_raw_fd(),
+            relative,
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC,
+            (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+        ),
+    };
+    opened.map_err(|source| match deadline {
+        Some(deadline) => frozen_materialization_io_error(deadline, source, |source| Error::OpenFrozenExecutableRoot {
+            path: root.to_owned(),
+            source,
+        }),
+        None => Error::OpenFrozenExecutableRoot {
+            path: root.to_owned(),
+            source,
+        },
     })
 }
 
@@ -4050,39 +4552,24 @@ fn open_frozen_symlink(root: &fs::File, binding: &FrozenExecutableBinding, path:
 }
 
 fn openat2_frozen(dirfd: RawFd, path: &Path, flags: i32, resolve: u64) -> io::Result<fs::File> {
-    #[repr(C)]
-    struct OpenHow {
-        flags: u64,
-        mode: u64,
-        resolve: u64,
-    }
-
     let display_path = path.to_owned();
     let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
-    let how = OpenHow {
-        flags: flags as u64,
-        mode: 0,
-        resolve,
-    };
-    // SAFETY: `path` and `how` remain live for the syscall. A successful
-    // openat2 returns a fresh descriptor owned by the resulting File.
-    let descriptor = unsafe {
-        syscall(
-            nix::libc::SYS_openat2,
-            dirfd,
-            path.as_ptr(),
-            &how as *const OpenHow,
-            size_of::<OpenHow>(),
-        )
-    };
-    if descriptor < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let descriptor = i32::try_from(descriptor)
-        .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
-    // SAFETY: successful openat2 returned one fresh owned descriptor.
-    let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    let file = openat2_file(dirfd, &path, flags, 0, resolve)?;
+    Ok(fs::File::from_parts(file, display_path))
+}
+
+fn openat2_frozen_until(
+    dirfd: RawFd,
+    path: &Path,
+    flags: i32,
+    resolve: u64,
+    deadline: Instant,
+) -> io::Result<fs::File> {
+    let display_path = path.to_owned();
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let file = openat2_file_until(dirfd, &path, flags, 0, resolve, deadline)?;
     Ok(fs::File::from_parts(file, display_path))
 }
 
@@ -4214,6 +4701,17 @@ fn require_frozen_materialization_deadline(deadline: Instant) -> Result<(), Erro
         })
     } else {
         Ok(())
+    }
+}
+
+fn frozen_materialization_io_error(
+    deadline: Instant,
+    source: io::Error,
+    map: impl FnOnce(io::Error) -> Error,
+) -> Error {
+    match require_frozen_materialization_deadline(deadline) {
+        Err(timeout) => timeout,
+        Ok(()) => map(source),
     }
 }
 
@@ -4846,78 +5344,1211 @@ fn frozen_discard_entry_names(directory: RawFd, entries: &mut usize, deadline: I
     Ok(names)
 }
 
-/// Normalize every materialized inode after the complete frozen tree and its
-/// root ABI links exist. Directories are updated after their children so
-/// traversal cannot leave ambient access or modification timestamps behind.
-fn normalize_frozen_tree(path: &Path, timestamp: FileTime, deadline: Instant) -> Result<(), Error> {
-    let mut inodes = 0usize;
-    normalize_frozen_tree_inner(path, timestamp, deadline, 0, &mut inodes)
+/// Prove and normalize the complete declarative frozen tree through retained
+/// descriptors. A preparation walk makes mode-zero directories and regular
+/// files temporarily owner-accessible; a second full walk authenticates
+/// content and seals leaves and directories bottom-up. The filesystem must
+/// match `expected` exactly: no missing, extra, type-changed, mode-changed,
+/// hardlinked, POSIX access/default-ACL-bearing, or cross-mount entry is
+/// eligible for publication.
+///
+/// This is a proof over Forge's private, quiescent staging tree, not a kernel
+/// filesystem freeze. An uncooperative process with the same effective UID can
+/// still mutate an ordinary inode after its last check; publication therefore
+/// must not claim adversarial same-UID snapshot atomicity.
+fn chmod_frozen_normalization_entry(
+    file: &std::fs::File,
+    path: &Path,
+    mode: u32,
+    deadline: Instant,
+) -> Result<(), Error> {
+    chmod_path_descriptor_until(file, mode, deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenEntryMode {
+            path: path.to_owned(),
+            source,
+        })
+    })
 }
 
-fn normalize_frozen_tree_inner(
+fn open_frozen_normalization_readonly(
+    file: &std::fs::File,
     path: &Path,
+    deadline: Instant,
+) -> Result<std::fs::File, Error> {
+    open_path_descriptor_readonly_until(file, deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::OpenFrozenNormalizationEntry {
+            path: path.to_owned(),
+            source,
+        })
+    })
+}
+
+fn require_frozen_normalization_access_acl(file: &std::fs::File, path: &Path, deadline: Instant) -> Result<(), Error> {
+    require_no_access_acl_until(file, path, deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::FrozenNormalizationAcl {
+            path: path.to_owned(),
+            source,
+        })
+    })
+}
+
+fn require_frozen_normalization_default_acl(file: &std::fs::File, path: &Path, deadline: Instant) -> Result<(), Error> {
+    require_no_default_acl_until(file, path, deadline).map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::FrozenNormalizationAcl {
+            path: path.to_owned(),
+            source,
+        })
+    })
+}
+
+fn normalize_frozen_tree(
+    root: &fs::File,
+    display_path: &Path,
+    expected: &FrozenExpectedTree,
     timestamp: FileTime,
     deadline: Instant,
-    depth: usize,
-    inodes: &mut usize,
 ) -> Result<(), Error> {
+    normalize_frozen_tree_with(
+        root,
+        display_path,
+        expected,
+        timestamp,
+        deadline,
+        FrozenNormalizationLimits::PRODUCTION,
+        |_, _| {},
+    )
+}
+
+fn normalize_frozen_tree_with<F>(
+    root: &fs::File,
+    display_path: &Path,
+    expected: &FrozenExpectedTree,
+    timestamp: FileTime,
+    deadline: Instant,
+    limits: FrozenNormalizationLimits,
+    mut checkpoint: F,
+) -> Result<(), Error>
+where
+    F: FnMut(FrozenNormalizationCheckpoint, &Path),
+{
     require_frozen_materialization_deadline(deadline)?;
-    if depth > MAX_FROZEN_LAYOUT_PATH_COMPONENTS {
+    if limits.inodes == 0 {
+        return Err(Error::FrozenNormalizationInodeLimit { limit: 0, actual: 1 });
+    }
+    let expected_path = Path::new("/");
+    let declaration = expected.entry(expected_path)?;
+    let witness = frozen_normalization_witness(root, expected_path)?;
+    let root_device = witness.device;
+    require_frozen_normalization_declaration(expected_path, witness, declaration, root_device)?;
+    require_named_frozen_normalization_root(display_path, root, witness, deadline)?;
+
+    let mut inodes = 1usize;
+    normalize_frozen_directory(
+        root,
+        root,
+        expected_path,
+        expected,
+        declaration,
+        witness,
+        deadline,
+        limits,
+        root_device,
+        &mut inodes,
+        &mut checkpoint,
+    )?;
+    if inodes != expected.entries.len() {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: expected_path.to_owned(),
+            reason: "the runtime walk did not account for the complete declarative tree",
+        });
+    }
+    checkpoint(
+        FrozenNormalizationCheckpoint::BeforeFinalTreeConfirmation,
+        expected_path,
+    );
+    let final_witness = seal_frozen_directory(
+        root,
+        root,
+        expected_path,
+        expected,
+        declaration,
+        timestamp,
+        deadline,
+        root_device,
+        &mut checkpoint,
+    )?;
+    require_named_frozen_normalization_root_final(display_path, root, final_witness, deadline)?;
+    require_frozen_normalization_access_acl(root.file(), expected_path, deadline)?;
+    require_frozen_normalization_default_acl(root.file(), expected_path, deadline)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn normalize_frozen_directory<F>(
+    anchor: &fs::File,
+    directory: &fs::File,
+    expected_path: &Path,
+    expected: &FrozenExpectedTree,
+    declaration: &FrozenExpectedEntry,
+    original: FrozenNormalizationWitness,
+    deadline: Instant,
+    limits: FrozenNormalizationLimits,
+    root_device: u64,
+    inodes: &mut usize,
+    checkpoint: &mut F,
+) -> Result<(), Error>
+where
+    F: FnMut(FrozenNormalizationCheckpoint, &Path),
+{
+    require_frozen_materialization_deadline(deadline)?;
+    let FrozenExpectedKind::Directory = declaration.kind else {
+        return Err(Error::InvalidFrozenNormalizationDeclaration {
+            path: expected_path.to_owned(),
+            reason: "a non-directory declaration reached directory traversal",
+        });
+    };
+    let traversal_mode = declaration.mode | 0o700;
+    if traversal_mode != declaration.mode {
+        chmod_frozen_normalization_entry(anchor.file(), expected_path, traversal_mode, deadline)?;
+    }
+    checkpoint(
+        FrozenNormalizationCheckpoint::DirectoryTraversalModeApplied,
+        expected_path,
+    );
+    require_frozen_normalization_witness(expected_path, directory, original.with_permissions(traversal_mode))?;
+    require_frozen_normalization_access_acl(directory.file(), expected_path, deadline)?;
+    require_frozen_normalization_default_acl(directory.file(), expected_path, deadline)?;
+
+    let declared_children = frozen_normalization_declared_children(expected, expected_path)?;
+    let inventory = frozen_normalization_inventory(
+        directory,
+        expected_path,
+        declared_children.len(),
+        Some((inodes, limits.inodes)),
+        deadline,
+    )?;
+    require_frozen_normalization_inventory(expected_path, &inventory, &declared_children, expected, root_device)?;
+    checkpoint(FrozenNormalizationCheckpoint::DirectoryEnumerated, expected_path);
+
+    for (entry, (_, child_path)) in inventory.iter().zip(declared_children.iter()) {
+        normalize_frozen_entry(
+            directory,
+            entry,
+            child_path,
+            expected,
+            deadline,
+            limits,
+            root_device,
+            inodes,
+            checkpoint,
+        )?;
+    }
+
+    require_frozen_materialization_deadline(deadline)?;
+    let confirmed = frozen_normalization_inventory(directory, expected_path, inventory.len(), None, deadline)?;
+    require_frozen_normalization_active_inventory(
+        expected_path,
+        &inventory,
+        &confirmed,
+        &declared_children,
+        expected,
+        root_device,
+    )?;
+    require_frozen_normalization_witness(expected_path, anchor, original.with_permissions(traversal_mode))?;
+    require_frozen_normalization_access_acl(directory.file(), expected_path, deadline)?;
+    require_frozen_normalization_default_acl(directory.file(), expected_path, deadline)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn normalize_frozen_entry<F>(
+    parent: &fs::File,
+    inventory: &FrozenNormalizationInventoryEntry,
+    expected_path: &Path,
+    expected: &FrozenExpectedTree,
+    deadline: Instant,
+    limits: FrozenNormalizationLimits,
+    root_device: u64,
+    inodes: &mut usize,
+    checkpoint: &mut F,
+) -> Result<(), Error>
+where
+    F: FnMut(FrozenNormalizationCheckpoint, &Path),
+{
+    require_frozen_materialization_deadline(deadline)?;
+    let depth =
+        frozen_normalization_path_depth(expected_path).ok_or_else(|| Error::InvalidFrozenNormalizationDeclaration {
+            path: expected_path.to_owned(),
+            reason: "the declarative path is not normalized and absolute",
+        })?;
+    if depth > limits.depth {
         return Err(Error::FrozenNormalizationDepthLimit {
-            limit: MAX_FROZEN_LAYOUT_PATH_COMPONENTS,
+            limit: limits.depth,
             actual: depth,
         });
     }
-    let actual = inodes.saturating_add(1);
-    if actual > MAX_FROZEN_NORMALIZED_INODES {
-        return Err(Error::FrozenNormalizationInodeLimit {
-            limit: MAX_FROZEN_NORMALIZED_INODES,
-            actual,
-        });
-    }
-    *inodes = actual;
+    let declaration = expected.entry(expected_path)?;
+    let pinned = open_frozen_normalization_entry(
+        parent,
+        &inventory.name,
+        expected_path,
+        FrozenNormalizationOpen::Anchor,
+        deadline,
+    )?;
+    require_frozen_normalization_witness(expected_path, &pinned, inventory.witness)?;
+    require_frozen_normalization_declaration(expected_path, inventory.witness, declaration, root_device)?;
+    checkpoint(FrozenNormalizationCheckpoint::EntryPinned, expected_path);
+    require_named_frozen_normalization_entry(parent, &inventory.name, expected_path, inventory.witness, deadline)?;
 
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() {
-        set_symlink_file_times(path, timestamp, timestamp)?;
-        return Ok(());
-    }
-    if metadata.is_dir() {
-        // Keep the private stage traversable even when the declared final mode
-        // is 000. Restore the exact authored mode after children and times are
-        // normalized; a failure before restoration intentionally leaves owner
-        // access available to TempDir's private cleanup.
-        let final_permissions = metadata.permissions();
-        let mut traversal_permissions = final_permissions.clone();
-        traversal_permissions.set_mode(traversal_permissions.mode() | 0o700);
-        fs::set_permissions(path, traversal_permissions)?;
-        let mut children = Vec::new();
-        for entry in fs::read_dir(path)? {
-            require_frozen_materialization_deadline(deadline)?;
-            let entry = entry?;
-            let discovered = inodes.saturating_add(children.len()).saturating_add(1);
-            if discovered > MAX_FROZEN_NORMALIZED_INODES {
-                return Err(Error::FrozenNormalizationInodeLimit {
-                    limit: MAX_FROZEN_NORMALIZED_INODES,
-                    actual: discovered,
+    let active_witness = match &declaration.kind {
+        FrozenExpectedKind::Directory => {
+            let traversal_mode = declaration.mode | 0o700;
+            if traversal_mode != declaration.mode {
+                chmod_frozen_normalization_entry(pinned.file(), expected_path, traversal_mode, deadline)?;
+            }
+            checkpoint(
+                FrozenNormalizationCheckpoint::DirectoryTraversalModeApplied,
+                expected_path,
+            );
+            let traversal_witness = inventory.witness.with_permissions(traversal_mode);
+            require_named_frozen_normalization_entry(
+                parent,
+                &inventory.name,
+                expected_path,
+                traversal_witness,
+                deadline,
+            )?;
+            let directory = open_frozen_normalization_entry(
+                parent,
+                &inventory.name,
+                expected_path,
+                FrozenNormalizationOpen::Directory,
+                deadline,
+            )?;
+            require_frozen_normalization_witness(expected_path, &directory, traversal_witness)?;
+            normalize_frozen_directory(
+                &pinned,
+                &directory,
+                expected_path,
+                expected,
+                declaration,
+                inventory.witness,
+                deadline,
+                limits,
+                root_device,
+                inodes,
+                checkpoint,
+            )?;
+            traversal_witness
+        }
+        FrozenExpectedKind::Regular { .. } => {
+            let readable_mode = declaration.mode | 0o400;
+            if readable_mode != declaration.mode {
+                chmod_frozen_normalization_entry(pinned.file(), expected_path, readable_mode, deadline)?;
+            }
+            let readable_witness = inventory.witness.with_permissions(readable_mode);
+            require_named_frozen_normalization_entry(
+                parent,
+                &inventory.name,
+                expected_path,
+                readable_witness,
+                deadline,
+            )?;
+            let readable = match open_frozen_normalization_readonly(pinned.file(), expected_path, deadline) {
+                Ok(readable) => fs::File::from_parts(readable, expected_path.to_owned()),
+                Err(primary) => {
+                    if readable_mode != declaration.mode {
+                        chmod_frozen_normalization_entry(pinned.file(), expected_path, declaration.mode, deadline)?;
+                    }
+                    return Err(primary);
+                }
+            };
+            require_frozen_normalization_witness(expected_path, &readable, readable_witness)?;
+            if let Err(primary) = require_frozen_normalization_access_acl(readable.file(), expected_path, deadline) {
+                if readable_mode != declaration.mode {
+                    chmod_frozen_normalization_entry(pinned.file(), expected_path, declaration.mode, deadline)?;
+                }
+                return Err(primary);
+            }
+            readable_witness
+        }
+        FrozenExpectedKind::Symlink { target } => {
+            let actual = read_frozen_normalization_symlink(&pinned, expected_path, deadline)?;
+            if &actual != target {
+                return Err(Error::FrozenNormalizationSymlinkTargetMismatch {
+                    path: expected_path.to_owned(),
+                    expected: OsString::from_vec(target.clone()),
+                    actual: OsString::from_vec(actual),
                 });
             }
-            children.push(entry.path());
+            inventory.witness
         }
-        require_frozen_materialization_deadline(deadline)?;
-        children.sort();
-        require_frozen_materialization_deadline(deadline)?;
-        for child in children {
-            normalize_frozen_tree_inner(&child, timestamp, deadline, depth + 1, inodes)?;
-        }
-        require_frozen_materialization_deadline(deadline)?;
-        set_file_times(path, timestamp, timestamp)?;
-        fs::set_permissions(path, final_permissions)?;
-        return Ok(());
-    }
+    };
+
+    checkpoint(FrozenNormalizationCheckpoint::BeforeEntryRevalidation, expected_path);
+    require_named_frozen_normalization_entry(parent, &inventory.name, expected_path, active_witness, deadline)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_frozen_directory<F>(
+    anchor: &fs::File,
+    directory: &fs::File,
+    expected_path: &Path,
+    expected: &FrozenExpectedTree,
+    declaration: &FrozenExpectedEntry,
+    timestamp: FileTime,
+    deadline: Instant,
+    root_device: u64,
+    checkpoint: &mut F,
+) -> Result<FrozenNormalizationFinalWitness, Error>
+where
+    F: FnMut(FrozenNormalizationCheckpoint, &Path),
+{
     require_frozen_materialization_deadline(deadline)?;
-    set_file_times(path, timestamp, timestamp)?;
+    let FrozenExpectedKind::Directory = declaration.kind else {
+        return Err(Error::InvalidFrozenNormalizationDeclaration {
+            path: expected_path.to_owned(),
+            reason: "a non-directory declaration reached final directory sealing",
+        });
+    };
+    let active = frozen_normalization_witness(anchor, expected_path)?;
+    require_frozen_normalization_active_declaration(expected_path, active, declaration, root_device)?;
+    require_frozen_normalization_witness(expected_path, directory, active)?;
+    require_frozen_normalization_access_acl(directory.file(), expected_path, deadline)?;
+    require_frozen_normalization_default_acl(directory.file(), expected_path, deadline)?;
+
+    let declared_children = frozen_normalization_declared_children(expected, expected_path)?;
+    let inventory = frozen_normalization_inventory(directory, expected_path, declared_children.len(), None, deadline)?;
+    require_frozen_normalization_active_declarations(
+        expected_path,
+        &inventory,
+        &declared_children,
+        expected,
+        root_device,
+    )?;
+
+    let mut sealed = Vec::new();
+    sealed
+        .try_reserve_exact(inventory.len())
+        .map_err(|source| Error::ReserveFrozenNormalizationInventory {
+            path: expected_path.to_owned(),
+            source,
+        })?;
+    for (entry, (_, child_path)) in inventory.iter().zip(declared_children.iter()) {
+        let witness = seal_frozen_entry(
+            directory,
+            entry,
+            child_path,
+            expected,
+            timestamp,
+            deadline,
+            root_device,
+            checkpoint,
+        )?;
+        sealed.push((entry.name.clone(), (*child_path).clone(), witness));
+    }
+
+    // Normalize the directory itself before its last child inventory. The
+    // O_NOATIME inventory below must leave this full witness untouched, so a
+    // concurrent add/remove cannot be hidden by a later Forge utimens call.
+    set_frozen_normalization_times(anchor, expected_path, timestamp, deadline)?;
+    require_frozen_normalization_times(expected_path, anchor, timestamp)?;
+    let active_final_witness = frozen_normalization_final_witness(anchor, expected_path)?;
+    checkpoint(
+        FrozenNormalizationCheckpoint::BeforeDirectoryFinalInventory,
+        expected_path,
+    );
+    if expected_path == Path::new("/") {
+        checkpoint(FrozenNormalizationCheckpoint::BeforeRootRevalidation, expected_path);
+    }
+    let confirmed = frozen_normalization_final_inventory(directory, expected_path, sealed.len(), deadline)?;
+    require_frozen_normalization_final_inventory(expected_path, &confirmed, &sealed)?;
+    checkpoint(
+        FrozenNormalizationCheckpoint::AfterDirectoryFinalInventory,
+        expected_path,
+    );
+    if frozen_normalization_final_witness(anchor, expected_path)? != active_final_witness {
+        return Err(Error::FrozenNormalizationEntryChanged(expected_path.to_owned()));
+    }
+
+    let active_mode = declaration.mode | 0o700;
+    if active_mode != declaration.mode {
+        chmod_frozen_normalization_entry(anchor.file(), expected_path, declaration.mode, deadline)?;
+    }
+    let final_stable = frozen_normalization_witness(anchor, expected_path)?;
+    require_frozen_normalization_declaration(expected_path, final_stable, declaration, root_device)?;
+    require_frozen_normalization_times(expected_path, anchor, timestamp)?;
+    require_frozen_normalization_access_acl(directory.file(), expected_path, deadline)?;
+    require_frozen_normalization_default_acl(directory.file(), expected_path, deadline)?;
+    frozen_normalization_final_witness(anchor, expected_path)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_frozen_entry<F>(
+    parent: &fs::File,
+    inventory: &FrozenNormalizationInventoryEntry,
+    expected_path: &Path,
+    expected: &FrozenExpectedTree,
+    timestamp: FileTime,
+    deadline: Instant,
+    root_device: u64,
+    checkpoint: &mut F,
+) -> Result<FrozenNormalizationFinalWitness, Error>
+where
+    F: FnMut(FrozenNormalizationCheckpoint, &Path),
+{
+    require_frozen_materialization_deadline(deadline)?;
+    let declaration = expected.entry(expected_path)?;
+    require_frozen_normalization_active_declaration(expected_path, inventory.witness, declaration, root_device)?;
+    let pinned = open_frozen_normalization_entry(
+        parent,
+        &inventory.name,
+        expected_path,
+        FrozenNormalizationOpen::Anchor,
+        deadline,
+    )?;
+    require_frozen_normalization_witness(expected_path, &pinned, inventory.witness)?;
+    require_named_frozen_normalization_entry(parent, &inventory.name, expected_path, inventory.witness, deadline)?;
+
+    let mut final_acl_check: Option<fs::File> = None;
+    let final_witness = match &declaration.kind {
+        FrozenExpectedKind::Directory => {
+            let directory = open_frozen_normalization_entry(
+                parent,
+                &inventory.name,
+                expected_path,
+                FrozenNormalizationOpen::Directory,
+                deadline,
+            )?;
+            require_frozen_normalization_witness(expected_path, &directory, inventory.witness)?;
+            seal_frozen_directory(
+                &pinned,
+                &directory,
+                expected_path,
+                expected,
+                declaration,
+                timestamp,
+                deadline,
+                root_device,
+                checkpoint,
+            )?
+        }
+        FrozenExpectedKind::Regular { digest } => {
+            let readable = open_frozen_normalization_readonly(pinned.file(), expected_path, deadline)?;
+            let readable = fs::File::from_parts(readable, expected_path.to_owned());
+            require_frozen_normalization_witness(expected_path, &readable, inventory.witness)?;
+            require_frozen_normalization_access_acl(readable.file(), expected_path, deadline)?;
+
+            let active_mode = declaration.mode | 0o400;
+            if active_mode != declaration.mode {
+                chmod_frozen_normalization_entry(pinned.file(), expected_path, declaration.mode, deadline)?;
+            }
+            set_frozen_normalization_times(&pinned, expected_path, timestamp, deadline)?;
+            let final_stable = frozen_normalization_witness(&pinned, expected_path)?;
+            require_frozen_normalization_declaration(expected_path, final_stable, declaration, root_device)?;
+            require_frozen_normalization_times(expected_path, &pinned, timestamp)?;
+            let final_witness = frozen_normalization_final_witness(&pinned, expected_path)?;
+            require_frozen_normalization_regular_digest(&readable, expected_path, *digest, final_witness, deadline)?;
+            checkpoint(FrozenNormalizationCheckpoint::AfterRegularDigest, expected_path);
+            final_acl_check = Some(readable);
+            final_witness
+        }
+        FrozenExpectedKind::Symlink { target } => {
+            let actual = read_frozen_normalization_symlink(&pinned, expected_path, deadline)?;
+            if &actual != target {
+                return Err(Error::FrozenNormalizationSymlinkTargetMismatch {
+                    path: expected_path.to_owned(),
+                    expected: OsString::from_vec(target.clone()),
+                    actual: OsString::from_vec(actual),
+                });
+            }
+            set_frozen_normalization_times(&pinned, expected_path, timestamp, deadline)?;
+            let final_stable = frozen_normalization_witness(&pinned, expected_path)?;
+            require_frozen_normalization_declaration(expected_path, final_stable, declaration, root_device)?;
+            require_frozen_normalization_times(expected_path, &pinned, timestamp)?;
+            frozen_normalization_final_witness(&pinned, expected_path)?
+        }
+    };
+
+    checkpoint(FrozenNormalizationCheckpoint::BeforeEntryRevalidation, expected_path);
+    require_named_frozen_normalization_entry_final(
+        parent,
+        &inventory.name,
+        expected_path,
+        &pinned,
+        final_witness,
+        deadline,
+    )?;
+    if let Some(file) = final_acl_check {
+        require_frozen_normalization_access_acl(file.file(), expected_path, deadline)?;
+    }
+    Ok(final_witness)
+}
+
+fn frozen_normalization_inventory(
+    directory: &fs::File,
+    expected_path: &Path,
+    expected_entries: usize,
+    mut accounting: Option<(&mut usize, usize)>,
+    deadline: Instant,
+) -> Result<Vec<FrozenNormalizationInventoryEntry>, Error> {
+    require_frozen_materialization_deadline(deadline)?;
+    let cursor = openat_owned(
+        directory.as_raw_fd(),
+        ".",
+        OFlag::O_CLOEXEC
+            | OFlag::O_DIRECTORY
+            | OFlag::O_RDONLY
+            | OFlag::O_NOFOLLOW
+            | OFlag::O_NONBLOCK
+            | OFlag::O_NOATIME,
+        Mode::empty(),
+    )?;
+    let descriptor = cursor.into_raw_fd();
+    // SAFETY: fdopendir consumes this fresh descriptor on success. On failure
+    // it remains ours and is closed explicitly below.
+    let stream = unsafe { nix::libc::fdopendir(descriptor) };
+    let Some(stream) = NonNull::new(stream) else {
+        let source = io::Error::last_os_error();
+        // SAFETY: fdopendir failed and did not consume descriptor.
+        unsafe {
+            nix::libc::close(descriptor);
+        }
+        return Err(Error::ReadFrozenNormalizationDirectory {
+            path: expected_path.to_owned(),
+            source,
+        });
+    };
+    let stream = FrozenDiscardDirectoryStream(stream);
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(expected_entries.saturating_add(1))
+        .map_err(|source| Error::ReserveFrozenNormalizationInventory {
+            path: expected_path.to_owned(),
+            source,
+        })?;
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        // SAFETY: errno is thread-local and readdir uses null for both EOF and
+        // failure, so clear it immediately before the call.
+        unsafe {
+            *nix::libc::__errno_location() = 0;
+        }
+        // SAFETY: stream is live and exclusively used by this loop.
+        let entry = unsafe { nix::libc::readdir(stream.0.as_ptr()) };
+        if entry.is_null() {
+            // SAFETY: errno was cleared immediately before readdir.
+            let errno = unsafe { *nix::libc::__errno_location() };
+            if errno == 0 {
+                break;
+            }
+            return Err(Error::ReadFrozenNormalizationDirectory {
+                path: expected_path.to_owned(),
+                source: io::Error::from_raw_os_error(errno),
+            });
+        }
+        // SAFETY: readdir returned a NUL-terminated name valid until the next
+        // call; copy it before advancing the stream.
+        let bytes = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+        if matches!(bytes, b"." | b"..") {
+            continue;
+        }
+        let name = CString::new(bytes).expect("directory entry names contain no interior NUL");
+        if entries.len() >= expected_entries {
+            return Err(Error::FrozenNormalizationInventoryMismatch {
+                path: expected_path.join(OsStr::from_bytes(name.as_bytes())),
+                reason: "the filesystem contains an undeclared entry",
+            });
+        }
+        if let Some((inodes, limit)) = accounting.as_mut() {
+            let actual = inodes.saturating_add(1);
+            if actual > *limit {
+                return Err(Error::FrozenNormalizationInodeLimit { limit: *limit, actual });
+            }
+            **inodes = actual;
+        }
+        let witness = fstatat_frozen_normalization_entry(directory.as_raw_fd(), &name, expected_path, deadline)?;
+        entries.push(FrozenNormalizationInventoryEntry { name, witness });
+    }
+    entries.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
+    require_frozen_materialization_deadline(deadline)?;
+    Ok(entries)
+}
+
+fn fstatat_frozen_normalization_entry(
+    directory: RawFd,
+    name: &CStr,
+    parent: &Path,
+    deadline: Instant,
+) -> Result<FrozenNormalizationWitness, Error> {
+    let mut metadata = MaybeUninit::<nix::libc::stat>::uninit();
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        // SAFETY: directory and name are live, metadata points to writable
+        // storage, and AT_SYMLINK_NOFOLLOW prevents target traversal.
+        if unsafe {
+            nix::libc::fstatat(
+                directory,
+                name.as_ptr(),
+                metadata.as_mut_ptr(),
+                nix::libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } == 0
+        {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(Error::InspectFrozenNormalizationEntry {
+                path: parent.join(OsStr::from_bytes(name.to_bytes())),
+                source,
+            });
+        }
+    }
+    // SAFETY: successful fstatat initialized the complete stat value.
+    let metadata = unsafe { metadata.assume_init() };
+    Ok(FrozenNormalizationWitness {
+        device: metadata.st_dev,
+        inode: metadata.st_ino,
+        mode: metadata.st_mode,
+        owner: metadata.st_uid,
+        group: metadata.st_gid,
+        links: metadata.st_nlink,
+        length: u64::try_from(metadata.st_size).unwrap_or(0),
+    })
+}
+
+fn require_frozen_normalization_inventory(
+    parent: &Path,
+    actual: &[FrozenNormalizationInventoryEntry],
+    expected_children: &[(&OsString, &PathBuf)],
+    expected: &FrozenExpectedTree,
+    root_device: u64,
+) -> Result<(), Error> {
+    if actual.len() != expected_children.len() {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: parent.to_owned(),
+            reason: "the filesystem is missing a declared entry",
+        });
+    }
+    for (actual, (expected_name, expected_path)) in actual.iter().zip(expected_children) {
+        if actual.name.as_bytes() != expected_name.as_bytes() {
+            return Err(Error::FrozenNormalizationInventoryMismatch {
+                path: parent.join(OsStr::from_bytes(actual.name.as_bytes())),
+                reason: "the filesystem entry name is not declared",
+            });
+        }
+        require_frozen_normalization_declaration(
+            expected_path,
+            actual.witness,
+            expected.entry(expected_path)?,
+            root_device,
+        )?;
+    }
     Ok(())
+}
+
+fn require_frozen_normalization_active_inventory(
+    parent: &Path,
+    original: &[FrozenNormalizationInventoryEntry],
+    actual: &[FrozenNormalizationInventoryEntry],
+    expected_children: &[(&OsString, &PathBuf)],
+    expected: &FrozenExpectedTree,
+    root_device: u64,
+) -> Result<(), Error> {
+    if original.len() != expected_children.len() || actual.len() != expected_children.len() {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: parent.to_owned(),
+            reason: "the active filesystem inventory differs from its declaration",
+        });
+    }
+    for ((original, actual), (expected_name, expected_path)) in original.iter().zip(actual).zip(expected_children) {
+        if original.name.as_bytes() != expected_name.as_bytes() || actual.name != original.name {
+            return Err(Error::FrozenNormalizationInventoryMismatch {
+                path: parent.join(OsStr::from_bytes(actual.name.as_bytes())),
+                reason: "an active filesystem entry name differs from its declaration",
+            });
+        }
+        let declaration = expected.entry(expected_path)?;
+        let expected_witness = original
+            .witness
+            .with_permissions(frozen_normalization_active_mode(declaration));
+        if actual.witness != expected_witness {
+            return Err(Error::FrozenNormalizationEntryChanged((*expected_path).clone()));
+        }
+        require_frozen_normalization_active_declaration(expected_path, actual.witness, declaration, root_device)?;
+    }
+    Ok(())
+}
+
+fn require_frozen_normalization_active_declarations(
+    parent: &Path,
+    actual: &[FrozenNormalizationInventoryEntry],
+    expected_children: &[(&OsString, &PathBuf)],
+    expected: &FrozenExpectedTree,
+    root_device: u64,
+) -> Result<(), Error> {
+    if actual.len() != expected_children.len() {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: parent.to_owned(),
+            reason: "the final pass found a missing declared entry",
+        });
+    }
+    for (actual, (expected_name, expected_path)) in actual.iter().zip(expected_children) {
+        if actual.name.as_bytes() != expected_name.as_bytes() {
+            return Err(Error::FrozenNormalizationInventoryMismatch {
+                path: parent.join(OsStr::from_bytes(actual.name.as_bytes())),
+                reason: "the final pass found an undeclared filesystem name",
+            });
+        }
+        require_frozen_normalization_active_declaration(
+            expected_path,
+            actual.witness,
+            expected.entry(expected_path)?,
+            root_device,
+        )?;
+    }
+    Ok(())
+}
+
+fn frozen_normalization_active_mode(expected: &FrozenExpectedEntry) -> u32 {
+    match expected.kind {
+        FrozenExpectedKind::Directory => expected.mode | 0o700,
+        FrozenExpectedKind::Regular { .. } => expected.mode | 0o400,
+        FrozenExpectedKind::Symlink { .. } => expected.mode,
+    }
+}
+
+fn require_frozen_normalization_active_declaration(
+    path: &Path,
+    witness: FrozenNormalizationWitness,
+    expected: &FrozenExpectedEntry,
+    root_device: u64,
+) -> Result<(), Error> {
+    let mut active = expected.clone();
+    active.mode = frozen_normalization_active_mode(expected);
+    require_frozen_normalization_declaration(path, witness, &active, root_device)
+}
+
+fn frozen_normalization_final_inventory(
+    directory: &fs::File,
+    expected_path: &Path,
+    expected_entries: usize,
+    deadline: Instant,
+) -> Result<Vec<(CString, FrozenNormalizationFinalWitness)>, Error> {
+    let inventory = frozen_normalization_inventory(directory, expected_path, expected_entries, None, deadline)?;
+    let mut final_inventory = Vec::new();
+    final_inventory.try_reserve_exact(inventory.len()).map_err(|source| {
+        Error::ReserveFrozenNormalizationInventory {
+            path: expected_path.to_owned(),
+            source,
+        }
+    })?;
+    for entry in inventory {
+        require_frozen_materialization_deadline(deadline)?;
+        let child_path = expected_path.join(OsStr::from_bytes(entry.name.as_bytes()));
+        let pinned = open_frozen_normalization_entry(
+            directory,
+            &entry.name,
+            &child_path,
+            FrozenNormalizationOpen::Anchor,
+            deadline,
+        )?;
+        require_frozen_normalization_witness(&child_path, &pinned, entry.witness)?;
+        final_inventory.push((entry.name, frozen_normalization_final_witness(&pinned, &child_path)?));
+    }
+    Ok(final_inventory)
+}
+
+fn require_frozen_normalization_final_inventory(
+    parent: &Path,
+    actual: &[(CString, FrozenNormalizationFinalWitness)],
+    expected: &[(CString, PathBuf, FrozenNormalizationFinalWitness)],
+) -> Result<(), Error> {
+    if actual.len() != expected.len() {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: parent.to_owned(),
+            reason: "the sealed filesystem inventory changed before parent sealing",
+        });
+    }
+    for ((actual_name, actual_witness), (expected_name, expected_path, expected_witness)) in actual.iter().zip(expected)
+    {
+        if actual_name != expected_name {
+            return Err(Error::FrozenNormalizationInventoryMismatch {
+                path: parent.join(OsStr::from_bytes(actual_name.as_bytes())),
+                reason: "a sealed filesystem name changed before parent sealing",
+            });
+        }
+        if actual_witness != expected_witness {
+            return Err(Error::FrozenNormalizationEntryChanged(expected_path.clone()));
+        }
+    }
+    Ok(())
+}
+
+fn open_frozen_normalization_entry(
+    parent: &fs::File,
+    name: &CStr,
+    expected_path: &Path,
+    open: FrozenNormalizationOpen,
+    deadline: Instant,
+) -> Result<fs::File, Error> {
+    let mut flags = nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW;
+    flags |= match open {
+        FrozenNormalizationOpen::Anchor => nix::libc::O_PATH,
+        FrozenNormalizationOpen::Directory => nix::libc::O_RDONLY | nix::libc::O_DIRECTORY | nix::libc::O_NONBLOCK,
+    };
+    require_frozen_materialization_deadline(deadline)?;
+    openat2_frozen_until(
+        parent.as_raw_fd(),
+        Path::new(OsStr::from_bytes(name.to_bytes())),
+        flags,
+        (nix::libc::RESOLVE_BENEATH
+            | nix::libc::RESOLVE_NO_SYMLINKS
+            | nix::libc::RESOLVE_NO_MAGICLINKS
+            | nix::libc::RESOLVE_NO_XDEV) as u64,
+        deadline,
+    )
+    .map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::OpenFrozenNormalizationEntry {
+            path: expected_path.to_owned(),
+            source,
+        })
+    })
+}
+
+fn require_named_frozen_normalization_entry(
+    parent: &fs::File,
+    name: &CStr,
+    expected_path: &Path,
+    expected: FrozenNormalizationWitness,
+    deadline: Instant,
+) -> Result<(), Error> {
+    let named =
+        open_frozen_normalization_entry(parent, name, expected_path, FrozenNormalizationOpen::Anchor, deadline)?;
+    require_frozen_normalization_witness(expected_path, &named, expected)
+}
+
+fn require_named_frozen_normalization_entry_final(
+    parent: &fs::File,
+    name: &CStr,
+    expected_path: &Path,
+    pinned: &fs::File,
+    expected: FrozenNormalizationFinalWitness,
+    deadline: Instant,
+) -> Result<(), Error> {
+    let named =
+        open_frozen_normalization_entry(parent, name, expected_path, FrozenNormalizationOpen::Anchor, deadline)?;
+    let retained = frozen_normalization_final_witness(pinned, expected_path)?;
+    let named = frozen_normalization_final_witness(&named, expected_path)?;
+    if retained == expected && named == expected {
+        Ok(())
+    } else {
+        Err(Error::FrozenNormalizationEntryChanged(expected_path.to_owned()))
+    }
+}
+
+fn require_named_frozen_normalization_root(
+    path: &Path,
+    root: &fs::File,
+    expected: FrozenNormalizationWitness,
+    deadline: Instant,
+) -> Result<(), Error> {
+    let retained = frozen_normalization_witness(root, Path::new("/"))?;
+    let named = match open_frozen_root_anchor_until(path, deadline) {
+        Ok(named) => named,
+        Err(error @ Error::FrozenMaterializationTimeout { .. }) => return Err(error),
+        Err(_) => return Err(Error::FrozenNormalizationRootChanged(path.to_owned())),
+    };
+    let named = frozen_normalization_witness(&named, Path::new("/"))?;
+    if retained != expected || named != expected {
+        return Err(Error::FrozenNormalizationRootChanged(path.to_owned()));
+    }
+    Ok(())
+}
+
+fn require_named_frozen_normalization_root_final(
+    path: &Path,
+    root: &fs::File,
+    expected: FrozenNormalizationFinalWitness,
+    deadline: Instant,
+) -> Result<(), Error> {
+    let retained = frozen_normalization_final_witness(root, Path::new("/"))?;
+    let named = match open_frozen_root_anchor_until(path, deadline) {
+        Ok(named) => named,
+        Err(error @ Error::FrozenMaterializationTimeout { .. }) => return Err(error),
+        Err(_) => return Err(Error::FrozenNormalizationRootChanged(path.to_owned())),
+    };
+    let named = frozen_normalization_final_witness(&named, Path::new("/"))?;
+    if retained == expected && named == expected {
+        Ok(())
+    } else {
+        Err(Error::FrozenNormalizationRootChanged(path.to_owned()))
+    }
+}
+
+fn frozen_normalization_witness(file: &fs::File, path: &Path) -> Result<FrozenNormalizationWitness, Error> {
+    file.metadata()
+        .map(|metadata| FrozenNormalizationWitness::from_metadata(&metadata))
+        .map_err(|source| Error::InspectFrozenNormalizationEntry {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn frozen_normalization_final_witness(file: &fs::File, path: &Path) -> Result<FrozenNormalizationFinalWitness, Error> {
+    file.metadata()
+        .map(|metadata| FrozenNormalizationFinalWitness::from_metadata(&metadata))
+        .map_err(|source| Error::InspectFrozenNormalizationEntry {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn require_frozen_normalization_witness(
+    path: &Path,
+    file: &fs::File,
+    expected: FrozenNormalizationWitness,
+) -> Result<(), Error> {
+    if frozen_normalization_witness(file, path)? == expected {
+        Ok(())
+    } else {
+        Err(Error::FrozenNormalizationEntryChanged(path.to_owned()))
+    }
+}
+
+fn require_frozen_normalization_declaration(
+    path: &Path,
+    witness: FrozenNormalizationWitness,
+    expected: &FrozenExpectedEntry,
+    root_device: u64,
+) -> Result<(), Error> {
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let effective_owner = unsafe { nix::libc::geteuid() };
+    if witness.owner != effective_owner {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the materialized inode is not owned by the effective user",
+        });
+    }
+    if witness.device != root_device {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the materialized inode resides on another filesystem",
+        });
+    }
+    let actual_kind = witness.mode & nix::libc::S_IFMT;
+    let expected_kind = match expected.kind {
+        FrozenExpectedKind::Directory => nix::libc::S_IFDIR,
+        FrozenExpectedKind::Regular { .. } => nix::libc::S_IFREG,
+        FrozenExpectedKind::Symlink { .. } => nix::libc::S_IFLNK,
+    };
+    if actual_kind != expected_kind {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the filesystem inode type differs from its declaration",
+        });
+    }
+    if witness.mode & 0o7777 != expected.mode {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the filesystem mode differs from its declaration",
+        });
+    }
+    if matches!(
+        expected.kind,
+        FrozenExpectedKind::Regular { .. } | FrozenExpectedKind::Symlink { .. }
+    ) && witness.links != 1
+    {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "a declarative regular file or symlink must have exactly one name",
+        });
+    }
+    Ok(())
+}
+
+fn set_frozen_normalization_times(
+    file: &fs::File,
+    path: &Path,
+    timestamp: FileTime,
+    deadline: Instant,
+) -> Result<(), Error> {
+    set_path_descriptor_times_until(
+        file.file(),
+        timestamp.unix_seconds(),
+        i64::from(timestamp.nanoseconds()),
+        deadline,
+    )
+    .map_err(|source| {
+        frozen_materialization_io_error(deadline, source, |source| Error::NormalizeFrozenEntryTime {
+            path: path.to_owned(),
+            source,
+        })
+    })
+}
+
+fn require_frozen_normalization_regular_digest(
+    file: &fs::File,
+    path: &Path,
+    expected_digest: u128,
+    expected_witness: FrozenNormalizationFinalWitness,
+    deadline: Instant,
+) -> Result<(), Error> {
+    if expected_witness.stable.length > MAX_BLIT_ASSET_BYTES {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the regular file exceeds the bounded asset size",
+        });
+    }
+    let before = file
+        .metadata()
+        .map_err(|source| Error::InspectFrozenNormalizationEntry {
+            path: path.to_owned(),
+            source,
+        })?;
+    if FrozenNormalizationFinalWitness::from_metadata(&before) != expected_witness {
+        return Err(Error::FrozenNormalizationEntryChanged(path.to_owned()));
+    }
+    let mut hasher = StoneDigestWriterHasher::new();
+    let mut remaining = expected_witness.stable.length;
+    let mut buffer = [0_u8; ASSET_COPY_BUFFER_BYTES];
+    while remaining != 0 {
+        require_frozen_materialization_deadline(deadline)?;
+        let requested = usize::try_from(remaining.min(buffer.len() as u64)).map_err(|_| {
+            Error::FrozenNormalizationInventoryMismatch {
+                path: path.to_owned(),
+                reason: "the regular file length is not representable",
+            }
+        })?;
+        let offset = nix::libc::off_t::try_from(expected_witness.stable.length - remaining).map_err(|_| {
+            Error::FrozenNormalizationInventoryMismatch {
+                path: path.to_owned(),
+                reason: "the regular file offset is not representable",
+            }
+        })?;
+        let count = loop {
+            require_frozen_materialization_deadline(deadline)?;
+            // SAFETY: the retained readable descriptor and writable buffer
+            // remain live, and the explicit bounded offset is representable.
+            let count = unsafe { nix::libc::pread(file.as_raw_fd(), buffer.as_mut_ptr().cast(), requested, offset) };
+            if count >= 0 {
+                break usize::try_from(count).map_err(|_| Error::FrozenNormalizationInventoryMismatch {
+                    path: path.to_owned(),
+                    reason: "pread returned an invalid byte count",
+                })?;
+            }
+            let source = Errno::last();
+            if source != Errno::EINTR {
+                return Err(Error::Blit(source));
+            }
+        };
+        match count {
+            0 => {
+                return Err(Error::FrozenNormalizationInventoryMismatch {
+                    path: path.to_owned(),
+                    reason: "the regular file ended before its pinned length",
+                });
+            }
+            _ => {}
+        }
+        hasher.update(&buffer[..count]);
+        remaining = remaining.saturating_sub(count as u64);
+    }
+    let trailing_offset = nix::libc::off_t::try_from(expected_witness.stable.length).map_err(|_| {
+        Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the trailing regular file offset is not representable",
+        }
+    })?;
+    let trailing = loop {
+        require_frozen_materialization_deadline(deadline)?;
+        // SAFETY: the retained readable descriptor and one-byte writable
+        // buffer remain live for the bounded explicit offset.
+        let count = unsafe { nix::libc::pread(file.as_raw_fd(), buffer.as_mut_ptr().cast(), 1, trailing_offset) };
+        if count >= 0 {
+            break usize::try_from(count).map_err(|_| Error::FrozenNormalizationInventoryMismatch {
+                path: path.to_owned(),
+                reason: "trailing pread returned an invalid byte count",
+            })?;
+        }
+        let source = Errno::last();
+        if source != Errno::EINTR {
+            return Err(Error::Blit(source));
+        }
+    };
+    if trailing != 0 {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the regular file grew beyond its pinned length",
+        });
+    }
+    if hasher.digest128() != expected_digest {
+        return Err(Error::FrozenNormalizationInventoryMismatch {
+            path: path.to_owned(),
+            reason: "the regular file content digest differs from its declaration",
+        });
+    }
+    let after = file
+        .metadata()
+        .map_err(|source| Error::InspectFrozenNormalizationEntry {
+            path: path.to_owned(),
+            source,
+        })?;
+    if FrozenNormalizationFinalWitness::from_metadata(&after) != expected_witness {
+        return Err(Error::FrozenNormalizationEntryChanged(path.to_owned()));
+    }
+    Ok(())
+}
+
+fn require_frozen_normalization_times(file_path: &Path, file: &fs::File, timestamp: FileTime) -> Result<(), Error> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| Error::InspectFrozenNormalizationEntry {
+            path: file_path.to_owned(),
+            source,
+        })?;
+    if metadata.atime() == timestamp.unix_seconds()
+        && metadata.atime_nsec() == i64::from(timestamp.nanoseconds())
+        && metadata.mtime() == timestamp.unix_seconds()
+        && metadata.mtime_nsec() == i64::from(timestamp.nanoseconds())
+    {
+        Ok(())
+    } else {
+        Err(Error::FrozenNormalizationEntryChanged(file_path.to_owned()))
+    }
+}
+
+fn read_frozen_normalization_symlink(file: &fs::File, path: &Path, deadline: Instant) -> Result<Vec<u8>, Error> {
+    let mut target = vec![0_u8; MAX_FROZEN_EXECUTABLE_SYMLINK_TARGET_BYTES + 1];
+    loop {
+        require_frozen_materialization_deadline(deadline)?;
+        // SAFETY: the retained O_PATH descriptor and empty path name the exact
+        // symlink inode, and target is writable for its complete capacity.
+        let read =
+            unsafe { nix::libc::readlinkat(file.as_raw_fd(), c"".as_ptr(), target.as_mut_ptr().cast(), target.len()) };
+        if read >= 0 {
+            let read = usize::try_from(read).map_err(|_| Error::ReadFrozenNormalizationSymlink {
+                path: path.to_owned(),
+                source: io::Error::other("readlinkat returned an invalid length"),
+            })?;
+            if read == target.len() {
+                return Err(Error::FrozenNormalizationInventoryMismatch {
+                    path: path.to_owned(),
+                    reason: "the symlink target exceeds the declarative byte limit",
+                });
+            }
+            target.truncate(read);
+            return Ok(target);
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::Interrupted {
+            return Err(Error::ReadFrozenNormalizationSymlink {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    }
 }
 
 /// Restore owner traversal and mutation permissions before replacing a tree.
@@ -5522,6 +7153,7 @@ fn blit_root_with_materialization(
         materialization,
         execution,
         None,
+        None,
     )
 }
 
@@ -5531,6 +7163,7 @@ fn blit_tree_into_open_root(
     root_fd: RawFd,
     materialization: AssetMaterialization,
     execution: BlitExecution,
+    copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
 ) -> Result<(), Error> {
     require_blit_deadline(deadline)?;
@@ -5582,6 +7215,7 @@ fn blit_tree_into_open_root(
                     &progress,
                     materialization,
                     execution,
+                    copy_manifest,
                     deadline,
                 )?);
             }
@@ -5628,6 +7262,7 @@ fn blit_element(
     progress: &ProgressBar,
     materialization: AssetMaterialization,
     execution: BlitExecution,
+    copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
 ) -> Result<BlitStats, Error> {
     require_blit_deadline(deadline)?;
@@ -5652,7 +7287,16 @@ fn blit_element(
     match element {
         Element::Directory(name, item, children) => {
             // Construct within the parent
-            blit_element_item(parent, cache, name, item, &mut stats, materialization, deadline)?;
+            blit_element_item(
+                parent,
+                cache,
+                name,
+                item,
+                &mut stats,
+                materialization,
+                copy_manifest,
+                deadline,
+            )?;
 
             // open the new dir
             let newdir = openat_owned(
@@ -5669,6 +7313,7 @@ fn blit_element(
                 progress,
                 materialization,
                 execution,
+                copy_manifest,
                 deadline,
             )?);
 
@@ -5684,7 +7329,16 @@ fn blit_element(
             Ok(stats)
         }
         Element::Child(name, item) => {
-            blit_element_item(parent, cache, name, item, &mut stats, materialization, deadline)?;
+            blit_element_item(
+                parent,
+                cache,
+                name,
+                item,
+                &mut stats,
+                materialization,
+                copy_manifest,
+                deadline,
+            )?;
 
             Ok(stats)
         }
@@ -5698,6 +7352,7 @@ fn blit_children(
     progress: &ProgressBar,
     materialization: AssetMaterialization,
     execution: BlitExecution,
+    copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
 ) -> Result<BlitStats, Error> {
     require_blit_deadline(deadline)?;
@@ -5708,13 +7363,31 @@ fn blit_children(
                 .into_par_iter()
                 .map(|child| {
                     let _guard = current_span.enter();
-                    blit_element(parent, cache, child, progress, materialization, execution, deadline)
+                    blit_element(
+                        parent,
+                        cache,
+                        child,
+                        progress,
+                        materialization,
+                        execution,
+                        copy_manifest,
+                        deadline,
+                    )
                 })
                 .try_reduce(BlitStats::default, |left, right| Ok(left.merge(right)))
         }
         BlitExecution::Sequential => children.into_iter().try_fold(BlitStats::default(), |stats, child| {
-            blit_element(parent, cache, child, progress, materialization, execution, deadline)
-                .map(|child_stats| stats.merge(child_stats))
+            blit_element(
+                parent,
+                cache,
+                child,
+                progress,
+                materialization,
+                execution,
+                copy_manifest,
+                deadline,
+            )
+            .map(|child_stats| stats.merge(child_stats))
         }),
     }
 }
@@ -5734,20 +7407,14 @@ fn blit_element_item(
     item: &PendingFile,
     stats: &mut BlitStats,
     materialization: AssetMaterialization,
+    copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
 ) -> Result<(), Error> {
     require_blit_deadline(deadline)?;
     match &item.layout.file {
         StonePayloadLayoutFile::Regular(id, _) => {
-            let hash = format!("{id:02x}");
-            let directory = if hash.len() >= 10 {
-                PathBuf::from(&hash[..2]).join(&hash[2..4]).join(&hash[4..6])
-            } else {
-                "".into()
-            };
-
-            // Link relative from cache to target
-            let fp = directory.join(hash);
+            // Link relative from cache to target.
+            let fp = frozen_asset_path(*id);
 
             match *id {
                 // Mystery empty-file hash. Do not allow dupes!
@@ -5770,7 +7437,16 @@ fn blit_element_item(
                             link_asset(cache, &fp, parent, subpath)?;
                         }
                         AssetMaterialization::IndependentCopy => {
-                            copy_asset(cache, &fp, *id, parent, subpath, item.layout.mode, deadline)?;
+                            copy_asset(
+                                cache,
+                                &fp,
+                                *id,
+                                parent,
+                                subpath,
+                                item.layout.mode,
+                                copy_manifest,
+                                deadline,
+                            )?;
                         }
                     }
                 }
@@ -5820,6 +7496,16 @@ fn blit_element_item(
     };
 
     Ok(())
+}
+
+fn frozen_asset_path(digest: u128) -> PathBuf {
+    let hash = format!("{digest:02x}");
+    let directory = if hash.len() >= 10 {
+        PathBuf::from(&hash[..2]).join(&hash[2..4]).join(&hash[4..6])
+    } else {
+        PathBuf::new()
+    };
+    directory.join(hash)
 }
 
 const MAX_BLIT_ASSET_BYTES: u64 = crate::request::DEFAULT_DOWNLOAD_LIMITS.max_bytes;
@@ -6294,9 +7980,20 @@ fn copy_asset(
     parent: RawFd,
     target: &str,
     mode: u32,
+    copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
 ) -> Result<(), Error> {
-    copy_asset_with_checkpoint(pool, source, expected_digest, parent, target, mode, deadline, |_| {})
+    copy_asset_with_checkpoint(
+        pool,
+        source,
+        expected_digest,
+        parent,
+        target,
+        mode,
+        copy_manifest,
+        deadline,
+        |_| {},
+    )
 }
 
 fn copy_asset_with_checkpoint<F>(
@@ -6306,6 +8003,7 @@ fn copy_asset_with_checkpoint<F>(
     parent: RawFd,
     target: &str,
     mode: u32,
+    copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
     mut checkpoint: F,
 ) -> Result<(), Error>
@@ -6315,6 +8013,9 @@ where
     require_blit_deadline(deadline)?;
     require_single_component(Path::new(target))?;
     let asset = pool.open_asset(source)?;
+    if let Some(copy_manifest) = copy_manifest {
+        copy_manifest.require_length(expected_digest, asset.witness.length)?;
+    }
     checkpoint(AssetCopyCheckpoint::SourceOpened);
     pool.revalidate()?;
     let target_fd = openat2_frozen(
@@ -6705,12 +8406,7 @@ fn open_state_metadata_at(parent: RawFd, path: &Path, flags: i32) -> io::Result<
             | nix::libc::RESOLVE_NO_SYMLINKS
             | nix::libc::RESOLVE_NO_XDEV) as u64
     };
-    loop {
-        match openat2_frozen(parent, path, flags, resolve).map(|file| file.into_parts().0) {
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            result => return result,
-        }
-    }
+    openat2_frozen(parent, path, flags, resolve).map(|file| file.into_parts().0)
 }
 
 fn mkdirat_state_metadata(parent: RawFd, name: &CStr, mode: u32) -> io::Result<bool> {
@@ -7841,6 +9537,14 @@ pub enum Error {
     FrozenExecutableVerificationTimeout { seconds: u64 },
     #[error("frozen-root materialization exceeded {seconds} seconds")]
     FrozenMaterializationTimeout { seconds: u64 },
+    #[error("frozen-root independent-copy bytes exceed {limit} (got {actual})")]
+    FrozenMaterializationTotalByteLimit { limit: u64, actual: u64 },
+    #[error(
+        "frozen-root cached asset {digest:032x} changed length between byte preflight and copy: expected {expected}, got {actual}"
+    )]
+    FrozenMaterializationAssetLengthChanged { digest: u128, expected: u64, actual: u64 },
+    #[error("frozen-root cached asset {digest:032x} was not admitted by the byte preflight")]
+    FrozenMaterializationAssetMissingFromManifest { digest: u128 },
     #[error("frozen-root destination is invalid: {0:?}")]
     InvalidFrozenRootDestination(PathBuf),
     #[error("frozen-root destination already exists: {0:?}")]
@@ -7851,6 +9555,68 @@ pub enum Error {
     FrozenNormalizationInodeLimit { limit: usize, actual: usize },
     #[error("frozen-root normalization exceeds {limit} path components (got {actual})")]
     FrozenNormalizationDepthLimit { limit: usize, actual: usize },
+    #[error("invalid declarative frozen-root entry {path:?}: {reason}")]
+    InvalidFrozenNormalizationDeclaration { path: PathBuf, reason: &'static str },
+    #[error("frozen-root filesystem does not match its declaration at {path:?}: {reason}")]
+    FrozenNormalizationInventoryMismatch { path: PathBuf, reason: &'static str },
+    #[error("frozen-root entry changed while being normalized: {0:?}")]
+    FrozenNormalizationEntryChanged(PathBuf),
+    #[error("frozen-root staging name changed while its original descriptor was retained: {0:?}")]
+    FrozenNormalizationRootChanged(PathBuf),
+    #[error("open frozen-root normalization entry {path:?}")]
+    OpenFrozenNormalizationEntry {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("inspect frozen-root normalization entry {path:?}")]
+    InspectFrozenNormalizationEntry {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read frozen-root normalization directory {path:?}")]
+    ReadFrozenNormalizationDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("reserve bounded frozen-root normalization inventory for {path:?}")]
+    ReserveFrozenNormalizationInventory {
+        path: PathBuf,
+        #[source]
+        source: std::collections::TryReserveError,
+    },
+    #[error("frozen-root entry carries a non-canonical ACL at {path:?}")]
+    FrozenNormalizationAcl {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("normalize frozen-root mode through retained entry {path:?}")]
+    NormalizeFrozenEntryMode {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("normalize frozen-root timestamp through retained entry {path:?}")]
+    NormalizeFrozenEntryTime {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read retained frozen-root symlink {path:?}")]
+    ReadFrozenNormalizationSymlink {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("frozen-root symlink {path:?} must target {expected:?}, found {actual:?}")]
+    FrozenNormalizationSymlinkTargetMismatch {
+        path: PathBuf,
+        expected: OsString,
+        actual: OsString,
+    },
     #[error("publish frozen root {stage:?} to {destination:?}")]
     PublishFrozenRoot {
         stage: PathBuf,
@@ -9281,8 +11047,97 @@ let cast = import! cast.system.v1
             fixture.output_parent.as_raw_fd(),
             "copied",
             nix::libc::S_IFREG | 0o755,
+            None,
             Some(Instant::now() + Duration::from_secs(10)),
         )
+    }
+
+    #[test]
+    fn frozen_copy_manifest_counts_output_inodes_and_enforces_exact_byte_limit() {
+        let first = xxhash_rust::xxh3::xxh3_128(b"first frozen asset");
+        let second = xxhash_rust::xxh3::xxh3_128(b"second frozen asset");
+        let manifest =
+            FrozenCopyManifest::from_digests_with_limit([EMPTY_FILE_DIGEST, first, first, second], 8, |digest| {
+                match digest {
+                    digest if digest == first => Ok(3),
+                    digest if digest == second => Ok(2),
+                    _ => unreachable!(),
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            manifest.total_bytes, 8,
+            "duplicate digest must be charged per output inode"
+        );
+        assert_eq!(manifest.lengths.len(), 2, "empty files consume no cache-manifest entry");
+
+        assert!(matches!(
+            FrozenCopyManifest::from_digests_with_limit([first, first, second], 7, |digest| {
+                if digest == first { Ok(3) } else { Ok(2) }
+            }),
+            Err(Error::FrozenMaterializationTotalByteLimit { limit: 7, actual: 8 })
+        ));
+
+        let mut total = 7;
+        account_frozen_blit_bytes(&mut total, 1, 8).unwrap();
+        assert_eq!(total, 8);
+        assert!(matches!(
+            account_frozen_blit_bytes(&mut total, 1, 8),
+            Err(Error::FrozenMaterializationTotalByteLimit { limit: 8, actual: 9 })
+        ));
+        assert_eq!(total, 8, "a rejected N+1 byte must not mutate accounting");
+
+        let mut overflow = u64::MAX;
+        assert!(matches!(
+            account_frozen_blit_bytes(&mut overflow, 1, u64::MAX),
+            Err(Error::FrozenMaterializationTotalByteLimit {
+                limit: u64::MAX,
+                actual: u64::MAX
+            })
+        ));
+        assert_eq!(overflow, u64::MAX);
+    }
+
+    #[test]
+    fn frozen_capability_retry_timeout_remains_a_materialization_timeout() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("file");
+        fs::write(&path, b"deadline proof").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let error = open_frozen_normalization_readonly(
+            file.file(),
+            Path::new("/file"),
+            Instant::now() - Duration::from_millis(1),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::FrozenMaterializationTimeout { .. }));
+    }
+
+    #[test]
+    fn independent_copy_rejects_length_changed_after_byte_preflight_before_creation() {
+        let original = b"preflight length";
+        let fixture = asset_copy_fixture(original);
+        let manifest = FrozenCopyManifest::from_digests_with_limit([fixture.digest], original.len() as u64, |_| {
+            Ok(original.len() as u64)
+        })
+        .unwrap();
+        fs::write(&fixture.source_path, b"longer bytes after preflight").unwrap();
+
+        let result = copy_asset(
+            &fixture.pool,
+            &fixture.source,
+            fixture.digest,
+            fixture.output_parent.as_raw_fd(),
+            "copied",
+            nix::libc::S_IFREG | 0o755,
+            Some(&manifest),
+            Some(Instant::now() + Duration::from_secs(10)),
+        );
+        assert!(matches!(
+            result,
+            Err(Error::FrozenMaterializationAssetLengthChanged { .. })
+        ));
+        assert!(!fixture.output.exists());
     }
 
     #[test]
@@ -9346,6 +11201,7 @@ let cast = import! cast.system.v1
             fixture.output_parent.as_raw_fd(),
             "copied",
             nix::libc::S_IFREG | 0o755,
+            None,
             Some(Instant::now() + Duration::from_secs(10)),
         );
 
@@ -9365,6 +11221,7 @@ let cast = import! cast.system.v1
             fixture.output_parent.as_raw_fd(),
             "copied",
             nix::libc::S_IFREG | 0o755,
+            None,
             Some(Instant::now() + Duration::from_secs(10)),
             |checkpoint| {
                 if checkpoint == AssetCopyCheckpoint::SourceOpened && !replaced {
@@ -9391,6 +11248,7 @@ let cast = import! cast.system.v1
             fixture.output_parent.as_raw_fd(),
             "copied",
             nix::libc::S_IFREG | 0o755,
+            None,
             Some(Instant::now() + Duration::from_secs(10)),
             |checkpoint| {
                 if checkpoint == AssetCopyCheckpoint::BytesCopied && !mutated {
@@ -10736,6 +12594,777 @@ let cast = import! cast.system.v1
                 if package == binding.package
                     && path == binding.path
                     && limit == MAX_FROZEN_SHEBANG_INTERPRETERS
+        ));
+    }
+
+    fn frozen_normalization_test_root(path: &Path) -> fs::File {
+        openat2_frozen(
+            AT_FDCWD,
+            path,
+            nix::libc::O_RDONLY
+                | nix::libc::O_DIRECTORY
+                | nix::libc::O_CLOEXEC
+                | nix::libc::O_NOFOLLOW
+                | nix::libc::O_NONBLOCK,
+            (nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+        )
+        .unwrap()
+    }
+
+    fn frozen_normalization_test_tree(
+        entries: impl IntoIterator<Item = (PathBuf, FrozenExpectedEntry)>,
+        limits: FrozenNormalizationLimits,
+    ) -> Result<FrozenExpectedTree, Error> {
+        let mut expected = BTreeMap::from([(
+            PathBuf::from("/"),
+            FrozenExpectedEntry {
+                kind: FrozenExpectedKind::Directory,
+                mode: 0o755,
+            },
+        )]);
+        for (path, entry) in entries {
+            assert!(expected.insert(path, entry).is_none());
+        }
+        FrozenExpectedTree::from_entries(expected, limits)
+    }
+
+    fn frozen_expected_directory(mode: u32) -> FrozenExpectedEntry {
+        FrozenExpectedEntry {
+            kind: FrozenExpectedKind::Directory,
+            mode,
+        }
+    }
+
+    fn frozen_expected_regular(mode: u32) -> FrozenExpectedEntry {
+        FrozenExpectedEntry {
+            kind: FrozenExpectedKind::Regular { digest: 0 },
+            mode,
+        }
+    }
+
+    fn frozen_expected_regular_bytes(mode: u32, bytes: &[u8]) -> FrozenExpectedEntry {
+        FrozenExpectedEntry {
+            kind: FrozenExpectedKind::Regular {
+                digest: xxhash_rust::xxh3::xxh3_128(bytes),
+            },
+            mode,
+        }
+    }
+
+    fn frozen_expected_symlink(mode: u32, target: &[u8]) -> FrozenExpectedEntry {
+        FrozenExpectedEntry {
+            kind: FrozenExpectedKind::Symlink {
+                target: target.to_vec(),
+            },
+            mode,
+        }
+    }
+
+    fn install_test_posix_acl(path: &Path, name: &CStr) -> bool {
+        const ACL_UNDEFINED_ID: u32 = u32::MAX;
+        // One named-user entry makes the ACL non-minimal so the kernel cannot
+        // collapse it into ordinary mode bits.
+        // SAFETY: geteuid takes no arguments and cannot fail.
+        let named_user = unsafe { nix::libc::geteuid() };
+        let entries = [
+            (0x01_u16, 0o7_u16, ACL_UNDEFINED_ID),
+            (0x02, 0o4, named_user),
+            (0x04, 0o5, ACL_UNDEFINED_ID),
+            (0x10, 0o5, ACL_UNDEFINED_ID),
+            (0x20, 0o5, ACL_UNDEFINED_ID),
+        ];
+        let mut value = Vec::with_capacity(4 + entries.len() * 8);
+        value.extend_from_slice(&2_u32.to_le_bytes());
+        for (tag, permissions, id) in entries {
+            value.extend_from_slice(&tag.to_le_bytes());
+            value.extend_from_slice(&permissions.to_le_bytes());
+            value.extend_from_slice(&id.to_le_bytes());
+        }
+        let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: both C strings and the complete xattr value remain live for
+        // the call. The fixtures are private same-owner regular directories.
+        if unsafe { nix::libc::setxattr(path.as_ptr(), name.as_ptr(), value.as_ptr().cast(), value.len(), 0) } == 0 {
+            return true;
+        }
+        let error = io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(nix::libc::EOPNOTSUPP) | Some(nix::libc::EPERM)
+        ) {
+            if std::env::var_os("CAST_REQUIRE_POSIX_ACL_TESTS").is_some() {
+                panic!(
+                    "required POSIX ACL fixture is unavailable for {}: {error}",
+                    path.to_string_lossy()
+                );
+            }
+            eprintln!("skipping POSIX ACL assertion for {}: {error}", path.to_string_lossy());
+            false
+        } else {
+            panic!("install test POSIX ACL: {error}");
+        }
+    }
+
+    #[test]
+    fn frozen_normalization_handles_mode_zero_entries_and_never_follows_symlinks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(root_path.join("locked")).unwrap();
+        fs::write(root_path.join("locked/file"), b"mode zero").unwrap();
+        fs::set_permissions(root_path.join("locked/file"), Permissions::from_mode(0o000)).unwrap();
+        fs::set_permissions(root_path.join("locked"), Permissions::from_mode(0o000)).unwrap();
+        fs::write(&outside, b"external sentinel").unwrap();
+        filetime::set_file_times(
+            &outside,
+            FileTime::from_unix_time(444, 0),
+            FileTime::from_unix_time(444, 0),
+        )
+        .unwrap();
+        symlink(&outside, root_path.join("link")).unwrap();
+        let target = outside.as_os_str().as_bytes();
+        let expected = frozen_normalization_test_tree(
+            [
+                (PathBuf::from("/link"), frozen_expected_symlink(0o777, target)),
+                (PathBuf::from("/locked"), frozen_expected_directory(0o000)),
+                (
+                    PathBuf::from("/locked/file"),
+                    frozen_expected_regular_bytes(0o000, b"mode zero"),
+                ),
+            ],
+            FrozenNormalizationLimits { inodes: 4, depth: 2 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let timestamp = FileTime::from_unix_time(123, 456);
+
+        normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            timestamp,
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 4, depth: 2 },
+            |_, _| {},
+        )
+        .unwrap();
+
+        for path in [root_path.clone(), root_path.join("locked"), root_path.join("link")] {
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert_eq!((metadata.atime(), metadata.atime_nsec()), (123, 456), "{path:?}");
+            assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (123, 456), "{path:?}");
+        }
+        assert_eq!(
+            fs::symlink_metadata(root_path.join("locked")).unwrap().mode() & 0o7777,
+            0
+        );
+        fs::set_permissions(root_path.join("locked"), Permissions::from_mode(0o700)).unwrap();
+        let file_metadata = fs::symlink_metadata(root_path.join("locked/file")).unwrap();
+        assert_eq!(file_metadata.mode() & 0o7777, 0);
+        assert_eq!((file_metadata.atime(), file_metadata.atime_nsec()), (123, 456));
+        assert_eq!((file_metadata.mtime(), file_metadata.mtime_nsec()), (123, 456));
+        let outside_metadata = fs::symlink_metadata(&outside).unwrap();
+        assert_eq!((outside_metadata.atime(), outside_metadata.mtime()), (444, 444));
+        assert_eq!(fs::read(&outside).unwrap(), b"external sentinel");
+        fs::set_permissions(root_path.join("locked/file"), Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn frozen_normalization_rejects_unplanned_missing_and_extra_entries() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let unexpected = root_path.join("unexpected");
+        fs::write(&unexpected, b"must not be normalized").unwrap();
+        filetime::set_file_times(
+            &unexpected,
+            FileTime::from_unix_time(333, 0),
+            FileTime::from_unix_time(333, 0),
+        )
+        .unwrap();
+        let expected = frozen_normalization_test_tree([], FrozenNormalizationLimits { inodes: 2, depth: 1 }).unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+
+        assert!(matches!(
+            normalize_frozen_tree_with(
+                &root,
+                &root_path,
+                &expected,
+                FileTime::from_unix_time(123, 0),
+                Instant::now() + Duration::from_secs(10),
+                FrozenNormalizationLimits { inodes: 2, depth: 1 },
+                |_, _| {},
+            ),
+            Err(Error::FrozenNormalizationInventoryMismatch {
+                reason: "the filesystem contains an undeclared entry",
+                ..
+            })
+        ));
+        assert_eq!(fs::symlink_metadata(&unexpected).unwrap().mtime(), 333);
+
+        fs::remove_file(&unexpected).unwrap();
+        let expected = frozen_normalization_test_tree(
+            [(PathBuf::from("/missing"), frozen_expected_regular(0o600))],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        assert!(matches!(
+            normalize_frozen_tree_with(
+                &root,
+                &root_path,
+                &expected,
+                FileTime::from_unix_time(123, 0),
+                Instant::now() + Duration::from_secs(10),
+                FrozenNormalizationLimits { inodes: 2, depth: 1 },
+                |_, _| {},
+            ),
+            Err(Error::FrozenNormalizationInventoryMismatch {
+                reason: "the filesystem is missing a declared entry",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn frozen_normalization_directory_to_symlink_race_cannot_escape_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(root_path.join("child")).unwrap();
+        fs::set_permissions(root_path.join("child"), Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let sentinel = outside.join("sentinel");
+        fs::write(&sentinel, b"outside").unwrap();
+        fs::set_permissions(&outside, Permissions::from_mode(0o500)).unwrap();
+        filetime::set_file_times(
+            &sentinel,
+            FileTime::from_unix_time(777, 0),
+            FileTime::from_unix_time(777, 0),
+        )
+        .unwrap();
+        let outside_before = fs::symlink_metadata(&outside).unwrap();
+        let expected = frozen_normalization_test_tree(
+            [(PathBuf::from("/child"), frozen_expected_directory(0o700))],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let displaced = root_path.join("displaced");
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::EntryPinned && path == Path::new("/child") && !raced {
+                    fs::rename(root_path.join("child"), &displaced).unwrap();
+                    symlink(&outside, root_path.join("child")).unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(matches!(
+            error,
+            Error::FrozenNormalizationEntryChanged(_) | Error::OpenFrozenNormalizationEntry { .. }
+        ));
+        let outside_after = fs::symlink_metadata(&outside).unwrap();
+        assert_eq!(outside_after.mode(), outside_before.mode());
+        assert_eq!(
+            (outside_after.atime(), outside_after.mtime()),
+            (outside_before.atime(), outside_before.mtime())
+        );
+        assert_eq!(fs::symlink_metadata(&sentinel).unwrap().mtime(), 777);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"outside");
+        fs::set_permissions(&outside, Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn frozen_normalization_hardlink_substitution_is_rejected_before_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        let outside = temporary.path().join("outside");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        fs::write(root_path.join("file"), b"declared").unwrap();
+        fs::set_permissions(root_path.join("file"), Permissions::from_mode(0o600)).unwrap();
+        fs::write(&outside, b"external sentinel").unwrap();
+        fs::set_permissions(&outside, Permissions::from_mode(0o640)).unwrap();
+        filetime::set_file_times(
+            &outside,
+            FileTime::from_unix_time(888, 0),
+            FileTime::from_unix_time(888, 0),
+        )
+        .unwrap();
+        let expected = frozen_normalization_test_tree(
+            [(PathBuf::from("/file"), frozen_expected_regular(0o600))],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let displaced = root_path.join("displaced");
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::EntryPinned && path == Path::new("/file") && !raced {
+                    fs::rename(root_path.join("file"), &displaced).unwrap();
+                    fs::hard_link(&outside, root_path.join("file")).unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(matches!(error, Error::FrozenNormalizationEntryChanged(_)));
+        let outside_metadata = fs::symlink_metadata(&outside).unwrap();
+        assert_eq!(outside_metadata.mode() & 0o7777, 0o640);
+        assert_eq!((outside_metadata.atime(), outside_metadata.mtime()), (888, 888));
+        assert_eq!(fs::read(&outside).unwrap(), b"external sentinel");
+    }
+
+    #[test]
+    fn frozen_normalization_rejects_stage_root_name_substitution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        let displaced = temporary.path().join("displaced");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let expected = frozen_normalization_test_tree([], FrozenNormalizationLimits { inodes: 1, depth: 0 }).unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 1, depth: 0 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::BeforeRootRevalidation && path == Path::new("/") {
+                    fs::rename(&root_path, &displaced).unwrap();
+                    fs::create_dir(&root_path).unwrap();
+                    fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+                    fs::write(root_path.join("replacement"), b"must not publish").unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(match error {
+            Error::FrozenNormalizationRootChanged(path) => path == root_path,
+            Error::FrozenNormalizationEntryChanged(path) => path == Path::new("/"),
+            _ => false,
+        });
+        assert_eq!(fs::read(root_path.join("replacement")).unwrap(), b"must not publish");
+        assert_eq!(fs::symlink_metadata(&displaced).unwrap().mtime(), 123);
+    }
+
+    #[test]
+    fn frozen_normalization_limits_accept_n_and_reject_n_plus_one() {
+        let entries = || {
+            [
+                (PathBuf::from("/a"), frozen_expected_directory(0o755)),
+                (PathBuf::from("/a/b"), frozen_expected_regular(0o600)),
+            ]
+        };
+        assert!(frozen_normalization_test_tree(entries(), FrozenNormalizationLimits { inodes: 3, depth: 2 }).is_ok());
+        assert!(matches!(
+            frozen_normalization_test_tree(entries(), FrozenNormalizationLimits { inodes: 2, depth: 2 }),
+            Err(Error::FrozenNormalizationInodeLimit { limit: 2, actual: 3 })
+        ));
+        assert!(matches!(
+            frozen_normalization_test_tree(entries(), FrozenNormalizationLimits { inodes: 3, depth: 1 }),
+            Err(Error::FrozenNormalizationDepthLimit { limit: 1, actual: 2 })
+        ));
+    }
+
+    #[test]
+    fn frozen_normalization_runtime_walk_enforces_the_inode_limit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir_all(root_path.join("nested")).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(root_path.join("nested"), Permissions::from_mode(0o755)).unwrap();
+        fs::write(root_path.join("nested/file"), b"bounded").unwrap();
+        fs::set_permissions(root_path.join("nested/file"), Permissions::from_mode(0o600)).unwrap();
+        let expected = frozen_normalization_test_tree(
+            [
+                (PathBuf::from("/nested"), frozen_expected_directory(0o755)),
+                (
+                    PathBuf::from("/nested/file"),
+                    frozen_expected_regular_bytes(0o600, b"bounded"),
+                ),
+            ],
+            FrozenNormalizationLimits { inodes: 3, depth: 2 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+
+        assert!(matches!(
+            normalize_frozen_tree_with(
+                &root,
+                &root_path,
+                &expected,
+                FileTime::from_unix_time(123, 0),
+                Instant::now() + Duration::from_secs(10),
+                FrozenNormalizationLimits { inodes: 2, depth: 2 },
+                |_, _| {},
+            ),
+            Err(Error::FrozenNormalizationInodeLimit { limit: 2, actual: 3 })
+        ));
+    }
+
+    #[test]
+    fn frozen_normalization_rejects_regular_content_outside_the_declaration() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let file = root_path.join("file");
+        fs::write(&file, b"tampered").unwrap();
+        fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+        filetime::set_file_times(
+            &file,
+            FileTime::from_unix_time(999, 0),
+            FileTime::from_unix_time(999, 0),
+        )
+        .unwrap();
+        let expected = frozen_normalization_test_tree(
+            [(
+                PathBuf::from("/file"),
+                frozen_expected_regular_bytes(0o600, b"declared"),
+            )],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+
+        assert!(matches!(
+            normalize_frozen_tree_with(
+                &root,
+                &root_path,
+                &expected,
+                FileTime::from_unix_time(123, 0),
+                Instant::now() + Duration::from_secs(10),
+                FrozenNormalizationLimits { inodes: 2, depth: 1 },
+                |_, _| {},
+            ),
+            Err(Error::FrozenNormalizationInventoryMismatch {
+                reason: "the regular file content digest differs from its declaration",
+                ..
+            })
+        ));
+        assert_eq!(fs::symlink_metadata(&file).unwrap().mode() & 0o7777, 0o600);
+        assert_eq!(fs::read(&file).unwrap(), b"tampered");
+    }
+
+    #[test]
+    fn frozen_normalization_detects_same_inode_mutation_before_final_revalidation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let file = root_path.join("file");
+        fs::write(&file, b"original").unwrap();
+        fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+        let expected = frozen_normalization_test_tree(
+            [(
+                PathBuf::from("/file"),
+                frozen_expected_regular_bytes(0o600, b"original"),
+            )],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::AfterRegularDigest
+                    && path == Path::new("/file")
+                    && !raced
+                {
+                    fs::write(&file, b"mutated!").unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(matches!(error, Error::FrozenNormalizationEntryChanged(path) if path == Path::new("/file")));
+        assert_eq!(fs::read(&file).unwrap(), b"mutated!");
+    }
+
+    #[test]
+    fn frozen_normalization_final_pass_detects_deep_content_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir_all(root_path.join("nested")).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(root_path.join("nested"), Permissions::from_mode(0o755)).unwrap();
+        let file = root_path.join("nested/file");
+        fs::write(&file, b"original").unwrap();
+        fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+        let expected = frozen_normalization_test_tree(
+            [
+                (PathBuf::from("/nested"), frozen_expected_directory(0o755)),
+                (
+                    PathBuf::from("/nested/file"),
+                    frozen_expected_regular_bytes(0o600, b"original"),
+                ),
+            ],
+            FrozenNormalizationLimits { inodes: 3, depth: 2 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 3, depth: 2 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::BeforeFinalTreeConfirmation && path == Path::new("/") {
+                    fs::write(&file, b"mutated!").unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(matches!(
+            error,
+            Error::FrozenNormalizationInventoryMismatch {
+                reason: "the regular file content digest differs from its declaration",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn frozen_normalization_root_inventory_detects_post_digest_child_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let file = root_path.join("file");
+        fs::write(&file, b"original").unwrap();
+        fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+        let expected = frozen_normalization_test_tree(
+            [(
+                PathBuf::from("/file"),
+                frozen_expected_regular_bytes(0o600, b"original"),
+            )],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::BeforeRootRevalidation && path == Path::new("/") {
+                    fs::write(&file, b"mutated!").unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(matches!(error, Error::FrozenNormalizationEntryChanged(path) if path == Path::new("/file")));
+    }
+
+    #[test]
+    fn frozen_normalization_detects_entry_added_after_final_inventory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let expected = frozen_normalization_test_tree([], FrozenNormalizationLimits { inodes: 1, depth: 0 }).unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+        let mut raced = false;
+
+        let error = normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 1, depth: 0 },
+            |checkpoint, path| {
+                if checkpoint == FrozenNormalizationCheckpoint::AfterDirectoryFinalInventory && path == Path::new("/") {
+                    fs::write(root_path.join("late"), b"must not publish").unwrap();
+                    raced = true;
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(raced);
+        assert!(matches!(error, Error::FrozenNormalizationEntryChanged(path) if path == Path::new("/")));
+        assert_eq!(fs::read(root_path.join("late")).unwrap(), b"must not publish");
+    }
+
+    #[test]
+    fn frozen_normalization_orders_non_utf8_names_as_raw_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_path = temporary.path().join("root");
+        fs::create_dir(&root_path).unwrap();
+        fs::set_permissions(&root_path, Permissions::from_mode(0o755)).unwrap();
+        let name = OsString::from_vec(vec![b'n', 0xff]);
+        let file = root_path.join(&name);
+        fs::write(&file, b"raw name").unwrap();
+        fs::set_permissions(&file, Permissions::from_mode(0o600)).unwrap();
+        let expected_path = Path::new("/").join(&name);
+        let expected = frozen_normalization_test_tree(
+            [(expected_path, frozen_expected_regular_bytes(0o600, b"raw name"))],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&root_path);
+
+        normalize_frozen_tree_with(
+            &root,
+            &root_path,
+            &expected,
+            FileTime::from_unix_time(123, 0),
+            Instant::now() + Duration::from_secs(10),
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+            |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(fs::symlink_metadata(&file).unwrap().mtime(), 123);
+    }
+
+    #[test]
+    fn frozen_normalization_rejects_cross_mount_entries_before_mutation() {
+        let root = fs::File::open("/").unwrap();
+        for name in [c"proc", c"sys", c"dev"] {
+            match open_frozen_normalization_entry(
+                &root,
+                name,
+                Path::new("/").join(OsStr::from_bytes(name.to_bytes())).as_path(),
+                FrozenNormalizationOpen::Anchor,
+                Instant::now() + Duration::from_secs(10),
+            ) {
+                Err(Error::OpenFrozenNormalizationEntry { source, .. })
+                    if source.raw_os_error() == Some(nix::libc::EXDEV) =>
+                {
+                    return;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("unexpected cross-mount probe failure: {error}"),
+            }
+        }
+        panic!("expected /proc, /sys, or /dev to reside on another mount");
+    }
+
+    #[test]
+    fn frozen_normalization_rejects_access_acl_after_active_mode_change() {
+        let access = tempfile::tempdir().unwrap();
+        let access_root = access.path().join("root");
+        fs::create_dir(&access_root).unwrap();
+        fs::set_permissions(&access_root, Permissions::from_mode(0o755)).unwrap();
+        let file = access_root.join("file");
+        fs::write(&file, b"acl protected").unwrap();
+        fs::set_permissions(&file, Permissions::from_mode(0o640)).unwrap();
+        if !install_test_posix_acl(&file, c"system.posix_acl_access") {
+            return;
+        }
+        // Preserve the non-minimal ACL while forcing phase one to add owner
+        // read permission through the retained descriptor.
+        fs::set_permissions(&file, Permissions::from_mode(0o000)).unwrap();
+        let file_mode = fs::symlink_metadata(&file).unwrap().mode() & 0o7777;
+        assert_eq!(file_mode, 0);
+        let expected = frozen_normalization_test_tree(
+            [(
+                PathBuf::from("/file"),
+                frozen_expected_regular_bytes(file_mode, b"acl protected"),
+            )],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&access_root);
+        assert!(matches!(
+            normalize_frozen_tree_with(
+                &root,
+                &access_root,
+                &expected,
+                FileTime::from_unix_time(123, 0),
+                Instant::now() + Duration::from_secs(10),
+                FrozenNormalizationLimits { inodes: 2, depth: 1 },
+                |_, _| {},
+            ),
+            Err(Error::FrozenNormalizationAcl { path, .. }) if path == Path::new("/file")
+        ));
+    }
+
+    #[test]
+    fn frozen_normalization_rejects_default_acl_after_active_mode_change() {
+        let default = tempfile::tempdir().unwrap();
+        let default_root = default.path().join("root");
+        let directory = default_root.join("directory");
+        fs::create_dir_all(&directory).unwrap();
+        fs::set_permissions(&default_root, Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&directory, Permissions::from_mode(0o755)).unwrap();
+        if !install_test_posix_acl(&directory, c"system.posix_acl_default") {
+            return;
+        }
+        // Force phase one to add traversal permission; a default ACL must
+        // remain visible and rejected after that descriptor mutation.
+        fs::set_permissions(&directory, Permissions::from_mode(0o000)).unwrap();
+        let directory_mode = fs::symlink_metadata(&directory).unwrap().mode() & 0o7777;
+        assert_eq!(directory_mode, 0);
+        let expected = frozen_normalization_test_tree(
+            [(PathBuf::from("/directory"), frozen_expected_directory(directory_mode))],
+            FrozenNormalizationLimits { inodes: 2, depth: 1 },
+        )
+        .unwrap();
+        let root = frozen_normalization_test_root(&default_root);
+        assert!(matches!(
+            normalize_frozen_tree_with(
+                &root,
+                &default_root,
+                &expected,
+                FileTime::from_unix_time(123, 0),
+                Instant::now() + Duration::from_secs(10),
+                FrozenNormalizationLimits { inodes: 2, depth: 1 },
+                |_, _| {},
+            ),
+            Err(Error::FrozenNormalizationAcl { path, .. }) if path == Path::new("/directory")
         ));
     }
 

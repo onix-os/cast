@@ -524,7 +524,18 @@ rejecting `N + 1`.
 - [x] Bound Stone payload counts, records, declared and expanded sizes,
   malformed lengths, content streaming, and aggregate archive consumption.
 - [x] Replace recursive/unbounded package collection with a bounded,
-  descriptor-safe, deterministic walk and verified content reads.
+  descriptor-safe, deterministic walk and verified content reads. Frozen-root
+  materialization now preflights a 32-GiB aggregate independent-copy budget,
+  charging duplicate assets once per output inode and pinning each admitted
+  length through copy. Its exact VFS inventory is then proven and normalized
+  in two descriptor-rooted passes with raw-byte ordering, inode/depth limits,
+  same-owner/device and single-link checks, POSIX access/default-ACL rejection,
+  symlink-target and regular-content verification, mode-zero support, stable
+  timestamps, and bottom-up final witnesses. Retained-capability helpers cap
+  interrupted-syscall retries, while normalization-local retries recheck the
+  materialization deadline. That deadline remains cooperative around
+  individual syscalls rather than a claim that an arbitrary blocking
+  filesystem can be preempted in-process.
 
 **Exit gate:** malformed, oversized, changing, blocking, or resource-exhausting
 inputs are rejected with structured diagnostics; no error path leaves a child,
