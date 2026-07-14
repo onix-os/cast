@@ -9,9 +9,9 @@
 //! processes, while its fixed `cast-supervisor` child contains exactly this
 //! supervisor's TGID. It authenticates that baseline, creates and configures
 //! one sibling payload leaf, lends pinned root and leaf descriptors to the
-//! crate's future `clone3(CLONE_INTO_CGROUP)` integration, and tears the leaf
-//! down without following symlinks. Mason must later arrange the delegation;
-//! the container crate must place the child atomically before releasing it.
+//! crate's `clone3(CLONE_INTO_CGROUP)` integration, and tears the leaf down
+//! without following symlinks. The caller must arrange the delegation; the
+//! container crate places the child atomically before releasing it.
 //! systemd may initially leave the delegated root's
 //! `cgroup.subtree_control` empty. Cast authenticates the complete
 //! supervisor-only topology first, enables only its missing `cpu`, `memory`,
@@ -1019,12 +1019,16 @@ impl CgroupLeaf {
         // authenticated leaf removal busy after every process has exited.
         write_control(&self.directory, c"cgroup.max.depth", b"0", &self.label)?;
         write_control(&self.directory, c"cgroup.max.descendants", b"0", &self.label)?;
-        write_control(&self.directory, c"cpu.max.burst", b"0", &self.label)?;
+        // Upstream Linux 5.14 exposes cpu.max.burst together with cpu.max.
+        // Accept exact absence for custom or selectively backported kernels:
+        // absence preserves the kernel's no-burst behavior, while every
+        // present control is still authenticated, written, and read back.
+        let cpu_max_burst_present = write_control_if_present(&self.directory, c"cpu.max.burst", b"0", &self.label)?;
         let cpu_max = format!("{} {}", limits.cpu_quota_micros, limits.cpu_period_micros);
         write_control(&self.directory, c"cpu.max", cpu_max.as_bytes(), &self.label)?;
 
         self.require_empty_for_configuration()?;
-        self.verify_configured_controls(limits)?;
+        self.verify_configured_controls(limits, cpu_max_burst_present)?;
         self.require_activation_controls()
     }
 
@@ -1043,7 +1047,7 @@ impl CgroupLeaf {
         }
     }
 
-    fn verify_configured_controls(&self, limits: CgroupLimits) -> Result<()> {
+    fn verify_configured_controls(&self, limits: CgroupLimits, cpu_max_burst_present: bool) -> Result<()> {
         verify_control(&self.directory, c"pids.max", &limits.pids_max.to_string(), &self.label)?;
         verify_control(
             &self.directory,
@@ -1060,7 +1064,9 @@ impl CgroupLeaf {
         verify_control(&self.directory, c"memory.oom.group", "1", &self.label)?;
         verify_control(&self.directory, c"cgroup.max.depth", "0", &self.label)?;
         verify_control(&self.directory, c"cgroup.max.descendants", "0", &self.label)?;
-        verify_control(&self.directory, c"cpu.max.burst", "0", &self.label)?;
+        if cpu_max_burst_present {
+            verify_control(&self.directory, c"cpu.max.burst", "0", &self.label)?;
+        }
         verify_control(
             &self.directory,
             c"cpu.max",
@@ -2047,7 +2053,11 @@ fn write_control(directory: &OwnedFd, name: &CStr, value: &[u8], label: &Path) -
         libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_TRUNC,
         label,
     )?;
-    write_exact_control_value(&path, value, &mut |bytes| {
+    write_control_descriptor(&descriptor, &path, value)
+}
+
+fn write_control_descriptor(descriptor: &OwnedFd, path: &Path, value: &[u8]) -> Result<()> {
+    write_exact_control_value(path, value, &mut |bytes| {
         // SAFETY: descriptor and bytes remain live for this single write.
         let written = unsafe { libc::write(descriptor.as_raw_fd(), bytes.as_ptr().cast(), bytes.len()) };
         if written == -1 {
@@ -2056,6 +2066,26 @@ fn write_control(directory: &OwnedFd, name: &CStr, value: &[u8], label: &Path) -
             usize::try_from(written).map_err(|_| io::Error::other("write returned an invalid length"))
         }
     })
+}
+
+/// Write a control when it exists, accepting only an exact missing name.
+///
+/// A wrong-kind object, symlink, permission failure, unsupported resolution,
+/// or any write failure is not absence and remains fatal.
+fn write_control_if_present(directory: &OwnedFd, name: &CStr, value: &[u8], label: &Path) -> Result<bool> {
+    let path = label.join(os_str(name));
+    let descriptor = match open_control_path(
+        directory,
+        name,
+        libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_TRUNC,
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(source) if source.raw_os_error() == Some(libc::ENOENT) => return Ok(false),
+        Err(source) => return Err(descriptor_error("open cgroup control", &path, source)),
+    };
+    require_control_file(&descriptor, &path)?;
+    write_control_descriptor(&descriptor, &path, value)?;
+    Ok(true)
 }
 
 fn write_exact_control_value(
@@ -2090,12 +2120,17 @@ fn open_control(directory: &OwnedFd, name: &CStr, flags: i32, label: &Path) -> R
     let path = label.join(os_str(name));
     let descriptor = open_control_path(directory, name, flags)
         .map_err(|source| descriptor_error("open cgroup control", &path, source))?;
-    let stat =
-        descriptor_stat(&descriptor).map_err(|source| descriptor_error("inspect cgroup control", &path, source))?;
-    if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
-        return Err(CgroupError::NotControlFile { path });
-    }
+    require_control_file(&descriptor, &path)?;
     Ok(descriptor)
+}
+
+fn require_control_file(descriptor: &OwnedFd, path: &Path) -> Result<()> {
+    let stat =
+        descriptor_stat(descriptor).map_err(|source| descriptor_error("inspect cgroup control", path, source))?;
+    if stat.st_mode & libc::S_IFMT != libc::S_IFREG {
+        return Err(CgroupError::NotControlFile { path: path.to_owned() });
+    }
+    Ok(())
 }
 
 fn open_control_path(directory: &OwnedFd, name: &CStr, flags: i32) -> io::Result<OwnedFd> {
@@ -2723,6 +2758,7 @@ mod tests {
         let root = simulated_root(&temporary);
         let mut leaf = root.create_unconfigured_leaf(ID).unwrap();
         create_simulated_controls(leaf.label());
+        fs::write(leaf.label().join("cpu.max.burst"), "40000").unwrap();
         leaf.configure(limits()).unwrap();
 
         for (name, expected) in [
@@ -2741,14 +2777,12 @@ mod tests {
     }
 
     #[test]
-    fn configured_leaf_requires_placement_and_race_safe_kill_controls() {
+    fn configured_leaf_requires_placement_and_terminal_domain_controls() {
         for missing in [
             "cgroup.procs",
             "cgroup.threads",
-            "cgroup.kill",
             "cgroup.max.depth",
             "cgroup.max.descendants",
-            "cpu.max.burst",
         ] {
             let temporary = tempfile::tempdir().unwrap();
             let root = simulated_root(&temporary);
@@ -2768,6 +2802,94 @@ mod tests {
     }
 
     #[test]
+    fn missing_cpu_max_burst_preserves_zero_burst_compatibility() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = simulated_root(&temporary);
+        let mut leaf = root.create_unconfigured_leaf(ID).unwrap();
+        create_simulated_controls(leaf.label());
+        fs::remove_file(leaf.label().join("cpu.max.burst")).unwrap();
+
+        leaf.configure(limits()).unwrap();
+
+        assert!(!leaf.label().join("cpu.max.burst").exists());
+        assert_eq!(
+            fs::read_to_string(leaf.label().join("cpu.max")).unwrap(),
+            "200000 100000"
+        );
+        deactivate(&mut leaf);
+    }
+
+    #[test]
+    fn non_file_or_symlink_cpu_max_burst_is_not_treated_as_absent() {
+        for replacement in ["directory", "symlink"] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = simulated_root(&temporary);
+            let mut leaf = root.create_unconfigured_leaf(ID).unwrap();
+            create_simulated_controls(leaf.label());
+            let burst = leaf.label().join("cpu.max.burst");
+            fs::remove_file(&burst).unwrap();
+            match replacement {
+                "directory" => fs::create_dir(&burst).unwrap(),
+                "symlink" => symlink("cpu.max", &burst).unwrap(),
+                _ => unreachable!(),
+            }
+
+            let error = leaf.configure(limits()).unwrap_err();
+            match error {
+                CgroupError::DescriptorOperation {
+                    operation,
+                    path,
+                    source,
+                } => {
+                    assert_eq!(operation, "open cgroup control");
+                    assert_eq!(path, burst);
+                    assert_ne!(source.raw_os_error(), Some(libc::ENOENT));
+                }
+                error => panic!("{replacement} cpu.max.burst returned unexpected error: {error}"),
+            }
+            deactivate(&mut leaf);
+        }
+    }
+
+    #[test]
+    fn cgroup_kill_remains_mandatory_when_cpu_max_burst_is_absent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = simulated_root(&temporary);
+        let mut leaf = root.create_unconfigured_leaf(ID).unwrap();
+        create_simulated_controls(leaf.label());
+        fs::remove_file(leaf.label().join("cpu.max.burst")).unwrap();
+        let kill = leaf.label().join("cgroup.kill");
+        fs::remove_file(&kill).unwrap();
+
+        assert!(matches!(
+            leaf.configure(limits()),
+            Err(CgroupError::DescriptorOperation {
+                operation: "open cgroup control",
+                path,
+                source,
+            }) if path == kill && source.raw_os_error() == Some(libc::ENOENT)
+        ));
+        deactivate(&mut leaf);
+    }
+
+    #[test]
+    fn present_cpu_max_burst_requires_exact_zero_readback() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = simulated_root(&temporary);
+        let mut leaf = root.create_unconfigured_leaf(ID).unwrap();
+        create_simulated_controls(leaf.label());
+        leaf.configure(limits()).unwrap();
+        fs::write(leaf.label().join("cpu.max.burst"), "1\n").unwrap();
+
+        assert!(matches!(
+            leaf.verify_configured_controls(limits(), true),
+            Err(CgroupError::ControlVerification { path, expected, found })
+                if path.ends_with("cpu.max.burst") && expected == "0" && found == "1"
+        ));
+        deactivate(&mut leaf);
+    }
+
+    #[test]
     fn ordinary_control_readback_rejects_any_effective_value_mismatch() {
         let temporary = tempfile::tempdir().unwrap();
         let root = simulated_root(&temporary);
@@ -2777,7 +2899,7 @@ mod tests {
         fs::write(leaf.label().join("memory.max"), "536870912\n").unwrap();
 
         assert!(matches!(
-            leaf.verify_configured_controls(limits()),
+            leaf.verify_configured_controls(limits(), true),
             Err(CgroupError::ControlVerification { expected, found, .. })
                 if expected == "1073741824" && found == "536870912"
         ));

@@ -617,8 +617,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   fixture. The payload binds permanent per-tree tokens to a creation boot and
   mount-namespace epoch plus boot-scoped device, inode, and mount witnesses;
   those runtime witnesses are historical evidence after an epoch change, not
-  durable identity. Linux 5.6 remains the runtime floor; restrictive-umask
-  repair may use only an authenticated procfs alias to the retained descriptor.
+  durable identity. These journal and state operations retain Linux 5.6 as
+  their descriptor-safe baseline; full frozen execution separately requires
+  Linux x86_64 5.14 or newer. Restrictive-umask repair may use only an
+  authenticated procfs alias to the retained descriptor.
 - [ ] Open mutable system clients in recovery order: installation lock,
   databases, journal lock, journal reconciliation, orphan-token audit, strict
   live-state discovery, then repositories and the active registry. Frozen

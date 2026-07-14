@@ -113,9 +113,13 @@ the delegated unit, selects the one exact Cargo-reported test executable with
 already prepared package store. Cast remains the workspace's sole binary
 target.
 
-Execution requires Linux 5.6 or newer because descriptor-safe activation uses
-`openat2(2)`. It also requires user and mount namespaces plus a systemd
-cgroup-v2 unit configured with `Delegate=cpu memory pids` and
+Descriptor-safe filesystem and state operations retain a Linux 5.6 baseline
+because they use `openat2(2)`. Full frozen execution is currently limited to
+Linux x86_64 and requires Linux 5.14 or newer: its fail-closed boundary uses
+`CLONE_INTO_CGROUP` (5.7), `CLOSE_RANGE_CLOEXEC` (5.11), `mount_setattr(2)`
+(5.12), and the mandatory race-safe `cgroup.kill` interface (5.14). It also
+requires user and mount namespaces plus a systemd cgroup-v2 unit configured
+with `Delegate=cpu memory pids` and
 `DelegateSubgroup=cast-supervisor`. The fixture runner creates this transient
 `Type=exec` service with cgroup-lifetime exit and control-group cleanup
 semantics. Each invocation owns a random, authenticated unit name, stops that
