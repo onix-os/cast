@@ -16,20 +16,19 @@ env:
 
 jobs:
   validation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     name: Validate project
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
 
-      - name: Install LLVM and Clang
+      - name: Select the runner's Clang 18 toolchain
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          echo "/usr/lib/llvm-18/bin" >> $GITHUB_PATH
-          echo "CC=/usr/lib/llvm-18/bin/clang" >> $GITHUB_ENV
+          test -x /usr/bin/clang-18
+          test -x /usr/bin/clang++-18
+          echo "CC=/usr/bin/clang-18" >> "$GITHUB_ENV"
+          echo "CXX=/usr/bin/clang++-18" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,3 +46,44 @@ jobs:
 
       - name: Run canonical validation
         run: make test
+
+  execution-fixtures:
+    runs-on: ubuntu-24.04
+    needs: validation
+    name: Build frozen execution fixtures
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Select the runner's Clang 18 toolchain
+        run: |
+          test -x /usr/bin/clang-18
+          test -x /usr/bin/clang++-18
+          echo "CC=/usr/bin/clang-18" >> "$GITHUB_ENV"
+          echo "CXX=/usr/bin/clang++-18" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Restore the verified Stone bootstrap closure
+        uses: actions/cache@v5
+        with:
+          path: target/bootstrap-fixtures/packages
+          key: stone-bootstrap-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/fixtures/gluon/execution/bootstrap/closure.glu', 'tests/fixtures/gluon/execution/bootstrap/stone.index') }}
+
+      - name: Require unprivileged user and mount namespaces
+        run: |
+          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user --mount true
+
+      - name: Build and reproduce all frozen fixtures
+        run: make fixtures-ci

@@ -17,7 +17,7 @@ REQUIRE_EXECUTION ?= 0
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures fixture-sources check fmt clean \
+.PHONY: build cast get-started licenses fix lint test examples execution-fixtures bootstrap-fixtures fixtures-ci fixture-sources check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -135,6 +135,9 @@ bootstrap-fixtures:
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closure -- \
 		--ignored --exact --nocapture
 
+fixtures-ci:
+	@$(MAKE) --no-print-directory bootstrap-fixtures REQUIRE_EXECUTION=1
+
 check:
 	@$(CARGO) check --workspace --all-targets
 
@@ -191,6 +194,7 @@ help:
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  bootstrap-fixtures  Fetch the pinned closure and build all six real fixtures twice"
 	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"
+	@echo "  fixtures-ci    Required-capability six-fixture execution and reproduction gate"
 	@echo "  fixture-sources  Rebuild deterministic offline execution-source archives"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"
