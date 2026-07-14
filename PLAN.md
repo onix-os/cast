@@ -32,8 +32,8 @@ pure Gluon package factory
     -> one or more .stone packages
 ```
 
-The `.stone` file remains the package artifact. `DerivationPlan` is the
-Nix-like build description and reproducibility boundary.
+The `.stone` file remains the package artifact. `DerivationPlan` is Stone's
+own frozen build description and reproducibility boundary.
 
 ## Non-negotiable constraints
 
@@ -286,9 +286,9 @@ PolicySpec -> PolicySpec
 ```
 
 Policy maps use explicit `add`, `replace`, and `modify` operations. Duplicate
-unqualified additions are errors. Recursive Nix-style `final: prev:` fixed
-points are deferred until a concrete requirement justifies their additional
-cycle and diagnostic complexity.
+unqualified additions are errors. Stone deliberately uses these ordered,
+one-way transformations instead of recursive overlay fixed points: package
+composition must remain finite, inspectable, and native to the Gluon ABI.
 
 ### Frozen derivation plan
 
