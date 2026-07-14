@@ -55,7 +55,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 29] = [
+const PACKAGE_EXAMPLES: [&str; 30] = [
     "autotools",
     "binary-release",
     "cargo",
@@ -76,6 +76,7 @@ const PACKAGE_EXAMPLES: [&str; 29] = [
     "minimal",
     "multiple-sources",
     "options-tuning",
+    "output-policy-factory",
     "output-tool-wrapper",
     "patch-series",
     "pgo-workload",
@@ -1142,6 +1143,7 @@ fn assert_x86_64_platform(plan: &DerivationPlan) {
 fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
     match name {
         "factory-override" => assert_factory_override_semantics(declaration, plan),
+        "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
         _ => {}
     }
@@ -1228,6 +1230,139 @@ fn assert_factory_override_semantics(declaration: &PackageSpec, plan: &Derivatio
             .iter()
             .all(|request| request.request != "pkgconfig(openssl)"),
         "the replaced OpenSSL default must not leak into the frozen closure"
+    );
+    assert_x86_64_platform(plan);
+}
+
+fn assert_output_policy_factory_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "telemetry-runtime");
+    assert!(
+        declaration.native_build_inputs.is_empty(),
+        "disabled documentation policy must omit its generator capability"
+    );
+    assert_eq!(
+        dependency_names(&declaration.build_inputs),
+        ["pkgconfig(zlib)", "pkgconfig(libressl)"]
+    );
+    assert_eq!(
+        declaration
+            .outputs
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect::<Vec<_>>(),
+        ["out", "libs", "devel", "tools"],
+        "one policy value must select the exact published output graph"
+    );
+    let [root, libraries, development, tools] = declaration.outputs.as_slice() else {
+        panic!("output policy must return exactly four outputs");
+    };
+    assert!(libraries.runtime_inputs.is_empty());
+    for (output, name) in [(root, "out"), (development, "devel")] {
+        assert!(
+            matches!(
+                output.runtime_inputs.as_slice(),
+                [DependencySpec::Output(reference)]
+                    if reference.package.name == "telemetry-runtime" && reference.output == "libs"
+            ),
+            "{name} must retain its exact local library-output relation"
+        );
+    }
+    assert!(matches!(
+        tools.runtime_inputs.as_slice(),
+        [DependencySpec::Output(libraries), DependencySpec::Package(trust_store)]
+            if libraries.package.name == "telemetry-runtime"
+                && libraries.output == "libs"
+                && trust_store.name == "ca-certificates"
+    ));
+    assert_eq!(
+        declaration.builder.phases.setup.steps,
+        [StepSpec::CMakeConfigure {
+            flags: vec![
+                "-DBUILD_COMMAND_LINE_TOOLS=ON".to_owned(),
+                "-DBUILD_DOCUMENTATION=OFF".to_owned(),
+            ],
+        }]
+    );
+    assert_eq!(declaration.builder.phases.check.steps, [StepSpec::CMakeTest]);
+    assert_eq!(
+        declaration
+            .tuning
+            .iter()
+            .map(|tuning| (tuning.key.as_str(), &tuning.value))
+            .collect::<Vec<_>>(),
+        [
+            ("harden", &TuningSpec::Enable),
+            (
+                "optimize",
+                &TuningSpec::Config {
+                    value: "size".to_owned(),
+                },
+            ),
+        ]
+    );
+    assert_eq!(
+        plan.manifest_build_inputs
+            .iter()
+            .map(|dependency| dependency.canonical_name())
+            .collect::<Vec<_>>(),
+        ["binary(ninja)", "pkgconfig(zlib)", "pkgconfig(libressl)"]
+    );
+    for output in ["out", "devel"] {
+        let frozen = plan
+            .outputs
+            .iter()
+            .find(|candidate| candidate.name == output)
+            .unwrap_or_else(|| panic!("missing frozen {output} output"));
+        assert!(matches!(
+            frozen.runtime_inputs.as_slice(),
+            [OutputRelation::Planned { output }] if output == "libs"
+        ));
+    }
+    let frozen_tools = plan
+        .outputs
+        .iter()
+        .find(|output| output.name == "tools")
+        .expect("policy-selected tools output reaches the frozen plan");
+    assert!(matches!(
+        frozen_tools.runtime_inputs.as_slice(),
+        [
+            OutputRelation::Planned { output },
+            OutputRelation::Locked { relation, reference },
+        ] if output == "libs"
+            && relation.canonical_name() == "ca-certificates"
+            && reference.output == "out"
+    ));
+    for (request, origin) in [
+        (
+            "pkgconfig(zlib)",
+            InputOrigin::Build {
+                selection: PackageInputSelection::Package,
+                index: 0,
+            },
+        ),
+        (
+            "pkgconfig(libressl)",
+            InputOrigin::Build {
+                selection: PackageInputSelection::Package,
+                index: 1,
+            },
+        ),
+        (
+            "ca-certificates",
+            InputOrigin::OutputRuntime {
+                output: "tools".to_owned(),
+                index: 1,
+            },
+        ),
+    ] {
+        assert_locked_request_origin(plan, request, origin);
+    }
+    assert!(
+        plan.build_lock
+            .requests
+            .iter()
+            .all(|request| request.request != "binary(doxygen)"),
+        "disabled documentation tooling must not leak into the frozen closure"
     );
     assert_x86_64_platform(plan);
 }

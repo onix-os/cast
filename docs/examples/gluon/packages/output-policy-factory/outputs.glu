@@ -1,0 +1,60 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let arrays = import! std.array.prim
+let b = import! cast.package.v3
+
+// Nix-style multi-output packaging is the inspiration, but this remains a
+// Stone-native function: local output edges and external runtime capabilities
+// are distinct typed values before Mason freezes them.
+\inputs ->
+    let package = b.package_ref inputs.pname
+
+    let root = b.output_with {
+        summary = b.optional.set "Telemetry service and configuration",
+        runtime_inputs = [b.dep.output package "libs"],
+        paths = [
+            b.path.exe "/usr/bin/telemetry-agent",
+            b.path.any "/usr/share/telemetry-runtime",
+        ],
+        .. b.output "out"
+    }
+
+    let libraries = b.output_with {
+        summary = b.optional.set "Telemetry runtime libraries",
+        paths = [b.path.any "/usr/lib/libtelemetry-runtime.so.*"],
+        .. b.output "libs"
+    }
+
+    let development = b.output_with {
+        summary = b.optional.set "Telemetry runtime development files",
+        runtime_inputs = [b.dep.output package "libs"],
+        paths = [
+            b.path.any "/usr/include/telemetry-runtime",
+            b.path.symlink "/usr/lib/libtelemetry-runtime.so",
+            b.path.any "/usr/lib/pkgconfig/telemetry-runtime.pc",
+        ],
+        .. b.output "devel"
+    }
+
+    let tools = b.output_with {
+        summary = b.optional.set "Telemetry diagnostics",
+        runtime_inputs = arrays.append
+            [b.dep.output package "libs"]
+            inputs.policy.tools_runtime_inputs,
+        paths = [b.path.exe "/usr/bin/telemetry-inspect"],
+        .. b.output "tools"
+    }
+
+    let documentation = b.output_with {
+        include_in_manifest = b.boolean.false,
+        summary = b.optional.set "Telemetry API documentation",
+        paths = [b.path.any "/usr/share/doc/telemetry-runtime"],
+        .. b.output "docs"
+    }
+
+    arrays.append
+        [root, libraries, development]
+        (arrays.append
+            (b.boolean.when inputs.policy.tools [tools])
+            (b.boolean.when inputs.policy.documentation [documentation]))
