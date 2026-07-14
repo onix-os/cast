@@ -525,7 +525,7 @@ partial cache, staging object, or ambiguous fallback eligible for reuse.
 - [x] Make the complete check/evaluate/freeze/execute proof a discoverable,
   zero-test-resistant `make examples` gate and document what it does and does
   not prove.
-- [ ] Add content-addressed, offline fixture sources with real bytes and hashes
+- [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for CMake, Meson, Cargo, Autotools, custom-step, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
