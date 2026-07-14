@@ -902,8 +902,16 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
     // wrapped container error's own source (often a bare `Errno`). Inspect the
     // typed wrapper before walking the chain or the operation identity needed
     // to distinguish namespace denial from unrelated EPERM failures is lost.
-    if let Some(crate::container::Error::Container(error)) = error.downcast_ref::<crate::container::Error>() {
-        return container_capability_unavailable(error);
+    if let Some(error) = error.downcast_ref::<crate::container::Error>() {
+        return match error {
+            crate::container::Error::Container(error) => container_capability_unavailable(error),
+            // A normal developer shell is not an explicitly delegated
+            // systemd supervisor. The optional fixture lane may report that
+            // one precise host deficiency; malformed or partially configured
+            // cgroup state remains a hard failure.
+            crate::container::Error::FrozenCgroupDelegationRequired { .. } => true,
+            _ => false,
+        };
     }
 
     // `thiserror` may make a transparent wrapper's concrete inner error
@@ -931,7 +939,12 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
             // the host merely lacks an optional execution capability.
             ::container::Error::CgroupLifecycle { .. }
             | ::container::Error::CgroupCleanup { .. }
-            | ::container::Error::CgroupCleanupAfterFailure { .. } => false,
+            | ::container::Error::CgroupCleanupAfterFailure { .. }
+            | ::container::Error::AtomicCgroupRequiresAnchoredRoot
+            | ::container::Error::InspectCgroupFilesystem { .. }
+            | ::container::Error::UnsafeCgroupRootFilesystem { .. }
+            | ::container::Error::UnsafeCgroupBindSource { .. }
+            | ::container::Error::UnsafeCgroupSysPolicy => false,
             // Pipe, signal, and wait failures remain grouped here. An errno
             // alone therefore does not prove namespace capability denial.
             ::container::Error::Nix { .. } => false,
@@ -1190,6 +1203,15 @@ fn checked_in_metadata_only_example_fails_closed_before_execution() {
 
 #[test]
 fn frozen_execution_capability_skip_never_hides_payload_or_ambiguous_nix_failures() {
+    let missing_delegation = crate::container::Error::FrozenCgroupDelegationRequired {
+        current: PathBuf::from("/user.slice/session.scope"),
+    };
+    assert!(container_capability_unavailable(&missing_delegation));
+    let malformed_delegation = crate::container::Error::MalformedCurrentCgroup {
+        reason: "duplicate unified entry",
+    };
+    assert!(!container_capability_unavailable(&malformed_delegation));
+
     for source in [
         nix::errno::Errno::EPERM,
         nix::errno::Errno::EACCES,

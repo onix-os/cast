@@ -171,6 +171,22 @@ cast -D "$PWD/aosroot" list installed
 Full builds require Linux user namespaces. Unprivileged callers also need
 `/usr/bin/newgidmap` and a delegated `/etc/subgid` entry.
 
+Frozen builds must additionally run as the sole process in a systemd cgroup-v2
+delegation with this unit policy:
+
+```ini
+[Service]
+Delegate=cpu memory pids
+DelegateSubgroup=cast-supervisor
+```
+
+Cast accepts exactly one unified `/proc/self/cgroup` entry ending in
+`/cast-supervisor`, authenticates its parent below `/sys/fs/cgroup`, and fails
+before cloning a build process if that contract is absent. Each derivation is
+then placed atomically in its own leaf with executor-owned ceilings of 4096
+PIDs, 32 GiB memory, no swap, and CPU bandwidth equal to the frozen
+`execution.jobs` value. These are operational safety limits, not recipe inputs.
+
 ## License
 
 OS Tools is available under the [Mozilla Public License 2.0](LICENSE).

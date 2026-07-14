@@ -526,6 +526,17 @@ select minimal or absent `/dev`. The default minimal `/dev` contains exactly
 networking is rejected, and its new network namespace retains the kernel's
 default loopback state without running a host `ip` utility.
 
+The host-side supervisor must itself run under a systemd cgroup-v2 unit with
+`Delegate=cpu memory pids` and `DelegateSubgroup=cast-supervisor`. Cast reads a
+single bounded `0::` entry from `/proc/self/cgroup`, requires its normalized
+absolute path to end exactly in `/cast-supervisor`, and descriptor-authenticates
+the non-root parent below `/sys/fs/cgroup`. There is no environment override,
+numeric PID migration, or legacy-clone fallback. A frozen derivation starts
+atomically in a terminal leaf limited to 4096 aggregate PIDs, 32 GiB memory,
+zero swap, and `execution.jobs` CPUs per 100 ms period. These deliberately
+generous finite ceilings belong to executor policy and do not change the
+derivation ID; a host without the delegation fails before payload execution.
+
 Mutable local files under the recipe `pkg/` directory are deliberately not
 exposed to build steps. A future local-source ABI must hash their bytes and
 destination into the derivation before those inputs can be supported safely.

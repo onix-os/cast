@@ -92,11 +92,16 @@ that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
 selection, runs all nine, and always requires execution.
 
-Execution requires Linux user and mount namespaces. For an unprivileged caller,
-the current mapper specifically requires `/usr/bin/newgidmap` and at least one
-delegated GID in `/etc/subgid`; the usual `uidmap` package provides the helper.
-The UID map is written directly, so `/usr/bin/newuidmap` and `/etc/subuid` are
-not currently consumed. Check the basic namespace capability with:
+Execution requires Linux user and mount namespaces plus a systemd cgroup-v2
+unit configured with `Delegate=cpu memory pids` and
+`DelegateSubgroup=cast-supervisor`. Cast does not synthesize or migrate into a
+delegation: `/proc/self/cgroup` must already contain exactly one unified entry
+ending in `/cast-supervisor`, or execution fails before the container child is
+created. For an unprivileged caller, the current mapper specifically requires
+`/usr/bin/newgidmap` and at least one delegated GID in `/etc/subgid`; the usual
+`uidmap` package provides the helper. The UID map is written directly, so
+`/usr/bin/newuidmap` and `/etc/subuid` are not currently consumed. Check the
+basic namespace capability with:
 
 ```sh
 unshare --user --map-root-user --mount true

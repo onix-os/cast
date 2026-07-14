@@ -3,14 +3,14 @@
 
 use std::{
     collections::BTreeSet,
-    ffi::CString,
+    ffi::{CString, OsString},
     fs::{File, Permissions},
-    io,
+    io::{self, Read as _},
     mem::{size_of, zeroed},
     os::{
         fd::{AsRawFd, FromRawFd, RawFd},
         unix::{
-            ffi::OsStrExt,
+            ffi::{OsStrExt, OsStringExt},
             fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
         },
     },
@@ -28,6 +28,24 @@ use stone_recipe::derivation::{
 use thiserror::Error;
 
 use crate::Paths;
+
+const CGROUP2_MOUNT_PATH: &str = "/sys/fs/cgroup";
+const CURRENT_CGROUP_MEMBERSHIP_PATH: &str = "/proc/self/cgroup";
+const CAST_SUPERVISOR_CGROUP: &[u8] = b"cast-supervisor";
+const MAX_CURRENT_CGROUP_BYTES: usize = 16 * 1024;
+const MAX_CURRENT_CGROUP_PATH_BYTES: usize = 4_095;
+const MAX_CURRENT_CGROUP_COMPONENTS: usize = 128;
+const MAX_CURRENT_CGROUP_COMPONENT_BYTES: usize = 255;
+
+// Frozen declarations do not select these values. They are executor-owned,
+// deliberately generous, finite safety ceilings around one complete
+// derivation process tree. CPU capacity is the sole scaled value because the
+// plan already declares and enforces its exact parallel-job count.
+const FROZEN_CGROUP_PIDS_MAX: u64 = 4_096;
+const FROZEN_CGROUP_MEMORY_GIB: u64 = 32;
+const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
+const FROZEN_CGROUP_SWAP_MAX: u64 = 0;
+const FROZEN_CGROUP_CPU_PERIOD_MICROS: u64 = 100_000;
 
 pub fn exec<E>(paths: &Paths, networking: bool, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
 where
@@ -73,8 +91,167 @@ where
             FrozenMountSource::RootRelative(source) => container.bind_rw_from_root(source, &mount.guest)?,
         };
     }
-    container.run::<E>(f)?;
+    let identity = plan.derivation_id();
+    require_derivation_cgroup_identity(identity.as_str())?;
+    let limits = frozen_cgroup_limits(plan.execution.jobs)?;
+    let delegated = discover_delegated_cgroup()?;
+    let leaf = delegated
+        .create_leaf(identity.as_str(), limits)
+        .map_err(Error::CreateDerivationCgroup)?;
+
+    // Frozen execution has no legacy-clone or post-clone migration path. The
+    // kernel must place the child in this authenticated leaf atomically.
+    container.run_in_cgroup::<E>(leaf, f)?;
     Ok(())
+}
+
+fn discover_delegated_cgroup() -> Result<container::cgroup::DelegatedCgroupRoot, Error> {
+    let membership_path = Path::new(CURRENT_CGROUP_MEMBERSHIP_PATH);
+    let membership = read_bounded_current_cgroup(membership_path)?;
+    let delegated_relative = delegated_relative_from_current_cgroup(&membership)?;
+    container::cgroup::DelegatedCgroupRoot::open(Path::new(CGROUP2_MOUNT_PATH), delegated_relative)
+        .map_err(Error::OpenDelegatedCgroup)
+}
+
+fn read_bounded_current_cgroup(path: &Path) -> Result<Vec<u8>, Error> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|source| Error::ReadCurrentCgroup {
+            path: path.to_owned(),
+            source,
+        })?;
+    let mut membership = Vec::with_capacity(MAX_CURRENT_CGROUP_BYTES + 1);
+    file.take((MAX_CURRENT_CGROUP_BYTES + 1) as u64)
+        .read_to_end(&mut membership)
+        .map_err(|source| Error::ReadCurrentCgroup {
+            path: path.to_owned(),
+            source,
+        })?;
+    if membership.len() > MAX_CURRENT_CGROUP_BYTES {
+        return Err(Error::CurrentCgroupTooLarge {
+            path: path.to_owned(),
+            limit: MAX_CURRENT_CGROUP_BYTES,
+        });
+    }
+    Ok(membership)
+}
+
+/// Return the delegated root relative to `/sys/fs/cgroup`.
+///
+/// With systemd's `DelegateSubgroup=cast-supervisor`, the current process is
+/// the sole member of `<delegated-root>/cast-supervisor`. Accept no alternate
+/// topology, compatibility hierarchy, normalization, or environment override.
+fn delegated_relative_from_current_cgroup(membership: &[u8]) -> Result<PathBuf, Error> {
+    if membership.is_empty() || !membership.ends_with(b"\n") || membership.contains(&0) {
+        return Err(Error::MalformedCurrentCgroup {
+            reason: "membership must be non-empty, NUL-free, and newline terminated",
+        });
+    }
+
+    let mut entries = membership[..membership.len() - 1].split(|byte| *byte == b'\n');
+    let entry = entries.next().ok_or(Error::MalformedCurrentCgroup {
+        reason: "missing unified cgroup entry",
+    })?;
+    if entry.is_empty() || entries.next().is_some() {
+        return Err(Error::MalformedCurrentCgroup {
+            reason: "expected exactly one unified cgroup entry",
+        });
+    }
+
+    let mut fields = entry.splitn(3, |byte| *byte == b':');
+    let hierarchy = fields.next();
+    let controllers = fields.next();
+    let path = fields.next();
+    let (Some(b"0"), Some(b""), Some(path)) = (hierarchy, controllers, path) else {
+        return Err(Error::MalformedCurrentCgroup {
+            reason: "expected the exact unified cgroup-v2 prefix `0::`",
+        });
+    };
+    if path.len() > MAX_CURRENT_CGROUP_PATH_BYTES {
+        return Err(Error::CurrentCgroupPathTooLarge {
+            limit: MAX_CURRENT_CGROUP_PATH_BYTES,
+            actual: path.len(),
+        });
+    }
+    if !path.starts_with(b"/") {
+        return Err(Error::MalformedCurrentCgroup {
+            reason: "unified cgroup path must be absolute",
+        });
+    }
+
+    let relative = &path[1..];
+    let current = PathBuf::from(OsString::from_vec(path.to_vec()));
+    if relative.is_empty() {
+        return Err(Error::FrozenCgroupDelegationRequired { current });
+    }
+    let components = relative.split(|byte| *byte == b'/').collect::<Vec<_>>();
+    if components.len() > MAX_CURRENT_CGROUP_COMPONENTS {
+        return Err(Error::CurrentCgroupComponentLimit {
+            limit: MAX_CURRENT_CGROUP_COMPONENTS,
+            actual: components.len(),
+        });
+    }
+    if let Some(component) = components
+        .iter()
+        .find(|component| component.len() > MAX_CURRENT_CGROUP_COMPONENT_BYTES)
+    {
+        return Err(Error::CurrentCgroupComponentTooLarge {
+            limit: MAX_CURRENT_CGROUP_COMPONENT_BYTES,
+            actual: component.len(),
+        });
+    }
+    if components
+        .iter()
+        .any(|component| component.is_empty() || *component == b"." || *component == b"..")
+    {
+        return Err(Error::MalformedCurrentCgroup {
+            reason: "unified cgroup path must contain only normalized non-empty components",
+        });
+    }
+
+    if components.last().copied() != Some(CAST_SUPERVISOR_CGROUP) || components.len() < 2 {
+        return Err(Error::FrozenCgroupDelegationRequired { current });
+    }
+
+    // The final component and its separator were authenticated above. Strip
+    // them byte-for-byte rather than applying lexical path normalization.
+    let parent_len = relative.len() - CAST_SUPERVISOR_CGROUP.len() - 1;
+    let parent = &relative[..parent_len];
+    Ok(PathBuf::from(OsString::from_vec(parent.to_vec())))
+}
+
+fn require_derivation_cgroup_identity(identity: &str) -> Result<(), Error> {
+    if identity.len() == 64
+        && identity
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(Error::InvalidDerivationCgroupIdentity)
+    }
+}
+
+fn frozen_cgroup_limits(jobs: u32) -> Result<container::cgroup::CgroupLimits, Error> {
+    if jobs == 0 {
+        return Err(Error::InvalidFrozenCgroupJobs);
+    }
+    let memory_max = FROZEN_CGROUP_MEMORY_GIB
+        .checked_mul(BYTES_PER_GIB)
+        .ok_or(Error::FrozenCgroupLimitOverflow { field: "memory.max" })?;
+    let cpu_quota_micros = u64::from(jobs)
+        .checked_mul(FROZEN_CGROUP_CPU_PERIOD_MICROS)
+        .ok_or(Error::FrozenCgroupLimitOverflow { field: "cpu.max quota" })?;
+    container::cgroup::CgroupLimits::new(
+        FROZEN_CGROUP_PIDS_MAX,
+        memory_max,
+        FROZEN_CGROUP_SWAP_MAX,
+        cpu_quota_micros,
+        FROZEN_CGROUP_CPU_PERIOD_MICROS,
+    )
+    .map_err(Error::InvalidFrozenCgroupLimits)
 }
 
 fn frozen_loopback_policy() -> LoopbackPolicy {
@@ -786,6 +963,38 @@ where
 pub enum Error {
     #[error(transparent)]
     Container(#[from] container::Error),
+    #[error("read the bounded current-process cgroup membership from {path:?}")]
+    ReadCurrentCgroup {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("current-process cgroup membership at {path:?} exceeds the {limit}-byte ceiling")]
+    CurrentCgroupTooLarge { path: PathBuf, limit: usize },
+    #[error("current unified cgroup path exceeds the {limit}-byte ceiling (got {actual})")]
+    CurrentCgroupPathTooLarge { limit: usize, actual: usize },
+    #[error("current unified cgroup path exceeds the {limit}-component ceiling (got {actual})")]
+    CurrentCgroupComponentLimit { limit: usize, actual: usize },
+    #[error("current unified cgroup component exceeds the {limit}-byte ceiling (got {actual})")]
+    CurrentCgroupComponentTooLarge { limit: usize, actual: usize },
+    #[error("malformed current-process cgroup membership: {reason}")]
+    MalformedCurrentCgroup { reason: &'static str },
+    #[error(
+        "frozen execution requires an explicit systemd delegation whose current cgroup ends in /cast-supervisor; found {current:?}"
+    )]
+    FrozenCgroupDelegationRequired { current: PathBuf },
+    #[error("open and authenticate the explicitly delegated cgroup-v2 root")]
+    OpenDelegatedCgroup(#[source] container::cgroup::CgroupError),
+    #[error("the frozen derivation ID is not canonical lowercase SHA-256")]
+    InvalidDerivationCgroupIdentity,
+    #[error("frozen cgroup policy requires a nonzero execution.jobs value")]
+    InvalidFrozenCgroupJobs,
+    #[error("frozen cgroup limit arithmetic overflowed for {field}")]
+    FrozenCgroupLimitOverflow { field: &'static str },
+    #[error("construct the finite frozen-derivation cgroup policy")]
+    InvalidFrozenCgroupLimits(#[source] container::cgroup::CgroupError),
+    #[error("create and configure the authenticated derivation cgroup")]
+    CreateDerivationCgroup(#[source] container::cgroup::CgroupError),
     #[error("revalidate the frozen root immediately before container activation")]
     FrozenRoot(#[from] forge::client::Error),
     #[error("open the authenticated frozen-root anchor for container activation")]
@@ -871,6 +1080,152 @@ mod tests {
     fn create_production_frozen_root(path: &Path) {
         std::fs::create_dir(path).unwrap();
         std::fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn current_cgroup_discovers_only_the_explicit_systemd_supervisor_topology() {
+        let membership =
+            b"0::/user.slice/user-1000.slice/user@1000.service/app.slice/cast-build.service/cast-supervisor\n";
+        assert_eq!(
+            delegated_relative_from_current_cgroup(membership).unwrap(),
+            Path::new("user.slice/user-1000.slice/user@1000.service/app.slice/cast-build.service")
+        );
+    }
+
+    #[test]
+    fn current_cgroup_requires_exactly_one_canonical_unified_entry() {
+        for malformed in [
+            b"".as_slice(),
+            b"0::/unit/cast-supervisor".as_slice(),
+            b"0::/unit/cast-supervisor\0\n".as_slice(),
+            b"0::/unit/cast-supervisor\n0::/other/cast-supervisor\n".as_slice(),
+            b"1::/unit/cast-supervisor\n".as_slice(),
+            b"0:cpu:/unit/cast-supervisor\n".as_slice(),
+            b"0::unit/cast-supervisor\n".as_slice(),
+            b"0::/unit//cast-supervisor\n".as_slice(),
+            b"0::/unit/./cast-supervisor\n".as_slice(),
+            b"0::/unit/../cast-supervisor\n".as_slice(),
+            b"0::/unit/cast-supervisor\n\n".as_slice(),
+        ] {
+            assert!(matches!(
+                delegated_relative_from_current_cgroup(malformed),
+                Err(Error::MalformedCurrentCgroup { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn current_cgroup_never_infers_delegation_from_an_ordinary_parent() {
+        for membership in [
+            b"0::/\n".as_slice(),
+            b"0::/user.slice/session.scope\n".as_slice(),
+            b"0::/cast-supervisor\n".as_slice(),
+        ] {
+            assert!(matches!(
+                delegated_relative_from_current_cgroup(membership),
+                Err(Error::FrozenCgroupDelegationRequired { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn current_cgroup_path_and_component_budgets_fail_closed() {
+        let oversized_component = "a".repeat(MAX_CURRENT_CGROUP_COMPONENT_BYTES + 1);
+        let membership = format!("0::/{oversized_component}/cast-supervisor\n");
+        assert!(matches!(
+            delegated_relative_from_current_cgroup(membership.as_bytes()),
+            Err(Error::CurrentCgroupComponentTooLarge {
+                limit: MAX_CURRENT_CGROUP_COMPONENT_BYTES,
+                ..
+            })
+        ));
+
+        let exact = std::iter::repeat_n("a", MAX_CURRENT_CGROUP_COMPONENTS - 1)
+            .chain(std::iter::once("cast-supervisor"))
+            .collect::<Vec<_>>()
+            .join("/");
+        delegated_relative_from_current_cgroup(format!("0::/{exact}\n").as_bytes()).unwrap();
+        let over = format!("a/{exact}");
+        assert!(matches!(
+            delegated_relative_from_current_cgroup(format!("0::/{over}\n").as_bytes()),
+            Err(Error::CurrentCgroupComponentLimit {
+                limit: MAX_CURRENT_CGROUP_COMPONENTS,
+                ..
+            })
+        ));
+
+        let long = std::iter::repeat_n("a".repeat(MAX_CURRENT_CGROUP_COMPONENT_BYTES), 17)
+            .chain(std::iter::once("cast-supervisor".to_owned()))
+            .collect::<Vec<_>>()
+            .join("/");
+        assert!(matches!(
+            delegated_relative_from_current_cgroup(format!("0::/{long}\n").as_bytes()),
+            Err(Error::CurrentCgroupPathTooLarge {
+                limit: MAX_CURRENT_CGROUP_PATH_BYTES,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn current_cgroup_reader_stops_at_n_plus_one_bytes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("cgroup");
+        std::fs::write(&path, vec![b'a'; MAX_CURRENT_CGROUP_BYTES]).unwrap();
+        assert_eq!(
+            read_bounded_current_cgroup(&path).unwrap().len(),
+            MAX_CURRENT_CGROUP_BYTES
+        );
+
+        std::fs::write(&path, vec![b'a'; MAX_CURRENT_CGROUP_BYTES + 1]).unwrap();
+        assert!(matches!(
+            read_bounded_current_cgroup(&path),
+            Err(Error::CurrentCgroupTooLarge {
+                limit: MAX_CURRENT_CGROUP_BYTES,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn frozen_cgroup_policy_is_finite_and_cpu_scales_only_with_explicit_jobs() {
+        let one = frozen_cgroup_limits(1).unwrap();
+        assert_eq!(one.pids_max(), FROZEN_CGROUP_PIDS_MAX);
+        assert_eq!(one.memory_max(), 32 * BYTES_PER_GIB);
+        assert_eq!(one.memory_swap_max(), 0);
+        assert_eq!(one.cpu_quota_micros(), FROZEN_CGROUP_CPU_PERIOD_MICROS);
+        assert_eq!(one.cpu_period_micros(), FROZEN_CGROUP_CPU_PERIOD_MICROS);
+
+        let eight = frozen_cgroup_limits(8).unwrap();
+        assert_eq!(eight.pids_max(), one.pids_max());
+        assert_eq!(eight.memory_max(), one.memory_max());
+        assert_eq!(eight.memory_swap_max(), one.memory_swap_max());
+        assert_eq!(eight.cpu_quota_micros(), 8 * FROZEN_CGROUP_CPU_PERIOD_MICROS);
+        assert_eq!(eight.cpu_period_micros(), one.cpu_period_micros());
+
+        assert!(matches!(frozen_cgroup_limits(0), Err(Error::InvalidFrozenCgroupJobs)));
+        assert!(matches!(
+            frozen_cgroup_limits(u32::MAX),
+            Err(Error::InvalidFrozenCgroupLimits(_))
+        ));
+    }
+
+    #[test]
+    fn cgroup_leaf_identity_is_validated_before_activation() {
+        let plan = package::test_derivation_plan();
+        require_derivation_cgroup_identity(plan.derivation_id().as_str()).unwrap();
+        for invalid in [
+            "",
+            "0",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg",
+            "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            assert!(matches!(
+                require_derivation_cgroup_identity(invalid),
+                Err(Error::InvalidDerivationCgroupIdentity)
+            ));
+        }
     }
 
     #[test]
