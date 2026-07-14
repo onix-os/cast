@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Linux 5.6-compatible operations on retained filesystem capabilities.
 //!
 //! `O_PATH` descriptors deliberately cannot be passed to `fchmod(2)`, and
@@ -367,6 +364,47 @@ pub(crate) fn renameat2_noreplace_until(
         destination_name,
         Some(deadline),
     )
+}
+
+/// Exchange two single-component names beneath retained directory parents.
+///
+/// This deliberately performs exactly one syscall attempt.  An interrupted
+/// or otherwise failed `RENAME_EXCHANGE` may already have taken effect, and a
+/// blind retry would exchange the names back.  Callers must retain both
+/// parents and reconcile both names after every return value.
+pub(crate) fn renameat2_exchange_once(
+    first_directory: &std::fs::File,
+    first_name: &CStr,
+    second_directory: &std::fs::File,
+    second_name: &CStr,
+) -> io::Result<()> {
+    for (role, name) in [("first", first_name), ("second", second_name)] {
+        if name.to_bytes().is_empty() || name.to_bytes().contains(&b'/') || matches!(name.to_bytes(), b"." | b"..") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("descriptor-relative exchange {role} name must be one nonempty component"),
+            ));
+        }
+    }
+
+    // SAFETY: both retained directory descriptors and both validated C
+    // strings remain live for this one syscall attempt.  The result remains
+    // ambiguous until the caller reconciles the two retained namespaces.
+    if unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_renameat2,
+            first_directory.as_raw_fd(),
+            first_name.as_ptr(),
+            second_directory.as_raw_fd(),
+            second_name.as_ptr(),
+            nix::libc::RENAME_EXCHANGE,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn renameat2_noreplace_with_deadline(

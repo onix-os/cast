@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Durable `/usr` identity guard for the existing stateful coordinator.
 //!
 //! This is deliberately narrower than the eventual crash-reopen transition
@@ -26,8 +23,8 @@ use thiserror::Error;
 use crate::{
     Installation, db, installation,
     linux_fs::{
-        chmod_path_descriptor, controlled_resolution, openat2_file, renameat2_noreplace, require_no_access_acl,
-        require_no_default_acl,
+        chmod_path_descriptor, controlled_resolution, openat2_file, renameat2_exchange_once, renameat2_noreplace,
+        require_no_access_acl, require_no_default_acl,
     },
     state,
     transition_journal::{QuarantineName, TransitionJournalStore},
@@ -110,6 +107,95 @@ pub(crate) enum QuarantineFaultPoint {
     FinalRevalidation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RetainedExchangeFaultPoint {
+    BeforeRename,
+    AfterRename,
+    StagingParentSync,
+    InstallationRootSync,
+    FinalRevalidation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RetainedExchangeOutcome {
+    NotApplied,
+    Applied,
+    Ambiguous,
+}
+
+#[derive(Debug, Error)]
+#[error("retained /usr exchange outcome is {outcome:?}")]
+pub(crate) struct RetainedExchangeFailure {
+    outcome: RetainedExchangeOutcome,
+    #[source]
+    source: Error,
+}
+
+impl RetainedExchangeFailure {
+    pub(crate) fn outcome(&self) -> RetainedExchangeOutcome {
+        self.outcome
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetainedExchangeDirection {
+    Forward,
+    Reverse,
+}
+
+impl RetainedExchangeDirection {
+    fn before(self) -> RetainedExchangeLayout {
+        match self {
+            Self::Forward => RetainedExchangeLayout::CandidateStaged,
+            Self::Reverse => RetainedExchangeLayout::CandidateLive,
+        }
+    }
+
+    fn after(self) -> RetainedExchangeLayout {
+        match self {
+            Self::Forward => RetainedExchangeLayout::CandidateLive,
+            Self::Reverse => RetainedExchangeLayout::CandidateStaged,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetainedExchangeLayout {
+    CandidateStaged,
+    CandidateLive,
+}
+
+impl RetainedExchangeLayout {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CandidateStaged => "candidate-staged",
+            Self::CandidateLive => "candidate-live",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetainedTreeRole {
+    Candidate,
+    Previous,
+}
+
+impl RetainedTreeRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::Previous => "previous",
+        }
+    }
+}
+
 #[cfg(test)]
 std::thread_local! {
     static BEFORE_LIVE_USR_MKDIR: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -117,6 +203,10 @@ std::thread_local! {
     static BEFORE_QUARANTINE_SLOT_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static QUARANTINE_FAULT: std::cell::RefCell<Option<(QuarantineFaultPoint, usize)>> =
+        const { std::cell::RefCell::new(None) };
+    static RETAINED_EXCHANGE_FAULT: std::cell::RefCell<Option<RetainedExchangeFaultPoint>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_RETAINED_EXCHANGE_RENAME: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -193,6 +283,227 @@ impl StatefulTreeIdentity {
         self.candidate.verify_named_read_only(candidate_path)?;
         self.previous.verify_named_read_only(previous_path)?;
         Ok(())
+    }
+
+    /// Exchange the authenticated staged candidate with the authenticated live
+    /// previous tree beneath retained parent descriptors.
+    pub(crate) fn exchange_forward(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
+        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward)
+    }
+
+    /// Reverse an earlier forward exchange through the same retained
+    /// capability namespace.
+    pub(crate) fn exchange_reverse(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
+        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Reverse)
+    }
+
+    /// Finish durability after a reverse exchange which is already proven to
+    /// have moved both exact trees.
+    ///
+    /// This path deliberately performs no rename. Retrying an exchange after
+    /// an applied-but-not-yet-durable result would put the failed candidate
+    /// back in the live namespace.
+    pub(crate) fn finish_applied_reverse(&self, installation: &Installation) -> Result<(), Error> {
+        self.require_no_journal()?;
+        installation.revalidate_root_directory()?;
+        let staging = self.open_exchange_staging(installation)?;
+        staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
+        self.require_exchange_layout(
+            installation.root_directory(),
+            &installation.root,
+            &staging,
+            RetainedExchangeDirection::Reverse.after(),
+        )?;
+        self.finish_exchange(installation, &staging, RetainedExchangeDirection::Reverse.after())
+    }
+
+    fn exchange_live_and_staged(
+        &self,
+        installation: &Installation,
+        direction: RetainedExchangeDirection,
+    ) -> Result<(), RetainedExchangeFailure> {
+        let not_applied = |source| RetainedExchangeFailure {
+            outcome: RetainedExchangeOutcome::NotApplied,
+            source,
+        };
+        let applied = |source| RetainedExchangeFailure {
+            outcome: RetainedExchangeOutcome::Applied,
+            source,
+        };
+        let ambiguous = |source| RetainedExchangeFailure {
+            outcome: RetainedExchangeOutcome::Ambiguous,
+            source,
+        };
+
+        self.require_no_journal().map_err(not_applied)?;
+        installation
+            .revalidate_root_directory()
+            .map_err(Error::from)
+            .map_err(not_applied)?;
+
+        let staging = self.open_exchange_staging(installation).map_err(not_applied)?;
+
+        staging
+            .revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)
+            .map_err(not_applied)?;
+        self.require_exchange_layout(
+            installation.root_directory(),
+            &installation.root,
+            &staging,
+            direction.before(),
+        )
+        .map_err(not_applied)?;
+
+        before_retained_exchange_rename();
+        self.require_no_journal().map_err(not_applied)?;
+        installation
+            .revalidate_root_directory()
+            .map_err(Error::from)
+            .map_err(not_applied)?;
+        staging
+            .revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)
+            .map_err(not_applied)?;
+        self.require_exchange_layout(
+            installation.root_directory(),
+            &installation.root,
+            &staging,
+            direction.before(),
+        )
+        .map_err(not_applied)?;
+        retained_exchange_checkpoint(RetainedExchangeFaultPoint::BeforeRename).map_err(not_applied)?;
+
+        // Never retry this syscall: an EINTR or injected error may describe an
+        // exchange which the kernel already completed.  Both retained parent
+        // namespaces are reconciled below before the result is interpreted.
+        let syscall_result = renameat2_exchange_once(
+            &staging.file,
+            LIVE_USR_NAME,
+            installation.root_directory(),
+            LIVE_USR_NAME,
+        )
+        .map_err(|source| retained_exchange_io("exchange staged and live /usr", &installation.root.join("usr"), source))
+        .and_then(|()| retained_exchange_checkpoint(RetainedExchangeFaultPoint::AfterRename));
+
+        let observed = self
+            .exchange_layout(installation.root_directory(), &installation.root, &staging)
+            .map_err(ambiguous)?;
+        if observed == direction.before() {
+            let source = match syscall_result {
+                Err(source) => source,
+                Ok(()) => Error::RetainedExchangeReportedSuccessWithoutMove {
+                    direction: direction.as_str(),
+                },
+            };
+            return Err(not_applied(source));
+        }
+        if observed != direction.after() {
+            return Err(ambiguous(Error::RetainedExchangeUnexpectedLayout {
+                direction: direction.as_str(),
+                expected: direction.after().as_str(),
+                actual: observed.as_str(),
+            }));
+        }
+
+        // Once both exact trees prove the post-exchange layout, a raw syscall
+        // error is merely an error-after-apply report.  Complete durability
+        // through both retained parents instead of exchanging a second time.
+        self.finish_exchange(installation, &staging, direction.after())
+            .map_err(applied)
+    }
+
+    fn open_exchange_staging(&self, installation: &Installation) -> Result<RetainedDirectory, Error> {
+        let staging_path = installation.staging_dir();
+        let staging =
+            RetainedDirectory::open_beneath(installation.root_directory(), STAGING_RELATIVE, staging_path.clone())?;
+        let root_device = installation
+            .root_directory()
+            .metadata()
+            .map_err(|source| retained_exchange_io("inspect retained installation root", &installation.root, source))?
+            .dev();
+        if root_device != staging.witness.device {
+            return Err(Error::RetainedExchangeCrossDevice {
+                live_parent: installation.root.clone(),
+                staged_parent: staging_path,
+            });
+        }
+        Ok(staging)
+    }
+
+    fn finish_exchange(
+        &self,
+        installation: &Installation,
+        staging: &RetainedDirectory,
+        expected: RetainedExchangeLayout,
+    ) -> Result<(), Error> {
+        retained_exchange_checkpoint(RetainedExchangeFaultPoint::StagingParentSync)?;
+        staging.sync("sync retained staging parent after /usr exchange")?;
+        retained_exchange_checkpoint(RetainedExchangeFaultPoint::InstallationRootSync)?;
+        installation.root_directory().sync_all().map_err(|source| {
+            retained_exchange_io(
+                "sync retained installation root after /usr exchange",
+                &installation.root,
+                source,
+            )
+        })?;
+        retained_exchange_checkpoint(RetainedExchangeFaultPoint::FinalRevalidation)?;
+        self.require_no_journal()?;
+        installation.revalidate_root_directory()?;
+        staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
+        self.require_exchange_layout(installation.root_directory(), &installation.root, staging, expected)
+    }
+
+    fn require_exchange_layout(
+        &self,
+        root: &std::fs::File,
+        root_path: &Path,
+        staging: &RetainedDirectory,
+        expected: RetainedExchangeLayout,
+    ) -> Result<(), Error> {
+        let actual = self.exchange_layout(root, root_path, staging)?;
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(Error::RetainedExchangeUnexpectedLayout {
+                direction: "preflight",
+                expected: expected.as_str(),
+                actual: actual.as_str(),
+            })
+        }
+    }
+
+    fn exchange_layout(
+        &self,
+        root: &std::fs::File,
+        root_path: &Path,
+        staging: &RetainedDirectory,
+    ) -> Result<RetainedExchangeLayout, Error> {
+        let live_path = root_path.join("usr");
+        let staged_path = staging.path.join("usr");
+        let live = open_retained_exchange_tree(root, &live_path)?;
+        let staged = open_retained_exchange_tree(&staging.file, &staged_path)?;
+        let live_role = self.retained_tree_role(&live)?;
+        let staged_role = self.retained_tree_role(&staged)?;
+        match (live_role, staged_role) {
+            (RetainedTreeRole::Previous, RetainedTreeRole::Candidate) => Ok(RetainedExchangeLayout::CandidateStaged),
+            (RetainedTreeRole::Candidate, RetainedTreeRole::Previous) => Ok(RetainedExchangeLayout::CandidateLive),
+            (live, staged) => Err(Error::RetainedExchangeNamespaceMismatch {
+                live: live.as_str(),
+                staged: staged.as_str(),
+            }),
+        }
+    }
+
+    fn retained_tree_role(&self, named: &TreeMarkerStore) -> Result<RetainedTreeRole, Error> {
+        match self.candidate.matches_store_read_only(named) {
+            Ok(true) => return Ok(RetainedTreeRole::Candidate),
+            Ok(false) => {}
+            Err(source) => return Err(source),
+        }
+        match self.previous.matches_store_read_only(named) {
+            Ok(true) => Ok(RetainedTreeRole::Previous),
+            Ok(false) => Err(Error::RetainedExchangeUnknownTree),
+            Err(source) => Err(source),
+        }
     }
 
     /// Verify the forward layout after the atomic exchange.
@@ -446,6 +757,22 @@ impl StatefulTreeIdentity {
 struct OpenedLiveUsr {
     pinned: std::fs::File,
     readable: std::fs::File,
+}
+
+fn open_retained_exchange_tree(parent: &std::fs::File, path: &Path) -> Result<TreeMarkerStore, Error> {
+    let tree = openat2_file(
+        parent.as_raw_fd(),
+        LIVE_USR_NAME,
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        0,
+        controlled_resolution(),
+    )
+    .map_err(|source| retained_exchange_io("open retained /usr exchange child", path, source))?;
+    TreeMarkerStore::open(&tree, path).map_err(Error::from)
 }
 
 fn open_or_synthesize_live_usr(installation: &Installation) -> Result<TreeMarkerStore, Error> {
@@ -1036,6 +1363,26 @@ pub(crate) fn arm_quarantine_faults(point: QuarantineFaultPoint, count: usize) {
 }
 
 #[cfg(test)]
+pub(crate) fn arm_retained_exchange_fault(point: RetainedExchangeFaultPoint) {
+    RETAINED_EXCHANGE_FAULT.with(|slot| {
+        assert!(
+            slot.replace(Some(point)).is_none(),
+            "retained exchange fault already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn arm_before_retained_exchange_rename(hook: impl FnOnce() + 'static) {
+    BEFORE_RETAINED_EXCHANGE_RENAME.with(|slot| {
+        assert!(
+            slot.replace(Some(Box::new(hook))).is_none(),
+            "retained exchange hook already armed"
+        );
+    });
+}
+
+#[cfg(test)]
 fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
     QUARANTINE_FAULT.with(|slot| {
         let mut armed = slot.borrow_mut();
@@ -1052,6 +1399,24 @@ fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
     })
 }
 
+#[cfg(test)]
+fn retained_exchange_checkpoint(point: RetainedExchangeFaultPoint) -> Result<(), Error> {
+    RETAINED_EXCHANGE_FAULT.with(|slot| {
+        if slot.borrow().as_ref() == Some(&point) {
+            slot.replace(None);
+            Err(Error::InjectedRetainedExchangeFault { point })
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn retained_exchange_checkpoint(point: RetainedExchangeFaultPoint) -> Result<(), Error> {
+    let _ = point;
+    Ok(())
+}
+
 #[cfg(not(test))]
 fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
     let _ = point;
@@ -1060,6 +1425,14 @@ fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
 
 fn quarantine_io(operation: &'static str, path: &Path, source: io::Error) -> Error {
     Error::Quarantine {
+        operation,
+        path: path.to_owned(),
+        source,
+    }
+}
+
+fn retained_exchange_io(operation: &'static str, path: &Path, source: io::Error) -> Error {
+    Error::RetainedExchange {
         operation,
         path: path.to_owned(),
         source,
@@ -1085,6 +1458,18 @@ pub(crate) fn arm_before_quarantine_slot_reopen(hook: impl FnOnce() + 'static) {
         );
     });
 }
+
+#[cfg(test)]
+fn before_retained_exchange_rename() {
+    BEFORE_RETAINED_EXCHANGE_RENAME.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_retained_exchange_rename() {}
 
 #[cfg(test)]
 fn before_live_usr_mkdir() {
@@ -1142,6 +1527,17 @@ impl RetainedIdentity {
         self.marker.require_same_marker(&named).map_err(Error::from)
     }
 
+    fn matches_store_read_only(&self, named_store: &TreeMarkerStore) -> Result<bool, Error> {
+        match self.store.require_same_directory(named_store) {
+            Ok(()) => {
+                self.verify_store_read_only(named_store)?;
+                Ok(true)
+            }
+            Err(TreeMarkerError::DirectoryChanged { .. }) => Ok(false),
+            Err(source) => Err(source.into()),
+        }
+    }
+
     fn revalidate_retained(&self) -> Result<(), Error> {
         self.marker.revalidate(&self.store).map_err(Error::from)
     }
@@ -1172,6 +1568,37 @@ pub(crate) enum Error {
     StateEvidence(#[from] db::state::TransitionEvidenceError),
     #[error("prepare or authenticate a durable tree marker")]
     TreeMarker(#[from] TreeMarkerError),
+    #[error("{operation} in retained /usr exchange namespace at `{}`", path.display())]
+    RetainedExchange {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "retained /usr exchange parents are on different filesystems: live `{}` and staged `{}`",
+        live_parent.display(),
+        staged_parent.display()
+    )]
+    RetainedExchangeCrossDevice {
+        live_parent: PathBuf,
+        staged_parent: PathBuf,
+    },
+    #[error("retained /usr exchange namespace contains an unrecognized tree")]
+    RetainedExchangeUnknownTree,
+    #[error("retained /usr exchange namespace mismatch: live={live}, staged={staged}")]
+    RetainedExchangeNamespaceMismatch { live: &'static str, staged: &'static str },
+    #[error("{direction} retained /usr exchange expected {expected}, found {actual}")]
+    RetainedExchangeUnexpectedLayout {
+        direction: &'static str,
+        expected: &'static str,
+        actual: &'static str,
+    },
+    #[error("{direction} retained /usr exchange reported success without changing either exact name")]
+    RetainedExchangeReportedSuccessWithoutMove { direction: &'static str },
+    #[cfg(test)]
+    #[error("injected retained /usr exchange fault at {point:?}")]
+    InjectedRetainedExchangeFault { point: RetainedExchangeFaultPoint },
     #[error("construct a bounded deterministic failed-candidate quarantine name")]
     InvalidQuarantineName(#[source] crate::transition_journal::CodecError),
     #[error("{operation} at failed-candidate quarantine path `{}`", path.display())]

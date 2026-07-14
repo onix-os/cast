@@ -1,8 +1,3 @@
-<!--
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
--->
-
 # Plan: Make Stone a Fully Declarative Package Function
 
 > **Executor instructions:** Follow this plan in order and keep the repository
@@ -579,6 +574,15 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
+On 2026-07-14, `make examples` and `make execution-fixtures` passed for the
+complete checked-in corpus and all ten locked real-source fixtures. The
+production-format offline bootstrap root also materialized successfully. The
+ordinary delegated lane then reported its narrowly classified lack of a
+reachable systemd user manager, while the same run with
+`REQUIRE_EXECUTION=1` rejected that condition. This is useful fail-closed host
+capability evidence, but it is not contentful execution or bundle-reproduction
+evidence and therefore does not close either item below.
+
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
   typed dependency roles, multiple sources, split outputs, conflicts, tuning,
@@ -699,12 +703,23 @@ and instant rollback mechanism; it hardens their failure semantics.
   racing occupants, fully synced with its parent, name-revalidated, and marked
   before exchange. The guard retains both inode proofs and the journal lock
   across exchange, archive, quarantine, and compensating recovery; every
-  post-preparation pathname check uses the exact-token recovery reader and
-  binds both the currently named directory and marker inode to the retained
-  proofs, so a copied token cannot authenticate a substituted tree. Failed
-  candidates enter a deterministic token-named quarantine through retained
-  parent descriptors and a no-replace move. Only an empty slot created and
-  inode-retained by the live guard is eligible for one bounded production
+  forward and compensating live/staging `/usr` exchange now resolves both
+  parents beneath the authenticated installation-root descriptor, binds both
+  children to those retained proofs, performs exactly one descriptor-relative
+  `RENAME_EXCHANGE`, and reconciles both names after every syscall result. An
+  error reported after the move is adopted rather than blindly exchanged
+  back; both changed parents are synced and revalidated before success, while
+  a forward post-move durability fault is routed through the swapped recovery
+  path. If the compensating reverse exchange has already moved both trees,
+  recovery retries only its idempotent sync-and-revalidation suffix before
+  preserving the staged candidate; it never exchanges the trees a second
+  time.
+  Every other post-preparation pathname check uses the exact-token recovery
+  reader and binds both the currently named directory and marker inode to the
+  retained proofs, so a copied token cannot authenticate a substituted tree.
+  Failed candidates enter a deterministic token-named quarantine through
+  retained parent descriptors and a no-replace move. Only an empty slot
+  created and inode-retained by the live guard is eligible for one bounded production
   retry after an in-process fault; pre-existing empty or populated collisions
   fail closed. A `syncfs` barrier flushes dirty candidate data and metadata on
   its root filesystem before the changed parents are synced, and the complete
@@ -718,9 +733,12 @@ and instant rollback mechanism; it hardens their failure semantics.
   quarantine slot. This remains an in-process, cooperating-lock boundary: it
   cannot make a filesystem rename and SQLite deletion atomic against an
   uncooperative same-UID writer. It does not create a journal record, reconcile
-  a reboot, perform the bounded descriptor-recursive stable-inventory proof,
-  authenticate the entire activation namespace, or finish the pre-journal
-  baseline and coordinator items below.
+  a reboot, durably fence an ambiguous post-exchange namespace, replace the
+  still-path-based archive, restore, repaired-archive, and archived-candidate
+  staging moves, perform the bounded
+  descriptor-recursive stable-inventory proof, authenticate the entire
+  activation namespace, or finish the pre-journal baseline and coordinator
+  items below.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree

@@ -65,7 +65,10 @@ use crate::{
     repository, runtime, signal,
     state::{self, Selection},
     system_model::{self, LoadedSystemModel},
-    transition_identity::{FailedCandidateKind, QuarantinedCandidate, StatefulTreeIdentity},
+    transition_identity::{
+        FailedCandidateKind, QuarantinedCandidate, RetainedExchangeFailure, RetainedExchangeOutcome,
+        StatefulTreeIdentity,
+    },
 };
 
 pub use self::extract::extract;
@@ -1122,6 +1125,14 @@ impl Client {
     where
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
+        // Preserve the production guard that historically lived in
+        // `promote_staging`: an ephemeral client must never reach the
+        // stateful `/usr` exchange, even if a future caller bypasses the
+        // ordinary public entry-point checks.
+        if self.scope.is_ephemeral() {
+            return Err(Error::EphemeralProhibitedOperation);
+        }
+
         if let Err(primary) = tree_identity
             .verify_pre_exchange(
                 &self.installation.staging_path("usr"),
@@ -1129,7 +1140,6 @@ impl Client {
             )
             .map_err(Error::from)
             .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeUsrExchange))
-            .and_then(|()| self.promote_staging())
         {
             return Err(self.preserve_unswapped_candidate(
                 candidate.id,
@@ -1139,6 +1149,37 @@ impl Client {
                 tree_identity,
                 checkpoint,
             ));
+        }
+
+        if let Err(failure) = self.promote_staging(tree_identity) {
+            let outcome = failure.outcome();
+            let primary = Error::from(failure);
+            return match outcome {
+                RetainedExchangeOutcome::NotApplied => Err(self.preserve_unswapped_candidate(
+                    candidate.id,
+                    previous.map(|state| state.id),
+                    candidate_origin,
+                    primary,
+                    tree_identity,
+                    checkpoint,
+                )),
+                RetainedExchangeOutcome::Applied => Err(self.recover_swapped_candidate(
+                    candidate.id,
+                    previous,
+                    candidate_origin,
+                    PreviousUsrLocation::Staging,
+                    false,
+                    false,
+                    primary,
+                    tree_identity,
+                    checkpoint,
+                )),
+                // Neither authenticated layout survived reconciliation. Do
+                // not guess which tree to move. The candidate row is left in
+                // place, but durable mutation fencing remains the pending
+                // journal-coordinator work documented in Phase 11.
+                RetainedExchangeOutcome::Ambiguous => Err(primary),
+            };
         }
 
         let mut previous_location = PreviousUsrLocation::Staging;
@@ -1296,7 +1337,7 @@ impl Client {
             )
             .map_err(Error::from)
             .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeRecoveryUsrExchange))
-            .and_then(|()| self.exchange_staging_and_live_usr())
+            .and_then(|()| self.exchange_staging_and_live_usr(tree_identity))
             .and_then(|()| {
                 tree_identity
                     .verify_restored(
@@ -1470,10 +1511,19 @@ impl Client {
         }
     }
 
-    fn exchange_staging_and_live_usr(&self) -> Result<(), Error> {
-        let staged = self.installation.staging_path("usr");
-        let live = self.installation.root.join("usr");
-        Self::atomic_swap(&staged, &live).map_err(Error::Blit)
+    fn exchange_staging_and_live_usr(&self, tree_identity: &StatefulTreeIdentity) -> Result<(), Error> {
+        match tree_identity.exchange_reverse(&self.installation) {
+            Ok(()) => Ok(()),
+            Err(failure) if failure.outcome() == RetainedExchangeOutcome::Applied => {
+                // The exact previous and candidate trees are already restored.
+                // Retry only the idempotent fsync/revalidation suffix; a
+                // second RENAME_EXCHANGE would undo the recovery.
+                tree_identity
+                    .finish_applied_reverse(&self.installation)
+                    .map_err(Error::from)
+            }
+            Err(failure) => Err(Error::from(failure)),
+        }
     }
 
     fn restore_archived_state_to_staging(&self, state: state::Id) -> Result<(), Error> {
@@ -1582,21 +1632,9 @@ impl Client {
     /// This is performed using `renameat2` and results in instantly available, atomically updated
     /// `/usr`. In combination with the mandated "`/usr`` merge" and statelessness approach of
     /// Serpent OS, provides a unique atomic upgrade strategy.
-    fn promote_staging(&self) -> Result<(), Error> {
-        if self.scope.is_ephemeral() {
-            return Err(Error::EphemeralProhibitedOperation);
-        }
-
-        let usr_target = self.installation.root.join("usr");
-        let usr_source = self.installation.staging_path("usr");
-
-        // The durable identity guard has already pinned and authenticated both
-        // names. Never recreate a missing target here: a replacement created
-        // between verification and exchange would be unmarked and recovery
-        // could no longer prove which logical tree moved.
-        Self::atomic_swap(&usr_source, &usr_target)?;
-
-        Ok(())
+    fn promote_staging(&self, tree_identity: &StatefulTreeIdentity) -> Result<(), RetainedExchangeFailure> {
+        debug_assert!(!self.scope.is_ephemeral());
+        tree_identity.exchange_forward(&self.installation)
     }
 
     /// syscall based wrapper for renameat2 so we can support musl libc which
@@ -11255,6 +11293,14 @@ impl From<crate::transition_identity::Error> for Error {
     }
 }
 
+impl From<RetainedExchangeFailure> for Error {
+    fn from(source: RetainedExchangeFailure) -> Self {
+        Self::StatefulTreeIdentity {
+            source: Box::new(source),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -17204,6 +17250,177 @@ let cast = import! cast.system.v1
     fn recovery_tree_token(usr: &Path) -> String {
         let store = crate::tree_marker::TreeMarkerStore::open_path(usr).unwrap();
         store.read_for_recovery().unwrap().token().as_str().to_owned()
+    }
+
+    #[test]
+    fn retained_exchange_adopts_applied_forward_and_reverse_moves_when_the_syscall_reports_error() {
+        let fixture = stateful_transition_fixture(false);
+        let live_usr = fixture.client.installation.root.join("usr");
+        let staged_usr = fixture.client.installation.staging_path("usr");
+        let identity = fixture.client.prepare_stateful_tree_identity(&staged_usr).unwrap();
+        let candidate_token = recovery_tree_token(&staged_usr);
+        let previous_token = recovery_tree_token(&live_usr);
+
+        crate::transition_identity::arm_retained_exchange_fault(
+            crate::transition_identity::RetainedExchangeFaultPoint::AfterRename,
+        );
+        identity.exchange_forward(&fixture.client.installation).unwrap();
+
+        identity.verify_forward_exchange(&live_usr, &staged_usr).unwrap();
+        assert_eq!(recovery_tree_token(&live_usr), candidate_token);
+        assert_eq!(recovery_tree_token(&staged_usr), previous_token);
+
+        crate::transition_identity::arm_retained_exchange_fault(
+            crate::transition_identity::RetainedExchangeFaultPoint::AfterRename,
+        );
+        identity.exchange_reverse(&fixture.client.installation).unwrap();
+
+        identity.verify_restored(&live_usr, &staged_usr).unwrap();
+        assert_eq!(recovery_tree_token(&live_usr), previous_token);
+        assert_eq!(recovery_tree_token(&staged_usr), candidate_token);
+    }
+
+    #[test]
+    fn retained_exchange_error_before_rename_preserves_both_exact_names() {
+        let fixture = stateful_transition_fixture(false);
+        let live_usr = fixture.client.installation.root.join("usr");
+        let staged_usr = fixture.client.installation.staging_path("usr");
+        let identity = fixture.client.prepare_stateful_tree_identity(&staged_usr).unwrap();
+        let candidate_token = recovery_tree_token(&staged_usr);
+        let previous_token = recovery_tree_token(&live_usr);
+
+        crate::transition_identity::arm_retained_exchange_fault(
+            crate::transition_identity::RetainedExchangeFaultPoint::BeforeRename,
+        );
+        let failure = identity.exchange_forward(&fixture.client.installation).unwrap_err();
+
+        assert_eq!(failure.outcome(), RetainedExchangeOutcome::NotApplied);
+        identity.verify_pre_exchange(&staged_usr, &live_usr).unwrap();
+        assert_eq!(recovery_tree_token(&staged_usr), candidate_token);
+        assert_eq!(recovery_tree_token(&live_usr), previous_token);
+    }
+
+    #[test]
+    fn retained_exchange_parent_replacement_is_rejected_before_the_syscall() {
+        let fixture = stateful_transition_fixture(false);
+        let installation = &fixture.client.installation;
+        let live_usr = installation.root.join("usr");
+        let staging = installation.staging_dir();
+        let staged_usr = installation.staging_path("usr");
+        let displaced = installation.root_path("displaced-retained-exchange-staging");
+        let identity = fixture.client.prepare_stateful_tree_identity(&staged_usr).unwrap();
+        let previous_token = recovery_tree_token(&live_usr);
+        let candidate_token = recovery_tree_token(&staged_usr);
+        let raced_staging = staging.clone();
+        let raced_displaced = displaced.clone();
+
+        crate::transition_identity::arm_before_retained_exchange_rename(move || {
+            fs::rename(&raced_staging, &raced_displaced).unwrap();
+            fs::create_dir(&raced_staging).unwrap();
+            fs::create_dir(raced_staging.join("usr")).unwrap();
+            fs::write(raced_staging.join("usr/foreign"), b"racing staging tree").unwrap();
+        });
+        let failure = identity.exchange_forward(installation).unwrap_err();
+
+        assert_eq!(failure.outcome(), RetainedExchangeOutcome::NotApplied);
+        assert_eq!(recovery_tree_token(&live_usr), previous_token);
+        assert_eq!(recovery_tree_token(&displaced.join("usr")), candidate_token);
+        assert_eq!(fs::read(staging.join("usr/foreign")).unwrap(), b"racing staging tree");
+    }
+
+    #[test]
+    fn retained_exchange_child_substitution_is_rejected_before_the_syscall() {
+        let fixture = stateful_transition_fixture(false);
+        let installation = &fixture.client.installation;
+        let live_usr = installation.root.join("usr");
+        let staged_usr = installation.staging_path("usr");
+        let displaced = installation.root_path("displaced-retained-exchange-candidate");
+        let identity = fixture.client.prepare_stateful_tree_identity(&staged_usr).unwrap();
+        let previous_token = recovery_tree_token(&live_usr);
+        let candidate_token = recovery_tree_token(&staged_usr);
+        let raced_staged = staged_usr.clone();
+        let raced_displaced = displaced.clone();
+
+        crate::transition_identity::arm_before_retained_exchange_rename(move || {
+            fs::rename(&raced_staged, &raced_displaced).unwrap();
+            fs::create_dir(&raced_staged).unwrap();
+            fs::write(raced_staged.join("foreign"), b"substituted candidate").unwrap();
+        });
+        let failure = identity.exchange_forward(installation).unwrap_err();
+
+        assert_eq!(failure.outcome(), RetainedExchangeOutcome::NotApplied);
+        assert_eq!(recovery_tree_token(&live_usr), previous_token);
+        assert_eq!(recovery_tree_token(&displaced), candidate_token);
+        assert_eq!(fs::read(staged_usr.join("foreign")).unwrap(), b"substituted candidate");
+    }
+
+    #[test]
+    fn retained_exchange_post_move_faults_run_the_swapped_recovery_path() {
+        for point in [
+            crate::transition_identity::RetainedExchangeFaultPoint::StagingParentSync,
+            crate::transition_identity::RetainedExchangeFaultPoint::InstallationRootSync,
+            crate::transition_identity::RetainedExchangeFaultPoint::FinalRevalidation,
+        ] {
+            let fixture = stateful_transition_fixture(false);
+            crate::transition_identity::arm_retained_exchange_fault(point);
+
+            let error = fixture
+                .client
+                .apply_stateful_blit_with_checkpoint(
+                    vfs(Vec::new()).unwrap(),
+                    &fixture.candidate,
+                    Some(fixture.previous.id),
+                    generated_system_snapshot("candidate-package"),
+                    |_| Ok(()),
+                )
+                .unwrap_err();
+
+            assert!(
+                matches!(error, Error::StatefulTransitionUsrRestored { .. }),
+                "unexpected recovery result after {point:?}: {error:#?}"
+            );
+            assert_fresh_candidate_quarantined_and_invalidated(&fixture);
+        }
+    }
+
+    #[test]
+    fn retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange() {
+        for point in [
+            crate::transition_identity::RetainedExchangeFaultPoint::StagingParentSync,
+            crate::transition_identity::RetainedExchangeFaultPoint::InstallationRootSync,
+            crate::transition_identity::RetainedExchangeFaultPoint::FinalRevalidation,
+        ] {
+            let fixture = stateful_transition_fixture(false);
+            let mut primary_injected = false;
+
+            let error = fixture
+                .client
+                .apply_stateful_blit_with_checkpoint(
+                    vfs(Vec::new()).unwrap(),
+                    &fixture.candidate,
+                    Some(fixture.previous.id),
+                    generated_system_snapshot("candidate-package"),
+                    |checkpoint| match checkpoint {
+                        StatefulTransitionCheckpoint::AfterUsrExchange if !primary_injected => {
+                            primary_injected = true;
+                            Err(injected_state_transition_error("force compensating reverse exchange"))
+                        }
+                        StatefulTransitionCheckpoint::BeforeRecoveryUsrExchange => {
+                            crate::transition_identity::arm_retained_exchange_fault(point);
+                            Ok(())
+                        }
+                        _ => Ok(()),
+                    },
+                )
+                .unwrap_err();
+
+            assert!(primary_injected, "forward exchange fault was not reached for {point:?}");
+            assert!(
+                matches!(error, Error::StatefulTransitionUsrRestored { .. }),
+                "reverse durability completion failed after {point:?}: {error:#?}"
+            );
+            assert_fresh_candidate_quarantined_and_invalidated(&fixture);
+        }
     }
 
     fn assert_recovered_stateful_transition(fixture: &StatefulTransitionFixture) {

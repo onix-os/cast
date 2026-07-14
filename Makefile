@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
-
 SHELL := /bin/bash
 
 TOP_DIR := $(CURDIR)
@@ -109,6 +106,12 @@ forge-transition-identity-test:
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
 		client::tests::stateful_tree_tokens_follow_their_logical_trees_through_exchange_and_archive \
+		client::tests::retained_exchange_adopts_applied_forward_and_reverse_moves_when_the_syscall_reports_error \
+		client::tests::retained_exchange_error_before_rename_preserves_both_exact_names \
+		client::tests::retained_exchange_parent_replacement_is_rejected_before_the_syscall \
+		client::tests::retained_exchange_child_substitution_is_rejected_before_the_syscall \
+		client::tests::retained_exchange_post_move_faults_run_the_swapped_recovery_path \
+		client::tests::retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange \
 		client::tests::recovery_never_recreates_a_missing_candidate_tree_marker \
 		client::tests::recovery_rejects_same_content_marker_name_substitution_without_repair \
 		client::tests::recovery_rejects_whole_directory_same_token_substitution_without_exchange \
