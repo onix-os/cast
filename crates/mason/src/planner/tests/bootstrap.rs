@@ -17,9 +17,9 @@ use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1Fi
 use url::Url;
 
 use super::{
-    EXECUTION_FIXTURES, Env, Planned, Publication, Request, SOURCE_DATE_EPOCH, TARGET, WriteOutcome,
-    container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain, execute_and_publish,
-    execution_capability_required, plan_for_build, profile,
+    EXECUTION_FIXTURES, Env, Planned, Publication, Request, SOURCE_DATE_EPOCH, SOURCE_LOCK_FILE_NAME, TARGET,
+    WriteOutcome, container_capability_unavailable, copy_package_directory, encode_build_lock, error_chain,
+    execute_and_publish, execution_capability_required, plan_for_build, profile,
 };
 
 #[path = "bootstrap/bundle.rs"]
@@ -351,6 +351,72 @@ fn validate_fixture_closure_coverage(fixtures: &[FixtureClosure], package_ids: &
         ));
     }
     Ok(())
+}
+
+fn assert_fixture_package_closure(
+    fixture: &str,
+    plan: &stone_recipe::derivation::DerivationPlan,
+    closure: &BootstrapClosure,
+) {
+    let expected = closure
+        .fixtures
+        .iter()
+        .find(|candidate| candidate.name == fixture)
+        .unwrap_or_else(|| panic!("{fixture}: no exact package closure is pinned"));
+    let actual = plan
+        .build_lock
+        .packages
+        .iter()
+        .map(|package| package.package_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        expected.package_ids.iter().map(String::as_str).collect::<Vec<_>>(),
+        "{fixture}: resolved package closure drifted from its exact declarative pin"
+    );
+}
+
+#[derive(Debug)]
+struct ExecutionInputSnapshot {
+    recipe: Vec<u8>,
+    source_lock: Vec<u8>,
+    build_lock: Vec<u8>,
+}
+
+impl ExecutionInputSnapshot {
+    fn capture(recipe: &Path, build_lock: &Path) -> Self {
+        Self {
+            recipe: fs::read(recipe)
+                .unwrap_or_else(|error| panic!("read execution fixture recipe {recipe:?}: {error}")),
+            source_lock: fs::read(recipe.with_file_name(SOURCE_LOCK_FILE_NAME))
+                .unwrap_or_else(|error| panic!("read execution fixture source lock beside {recipe:?}: {error}")),
+            build_lock: fs::read(build_lock)
+                .unwrap_or_else(|error| panic!("read generated execution fixture build lock {build_lock:?}: {error}")),
+        }
+    }
+
+    fn assert_unchanged(&self, fixture: &str, checkpoint: &str, recipe: &Path, build_lock: &Path) {
+        assert_file_bytes_unchanged(fixture, checkpoint, "stone.glu", recipe, &self.recipe);
+        assert_file_bytes_unchanged(
+            fixture,
+            checkpoint,
+            SOURCE_LOCK_FILE_NAME,
+            &recipe.with_file_name(SOURCE_LOCK_FILE_NAME),
+            &self.source_lock,
+        );
+        assert_file_bytes_unchanged(fixture, checkpoint, "build.lock.glu", build_lock, &self.build_lock);
+    }
+}
+
+fn assert_file_bytes_unchanged(fixture: &str, checkpoint: &str, label: &str, path: &Path, expected: &[u8]) {
+    let actual =
+        fs::read(path).unwrap_or_else(|error| panic!("{fixture}: read {label} at {checkpoint} from {path:?}: {error}"));
+    assert!(
+        actual == expected,
+        "{fixture}: {label} changed {checkpoint}; expected_sha256={}, actual_sha256={}",
+        hex::encode(Sha256::digest(expected)),
+        hex::encode(Sha256::digest(&actual)),
+    );
 }
 
 fn bootstrap_root() -> PathBuf {
@@ -838,10 +904,12 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
     for (name, recipe) in matrix.recipes.iter().filter(|(name, _)| selection.includes(name)) {
         let first = plan_for_build(matrix.env(), matrix.request(recipe, true), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: plan contentful execution: {error:#}"));
+        assert_fixture_package_closure(name, &first.plan, &closure);
         assert_execution_fixture_topology(name, &first.plan);
         matrix.import_sources(&first);
         let canonical_plan = first.plan.canonical_bytes();
         let derivation_id = first.plan.derivation_id();
+        let input_snapshot = ExecutionInputSnapshot::capture(recipe, &first.lock_path);
 
         let first_publication = match execute_and_publish(&first) {
             Ok(publication) => publication,
@@ -866,6 +934,12 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
 
         let published_root = matrix.output_dir.join(derivation_id.as_str());
         let published = bundle::assert_fixture_bundle(name, &first, &published_root, bundle::BundleRootRole::Published);
+        input_snapshot.assert_unchanged(
+            name,
+            "after the first execution and publication",
+            recipe,
+            &first.lock_path,
+        );
 
         let locked = plan_for_build(matrix.env(), matrix.request(recipe, false), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: reuse contentful build lock: {error:#}"));
@@ -883,6 +957,11 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
             derivation_id,
             "{name}: derivation ID drift"
         );
+        assert_eq!(
+            locked.lock_path, first.lock_path,
+            "{name}: repeated planning selected a different build.lock.glu path"
+        );
+        input_snapshot.assert_unchanged(name, "after locked replanning", recipe, &locked.lock_path);
 
         let second_publication = execute_and_publish(&locked).unwrap_or_else(|error| {
             panic!(
@@ -901,6 +980,12 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
         let preserved =
             bundle::assert_fixture_bundle(name, &locked, &published_root, bundle::BundleRootRole::Published);
         assert_eq!(preserved, published, "{name}: published generation changed");
+        input_snapshot.assert_unchanged(
+            name,
+            "after the repeated execution and publication",
+            recipe,
+            &locked.lock_path,
+        );
     }
 
     assert_eq!(executed, selection.expected_count());
@@ -910,16 +995,6 @@ fn all_execution_fixtures_build_package_and_reproduce_from_the_contentful_closur
 fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
     let (closure, indexed) = validated_bootstrap();
     let expected_packages = closure.packages.sha256.iter().cloned().collect::<BTreeSet<_>>();
-    let expected_fixture_packages = closure
-        .fixtures
-        .iter()
-        .map(|fixture| {
-            (
-                fixture.name.as_str(),
-                fixture.package_ids.iter().map(String::as_str).collect::<Vec<_>>(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
     let matrix = BootstrapPlanningMatrix::new(&closure);
     let mut resolved_packages = BTreeSet::new();
 
@@ -947,18 +1022,7 @@ fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
                 .all(|package| package.repository == "bootstrap" && !package.name.starts_with("planner-provider-")),
             "{name}: a synthetic metadata-only provider entered the real closure"
         );
-        let fixture_packages = first
-            .plan
-            .build_lock
-            .packages
-            .iter()
-            .map(|package| package.package_id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            fixture_packages,
-            expected_fixture_packages[name.as_str()],
-            "{name}: resolved package closure drifted from its exact declarative pin"
-        );
+        assert_fixture_package_closure(name, &first.plan, &closure);
         resolved_packages.extend(
             first
                 .plan
