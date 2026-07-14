@@ -201,6 +201,28 @@ pub fn par_remove_dir_all(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Remove every entry below one directory in parallel while preserving the
+/// directory itself.
+///
+/// Enumeration is streamed into Rayon rather than collected first, so a cache
+/// with many top-level entries does not require one unbounded path vector. The
+/// root must already be an authenticated directory; a symlink or other inode
+/// kind is rejected rather than followed or removed.
+pub fn par_remove_dir_contents(path: &Path) -> io::Result<()> {
+    let rayon_runtime = rayon::ThreadPoolBuilder::new().build().expect("rayon runtime");
+
+    rayon_runtime.install(|| -> io::Result<()> {
+        let filetype = fs::symlink_metadata(path)?.file_type();
+        if !filetype.is_dir() || filetype.is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("directory contents root is not a real directory: {}", path.display()),
+            ));
+        }
+        par_remove_dir_contents_recursive(path)
+    })
+}
+
 /// Removes a set of directories provided, after removing all of their contents in parallel. Use carefully!
 ///
 /// Ignores `NotFound` error if any of the root paths do not exist.
@@ -235,6 +257,11 @@ where
 }
 
 fn par_remove_dir_all_recursive(path: &Path) -> io::Result<()> {
+    par_remove_dir_contents_recursive(path)?;
+    ignore_notfound(fs::remove_dir(path))
+}
+
+fn par_remove_dir_contents_recursive(path: &Path) -> io::Result<()> {
     fs::read_dir(path)?
         .par_bridge()
         // TODO: Use try {} here once it becomes stable to match stdlib
@@ -254,16 +281,9 @@ fn par_remove_dir_all_recursive(path: &Path) -> io::Result<()> {
                 fs::remove_file(&child_path)
             };
 
-            if let Err(err) = &result
-                && err.kind() != io::ErrorKind::NotFound
-            {
-                Ok(())
-            } else {
-                result
-            }
+            ignore_notfound(result)
         })?;
-
-    ignore_notfound(fs::remove_dir(path))
+    Ok(())
 }
 
 /// Wrapper that ignores io::ErrorKind::NotFound errors
@@ -351,4 +371,40 @@ impl<T: AsyncRead + Unpin> AsyncRead for Sha256Wrapper<T> {
 /// Extract stone payloads from the provided reader
 pub fn stone_payloads<R: Read + Seek>(reader: &mut R) -> Result<Vec<StoneDecodedPayload>, StoneReadError> {
     stone::read(reader)?.payloads()?.collect::<Result<Vec<_>, _>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    #[test]
+    fn parallel_contents_removal_preserves_root_and_never_follows_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), b"outside").unwrap();
+        fs::create_dir(root.path().join("nested")).unwrap();
+        fs::write(root.path().join("nested/file"), b"remove").unwrap();
+        symlink(outside.path(), root.path().join("outside-link")).unwrap();
+
+        par_remove_dir_contents(root.path()).unwrap();
+
+        assert!(root.path().is_dir());
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+        assert_eq!(fs::read(outside.path().join("keep")).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn recursive_child_result_ignores_only_not_found() {
+        assert!(ignore_notfound(Err(io::Error::from(io::ErrorKind::NotFound))).is_ok());
+
+        let error = ignore_notfound(Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "injected non-NotFound child failure",
+        )))
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "injected non-NotFound child failure");
+    }
 }
