@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 pub fn greeting(subject: &str) -> String {
     format!("hello from {subject}")

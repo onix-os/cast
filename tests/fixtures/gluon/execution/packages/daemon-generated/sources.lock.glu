@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-daemon-fixture-1.0.0.tar.zst",
-            sha256 = "2c67e21d41f3551600f325b24eada10aba301e861b5efb5485bc8ce616605361",
+            sha256 = "7d01ab16acc6b96925e8f996e8fbaea4d11b448bccc44d40090bbdc7963e617b",
         },
     ],
 }

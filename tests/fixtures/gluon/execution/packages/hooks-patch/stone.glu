@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let cmake = import! cast.builders.cmake.v2
@@ -24,7 +22,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0.tar.xz",
-            hash = "58df54f8ce6c68753663366a24c265dd1b10011b4129b5f0181ea0a2b6758a25",
+            hash = "4483b33167bf58fcb5fdbaaae21bf7bfb3e496c54a3a726d4e09bb41db013b97",
             rename = b.optional.set "cast-hooks-fixture.tar.xz",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

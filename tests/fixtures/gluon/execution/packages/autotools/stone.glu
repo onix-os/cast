@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let autotools = import! cast.builders.autotools.v2
@@ -17,7 +15,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-autotools-fixture-1.0.0.tar",
-            hash = "1bd980991136facc8eae07f2ea68a93fc09b2102f600e64dc843db631d93eb32",
+            hash = "986ba27cfb0487842b0cf26be901f03cae1f05eba721d7563a6538a71f4253a2",
             rename = b.optional.set "cast-autotools-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

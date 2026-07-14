@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Typed repository policy used to lower package builders into frozen plans.
 //!

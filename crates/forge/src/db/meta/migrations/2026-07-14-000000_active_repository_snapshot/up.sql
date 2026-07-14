@@ -1,5 +1,3 @@
--- SPDX-FileCopyrightText: 2026 AerynOS Developers
--- SPDX-License-Identifier: MPL-2.0
 
 -- A repository database has at most one accepted index snapshot. The fixed
 -- key makes the singleton invariant enforceable even for callers outside the

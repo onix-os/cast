@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Read-only package closure resolution for build planning.
 

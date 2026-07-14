@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let cargo = import! cast.builders.cargo.v2
@@ -21,7 +19,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-cargo-fixture-1.0.0.tar",
-            hash = "06ece346a9cadf69e4bb639e75fb30085ab025a8d709640be7063bb05378b159",
+            hash = "a6ced421d2b8a8d319abc46c6c6d34e65bcf4fdf87a26778e3a450f4ed23a5a0",
             rename = b.optional.set "cast-cargo-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

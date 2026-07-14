@@ -1,5 +1,3 @@
-.\" SPDX-FileCopyrightText: 2026 AerynOS Developers
-.\" SPDX-License-Identifier: MPL-2.0
 .TH CAST-DAEMON-FIXTURE 8 "2023-11-14" "cast-daemon-fixture @PROJECT_VERSION@"
 .SH NAME
 cast-daemon-fixture \- validate the generated daemon fixture configuration

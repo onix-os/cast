@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let cmake = import! cast.builders.cmake.v2
@@ -17,7 +15,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-cmake-fixture-1.0.0.tar",
-            hash = "4e6f2f6e5c20984803ce9d7927f5187af9e419514028d030ff0197ec48210ad4",
+            hash = "21866c6d06768489544592db95f208b991baba41cd40866b2929c8c893a3fe21",
             rename = b.optional.set "cast-cmake-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

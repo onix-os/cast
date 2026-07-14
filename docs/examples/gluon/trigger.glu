@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let cast = import! cast.trigger.v1
 let base = cast.trigger "refresh-example" "Refresh generated example data"

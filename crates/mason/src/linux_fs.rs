@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Linux 5.6-compatible operations on retained filesystem capabilities.
 //!

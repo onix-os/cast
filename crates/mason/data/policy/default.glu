@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 // Repository-owned build policy. This file contains data only; every dynamic
 // value is an explicit member of the finite build context.

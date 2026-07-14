@@ -1,5 +1,3 @@
--- SPDX-FileCopyrightText: 2026 AerynOS Developers
--- SPDX-License-Identifier: MPL-2.0
 
 ALTER TABLE state ADD COLUMN transition_id TEXT NULL
     CHECK (

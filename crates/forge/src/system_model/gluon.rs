@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Versioned Gluon boundary for authored Cast system intent and snapshots.
 

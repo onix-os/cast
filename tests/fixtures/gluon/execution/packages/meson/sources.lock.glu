@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-meson-fixture-1.0.0.tar",
-            sha256 = "59188abb5058ac80eff3cad52320d76b84d1c1f802b5195cb4ac70b329dbcf6a",
+            sha256 = "c2584ee2b418149d687156bae5235f145045ebf4f7ef272b898fae9fa0d4dd5c",
         },
     ],
 }

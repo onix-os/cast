@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-autotools-fixture-1.0.0.tar",
-            sha256 = "1bd980991136facc8eae07f2ea68a93fc09b2102f600e64dc843db631d93eb32",
+            sha256 = "986ba27cfb0487842b0cf26be901f03cae1f05eba721d7563a6538a71f4253a2",
         },
     ],
 }

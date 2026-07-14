@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 fn message() -> String {
     cast_fixture_greeting::greeting("vendored Cargo fixture")

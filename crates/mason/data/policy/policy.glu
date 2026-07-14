@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 // The complete repository policy order. Cast loads only this manifest;
 // files next to it do not participate unless named here.

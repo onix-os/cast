@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Minimal fork-like `clone3(2)` support for atomic cgroup placement.
 //!

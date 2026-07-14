@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 
@@ -42,7 +40,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-custom-fixture-1.0.0.tar",
-            hash = "383289a2b1cc9e7b4008e4e94fb7d9142f9ee56e8a70263ec795136e5fcc2d93",
+            hash = "81d8b1ca259e4bf6fdd056d1de3b57283bd34ab2397e04b8ab5c7f1d2aea41f9",
             rename = b.optional.set "cast-custom-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

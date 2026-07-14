@@ -1,5 +1,3 @@
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
 
 cmake_minimum_required(VERSION 3.16)
 project(cast_factory_override_fixture VERSION 1.0.0 LANGUAGES C)

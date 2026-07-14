@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-factory-override-fixture-1.0.0.tar",
-            sha256 = "d55364ce292f3bfb682e36006b6b2054045b260c97320d1cd0371f71f207d0ea",
+            sha256 = "cc10c246cfaeeb644e2a458794262fd68ade2c0d76c0874a932a787ad088e001",
         },
     ],
 }

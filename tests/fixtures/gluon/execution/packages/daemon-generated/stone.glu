@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let cmake = import! cast.builders.cmake.v2
@@ -44,7 +42,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-daemon-fixture-1.0.0.tar.zst",
-            hash = "2c67e21d41f3551600f325b24eada10aba301e861b5efb5485bc8ce616605361",
+            hash = "7d01ab16acc6b96925e8f996e8fbaea4d11b448bccc44d40090bbdc7963e617b",
             rename = b.optional.set "cast-daemon-fixture.tar.zst",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

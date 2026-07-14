@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Stable, comprehensive presentation of a frozen derivation and its
 //! evaluation provenance.

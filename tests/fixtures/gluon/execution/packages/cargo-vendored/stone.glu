@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let cargo = import! cast.builders.cargo.v2
@@ -24,7 +22,7 @@ let base = b.mk_package (b.meta {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-cargo-vendored-fixture-1.0.0.tar.gz",
-            hash = "66cca1b5c1e183488393cb40761c1fafd0ea509ee76589f9c1935671724421ba",
+            hash = "7b852cc6802af8126d5ae4d81962e072143bc63bfc7927174d179e574d5d672e",
             rename = b.optional.set "cast-cargo-vendored-fixture.tar.gz",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

@@ -1,7 +1,3 @@
-<!--
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
--->
 
 # Historical plan: Establish Gluon as the Declarative Language for OS Tools
 

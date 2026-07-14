@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 // Exact contentful bootstrap closure for the offline execution fixtures.
 // Package names, versions, sizes, URLs, outputs, and dependency edges are

@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-split-fixture-1.0.0.tar",
-            sha256 = "577c23ac3279788c89be162a7d3be774aa38290a41579fa692c085213a2929a9",
+            sha256 = "bd78efc34e46566f967ae963c895c1e7d9de45da7d7022c5c4f6683425ae567d",
         },
     ],
 }

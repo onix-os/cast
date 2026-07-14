@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 let b = import! cast.package.v3
 let cmake = import! cast.builders.cmake.v2
@@ -20,7 +18,7 @@ let package = make_package {
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-factory-override-fixture-1.0.0.tar",
-            hash = "d55364ce292f3bfb682e36006b6b2054045b260c97320d1cd0371f71f207d0ea",
+            hash = "cc10c246cfaeeb644e2a458794262fd68ade2c0d76c0874a932a787ad088e001",
             rename = b.optional.set "cast-factory-override-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

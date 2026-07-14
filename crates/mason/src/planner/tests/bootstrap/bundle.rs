@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 // This test deliberately exercises raw descriptor boundaries. `std::fs::File`
 // keeps those operations explicit instead of attaching path context after the
