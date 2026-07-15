@@ -1,0 +1,41 @@
+let b = import! cast.package.v3
+
+let shared_shell = b.dep.binary "bash"
+
+let phases = b.scripts {
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [],
+            script = "printf '%s\\n' shared-capability > capability.marker",
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "shared-capability-origins",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/shared-capability-origins",
+    license = ["MIT"],
+})
+
+{
+    // One capability deliberately reaches the closure through every package
+    // input role, one executable role, and one published runtime relation.
+    // The build lock retains all reasons while resolving one exact provider.
+    builder = b.builder.custom phases [shared_shell],
+    native_build_inputs = [shared_shell],
+    build_inputs = [shared_shell],
+    check_inputs = [shared_shell],
+    outputs = [
+        b.output_with {
+            runtime_inputs = [shared_shell],
+            paths = [b.path.any "*"],
+            .. b.output "out"
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

@@ -1,0 +1,65 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+type Backend =
+    | OpenSsl
+    | LibreSsl
+    | Rustls
+
+let select = \backend ->
+    match backend with
+    | OpenSsl -> {
+        flag = "-DTLS_BACKEND=openssl",
+        development = b.dep.pkgconfig "openssl",
+        runtime = b.dep.soname "libssl.so.3",
+    }
+    | LibreSsl -> {
+        flag = "-DTLS_BACKEND=libressl",
+        development = b.dep.pkgconfig "libressl",
+        runtime = b.dep.soname "libtls.so.28",
+    }
+    | Rustls -> {
+        flag = "-DTLS_BACKEND=rustls",
+        development = b.dep.pkgconfig "rustls-ffi",
+        runtime = b.dep.soname "librustls_ffi.so.0",
+    }
+
+let make = \backend ->
+    let selected = select backend
+
+    let base = b.mk_package (b.meta {
+        pname = "typed-backend-client",
+        version = "4.0.0",
+        release = 1,
+        homepage = "https://example.invalid/typed-backend-client",
+        license = ["MPL-2.0"],
+    })
+
+    {
+        builder = cmake.builder {
+            flags = [selected.flag],
+            .. cmake.defaults
+        },
+        build_inputs = [selected.development],
+        outputs = [
+            b.output_with {
+                runtime_inputs = [selected.runtime],
+                paths = [b.path.any "*"],
+                .. b.output "out"
+            },
+        ],
+        sources = [
+            b.source.archive
+                "https://example.invalid/typed-backend-client-4.0.0.tar.xz"
+                "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+        ],
+        architectures = ["native"],
+        .. base
+    }
+
+{
+    make,
+    openssl = OpenSsl,
+    libressl = LibreSsl,
+    rustls = Rustls,
+}
