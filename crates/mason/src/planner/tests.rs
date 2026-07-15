@@ -52,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 53] = [
+const PACKAGE_EXAMPLES: [&str; 57] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -65,6 +65,7 @@ const PACKAGE_EXAMPLES: [&str; 53] = [
     "desktop-application",
     "explicit-git-subprojects",
     "explicit-package-scope",
+    "explicit-package-set-extension",
     "external-patch-source",
     "factory-override",
     "firmware-bundle",
@@ -99,12 +100,15 @@ const PACKAGE_EXAMPLES: [&str; 53] = [
     "realistic-daemon",
     "release-override",
     "release-source-factory",
+    "service-family-factory",
     "shared-capability-origins",
     "source-less-generated-config",
     "split-outputs",
     "system-integration-assets",
     "target-profile-specialization",
     "typed-output-routing",
+    "userspace-role-factory",
+    "variant-matrix-factory",
     "zig-project",
 ];
 const EXECUTION_FIXTURES: [&str; 12] = [
@@ -126,6 +130,8 @@ const EXECUTION_FIXTURES: [&str; 12] = [
 mod bootstrap;
 #[path = "tests/documented_semantics/code_generation.rs"]
 mod documented_code_generation;
+#[path = "tests/documented_semantics/composition.rs"]
+mod documented_composition;
 #[path = "tests/documented_semantics/dependencies.rs"]
 mod documented_dependencies;
 #[path = "tests/documented_semantics/generated.rs"]

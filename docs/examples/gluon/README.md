@@ -29,9 +29,11 @@ needed by a declarative userspace.
 | [`optional-component-source-graph`](packages/optional-component-source-graph/stone.glu) | One typed feature adding a locked source, native tool, setup hook, and output as a coherent graph. |
 | [`backend-choice-factory`](packages/backend-choice-factory/stone.glu) | A closed Gluon variant selecting one mutually exclusive build and runtime backend. |
 | [`release-source-factory`](packages/release-source-factory/stone.glu) | One explicit release record driving package metadata, source identity, and materialization names. |
+| [`service-family-factory`](packages/service-family-factory/stone.glu) | One release and a closed member selector producing an exact daemon, client, or integration closure. |
 | [`release-override`](packages/release-override/stone.glu) | An explicit attribute patch replacing package metadata and the complete source list together. |
 | [`factory-override`](packages/factory-override/stone.glu) | Dependency-argument overrides followed by a typed attribute patch. |
 | [`explicit-package-scope`](packages/explicit-package-scope/stone.glu) | Multiple explicit factories receiving one authored capability scope without reflection or recursive package-set magic. |
+| [`explicit-package-set-extension`](packages/explicit-package-set-extension/stone.glu) | A non-recursive package-set extension passed explicitly into a source-less userspace bundle. |
 | [`platform-factory`](packages/platform-factory/stone.glu) | A pure factory receiving explicit platform policy and dependency capabilities from local modules. |
 | [`kernel-module-factory`](packages/kernel-module-factory/stone.glu) | A kernel-specialized package factory with an exact headers output, ABI release, module path, and target set. |
 | [`layered-overrides`](packages/layered-overrides/stone.glu) | Ordered total package transformations with visible prepend, append, and scalar replacement semantics. |
@@ -46,6 +48,8 @@ needed by a declarative userspace.
 | [`native-codegen-target-library`](packages/native-codegen-target-library/stone.glu) | A build-platform generator and target-platform library kept in distinct typed dependency roles. |
 | [`split-outputs`](packages/split-outputs/stone.glu) | Runtime, development, documentation, and root output rules. |
 | [`typed-output-routing`](packages/typed-output-routing/stone.glu) | Ordered catch-all, executable, symlink, and special-file collection rules across explicit outputs. |
+| [`userspace-role-factory`](packages/userspace-role-factory/stone.glu) | Closed workstation, server, and builder roles selected through an ordinary pure function rather than module merging. |
+| [`variant-matrix-factory`](packages/variant-matrix-factory/stone.glu) | Two exhaustive typed axes forming one dependency and build-policy matrix without independent boolean drift. |
 | [`conflicts`](packages/conflicts/stone.glu) | Typed conflicts, exclusions, provides, and path kinds. |
 | [`options-tuning`](packages/options-tuning/stone.glu) | Toolchain choice, hardening, LTO, optimization, and package switches. |
 | [`profiles-emul32`](packages/profiles-emul32/stone.glu) | Profile-specific builders and 32-bit dependency roles. |

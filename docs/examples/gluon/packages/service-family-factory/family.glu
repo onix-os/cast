@@ -1,0 +1,56 @@
+let b = import! cast.package.v3
+
+type Member =
+    | Daemon
+    | Client
+    | Integration
+
+let select = \member ->
+    match member with
+    | Daemon -> {
+        pname = "relay-daemon",
+        flag = "-DBUILD_MEMBER=daemon",
+        summary = "Relay background service",
+        runtime_inputs = [
+            b.dep.package "systemd",
+            b.dep.soname "libssl.so.3",
+        ],
+        paths = [
+            b.path.exe "/usr/sbin/relay-daemon",
+            b.path.any "/usr/lib/systemd/system/relay-daemon.service",
+            b.path.any "/usr/share/defaults/relay-daemon",
+        ],
+    }
+    | Client -> {
+        pname = "relay-client",
+        flag = "-DBUILD_MEMBER=client",
+        summary = "Relay command-line client",
+        runtime_inputs = [
+            b.dep.soname "libssl.so.3",
+            b.dep.package "ca-certificates",
+        ],
+        paths = [
+            b.path.exe "/usr/bin/relayctl",
+            b.path.any "/usr/share/man/man1/relayctl.1",
+        ],
+    }
+    | Integration -> {
+        pname = "relay-integration",
+        flag = "-DBUILD_MEMBER=integration",
+        summary = "Relay declarative integration assets",
+        runtime_inputs = [
+            b.dep.package "relay-daemon",
+            b.dep.package "systemd",
+        ],
+        paths = [
+            b.path.any "/usr/lib/sysusers.d/relay.conf",
+            b.path.any "/usr/lib/tmpfiles.d/relay.conf",
+        ],
+    }
+
+{
+    daemon = Daemon,
+    client = Client,
+    integration = Integration,
+    select,
+}

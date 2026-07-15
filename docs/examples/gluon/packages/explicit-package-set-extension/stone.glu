@@ -1,0 +1,5 @@
+let scope = import! "./scope.glu"
+let make_bundle = import! "./package.glu"
+
+let packages = scope.with_observability scope.base
+make_bundle packages

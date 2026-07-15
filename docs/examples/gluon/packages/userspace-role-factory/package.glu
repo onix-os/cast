@@ -1,0 +1,24 @@
+let b = import! cast.package.v3
+let roles = import! "./roles.glu"
+
+\role ->
+    let selected = roles.select role
+    let base = b.mk_package (b.meta {
+        pname = selected.pname,
+        version = "1",
+        release = 1,
+        homepage = "https://example.invalid/userspace-roles",
+        license = ["CC0-1.0"],
+    })
+    {
+        outputs = [
+            b.output_with {
+                summary = b.optional.set selected.summary,
+                description = b.optional.set "One explicit, typed userspace role with no imperative activation phase.",
+                runtime_inputs = selected.packages,
+                .. b.output "out"
+            },
+        ],
+        architectures = ["native"],
+        .. base
+    }
