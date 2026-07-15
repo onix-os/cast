@@ -868,6 +868,23 @@ and instant rollback mechanism; it hardens their failure semantics.
   missing, malformed, or duplicate tokens where recovery requires identity,
   reserve the marker path from package and trigger output, and preflight every
   root ABI name.
+  As of 2026-07-15, the root-ABI portion uses a retained two-stage capability:
+  all five final names and all five legacy `.next` names are inspected without
+  mutation before candidate identity preparation, so a static foreign occupant
+  leaves live `/usr`, the already-materialized fixed-staging candidate, tree
+  markers, triggers, and the already-allocated database row unchanged. The same
+  root descriptor and per-link absence/inode witnesses are
+  revalidated before transaction triggers, at ordinary exchange preflight, and
+  inside the final exchange validator. Only after the forward `/usr` exchange,
+  while the already-clean journal guard remains retained, are missing canonical
+  links published no-replace and fsynced through that descriptor; the completed
+  capability is revalidated before and after system triggers. Focused coverage
+  exercises every final and `.next` conflict, archived-candidate ordering,
+  retained absence and inode replacement at the exchange boundary, and
+  compensating recovery when a foreign name wins after `/usr` exchange but
+  before root-link publication. Authenticated scratch cleanup, recursive
+  candidate durability/inventory, complete previous-tree classification, and
+  trigger-proof marker reservation remain open, so this item is not complete.
 - [ ] Drive new-state creation, archived-state activation, and active-state
   reblits through the same journal coordinator. Persist each intent before DB
   allocation, candidate decoration, trigger execution, `/usr` exchange,

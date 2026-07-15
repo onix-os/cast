@@ -941,6 +941,12 @@ impl Client {
         // database or VFS failure must leave the archived candidate untouched.
         let fstree = self.vfs(new.selections.iter().map(|selection| &selection.package))?;
 
+        // Root ABI conflicts are immutable preflight failures, not reasons to
+        // move the archived candidate or exchange the live /usr first. Retain
+        // the read-only proof so the same names can be revalidated at the
+        // exchange boundary without reopening mutable path authority.
+        let live_root_abi = preflight_root_links(&self.installation.root)?;
+
         let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
         active_state.revalidate(&self.installation)?;
         let tree_identity = self
@@ -952,6 +958,7 @@ impl Client {
                 source: Box::new(source.into()),
             })?;
         active_state.refresh_after_tree_identity_preparation(&self.installation)?;
+        live_root_abi.revalidate()?;
 
         // Exchange the exact archived-state wrapper with the fixed staging
         // wrapper. Both inodes remain retained so a racing path replacement
@@ -1000,6 +1007,7 @@ impl Client {
             !skip_triggers,
             !skip_boot,
             &tree_identity,
+            live_root_abi,
             &active_state,
             &mut checkpoint,
         )?;
@@ -1232,6 +1240,10 @@ impl Client {
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
         self.require_non_frozen()?;
+        // Complete preflight before candidate identity preparation or any
+        // trigger. A static conflict therefore leaves the staged candidate and
+        // its database row available for inspection or an exact retry.
+        let live_root_abi = preflight_root_links(&self.installation.root)?;
         let archive_previous = old_state.is_some();
         let candidate_usr = self.installation.staging_path("usr");
         // Empty package selections deliberately materialize no filesystem
@@ -1325,6 +1337,7 @@ impl Client {
                 &self.installation.staging_path("usr"),
                 &self.installation.root.join("usr"),
             )?;
+            live_root_abi.revalidate()?;
             match retained_usr {
                 Some(candidate_usr) => Self::apply_triggers(
                     TriggerScope::RetainedTransaction {
@@ -1377,6 +1390,7 @@ impl Client {
             true,
             true,
             &tree_identity,
+            live_root_abi,
             active_state,
             &mut checkpoint,
         )
@@ -1403,6 +1417,7 @@ impl Client {
         run_system_triggers: bool,
         run_boot_synchronization: bool,
         tree_identity: &StatefulTreeIdentity,
+        live_root_abi: RootAbiPreflight,
         active_state: &active_state_authority::ActiveStateAuthority,
         checkpoint: &mut F,
     ) -> Result<(), Error>
@@ -1424,6 +1439,7 @@ impl Client {
             )
             .map_err(Error::from)
             .and_then(|()| active_state.revalidate(&self.installation))
+            .and_then(|()| live_root_abi.revalidate())
             .and_then(|()| {
                 if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                     tree_identity
@@ -1453,6 +1469,13 @@ impl Client {
                     source: io::Error::other(source),
                 }
             })?;
+            live_root_abi
+                .revalidate()
+                .map_err(|source| crate::transition_identity::Error::RetainedExchange {
+                    operation: "revalidate retained root ABI immediately before forward exchange",
+                    path: live_root_abi.path().to_owned(),
+                    source: io::Error::other(source),
+                })?;
             if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                 tree_identity.verify_active_reblit_candidate_snapshot(
                     &self.installation,
@@ -1504,6 +1527,8 @@ impl Client {
                 &self.installation.root.join("usr"),
                 &self.installation.staging_path("usr"),
             )?;
+            let live_root_abi = live_root_abi.publish()?;
+            live_root_abi.revalidate()?;
             if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                 tree_identity.verify_active_reblit_candidate_snapshot(
                     &self.installation,
@@ -1513,10 +1538,6 @@ impl Client {
                 )?;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterUsrExchange)?;
-
-            // Root ABI links refer into `/usr`, so the same links remain valid
-            // after either the forward or reverse exchange.
-            create_root_links(&self.installation.root)?;
 
             if run_system_triggers {
                 system_triggers_incomplete = true;
@@ -1534,6 +1555,7 @@ impl Client {
                         true,
                     )?;
                 }
+                live_root_abi.revalidate()?;
                 system_triggers_incomplete = false;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggers)?;
@@ -5443,6 +5465,72 @@ fn create_root_links(root: &Path) -> Result<RetainedRootAbi, Error> {
     create_root_links_with(root, |_| {}, |directory| directory.sync_all())
 }
 
+/// Inspect every stable and legacy staging name without mutating the root.
+///
+/// Stateful activation performs this half before candidate identity preparation
+/// so a static foreign occupant leaves the already-materialized candidate and
+/// its allocated database row unchanged.
+/// Publication is deliberately separate: it runs only after the canonical
+/// journal guard has proved a clean baseline, using this same retained root
+/// descriptor rather than reopening the public pathname.
+fn preflight_root_links(root: &Path) -> Result<RootAbiPreflight, Error> {
+    RootAbiPreflight::open_with(root, &mut |_| {})
+}
+
+#[derive(Debug)]
+struct RootAbiPreflight {
+    root: PathBuf,
+    directory: fs::File,
+    identity: FrozenRootIdentity,
+    links: Vec<(&'static str, &'static str, Option<PinnedRootAbiLink>)>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BEFORE_STATEFUL_ROOT_ABI_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn arm_before_stateful_root_abi_publication(hook: impl FnOnce() + 'static) {
+    BEFORE_STATEFUL_ROOT_ABI_PUBLICATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_stateful_root_abi_publication() {
+    BEFORE_STATEFUL_ROOT_ABI_PUBLICATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+impl RootAbiPreflight {
+    fn path(&self) -> &Path {
+        &self.root
+    }
+
+    fn revalidate(&self) -> Result<(), Error> {
+        require_root_abi_directory(&self.root, &self.directory, self.identity)?;
+        for (source, target, pinned) in &self.links {
+            require_root_abi_staging_absent(&self.directory, &self.root, target)?;
+            match pinned {
+                Some(pinned) => {
+                    require_pinned_root_abi_link(&self.directory, &self.root, source, target, pinned)?;
+                }
+                None => {
+                    if open_root_abi_entry(&self.directory, &self.root, target)?.is_some() {
+                        return Err(Error::RootAbiLinkAppeared(self.root.join(target)));
+                    }
+                }
+            }
+        }
+        require_root_abi_directory(&self.root, &self.directory, self.identity)
+    }
+}
+
 /// Exact merged-/usr scratch-root capability established while the ABI links
 /// are provisioned. Transaction containers must consume this retained inode;
 /// reopening the public path would admit a replacement root after validation.
@@ -5497,121 +5585,150 @@ where
     C: FnMut(RootAbiLinkCheckpoint),
     S: FnMut(&fs::File) -> io::Result<()>,
 {
-    let root = if root.is_absolute() {
-        root.to_owned()
-    } else {
-        std::env::current_dir()
-            .map_err(|source| Error::OpenRootAbiDirectory {
-                root: root.to_owned(),
-                source,
-            })?
-            .join(root)
-    };
-    let directory = open_root_abi_directory(&root).map_err(|source| Error::OpenRootAbiDirectory {
-        root: root.clone(),
-        source,
-    })?;
-    let identity = root_abi_directory_identity(&directory).map_err(|source| Error::StatRootAbiDirectory {
-        root: root.clone(),
-        source,
-    })?;
-    checkpoint(RootAbiLinkCheckpoint::RootOpened);
+    RootAbiPreflight::open_with(root, &mut checkpoint)?.publish_with(&mut checkpoint, &mut sync)
+}
 
-    let mut links = Vec::with_capacity(ROOT_ABI_LINKS.len());
-    for (source, target) in ROOT_ABI_LINKS {
-        require_root_abi_staging_absent(&directory, &root, target)?;
-        links.push((
-            source,
-            target,
-            pin_root_abi_link(&directory, &root, source, target, true)?,
-        ));
-    }
-    checkpoint(RootAbiLinkCheckpoint::PreflightComplete);
-
-    for (source, target, pinned) in &mut links {
-        let source = *source;
-        let target = *target;
-        if pinned.is_some() {
-            continue;
-        }
-        match symlinkat(source, Some(directory.as_raw_fd()), target) {
-            Ok(()) => {}
-            Err(Errno::EEXIST) => {
-                // A concurrent creator is authenticated by the common pin
-                // below. Never replace or remove what won the race.
-            }
-            Err(error) => {
-                return Err(Error::CreateRootAbiLink {
-                    path: root.join(target),
-                    target: source.to_owned(),
-                    source: io::Error::from_raw_os_error(error as i32),
-                });
-            }
-        }
-        *pinned = pin_root_abi_link(&directory, &root, source, target, false)?;
-    }
-
-    // Always sync, including an idempotent no-op retry after a prior sync
-    // failure, so every successful return is a durability boundary.
-    sync(&directory).map_err(|source| Error::SyncRootAbiDirectory {
-        root: root.clone(),
-        source,
-    })?;
-    checkpoint(RootAbiLinkCheckpoint::AfterSync);
-
-    // Revalidate the complete namespace after publication and sync. This also
-    // detects `.next` or final-name races without ever cleaning them up.
-    for (source, target, pinned) in &links {
-        let source = *source;
-        let target = *target;
-        require_root_abi_staging_absent(&directory, &root, target)?;
-        require_pinned_root_abi_link(
-            &directory,
-            &root,
-            source,
-            target,
-            pinned.as_ref().expect("every root ABI link was pinned before sync"),
-        )?;
-    }
-    require_root_abi_directory(&root, &directory, identity)?;
-    let anchor = openat2_file(
-        directory.as_raw_fd(),
-        c".",
-        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-        0,
-        crate::linux_fs::controlled_resolution(),
-    )
-    .map_err(|source| Error::OpenRootAbiDirectory {
-        root: root.clone(),
-        source,
-    })?;
-    if anchor
-        .metadata()
-        .map(|metadata| FrozenRootIdentity::from_metadata(&metadata))
-        .map_err(|source| Error::StatRootAbiDirectory {
+impl RootAbiPreflight {
+    fn open_with<C>(root: &Path, checkpoint: &mut C) -> Result<Self, Error>
+    where
+        C: FnMut(RootAbiLinkCheckpoint),
+    {
+        let root = if root.is_absolute() {
+            root.to_owned()
+        } else {
+            std::env::current_dir()
+                .map_err(|source| Error::OpenRootAbiDirectory {
+                    root: root.to_owned(),
+                    source,
+                })?
+                .join(root)
+        };
+        let directory = open_root_abi_directory(&root).map_err(|source| Error::OpenRootAbiDirectory {
             root: root.clone(),
             source,
-        })?
-        != identity
-    {
-        return Err(Error::RootAbiDirectoryReplaced(root));
+        })?;
+        let identity = root_abi_directory_identity(&directory).map_err(|source| Error::StatRootAbiDirectory {
+            root: root.clone(),
+            source,
+        })?;
+        checkpoint(RootAbiLinkCheckpoint::RootOpened);
+
+        let mut links = Vec::with_capacity(ROOT_ABI_LINKS.len());
+        for (source, target) in ROOT_ABI_LINKS {
+            require_root_abi_staging_absent(&directory, &root, target)?;
+            links.push((
+                source,
+                target,
+                pin_root_abi_link(&directory, &root, source, target, true)?,
+            ));
+        }
+        checkpoint(RootAbiLinkCheckpoint::PreflightComplete);
+
+        Ok(Self {
+            root,
+            directory,
+            identity,
+            links,
+        })
     }
-    Ok(RetainedRootAbi {
-        root,
-        directory,
-        anchor,
-        identity,
-        links: links
-            .into_iter()
-            .map(|(source, target, link)| {
-                (
-                    source,
-                    target,
-                    link.expect("every root ABI link was pinned before retention"),
-                )
-            })
-            .collect(),
-    })
+
+    fn publish(self) -> Result<RetainedRootAbi, Error> {
+        #[cfg(test)]
+        before_stateful_root_abi_publication();
+        self.publish_with(&mut |_| {}, &mut |directory| directory.sync_all())
+    }
+
+    fn publish_with<C, S>(mut self, checkpoint: &mut C, sync: &mut S) -> Result<RetainedRootAbi, Error>
+    where
+        C: FnMut(RootAbiLinkCheckpoint),
+        S: FnMut(&fs::File) -> io::Result<()>,
+    {
+        for (source, target, pinned) in &mut self.links {
+            let source = *source;
+            let target = *target;
+            if pinned.is_some() {
+                continue;
+            }
+            match symlinkat(source, Some(self.directory.as_raw_fd()), target) {
+                Ok(()) => {}
+                Err(Errno::EEXIST) => {
+                    // A concurrent creator is authenticated by the common pin
+                    // below. Never replace or remove what won the race.
+                }
+                Err(error) => {
+                    return Err(Error::CreateRootAbiLink {
+                        path: self.root.join(target),
+                        target: source.to_owned(),
+                        source: io::Error::from_raw_os_error(error as i32),
+                    });
+                }
+            }
+            *pinned = pin_root_abi_link(&self.directory, &self.root, source, target, false)?;
+        }
+
+        // Always sync, including an idempotent no-op retry after a prior sync
+        // failure, so every successful return is a durability boundary.
+        sync(&self.directory).map_err(|source| Error::SyncRootAbiDirectory {
+            root: self.root.clone(),
+            source,
+        })?;
+        checkpoint(RootAbiLinkCheckpoint::AfterSync);
+
+        // Revalidate the complete namespace after publication and sync. This
+        // also detects `.next` or final-name races without cleaning them up.
+        for (source, target, pinned) in &self.links {
+            let source = *source;
+            let target = *target;
+            require_root_abi_staging_absent(&self.directory, &self.root, target)?;
+            require_pinned_root_abi_link(
+                &self.directory,
+                &self.root,
+                source,
+                target,
+                pinned.as_ref().expect("every root ABI link was pinned before sync"),
+            )?;
+        }
+        require_root_abi_directory(&self.root, &self.directory, self.identity)?;
+        let anchor = openat2_file(
+            self.directory.as_raw_fd(),
+            c".",
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            0,
+            crate::linux_fs::controlled_resolution(),
+        )
+        .map_err(|source| Error::OpenRootAbiDirectory {
+            root: self.root.clone(),
+            source,
+        })?;
+        if anchor
+            .metadata()
+            .map(|metadata| FrozenRootIdentity::from_metadata(&metadata))
+            .map_err(|source| Error::StatRootAbiDirectory {
+                root: self.root.clone(),
+                source,
+            })?
+            != self.identity
+        {
+            return Err(Error::RootAbiDirectoryReplaced(self.root));
+        }
+        Ok(RetainedRootAbi {
+            root: self.root,
+            directory: self.directory,
+            anchor,
+            identity: self.identity,
+            links: self
+                .links
+                .into_iter()
+                .map(|(source, target, link)| {
+                    (
+                        source,
+                        target,
+                        link.expect("every root ABI link was pinned before retention"),
+                    )
+                })
+                .collect(),
+        })
+    }
 }
 
 fn open_root_abi_directory(root: &Path) -> io::Result<fs::File> {
@@ -11336,6 +11453,8 @@ pub enum Error {
     },
     #[error("merged-/usr root ABI link {path:?} targeting {target:?} is missing after publication")]
     RootAbiLinkMissing { path: PathBuf, target: String },
+    #[error("merged-/usr root ABI link appeared after absence was retained: {0:?}")]
+    RootAbiLinkAppeared(PathBuf),
     #[error("merged-/usr root ABI link was replaced across its durability boundary: {0:?}")]
     RootAbiLinkReplaced(PathBuf),
     #[error("create absent merged-/usr root ABI link {path:?} targeting {target:?}")]
@@ -12185,6 +12304,7 @@ mod tests {
 
     mod external_materialization;
     mod fixed_staging_transition;
+    mod root_abi_preflight;
 
     fn test_installation(root: &Path) -> Installation {
         prepare_private_installation_root(root);
@@ -19822,6 +19942,7 @@ let cast = import! cast.system.v1
         active_state
             .refresh_after_tree_identity_preparation(&fixture.client.installation)
             .unwrap();
+        let live_root_abi = preflight_root_links(&fixture.client.installation.root).unwrap();
         let mut no_fault = |_| Ok(());
         fixture
             .client
@@ -19834,6 +19955,7 @@ let cast = import! cast.system.v1
                 false,
                 false,
                 &identity,
+                live_root_abi,
                 &active_state,
                 &mut no_fault,
             )
@@ -20759,6 +20881,7 @@ let cast = import! cast.system.v1
         active_state
             .refresh_after_tree_identity_preparation(&client.installation)
             .unwrap();
+        let live_root_abi = preflight_root_links(&client.installation.root).unwrap();
         tree_identity.verify_pre_exchange(&candidate_usr, &live_usr).unwrap();
         let synthesized_token = recovery_tree_token(&live_usr);
         let candidate_token = recovery_tree_token(&candidate_usr);
@@ -20783,6 +20906,7 @@ let cast = import! cast.system.v1
                 false,
                 false,
                 &tree_identity,
+                live_root_abi,
                 &active_state,
                 &mut |_| Ok(()),
             )
@@ -21161,33 +21285,56 @@ let cast = import! cast.system.v1
     }
 
     #[test]
-    fn live_root_abi_conflict_reverses_usr_exchange_without_touching_foreign_entry() {
+    fn archived_live_root_abi_conflict_precedes_staging_triggers_and_usr_exchange() {
         let fixture = stateful_transition_fixture(true);
-        let foreign = fixture.client.installation.root.join("bin");
+        let installation = &fixture.client.installation;
+        let foreign = installation.root.join("bin");
         fs::write(&foreign, b"foreign live root entry").unwrap();
         let identity = root_abi_inode(&foreign);
+        let live_usr = installation.root.join("usr");
+        let archived_root = installation.root_path(fixture.candidate.id.to_string());
+        let archived_usr = archived_root.join("usr");
+        let staging = installation.staging_dir();
+        let live_identity = root_abi_inode(&live_usr);
+        let archive_identity = root_abi_inode(&archived_root);
+        let archived_usr_identity = root_abi_inode(&archived_usr);
+        let staging_identity = root_abi_inode(&staging);
+        let states = fixture.client.state_db.all().unwrap();
+        let mut checkpoints = Vec::new();
+        assert!(take_observed_trigger_scopes().is_empty());
 
         let error = fixture
             .client
-            .activate_state_with_checkpoint(fixture.candidate.id, true, true, |_| Ok(()))
+            .activate_state_with_checkpoint(fixture.candidate.id, false, true, |checkpoint| {
+                checkpoints.push(checkpoint);
+                Ok(())
+            })
             .unwrap_err();
         assert!(matches!(
             error,
-            Error::StatefulTransitionUsrRestored {
-                primary,
-                candidate,
-                previous: Some(previous),
-            } if candidate == fixture.candidate.id
-                && previous == fixture.previous.id
-                && matches!(
-                    primary.as_ref(),
-                    Error::RootAbiLinkTypeConflict { path, .. } if path == &foreign
-                )
+            Error::RootAbiLinkTypeConflict { path, .. } if path == foreign
         ));
+        assert!(checkpoints.is_empty());
+        assert!(take_observed_trigger_scopes().is_empty());
         assert_eq!(root_abi_inode(&foreign), identity);
         assert_eq!(fs::read(&foreign).unwrap(), b"foreign live root entry");
-        assert_root_abi_absent(&fixture.client.installation.root.join("sbin"));
-        assert_recovered_stateful_transition(&fixture);
+        assert_root_abi_absent(&installation.root.join("sbin"));
+        assert_eq!(root_abi_inode(&live_usr), live_identity);
+        assert_eq!(root_abi_inode(&archived_root), archive_identity);
+        assert_eq!(root_abi_inode(&archived_usr), archived_usr_identity);
+        assert_eq!(root_abi_inode(&staging), staging_identity);
+        assert!(!installation.staging_path("usr").exists());
+        assert!(!live_usr.join(".cast-tree-id").exists());
+        assert!(!archived_usr.join(".cast-tree-id").exists());
+        assert_eq!(fixture.client.state_db.all().unwrap(), states);
+        assert_eq!(
+            fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+            fixture.previous.id.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(archived_usr.join(".stateID")).unwrap(),
+            fixture.candidate.id.to_string()
+        );
     }
 
     #[test]

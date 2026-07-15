@@ -187,6 +187,11 @@ forge-transition-identity-test:
 		client::tests::recovery_rejects_same_content_marker_name_substitution_without_repair \
 		client::tests::recovery_rejects_whole_directory_same_token_substitution_without_exchange \
 		client::tests::missing_live_usr_between_identity_check_and_exchange_is_never_recreated \
+		client::tests::root_abi_preflight::every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation \
+		client::tests::root_abi_preflight::retained_live_root_abi_rejects_replacement_at_the_exchange_boundary \
+		client::tests::root_abi_preflight::retained_absent_root_abi_rejects_appearance_at_the_exchange_boundary \
+		client::tests::root_abi_preflight::post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry \
+		client::tests::archived_live_root_abi_conflict_precedes_staging_triggers_and_usr_exchange \
 		client::tests::unresolved_journal_evidence_blocks_marker_publication_before_activation \
 		client::tests::orphan_transition_row_blocks_marker_publication_before_activation \
 		client::tests::state_creation_records_and_exports_the_generated_snapshot \
