@@ -7,43 +7,39 @@
 //! mint a token nor promote, repair, or remove a temporary marker.
 
 use std::{
-    ffi::{CStr, CString, OsStr},
+    ffi::{CStr, CString},
     fs::{File, Permissions},
     io,
     os::{
         fd::AsRawFd as _,
         unix::{
             ffi::OsStrExt as _,
-            fs::{FileExt as _, MetadataExt as _, PermissionsExt as _},
+            fs::{MetadataExt as _, PermissionsExt as _},
         },
     },
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{
     linux_fs::{
-        controlled_resolution, link_path_descriptor_noreplace, openat2_file, require_no_default_acl, sync_filesystem,
+        controlled_resolution, link_path_descriptor_noreplace, link_retained_file_noreplace, openat2_file,
+        require_no_default_acl, sync_filesystem,
     },
     transition_journal::TreeToken,
 };
+
+mod integrity;
+mod retained;
+
+use integrity::*;
 
 const MARKER_NAME: &CStr = c".cast-tree-id";
 const TEMPORARY_NAME: &CStr = c".cast-tree-id.tmp";
 const MARKER_MODE: u32 = 0o444;
 const TEMPORARY_MODE: u32 = 0o600;
-
-const MAGIC: &[u8; 8] = b"CASTTID\0";
-const VERSION: u16 = 1;
-const TOKEN_LENGTH: usize = TreeToken::TEXT_LENGTH;
-const CHECKSUM_LENGTH: usize = 32;
-const MAGIC_END: usize = MAGIC.len();
-const VERSION_END: usize = MAGIC_END + size_of::<u16>();
-const LENGTH_END: usize = VERSION_END + size_of::<u32>();
-const CHECKSUM_END: usize = LENGTH_END + CHECKSUM_LENGTH;
-const FRAME_LENGTH: usize = CHECKSUM_END + TOKEN_LENGTH;
 
 /// A retained, readable `/usr` directory capability.
 ///
@@ -64,52 +60,14 @@ pub(crate) struct RetainedTreeMarker {
     file: File,
     path: PathBuf,
     witness: MarkerWitness,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct InodeIdentity {
-    device: u64,
-    inode: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectoryWitness {
-    identity: InodeIdentity,
-    owner: u32,
-    mode: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MarkerWitness {
-    identity: InodeIdentity,
-    owner: u32,
-    mode: u32,
-    links: u64,
-    length: u64,
+    authorized_links: AtomicU64,
+    slot_link_authorized: AtomicBool,
 }
 
 #[derive(Debug)]
 struct TemporaryMarker {
     file: File,
     witness: MarkerWitness,
-}
-
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub(crate) enum MarkerCodecError {
-    #[error("tree marker has length {actual}, expected exactly {FRAME_LENGTH}")]
-    InvalidLength { actual: usize },
-    #[error("tree marker magic is not canonical")]
-    InvalidMagic,
-    #[error("tree marker version {0} is unsupported")]
-    UnsupportedVersion(u16),
-    #[error("tree marker payload length {0} is not canonical")]
-    InvalidPayloadLength(u32),
-    #[error("tree marker token is not one nonzero lowercase 128-bit value")]
-    InvalidToken,
-    #[error("tree marker checksum does not match its framed token")]
-    ChecksumMismatch,
-    #[error("tree marker frame is not in canonical byte form")]
-    NonCanonical,
 }
 
 #[derive(Debug, Error)]
@@ -163,6 +121,12 @@ pub(crate) enum TreeMarkerError {
     DirectoryChanged { path: PathBuf },
     #[error("temporary tree marker inode changed at `{}`", path.display())]
     TemporaryChanged { path: PathBuf },
+    #[error("tree marker at `{}` has an unauthenticated second namespace link", path.display())]
+    UnauthorizedSlotLink { path: PathBuf },
+    #[error("tree marker slot-link publication collided at `{}`", path.display())]
+    SlotLinkPublicationCollision { path: PathBuf },
+    #[error("tree marker at `{}` cannot authorize a slot link from link count {links}", path.display())]
+    InvalidAuthorizedLinkCount { path: PathBuf, links: u64 },
 }
 
 impl TreeMarkerStore {
@@ -287,6 +251,7 @@ impl TreeMarkerStore {
     /// source pathname to substitute and no crash residue to clean. This is
     /// the only API in this module which can generate a token or publish a
     /// canonical name.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn adopt_or_create_before_journal(&self) -> Result<RetainedTreeMarker, TreeMarkerError> {
         self.validate_usr()?;
         self.usr
@@ -314,6 +279,46 @@ impl TreeMarkerStore {
         self.publish_temporary(temporary, &token)
     }
 
+    /// Prepare a marker for the transition guard while allowing it to defer
+    /// authentication of exactly one persistent state-slot hardlink.
+    ///
+    /// The ordinary preparation and recovery APIs remain strict `nlink=1`
+    /// readers. This narrow path may return an `nlink=2` marker, but its normal
+    /// revalidation remains disabled until the transition namespace proves the
+    /// sole extra link is the expected canonical or parked state-slot entry.
+    pub(crate) fn adopt_or_create_before_journal_for_transition(&self) -> Result<RetainedTreeMarker, TreeMarkerError> {
+        self.validate_usr()?;
+        self.usr.sync_all().map_err(|source| {
+            io_error(
+                "sync /usr before transition tree marker preparation",
+                &self.path,
+                source,
+            )
+        })?;
+
+        if let Some(existing) = self.load_canonical_for_transition()? {
+            self.reject_temporary()?;
+            existing
+                .file
+                .sync_all()
+                .map_err(|source| io_error("sync transition tree marker", &existing.path, source))?;
+            self.usr
+                .sync_all()
+                .map_err(|source| io_error("sync /usr after transition tree marker adoption", &self.path, source))?;
+            if !existing.needs_slot_link_authorization() {
+                existing.revalidate(self)?;
+            }
+            return Ok(existing);
+        }
+
+        self.reject_temporary()?;
+        let mut temporary = self.create_anonymous_temporary()?;
+        let token = TreeToken::generate()
+            .map_err(|source| io_error("generate kernel-random tree token", &self.marker_path(), source))?;
+        self.write_complete_temporary(&mut temporary, &token)?;
+        self.publish_temporary(temporary, &token)
+    }
+
     /// Read only canonical recovery evidence.
     ///
     /// This path cannot generate, chmod, unlink, rename, repair, or promote a
@@ -329,6 +334,7 @@ impl TreeMarkerStore {
     }
 
     /// Read canonical recovery evidence and bind it to the journal token.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn read_expected_for_recovery(
         &self,
         expected: &TreeToken,
@@ -358,6 +364,10 @@ impl TreeMarkerStore {
     }
 
     fn load_canonical(&self) -> Result<Option<RetainedTreeMarker>, TreeMarkerError> {
+        self.load_canonical_with_links(1, true)
+    }
+
+    fn load_canonical_for_transition(&self) -> Result<Option<RetainedTreeMarker>, TreeMarkerError> {
         let path = self.marker_path();
         let Some(probe) = self.open_optional(
             MARKER_NAME,
@@ -367,7 +377,36 @@ impl TreeMarkerStore {
         else {
             return Ok(None);
         };
-        let witness = canonical_witness(&probe, &path)?;
+        let metadata = probe
+            .metadata()
+            .map_err(|source| io_error("inspect transition tree marker", &path, source))?;
+        let links = metadata.nlink();
+        if links != 1 && links != 2 {
+            return Err(unsafe_marker(
+                "transition",
+                &path,
+                MarkerWitness::from_metadata(&metadata),
+            ));
+        }
+        drop(probe);
+        self.load_canonical_with_links(links, links == 1)
+    }
+
+    fn load_canonical_with_links(
+        &self,
+        expected_links: u64,
+        slot_link_authorized: bool,
+    ) -> Result<Option<RetainedTreeMarker>, TreeMarkerError> {
+        let path = self.marker_path();
+        let Some(probe) = self.open_optional(
+            MARKER_NAME,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            "probe canonical tree marker",
+        )?
+        else {
+            return Ok(None);
+        };
+        let witness = canonical_witness_with_links(&probe, &path, expected_links)?;
         let file = self
             .open_optional(
                 MARKER_NAME,
@@ -375,15 +414,17 @@ impl TreeMarkerStore {
                 "open canonical tree marker",
             )?
             .ok_or_else(|| TreeMarkerError::MarkerChanged { path: path.clone() })?;
-        if canonical_witness(&file, &path)? != witness {
+        if canonical_witness_with_links(&file, &path, expected_links)? != witness {
             return Err(TreeMarkerError::MarkerChanged { path });
         }
-        let token = read_and_decode(&file, witness, &path)?;
+        let token = read_and_decode_with_links(&file, witness, &path, expected_links)?;
         Ok(Some(RetainedTreeMarker {
             token,
             file,
             path,
             witness,
+            authorized_links: AtomicU64::new(expected_links),
+            slot_link_authorized: AtomicBool::new(slot_link_authorized),
         }))
     }
 
@@ -556,290 +597,12 @@ impl TreeMarkerStore {
     }
 }
 
-impl RetainedTreeMarker {
-    pub(crate) fn token(&self) -> &TreeToken {
-        &self.token
-    }
-
-    /// Bind a marker reopened through a current pathname to this retained
-    /// marker inode, not merely to a copy of its token bytes.
-    pub(crate) fn require_same_marker(&self, named: &Self) -> Result<(), TreeMarkerError> {
-        if self.witness == named.witness && self.token == named.token {
-            Ok(())
-        } else {
-            Err(TreeMarkerError::MarkerChanged {
-                path: named.path.clone(),
-            })
-        }
-    }
-
-    /// Prove that both the retained descriptor and canonical name still denote
-    /// the exact decoded marker. This is intended for every trigger boundary.
-    pub(crate) fn revalidate(&self, store: &TreeMarkerStore) -> Result<(), TreeMarkerError> {
-        store.validate_usr()?;
-        store.reject_temporary()?;
-        if canonical_witness(&self.file, &self.path)? != self.witness {
-            return Err(TreeMarkerError::MarkerChanged {
-                path: self.path.clone(),
-            });
-        }
-        let retained_token = read_and_decode(&self.file, self.witness, &self.path)?;
-        require_expected_token(Some(&self.token), &retained_token, &self.path)?;
-        let named = store.load_canonical()?.ok_or_else(|| TreeMarkerError::MarkerChanged {
-            path: self.path.clone(),
-        })?;
-        if named.witness != self.witness || named.token != self.token {
-            return Err(TreeMarkerError::MarkerChanged {
-                path: self.path.clone(),
-            });
-        }
-        Ok(())
-    }
-}
-
-fn encode_marker(token: &TreeToken) -> [u8; FRAME_LENGTH] {
-    let mut frame = [0_u8; FRAME_LENGTH];
-    frame[..MAGIC_END].copy_from_slice(MAGIC);
-    frame[MAGIC_END..VERSION_END].copy_from_slice(&VERSION.to_be_bytes());
-    frame[VERSION_END..LENGTH_END].copy_from_slice(&(TOKEN_LENGTH as u32).to_be_bytes());
-    frame[CHECKSUM_END..].copy_from_slice(token.as_str().as_bytes());
-    let checksum = marker_checksum(&frame[..LENGTH_END], &frame[CHECKSUM_END..]);
-    frame[LENGTH_END..CHECKSUM_END].copy_from_slice(&checksum);
-    frame
-}
-
-fn decode_marker(frame: &[u8]) -> Result<TreeToken, MarkerCodecError> {
-    if frame.len() != FRAME_LENGTH {
-        return Err(MarkerCodecError::InvalidLength { actual: frame.len() });
-    }
-    if &frame[..MAGIC_END] != MAGIC {
-        return Err(MarkerCodecError::InvalidMagic);
-    }
-    let version = u16::from_be_bytes(frame[MAGIC_END..VERSION_END].try_into().expect("fixed version range"));
-    if version != VERSION {
-        return Err(MarkerCodecError::UnsupportedVersion(version));
-    }
-    let length = u32::from_be_bytes(frame[VERSION_END..LENGTH_END].try_into().expect("fixed length range"));
-    if length != TOKEN_LENGTH as u32 {
-        return Err(MarkerCodecError::InvalidPayloadLength(length));
-    }
-    let expected = marker_checksum(&frame[..LENGTH_END], &frame[CHECKSUM_END..]);
-    if frame[LENGTH_END..CHECKSUM_END] != expected {
-        return Err(MarkerCodecError::ChecksumMismatch);
-    }
-    let token = std::str::from_utf8(&frame[CHECKSUM_END..])
-        .ok()
-        .and_then(|token| TreeToken::parse(token.to_owned()).ok())
-        .ok_or(MarkerCodecError::InvalidToken)?;
-    if encode_marker(&token) != frame {
-        return Err(MarkerCodecError::NonCanonical);
-    }
-    Ok(token)
-}
-
-fn marker_checksum(header: &[u8], token: &[u8]) -> [u8; CHECKSUM_LENGTH] {
-    let mut digest = Sha256::new();
-    digest.update(header);
-    digest.update(token);
-    digest.finalize().into()
-}
-
-fn directory_witness(file: &File, path: &Path) -> Result<DirectoryWitness, TreeMarkerError> {
-    let metadata = file
-        .metadata()
-        .map_err(|source| io_error("inspect retained /usr directory", path, source))?;
-    let mode = metadata.mode() & 0o7777;
-    if !metadata.file_type().is_dir()
-        || metadata.uid() != effective_user_id()
-        || mode & 0o7000 != 0
-        || mode & 0o700 != 0o700
-        || mode & 0o022 != 0
-    {
-        return Err(TreeMarkerError::UnsafeDirectory {
-            path: path.to_owned(),
-            owner: metadata.uid(),
-            mode,
-        });
-    }
-    Ok(DirectoryWitness {
-        identity: InodeIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        },
-        owner: metadata.uid(),
-        mode,
-    })
-}
-
-fn canonical_witness(file: &File, path: &Path) -> Result<MarkerWitness, TreeMarkerError> {
-    let metadata = file
-        .metadata()
-        .map_err(|source| io_error("inspect canonical tree marker", path, source))?;
-    let witness = MarkerWitness::from_metadata(&metadata);
-    if metadata.file_type().is_file()
-        && witness.owner == effective_user_id()
-        && witness.mode == MARKER_MODE
-        && witness.links == 1
-        && witness.length == FRAME_LENGTH as u64
-    {
-        Ok(witness)
-    } else {
-        Err(unsafe_marker("canonical", path, witness))
-    }
-}
-
-fn anonymous_witness(
-    file: &File,
-    path: &Path,
-    expected_mode: u32,
-    expected_length: u64,
-) -> Result<MarkerWitness, TreeMarkerError> {
-    let metadata = file
-        .metadata()
-        .map_err(|source| io_error("inspect anonymous tree marker", path, source))?;
-    let witness = MarkerWitness::from_metadata(&metadata);
-    if metadata.file_type().is_file()
-        && witness.owner == effective_user_id()
-        && witness.links == 0
-        && witness.mode == expected_mode
-        && witness.length == expected_length
-    {
-        Ok(witness)
-    } else {
-        Err(unsafe_marker("anonymous", path, witness))
-    }
-}
-
-impl MarkerWitness {
-    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-        Self {
-            identity: InodeIdentity {
-                device: metadata.dev(),
-                inode: metadata.ino(),
-            },
-            owner: metadata.uid(),
-            mode: metadata.mode() & 0o7777,
-            links: metadata.nlink(),
-            length: metadata.len(),
-        }
-    }
-}
-
-fn read_and_decode(file: &File, expected: MarkerWitness, path: &Path) -> Result<TreeToken, TreeMarkerError> {
-    let bytes = read_exact_frame(file, path)?;
-    if canonical_witness(file, path)? != expected {
-        return Err(TreeMarkerError::MarkerChanged { path: path.to_owned() });
-    }
-    decode_marker(&bytes).map_err(|source| TreeMarkerError::Decode {
-        path: path.to_owned(),
-        source,
-    })
-}
-
-fn read_exact_frame(file: &File, path: &Path) -> Result<[u8; FRAME_LENGTH], TreeMarkerError> {
-    let mut frame = [0_u8; FRAME_LENGTH];
-    let mut offset = 0;
-    while offset < frame.len() {
-        match file.read_at(&mut frame[offset..], offset as u64) {
-            Ok(0) => {
-                return Err(io_error(
-                    "read complete tree marker frame",
-                    path,
-                    io::Error::new(io::ErrorKind::UnexpectedEof, "tree marker ended before its fixed frame"),
-                ));
-            }
-            Ok(read) => offset += read,
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) => return Err(io_error("read tree marker frame", path, source)),
-        }
-    }
-    let mut trailing = [0_u8; 1];
-    loop {
-        match file.read_at(&mut trailing, FRAME_LENGTH as u64) {
-            Ok(0) => return Ok(frame),
-            Ok(_) => {
-                return Err(io_error(
-                    "read bounded tree marker frame",
-                    path,
-                    io::Error::new(io::ErrorKind::InvalidData, "tree marker contains trailing bytes"),
-                ));
-            }
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) => return Err(io_error("read tree marker frame bound", path, source)),
-        }
-    }
-}
-
-fn write_all_at(file: &File, bytes: &[u8], path: &Path) -> Result<(), TreeMarkerError> {
-    let mut written = 0;
-    while written < bytes.len() {
-        match file.write_at(&bytes[written..], written as u64) {
-            Ok(0) => {
-                return Err(io_error(
-                    "write complete tree marker frame",
-                    path,
-                    io::Error::from_raw_os_error(nix::libc::EIO),
-                ));
-            }
-            Ok(count) => written += count,
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) => return Err(io_error("write tree marker frame", path, source)),
-        }
-    }
-    Ok(())
-}
-
-fn require_expected_token(
-    expected: Option<&TreeToken>,
-    actual: &TreeToken,
-    path: &Path,
-) -> Result<(), TreeMarkerError> {
-    if let Some(expected) = expected
-        && expected != actual
-    {
-        return Err(TreeMarkerError::TokenMismatch {
-            path: path.to_owned(),
-            expected: expected.as_str().to_owned(),
-            actual: actual.as_str().to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn unsafe_marker(role: &'static str, path: &Path, witness: MarkerWitness) -> TreeMarkerError {
-    TreeMarkerError::UnsafeMarker {
-        role,
-        path: path.to_owned(),
-        owner: witness.owner,
-        mode: witness.mode,
-        links: witness.links,
-        length: witness.length,
-    }
-}
-
-fn io_error(operation: &'static str, path: &Path, source: io::Error) -> TreeMarkerError {
-    TreeMarkerError::Io {
-        operation,
-        path: path.to_owned(),
-        source,
-    }
-}
-
-fn component_path(directory: &Path, name: &CStr) -> PathBuf {
-    directory.join(OsStr::from_bytes(name.to_bytes()))
-}
-
-fn effective_user_id() -> u32 {
-    // SAFETY: geteuid has no arguments and cannot fail.
-    unsafe { nix::libc::geteuid() }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         os::unix::{
-            fs::{MetadataExt as _, PermissionsExt as _, symlink},
+            fs::{FileExt as _, MetadataExt as _, PermissionsExt as _, symlink},
             net::UnixListener,
         },
         process::Command,

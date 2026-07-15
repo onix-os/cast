@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-previous-tree-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -161,6 +161,40 @@ forge-previous-tree-move-test:
 		client::tests::retained_previous_archive_rejects_slot_replacement_before_retention \
 		client::tests::retained_previous_archive_rejects_state_slot_parent_substitution_before_rename \
 		client::tests::retained_previous_archive_rejects_same_token_child_substitution_before_rename; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-archived-candidate-move-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::retained_archived_candidate_move_classifies_and_resumes_exact_layouts \
+		client::tests::retained_archived_candidate_move_adopts_only_the_exact_exchanged_wrappers \
+		client::tests::displaced_archived_candidate_slot_retirement_preserves_racing_occupants \
+		client::tests::archived_activation_resumes_applied_staging_suffix_before_full_recovery \
+		client::tests::archived_activation_resumes_applied_rearchive_suffix_during_full_recovery \
+		client::tests::archived_activation_keeps_rearchive_preparation_sticky_through_presync_faults \
+		client::tests::forged_exact_tree_marker_hardlink_is_not_adopted_in_process \
+		client::tests::exact_parked_tree_marker_hardlink_is_reauthorized_after_reopen \
+		client::tests::retained_archived_candidate_move_rejects_substituted_roots_as_ambiguous \
+		client::tests::retained_archived_candidate_move_rejects_a_substituted_source_wrapper \
+		client::tests::retained_archived_candidate_move_rejects_a_substituted_fixed_staging_wrapper \
+		client::tests::displaced_archived_candidate_restore_faults_are_exactly_classified_and_resumable \
+		client::tests::archived_candidate_marker_transfer_faults_resume_without_a_second_wrapper_exchange \
+		client::tests::externally_premoved_slot_marker_fast_path_still_finishes_durability \
+		client::tests::archived_candidate_rearchive_marker_preparation_faults_are_resumable \
+		client::tests::archived_candidate_parking_scan_skips_every_foreign_occupant_kind \
+		client::tests::archived_candidate_restore_preparation_uses_one_bounded_client_retry \
+		client::tests::archived_candidate_marker_preparation_after_restore_uses_one_bounded_client_retry \
+		client::tests::multiple_structural_reusable_state_slot_links_fail_closed \
+		client::tests::repeated_archived_activations_reuse_wrapper_slots_beyond_the_scan_bound \
+		client::tests::displaced_archived_candidate_retirement_without_an_attempt_fails_closed \
+		client::tests::displaced_archived_candidate_retirement_resumes_without_a_second_move \
+		client::tests::archived_retirement_suffix_failure_restores_the_slot_during_full_recovery \
+		client::tests::quarantined_archived_candidate_retries_only_retirement_durability \
+		client::tests::archived_activation_archive_failure_reverses_usr_and_rearchives_the_candidate \
+		transition_identity::reusable_previous_slot::tests::reusable_slot_scan_skips_only_proven_foreign_errors; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
@@ -428,6 +462,7 @@ help:
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
+	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"

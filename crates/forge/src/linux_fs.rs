@@ -331,6 +331,75 @@ pub(crate) fn link_path_descriptor_noreplace(
     require_same_inode(expected, inode_identity(&target.metadata()?))
 }
 
+/// Give one exact retained, already-named regular inode a second no-replace
+/// name in an authenticated target directory.
+///
+/// The procfs descriptor alias binds the source to the open inode rather than
+/// a mutable source pathname. This is deliberately separate from
+/// [`link_path_descriptor_noreplace`], whose strict unnamed-inode contract is
+/// retained for ordinary `O_TMPFILE` publication.
+pub(crate) fn link_retained_file_noreplace(
+    file: &std::fs::File,
+    target_directory: &std::fs::File,
+    target_name: &CStr,
+) -> io::Result<()> {
+    if target_name.to_bytes().is_empty()
+        || target_name.to_bytes().contains(&b'/')
+        || matches!(target_name.to_bytes(), b"." | b"..")
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "retained-file link target must be one nonempty component",
+        ));
+    }
+    let source_metadata = file.metadata()?;
+    if !source_metadata.file_type().is_file() || source_metadata.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "retained-file link source must be one singly-named regular inode",
+        ));
+    }
+
+    let (descriptors, descriptor, expected) = authenticated_descriptor_name(file)?;
+    retry_interrupted(None, || {
+        // SAFETY: both directory descriptors and names remain live. The only
+        // followed source is the authenticated procfs alias for `file`.
+        if unsafe {
+            nix::libc::linkat(
+                descriptors.as_raw_fd(),
+                descriptor.as_ptr(),
+                target_directory.as_raw_fd(),
+                target_name.as_ptr(),
+                nix::libc::AT_SYMLINK_FOLLOW,
+            )
+        } == 0
+        {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })?;
+
+    let linked_metadata = file.metadata()?;
+    require_same_inode(expected, inode_identity(&linked_metadata))?;
+    if linked_metadata.nlink() != 2 {
+        return Err(io::Error::other(format!(
+            "retained-file link source has {} names after publication, expected exactly two",
+            linked_metadata.nlink()
+        )));
+    }
+    let post_alias = open_descriptor_alias(&descriptors, &descriptor)?;
+    require_same_inode(expected, inode_identity(&post_alias.metadata()?))?;
+    let target = openat2_file(
+        target_directory.as_raw_fd(),
+        target_name,
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        controlled_resolution(),
+    )?;
+    require_same_inode(expected, inode_identity(&target.metadata()?))
+}
+
 /// Move one exact directory entry between retained parents without replacing
 /// any destination entry. Both names must be single components; callers keep
 /// authority in the descriptors rather than mutable absolute pathnames.

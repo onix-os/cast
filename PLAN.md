@@ -686,12 +686,13 @@ and instant rollback mechanism; it hardens their failure semantics.
   locked by an exact golden; pre-journal publication uses an anonymous
   same-filesystem `O_TMPFILE`, full file syncs, identity-bound no-replace
   linking through authenticated procfs, directory sync, and retained inode
-  revalidation. Canonical markers are exact owner-owned single-link 0444
-  files; package ownership of both durable and temporary names is forbidden;
-  and filesystems without linkable `O_TMPFILE` support fail closed without a
-  named pathname fallback. The recovery API is structurally read-only: a
-  missing, malformed, mismatched, replaced, or temporary marker fails without
-  minting or repair.
+  revalidation. Canonical markers are exact owner-owned 0444 files and use one
+  link by default; the narrowly authorized state-slot transition may retain
+  the sole second link described below. Package ownership of both durable and
+  temporary names is forbidden, and filesystems without linkable `O_TMPFILE`
+  support fail closed without a named pathname fallback. The recovery API is
+  structurally read-only: a missing, malformed, mismatched, replaced, or
+  temporary marker fails without minting or repair.
 - [x] Consume that primitive at the real in-process activation boundary without
   claiming crash-reopen coordination. After candidate materialization (and,
   for the legacy fresh-state path, database allocation), the stateful client
@@ -746,9 +747,34 @@ and instant rollback mechanism; it hardens their failure semantics.
   retry before recovery reverses `/usr`. Proven post-move durability failures
   likewise resume only their idempotent suffix and never rename the tree a
   second time. The bounded scan deliberately fails closed after all 256 names
-  are occupied, preserving both canonical and staged namespaces; reclaiming
-  inert parked wrappers across process restarts belongs to the later durable
-  coordinator, with manual cleanup required before that baseline exists.
+  are occupied, preserving both canonical and staged namespaces. A later
+  previous-tree archive may reuse one uniquely authenticated marker-only
+  wrapper left by archived-candidate activation instead of consuming another
+  bounded name; every foreign file type or wrapper layout is preserved and
+  skipped, multiple structurally valid reusable wrappers fail closed, and
+  reclaiming any other inert parked wrapper across process restarts belongs to
+  the later durable coordinator.
+  Initial staging and compensating rearchive of an archived candidate now
+  retain the roots, canonical state wrapper, and fixed staging wrapper, make
+  exactly one descriptor-relative `RENAME_EXCHANGE`, and reconcile both exact
+  wrapper inodes after every syscall result. Once the exchange has applied,
+  retries finish only the sync-and-revalidation suffix and never exchange the
+  wrappers a second time. The displaced staging wrapper is tracked by the sole
+  authorized extra hardlink to the archived candidate tree's permanent
+  `/usr/.cast-tree-id` inode, not by a separately forgeable token file. The
+  in-process path publishes that link no-replace from the retained canonical
+  marker after strict revalidation. On restart, an already two-link marker is
+  authorized only after a bounded scan proves exactly one state-slot link with
+  the same inode: parked wrappers must be exactly marker-only, while the
+  canonical wrapper may be marker-only or contain that marker plus the exact
+  retained `usr` tree. That retained link moves no-replace between the
+  exchanged wrappers, and the displaced wrapper is restored, parked, or
+  retired without unlinking a mutable final name. Applied restore or
+  marker-transfer preparation receives one bounded client retry; foreign
+  regular files, symlinks, FIFOs, and unsafe directories are preserved, while
+  unexpected I/O and duplicate authenticated layouts fail closed. Repeated
+  archived activations therefore reuse the same exact wrapper past the
+  256-name scan bound during normal operation.
   Failed preparation
   retains the candidate at its authenticated pre-transition location and keeps
   its database row; any preservation durability fault retains the database
@@ -757,8 +783,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   cannot make a filesystem rename and SQLite deletion atomic against an
   uncooperative same-UID writer. It does not create a journal record, reconcile
   a reboot, durably fence an ambiguous post-exchange namespace, replace the
-  still-path-based initial archived-candidate staging, repaired-archive
-  publication, and archived-candidate rearchive moves, perform the bounded
+  still-path-based repaired-archive publication move, perform the bounded
   descriptor-recursive stable-inventory proof, authenticate the entire
   activation namespace, or finish the pre-journal baseline and coordinator
   items below.
