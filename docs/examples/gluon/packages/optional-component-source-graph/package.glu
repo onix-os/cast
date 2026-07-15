@@ -1,0 +1,63 @@
+let arrays = import! std.array.prim
+let b = import! cast.package.v3
+
+\features ->
+    let base = b.mk_package (b.meta {
+        pname = "optional-source-graph",
+        version = "3.0.0",
+        release = 1,
+        homepage = "https://example.invalid/optional-source-graph",
+        license = ["Apache-2.0"],
+    })
+
+    let primary_source = b.source.archive_with {
+        url = "https://example.invalid/optional-source-graph-3.0.0.tar.xz",
+        hash = "1111111111111111111111111111111111111111111111111111111111111111",
+        rename = b.optional.set "optional-source-graph.tar.xz",
+        strip_dirs = b.optional.set 1,
+        unpack = b.boolean.true,
+        unpack_dir = b.optional.set "application",
+    }
+
+    let component_source = b.source.archive_with {
+        url = "https://example.invalid/optional-source-graph-components-3.0.0.tar.xz",
+        hash = "2222222222222222222222222222222222222222222222222222222222222222",
+        rename = b.optional.set "optional-source-graph-components.tar.xz",
+        strip_dirs = b.optional.set 1,
+        unpack = b.boolean.true,
+        unpack_dir = b.optional.set "components",
+    }
+
+    let root = b.output_with {
+        paths = [b.path.any "*"],
+        .. b.output "out"
+    }
+
+    let components = b.output_with {
+        summary = b.optional.set "Optional source-graph components",
+        paths = [b.path.any "/usr/share/optional-source-graph/components"],
+        .. b.output "components"
+    }
+
+    {
+        builder = b.builder.custom b.defaults.scripts [],
+        hooks = b.hooks {
+            pre_setup = b.boolean.when features.component [
+                b.step.run
+                    (b.program.binary "component-preparer")
+                    ["--source", "../components"],
+            ],
+            .. b.defaults.hooks
+        },
+        native_build_inputs = b.boolean.when
+            features.component
+            [b.dep.binary "component-preparer"],
+        outputs = arrays.append
+            [root]
+            (b.boolean.when features.component [components]),
+        sources = arrays.append
+            [primary_source]
+            (b.boolean.when features.component [component_source]),
+        architectures = ["native"],
+        .. base
+    }

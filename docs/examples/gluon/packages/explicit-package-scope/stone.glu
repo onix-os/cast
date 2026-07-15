@@ -1,0 +1,6 @@
+let packages = import! "./packages.glu"
+let scope = import! "./scope.glu"
+
+// Selection is explicit and returns one PackageSpec. The unselected server
+// factory contributes no dependencies or sources to the client's closure.
+packages.client scope

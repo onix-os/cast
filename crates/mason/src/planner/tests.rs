@@ -52,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 47] = [
+const PACKAGE_EXAMPLES: [&str; 51] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -63,6 +63,7 @@ const PACKAGE_EXAMPLES: [&str; 47] = [
     "custom-steps",
     "dependency-roles",
     "desktop-application",
+    "explicit-package-scope",
     "external-patch-source",
     "factory-override",
     "firmware-bundle",
@@ -81,6 +82,7 @@ const PACKAGE_EXAMPLES: [&str; 47] = [
     "minimal",
     "multiple-sources",
     "nodejs-vendored-application",
+    "optional-component-source-graph",
     "options-tuning",
     "output-policy-factory",
     "output-tool-wrapper",
@@ -93,12 +95,14 @@ const PACKAGE_EXAMPLES: [&str; 47] = [
     "python-module",
     "raw-script-package",
     "realistic-daemon",
+    "release-override",
     "release-source-factory",
     "shared-capability-origins",
     "source-less-generated-config",
     "split-outputs",
     "system-integration-assets",
     "target-profile-specialization",
+    "typed-output-routing",
     "zig-project",
 ];
 const EXECUTION_FIXTURES: [&str; 10] = [
@@ -120,10 +124,18 @@ mod bootstrap;
 mod documented_dependencies;
 #[path = "tests/documented_semantics/generated.rs"]
 mod documented_generated;
+#[path = "tests/documented_semantics/outputs.rs"]
+mod documented_outputs;
+#[path = "tests/documented_semantics/overrides.rs"]
+mod documented_overrides;
 #[path = "tests/documented_semantics/profiles.rs"]
 mod documented_profiles;
+#[path = "tests/documented_semantics/scopes.rs"]
+mod documented_scopes;
 #[path = "tests/documented_semantics.rs"]
 mod documented_semantics;
+#[path = "tests/documented_semantics/sources.rs"]
+mod documented_sources;
 #[path = "tests/documented_semantics/variants.rs"]
 mod documented_variants;
 
@@ -1167,6 +1179,7 @@ fn assert_x86_64_platform(plan: &DerivationPlan) {
 fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
     match name {
         "backend-choice-factory" => documented_variants::assert_semantics(declaration, plan),
+        "explicit-package-scope" => documented_scopes::assert_semantics(declaration, plan),
         "factory-override" => assert_factory_override_semantics(declaration, plan),
         "gettext-catalogs" => assert_gettext_catalog_semantics(declaration, plan),
         "go-module" => assert_go_module_semantics(declaration, plan),
@@ -1174,11 +1187,14 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "layered-overrides" => assert_layered_override_semantics(declaration, plan),
         "maven-application" => assert_maven_application_semantics(declaration, plan),
         "nodejs-vendored-application" => assert_nodejs_vendored_application_semantics(declaration, plan),
+        "optional-component-source-graph" => documented_sources::assert_semantics(declaration, plan),
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
+        "release-override" => documented_overrides::assert_semantics(declaration, plan),
         "shared-capability-origins" => documented_dependencies::assert_semantics(declaration, plan),
         "source-less-generated-config" => documented_generated::assert_semantics(declaration, plan),
         "target-profile-specialization" => documented_profiles::assert_semantics(declaration, plan),
+        "typed-output-routing" => documented_outputs::assert_semantics(declaration, plan),
         "zig-project" => assert_zig_project_semantics(declaration, plan),
         _ => documented_semantics::assert_semantics(name, declaration, plan),
     }

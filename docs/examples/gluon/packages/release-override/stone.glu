@@ -1,0 +1,27 @@
+let b = import! cast.package.v3
+let original = import! "./package.glu"
+
+let replacement_meta = b.meta {
+    pname = "override-release",
+    version = "2.1.0",
+    release = 4,
+    homepage = "https://example.invalid/override-release",
+    license = ["MIT"],
+}
+
+let replacement_source = b.source.archive_with {
+    url = "https://example.invalid/override-release-2.1.0.tar.xz",
+    hash = "4444444444444444444444444444444444444444444444444444444444444444",
+    rename = b.optional.set "override-release-2.1.0.tar.xz",
+    strip_dirs = b.optional.set 1,
+    unpack = b.boolean.true,
+    unpack_dir = b.optional.set "override-release-2.1.0",
+}
+
+// Metadata and the complete source list move together through explicit patch
+// variants. There is no implicit old-attribute merge or stale source fallback.
+b.override_attrs (b.package_patch {
+    meta = b.patch.set replacement_meta,
+    sources = b.patch.array.replace [replacement_source],
+    .. b.defaults.package_patch
+}) original
