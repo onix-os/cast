@@ -939,55 +939,6 @@ fn planner_and_frozen_runtime_share_one_authenticated_repository_snapshot_namesp
     assert_runtime_reopens_planner_repository_snapshot(&fixture.forge_dir, &fixture.output_dir, repositories, &planned);
 }
 
-fn capability_errno(error: &(dyn StdError + 'static)) -> bool {
-    if let Some(source) = error.downcast_ref::<std::io::Error>()
-        && (source.kind() == std::io::ErrorKind::PermissionDenied
-            || matches!(
-                source.raw_os_error(),
-                Some(code)
-                    if code == nix::libc::EPERM
-                        || code == nix::libc::EACCES
-                        || code == nix::libc::ENOSYS
-            ))
-    {
-        return true;
-    }
-    if let Some(source) = error.downcast_ref::<nix::errno::Errno>()
-        && matches!(
-            source,
-            nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS
-        )
-    {
-        return true;
-    }
-    error.source().is_some_and(capability_errno)
-}
-
-fn setup_capability_denial(message: &str) -> bool {
-    let message = message.strip_prefix("exited with failure: ").unwrap_or(message);
-    let setup_failure = [
-        "clear inherited supplementary groups",
-        "mount ",
-        "pivot_root",
-        "sethostname",
-        "unmount old root",
-    ]
-    .iter()
-    .any(|prefix| message.starts_with(prefix));
-    // Child setup errors are rendered from a typed `nix::Errno` source. Match
-    // only its exact terminal representation: paths and operation labels are
-    // diagnostic text and must never be able to smuggle an errno substring
-    // into the capability-skip decision.
-    let permission_failure = [
-        ": EPERM: Operation not permitted",
-        ": EACCES: Permission denied",
-        ": ENOSYS: Function not implemented",
-    ]
-    .iter()
-    .any(|suffix| message.ends_with(suffix));
-    setup_failure && permission_failure
-}
-
 fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
     // The Mason wrapper is transparent, so `source()` skips directly to the
     // wrapped container error's own source (often a bare `Errno`). Inspect the
@@ -995,7 +946,7 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
     // to distinguish namespace denial from unrelated EPERM failures is lost.
     if let Some(error) = error.downcast_ref::<crate::container::Error>() {
         return match error {
-            crate::container::Error::Container(error) => container_capability_unavailable(error),
+            crate::container::Error::Container(error) => error.execution_capability_unavailable(),
             // A normal developer shell is not an explicitly delegated
             // systemd supervisor. The optional fixture lane may report that
             // one precise host deficiency; malformed or partially configured
@@ -1006,53 +957,9 @@ fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
     }
 
     if let Some(error) = error.downcast_ref::<::container::Error>() {
-        return match error {
-            ::container::Error::CloneNamespaces { source } => matches!(
-                source,
-                nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS
-            ),
-            ::container::Error::CloneIntoCgroup { source } => matches!(
-                source.raw_os_error(),
-                Some(code)
-                    if code == nix::libc::ENOSYS
-                        || code == nix::libc::EPERM
-                        || code == nix::libc::E2BIG
-            ),
-            // Once the kernel accepted atomic placement, authentication and
-            // teardown failures are lifecycle violations, not evidence that
-            // the host merely lacks an optional execution capability.
-            ::container::Error::CgroupLifecycle { .. }
-            | ::container::Error::ChildCleanup { .. }
-            | ::container::Error::ChildCleanupAfterFailure { .. }
-            | ::container::Error::CgroupCleanup { .. }
-            | ::container::Error::CgroupCleanupAfterFailure { .. }
-            | ::container::Error::AtomicCgroupRequiresAnchoredRoot
-            | ::container::Error::InspectCgroupFilesystem { .. }
-            | ::container::Error::UnsafeCgroupRootFilesystem { .. }
-            | ::container::Error::UnsafeCgroupBindSource { .. }
-            | ::container::Error::UnsafeCgroupSysPolicy => false,
-            // Pipe, signal, and wait failures remain grouped here. An errno
-            // alone therefore does not prove namespace capability denial.
-            ::container::Error::Nix { .. } => false,
-            ::container::Error::Idmap { source } => {
-                source
-                    .to_string()
-                    .contains("needs at least one delegated subordinate GID")
-                    || capability_errno(source)
-            }
-            ::container::Error::Failure { message } => setup_capability_denial(message),
-            ::container::Error::Signaled { .. } | ::container::Error::UnknownExit => false,
-        };
+        return error.execution_capability_unavailable();
     }
 
-    // `thiserror` may make a transparent wrapper's concrete inner error
-    // unavailable to `downcast_ref`, but its exact display remains in the
-    // source chain. Accept only known setup labels, never `run: ...` payload
-    // failures. Typed lifecycle errors above take precedence so cleanup text
-    // can never turn a post-clone violation into an optional-capability skip.
-    if setup_capability_denial(&error.to_string()) {
-        return true;
-    }
     error.source().is_some_and(container_capability_unavailable)
 }
 
@@ -1975,15 +1882,22 @@ fn frozen_execution_capability_skip_never_hides_payload_or_ambiguous_nix_failure
     });
     assert!(!container_capability_unavailable(&namespace_resource_exhaustion));
 
-    for terminal in [
-        "EPERM: Operation not permitted",
-        "EACCES: Permission denied",
-        "ENOSYS: Function not implemented",
+    for operation in [
+        "clear inherited supplementary groups",
+        "normalize payload real, effective, and saved-set GIDs",
+        "normalize payload real, effective, and saved-set UIDs",
+        "mount /work",
     ] {
-        let setup = crate::container::Error::Container(::container::Error::Failure {
-            message: format!("mount /work: {terminal}"),
-        });
-        assert!(container_capability_unavailable(&setup));
+        for terminal in [
+            "EPERM: Operation not permitted",
+            "EACCES: Permission denied",
+            "ENOSYS: Function not implemented",
+        ] {
+            let setup = crate::container::Error::Container(::container::Error::Failure {
+                message: format!("{operation}: {terminal}"),
+            });
+            assert!(container_capability_unavailable(&setup));
+        }
     }
 
     for message in [

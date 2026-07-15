@@ -53,6 +53,13 @@ const FROZEN_TMPFS_LIMITS: TmpfsLimits = match TmpfsLimits::new(FROZEN_TMPFS_SIZ
     Err(_) => panic!("frozen tmpfs limits are non-zero"),
 };
 
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+mod preflight;
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+pub(crate) use preflight::execution_namespace_capability_unavailable;
+#[cfg(feature = "delegated-fixture-test-support")]
+pub(crate) use preflight::preflight_delegated_execution_capability;
+
 pub fn exec<E>(paths: &Paths, networking: bool, f: impl FnMut() -> Result<(), E>) -> Result<(), Error>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -1069,6 +1076,46 @@ pub enum Error {
     },
     #[error("frozen mount target must be empty before activation: {0:?}")]
     FrozenMountTargetNotEmpty(PathBuf),
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("create the private execution-capability preflight root")]
+    CreateExecutionPreflightRoot(#[source] io::Error),
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("open the execution-capability preflight root {path:?} as an O_PATH directory")]
+    OpenExecutionPreflightRoot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("authenticate the execution-capability preflight root")]
+    AnchorExecutionPreflightRoot(#[source] io::Error),
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("prepare execution-capability preflight root path {path:?}")]
+    PrepareExecutionPreflightRoot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("create the private execution-capability preflight bind source")]
+    CreateExecutionPreflightBindSource(#[source] io::Error),
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("open the execution-capability preflight bind source {path:?} as an O_PATH directory")]
+    OpenExecutionPreflightBindSource {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("read execution-capability preflight payload witness {path:?}")]
+    VerifyExecutionPreflightPayload {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("execution-capability preflight payload wrote unexpected bytes to {path:?}")]
+    UnexpectedExecutionPreflightPayload { path: PathBuf },
 }
 
 #[cfg(test)]

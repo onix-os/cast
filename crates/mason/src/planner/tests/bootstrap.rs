@@ -180,6 +180,12 @@ fn run(program: &str, first_argument: &str) -> FrozenStepShape {
 
 fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation::DerivationPlan) {
     assert_eq!(EXECUTION_FIXTURES, REQUIRED_EXECUTION_FIXTURES);
+    assert_eq!(plan.execution.jobs, 1, "{name}: execution preflight jobs drifted");
+    assert_eq!(
+        plan.execution.filesystems,
+        stone_recipe::derivation::FilesystemPolicy::default(),
+        "{name}: execution preflight filesystem policy drifted"
+    );
     let [job] = plan.jobs.as_slice() else {
         panic!("{name}: execution fixture must freeze exactly one non-PGO job");
     };

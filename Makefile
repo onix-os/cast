@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -97,7 +97,7 @@ product-names:
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
 # separately by harness-free container and delegated Mason integration targets.
-test: lint config-formats-test delegated-fixture-runner-test cache-clean-test
+test: lint config-formats-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
@@ -461,6 +461,24 @@ bootstrap-fixture-selection:
 bootstrap-execution-requirement:
 	@$(if $(VALID_EXECUTION_REQUIREMENT),:,$(error REQUIRE_EXECUTION must be exactly '0' or '1'))
 
+execution-capability-preflight-test:
+	@$(CARGO) check -p mason --features delegated-fixture-test-support \
+		--test delegated_execution_fixture
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib -- --list )"; \
+	for test in \
+		delegated_preflight_tests::execution_requirement_rejects_missing_or_invalid_values \
+		delegated_preflight_tests::successful_preflight_executes_fixture_materialization_once_for_both_policies \
+		delegated_preflight_tests::optional_capability_denial_short_circuits_before_fixture_materialization \
+		delegated_preflight_tests::required_capability_denial_fails_before_fixture_materialization \
+		container::preflight::tests::execution_preflight_root_is_an_opath_directory_capability \
+		container::preflight::tests::execution_preflight_classifies_only_known_namespace_setup_denials \
+		planner::hermetic_tests::frozen_execution_capability_skip_never_hides_payload_or_ambiguous_nix_failures \
+		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure; do \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
+		$(CARGO) test -p mason --lib "$$test" -- --exact --test-threads=1; \
+	done
+
 bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
 	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
@@ -565,6 +583,7 @@ help:
 	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
+	@echo "  execution-capability-preflight-test  Test optional/required preflight policy and classification"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
 	@echo "  delegated-fixture-runner-test  Test delegated-unit timeout and interruption cleanup"
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"

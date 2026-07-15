@@ -155,12 +155,15 @@ itself does not synthesize or migrate into a delegation:
 For an unprivileged caller, the current mapper specifically requires
 `/usr/bin/newgidmap` and at least one delegated GID in `/etc/subgid`; the usual
 `uidmap` package provides the helper. The UID map is written directly, so
-`/usr/bin/newuidmap` and `/etc/subuid` are not currently consumed. Check the
-basic namespace capability with:
-
-```sh
-unshare --user --map-root-user --mount true
-```
+`/usr/bin/newuidmap` and `/etc/subuid` are not currently consumed. Do not use
+`unshare --user --map-root-user --mount true` as proof that this boundary is
+available: that convenience mapping can permanently set `setgroups=deny` and
+therefore avoid the production requirement to clear inherited supplementary
+groups. The harness-free delegated runner instead performs a small
+production-policy `clone3`/cgroup/container activation inside the same
+transient service, before it reads the bootstrap index or materializes the
+package root. An optional denial stops there with an explicit `SKIP`;
+`REQUIRE_EXECUTION=1` fails there without downgrading to a skip.
 
 Some hosts disable unprivileged namespaces through
 `kernel.unprivileged_userns_clone`. Ubuntu hosts may additionally set

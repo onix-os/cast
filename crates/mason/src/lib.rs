@@ -76,10 +76,61 @@ pub mod cache_clean_test_support {
 /// feature is enabled. The standalone integration target uses it instead of
 /// libtest so the production `clone3` path can authenticate an exact
 /// single-task supervisor through `/proc/self/task`.
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutionRequirement {
+    Optional,
+    Required,
+}
+
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+#[derive(Debug)]
+enum DelegatedPreflightOutcome<T> {
+    Executed(T),
+    Skipped(container::Error),
+}
+
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+fn parse_execution_requirement(value: Option<&std::ffi::OsStr>) -> Result<ExecutionRequirement, String> {
+    let Some(value) = value else {
+        return Err("CAST_REQUIRE_EXECUTION must be set to exactly `0` or `1`".to_owned());
+    };
+    let value = value
+        .to_str()
+        .ok_or_else(|| "CAST_REQUIRE_EXECUTION must be the UTF-8 value `0` or `1`".to_owned())?;
+    match value {
+        "0" => Ok(ExecutionRequirement::Optional),
+        "1" => Ok(ExecutionRequirement::Required),
+        value => Err(format!(
+            "CAST_REQUIRE_EXECUTION must be exactly `0` or `1`, found {value:?}"
+        )),
+    }
+}
+
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+fn run_after_delegated_preflight<T>(
+    requirement: ExecutionRequirement,
+    preflight: Result<(), container::Error>,
+    execute: impl FnOnce() -> T,
+) -> Result<DelegatedPreflightOutcome<T>, container::Error> {
+    match preflight {
+        Ok(()) => Ok(DelegatedPreflightOutcome::Executed(execute())),
+        Err(error)
+            if requirement == ExecutionRequirement::Optional
+                && container::execution_namespace_capability_unavailable(&error) =>
+        {
+            Ok(DelegatedPreflightOutcome::Skipped(error))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[doc(hidden)]
 #[cfg(feature = "delegated-fixture-test-support")]
 pub mod delegated_fixture_test_support {
     use std::process;
+
+    use super::{DelegatedPreflightOutcome, ExecutionRequirement};
 
     /// Run the selected existing contentful execution fixture under the exact
     /// validated optional-or-required capability policy supplied by Make.
@@ -95,18 +146,49 @@ pub mod delegated_fixture_test_support {
             }
         }
         assert_exact_main_task("harness-free delegated fixture startup");
-        match std::env::var("CAST_REQUIRE_EXECUTION") {
-            Ok(value) if value == "0" || value == "1" => {}
-            Ok(value) => panic!("CAST_REQUIRE_EXECUTION must be exactly `0` or `1`, found {value:?}"),
-            Err(std::env::VarError::NotPresent) => {
-                panic!("CAST_REQUIRE_EXECUTION must be set to exactly `0` or `1` for the delegated fixture")
+        let execution_requirement =
+            super::parse_execution_requirement(std::env::var_os("CAST_REQUIRE_EXECUTION").as_deref())
+                .unwrap_or_else(|message| panic!("{message}"));
+        let outcome = super::run_after_delegated_preflight(
+            execution_requirement,
+            crate::container::preflight_delegated_execution_capability(),
+            crate::planner::run_delegated_execution_fixture,
+        );
+        match outcome {
+            Ok(DelegatedPreflightOutcome::Executed(())) => {}
+            Ok(DelegatedPreflightOutcome::Skipped(error)) => {
+                assert_exact_main_task("after optional delegated execution-capability denial");
+                eprintln!(
+                    "SKIP delegated execution fixture: host denied required production user/mount namespace setup before package/root materialization: {}",
+                    error_chain(&error)
+                );
+                return;
             }
-            Err(std::env::VarError::NotUnicode(_)) => {
-                panic!("CAST_REQUIRE_EXECUTION must be the UTF-8 value `0` or `1` for the delegated fixture")
+            Err(error)
+                if execution_requirement == ExecutionRequirement::Required
+                    && crate::container::execution_namespace_capability_unavailable(&error) =>
+            {
+                panic!(
+                    "required execution-capability preflight failed before package/root materialization; enable unprivileged user namespaces and permit isolated setgroups and mount setup for the delegated service: {}",
+                    error_chain(&error)
+                );
             }
+            Err(error) => panic!(
+                "delegated execution-capability preflight failed before package/root materialization: {}",
+                error_chain(&error)
+            ),
         }
-        crate::planner::run_delegated_execution_fixture();
         assert_exact_main_task("harness-free delegated fixture completion");
+    }
+
+    fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+        let mut messages = vec![error.to_string()];
+        let mut source = error.source();
+        while let Some(error) = source {
+            messages.push(error.to_string());
+            source = error.source();
+        }
+        messages.join(": ")
     }
 
     fn assert_exact_main_task(context: &str) {
@@ -124,5 +206,74 @@ pub mod delegated_fixture_test_support {
             .collect::<Vec<_>>();
         tasks.sort_unstable();
         assert_eq!(tasks, [process::id()], "{context} was not an exact single-task process");
+    }
+}
+
+#[cfg(test)]
+mod delegated_preflight_tests {
+    use std::{cell::Cell, os::unix::ffi::OsStrExt as _};
+
+    use super::*;
+
+    fn setgroups_denial() -> container::Error {
+        container::Error::Container(::container::Error::Failure {
+            message: "clear inherited supplementary groups: EPERM: Operation not permitted".to_owned(),
+        })
+    }
+
+    #[test]
+    fn execution_requirement_rejects_missing_or_invalid_values() {
+        assert!(parse_execution_requirement(None).is_err());
+        assert_eq!(
+            parse_execution_requirement(Some(std::ffi::OsStr::new("0"))).unwrap(),
+            ExecutionRequirement::Optional
+        );
+        assert_eq!(
+            parse_execution_requirement(Some(std::ffi::OsStr::new("1"))).unwrap(),
+            ExecutionRequirement::Required
+        );
+        assert!(parse_execution_requirement(Some(std::ffi::OsStr::new(""))).is_err());
+        assert!(parse_execution_requirement(Some(std::ffi::OsStr::new("yes"))).is_err());
+        assert!(parse_execution_requirement(Some(std::ffi::OsStr::from_bytes(&[0xff]))).is_err());
+    }
+
+    #[test]
+    fn successful_preflight_executes_fixture_materialization_once_for_both_policies() {
+        for requirement in [ExecutionRequirement::Optional, ExecutionRequirement::Required] {
+            let materializations = Cell::new(0_u8);
+            let outcome = run_after_delegated_preflight(requirement, Ok(()), || {
+                materializations.set(materializations.get() + 1);
+            })
+            .unwrap();
+
+            assert!(matches!(outcome, DelegatedPreflightOutcome::Executed(())));
+            assert_eq!(materializations.get(), 1);
+        }
+    }
+
+    #[test]
+    fn optional_capability_denial_short_circuits_before_fixture_materialization() {
+        let materialized = Cell::new(false);
+        let outcome = run_after_delegated_preflight(ExecutionRequirement::Optional, Err(setgroups_denial()), || {
+            materialized.set(true)
+        })
+        .unwrap();
+
+        let DelegatedPreflightOutcome::Skipped(error) = outcome else {
+            panic!("optional denial did not report a skipped preflight");
+        };
+        assert!(container::execution_namespace_capability_unavailable(&error));
+        assert!(!materialized.get(), "optional denial entered fixture materialization");
+    }
+
+    #[test]
+    fn required_capability_denial_fails_before_fixture_materialization() {
+        let materialized = Cell::new(false);
+        let outcome = run_after_delegated_preflight(ExecutionRequirement::Required, Err(setgroups_denial()), || {
+            materialized.set(true)
+        });
+
+        assert!(outcome.is_err());
+        assert!(!materialized.get(), "required denial entered fixture materialization");
     }
 }

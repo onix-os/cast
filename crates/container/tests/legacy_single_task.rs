@@ -17,10 +17,17 @@ use std::sync::mpsc;
 use container::{
     Container, DevPolicy, Error, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy,
 };
+use nix::libc;
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-use nix::{errno::Errno, libc};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutionRequirement {
+    Optional,
+    Required,
+}
 
 fn main() {
+    let execution_requirement = execution_requirement_from_env();
     assert_exact_main_task("standalone startup");
     prove_parked_task_is_rejected();
     assert_exact_main_task("after parked-task rejection");
@@ -29,17 +36,37 @@ fn main() {
 
     let success_root = tempfile::tempdir().expect("create successful activation root");
     let success_anchor = open_path_directory(success_root.path());
-    let success = minimal_container(success_root.path(), &success_anchor)
-        .run::<io::Error>(|| std::fs::write("/single-task-witness", b"production legacy clone"));
+    let success = minimal_container(success_root.path(), &success_anchor).run::<io::Error>(|| {
+        require_supplementary_group_mutation_blocked()?;
+        read_payload_credentials()?.require_isolated()?;
+        std::fs::write(
+            "/single-task-credentials",
+            b"uid=0/0/0/0 gid=0/0/0/0 supplementary=0 setgroups=EPERM",
+        )?;
+        std::fs::write("/single-task-witness", b"production legacy clone")
+    });
     match success {
-        Ok(()) => assert_eq!(
-            std::fs::read(success_root.path().join("single-task-witness")).expect("read payload witness"),
-            b"production legacy clone"
-        ),
-        Err(error) if namespace_activation_unavailable(&error) => {
-            eprintln!("SKIP standalone legacy activation: host denied required namespaces: {error}");
-            return;
+        Ok(()) => {
+            assert_eq!(
+                std::fs::read(success_root.path().join("single-task-witness")).expect("read payload witness"),
+                b"production legacy clone"
+            );
+            assert_eq!(
+                std::fs::read(success_root.path().join("single-task-credentials"))
+                    .expect("read payload credential witness"),
+                b"uid=0/0/0/0 gid=0/0/0/0 supplementary=0 setgroups=EPERM"
+            );
         }
+        Err(error) if namespace_activation_unavailable(&error) => match execution_requirement {
+            ExecutionRequirement::Optional => {
+                eprintln!("SKIP standalone legacy activation: host denied required namespaces: {error}");
+                return;
+            }
+            ExecutionRequirement::Required => panic!(
+                "required execution-capability preflight failed: the host denied production container user/mount namespace setup; enable unprivileged user namespaces and permit isolated setgroups and mount setup for the delegated service: {}",
+                error_chain(&error)
+            ),
+        },
         Err(error) => panic!("single-task legacy activation failed: {error}"),
     }
 
@@ -56,6 +83,157 @@ fn main() {
         other => panic!("panicking legacy payload was not contained as a child failure: {other:?}"),
     }
     assert_exact_main_task("after contained payload panic");
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PayloadCredentials {
+    real_uid: u32,
+    effective_uid: u32,
+    saved_uid: u32,
+    filesystem_uid: u32,
+    real_gid: u32,
+    effective_gid: u32,
+    saved_gid: u32,
+    filesystem_gid: u32,
+    supplementary_group_count: usize,
+}
+
+impl PayloadCredentials {
+    fn require_isolated(&self) -> io::Result<()> {
+        let isolated = Self {
+            real_uid: 0,
+            effective_uid: 0,
+            saved_uid: 0,
+            filesystem_uid: 0,
+            real_gid: 0,
+            effective_gid: 0,
+            saved_gid: 0,
+            filesystem_gid: 0,
+            supplementary_group_count: 0,
+        };
+        if self == &isolated {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "confined payload retained non-isolated credential slots: {self:?}"
+            )))
+        }
+    }
+}
+
+fn read_payload_credentials() -> io::Result<PayloadCredentials> {
+    let mut real_uid = 0;
+    let mut effective_uid = 0;
+    let mut saved_uid = 0;
+    // SAFETY: getresuid writes one uid_t to each valid local pointer.
+    require_syscall_success(
+        unsafe {
+            libc::syscall(
+                libc::SYS_getresuid,
+                &mut real_uid as *mut libc::uid_t,
+                &mut effective_uid as *mut libc::uid_t,
+                &mut saved_uid as *mut libc::uid_t,
+            )
+        },
+        "read confined real, effective, and saved-set UIDs",
+    )?;
+    // SAFETY: Linux returns the prior filesystem UID. The all-ones argument is
+    // unmapped in this namespace, so the attempted change cannot succeed.
+    let filesystem_uid = u32::try_from(unsafe { libc::syscall(libc::SYS_setfsuid, u32::MAX) })
+        .map_err(|_| io::Error::last_os_error())?;
+
+    let mut real_gid = 0;
+    let mut effective_gid = 0;
+    let mut saved_gid = 0;
+    // SAFETY: getresgid writes one gid_t to each valid local pointer.
+    require_syscall_success(
+        unsafe {
+            libc::syscall(
+                libc::SYS_getresgid,
+                &mut real_gid as *mut libc::gid_t,
+                &mut effective_gid as *mut libc::gid_t,
+                &mut saved_gid as *mut libc::gid_t,
+            )
+        },
+        "read confined real, effective, and saved-set GIDs",
+    )?;
+    // SAFETY: Linux returns the prior filesystem GID. The all-ones argument is
+    // unmapped even though the distinct auxiliary GID is also mapped, so the
+    // attempted change cannot succeed.
+    let filesystem_gid = u32::try_from(unsafe { libc::syscall(libc::SYS_setfsgid, u32::MAX) })
+        .map_err(|_| io::Error::last_os_error())?;
+
+    // SAFETY: a zero-sized getgroups query does not dereference its null list
+    // and returns the exact supplementary-group count.
+    let supplementary_group_count =
+        usize::try_from(unsafe { libc::syscall(libc::SYS_getgroups, 0_usize, std::ptr::null_mut::<libc::gid_t>()) })
+            .map_err(|_| io::Error::last_os_error())?;
+
+    Ok(PayloadCredentials {
+        real_uid,
+        effective_uid,
+        saved_uid,
+        filesystem_uid,
+        real_gid,
+        effective_gid,
+        saved_gid,
+        filesystem_gid,
+        supplementary_group_count,
+    })
+}
+
+fn require_supplementary_group_mutation_blocked() -> io::Result<()> {
+    // SAFETY: a zero-sized setgroups call does not dereference its null list.
+    // This runs inside the payload only after all namespace capabilities have
+    // been dropped and the mandatory seccomp policy has been installed.
+    let result = unsafe { libc::syscall(libc::SYS_setgroups, 0_usize, std::ptr::null::<libc::gid_t>()) };
+    if result != -1 {
+        return Err(io::Error::other(
+            "confined payload unexpectedly retained authority to mutate supplementary groups",
+        ));
+    }
+    let source = io::Error::last_os_error();
+    if source.raw_os_error() != Some(libc::EPERM) {
+        return Err(io::Error::other(format!(
+            "confined payload setgroups failed with {source}, expected EPERM"
+        )));
+    }
+    Ok(())
+}
+
+fn require_syscall_success(result: libc::c_long, operation: &str) -> io::Result<()> {
+    if result == 0 {
+        Ok(())
+    } else if result == -1 {
+        let source = io::Error::last_os_error();
+        Err(io::Error::new(source.kind(), format!("{operation}: {source}")))
+    } else {
+        Err(io::Error::other(format!(
+            "{operation} returned unexpected nonzero result {result}"
+        )))
+    }
+}
+
+fn execution_requirement_from_env() -> ExecutionRequirement {
+    match std::env::var("CAST_REQUIRE_EXECUTION") {
+        Err(std::env::VarError::NotPresent) => ExecutionRequirement::Optional,
+        Ok(value) if value == "0" => ExecutionRequirement::Optional,
+        Ok(value) if value == "1" => ExecutionRequirement::Required,
+        Ok(value) => panic!("CAST_REQUIRE_EXECUTION must be exactly `0` or `1`, found {value:?}"),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("CAST_REQUIRE_EXECUTION must be the UTF-8 value `0` or `1`")
+        }
+    }
+}
+
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(error) = source {
+        messages.push(error.to_string());
+        source = error.source();
+    }
+    messages.join(": ")
 }
 
 fn prove_nonwaitable_sigchld_dispositions_are_rejected() {
@@ -198,15 +376,5 @@ fn assert_exact_main_task(context: &str) {
 }
 
 fn namespace_activation_unavailable(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::CloneNamespaces {
-            source: Errno::EPERM | Errno::EACCES | Errno::ENOSYS
-        }
-    ) || matches!(
-        error,
-        Error::Failure { message }
-            if message.starts_with("clear inherited supplementary groups:")
-                && message.contains("EPERM: Operation not permitted")
-    )
+    error.execution_capability_unavailable()
 }
