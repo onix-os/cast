@@ -102,23 +102,37 @@ fn existing_metadata_outputs_are_preserved_without_mutating_regular_or_hardlinke
 
 #[test]
 fn successful_metadata_publication_creates_independent_sealed_files() {
-    let fixture = Fixture::new(false);
+    for report_applied_error in [false, true] {
+        let fixture = Fixture::new(false);
+        let parent_sync_observed = std::rc::Rc::new(std::cell::Cell::new(false));
+        if report_applied_error {
+            let observed = std::rc::Rc::clone(&parent_sync_observed);
+            super::super::candidate_metadata::arm_applied_private_directory_publication_error(move || {
+                observed.set(true);
+            });
+        }
 
-    fixture
-        .client
-        .repair_archived_state(
-            fixture.empty_candidate(),
-            &fixture.repaired,
-            fixture.snapshot("sealed-metadata"),
-        )
-        .unwrap();
+        fixture
+            .client
+            .repair_archived_state(
+                fixture.empty_candidate(),
+                &fixture.repaired,
+                fixture.snapshot("sealed-metadata"),
+            )
+            .unwrap();
 
-    for name in ["os-release", "system-model.glu"] {
-        let path = fixture.archived_root.join("usr/lib").join(name);
-        let metadata = fs::symlink_metadata(&path).unwrap();
-        assert!(metadata.file_type().is_file(), "metadata {name}");
-        assert_eq!(metadata.permissions().mode() & 0o7777, 0o644, "metadata {name}");
-        assert_eq!(metadata.nlink(), 1, "metadata {name}");
+        assert_eq!(
+            parent_sync_observed.get(),
+            report_applied_error,
+            "an applied-but-reported-error publication must complete the parent sync suffix"
+        );
+        for name in ["os-release", "system-model.glu"] {
+            let path = fixture.archived_root.join("usr/lib").join(name);
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert!(metadata.file_type().is_file(), "metadata {name}");
+            assert_eq!(metadata.permissions().mode() & 0o7777, 0o644, "metadata {name}");
+            assert_eq!(metadata.nlink(), 1, "metadata {name}");
+        }
     }
 }
 
@@ -132,7 +146,7 @@ fn a_second_metadata_name_collision_preserves_the_partial_candidate_without_repl
     let external_identity = inode_identity(&external);
     let hook_external = external.clone();
     let hook_output = staging.join("usr/lib/system-model.glu");
-    super::super::archived_repair_metadata::arm_after_first_publication(move || {
+    super::super::candidate_metadata::arm_after_first_publication(move || {
         fs::hard_link(&hook_external, &hook_output).unwrap();
     });
 
@@ -171,7 +185,7 @@ fn deleting_the_first_metadata_output_during_pair_publication_preserves_the_part
     let old_wrapper = directory_identity(&fixture.archived_root);
     let staging = fixture.client.installation.staging_dir();
     let hook_release = staging.join("usr/lib/os-release");
-    super::super::archived_repair_metadata::arm_after_first_publication(move || {
+    super::super::candidate_metadata::arm_after_first_publication(move || {
         fs::remove_file(&hook_release).unwrap();
     });
 
@@ -206,7 +220,7 @@ fn replacing_the_first_metadata_output_during_pair_publication_never_adopts_the_
     let external_identity = inode_identity(&external);
     let hook_external = external.clone();
     let hook_release = staging.join("usr/lib/os-release");
-    super::super::archived_repair_metadata::arm_after_first_publication(move || {
+    super::super::candidate_metadata::arm_after_first_publication(move || {
         fs::remove_file(&hook_release).unwrap();
         fs::hard_link(&hook_external, &hook_release).unwrap();
     });

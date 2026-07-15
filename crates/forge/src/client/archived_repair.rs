@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
 use super::{
-    Client, Error, TriggerScope, archived_repair_materialization::ArchivedRepairCandidate, archived_repair_metadata,
+    Client, Error, TriggerScope, archived_repair_materialization::ArchivedRepairCandidate, candidate_metadata,
     create_root_links, postblit::RetainedTransactionKind,
 };
 use crate::{
@@ -157,7 +157,8 @@ impl Client {
             identity
                 .verify_candidate_snapshot(&self.installation, &self.state_db)
                 .map_err(|source| archived_repair_identity_error(state, "before metadata decoration", source))?;
-            archived_repair_metadata::decorate(&identity, &system_snapshot)?;
+            let metadata = candidate_metadata::decorate_archived(&identity, &system_snapshot)?;
+            metadata.revalidate()?;
 
             // Root ABI links belong to the container scratch root, never to
             // the candidate wrapper. Therefore staging remains exactly
@@ -191,17 +192,20 @@ impl Client {
             identity
                 .verify_candidate_snapshot(&self.installation, &self.state_db)
                 .map_err(|source| archived_repair_identity_error(state, "after transaction triggers", source))?;
+            metadata.revalidate()?;
             checkpoint(ArchivedRepairCheckpoint::AfterTransactionTriggers)?;
             checkpoint(ArchivedRepairCheckpoint::BeforePublication)?;
             identity
                 .verify_candidate_snapshot(&self.installation, &self.state_db)
                 .map_err(|source| archived_repair_identity_error(state, "immediately before publication", source))?;
-            Ok::<(), Error>(())
+            metadata.revalidate()?;
+            Ok::<_, Error>(metadata)
         })();
 
-        if let Err(primary) = prepare {
-            return Err(self.preserve_failed_archived_repair(state, &identity, primary));
-        }
+        let _metadata = match prepare {
+            Ok(metadata) => metadata,
+            Err(primary) => return Err(self.preserve_failed_archived_repair(state, &identity, primary)),
+        };
 
         match identity.publish(&self.installation, &self.state_db) {
             Ok(publication) => Ok(publication),

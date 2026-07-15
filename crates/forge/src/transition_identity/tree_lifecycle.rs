@@ -1,6 +1,17 @@
 use super::*;
 
 impl StatefulTreeIdentity {
+    /// Exact candidate `/usr` capability retained before metadata decoration.
+    ///
+    /// The path is diagnostic only. Callers must perform every traversal from
+    /// the descriptor and sandwich their work between strict guard proofs.
+    pub(crate) fn retained_candidate_usr(&self) -> (&std::fs::File, &Path) {
+        (
+            self.candidate.store.retained_directory(),
+            self.candidate.store.display_path(),
+        )
+    }
+
     /// Establish both permanent identities before the coordinator performs a
     /// trigger, exchange, archive, quarantine, or other transition effect.
     pub(crate) fn prepare(
@@ -370,6 +381,17 @@ impl StatefulTreeIdentity {
     pub(crate) fn verify_candidate_for_recovery(&self, path: &Path) -> Result<(), Error> {
         self.require_no_journal()?;
         self.candidate.verify_named_read_only(path)
+    }
+
+    /// Strictly authenticate the named candidate before activation work.
+    ///
+    /// Unlike recovery verification, this also proves the exact retained
+    /// `.stateID`. Recovery must remain marker-only so a damaged state ID can
+    /// still be moved out of the live namespace and preserved as evidence.
+    pub(crate) fn verify_candidate_for_activation(&self, path: &Path) -> Result<(), Error> {
+        self.require_no_journal()?;
+        self.candidate.verify_named_with_state_id(path)?;
+        self.require_no_journal()
     }
 
     /// Flush the filesystem containing the retained candidate and persist its

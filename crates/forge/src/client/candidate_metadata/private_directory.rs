@@ -28,7 +28,7 @@ impl RetainedDirectory {
                 Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(source) => {
                     return Err(metadata_io(
-                        "create private archived-repair metadata directory",
+                        "create private candidate metadata directory",
                         private_path,
                         source,
                     ));
@@ -67,10 +67,14 @@ impl RetainedDirectory {
             }
             private.require_empty()?;
 
-            let publication = crate::linux_fs::renameat2_noreplace_once(parent, &private_name, parent, name);
+            let publication = publish_private_directory_once(parent, &private_name, name);
             let canonical = Self::open(parent, name, path.clone());
             match (publication, canonical) {
-                (Ok(()), Ok(canonical)) if canonical.witness == expected => {
+                (Ok(()), Ok(canonical)) | (Err(_), Ok(canonical)) if canonical.witness == expected => {
+                    // A reported error remains ambiguous: the move may have
+                    // reached the namespace. Once exact reconciliation proves
+                    // that it did, finish the same durability and
+                    // revalidation suffix as an ordinary syscall success.
                     require_name_absent(parent, &private_name, &private_path)?;
                     canonical.require_empty()?;
                     parent.sync_all().map_err(|source| {
@@ -80,14 +84,7 @@ impl RetainedDirectory {
                             source,
                         )
                     })?;
-                    canonical.require_named(parent, name)?;
-                    return Ok(canonical);
-                }
-                (Err(_), Ok(canonical)) if canonical.witness == expected => {
-                    // Retain exact applied-result reconciliation if a suffix
-                    // is ever wrapped around the raw rename syscall.
-                    require_name_absent(parent, &private_name, &private_path)?;
-                    canonical.require_empty()?;
+                    after_parent_sync();
                     canonical.require_named(parent, name)?;
                     return Ok(canonical);
                 }
@@ -100,6 +97,63 @@ impl RetainedDirectory {
         Err(MetadataError::PrivateDirectoryExhausted {
             limit: MAX_PRIVATE_DIRECTORY_ATTEMPTS,
         })
+    }
+}
+
+fn publish_private_directory_once(parent: &File, private_name: &CStr, name: &CStr) -> io::Result<()> {
+    let result = crate::linux_fs::renameat2_noreplace_once(parent, private_name, parent, name);
+    #[cfg(test)]
+    if result.is_ok() && REPORT_APPLIED_PUBLICATION_ERROR.with(|armed| armed.replace(false)) {
+        APPLIED_PUBLICATION_ERROR_REPORTED.with(|reported| {
+            assert!(
+                !reported.replace(true),
+                "applied metadata-directory publication error is already pending"
+            );
+        });
+        return Err(io::Error::from_raw_os_error(nix::libc::EIO));
+    }
+    result
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static REPORT_APPLIED_PUBLICATION_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static APPLIED_PUBLICATION_ERROR_REPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static AFTER_PARENT_SYNC: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_applied_publication_error(after_parent_sync: impl FnOnce() + 'static) {
+    REPORT_APPLIED_PUBLICATION_ERROR.with(|armed| {
+        assert!(
+            !armed.replace(true),
+            "applied metadata-directory publication error is already armed"
+        );
+    });
+    APPLIED_PUBLICATION_ERROR_REPORTED.with(|reported| {
+        assert!(
+            !reported.get(),
+            "applied metadata-directory publication error is already pending"
+        );
+    });
+    AFTER_PARENT_SYNC.with(|slot| {
+        let previous = slot.borrow_mut().replace(Box::new(after_parent_sync));
+        assert!(
+            previous.is_none(),
+            "metadata-directory parent-sync hook is already armed"
+        );
+    });
+}
+
+fn after_parent_sync() {
+    #[cfg(test)]
+    if APPLIED_PUBLICATION_ERROR_REPORTED.with(|reported| reported.replace(false)) {
+        AFTER_PARENT_SYNC.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
     }
 }
 

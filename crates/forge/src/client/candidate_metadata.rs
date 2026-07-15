@@ -1,13 +1,13 @@
-//! Descriptor-bound metadata decoration for an inactive repair candidate.
+//! Descriptor-bound metadata decoration for a retained candidate `/usr`.
 //!
 //! Candidate metadata is never opened through the mutable staging pathname.
-//! The archived-repair guard supplies the exact retained `/usr` descriptor;
-//! this module retains every directory and input inode below it with
-//! `openat2(2)` and publishes new regular files from anonymous `O_TMPFILE`
-//! inodes. Existing output names are deliberately rejected rather than
-//! replaced: Linux has no rename primitive which can condition replacement on
-//! an already-retained destination inode, and leaving that inode untouched is
-//! safer than path-based overwrite or cleanup.
+//! The state-transition or archived-repair guard supplies the exact retained
+//! descriptor; this module retains every directory and input inode below it
+//! with `openat2(2)` and publishes new regular files from anonymous
+//! `O_TMPFILE` inodes. Existing output names are deliberately rejected rather
+//! than replaced: Linux has no rename primitive which can condition
+//! replacement on an already-retained destination inode, and leaving that
+//! inode untouched is safer than path-based overwrite or cleanup.
 
 use std::{
     ffi::CStr,
@@ -30,10 +30,15 @@ use crate::{
         controlled_resolution, link_path_descriptor_noreplace, open_path_descriptor_readonly_until, openat2_file,
         require_no_access_acl, require_no_default_acl,
     },
-    transition_identity::ArchivedStateRepairIdentity,
+    transition_identity::{ArchivedStateRepairIdentity, StatefulTreeIdentity},
 };
 
 mod private_directory;
+
+#[cfg(test)]
+pub(super) fn arm_applied_private_directory_publication_error(after_parent_sync: impl FnOnce() + 'static) {
+    private_directory::arm_applied_publication_error(after_parent_sync);
+}
 
 const LIB_NAME: &CStr = c"lib";
 const OS_INFO_NAME: &CStr = c"os-info.json";
@@ -47,7 +52,7 @@ const MAX_METADATA_BYTES: usize = 1024 * 1024;
 const MAX_IO_ATTEMPTS: usize = MAX_METADATA_BYTES + 4_096;
 const DESCRIPTOR_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-const GENERIC_OS_RELEASE: &str = r#"NAME="Unbranded OS"
+pub(super) const GENERIC_OS_RELEASE: &str = r#"NAME="Unbranded OS"
 VERSION="no-os-info.json"
 ID="unbranded-os"
 VERSION_CODENAME=no-os-info.json
@@ -58,7 +63,7 @@ BUG_REPORT_URL="https://github.com/AerynOS/os-info/issues""#;
 
 #[derive(Debug, ThisError)]
 enum MetadataError {
-    #[error("{operation} archived-repair metadata path `{}`", path.display())]
+    #[error("{operation} candidate metadata path `{}`", path.display())]
     Io {
         operation: &'static str,
         path: PathBuf,
@@ -66,7 +71,7 @@ enum MetadataError {
         source: io::Error,
     },
     #[error(
-        "unsafe archived-repair metadata directory `{}` (type={kind}, uid={owner}, mode={mode:04o})",
+        "unsafe candidate metadata directory `{}` (type={kind}, uid={owner}, mode={mode:04o})",
         path.display()
     )]
     UnsafeDirectory {
@@ -75,10 +80,10 @@ enum MetadataError {
         owner: u32,
         mode: u32,
     },
-    #[error("archived-repair metadata directory changed while retained at `{}`", path.display())]
+    #[error("candidate metadata directory changed while retained at `{}`", path.display())]
     DirectoryChanged { path: PathBuf },
     #[error(
-        "unsafe archived-repair metadata input `{}` (type={kind}, uid={owner}, mode={mode:04o}, links={links}, length={length})",
+        "unsafe candidate metadata input `{}` (type={kind}, uid={owner}, mode={mode:04o}, links={links}, length={length})",
         path.display()
     )]
     UnsafeInput {
@@ -89,16 +94,16 @@ enum MetadataError {
         links: u64,
         length: u64,
     },
-    #[error("archived-repair metadata input `{}` exceeds the {limit}-byte limit (got {actual})", path.display())]
+    #[error("candidate metadata input `{}` exceeds the {limit}-byte limit (got {actual})", path.display())]
     InputTooLarge { path: PathBuf, limit: usize, actual: u64 },
-    #[error("generated archived-repair metadata `{name}` exceeds the {limit}-byte limit (got {actual})")]
+    #[error("generated candidate metadata `{name}` exceeds the {limit}-byte limit (got {actual})")]
     OutputTooLarge {
         name: &'static str,
         limit: usize,
         actual: usize,
     },
     #[error(
-        "archived-repair metadata destination `{}` already exists as {kind} (uid={owner}, mode={mode:04o}, links={links}); refusing non-conditional replacement",
+        "candidate metadata destination `{}` already exists as {kind} (uid={owner}, mode={mode:04o}, links={links}); refusing non-conditional replacement",
         path.display()
     )]
     DestinationExists {
@@ -108,17 +113,17 @@ enum MetadataError {
         mode: u32,
         links: u64,
     },
-    #[error("archived-repair metadata inode changed while retained at `{}`", path.display())]
+    #[error("candidate metadata inode changed while retained at `{}`", path.display())]
     FileChanged { path: PathBuf },
-    #[error("archived-repair metadata publication collided at `{}`", path.display())]
+    #[error("candidate metadata publication collided at `{}`", path.display())]
     PublicationCollision {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
-    #[error("cannot reserve a private archived-repair metadata directory after {limit} attempts")]
+    #[error("cannot reserve a private candidate metadata directory after {limit} attempts")]
     PrivateDirectoryExhausted { limit: usize },
-    #[error("private archived-repair metadata directory `{}` unexpectedly contains `{entry}`", path.display())]
+    #[error("private candidate metadata directory `{}` unexpectedly contains `{entry}`", path.display())]
     PrivateDirectoryNotEmpty { path: PathBuf, entry: String },
 }
 
@@ -157,18 +162,56 @@ struct PreparedFile {
     identity: (u64, u64),
 }
 
-pub(super) fn decorate(identity: &ArchivedStateRepairIdentity, snapshot: &SystemModel) -> Result<(), Error> {
-    decorate_retained(identity, snapshot).map_err(|source| Error::ArchivedStateRepair {
-        source: Box::new(source),
-    })
+#[derive(Clone, Copy, Debug)]
+enum MetadataContext {
+    ArchivedRepair,
+    Stateful,
 }
 
-fn decorate_retained(identity: &ArchivedStateRepairIdentity, snapshot: &SystemModel) -> Result<(), MetadataError> {
+/// Retains the exact generated files and their parent directories until the
+/// transition has crossed every trigger and publication boundary. A caller
+/// must not treat successful decoration as a one-time pathname check: the
+/// proof is deliberately revalidated while these descriptors remain live.
+#[derive(Debug)]
+pub(super) struct CandidateMetadataProof<'candidate> {
+    context: MetadataContext,
+    usr: &'candidate File,
+    usr_path: PathBuf,
+    lib: RetainedDirectory,
+    release: PreparedFile,
+    release_bytes: Vec<u8>,
+    snapshot: PreparedFile,
+    snapshot_bytes: Vec<u8>,
+}
+
+pub(super) fn decorate_archived<'candidate>(
+    identity: &'candidate ArchivedStateRepairIdentity,
+    snapshot: &SystemModel,
+) -> Result<CandidateMetadataProof<'candidate>, Error> {
     let (usr, usr_path) = identity.retained_candidate_usr();
-    let snapshot = bounded_output("system-model.glu", snapshot.encoded().as_bytes())?;
+    decorate_retained(MetadataContext::ArchivedRepair, usr, usr_path, snapshot)
+        .map_err(|source| metadata_error(MetadataContext::ArchivedRepair, source))
+}
+
+pub(super) fn decorate_stateful<'candidate>(
+    identity: &'candidate StatefulTreeIdentity,
+    snapshot: &SystemModel,
+) -> Result<CandidateMetadataProof<'candidate>, Error> {
+    let (usr, usr_path) = identity.retained_candidate_usr();
+    decorate_retained(MetadataContext::Stateful, usr, usr_path, snapshot)
+        .map_err(|source| metadata_error(MetadataContext::Stateful, source))
+}
+
+fn decorate_retained<'candidate>(
+    context: MetadataContext,
+    usr: &'candidate File,
+    usr_path: &Path,
+    snapshot: &SystemModel,
+) -> Result<CandidateMetadataProof<'candidate>, MetadataError> {
+    let snapshot = bounded_output("system-model.glu", snapshot.encoded().as_bytes())?.to_vec();
     let lib = RetainedDirectory::retain_or_create(usr, LIB_NAME, usr_path.join("lib"))?;
     let os_release = load_os_release(&lib)?;
-    let os_release = bounded_output("os-release", os_release.as_bytes())?;
+    let os_release = bounded_output("os-release", os_release.as_bytes())?.to_vec();
 
     // Refuse every deterministic conflict before either canonical name is
     // published. A racing conflict after this point still cannot be replaced
@@ -176,18 +219,62 @@ fn decorate_retained(identity: &ArchivedStateRepairIdentity, snapshot: &SystemMo
     lib.require_named(usr, LIB_NAME)?;
     lib.require_absent(OS_RELEASE_NAME)?;
     lib.require_absent(SYSTEM_SNAPSHOT_NAME)?;
-    let prepared_release = PreparedFile::new(&lib, os_release, lib.path.join("os-release"))?;
-    let prepared_snapshot = PreparedFile::new(&lib, snapshot, lib.path.join("system-model.glu"))?;
+    let prepared_release = PreparedFile::new(&lib, &os_release, lib.path.join("os-release"))?;
+    let prepared_snapshot = PreparedFile::new(&lib, &snapshot, lib.path.join("system-model.glu"))?;
 
-    publish(usr, &lib, OS_RELEASE_NAME, &prepared_release, os_release)?;
+    publish(usr, &lib, OS_RELEASE_NAME, &prepared_release, &os_release)?;
     lib.require_named(usr, LIB_NAME)?;
     after_first_publication();
-    publish(usr, &lib, SYSTEM_SNAPSHOT_NAME, &prepared_snapshot, snapshot)?;
+    publish(usr, &lib, SYSTEM_SNAPSHOT_NAME, &prepared_snapshot, &snapshot)?;
     lib.require_named(usr, LIB_NAME)?;
     lib.sync()?;
     usr.sync_all()
         .map_err(|source| metadata_io("sync candidate /usr after metadata decoration", usr_path, source))?;
-    require_published_pair(usr, &lib, &prepared_release, os_release, &prepared_snapshot, snapshot)
+    let proof = CandidateMetadataProof {
+        context,
+        usr,
+        usr_path: usr_path.to_owned(),
+        lib,
+        release: prepared_release,
+        release_bytes: os_release,
+        snapshot: prepared_snapshot,
+        snapshot_bytes: snapshot,
+    };
+    proof.revalidate_inner()?;
+    Ok(proof)
+}
+
+impl CandidateMetadataProof<'_> {
+    pub(super) fn revalidate(&self) -> Result<(), Error> {
+        self.revalidate_inner()
+            .map_err(|source| metadata_error(self.context, source))
+    }
+
+    pub(super) fn diagnostic_path(&self) -> &Path {
+        &self.usr_path
+    }
+
+    fn revalidate_inner(&self) -> Result<(), MetadataError> {
+        require_published_pair(
+            self.usr,
+            &self.lib,
+            &self.release,
+            &self.release_bytes,
+            &self.snapshot,
+            &self.snapshot_bytes,
+        )
+    }
+}
+
+fn metadata_error(context: MetadataContext, source: MetadataError) -> Error {
+    match context {
+        MetadataContext::ArchivedRepair => Error::ArchivedStateRepair {
+            source: Box::new(source),
+        },
+        MetadataContext::Stateful => Error::StatefulCandidateMetadata {
+            source: Box::new(source),
+        },
+    }
 }
 
 fn bounded_output<'a>(name: &'static str, bytes: &'a [u8]) -> Result<&'a [u8], MetadataError> {
@@ -311,6 +398,7 @@ fn publish(
     directory.require_retained()?;
     directory.require_absent(name)?;
     directory.require_named(parent, LIB_NAME)?;
+    before_publication(name);
     let result = link_path_descriptor_noreplace(&prepared.file, &directory.file, name);
     if let Err(source) = result {
         match named_identity(directory, name, &path)? {
@@ -324,7 +412,7 @@ fn publish(
     prepared
         .file
         .sync_all()
-        .map_err(|source| metadata_io("sync published archived-repair metadata", &path, source))?;
+        .map_err(|source| metadata_io("sync published candidate metadata", &path, source))?;
     directory.sync()?;
     directory.require_named(parent, LIB_NAME)?;
     require_published(directory, name, &prepared.file, prepared.identity, expected, &path)?;
@@ -386,6 +474,8 @@ fn require_published_pair(
 std::thread_local! {
     static AFTER_FIRST_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static BEFORE_PUBLICATION: std::cell::RefCell<Option<(&'static str, Box<dyn FnOnce()>)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -393,6 +483,29 @@ pub(super) fn arm_after_first_publication(hook: impl FnOnce() + 'static) {
     AFTER_FIRST_PUBLICATION.with(|slot| {
         let previous = slot.borrow_mut().replace(Box::new(hook));
         assert!(previous.is_none(), "metadata publication hook is already armed");
+    });
+}
+
+#[cfg(test)]
+pub(super) fn arm_before_publication(name: &'static str, hook: impl FnOnce() + 'static) {
+    assert!(matches!(name, "os-release" | "system-model.glu"));
+    BEFORE_PUBLICATION.with(|slot| {
+        let previous = slot.borrow_mut().replace((name, Box::new(hook)));
+        assert!(previous.is_none(), "metadata publication hook is already armed");
+    });
+}
+
+fn before_publication(name: &CStr) {
+    #[cfg(test)]
+    BEFORE_PUBLICATION.with(|slot| {
+        let matches = slot
+            .borrow()
+            .as_ref()
+            .is_some_and(|(expected, _)| name.to_bytes() == expected.as_bytes());
+        if matches {
+            let (_, hook) = slot.borrow_mut().take().expect("matched metadata publication hook");
+            hook();
+        }
     });
 }
 
@@ -424,7 +537,7 @@ fn require_published(
         0,
         controlled_resolution(),
     )
-    .map_err(|source| metadata_io("reopen published archived-repair metadata", path, source))?;
+    .map_err(|source| metadata_io("reopen published candidate metadata", path, source))?;
     if published_witness(&named, path, expected.len())? != retained_witness {
         return Err(MetadataError::FileChanged { path: path.to_owned() });
     }
@@ -483,7 +596,7 @@ impl PreparedFile {
             TEMPORARY_FILE_MODE,
             controlled_resolution(),
         )
-        .map_err(|source| metadata_io("create anonymous archived-repair metadata", &path, source))?;
+        .map_err(|source| metadata_io("create anonymous candidate metadata", &path, source))?;
         file.set_permissions(Permissions::from_mode(TEMPORARY_FILE_MODE))
             .map_err(|source| metadata_io("normalize anonymous metadata mode", &path, source))?;
         require_anonymous(&file, &path, TEMPORARY_FILE_MODE, 0)?;
@@ -521,7 +634,7 @@ impl RetainedDirectory {
         ) {
             Ok(file) => Some(file),
             Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => None,
-            Err(source) => return Err(metadata_io("probe archived-repair metadata directory", &path, source)),
+            Err(source) => return Err(metadata_io("probe candidate metadata directory", &path, source)),
         };
         if let Some(probe) = probe {
             return Self::open_existing(parent, name, path, probe);
@@ -601,11 +714,11 @@ impl RetainedDirectory {
             controlled_resolution(),
         ) {
             Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => Ok(()),
-            Err(source) => Err(metadata_io("probe archived-repair metadata destination", path, source)),
+            Err(source) => Err(metadata_io("probe candidate metadata destination", path, source)),
             Ok(file) => {
                 let metadata = file
                     .metadata()
-                    .map_err(|source| metadata_io("inspect archived-repair metadata destination", &path, source))?;
+                    .map_err(|source| metadata_io("inspect candidate metadata destination", &path, source))?;
                 Err(MetadataError::DestinationExists {
                     path,
                     kind: file_type_name(&metadata.file_type()),
@@ -652,7 +765,7 @@ impl FileWitness {
 fn directory_witness(file: &File, path: &Path) -> Result<DirectoryWitness, MetadataError> {
     let metadata = file
         .metadata()
-        .map_err(|source| metadata_io("inspect archived-repair metadata directory", path, source))?;
+        .map_err(|source| metadata_io("inspect candidate metadata directory", path, source))?;
     let mode = metadata.permissions().mode() & 0o7777;
     if !metadata.file_type().is_dir()
         || metadata.uid() != effective_user_id()
@@ -678,7 +791,7 @@ fn directory_witness(file: &File, path: &Path) -> Result<DirectoryWitness, Metad
 fn require_anonymous(file: &File, path: &Path, mode: u32, length: usize) -> Result<FileWitness, MetadataError> {
     let metadata = file
         .metadata()
-        .map_err(|source| metadata_io("inspect anonymous archived-repair metadata", path, source))?;
+        .map_err(|source| metadata_io("inspect anonymous candidate metadata", path, source))?;
     let witness = FileWitness::from_metadata(&metadata);
     if metadata.file_type().is_file()
         && witness.owner == effective_user_id()
@@ -695,7 +808,7 @@ fn require_anonymous(file: &File, path: &Path, mode: u32, length: usize) -> Resu
 fn published_witness(file: &File, path: &Path, length: usize) -> Result<FileWitness, MetadataError> {
     let metadata = file
         .metadata()
-        .map_err(|source| metadata_io("inspect published archived-repair metadata", path, source))?;
+        .map_err(|source| metadata_io("inspect published candidate metadata", path, source))?;
     let witness = FileWitness::from_metadata(&metadata);
     if metadata.file_type().is_file()
         && witness.owner == effective_user_id()
@@ -716,7 +829,7 @@ fn write_all_at(file: &File, bytes: &[u8], path: &Path) -> Result<(), MetadataEr
         attempts += 1;
         if attempts > MAX_IO_ATTEMPTS {
             return Err(metadata_io(
-                "write complete anonymous archived-repair metadata",
+                "write complete anonymous candidate metadata",
                 path,
                 io::Error::other("metadata write exceeded the bounded attempt limit"),
             ));
@@ -724,14 +837,14 @@ fn write_all_at(file: &File, bytes: &[u8], path: &Path) -> Result<(), MetadataEr
         match file.write_at(&bytes[written..], written as u64) {
             Ok(0) => {
                 return Err(metadata_io(
-                    "write anonymous archived-repair metadata",
+                    "write anonymous candidate metadata",
                     path,
                     io::Error::from_raw_os_error(nix::libc::EIO),
                 ));
             }
             Ok(count) => written += count,
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
-            Err(source) => return Err(metadata_io("write anonymous archived-repair metadata", path, source)),
+            Err(source) => return Err(metadata_io("write anonymous candidate metadata", path, source)),
         }
     }
     Ok(())

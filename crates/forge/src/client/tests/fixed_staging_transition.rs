@@ -310,18 +310,31 @@ fn coordinator_lease_spans_state_allocation_and_retained_identity_preparation() 
 
     let state = client.state_db.add(&[], Some("serialized candidate"), None).unwrap();
     record_state_id_retained(&candidate.staging, &candidate.candidate_usr, state.id).unwrap();
+    let candidate_path = client.installation.staging_path("usr");
     let identity = StatefulTreeIdentity::prepare_retained_candidate(
         &client.installation,
         &client.state_db,
-        &client.installation.staging_path("usr"),
+        &candidate_path,
         &candidate.candidate_usr,
         state.id,
     )
     .unwrap();
+    let (retained_usr, diagnostic_path) = identity.retained_candidate_usr();
+    assert_eq!(file_identity(retained_usr), file_identity(&candidate.candidate_usr));
+    assert_eq!(diagnostic_path, candidate_path);
+    identity.verify_candidate_for_activation(&candidate_path).unwrap();
     assert!(matches!(
         done_rx.recv_timeout(Duration::from_millis(100)),
         Err(RecvTimeoutError::Timeout)
     ));
+
+    let retained_state_id = candidate_path.join(".stateID.retained-test-evidence");
+    fs::rename(candidate_path.join(".stateID"), &retained_state_id).unwrap();
+    fs::write(candidate_path.join(".stateID"), state.id.to_string()).unwrap();
+    fs::set_permissions(candidate_path.join(".stateID"), Permissions::from_mode(0o644)).unwrap();
+    identity.verify_candidate_for_recovery(&candidate_path).unwrap();
+    assert!(identity.verify_candidate_for_activation(&candidate_path).is_err());
+    assert_eq!(fs::read_to_string(retained_state_id).unwrap(), state.id.to_string());
 
     drop(identity);
     drop(candidate);

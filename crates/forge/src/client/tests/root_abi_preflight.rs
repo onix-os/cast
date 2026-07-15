@@ -100,10 +100,9 @@ fn every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation
                 &fixture.previous_snapshot,
                 "previous-package",
             );
-            assert_generated_snapshot(
-                &system_model::snapshot_path(&installation.staging_dir()),
-                &fixture.candidate_snapshot,
-                "candidate-package",
+            assert!(
+                !system_model::snapshot_path(&installation.staging_dir()).exists(),
+                "root ABI preflight decorated the untouched candidate"
             );
             assert!(!live_usr.join(".cast-tree-id").exists());
             assert!(!candidate_usr.join(".cast-tree-id").exists());

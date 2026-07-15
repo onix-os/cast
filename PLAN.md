@@ -705,6 +705,22 @@ and instant rollback mechanism; it hardens their failure semantics.
   witnesses. Require candidate and previous to have distinct tokens and
   filesystem objects on the same exchange-capable mount, keep all descriptors
   close-on-exec, and fsync every changed parent before recording completion.
+  As of 2026-07-15, fresh-state creation, active-state reblit, and inactive
+  archived repair share one descriptor-bound candidate-metadata primitive.
+  It retains the authenticated candidate `/usr` and `lib`, bounds and pins
+  `os-info.json`, prepares both generated files as sealed `O_TMPFILE` inodes,
+  publishes their names no-replace, and retains exact file/content witnesses
+  through transaction triggers, the final exchange validator, system triggers,
+  previous-tree archive, and boot synchronization. Strict activation proofs
+  include the exact `.stateID`; recovery remains marker-only. Package layouts
+  now reserve `lib/os-release` and `lib/system-model.glu` while keeping
+  `lib/os-info.json` package-owned. Applied-but-reported-error `lib` publication
+  completes the same `/usr` fsync suffix as ordinary success. Focused tests cover
+  symlink escapes, existing regular and hardlinked outputs, final-name races,
+  candidate substitution, trigger-time deletion/rewrite/replacement/hardlink,
+  sealed success, compensating recovery, and atomic rollback. Ephemeral
+  decoration and other path-based lifecycle/cleanup paths remain, so this item
+  is intentionally still open.
 - [x] Land the descriptor-relative `/usr/.cast-tree-id` primitive independently
   of coordinator integration. Its fixed v1 frame is bounded, checksummed, and
   locked by an exact golden; pre-journal publication uses an anonymous

@@ -92,11 +92,11 @@ mod active_state_snapshot;
 mod active_state_snapshot_tests;
 mod archived_repair;
 mod archived_repair_materialization;
-mod archived_repair_metadata;
 #[cfg(test)]
 mod archived_repair_tests;
 mod boot;
 mod cache;
+mod candidate_metadata;
 mod external_materialization;
 mod fetch;
 mod fixed_staging;
@@ -1007,6 +1007,7 @@ impl Client {
             !skip_triggers,
             !skip_boot,
             &tree_identity,
+            None,
             live_root_abi,
             &active_state,
             &mut checkpoint,
@@ -1317,8 +1318,15 @@ impl Client {
         }
 
         let prepare = (|| {
-            record_os_release(&self.installation.staging_dir())?;
-            record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
+            #[cfg(test)]
+            before_stateful_candidate_metadata();
+            revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
+            active_state.revalidate(&self.installation)?;
+            tree_identity.verify_candidate_for_activation(&self.installation.staging_path("usr"))?;
+            let metadata = candidate_metadata::decorate_stateful(&tree_identity, &system_snapshot)?;
+            metadata.revalidate()?;
+            tree_identity.verify_candidate_for_activation(&self.installation.staging_path("usr"))?;
+            revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
 
             let isolation_root = create_root_links(&self.installation.isolation_dir())?;
 
@@ -1358,6 +1366,10 @@ impl Client {
                 &self.installation.staging_path("usr"),
                 &self.installation.root.join("usr"),
             )?;
+            tree_identity.verify_candidate_for_activation(&self.installation.staging_path("usr"))?;
+            metadata.revalidate()?;
+            revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
+            active_state.revalidate(&self.installation)?;
             if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                 tree_identity.verify_active_reblit_candidate_snapshot(
                     &self.installation,
@@ -1367,19 +1379,22 @@ impl Client {
                 )?;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterTransactionTriggers)?;
-            Ok(())
+            Ok::<_, Error>(metadata)
         })();
 
-        if let Err(primary) = prepare {
-            return Err(self.preserve_unswapped_candidate(
-                state.id,
-                previous.as_ref().map(|state| state.id),
-                candidate_origin,
-                primary,
-                &tree_identity,
-                &mut checkpoint,
-            ));
-        }
+        let metadata = match prepare {
+            Ok(metadata) => metadata,
+            Err(primary) => {
+                return Err(self.preserve_unswapped_candidate(
+                    state.id,
+                    previous.as_ref().map(|state| state.id),
+                    candidate_origin,
+                    primary,
+                    &tree_identity,
+                    &mut checkpoint,
+                ));
+            }
+        };
 
         self.commit_stateful_staging(
             &fstree,
@@ -1390,6 +1405,7 @@ impl Client {
             true,
             true,
             &tree_identity,
+            Some(&metadata),
             live_root_abi,
             active_state,
             &mut checkpoint,
@@ -1417,6 +1433,7 @@ impl Client {
         run_system_triggers: bool,
         run_boot_synchronization: bool,
         tree_identity: &StatefulTreeIdentity,
+        metadata: Option<&candidate_metadata::CandidateMetadataProof<'_>>,
         live_root_abi: RootAbiPreflight,
         active_state: &active_state_authority::ActiveStateAuthority,
         checkpoint: &mut F,
@@ -1432,12 +1449,31 @@ impl Client {
             return Err(Error::EphemeralProhibitedOperation);
         }
 
+        if candidate_origin != StatefulCandidateOrigin::Archived && metadata.is_none() {
+            return Err(self.preserve_unswapped_candidate(
+                candidate.id,
+                previous.map(|state| state.id),
+                candidate_origin,
+                Error::StatefulCandidateMetadataProofRequired {
+                    candidate: candidate.id,
+                },
+                tree_identity,
+                checkpoint,
+            ));
+        }
+
         if let Err(primary) = tree_identity
             .verify_pre_exchange(
                 &self.installation.staging_path("usr"),
                 &self.installation.root.join("usr"),
             )
             .map_err(Error::from)
+            .and_then(|()| {
+                tree_identity
+                    .verify_candidate_for_activation(&self.installation.staging_path("usr"))
+                    .map_err(Error::from)
+            })
+            .and_then(|()| metadata.map_or(Ok(()), |proof| proof.revalidate()))
             .and_then(|()| active_state.revalidate(&self.installation))
             .and_then(|()| live_root_abi.revalidate())
             .and_then(|()| {
@@ -1462,6 +1498,16 @@ impl Client {
         }
 
         let promotion = tree_identity.exchange_forward_validated(&self.installation, &|| {
+            tree_identity.verify_candidate_for_activation(&self.installation.staging_path("usr"))?;
+            if let Some(metadata) = metadata {
+                metadata
+                    .revalidate()
+                    .map_err(|source| crate::transition_identity::Error::RetainedExchange {
+                        operation: "revalidate retained candidate metadata immediately before forward exchange",
+                        path: metadata.diagnostic_path().to_owned(),
+                        source: io::Error::other(source),
+                    })?;
+            }
             active_state.revalidate(&self.installation).map_err(|source| {
                 crate::transition_identity::Error::RetainedExchange {
                     operation: "revalidate active-state authority immediately before forward exchange",
@@ -1527,6 +1573,10 @@ impl Client {
                 &self.installation.root.join("usr"),
                 &self.installation.staging_path("usr"),
             )?;
+            tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+            if let Some(metadata) = metadata {
+                metadata.revalidate()?;
+            }
             let live_root_abi = live_root_abi.publish()?;
             live_root_abi.revalidate()?;
             if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
@@ -1547,6 +1597,10 @@ impl Client {
                     &self.installation.root.join("usr"),
                     &self.installation.staging_path("usr"),
                 )?;
+                tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+                if let Some(metadata) = metadata {
+                    metadata.revalidate()?;
+                }
                 if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                     tree_identity.verify_active_reblit_candidate_snapshot(
                         &self.installation,
@@ -1559,9 +1613,18 @@ impl Client {
                 system_triggers_incomplete = false;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggers)?;
+            tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+            if let Some(metadata) = metadata {
+                metadata.revalidate()?;
+            }
+            live_root_abi.revalidate()?;
 
             if archive_previous && let Some(previous) = previous {
                 checkpoint(StatefulTransitionCheckpoint::BeforePreviousStateArchive)?;
+                tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+                if let Some(metadata) = metadata {
+                    metadata.revalidate()?;
+                }
                 tree_identity.verify_previous_for_recovery(&self.installation.staging_path("usr"))?;
                 match tree_identity.archive_previous(&self.installation, previous.id) {
                     Ok(()) => {}
@@ -1587,12 +1650,19 @@ impl Client {
                     &self.installation.root.join("usr"),
                     &self.installation.root_path(previous.id.to_string()).join("usr"),
                 )?;
+                tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+                if let Some(metadata) = metadata {
+                    metadata.revalidate()?;
+                }
                 checkpoint(StatefulTransitionCheckpoint::AfterPreviousStateArchive)?;
             }
 
             if run_boot_synchronization {
                 checkpoint(StatefulTransitionCheckpoint::BeforeCandidateBootSynchronization)?;
-                tree_identity.verify_candidate_for_recovery(&self.installation.root.join("usr"))?;
+                tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+                if let Some(metadata) = metadata {
+                    metadata.revalidate()?;
+                }
                 if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                     tree_identity.verify_active_reblit_candidate_snapshot(
                         &self.installation,
@@ -1603,6 +1673,10 @@ impl Client {
                 }
                 candidate_boot_synchronization_started = true;
                 checkpoint(StatefulTransitionCheckpoint::AfterCandidateBootSynchronizationStarted)?;
+                tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+                if let Some(metadata) = metadata {
+                    metadata.revalidate()?;
+                }
                 if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                     tree_identity.verify_active_reblit_candidate_snapshot(
                         &self.installation,
@@ -1612,7 +1686,10 @@ impl Client {
                     )?;
                 }
                 boot::synchronize(self, candidate, previous)?;
-                tree_identity.verify_candidate_for_recovery(&self.installation.root.join("usr"))?;
+                tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+                if let Some(metadata) = metadata {
+                    metadata.revalidate()?;
+                }
                 if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                     tree_identity.verify_active_reblit_candidate_snapshot(
                         &self.installation,
@@ -1625,6 +1702,11 @@ impl Client {
 
             if candidate_origin == StatefulCandidateOrigin::Archived {
                 tree_identity.retire_displaced_archived_candidate_slot(&self.installation, candidate.id)?;
+            }
+
+            tree_identity.verify_candidate_for_activation(&self.installation.root.join("usr"))?;
+            if let Some(metadata) = metadata {
+                metadata.revalidate()?;
             }
 
             Ok(())
@@ -5487,8 +5569,26 @@ struct RootAbiPreflight {
 
 #[cfg(test)]
 std::thread_local! {
+    static BEFORE_STATEFUL_CANDIDATE_METADATA: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
     static BEFORE_STATEFUL_ROOT_ABI_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn arm_before_stateful_candidate_metadata(hook: impl FnOnce() + 'static) {
+    BEFORE_STATEFUL_CANDIDATE_METADATA.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_stateful_candidate_metadata() {
+    BEFORE_STATEFUL_CANDIDATE_METADATA.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
 }
 
 #[cfg(test)]
@@ -12177,6 +12277,13 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+    #[error("decorate a stateful candidate through retained metadata capabilities")]
+    StatefulCandidateMetadata {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("stateful candidate {candidate} reached activation without its retained metadata proof")]
+    StatefulCandidateMetadataProofRequired { candidate: state::Id },
     #[error("materialize an inactive archived state")]
     ArchivedRepairMaterialization {
         #[source]
@@ -12305,6 +12412,7 @@ mod tests {
     mod external_materialization;
     mod fixed_staging_transition;
     mod root_abi_preflight;
+    mod stateful_candidate_metadata;
 
     fn test_installation(root: &Path) -> Installation {
         prepare_private_installation_root(root);
@@ -12937,6 +13045,10 @@ mod tests {
                 ".cast-tree-id",
                 ".cast-tree-id.tmp",
                 ".stateID/forged-child",
+                "lib/os-release",
+                "lib/os-release/forged-child",
+                "lib/system-model.glu",
+                "lib/system-model.glu/forged-child",
             ] {
                 let invalid = test_stone_layout(kind, reserved);
                 assert!(matches!(
@@ -13020,6 +13132,9 @@ mod tests {
             ".cast-tree-id-old",
             ".cast-tree-id.tmp-old",
             ".stateID.old/child",
+            "lib/os-info.json",
+            "lib/os-release.local",
+            "lib/system-model.glu.old",
             "share/Grüße/工具",
             "usr/bin/nested",
         ] {
@@ -17845,6 +17960,10 @@ let cast = import! cast.system.v1
             ".cast-tree-id",
             ".cast-tree-id.tmp",
             ".stateID/forged-child",
+            "lib/os-release",
+            "lib/os-release/forged-child",
+            "lib/system-model.glu",
+            "lib/system-model.glu/forged-child",
         ] {
             let layout = StonePayloadLayoutRecord {
                 uid: 0,
@@ -18398,11 +18517,10 @@ let cast = import! cast.system.v1
             record_system_snapshot(&candidate_root, candidate_model).unwrap();
         } else {
             // Production fresh-state activation receives an already
-            // materialized staging /usr from blit_root. Keep the transition
-            // fixture faithful now that marker identity must precede metadata
-            // decoration and trigger execution.
+            // materialized staging /usr from blit_root. Candidate metadata is
+            // deliberately absent until descriptor-bound decoration runs after
+            // marker identity preparation.
             record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
-            record_system_snapshot(&client.installation.staging_dir(), candidate_model).unwrap();
         }
 
         StatefulTransitionFixture {
@@ -19930,15 +20048,12 @@ let cast = import! cast.system.v1
 
         let next = fixture.client.state_db.add(&[], Some("next candidate"), None).unwrap();
         record_state_id(&fixture.client.installation.staging_dir(), next.id).unwrap();
-        record_system_snapshot(
-            &fixture.client.installation.staging_dir(),
-            generated_system_snapshot("next-package"),
-        )
-        .unwrap();
         let staged = fixture.client.installation.staging_path("usr");
         let mut active_state =
             active_state_authority::ActiveStateAuthority::acquire(&fixture.client.installation).unwrap();
         let identity = fixture.client.prepare_stateful_tree_identity(&staged, next.id).unwrap();
+        let metadata =
+            candidate_metadata::decorate_stateful(&identity, &generated_system_snapshot("next-package")).unwrap();
         active_state
             .refresh_after_tree_identity_preparation(&fixture.client.installation)
             .unwrap();
@@ -19955,6 +20070,7 @@ let cast = import! cast.system.v1
                 false,
                 false,
                 &identity,
+                Some(&metadata),
                 live_root_abi,
                 &active_state,
                 &mut no_fault,
@@ -20865,11 +20981,6 @@ let cast = import! cast.system.v1
         let client = stateful_test_client(temporary.path());
         let candidate = client.state_db.add(&[], Some("first state"), None).unwrap();
         record_state_id(&client.installation.staging_dir(), candidate.id).unwrap();
-        record_system_snapshot(
-            &client.installation.staging_dir(),
-            generated_system_snapshot("first-state-package"),
-        )
-        .unwrap();
         let candidate_usr = client.installation.staging_path("usr");
         let live_usr = client.installation.root.join("usr");
         assert!(!live_usr.exists());
@@ -20878,6 +20989,9 @@ let cast = import! cast.system.v1
         let tree_identity = client
             .prepare_stateful_tree_identity(&candidate_usr, candidate.id)
             .unwrap();
+        let metadata_proof =
+            candidate_metadata::decorate_stateful(&tree_identity, &generated_system_snapshot("first-state-package"))
+                .unwrap();
         active_state
             .refresh_after_tree_identity_preparation(&client.installation)
             .unwrap();
@@ -20906,6 +21020,7 @@ let cast = import! cast.system.v1
                 false,
                 false,
                 &tree_identity,
+                Some(&metadata_proof),
                 live_root_abi,
                 &active_state,
                 &mut |_| Ok(()),

@@ -16,19 +16,28 @@ pub mod render;
 /// to Cast's system-metadata namespace.
 ///
 /// Stone layout targets omit the leading `/usr/`. Packages must never own the
-/// state or tree-identity markers, their atomic-publication temporaries, nor
-/// anything beneath any marker if a future representation turns one into a
-/// directory. This predicate deliberately reserves only those exact first
-/// components; similar package names remain available.
+/// state or tree-identity markers, their atomic-publication temporaries, the
+/// generated candidate metadata files, nor anything beneath those names if a
+/// conflicting package layout tries to turn one into a directory. This
+/// predicate deliberately reserves only the exact system-owned paths; similar
+/// package names and the package-owned `lib/os-info.json` input remain
+/// available.
 pub fn is_reserved_usr_layout_target(target: &str) -> bool {
-    [".cast-state-id.tmp", ".cast-tree-id", ".cast-tree-id.tmp", ".stateID"]
-        .into_iter()
-        .any(|reserved| {
-            target == reserved
-                || target
-                    .strip_prefix(reserved)
-                    .is_some_and(|remainder| remainder.starts_with('/'))
-        })
+    [
+        ".cast-state-id.tmp",
+        ".cast-tree-id",
+        ".cast-tree-id.tmp",
+        ".stateID",
+        "lib/os-release",
+        "lib/system-model.glu",
+    ]
+    .into_iter()
+    .any(|reserved| {
+        target == reserved
+            || target
+                .strip_prefix(reserved)
+                .is_some_and(|remainder| remainder.starts_with('/'))
+    })
 }
 
 /// Unique ID of a [`Package`]
@@ -203,6 +212,12 @@ mod tests {
             ".stateID",
             ".stateID/child",
             ".stateID/nested/child",
+            "lib/os-release",
+            "lib/os-release/child",
+            "lib/os-release/nested/child",
+            "lib/system-model.glu",
+            "lib/system-model.glu/child",
+            "lib/system-model.glu/nested/child",
         ] {
             assert!(is_reserved_usr_layout_target(target), "did not reserve {target:?}");
         }
@@ -218,6 +233,14 @@ mod tests {
             ".state",
             ".stateID-old",
             ".stateID.old/child",
+            "lib",
+            "lib/os-info.json",
+            "lib/os-release-old",
+            "lib/os-release.local/child",
+            "lib/system-model.glu-old",
+            "lib/system-model.glu.local/child",
+            "share/lib/os-release",
+            "share/lib/system-model.glu",
             "share/.cast-tree-id",
             "share/.stateID",
         ] {

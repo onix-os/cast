@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -307,6 +307,22 @@ forge-archived-repair-test:
 		client::archived_repair_tests::namespace_races::externally_completed_missing_cleanup_is_adopted_without_a_second_restore \
 		client::archived_repair_tests::namespace_races::successful_preservation_reversal_is_ambiguous_without_a_second_exchange; do \
 		printf '%s\n' "$$listed" | grep -Fx "$$test: test" >/dev/null; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-stateful-candidate-metadata-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_lib_or_os_info_symlinks \
+		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_output_symlinks \
+		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_preserves_existing_output_inodes \
+		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_final_name_races_are_no_replace \
+		client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_trigger_mutation \
+		client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_system_trigger_mutation \
+		client::tests::stateful_candidate_metadata::candidate_usr_substitution_before_metadata_never_decorates_replacement \
+		client::tests::stateful_candidate_metadata::successful_stateful_metadata_is_sealed_and_rollback_capable; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
