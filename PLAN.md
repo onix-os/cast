@@ -700,8 +700,17 @@ and instant rollback mechanism; it hardens their failure semantics.
   result is checked against the preliminary Installation observation, which
   remains only a stale-clone witness; a mismatch is rejected rather than
   refreshed. Focused tests prove unresolved journal and orphan evidence precede
-  malformed live state. Startup reconciliation and the read-only shared snapshot
-  path are not implemented. Default authored intent is no longer evaluated by
+  malformed live state. Startup reconciliation and the complete read-only
+  client path are not implemented. The installation-level snapshot authority
+  is now real: `Installation::open_read_only` opens only an existing root,
+  `.cast`, default or custom cache, and their lockfiles; retains and revalidates
+  their exact directory and lock identities; holds shared global and custom-cache
+  locks through every clone; and bounds contended shared-lock acquisition to 30
+  seconds without entering a blocking kernel lock call. Mutable `ClientBuilder`
+  construction rejects explicit snapshots and naturally read-only installations
+  before the coordinator or any SQLite handle is opened. This foundation does
+  not yet expose read-only database, journal, repository, or active-registry
+  queries. Default authored intent is no longer evaluated by
   `Installation::open`: the mutable client retains the exact `etc/cast`
   directory, loads `system.glu` and its imports through the descriptor-rooted
   Gluon source authority only after the clean startup gate and strict active
@@ -711,8 +720,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   also run after the gate, and repository CLI construction can no longer bypass
   this ordering. Focused tests cover journal/orphan precedence, frozen-client
   separation, CLI notice timing, unsafe source metadata, and root, directory,
-  and source substitution. Startup reconciliation and the read-only shared
-  snapshot path still keep this item open.
+  and source substitution. Startup reconciliation and the complete read-only
+  database, journal, repository, and registry client still keep this item open.
 - [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
   with one retained capability namespace. Resolve beneath authenticated
   directory descriptors without symlink, magic-link, or mount traversal. Give
@@ -899,10 +908,22 @@ and instant rollback mechanism; it hardens their failure semantics.
   activation namespace, or finish the pre-journal baseline and coordinator
   items below. Repaired-archive publication is descriptor-relative, and
   production stateful materialization already uses the retained fixed-staging
-  capability; `blit_root_with_materialization` is test-only. Destructive
-  pathname cleanup still remains in archived-state pruning and other legacy
-  garbage-collection paths, so this item does not claim complete lifecycle
-  safety.
+  capability; `blit_root_with_materialization` is test-only. Archived-state
+  pruning now authenticates an exact journal-locked batch of at most 64 retained
+  wrappers, detaches each into a fresh private no-replace quarantine, applies
+  boot exclusions before rollback selection, removes the exact database rows in
+  one reconciled SQLite transaction, and deletes only beneath the private
+  retained descriptors with aggregate entry, depth, byte, operation, and time
+  bounds. Startup scans twice for every raw-byte `state-prune-*` residue before
+  live-state or authored-intent discovery, so interrupted pruning blocks normal
+  reopening without deleting evidence. `make forge-state-prune-test` covers 34
+  exact production, compensation, restart-residue, race, bound, deletion, and
+  database cases; the startup-gate lane covers the residue precedence. This is
+  still not durable automatic recovery: there is no prune intent to adopt after
+  process death, the pinned boot manager does not propagate every stale-entry
+  deletion failure, syscall deadlines are cooperative, and package/CAS orphan
+  cleanup remains path-based. Other legacy garbage-collection paths also remain,
+  so this item does not claim complete lifecycle safety.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree
