@@ -4,7 +4,8 @@ use gluon_config::EvaluationFingerprint;
 
 use crate::build_policy::layers::BuildPolicyOperation;
 
-use super::{BuildLock, CanonicalEncoder, DerivationValidationError, LockedIdentity, require_nonblank, sha256};
+use super::validation::require_nonblank;
+use super::{BuildLock, CanonicalEncoder, DerivationValidationError, LockedIdentity, sha256};
 
 const PROFILE_AGGREGATE_DOMAIN: &[u8] = b"cast-profile-fragments-v2\0";
 const POLICY_COMPOSITION_IDENTITY_DOMAIN: &str = "cast-build-policy-composition-v2";
