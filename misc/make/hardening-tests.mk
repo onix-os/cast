@@ -1,5 +1,5 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
-	forge-linux-fs-test forge-cache-test \
+	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
 	forge-transition-journal-test \
@@ -11,6 +11,7 @@
 	container-root-host-safe-test mason-package-collect-test \
 	mason-package-collect-transaction-test mason-analysis-handler-test mason-emit-test \
 	mason-archive-test mason-package-publication-test \
+	mason-git-materialization-test mason-paths-test mason-executor-test \
 	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
@@ -97,6 +98,14 @@ forge-cache-test:
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+forge-client-direct-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 211; \
+	timeout 1200s $(CARGO) test -p forge --lib "client::tests::" -- --test-threads=1
 
 forge-database-adapter-test:
 	@set -eu; \
@@ -425,6 +434,30 @@ mason-package-publication-test:
 	count="$$( timeout 10s grep -c '^package::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 42; \
 	timeout 900s $(CARGO) test -p mason --lib "package::tests::" -- --test-threads=1
+
+mason-git-materialization-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^upstream::git::materialization::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 20; \
+	timeout 900s $(CARGO) test -p mason --lib "upstream::git::materialization::tests::" -- --test-threads=1
+
+mason-paths-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^paths::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 25; \
+	timeout 900s $(CARGO) test -p mason --lib "paths::tests::" -- --test-threads=1
+
+mason-executor-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^executor::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 25; \
+	timeout 900s $(CARGO) test -p mason --lib "executor::tests::" -- --test-threads=1
 
 config-gluon-store-test:
 	@set -eu; \
