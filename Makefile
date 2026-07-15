@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test container-process-runtime-test gitwrap-repository-fs-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test container-process-runtime-test gitwrap-repository-fs-test forge-security-fixture-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -244,6 +244,19 @@ gitwrap-repository-fs-test:
 		tests::sha256_object_format_commit_ids_are_accepted; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 180s $(CARGO) test -p gitwrap --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-security-fixture-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		cli::repo::tests::authored_system_intent_rejects_imperative_repository_changes \
+		client::tests::state_creation_records_and_exports_the_generated_snapshot \
+		installation::tests::both_open_modes_defer_invalid_system_intent_but_frozen_skips_active_state \
+		tree_marker::tests::canonical_marker_rejects_links_wrong_kinds_and_mutable_modes; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 forge-client-startup-gate-test:
@@ -953,6 +966,7 @@ help:
 	@echo "  container-cgroup-test  Run all extracted cgroup lifecycle and parser tests"
 	@echo "  container-process-runtime-test  Run host-safe process-runtime, pidfd, and signal tests"
 	@echo "  gitwrap-repository-fs-test  Run repository filesystem identity, quota, and mirror tests"
+	@echo "  forge-security-fixture-test  Run hardened intent, state-marker, and inode-kind fixtures"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"

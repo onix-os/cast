@@ -326,6 +326,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
     use fs_err as fs;
 
     use super::*;
@@ -335,6 +337,8 @@ mod tests {
         let temporary = crate::test_support::private_installation_tempdir();
         let intent_path = system_model::intent_path(temporary.path());
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        fs::set_permissions(temporary.path().join("etc"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(intent_path.parent().unwrap(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let authored = r#"// Repository intent remains administrator-owned.
 let cast = import! cast.system.v1
 {
@@ -345,6 +349,7 @@ let cast = import! cast.system.v1
 }
 "#;
         fs::write(&intent_path, authored).unwrap();
+        fs::set_permissions(&intent_path, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let cases = [
             vec!["repo", "add", "extra", "file:///var/cache/cast/extra.index"],

@@ -13787,8 +13787,10 @@ mod tests {
     fn state_creation_records_and_exports_the_generated_snapshot() {
         let temporary = tempfile::tempdir().unwrap();
         let intent_path = system_model::intent_path(temporary.path());
-        fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        let intent_directory = intent_path.parent().unwrap();
+        fs::create_dir_all(intent_directory).unwrap();
         fs::set_permissions(temporary.path().join("etc"), Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(intent_directory, Permissions::from_mode(0o755)).unwrap();
         fs::write(
             &intent_path,
             r#"// Authored intent must remain unchanged.
@@ -13797,6 +13799,7 @@ cast.system
 "#,
         )
         .unwrap();
+        fs::set_permissions(&intent_path, Permissions::from_mode(0o644)).unwrap();
         let authored = fs::read_to_string(&intent_path).unwrap();
 
         let client = stateful_test_client(temporary.path());

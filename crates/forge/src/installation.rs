@@ -1636,7 +1636,9 @@ mod tests {
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
         fs::write(&intent_path, b"invalid Gluon that normal open must reject").unwrap();
         fs::create_dir_all(temporary.path().join("usr")).unwrap();
-        fs::write(temporary.path().join("usr/.stateID"), b"73").unwrap();
+        let state_id = temporary.path().join("usr/.stateID");
+        fs::write(&state_id, b"73").unwrap();
+        fs::set_permissions(&state_id, std::fs::Permissions::from_mode(0o644)).unwrap();
 
         let frozen = Installation::open_frozen(temporary.path(), None).unwrap();
         assert!(frozen.active_state.is_none());

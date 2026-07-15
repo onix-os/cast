@@ -613,10 +613,7 @@ impl TreeMarkerStore {
 mod tests {
     use std::{
         fs,
-        os::unix::{
-            fs::{FileExt as _, MetadataExt as _, PermissionsExt as _, symlink},
-            net::UnixListener,
-        },
+        os::unix::fs::{FileExt as _, MetadataExt as _, PermissionsExt as _, symlink},
         process::Command,
     };
 
@@ -846,7 +843,6 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let marker = root.path().join(".cast-tree-id");
             let external = root.path().join("external");
-            let mut listener = None;
             match attack {
                 "symlink" => {
                     fs::write(&external, b"external").unwrap();
@@ -862,7 +858,17 @@ mod tests {
                     // SAFETY: encoded is one live NUL-terminated pathname.
                     assert_eq!(unsafe { nix::libc::mkfifo(encoded.as_ptr(), 0o444) }, 0);
                 }
-                "socket" => listener = Some(UnixListener::bind(&marker).unwrap()),
+                "socket" => {
+                    let encoded = CString::new(marker.as_os_str().as_bytes()).unwrap();
+                    // A listening socket is unnecessary here: the production
+                    // reader authenticates the inode kind. Creating that inode
+                    // directly also keeps this proof valid under sandboxes that
+                    // intentionally deny the socket/bind syscalls.
+                    // SAFETY: encoded is one live NUL-terminated pathname and
+                    // S_IFSOCK ignores the zero device number.
+                    let result = unsafe { nix::libc::mknod(encoded.as_ptr(), nix::libc::S_IFSOCK | 0o444, 0) };
+                    assert_eq!(result, 0, "create socket inode: {}", io::Error::last_os_error());
+                }
                 "mode" => write_marker(&marker, &token('9'), 0o644),
                 _ => unreachable!(),
             }
@@ -872,7 +878,6 @@ mod tests {
             if attack == "mode" {
                 assert_eq!(fs::symlink_metadata(&marker).unwrap().mode() & 0o7777, 0o644);
             }
-            drop(listener);
         }
     }
 
