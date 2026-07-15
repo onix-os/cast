@@ -1,4 +1,5 @@
-.PHONY: forge-read-only-installation-test forge-read-only-substrate-test \
+.PHONY: forge-read-only-installation-test forge-installation-test \
+	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
 	forge-transition-journal-test \
 	stone-recipe-derivation-provenance-test \
@@ -7,8 +8,9 @@
 	stone-recipe-build-policy-validation-test container-cgroup-test \
 	container-process-runtime-test container-mount-boundary-test \
 	container-root-host-safe-test mason-package-collect-test \
-	mason-package-collect-transaction-test \
-	gitwrap-repository-fs-test forge-repository-manager-test \
+	mason-package-collect-transaction-test mason-analysis-handler-test \
+	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
+	forge-repository-manager-test \
 	forge-security-fixture-test
 
 forge-read-only-installation-test:
@@ -37,6 +39,23 @@ forge-read-only-installation-test:
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+forge-installation-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^installation::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 28; \
+	timeout 900s $(CARGO) test -p forge --lib "installation::tests::" -- --test-threads=1
+
+forge-database-adapter-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	layout_count="$$( timeout 10s grep -c '^db::layout::test::.*: test$$' <<<"$$listed" )"; \
+	meta_count="$$( timeout 10s grep -c '^db::meta::test::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$layout_count" = 11; \
+	timeout 10s test "$$meta_count" = 10; \
+	timeout 900s $(CARGO) test -p forge --lib "db::layout::test::" -- --test-threads=1; \
+	timeout 900s $(CARGO) test -p forge --lib "db::meta::test::" -- --test-threads=1
 
 forge-read-only-substrate-test:
 	@set -eu; \
@@ -273,6 +292,20 @@ mason-package-collect-transaction-test:
 	timeout 900s $(CARGO) test -p mason --lib "package::collect::mutation::tests::" -- --test-threads=1; \
 	timeout 900s $(CARGO) test -p mason --lib "package::collect::publication::tests::" -- --test-threads=1
 
+mason-analysis-handler-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^package::analysis::handler::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 30; \
+	timeout 900s $(CARGO) test -p mason --lib "package::analysis::handler::tests::" -- --test-threads=1
+
+config-gluon-store-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p config --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^gluon::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 28; \
+	timeout 900s $(CARGO) test -p config --lib "gluon::tests::" -- --test-threads=1
+
 gitwrap-repository-fs-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p gitwrap --lib -- --list )"; \
@@ -302,6 +335,13 @@ gitwrap-repository-fs-test:
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 180s $(CARGO) test -p gitwrap --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+gitwrap-all-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p gitwrap --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 32; \
+	timeout 900s $(CARGO) test -p gitwrap --lib "tests::" -- --test-threads=1
 
 forge-repository-manager-test:
 	@set -eu; \
