@@ -32,6 +32,7 @@ use crate::{
 
 mod lockfile;
 mod snapshot;
+pub(crate) use snapshot::{DatabaseFile as ReadOnlyDatabaseFile, DatabaseKind};
 
 /// System mutability - do we have readwrite?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
@@ -324,6 +325,44 @@ impl Installation {
             .as_deref()
             .ok_or(Error::ReadOnlySnapshotAuthorityRequired)?;
         authority.revalidate(&self.root, &self.root_directory)
+    }
+
+    #[allow(dead_code)] // consumed by the next read-only-client slice
+    pub(crate) fn open_read_only_database(&self, kind: DatabaseKind) -> Result<ReadOnlyDatabaseFile, Error> {
+        self.revalidate_read_only_snapshot()?;
+        let database = self
+            .snapshot_authority
+            .as_deref()
+            .ok_or(Error::ReadOnlySnapshotAuthorityRequired)?
+            .open_database(kind)?;
+        self.revalidate_read_only_snapshot()?;
+        Ok(database)
+    }
+
+    #[allow(dead_code)] // consumed by the next read-only-client slice
+    pub(crate) fn revalidate_read_only_database(&self, database: &ReadOnlyDatabaseFile) -> Result<(), Error> {
+        self.revalidate_read_only_snapshot()?;
+        self.snapshot_authority
+            .as_deref()
+            .ok_or(Error::ReadOnlySnapshotAuthorityRequired)?
+            .revalidate_database(database)?;
+        self.revalidate_read_only_snapshot()
+    }
+
+    #[allow(dead_code)] // consumed by the next read-only-client slice
+    pub(crate) fn read_read_only_database_image(
+        &self,
+        database: &ReadOnlyDatabaseFile,
+        max_bytes: usize,
+    ) -> Result<Box<[u8]>, Error> {
+        self.revalidate_read_only_snapshot()?;
+        let image = self
+            .snapshot_authority
+            .as_deref()
+            .ok_or(Error::ReadOnlySnapshotAuthorityRequired)?
+            .read_database_image(database, max_bytes)?;
+        self.revalidate_read_only_snapshot()?;
+        Ok(image)
     }
 
     /// Return true if we lack write access
@@ -1530,6 +1569,26 @@ pub enum Error {
         path: PathBuf,
         timeout: std::time::Duration,
     },
+    #[error("open existing read-only database `{}`", path.display())]
+    OpenReadOnlyDatabase {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read-only database identity changed: {}", path.display())]
+    ReadOnlyDatabaseChanged { path: PathBuf },
+    #[error("read-only database has unsupported SQLite sidecar evidence: {}", path.display())]
+    ReadOnlyDatabaseSidecar { path: PathBuf },
+    #[error("read-only database exceeds the {limit}-byte image bound: {} ({size} bytes)", path.display())]
+    ReadOnlyDatabaseTooLarge { path: PathBuf, size: u64, limit: usize },
+    #[error("read stable read-only database image `{}`", path.display())]
+    ReadOnlyDatabaseImage {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read-only database metadata or length changed while imaging: {}", path.display())]
+    ReadOnlyDatabaseImageChanged { path: PathBuf },
     #[error("explicit read-only snapshot authority is required")]
     ReadOnlySnapshotAuthorityRequired,
 }

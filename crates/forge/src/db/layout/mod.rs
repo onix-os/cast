@@ -39,7 +39,12 @@ const MAX_BOUNDED_QUERY_PACKAGE_ID_BYTES: usize = 1024 * 1024;
 
 static NEXT_MEMORY_DATABASE: AtomicU64 = AtomicU64::new(0);
 
+#[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
+mod read_only;
 mod schema;
+
+#[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
+pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyLayoutError};
 
 #[derive(Debug, Clone)]
 pub struct Database {

@@ -13,7 +13,12 @@ use thiserror::Error;
 
 pub mod layout;
 pub mod meta;
+#[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
+mod read_only;
 pub mod state;
+
+#[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
+pub(crate) use read_only::{ReadOnlyConnection, ReadOnlyError, ReadOnlyRow, Step as ReadOnlyStep};
 
 /// Max number of variables (binds) for a prepared statement
 ///

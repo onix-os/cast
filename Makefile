@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -138,6 +138,28 @@ forge-read-only-installation-test:
 		installation::snapshot::tests::retained_snapshot_rejects_custom_cache_directory_substitution \
 		installation::snapshot::tests::retained_snapshot_rejects_custom_cache_lockfile_substitution \
 		installation::snapshot::tests::open_revalidate_clone_and_drop_leave_recursive_metadata_and_contents_unchanged; do \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-read-only-substrate-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		db::read_only::tests::deserialized_adapters_query_exact_state_meta_and_selected_layout_without_mutation \
+		db::read_only::tests::authorizer_denies_writes_and_functions_and_connection_remains_clean \
+		db::read_only::tests::opcode_and_deadline_interruptions_are_deterministic_and_handlers_are_cleared \
+		db::read_only::tests::temp_store_is_memory_only_and_ordered_scan_leaves_source_unchanged \
+		db::read_only::tests::sidecar_inode_kinds_fail_closed_and_are_preserved \
+		db::read_only::tests::oversized_database_image_fails_before_allocation_without_mutation \
+		db::read_only::tests::corrupt_database_image_fails_typed_without_mutation \
+		db::read_only::tests::metadata_reconstructed_id_and_i32_release_corruption_fail_typed \
+		db::read_only::tests::missing_unknown_and_extra_diesel_migrations_fail_typed \
+		db::read_only::tests::absent_migration_table_is_version_set_validation_failure_not_migration \
+		transition_journal::read_only::tests::absent_and_preexisting_clean_journals_are_retained_without_provisioning \
+		transition_journal::read_only::tests::valid_canonical_transition_fails_closed_and_is_preserved \
+		transition_journal::read_only::tests::corrupt_canonical_and_interrupted_temporary_fail_closed_unchanged; do \
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
@@ -844,6 +866,7 @@ help:
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  config-rooted-gluon-test  Run descriptor-rooted Gluon substitution-race tests"
 	@echo "  forge-read-only-installation-test  Run retained read-only snapshot and mutable-client rejection tests"
+	@echo "  forge-read-only-substrate-test  Run immutable database-image and clean-journal substrate tests"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"

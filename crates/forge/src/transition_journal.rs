@@ -29,6 +29,11 @@ use thiserror::Error;
 
 use crate::{linux_fs::chmod_path_descriptor, state::TransitionId};
 
+#[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
+mod read_only;
+#[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
+pub(crate) use read_only::{CleanReadOnlyJournal, ReadOnlyJournalError};
+
 const JOURNAL_DIRECTORY: &CStr = c"journal";
 const CANONICAL_NAME: &CStr = c"state-transition";
 const LOCK_NAME: &CStr = c"state-transition.lock";
@@ -2668,7 +2673,7 @@ mod tests {
         }
     }
 
-    fn creation_record() -> TransitionRecord {
+    pub(super) fn creation_record() -> TransitionRecord {
         TransitionRecord::preparing(
             id(),
             runtime_epoch(),

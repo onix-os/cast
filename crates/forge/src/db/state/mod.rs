@@ -14,11 +14,15 @@ use crate::state::{self, Id, Selection, TransitionId};
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/state/migrations");
 
 mod exact_archived_removal;
+#[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
+mod read_only;
 mod schema;
 
 pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
 #[cfg(test)]
 use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
+#[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
+pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyStateError};
 
 #[derive(Debug, Clone)]
 pub struct Database {

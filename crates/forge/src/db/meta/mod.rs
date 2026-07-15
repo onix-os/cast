@@ -23,7 +23,12 @@ const ACTIVE_SNAPSHOT_SINGLETON: i32 = 1;
 const MAX_SNAPSHOT_INDEX_URI_BYTES: usize = 8 * 1024;
 const MAX_SNAPSHOT_BYTE_SIZE: u64 = 16 * 1024 * 1024;
 
+#[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
+mod read_only;
 mod schema;
+
+#[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
+pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyMetaError};
 
 #[derive(Debug)]
 pub enum Filter<'a> {
