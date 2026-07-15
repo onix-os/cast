@@ -21,6 +21,9 @@ const MAX_READ_ATTEMPTS: usize = 32;
 const STATE_ID_MODE: u32 = 0o644;
 
 mod handoff;
+mod read_only;
+
+pub(super) use read_only::ReadOnlyActiveStateSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DirectoryWitness {
@@ -437,7 +440,8 @@ fn open_usr(installation: &Installation, path: &Path) -> Result<Option<std::fs::
             | nix::libc::O_DIRECTORY
             | nix::libc::O_CLOEXEC
             | nix::libc::O_NOFOLLOW
-            | nix::libc::O_NONBLOCK,
+            | nix::libc::O_NONBLOCK
+            | nix::libc::O_NOATIME,
         0,
         linux_fs::controlled_resolution(),
     ) {

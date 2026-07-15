@@ -207,7 +207,8 @@ impl TreeMarkerStore {
                 | nix::libc::O_DIRECTORY
                 | nix::libc::O_CLOEXEC
                 | nix::libc::O_NOFOLLOW
-                | nix::libc::O_NONBLOCK,
+                | nix::libc::O_NONBLOCK
+                | nix::libc::O_NOATIME,
             0,
             controlled_resolution(),
         )
@@ -422,7 +423,11 @@ impl TreeMarkerStore {
         let file = self
             .open_optional(
                 MARKER_NAME,
-                nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+                nix::libc::O_RDONLY
+                    | nix::libc::O_CLOEXEC
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_NONBLOCK
+                    | nix::libc::O_NOATIME,
                 "open canonical tree marker",
             )?
             .ok_or_else(|| TreeMarkerError::MarkerChanged { path: path.clone() })?;

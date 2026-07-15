@@ -4,7 +4,10 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt as _, path::PathBuf};
 
 use thiserror::Error;
 
-use crate::{Installation, installation, transition_journal::TransitionJournalStore};
+use crate::{
+    Installation, installation,
+    transition_journal::{CleanReadOnlyJournal, TransitionJournalStore},
+};
 
 use super::{QUARANTINE_RELATIVE, RetainedDirectory};
 
@@ -48,6 +51,19 @@ pub(crate) fn audit_archived_state_prune_residue(
     installation: &Installation,
     _journal: &TransitionJournalStore,
 ) -> Result<(), ArchivedStatePruneResidueError> {
+    audit(installation)
+}
+
+/// Apply the same non-mutating residue audit while a read-only client retains
+/// the exact clean-journal proof and its shared lock.
+pub(crate) fn audit_archived_state_prune_residue_read_only(
+    installation: &Installation,
+    _journal: &CleanReadOnlyJournal,
+) -> Result<(), ArchivedStatePruneResidueError> {
+    audit(installation)
+}
+
+fn audit(installation: &Installation) -> Result<(), ArchivedStatePruneResidueError> {
     installation.revalidate_root_directory()?;
     let path = installation.state_quarantine_dir();
     let quarantine = RetainedDirectory::open_beneath(installation.root_directory(), QUARANTINE_RELATIVE, path.clone())?;

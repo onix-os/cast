@@ -102,7 +102,9 @@ pub(crate) use fault_injection::{
 };
 #[cfg(test)]
 pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;
-pub(crate) use prune_residue::{ArchivedStatePruneResidueError, audit_archived_state_prune_residue};
+pub(crate) use prune_residue::{
+    ArchivedStatePruneResidueError, audit_archived_state_prune_residue, audit_archived_state_prune_residue_read_only,
+};
 pub(crate) use staging_wrapper_rotation::{
     RetainedStagingWrapperRotationFailure, RetainedStagingWrapperRotationOutcome,
 };

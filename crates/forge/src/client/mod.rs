@@ -79,6 +79,7 @@ use crate::{
 
 pub use self::extract::extract;
 pub use self::index::index;
+pub use self::read_only::{ReadOnlyClient, ReadOnlyClientError};
 pub use self::resolve::{AvailableClosure, Error as ResolveError, ResolvedPackage, ResolvedRequest};
 pub use self::self_upgrade::self_upgrade;
 
@@ -102,6 +103,7 @@ mod fetch;
 mod fixed_staging;
 mod install;
 mod postblit;
+mod read_only;
 mod remove;
 mod resolve;
 mod self_upgrade;

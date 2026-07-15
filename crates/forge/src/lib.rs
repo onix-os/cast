@@ -3,6 +3,7 @@
 
 pub use self::client::{
     Client, ClientBuilder, FrozenExecutableBinding, FrozenMaterialization, FrozenRootGuard, MaterializedFrozenRoot,
+    ReadOnlyClient, ReadOnlyClientError,
 };
 pub use self::dependency::{Dependency, Provider};
 pub use self::installation::Installation;
