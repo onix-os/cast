@@ -368,6 +368,7 @@ forge-fixed-staging-test:
 		client::tests::fixed_staging_transition::stateful_candidate_same_digest_modes_and_writes_are_isolated_from_cache \
 		client::tests::fixed_staging_transition::stateful_candidate_rejects_corrupt_cache_bytes_without_publishing_usr \
 		client::tests::fixed_staging_transition::retained_state_id_write_never_targets_a_substituted_usr \
+		client::tests::fixed_staging_transition::stateful_trigger_preparation_never_follows_a_replaced_isolation_root \
 		client::tests::fixed_staging_transition::archived_repair_state_id_write_uses_the_same_retained_usr \
 		client::tests::fixed_staging_transition::coordinator_lease_spans_state_allocation_and_retained_identity_preparation \
 		client::tests::fixed_staging_transition::public_and_cross_install_blitters_cannot_target_fixed_staging \

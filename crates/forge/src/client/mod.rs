@@ -1344,13 +1344,12 @@ impl Client {
             revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
 
             let isolation_root = create_root_links(&self.installation.isolation_dir())?;
+            #[cfg(test)]
+            after_stateful_isolation_root_retention();
 
             // The container running triggers receives this exact retained
             // local /etc inode rather than resolving its mutable pathname.
             local_etc.revalidate(&self.installation)?;
-
-            let isolation_etc = self.installation.isolation_dir().join("etc");
-            fs::create_dir_all(isolation_etc)?;
 
             // Transaction triggers run before `/usr` is exchanged. Their
             // arbitrary external side effects cannot be undone, but the
@@ -5618,6 +5617,8 @@ std::thread_local! {
         const { std::cell::RefCell::new(None) };
     static BEFORE_STATEFUL_ROOT_ABI_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static AFTER_STATEFUL_ISOLATION_ROOT_RETENTION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -5646,6 +5647,22 @@ fn arm_before_stateful_root_abi_publication(hook: impl FnOnce() + 'static) {
 #[cfg(test)]
 fn before_stateful_root_abi_publication() {
     BEFORE_STATEFUL_ROOT_ABI_PUBLICATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(test)]
+fn arm_after_stateful_isolation_root_retention(hook: impl FnOnce() + 'static) {
+    AFTER_STATEFUL_ISOLATION_ROOT_RETENTION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_stateful_isolation_root_retention() {
+    AFTER_STATEFUL_ISOLATION_ROOT_RETENTION.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
             hook();
         }
