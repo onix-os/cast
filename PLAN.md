@@ -600,7 +600,8 @@ evidence and therefore does not close either item below.
   zero-test-resistant `make examples` gate and document what it does and does
   not prove. Real execution remains exclusive to contentful fixture closures.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
-  for Autotools, Cargo, vendored Cargo, CMake, custom-step, generated-daemon,
+  for Autotools, configured no-check Autotools, Cargo, feature-selected
+  multi-binary Cargo, vendored Cargo, CMake, custom-step, generated-daemon,
   pre-setup-hook, Meson, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
@@ -608,7 +609,7 @@ evidence and therefore does not close either item below.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the ten exact closure declarations and their aggregate 107-package
+  each of the twelve exact closure declarations and their aggregate 107-package
   pool before the delegated runner materializes the production-format root.
 - [x] Before entering the container, require every frozen executable binding's
   entry point to belong to its declared provider and resolve to a regular

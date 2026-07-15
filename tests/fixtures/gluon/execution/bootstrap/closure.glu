@@ -568,7 +568,9 @@ let meson_packages = [
     repository,
     fixtures = [
         { name = "autotools", package_ids = autotools_packages },
+        { name = "autotools-options", package_ids = autotools_packages },
         { name = "cargo", package_ids = cargo_packages },
+        { name = "cargo-features", package_ids = cargo_packages },
         { name = "cargo-vendored", package_ids = cargo_packages },
         { name = "cmake", package_ids = cmake_packages },
         { name = "custom", package_ids = custom_packages },

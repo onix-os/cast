@@ -27,9 +27,11 @@ const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const BOOTSTRAP_PROFILE: &str = "planner-contentful-bootstrap";
-const REQUIRED_EXECUTION_FIXTURES: [&str; 10] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 12] = [
     "autotools",
+    "autotools-options",
     "cargo",
+    "cargo-features",
     "cargo-vendored",
     "cmake",
     "custom",
@@ -219,23 +221,30 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Install", vec![run("meson", "install")]),
             phase("Check", vec![run("meson", "test")]),
         ],
-        "cargo" | "cargo-vendored" => vec![
-            prepare(if name == "cargo" {
-                "cast-cargo-fixture"
-            } else {
-                "cast-cargo-vendored-fixture"
+        "cargo" | "cargo-features" | "cargo-vendored" => vec![
+            prepare(match name {
+                "cargo" => "cast-cargo-fixture",
+                "cargo-features" => "cast-cargo-features-fixture",
+                "cargo-vendored" => "cast-cargo-vendored-fixture",
+                _ => unreachable!(),
             }),
             phase("Build", vec![run("cargo", "build")]),
             phase("Install", vec![run("install", "-Dm00755")]),
             phase("Check", vec![run("cargo", "test")]),
         ],
-        "autotools" => vec![
-            prepare("cast-autotools-fixture"),
+        "autotools" | "autotools-options" => vec![
+            prepare(if name == "autotools" {
+                "cast-autotools-fixture"
+            } else {
+                "cast-autotools-options-fixture"
+            }),
             phase("Setup", vec![run("dash", "./configure")]),
             phase("Build", vec![run("make", "VERBOSE=1")]),
             phase("Install", vec![run("make", "install")]),
-            phase("Check", vec![run("make", "check")]),
-        ],
+        ]
+        .into_iter()
+        .chain((name == "autotools").then(|| phase("Check", vec![run("make", "check")])))
+        .collect(),
         "custom" => vec![
             prepare("cast-custom-fixture"),
             phase("Setup", vec![run("mkdir", "-p")]),
@@ -286,6 +295,41 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
+    if name == "autotools-options" {
+        let setup = job.phases.iter().find(|phase| phase.name == "Setup").unwrap();
+        let [stone_recipe::derivation::StepPlan::Run { args, .. }] = setup.steps.as_slice() else {
+            panic!("autotools-options: frozen Setup phase has unexpected steps");
+        };
+        assert_eq!(args.last().map(String::as_str), Some("--enable-stone-message"));
+        assert!(
+            job.phases.iter().all(|phase| phase.name != "Check"),
+            "autotools-options: run_tests=false retained a Check phase"
+        );
+    }
+    if name == "cargo-features" {
+        let phase_args = |phase_name: &str| {
+            let phase = job.phases.iter().find(|phase| phase.name == phase_name).unwrap();
+            let [stone_recipe::derivation::StepPlan::Run { args, .. }] = phase.steps.as_slice() else {
+                panic!("cargo-features: frozen {phase_name} phase has unexpected steps");
+            };
+            args
+        };
+        let build = phase_args("Build");
+        assert_eq!(&build[build.len() - 2..], ["--features", "fixture-protocol"]);
+        let check = phase_args("Check");
+        assert_eq!(
+            &check[check.len() - 3..],
+            ["--features", "fixture-protocol", "--workspace"]
+        );
+        let install = phase_args("Install");
+        assert_eq!(
+            &install[install.len() - 2..],
+            [
+                "target/x86_64-unknown-linux-gnu/release/cast-feature-client",
+                "target/x86_64-unknown-linux-gnu/release/cast-feature-daemon",
+            ]
+        );
+    }
     if name == "factory-override" {
         let setup = job
             .phases

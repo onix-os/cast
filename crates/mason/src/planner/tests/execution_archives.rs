@@ -23,6 +23,8 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         discovered[1],
         [
             "cast-autotools-fixture-1.0.0",
+            "cast-autotools-options-fixture-1.0.0",
+            "cast-cargo-features-fixture-1.0.0",
             "cast-cargo-fixture-1.0.0",
             "cast-cargo-vendored-fixture-1.0.0",
             "cast-cmake-fixture-1.0.0",
@@ -60,6 +62,41 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
                 panic!("factory-override: package patch did not select the CMake builder");
             };
             assert_eq!(flags.as_slice(), ["-DCAST_FACTORY_VARIANT=stone-override"]);
+        }
+        if name == "autotools-options" {
+            let [StepSpec::AutotoolsConfigure { flags }] =
+                recipe.declaration.builder.phases.setup.steps.as_slice()
+            else {
+                panic!("autotools-options: expected one structural configure step");
+            };
+            assert_eq!(flags.as_slice(), ["--enable-stone-message"]);
+            assert!(
+                recipe.declaration.builder.phases.check.steps.is_empty(),
+                "autotools-options: run_tests=false must remove the typed check step"
+            );
+        }
+        if name == "cargo-features" {
+            let [StepSpec::CargoBuild { features }] =
+                recipe.declaration.builder.phases.build.steps.as_slice()
+            else {
+                panic!("cargo-features: expected one structural Cargo build step");
+            };
+            assert_eq!(features.as_slice(), ["fixture-protocol"]);
+            let [StepSpec::CargoInstall { binaries }] =
+                recipe.declaration.builder.phases.install.steps.as_slice()
+            else {
+                panic!("cargo-features: expected one structural Cargo install step");
+            };
+            assert_eq!(
+                binaries.as_slice(),
+                ["cast-feature-client", "cast-feature-daemon"]
+            );
+            let [StepSpec::CargoTest { features }] =
+                recipe.declaration.builder.phases.check.steps.as_slice()
+            else {
+                panic!("cargo-features: expected one structural Cargo test step");
+            };
+            assert_eq!(features.as_slice(), ["fixture-protocol"]);
         }
         let lock_path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
         let lock_bytes = fs::read(&lock_path).unwrap();
@@ -205,7 +242,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     );
     assert_eq!(
         archive_format_counts,
-        [7, 1, 1, 1],
-        "execution fixtures must cover seven plain tar streams plus one each of gzip, XZ, and Zstandard"
+        [9, 1, 1, 1],
+        "execution fixtures must cover nine plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
 }

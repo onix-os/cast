@@ -39,6 +39,8 @@ fi
 
 for fixture in \
     cast-autotools-fixture-1.0.0 \
+    cast-autotools-options-fixture-1.0.0 \
+    cast-cargo-features-fixture-1.0.0 \
     cast-cargo-vendored-fixture-1.0.0 \
     cast-cargo-fixture-1.0.0 \
     cast-cmake-fixture-1.0.0 \
@@ -141,6 +143,8 @@ for entry in "$archive_root"/*; do
     }
     case "$(basename "$entry")" in
         cast-autotools-fixture-1.0.0.tar|\
+        cast-autotools-options-fixture-1.0.0.tar|\
+        cast-cargo-features-fixture-1.0.0.tar|\
         cast-cargo-vendored-fixture-1.0.0.tar.gz|\
         cast-cargo-fixture-1.0.0.tar|\
         cast-cmake-fixture-1.0.0.tar|\
@@ -155,7 +159,7 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 10 || {
-    printf 'expected exactly ten execution fixture archives, found %s\n' "$count" >&2
+test "$count" -eq 12 || {
+    printf 'expected exactly twelve execution fixture archives, found %s\n' "$count" >&2
     exit 1
 }

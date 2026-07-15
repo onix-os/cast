@@ -20,7 +20,9 @@ pub(super) fn assert_fixture_bundle(
         matches!(
             name,
             "autotools"
+                | "autotools-options"
                 | "cargo"
+                | "cargo-features"
                 | "cargo-vendored"
                 | "cmake"
                 | "custom"
@@ -132,6 +134,8 @@ pub(super) fn assert_fixture_bundle(
         assert_split_fixture(planned, &packages);
     } else if name == "daemon-generated" {
         assert_daemon_fixture(planned, &packages);
+    } else if name == "cargo-features" {
+        assert_cargo_features_fixture(planned, &packages);
     } else {
         assert_simple_fixture(name, planned, &packages);
     }

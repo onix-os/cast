@@ -107,9 +107,11 @@ const PACKAGE_EXAMPLES: [&str; 53] = [
     "typed-output-routing",
     "zig-project",
 ];
-const EXECUTION_FIXTURES: [&str; 10] = [
+const EXECUTION_FIXTURES: [&str; 12] = [
     "autotools",
+    "autotools-options",
     "cargo",
+    "cargo-features",
     "cargo-vendored",
     "cmake",
     "custom",

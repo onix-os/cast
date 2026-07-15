@@ -54,6 +54,7 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
             format!("bin/cast-{fixture}-fixture"),
             vec![match fixture {
                 "autotools" => "cast autotools fixture",
+                "autotools-options" => "cast autotools options fixture: enabled",
                 "cargo" => "cast cargo fixture",
                 "cmake" => "cast cmake fixture",
                 "factory-override" => "Stone-native factory override: stone-override",
@@ -105,6 +106,76 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
             );
             assert_exact_relations(
                 fixture,
+                &packages[&candidate.package_name],
+                planned_output_dependencies(planned, candidate),
+                BTreeSet::from([candidate.package_name.clone()]),
+            );
+        }
+    }
+}
+
+fn assert_cargo_features_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "cargo-features";
+    for output in &planned.plan.outputs {
+        assert_eq!(
+            output.include_in_manifest,
+            !matches!(output.name.as_str(), "dbginfo" | "32bit-dbginfo"),
+            "{FIXTURE}: default manifest membership drift for {}",
+            output.name
+        );
+    }
+
+    let (root_plan, root) = output(planned, packages, "out");
+    let executables = [
+        (
+            "bin/cast-feature-client",
+            "cast cargo features fixture: client protocol enabled",
+        ),
+        (
+            "bin/cast-feature-daemon",
+            "cast cargo features fixture: daemon protocol enabled",
+        ),
+    ];
+    assert_leaf_paths(FIXTURE, "out", root, executables.iter().map(|(target, _)| *target));
+    assert_no_directories(FIXTURE, "out", root);
+
+    let mut native = Vec::new();
+    let mut dependencies = planned_output_dependencies(planned, root_plan);
+    let mut providers = BTreeSet::from([root_plan.package_name.clone()]);
+    for (target, marker) in executables {
+        assert_eq!(root.layouts[target].mode & 0o777, 0o755);
+        let bytes = regular_bytes(FIXTURE, root, target);
+        assert!(
+            contains_bytes(bytes, marker.as_bytes()),
+            "{FIXTURE}: /usr/{target} omits its feature-selected role marker"
+        );
+        let elf = assert_runtime_elf(FIXTURE, target, bytes, RuntimeElfKind::Executable);
+        dependencies.extend(elf.dependencies.iter().cloned());
+        providers.insert(format!(
+            "binary({})",
+            Path::new(target).file_name().unwrap().to_str().unwrap()
+        ));
+        native.push(elf);
+    }
+    assert_exact_relations(FIXTURE, root, dependencies, providers);
+
+    let (debug_plan, debug) = output(planned, packages, "dbginfo");
+    assert_debug_output(FIXTURE, debug, &native);
+    assert_exact_relations(
+        FIXTURE,
+        debug,
+        planned_output_dependencies(planned, debug_plan),
+        BTreeSet::from([debug_plan.package_name.clone()]),
+    );
+    for candidate in &planned.plan.outputs {
+        if !matches!(candidate.name.as_str(), "out" | "dbginfo") {
+            assert!(
+                packages[&candidate.package_name].layouts.is_empty(),
+                "{FIXTURE}: unexpected path in default output {}",
+                candidate.name
+            );
+            assert_exact_relations(
+                FIXTURE,
                 &packages[&candidate.package_name],
                 planned_output_dependencies(planned, candidate),
                 BTreeSet::from([candidate.package_name.clone()]),
