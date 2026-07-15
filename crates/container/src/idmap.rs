@@ -28,7 +28,7 @@ use nix::{
     errno::Errno,
     fcntl::{FcntlArg, SealFlag, fcntl},
     sys::memfd::{MemFdCreateFlag, memfd_create},
-    unistd::{Pid, Uid, User, getegid, geteuid, getgid, getuid},
+    unistd::{Pid, Uid, User},
 };
 use snafu::{ResultExt, Snafu, ensure};
 
@@ -65,11 +65,24 @@ struct HelperLimits {
     stderr_bytes: usize,
 }
 
-pub fn idmap(pid: Pid) -> Result<(), Error> {
-    ensure_same_real_and_effective_ids()?;
+pub(super) fn validated_caller_identity() -> Result<crate::credentials::IdentityCredentials, Error> {
+    let caller = crate::credentials::read_current_identity().map_err(|failure| match failure {
+        crate::credentials::ReadIdentityFailure::ReadGroupCredentials(source) => {
+            Error::ReadCallerGroupCredentials { source }
+        }
+        crate::credentials::ReadIdentityFailure::ReadUserCredentials(source) => {
+            Error::ReadCallerUserCredentials { source }
+        }
+    })?;
+    ensure_uniform_caller_credentials(&caller)?;
+    Ok(caller)
+}
 
-    let uid = geteuid().as_raw();
-    let gid = getegid().as_raw();
+pub(super) fn idmap(pid: Pid, caller: &crate::credentials::IdentityCredentials) -> Result<(), Error> {
+    let (uid, gid) = ensure_uniform_caller_credentials(caller)?;
+    let current = validated_caller_identity()?;
+    ensure_unchanged_caller_credentials(caller, &current)?;
+
     let proc_dir = Path::new("/proc").join(pid.as_raw().to_string());
 
     fs::write(proc_dir.join("uid_map"), mapping(0, uid)).context(WriteUidMapSnafu)?;
@@ -105,18 +118,34 @@ pub fn idmap(pid: Pid) -> Result<(), Error> {
     Ok(())
 }
 
-fn ensure_same_real_and_effective_ids() -> Result<(), Error> {
-    let real_uid = getuid();
-    let effective_uid = geteuid();
-    let real_gid = getgid();
-    let effective_gid = getegid();
+fn ensure_uniform_caller_credentials(
+    credentials: &crate::credentials::IdentityCredentials,
+) -> Result<(u32, u32), Error> {
+    let Some(ids) = credentials.uniform_ids() else {
+        return MixedCallerCredentialsSnafu {
+            real_uid: credentials.real_uid,
+            effective_uid: credentials.effective_uid,
+            saved_uid: credentials.saved_uid,
+            filesystem_uid: credentials.filesystem_uid,
+            real_gid: credentials.real_gid,
+            effective_gid: credentials.effective_gid,
+            saved_gid: credentials.saved_gid,
+            filesystem_gid: credentials.filesystem_gid,
+        }
+        .fail();
+    };
+    Ok(ids)
+}
+
+fn ensure_unchanged_caller_credentials(
+    before_clone: &crate::credentials::IdentityCredentials,
+    before_mapping: &crate::credentials::IdentityCredentials,
+) -> Result<(), Error> {
     ensure!(
-        real_uid == effective_uid && real_gid == effective_gid,
-        MixedCallerCredentialsSnafu {
-            real_uid: real_uid.as_raw(),
-            effective_uid: effective_uid.as_raw(),
-            real_gid: real_gid.as_raw(),
-            effective_gid: effective_gid.as_raw(),
+        before_clone == before_mapping,
+        CallerCredentialsChangedSnafu {
+            before_clone: before_clone.to_string(),
+            before_mapping: before_mapping.to_string(),
         }
     );
     Ok(())
@@ -503,13 +532,32 @@ fn read_map(path: &Path) -> Result<Vec<(u32, u32, u32)>, io::Error> {
 #[derive(Debug, Snafu)]
 pub enum Error {
     #[snafu(display(
-        "container mapping requires equal real/effective credentials, found uid {real_uid}/{effective_uid} and gid {real_gid}/{effective_gid}"
+        "container mapping requires uniform real/effective/saved/filesystem credentials, found uid {real_uid}/{effective_uid}/{saved_uid}/{filesystem_uid} and gid {real_gid}/{effective_gid}/{saved_gid}/{filesystem_gid}"
     ))]
     MixedCallerCredentials {
         real_uid: u32,
         effective_uid: u32,
+        saved_uid: u32,
+        filesystem_uid: u32,
         real_gid: u32,
         effective_gid: u32,
+        saved_gid: u32,
+        filesystem_gid: u32,
+    },
+    #[snafu(display("read caller real, effective, and saved-set GIDs"))]
+    ReadCallerGroupCredentials {
+        source: crate::credentials::CredentialSyscallError,
+    },
+    #[snafu(display("read caller real, effective, and saved-set UIDs"))]
+    ReadCallerUserCredentials {
+        source: crate::credentials::CredentialSyscallError,
+    },
+    #[snafu(display(
+        "caller credentials changed between the authenticated pre-clone snapshot ({before_clone}) and namespace mapping ({before_mapping})"
+    ))]
+    CallerCredentialsChanged {
+        before_clone: String,
+        before_mapping: String,
     },
     #[snafu(display("write namespace UID map"))]
     WriteUidMap { source: io::Error },
@@ -553,6 +601,48 @@ pub enum Error {
     NewgidmapFailed { status: String, stderr: String },
 }
 
+impl Error {
+    /// Whether this failure proves that the host has not admitted the caller
+    /// to the mandatory user-namespace mapping boundary.
+    ///
+    /// Keep this deliberately narrower than walking arbitrary error sources
+    /// for `PermissionDenied`: verification, identity-integrity, and helper
+    /// lifecycle failures remain hard errors even when an inner I/O operation
+    /// happens to carry EPERM.
+    pub(super) fn execution_capability_unavailable(&self) -> bool {
+        match self {
+            Self::MissingSubgid { .. } => true,
+            Self::WriteUidMap { source }
+            | Self::WriteGidMap { source }
+            | Self::ReadSubgid { source }
+            | Self::RunNewgidmap { source } => permission_denied(source),
+            Self::MixedCallerCredentials { .. }
+            | Self::ReadCallerGroupCredentials { .. }
+            | Self::ReadCallerUserCredentials { .. }
+            | Self::CallerCredentialsChanged { .. }
+            | Self::VerifyUidMap { .. }
+            | Self::VerifyGidMap { .. }
+            | Self::UnexpectedGidMap { .. }
+            | Self::ReadSetgroups { .. }
+            | Self::SetgroupsDisabled
+            | Self::GetUserByUid { .. }
+            | Self::MissingUser { .. }
+            | Self::PrepareNewgidmapStderr { .. }
+            | Self::ReadNewgidmapStderr { .. }
+            | Self::WaitNewgidmap { .. }
+            | Self::TerminateNewgidmap { .. }
+            | Self::NewgidmapTimedOut { .. }
+            | Self::NewgidmapStderrTooLarge { .. }
+            | Self::NewgidmapFailed { .. } => false,
+        }
+    }
+}
+
+fn permission_denied(source: &io::Error) -> bool {
+    source.kind() == io::ErrorKind::PermissionDenied
+        || matches!(source.raw_os_error(), Some(code) if code == nix::libc::EPERM || code == nix::libc::EACCES)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -580,6 +670,123 @@ mod tests {
             wall_time: Duration::from_secs(2),
             termination_time: Duration::from_secs(1),
             stderr_bytes,
+        }
+    }
+
+    fn uniform_caller(uid: u32, gid: u32) -> crate::credentials::IdentityCredentials {
+        crate::credentials::IdentityCredentials {
+            real_uid: uid,
+            effective_uid: uid,
+            saved_uid: uid,
+            filesystem_uid: uid,
+            real_gid: gid,
+            effective_gid: gid,
+            saved_gid: gid,
+            filesystem_gid: gid,
+        }
+    }
+
+    #[test]
+    fn caller_mapping_identity_requires_every_uid_and_gid_slot_to_match() {
+        let caller = uniform_caller(1000, 1001);
+        assert_eq!(ensure_uniform_caller_credentials(&caller).unwrap(), (1000, 1001));
+
+        let mutations: [fn(&mut crate::credentials::IdentityCredentials); 8] = [
+            |credentials| credentials.real_uid = 2,
+            |credentials| credentials.effective_uid = 2,
+            |credentials| credentials.saved_uid = 2,
+            |credentials| credentials.filesystem_uid = 2,
+            |credentials| credentials.real_gid = 2,
+            |credentials| credentials.effective_gid = 2,
+            |credentials| credentials.saved_gid = 2,
+            |credentials| credentials.filesystem_gid = 2,
+        ];
+        for mutate in mutations {
+            let mut mixed = caller.clone();
+            mutate(&mut mixed);
+            assert!(matches!(
+                ensure_uniform_caller_credentials(&mixed),
+                Err(Error::MixedCallerCredentials { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn caller_mapping_identity_must_not_change_after_the_pre_clone_snapshot() {
+        let before_clone = uniform_caller(1000, 1001);
+        assert!(ensure_unchanged_caller_credentials(&before_clone, &before_clone).is_ok());
+
+        let mut before_mapping = before_clone.clone();
+        before_mapping.real_gid = 1002;
+        before_mapping.effective_gid = 1002;
+        before_mapping.saved_gid = 1002;
+        before_mapping.filesystem_gid = 1002;
+        assert!(matches!(
+            ensure_unchanged_caller_credentials(&before_clone, &before_mapping),
+            Err(Error::CallerCredentialsChanged { .. })
+        ));
+    }
+
+    fn denied_io() -> io::Error {
+        io::Error::from_raw_os_error(nix::libc::EPERM)
+    }
+
+    #[test]
+    fn execution_capability_classifier_accepts_only_idmap_admission_failures() {
+        for failure in [
+            Error::WriteUidMap { source: denied_io() },
+            Error::WriteGidMap { source: denied_io() },
+            Error::ReadSubgid { source: denied_io() },
+            Error::RunNewgidmap { source: denied_io() },
+            Error::MissingSubgid {
+                uid: 1000,
+                username: "builder".to_owned(),
+            },
+        ] {
+            assert!(failure.execution_capability_unavailable(), "rejected {failure}");
+        }
+
+        assert!(
+            !Error::WriteUidMap {
+                source: io::Error::new(io::ErrorKind::InvalidData, "malformed map"),
+            }
+            .execution_capability_unavailable()
+        );
+    }
+
+    #[test]
+    fn execution_capability_classifier_keeps_integrity_and_lifecycle_failures_hard() {
+        for failure in [
+            Error::MixedCallerCredentials {
+                real_uid: 1,
+                effective_uid: 2,
+                saved_uid: 3,
+                filesystem_uid: 4,
+                real_gid: 5,
+                effective_gid: 6,
+                saved_gid: 7,
+                filesystem_gid: 8,
+            },
+            Error::ReadCallerGroupCredentials {
+                source: crate::credentials::CredentialSyscallError::Kernel(Errno::EPERM),
+            },
+            Error::ReadCallerUserCredentials {
+                source: crate::credentials::CredentialSyscallError::Kernel(Errno::EPERM),
+            },
+            Error::CallerCredentialsChanged {
+                before_clone: "uid 1, gid 1".to_owned(),
+                before_mapping: "uid 2, gid 2".to_owned(),
+            },
+            Error::VerifyUidMap { source: denied_io() },
+            Error::ReadSetgroups { source: denied_io() },
+            Error::ReadNewgidmapStderr { source: denied_io() },
+            Error::WaitNewgidmap { source: denied_io() },
+            Error::NewgidmapFailed {
+                status: "1".to_owned(),
+                stderr: "permission denied".to_owned(),
+            },
+        ] {
+            assert!(!failure.execution_capability_unavailable(), "softened {failure}");
         }
     }
 

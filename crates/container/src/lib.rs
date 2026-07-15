@@ -33,17 +33,15 @@ use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, kill, sigaction};
 use nix::sys::signalfd::SigSet;
 use nix::sys::stat::{Mode, umask};
 use nix::sys::wait::{Id as WaitId, WaitPidFlag, WaitStatus, waitid, waitpid};
-use nix::unistd::{
-    Pid, close, fchdir, getegid, geteuid, getgid, getgroups, getuid, pivot_root, read, setgroups, sethostname,
-    tcsetpgrp,
-};
+use nix::unistd::{Pid, close, fchdir, pivot_root, read, sethostname, tcsetpgrp};
 use snafu::{ResultExt, Snafu};
 
 use self::clone3::{Clone3Outcome, clone3_into_cgroup};
-use self::idmap::idmap;
+use self::idmap::{idmap, validated_caller_identity};
 
 pub mod cgroup;
 mod clone3;
+mod credentials;
 mod idmap;
 mod seccomp;
 
@@ -603,6 +601,19 @@ impl Container {
                         format!("block signals before clone3 task audit: {source}"),
                     ),
                 })?;
+                let caller_identity = match validated_caller_identity() {
+                    Ok(identity) => identity,
+                    Err(source) => {
+                        if let Err(restore) = signal_mask.restore() {
+                            return Err(Error::Failure {
+                                message: format!(
+                                    "validate caller credentials before clone3: {source}; additionally failed to restore the supervisor signal mask: {restore}"
+                                ),
+                            });
+                        }
+                        return Err(Error::Idmap { source });
+                    }
+                };
                 // SAFETY: the child outcome below closes both cgroup
                 // descriptors, never unwinds, and terminates through _exit.
                 let outcome = match unsafe { clone3_into_cgroup(flags.bits() as u64, placement.target()) } {
@@ -621,10 +632,10 @@ impl Container {
                         return Err(Error::CloneIntoCgroup { source });
                     }
                 };
-                Ok::<_, Error>((outcome, inherited, signal_mask))
+                Ok::<_, Error>((outcome, inherited, signal_mask, caller_identity))
             })();
             match result {
-                Ok((Clone3Outcome::Parent { pid, pidfd }, _, mut signal_mask)) => {
+                Ok((Clone3Outcome::Parent { pid, pidfd }, _, mut signal_mask, caller_identity)) => {
                     let child = ChildLifecycle::Pidfd { pid, pidfd };
                     if let Err(source) = signal_mask.restore() {
                         let primary = Error::CloneIntoCgroup {
@@ -635,10 +646,10 @@ impl Container {
                         };
                         Err(child.cleanup_after_failure(primary))
                     } else {
-                        Ok(child)
+                        Ok((child, caller_identity))
                     }
                 }
-                Ok((Clone3Outcome::Child, inherited, mut signal_mask)) => {
+                Ok((Clone3Outcome::Child, inherited, mut signal_mask, _caller_identity)) => {
                     // This is the raw fork-like child. If setup fails before
                     // the explicit pre-payload restore, inherited signal
                     // handlers must remain blocked until `_exit` rather than
@@ -708,6 +719,20 @@ impl Container {
                     signal_mask
                 };
 
+                let mut signal_mask = signal_mask;
+                let caller_identity = match validated_caller_identity() {
+                    Ok(identity) => identity,
+                    Err(source) => {
+                        if let Err(restore) = signal_mask.restore() {
+                            return Err(Error::Failure {
+                                message: format!(
+                                    "validate caller credentials before legacy clone: {source}; additionally failed to restore the supervisor signal mask: {restore}"
+                                ),
+                            });
+                        }
+                        return Err(Error::Idmap { source });
+                    }
+                };
                 let mut child_signal_mask = Some(signal_mask);
                 let clone_result = {
                     let clone_cb = Box::new(|| {
@@ -746,7 +771,7 @@ impl Container {
                 })?;
                 let restore = signal_mask.restore();
                 match (clone_result, restore) {
-                    (Ok(pid), Ok(())) => Ok(ChildLifecycle::Legacy { pid }),
+                    (Ok(pid), Ok(())) => Ok((ChildLifecycle::Legacy { pid }, caller_identity)),
                     (Err(source), Ok(())) => Err(Error::CloneNamespaces { source }),
                     (Ok(pid), Err(source)) => {
                         abort_child(pid);
@@ -763,8 +788,8 @@ impl Container {
             })()
         };
 
-        let child = match spawn {
-            Ok(child) => child,
+        let (child, caller_identity) = match spawn {
+            Ok(spawned) => spawned,
             Err(failure) => {
                 return Err(match cgroup_leaf.take() {
                     Some(leaf) => cleanup_unstarted_cgroup(failure, leaf),
@@ -790,7 +815,7 @@ impl Container {
         let result = (|| {
             // Every build receives the same one-identity credential namespace:
             // namespace root maps to the caller and no other IDs exist.
-            if let Err(source) = idmap(pid) {
+            if let Err(source) = idmap(pid, &caller_identity) {
                 return Err(child.cleanup_after_failure(Error::Idmap { source }));
             }
 
@@ -1199,39 +1224,29 @@ fn close_range(first: u32, last: u32) -> Result<(), ContainerError> {
 }
 
 fn isolate_payload_credentials() -> Result<(), ContainerError> {
-    setgroups(&[]).context(ClearSupplementaryGroupsSnafu)?;
-    let supplementary_gids = getgroups()
-        .context(ReadSupplementaryGroupsSnafu)?
-        .into_iter()
-        .map(|gid| gid.as_raw())
-        .collect::<Vec<_>>();
-    validate_payload_credentials(
-        getuid().as_raw(),
-        geteuid().as_raw(),
-        getgid().as_raw(),
-        getegid().as_raw(),
-        supplementary_gids,
-    )
-}
-
-fn validate_payload_credentials(
-    real_uid: u32,
-    effective_uid: u32,
-    real_gid: u32,
-    effective_gid: u32,
-    supplementary_gids: Vec<u32>,
-) -> Result<(), ContainerError> {
-    if real_uid != 0 || effective_uid != 0 || real_gid != 0 || effective_gid != 0 || !supplementary_gids.is_empty() {
-        return UnexpectedPayloadCredentialsSnafu {
-            real_uid,
-            effective_uid,
-            real_gid,
-            effective_gid,
-            supplementary_gids,
+    credentials::isolate_payload_credentials().map_err(|failure| match failure {
+        credentials::IsolationFailure::ClearSupplementaryGroups(source) => {
+            ContainerError::ClearSupplementaryGroups { source }
         }
-        .fail();
-    }
-    Ok(())
+        credentials::IsolationFailure::NormalizeGroupCredentials(source) => {
+            ContainerError::NormalizePayloadGroupCredentials { source }
+        }
+        credentials::IsolationFailure::NormalizeUserCredentials(source) => {
+            ContainerError::NormalizePayloadUserCredentials { source }
+        }
+        credentials::IsolationFailure::ReadSupplementaryGroups(source) => {
+            ContainerError::ReadSupplementaryGroups { source }
+        }
+        credentials::IsolationFailure::ReadGroupCredentials(source) => {
+            ContainerError::ReadPayloadGroupCredentials { source }
+        }
+        credentials::IsolationFailure::ReadUserCredentials(source) => {
+            ContainerError::ReadPayloadUserCredentials { source }
+        }
+        credentials::IsolationFailure::UnexpectedCredentials(credentials) => {
+            ContainerError::UnexpectedPayloadCredentials { credentials }
+        }
+    })
 }
 
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
@@ -3665,6 +3680,45 @@ pub enum Error {
 }
 
 impl Error {
+    /// Whether this error is a narrowly authenticated host-capability denial
+    /// for the mandatory container execution boundary.
+    ///
+    /// Callers may use this to skip an optional execution proof. It does not
+    /// recursively soften arbitrary permission errors: malformed maps,
+    /// credential drift, helper lifecycle failures, cleanup failures, and
+    /// payload errors remain hard failures even when an inner source happens
+    /// to contain EPERM.
+    pub fn execution_capability_unavailable(&self) -> bool {
+        match self {
+            Self::CloneNamespaces { source } => {
+                matches!(*source, Errno::EPERM | Errno::EACCES | Errno::ENOSYS)
+            }
+            Self::CloneIntoCgroup { source } => matches!(
+                source.raw_os_error(),
+                Some(code)
+                    if code == nix::libc::EPERM
+                        || code == nix::libc::EACCES
+                        || code == nix::libc::ENOSYS
+                        || code == nix::libc::E2BIG
+            ),
+            Self::Idmap { source } => source.execution_capability_unavailable(),
+            Self::Failure { message } => setup_capability_denial(message),
+            Self::Signaled { .. }
+            | Self::UnknownExit
+            | Self::AtomicCgroupRequiresAnchoredRoot
+            | Self::InspectCgroupFilesystem { .. }
+            | Self::UnsafeCgroupRootFilesystem { .. }
+            | Self::UnsafeCgroupBindSource { .. }
+            | Self::UnsafeCgroupSysPolicy
+            | Self::CgroupLifecycle { .. }
+            | Self::ChildCleanup { .. }
+            | Self::ChildCleanupAfterFailure { .. }
+            | Self::CgroupCleanup { .. }
+            | Self::CgroupCleanupAfterFailure { .. }
+            | Self::Nix { .. } => false,
+        }
+    }
+
     fn retry_child_cleanup_after_cgroup(self) -> Result<(), Self> {
         match self {
             Self::ChildCleanup {
@@ -3721,6 +3775,30 @@ impl Error {
     }
 }
 
+fn setup_capability_denial(message: &str) -> bool {
+    let known_setup_operation = [
+        "clear inherited supplementary groups",
+        "normalize payload real, effective, and saved-set GIDs",
+        "normalize payload real, effective, and saved-set UIDs",
+        "clone descriptor-backed root mount",
+        "attach descriptor-backed root mount",
+        "mount ",
+        "pivot_root",
+        "sethostname",
+        "unmount old root",
+    ]
+    .iter()
+    .any(|prefix| message.starts_with(prefix));
+    let known_capability_errno = [
+        ": EPERM: Operation not permitted",
+        ": EACCES: Permission denied",
+        ": ENOSYS: Function not implemented",
+    ]
+    .iter()
+    .any(|suffix| message.ends_with(suffix));
+    known_setup_operation && known_capability_errno
+}
+
 #[derive(Debug, Snafu)]
 enum ContainerError {
     #[snafu(display("run"))]
@@ -3740,18 +3818,32 @@ enum ContainerError {
     #[snafu(display("close the supervisor synchronization endpoint in the clone child"))]
     CloseSupervisorSync { source: nix::Error },
     #[snafu(display("clear inherited supplementary groups"))]
-    ClearSupplementaryGroups { source: nix::Error },
+    ClearSupplementaryGroups {
+        source: credentials::CredentialSyscallError,
+    },
+    #[snafu(display("normalize payload real, effective, and saved-set GIDs"))]
+    NormalizePayloadGroupCredentials {
+        source: credentials::CredentialSyscallError,
+    },
+    #[snafu(display("normalize payload real, effective, and saved-set UIDs"))]
+    NormalizePayloadUserCredentials {
+        source: credentials::CredentialSyscallError,
+    },
     #[snafu(display("read isolated supplementary groups"))]
-    ReadSupplementaryGroups { source: nix::Error },
-    #[snafu(display(
-        "unexpected payload credentials uid {real_uid}/{effective_uid}, gid {real_gid}/{effective_gid}, supplementary {supplementary_gids:?}"
-    ))]
+    ReadSupplementaryGroups {
+        source: credentials::CredentialSyscallError,
+    },
+    #[snafu(display("read payload real, effective, and saved-set GIDs"))]
+    ReadPayloadGroupCredentials {
+        source: credentials::CredentialSyscallError,
+    },
+    #[snafu(display("read payload real, effective, and saved-set UIDs"))]
+    ReadPayloadUserCredentials {
+        source: credentials::CredentialSyscallError,
+    },
+    #[snafu(display("unexpected payload credentials {credentials}"))]
     UnexpectedPayloadCredentials {
-        real_uid: u32,
-        effective_uid: u32,
-        real_gid: u32,
-        effective_gid: u32,
-        supplementary_gids: Vec<u32>,
+        credentials: credentials::PayloadCredentials,
     },
     #[snafu(display("restrict payload scheduler to the fair class"))]
     RestrictPayloadScheduler { source: nix::Error },
@@ -3953,8 +4045,8 @@ mod tests {
         require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
         send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
         supported_capability_numbers, validate_anchored_mount_topology, validate_minimal_device_source,
-        validate_payload_credentials, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
-        wait_for_pidfd, wait_for_pidfd_reap,
+        validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits, wait_for_pidfd,
+        wait_for_pidfd_reap,
     };
 
     fn open_path_directory(path: &Path) -> OwnedFd {
@@ -5737,34 +5829,95 @@ mod tests {
     }
 
     #[test]
+    fn execution_capability_classifier_accepts_only_known_host_admission_denials() {
+        for source in [Errno::EPERM, Errno::EACCES, Errno::ENOSYS] {
+            assert!(ContainerRunError::CloneNamespaces { source }.execution_capability_unavailable());
+        }
+        for code in [nix::libc::EPERM, nix::libc::EACCES, nix::libc::ENOSYS, nix::libc::E2BIG] {
+            assert!(
+                ContainerRunError::CloneIntoCgroup {
+                    source: io::Error::from_raw_os_error(code),
+                }
+                .execution_capability_unavailable()
+            );
+        }
+        for operation in [
+            "clear inherited supplementary groups",
+            "normalize payload real, effective, and saved-set GIDs",
+            "normalize payload real, effective, and saved-set UIDs",
+            "clone descriptor-backed root mount for anchored root /tmp/root",
+            "attach descriptor-backed root mount for anchored root /tmp/root",
+            "mount /",
+            "pivot_root",
+            "sethostname",
+            "unmount old root",
+        ] {
+            assert!(
+                ContainerRunError::Failure {
+                    message: format!("{operation}: EPERM: Operation not permitted"),
+                }
+                .execution_capability_unavailable(),
+                "rejected {operation}"
+            );
+        }
+        assert!(
+            ContainerRunError::Idmap {
+                source: super::idmap::Error::MissingSubgid {
+                    uid: 1000,
+                    username: "builder".to_owned(),
+                },
+            }
+            .execution_capability_unavailable()
+        );
+    }
+
+    #[test]
+    fn execution_capability_classifier_does_not_soften_unrelated_permission_errors() {
+        assert!(!ContainerRunError::CloneNamespaces { source: Errno::EAGAIN }.execution_capability_unavailable());
+        assert!(!ContainerRunError::Nix { source: Errno::EPERM }.execution_capability_unavailable());
+        assert!(
+            !ContainerRunError::Failure {
+                message: "run: EPERM: Operation not permitted".to_owned(),
+            }
+            .execution_capability_unavailable()
+        );
+        assert!(
+            !ContainerRunError::Failure {
+                message: "mount /: EIO: Input/output error".to_owned(),
+            }
+            .execution_capability_unavailable()
+        );
+        assert!(
+            !ContainerRunError::Idmap {
+                source: super::idmap::Error::VerifyUidMap {
+                    source: io::Error::from_raw_os_error(nix::libc::EPERM),
+                },
+            }
+            .execution_capability_unavailable()
+        );
+        assert!(
+            !ContainerRunError::Idmap {
+                source: super::idmap::Error::ReadCallerUserCredentials {
+                    source: super::credentials::CredentialSyscallError::Kernel(Errno::EPERM),
+                },
+            }
+            .execution_capability_unavailable()
+        );
+        assert!(
+            !ContainerRunError::ChildCleanup {
+                cleanup: io::Error::from_raw_os_error(nix::libc::EPERM),
+                pidfd: None,
+            }
+            .execution_capability_unavailable()
+        );
+    }
+
+    #[test]
     fn user_namespace_is_mandatory_for_rootful_and_rootless_callers() {
         for networking in [false, true] {
             let flags = namespace_flags(networking);
             assert!(flags.contains(nix::sched::CloneFlags::CLONE_NEWUSER));
             assert_eq!(flags.contains(nix::sched::CloneFlags::CLONE_NEWNET), !networking);
-        }
-    }
-
-    #[test]
-    fn payload_credentials_reject_every_inherited_identity() {
-        assert!(validate_payload_credentials(0, 0, 0, 0, Vec::new()).is_ok());
-        for credentials in [
-            (1000, 0, 0, 0, Vec::new()),
-            (0, 1000, 0, 0, Vec::new()),
-            (0, 0, 1000, 0, Vec::new()),
-            (0, 0, 0, 1000, Vec::new()),
-            (0, 0, 0, 0, vec![4, 24, 27]),
-        ] {
-            assert!(
-                validate_payload_credentials(
-                    credentials.0,
-                    credentials.1,
-                    credentials.2,
-                    credentials.3,
-                    credentials.4,
-                )
-                .is_err()
-            );
         }
     }
 
