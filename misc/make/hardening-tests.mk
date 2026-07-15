@@ -1,4 +1,5 @@
-.PHONY: forge-read-only-installation-test forge-installation-test \
+.PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
+	forge-linux-fs-test forge-cache-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
 	forge-transition-journal-test \
@@ -8,7 +9,8 @@
 	stone-recipe-build-policy-validation-test container-cgroup-test \
 	container-process-runtime-test container-mount-boundary-test \
 	container-root-host-safe-test mason-package-collect-test \
-	mason-package-collect-transaction-test mason-analysis-handler-test \
+	mason-package-collect-transaction-test mason-analysis-handler-test mason-emit-test \
+	mason-archive-test mason-package-publication-test \
 	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
@@ -46,6 +48,55 @@ forge-installation-test:
 	count="$$( timeout 10s grep -c '^installation::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 28; \
 	timeout 900s $(CARGO) test -p forge --lib "installation::tests::" -- --test-threads=1
+
+forge-linux-fs-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^linux_fs::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 16; \
+	for test in \
+		linux_fs::tests::interrupted_retry_limit_accepts_n_and_rejects_n_plus_one \
+		linux_fs::tests::expired_retry_deadline_fails_before_another_syscall \
+		linux_fs::tests::expired_rename_deadline_preserves_both_namespaces \
+		linux_fs::tests::expired_sync_filesystem_deadline_fails_before_syncfs \
+		linux_fs::tests::procfs_authentication_rejects_an_ordinary_filesystem \
+		linux_fs::tests::proc_pid_parser_accepts_only_bounded_canonical_decimal \
+		linux_fs::tests::thread_self_parser_requires_exact_current_process_and_thread \
+		linux_fs::tests::chmod_revalidates_the_exact_opath_inode_and_mode \
+		linux_fs::tests::descriptor_times_update_the_retained_regular_inode_not_its_replacement \
+		linux_fs::tests::descriptor_read_uses_the_retained_inode_and_preserves_atime \
+		linux_fs::tests::descriptor_read_rejects_non_regular_capabilities \
+		linux_fs::tests::descriptor_times_support_a_mode_zero_directory \
+		linux_fs::tests::descriptor_times_update_a_symlink_without_touching_its_target \
+		linux_fs::tests::authenticated_procfs_links_an_unnamed_inode_without_privilege \
+		linux_fs::tests::new_directory_normalization_retains_identity_and_rejects_name_substitution \
+		linux_fs::tests::chmod_uses_the_calling_tasks_private_descriptor_table; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-cache-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^client::cache::download_limit_tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 11; \
+	for test in \
+		client::cache::download_limit_tests::declared_package_size_can_only_tighten_the_global_ceiling \
+		client::cache::download_limit_tests::cached_package_symlink_is_rejected_without_reading_target \
+		client::cache::download_limit_tests::cached_package_fifo_is_rejected_without_blocking \
+		client::cache::download_limit_tests::cached_package_requires_the_exact_declared_size_at_n_and_n_plus_one \
+		client::cache::download_limit_tests::retained_download_descriptor_defeats_path_substitution_before_unpack \
+		client::cache::download_limit_tests::asset_publication_replaces_fifo_and_symlink_without_blocking_or_touching_target \
+		client::cache::download_limit_tests::asset_authentication_rejects_truncated_and_n_plus_one_entries \
+		client::cache::download_limit_tests::competing_asset_publishers_reuse_one_verified_winner \
+		client::cache::download_limit_tests::competing_download_publishers_reuse_one_verified_winner \
+		client::cache::download_limit_tests::armed_publication_cleanup_removes_only_the_exact_moved_inode \
+		client::cache::download_limit_tests::random_stages_clean_failure_without_truncating_legacy_part_file; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 forge-database-adapter-test:
 	@set -eu; \
@@ -123,6 +174,37 @@ forge-transition-journal-test:
 	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 51; \
 	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
+
+stone-read-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p stone --all-features --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^read::test::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 20; \
+	for test in \
+		read::test::read_header \
+		read::test::read_bash_completion \
+		read::test::payload_count_limit_accepts_n_and_rejects_n_plus_one \
+		read::test::record_count_limit_accepts_n_and_rejects_n_plus_one \
+		read::test::record_byte_limit_accepts_n_and_rejects_n_plus_one_before_allocation \
+		read::test::stored_and_plain_payload_limits_accept_n_and_reject_n_plus_one \
+		read::test::aggregate_stored_plain_record_and_count_limits_are_enforced_at_n_plus_one \
+		read::test::zstd_plain_size_must_match_exact_expansion \
+		read::test::malformed_metadata_and_layout_lengths_are_rejected_without_panics \
+		read::test::malformed_or_out_of_bounds_content_indices_are_rejected \
+		read::test::huge_declared_attribute_length_fails_before_allocation \
+		read::test::exact_length_strings_reject_truncation \
+		read::test::record_payload_trailing_bytes_are_rejected_without_panicking \
+		read::test::declared_payload_header_is_never_silently_truncated \
+		read::test::multiple_content_payloads_are_rejected \
+		read::test::unknown_payloads_are_skipped_with_exact_checksum_validation \
+		read::test::trailing_bytes_and_truncated_payload_are_rejected \
+		read::test::huge_sparse_archive_and_limit_arithmetic_fail_before_offset_seeks \
+		read::test::content_output_never_exceeds_declared_plain_size \
+		read::test::ffi_content_stream_is_bounded_and_validates_checksum_before_eof; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p stone --all-features --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 stone-recipe-derivation-provenance-test:
 	@set -eu; \
@@ -298,6 +380,51 @@ mason-analysis-handler-test:
 	count="$$( timeout 10s grep -c '^package::analysis::handler::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 30; \
 	timeout 900s $(CARGO) test -p mason --lib "package::analysis::handler::tests::" -- --test-threads=1
+
+mason-emit-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^package::emit::verification_tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 18; \
+	for test in \
+		package::emit::verification_tests::artifact_sink_publishes_only_the_exact_read_only_set \
+		package::emit::verification_tests::real_contentful_stone_emission_survives_transactional_staging \
+		package::emit::verification_tests::bounded_artifact_failure_removes_every_owned_name \
+		package::emit::verification_tests::bounded_artifact_seek_accepts_exact_limit_and_rejects_limit_plus_one \
+		package::emit::verification_tests::publication_collision_after_one_rename_rolls_back_owned_final \
+		package::emit::verification_tests::staged_same_size_mutation_immediately_before_rename_is_rejected \
+		package::emit::verification_tests::final_inode_swap_is_detected_without_deleting_the_replacement \
+		package::emit::verification_tests::same_inode_truncation_after_publication_is_detected_and_removed \
+		package::emit::verification_tests::same_inode_same_size_overwrite_after_publication_is_detected_and_removed \
+		package::emit::verification_tests::replaced_public_root_is_rejected_and_only_the_pinned_root_is_cleaned \
+		package::emit::verification_tests::preexisting_artifact_root_entries_are_never_reused_or_removed \
+		package::emit::verification_tests::emitter_rejects_a_path_replaced_after_collection \
+		package::emit::verification_tests::duplicate_normalized_layout_targets_are_rejected_before_emission \
+		package::emit::verification_tests::reserved_system_metadata_target_is_rejected_before_artifact_sink_creation \
+		package::emit::verification_tests::near_system_metadata_names_remain_legal_for_mason_layouts \
+		package::emit::verification_tests::non_directory_normalized_ancestor_is_rejected_before_emission \
+		package::emit::verification_tests::directory_normalized_ancestor_may_own_descendants \
+		package::emit::verification_tests::content_emission_preserves_the_primary_writer_error; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p mason --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+mason-archive-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^archive::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 24; \
+	timeout 900s $(CARGO) test -p mason --lib "archive::tests::" -- --test-threads=1
+
+mason-package-publication-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^package::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 42; \
+	timeout 900s $(CARGO) test -p mason --lib "package::tests::" -- --test-threads=1
 
 config-gluon-store-test:
 	@set -eu; \
