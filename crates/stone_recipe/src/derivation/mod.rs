@@ -39,7 +39,7 @@ pub use self::build_lock::{
 mod build_lock;
 
 /// Current schema used by [`DerivationPlan`].
-pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 15;
+pub const DERIVATION_PLAN_SCHEMA_VERSION: u32 = 16;
 
 /// Resource limits for process-facing data in one frozen derivation.
 ///
@@ -922,7 +922,7 @@ impl JobPlan {
             .flat_map(|phase| phase.pre.iter().chain(&phase.steps).chain(&phase.post))
             .filter_map(|step| match step {
                 StepPlan::ExtractArchive { destination, .. } => Some(destination.as_str()),
-                StepPlan::Run { .. } | StepPlan::Shell { .. } => None,
+                StepPlan::Run { .. } | StepPlan::RunBuilt { .. } | StepPlan::Shell { .. } => None,
             })
             .collect::<Vec<_>>();
         for (index, destination) in archive_destinations.iter().enumerate() {
@@ -981,6 +981,16 @@ pub enum StepPlan {
         environment: BTreeMap<String, String>,
         working_dir: String,
     },
+    /// Execute an exact native Linux ELF image retained below the build
+    /// working directory rather than resolving an external provider
+    /// capability. Scripts remain explicit [`Self::Shell`] steps;
+    /// descriptor-executed shebangs fail closed without a pathname fallback.
+    RunBuilt {
+        program: String,
+        args: Vec<String>,
+        environment: BTreeMap<String, String>,
+        working_dir: String,
+    },
     Shell {
         interpreter: ExecutablePlan,
         declared_programs: Vec<ExecutablePlan>,
@@ -1011,6 +1021,15 @@ impl StepPlan {
             } => {
                 program.validate(&format!("{field}.program"), build_lock)?;
                 validate_step_working_dir(field, working_dir, build_dir)
+            }
+            Self::RunBuilt {
+                program, working_dir, ..
+            } => {
+                validate_step_working_dir(field, working_dir, build_dir)?;
+                let working_dir = Path::new(working_dir);
+                let program_field = format!("{field}.program");
+                let program = validate_normalized_absolute_path(&program_field, program)?;
+                require_proper_path_child(&program_field, program, "step working_dir", working_dir)
             }
             Self::Shell {
                 interpreter,
@@ -1075,6 +1094,18 @@ impl StepPlan {
             } => {
                 encoder.variant(0);
                 program.encode(encoder);
+                encoder.strings(args);
+                encoder.map(environment);
+                encoder.string(working_dir);
+            }
+            Self::RunBuilt {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => {
+                encoder.variant(3);
+                encoder.string(program);
                 encoder.strings(args);
                 encoder.map(environment);
                 encoder.string(working_dir);
@@ -2232,6 +2263,28 @@ impl ProcessDataBudget {
                     environment,
                 )
             }
+            StepPlan::RunBuilt {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => {
+                self.path(&format!("{field}.program"), program)?;
+                self.collection_with_limit(&format!("{field}.args"), args.len(), self.limits.max_arguments_per_step)?;
+                for (index, argument) in args.iter().enumerate() {
+                    self.process_string(&format!("{field}.args[{index}]"), argument)?;
+                }
+                self.environment(&format!("{field}.environment"), environment)?;
+                self.path(&format!("{field}.working_dir"), working_dir)?;
+                self.validate_effective_environment(field, global_environment, environment)?;
+                self.validate_execve(
+                    field,
+                    program,
+                    args.iter().map(String::as_str),
+                    global_environment,
+                    environment,
+                )
+            }
             StepPlan::Shell {
                 interpreter,
                 declared_programs,
@@ -3318,12 +3371,29 @@ mod tests {
                 working_dir,
                 ..
             } => (environment.clone(), working_dir.clone()),
-            StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => return,
+            StepPlan::RunBuilt { .. } | StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => return,
         };
         *sample_step_mut(plan) = StepPlan::Shell {
             interpreter: sample_analyzer_tool("bash"),
             declared_programs: vec![sample_analyzer_tool("cmake")],
             script: "printf '%s\\n' hardened".to_owned(),
+            environment,
+            working_dir,
+        };
+    }
+
+    fn make_sample_run_built(plan: &mut DerivationPlan) {
+        let (environment, working_dir) = match sample_step_mut(plan) {
+            StepPlan::Run {
+                environment,
+                working_dir,
+                ..
+            } => (environment.clone(), working_dir.clone()),
+            StepPlan::RunBuilt { .. } | StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => return,
+        };
+        *sample_step_mut(plan) = StepPlan::RunBuilt {
+            program: "/mason/build/bin/self-test".to_owned(),
+            args: vec!["--verify".to_owned()],
             environment,
             working_dir,
         };
@@ -4938,7 +5008,9 @@ mod tests {
                 "phase",
                 Box::new(|plan| match &mut plan.jobs[0].phases[0].steps[0] {
                     StepPlan::Run { args, .. } => args.push("--verbose".to_owned()),
-                    StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => unreachable!(),
+                    StepPlan::RunBuilt { .. } | StepPlan::Shell { .. } | StepPlan::ExtractArchive { .. } => {
+                        unreachable!()
+                    }
                 }),
             ),
             (
@@ -5254,6 +5326,44 @@ mod tests {
             let mut changed = original.clone();
             mutate(&mut changed.jobs[0].phases[0].steps[0]);
             assert_ne!(original_id, changed.derivation_id());
+        }
+    }
+
+    #[test]
+    fn run_built_is_contained_and_fully_identity_bearing() {
+        let mut original = sample_plan();
+        make_sample_run_built(&mut original);
+        original.validate().unwrap();
+        let original_id = original.derivation_id();
+
+        let mut changed_path = original.clone();
+        let StepPlan::RunBuilt { program, .. } = sample_step_mut(&mut changed_path) else {
+            unreachable!()
+        };
+        *program = "/mason/build/bin/other-test".to_owned();
+        changed_path.validate().unwrap();
+        assert_ne!(original_id, changed_path.derivation_id());
+
+        let mut changed_args = original.clone();
+        let StepPlan::RunBuilt { args, .. } = sample_step_mut(&mut changed_args) else {
+            unreachable!()
+        };
+        args.push("--thorough".to_owned());
+        changed_args.validate().unwrap();
+        assert_ne!(original_id, changed_args.derivation_id());
+
+        for invalid in [
+            "/mason/build",
+            "/mason/other/self-test",
+            "mason/build/bin/self-test",
+            "/mason/build/../escape",
+        ] {
+            let mut plan = original.clone();
+            let StepPlan::RunBuilt { program, .. } = sample_step_mut(&mut plan) else {
+                unreachable!()
+            };
+            *program = invalid.to_owned();
+            assert!(plan.validate().is_err(), "{invalid:?} escaped RunBuilt validation");
         }
     }
 

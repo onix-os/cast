@@ -2,8 +2,9 @@ use std::path::Path;
 
 use gluon_config::{DiagnosticCategory, Evaluator, Source, SourceRoot};
 use stone_recipe::package::{
-    BuilderEnvironmentSpec, DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError, PackageEvaluationError,
-    ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
+    BuilderEnvironmentSpec, BuiltProgramSpec, DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError,
+    PackageEvaluationError, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon, evaluate_gluon_with,
+    evaluate_gluon_with_inputs,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -186,13 +187,14 @@ let root = b.output "out"
 }
 
 #[test]
-fn run_and_shell_steps_preserve_explicit_program_capabilities() {
+fn external_built_and_shell_steps_preserve_distinct_program_authority() {
     let source = authored(
         r#"
 let tool = b.package_ref "odd-tool"
 let scripts = b.scripts {
     build = b.phase [
         b.step.run (b.program.package tool "/opt/odd/bin/tool") ["--frozen"],
+        b.step.run_built (b.program.built "build/generated-tool") ["--self-test"],
         b.step.shell_with {
             interpreter = b.program.binary "dash",
             declared_programs = [b.program.package tool "/opt/odd/bin/helper"],
@@ -226,6 +228,12 @@ let scripts = b.scripts {
                 },
                 args: vec!["--frozen".to_owned()],
             },
+            StepSpec::RunBuilt {
+                program: BuiltProgramSpec {
+                    path: "build/generated-tool".to_owned(),
+                },
+                args: vec!["--self-test".to_owned()],
+            },
             StepSpec::Shell {
                 interpreter: binary_program("dash"),
                 declared_programs: vec![ProgramSpec {
@@ -243,6 +251,41 @@ let scripts = b.scripts {
             },
         ]
     );
+}
+
+#[test]
+fn built_program_paths_are_normalized_before_planning() {
+    for invalid in [
+        "",
+        "/build/tool",
+        "build/../tool",
+        "./build/tool",
+        "build//tool",
+        r"build\tool",
+    ] {
+        let source = authored(&format!(
+            r#"
+let scripts = b.scripts {{
+    check = b.phase [b.step.run_built (b.program.built {invalid:?}) []],
+    .. b.defaults.scripts
+}}
+{{
+    builder = b.builder.custom scripts [],
+    outputs = [b.output "out"],
+    .. b.mk_package (b.meta {{
+        pname = "example", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    }})
+}}
+"#
+        ));
+        let error = evaluate_gluon(&source).unwrap_err();
+        assert!(matches!(
+            error,
+            PackageEvaluationError::Conversion(PackageConversionError::InvalidText { ref field, .. })
+                if field == "builder.phases.check.steps[0].program.path"
+        ));
+    }
 }
 
 #[test]

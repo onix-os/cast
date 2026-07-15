@@ -97,6 +97,18 @@ pub enum StepSpec {
         program: ProgramSpec,
         args: Vec<String>,
     },
+    /// Execute one exact native executable below the current build working directory.
+    ///
+    /// Unlike [`Self::Run`], this Linux ELF image is produced or materialized
+    /// inside the isolated build tree and therefore has no external
+    /// package-provider capability. The authored path is normalized and
+    /// relative; freezing binds it to an absolute path below the phase working
+    /// directory. Scripts must use [`Self::Shell`]; descriptor-executed
+    /// shebangs fail closed.
+    RunBuilt {
+        program: BuiltProgramSpec,
+        args: Vec<String>,
+    },
     Shell {
         interpreter: ProgramSpec,
         declared_programs: Vec<ProgramSpec>,
@@ -299,6 +311,15 @@ pub enum DependencySpec {
 pub struct ProgramSpec {
     pub path: String,
     pub requirement: DependencySpec,
+}
+
+/// One native Linux ELF executable produced beneath the phase working directory.
+///
+/// Scripts use [`StepSpec::Shell`]; a descriptor-executed shebang is rejected
+/// without falling back to its mutable public pathname.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltProgramSpec {
+    pub path: String,
 }
 
 impl DependencySpec {
@@ -1092,6 +1113,24 @@ impl PackageSpec {
                         }
                     }
                 }
+                StepSpec::RunBuilt { program, args } => {
+                    if !is_normalized_relative_path(&program.path) {
+                        return Err(PackageConversionError::InvalidText {
+                            field: format!("{field}.program.path"),
+                            value: program.path.clone(),
+                            requirement: "must be a normalized relative path below the build working directory",
+                        });
+                    }
+                    for (argument_index, argument) in args.iter().enumerate() {
+                        if argument.contains('\0') {
+                            return Err(PackageConversionError::InvalidText {
+                                field: format!("{field}.args[{argument_index}]"),
+                                value: argument.clone(),
+                                requirement: "must not contain NUL characters",
+                            });
+                        }
+                    }
+                }
                 StepSpec::Shell {
                     interpreter,
                     declared_programs,
@@ -1498,6 +1537,10 @@ impl PackageBudget {
         match step {
             StepSpec::Run { program, args } => {
                 self.program(&format!("{field}.program"), program)?;
+                self.strings(&format!("{field}.args"), args)?;
+            }
+            StepSpec::RunBuilt { program, args } => {
+                self.text(&format!("{field}.program.path"), &program.path)?;
                 self.strings(&format!("{field}.args"), args)?;
             }
             StepSpec::Shell {

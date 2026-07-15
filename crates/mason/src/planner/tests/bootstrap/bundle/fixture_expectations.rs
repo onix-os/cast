@@ -9,41 +9,6 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
     }
 
     let (root_plan, root) = output(planned, packages, "out");
-    if fixture == "custom" {
-        let target = "share/cast-custom-fixture/payload.txt";
-        assert_leaf_paths(fixture, "out", root, [target]);
-        assert_no_directories(fixture, "out", root);
-        assert_regular(
-            fixture,
-            root,
-            target,
-            0o644,
-            tracked_bytes("cast-custom-fixture-1.0.0", "payload.txt"),
-        );
-        assert_exact_relations(
-            fixture,
-            root,
-            planned_output_dependencies(planned, root_plan),
-            BTreeSet::from([root_plan.package_name.clone()]),
-        );
-        for candidate in &planned.plan.outputs {
-            if candidate.name != "out" {
-                assert!(
-                    packages[&candidate.package_name].layouts.is_empty(),
-                    "{fixture}: unexpected path in default output {}",
-                    candidate.name
-                );
-                assert_exact_relations(
-                    fixture,
-                    &packages[&candidate.package_name],
-                    planned_output_dependencies(planned, candidate),
-                    BTreeSet::from([candidate.package_name.clone()]),
-                );
-            }
-        }
-        return;
-    }
-
     let (executable, messages) = match fixture {
         "cargo-vendored" => (
             "bin/cast-cargo-vendored-fixture".to_owned(),
@@ -57,6 +22,7 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
                 "autotools-options" => "cast autotools options fixture: enabled",
                 "cargo" => "cast cargo fixture",
                 "cmake" => "cast cmake fixture",
+                "custom" => "cast custom fixture: compiled and executed",
                 "factory-override" => "Stone-native factory override: stone-override",
                 "meson" => "cast meson fixture",
                 other => panic!("{other}: simple fixture needs an explicit payload golden"),

@@ -108,7 +108,7 @@ freeze I/O-backed resolution:
   closure, repository snapshots, platforms, policy identities, and typed input
   provenance.
 
-The derivation-plan schema is v15. It binds the Cast implementation identity,
+The derivation-plan schema is v16. It binds the Cast implementation identity,
 recipe and policy provenance, locks, resolved commands, built-in archive
 extraction, environment, outputs, and reproducibility inputs into one SHA-256
 derivation identity.

@@ -207,6 +207,12 @@ fn compile_steps(typed_steps: &[StepSpec], context: &BuildContext, working_dir: 
                 environment: context.environment.clone(),
                 working_dir: working_dir.to_owned(),
             }),
+            StepSpec::RunBuilt { program, args } => steps.push(StepPlan::RunBuilt {
+                program: Path::new(working_dir).join(&program.path).display().to_string(),
+                args: args.clone(),
+                environment: context.environment.clone(),
+                working_dir: working_dir.to_owned(),
+            }),
             StepSpec::Shell {
                 interpreter,
                 declared_programs,
@@ -457,8 +463,8 @@ mod direct_tests {
         build_policy::{BuildToolSpec, EnvironmentBindingSpec, EnvironmentCondition},
         derivation::StepPlan,
         package::{
-            BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, PhaseSpec, PhasesSpec, ProfileSpec,
-            ProgramSpec, StepSpec, SupportedHooksSpec,
+            BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, PhaseSpec, PhasesSpec,
+            ProfileSpec, ProgramSpec, StepSpec, SupportedHooksSpec,
         },
     };
 
@@ -509,7 +515,9 @@ mod direct_tests {
     fn shell_script(step: &StepPlan) -> &str {
         match step {
             StepPlan::Shell { script, .. } => script,
-            StepPlan::Run { .. } | StepPlan::ExtractArchive { .. } => panic!("expected an authored shell step"),
+            StepPlan::Run { .. } | StepPlan::RunBuilt { .. } | StepPlan::ExtractArchive { .. } => {
+                panic!("expected an authored shell step")
+            }
         }
     }
 
@@ -571,6 +579,46 @@ mod direct_tests {
         assert_eq!(environment["CAST_JOBS"], "3");
         assert_eq!(environment["SOURCE_DATE_EPOCH"], "1700000000");
         assert_eq!(environment["CC"], "/usr/bin/clang");
+    }
+
+    #[test]
+    fn built_programs_freeze_below_the_exact_phase_working_directory() {
+        let (mut recipe, policy, root) = fixture();
+        recipe.declaration.builder.phases.check = PhaseSpec::new([StepSpec::RunBuilt {
+            program: BuiltProgramSpec {
+                path: "build/self-test".to_owned(),
+            },
+            args: vec!["--verify".to_owned()],
+        }]);
+        let paths = test_paths(&recipe, &policy, root.path());
+        let target = policy.target("x86_64").unwrap();
+        let plan = Phase::Check
+            .plan(&PlanContext {
+                target,
+                pgo_stage: None,
+                recipe: &recipe,
+                paths: &paths,
+                policy: &policy,
+                compiler_cache: false,
+                jobs: NonZeroUsize::new(1).unwrap(),
+            })
+            .unwrap()
+            .unwrap();
+
+        let [
+            StepPlan::RunBuilt {
+                program,
+                args,
+                working_dir,
+                ..
+            },
+        ] = plan.steps.as_slice()
+        else {
+            panic!("built program must freeze as RunBuilt")
+        };
+        assert_eq!(working_dir, "/mason/build/x86_64");
+        assert_eq!(program, "/mason/build/x86_64/build/self-test");
+        assert_eq!(args.iter().map(String::as_str).collect::<Vec<_>>(), ["--verify"]);
     }
 
     #[test]

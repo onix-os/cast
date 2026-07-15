@@ -181,8 +181,17 @@ contains that command; a hook cannot mutate the standard builder step, and the
 current package ABI has no per-step environment override.
 
 The package ABI exposes the typed standard-step constructors used by the
-embedded modules, plus `b.step.run`, `b.step.shell`, and `b.step.shell_with`
-for explicit custom work. It deliberately has no `cargo_fetch` step: a frozen
+embedded modules, plus `b.step.run`, `b.step.run_built`, `b.step.shell`, and
+`b.step.shell_with` for explicit custom work. `b.step.run` binds an external
+program to the locked package capability that provides it. A native executable
+produced inside the current build tree instead uses
+`b.step.run_built (b.program.built "relative/path")`; freezing binds that
+normalized relative path beneath the exact phase working directory without
+inventing a package dependency. The current native format is Linux ELF, and
+the retained descriptor remains close-on-exec when passed directly to
+`execveat`. Scripts must use an explicit `b.step.shell` or `b.step.shell_with`;
+a descriptor-executed shebang fails closed without reopening the public path.
+The ABI deliberately has no `cargo_fetch` step: a frozen
 build cannot resolve or download Cargo dependencies. Cargo inputs must already
 be present in a locked source, with Cargo configured to use that vendored tree;
 the standard Cargo builder runs with `--frozen`. Package authors normally
@@ -422,7 +431,7 @@ the frozen timestamp.
 
 ### Archive extraction contract
 
-When an archive has `unpack = b.boolean.true`, derivation schema v15 records a
+When an archive has `unpack = b.boolean.true`, derivation schema v16 records a
 built-in `ExtractArchive` step in the prepare-phase body. The step refers to one
 locked archive by index and freezes its normalized relative destination and
 `strip_dirs` value. Plan validation rejects a non-archive source, extraction in
@@ -542,7 +551,7 @@ The source timestamp and job count are explicit because build scripts can
 observe them. The derivation ID is SHA-256 over the canonical
 `DerivationPlan`, including locked sources and dependencies, selected policy,
 jobs and phases, environment, execution policy, pseudo-filesystems, outputs,
-and timestamp. Derivation schema v15 includes the canonical build-lock origin
+and timestamp. Derivation schema v16 includes the canonical build-lock origin
 mapping and typed built-in archive extraction, so changing only why an
 unchanged provider was requested, or changing an archive source, destination,
 or strip count, changes the derivation ID.

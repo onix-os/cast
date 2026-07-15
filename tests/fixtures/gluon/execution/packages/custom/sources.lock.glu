@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-custom-fixture-1.0.0.tar",
-            sha256 = "81d8b1ca259e4bf6fdd056d1de3b57283bd34ab2397e04b8ab5c7f1d2aea41f9",
+            sha256 = "76cf98a8eef6104059a60cd78e839f94c279ee2a415c36bc98bc3793b416838c",
         },
     ],
 }

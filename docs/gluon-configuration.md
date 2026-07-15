@@ -264,7 +264,7 @@ component and is preserved as the frozen materialization destination; the
 outer destination name is separately part of derivation identity.
 
 Archive bytes are likewise bound by their source-lock SHA-256. For an unpacked
-source, derivation schema v15 freezes a built-in `ExtractArchive` step in the
+source, derivation schema v16 freezes a built-in `ExtractArchive` step in the
 prepare-phase body which identifies the locked source, normalized relative
 destination, and `strip_components` value. Cast accepts plain, gzip, xz, and
 standard-frame zstd tar streams. Other compression or container formats have
@@ -299,7 +299,7 @@ schema freezes the executor ABI and implementation fingerprint separately inside
 `ExecutionPolicy`, so changing execution compatibility cannot be
 mistaken for changing authored builder structure. It also freezes the selected
 credential contract and every reachable analyzer program and provider request.
-The current derivation schema is v15; build-lock origins and typed built-in
+The current derivation schema is v16; build-lock origins and typed built-in
 archive extraction participate in the canonical derivation identity.
 
 The Cast implementation fingerprint is produced at compile time from the

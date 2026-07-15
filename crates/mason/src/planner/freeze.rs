@@ -133,6 +133,16 @@ pub(super) fn jobs_use_package_directory(jobs: &[JobPlan], package_dir: &str) ->
                 .chain(environment.values().map(String::as_str))
                 .chain(std::iter::once(working_dir.as_str()))
                 .any(|value| value.contains(package_dir)),
+            StepPlan::RunBuilt {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => std::iter::once(program.as_str())
+                .chain(args.iter().map(String::as_str))
+                .chain(environment.values().map(String::as_str))
+                .chain(std::iter::once(working_dir.as_str()))
+                .any(|value| value.contains(package_dir)),
             StepPlan::Shell {
                 interpreter,
                 declared_programs,

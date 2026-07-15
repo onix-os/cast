@@ -5,8 +5,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::CString,
     io::{self, Write},
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, RawFd},
     os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
     process,
@@ -54,6 +55,96 @@ const STEP_TOTAL_OUTPUT_BYTE_LIMIT: u64 = 96 * 1024 * 1024;
 const STEP_OPEN_FILE_LIMIT: nix::libc::rlim_t = 4_096;
 const LOG_READ_BUFFER_BYTES: usize = 16 * 1024;
 const STEP_MONITOR_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Parent-prepared argument and environment vectors for one descriptor-based
+/// native-executable handoff in the post-fork child.
+///
+/// The raw pointer arrays refer only to immutable allocations owned by the two
+/// `CString` vectors. Construction completes every allocation before exposing
+/// the value, and none of those vectors are mutated afterward. Moving this
+/// value therefore never moves the referenced string bytes.
+struct DescriptorExec {
+    descriptor: RawFd,
+    _arguments: Vec<CString>,
+    _environment: Vec<CString>,
+    argument_pointers: Vec<*const nix::libc::c_char>,
+    environment_pointers: Vec<*const nix::libc::c_char>,
+}
+
+// SAFETY: all raw pointers refer into immutable allocations owned by the same
+// value, remain valid for its complete lifetime, and are only read by the
+// post-fork child immediately before `execveat`.
+unsafe impl Send for DescriptorExec {}
+// SAFETY: see the `Send` justification. Shared access cannot mutate either the
+// pointer arrays or their backing `CString` allocations.
+unsafe impl Sync for DescriptorExec {}
+
+impl DescriptorExec {
+    fn new(
+        descriptor: RawFd,
+        program: &str,
+        args: &[String],
+        environment: &BTreeMap<String, String>,
+    ) -> io::Result<Self> {
+        let mut arguments = Vec::with_capacity(args.len().saturating_add(1));
+        arguments.push(process_cstring("built program", program)?);
+        for argument in args {
+            arguments.push(process_cstring("built-program argument", argument)?);
+        }
+        let environment = environment
+            .iter()
+            .map(|(key, value)| process_cstring("built-program environment", &format!("{key}={value}")))
+            .collect::<io::Result<Vec<_>>>()?;
+        let argument_pointers = arguments
+            .iter()
+            .map(|value| value.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+        let environment_pointers = environment
+            .iter()
+            .map(|value| value.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+        Ok(Self {
+            descriptor,
+            _arguments: arguments,
+            _environment: environment,
+            argument_pointers,
+            environment_pointers,
+        })
+    }
+
+    /// Replace the post-fork child with the retained executable capability.
+    ///
+    /// All allocation and pointer construction happened in the parent. On
+    /// success this syscall never returns; failure is reported through
+    /// `Command`'s existing child-error pipe, with no pathname fallback.
+    unsafe fn execveat(&self) -> io::Result<()> {
+        // SAFETY: the descriptor names the retained executable; the empty path
+        // is a valid static C string; both pointer arrays are null-terminated
+        // and backed by live immutable C strings; the kernel copies all inputs
+        // synchronously and retains none of these userspace pointers.
+        let result = unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_execveat,
+                self.descriptor,
+                c"".as_ptr(),
+                self.argument_pointers.as_ptr(),
+                self.environment_pointers.as_ptr(),
+                nix::libc::AT_EMPTY_PATH,
+            )
+        };
+        if result == -1 {
+            Err(io::Error::last_os_error())
+        } else {
+            Err(io::Error::other("execveat unexpectedly returned"))
+        }
+    }
+}
+
+fn process_cstring(field: &'static str, value: &str) -> io::Result<CString> {
+    CString::new(value).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, format!("{field} contains NUL")))
+}
 
 impl<'a> Executor<'a> {
     pub fn new(plan: &'a DerivationPlan) -> Result<Self, Error> {
@@ -158,13 +249,38 @@ impl<'a> Executor<'a> {
             )?;
             return Ok(());
         }
-        let (program, args, step_environment, working_dir) = match step {
+        let (program, args, step_environment, working_dir, retained_program) = match step {
             StepPlan::Run {
                 program,
                 args,
                 environment,
                 working_dir,
-            } => (program.path.as_str(), args.clone(), environment, working_dir.as_str()),
+            } => (
+                program.path.clone(),
+                args.clone(),
+                environment,
+                working_dir.as_str(),
+                None,
+            ),
+            StepPlan::RunBuilt {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => {
+                let retained = crate::linux_fs::open_built_executable(Path::new(working_dir), Path::new(program))
+                    .map_err(|source| Error::BuiltExecutable {
+                        path: program.clone(),
+                        source,
+                    })?;
+                (
+                    program.clone(),
+                    args.clone(),
+                    environment,
+                    working_dir.as_str(),
+                    Some(retained),
+                )
+            }
             StepPlan::Shell {
                 interpreter,
                 script,
@@ -172,21 +288,35 @@ impl<'a> Executor<'a> {
                 working_dir,
                 ..
             } => (
-                interpreter.path.as_str(),
+                interpreter.path.clone(),
                 vec!["-c".to_owned(), script.clone()],
                 environment,
                 working_dir.as_str(),
+                None,
             ),
             StepPlan::ExtractArchive { .. } => unreachable!("archive extraction returned above"),
         };
         let environment = merged_environment(&self.plan.environment, step_environment);
-        let status = logged(program, DescendantContainment::PidNamespace, |command| {
-            command
-                .args(args)
-                .env_clear()
-                .envs(environment)
-                .current_dir(working_dir)
-        })?;
+        let descriptor_exec = retained_program
+            .as_ref()
+            .map(|retained| DescriptorExec::new(retained.as_raw_fd(), &program, &args, &environment))
+            .transpose()
+            .map_err(|source| Error::BuiltExecutable {
+                path: program.clone(),
+                source,
+            })?;
+        let status = logged_retaining(
+            &program,
+            descriptor_exec,
+            DescendantContainment::PidNamespace,
+            |command| {
+                command
+                    .args(args)
+                    .env_clear()
+                    .envs(environment)
+                    .current_dir(working_dir)
+            },
+        )?;
         if status.success() {
             return Ok(());
         }
@@ -347,13 +477,24 @@ fn select_cpu_ids(allowed: &[usize], jobs: u32, representable: usize) -> Result<
     Ok(allowed.into_iter().take(requested).collect())
 }
 
+#[cfg(test)]
 fn logged(
     command: &str,
     containment: DescendantContainment,
     configure: impl FnOnce(&mut process::Command) -> &mut process::Command,
 ) -> Result<process::ExitStatus, StepExecutionError> {
+    logged_retaining(command, None, containment, configure)
+}
+
+fn logged_retaining(
+    command: &str,
+    descriptor_exec: Option<DescriptorExec>,
+    containment: DescendantContainment,
+    configure: impl FnOnce(&mut process::Command) -> &mut process::Command,
+) -> Result<process::ExitStatus, StepExecutionError> {
     logged_with_limits(
         command,
+        descriptor_exec,
         containment,
         StepExecutionLimits::production(),
         LogMode::Stream,
@@ -395,6 +536,7 @@ enum LogMode {
 
 fn logged_with_limits(
     command: &str,
+    descriptor_exec: Option<DescriptorExec>,
     containment: DescendantContainment,
     limits: StepExecutionLimits,
     log_mode: LogMode,
@@ -406,7 +548,7 @@ fn logged_with_limits(
     // descriptor close-on-exec in the post-fork child; this also covers
     // descriptors inherited by Cast from its own launcher.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if nix::libc::setpgid(0, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
@@ -419,10 +561,17 @@ fn logged_with_limits(
                 CLOSE_RANGE_CLOEXEC,
             );
             if result == -1 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
+                return Err(io::Error::last_os_error());
             }
+            if let Some(descriptor_exec) = &descriptor_exec {
+                // SAFETY: `DescriptorExec` prepared and retained every C
+                // string and pointer in the parent. The child has completed
+                // its stdio, working-directory, limit, process-group, and
+                // descriptor setup, so this is the final operation before
+                // replacing the child image.
+                descriptor_exec.execveat()?;
+            }
+            Ok(())
         });
     }
     let mut child = command
@@ -555,7 +704,7 @@ fn set_child_resource_limits() -> io::Result<()> {
     Ok(())
 }
 
-fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(io_error_from_errno)?;
     let flags = OFlag::from_bits_truncate(flags);
     fcntl(fd, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK))
@@ -1089,6 +1238,12 @@ pub enum Error {
     UnsupportedPhase(String),
     #[error("frozen archive source index {0} is invalid")]
     InvalidArchiveSource(u32),
+    #[error("retain frozen built executable {path:?}")]
+    BuiltExecutable {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
     #[error("archive extraction")]
     Archive(#[from] crate::archive::Error),
     #[error(transparent)]
@@ -1110,7 +1265,10 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use std::{
-        os::{fd::AsRawFd, unix::fs::symlink},
+        os::{
+            fd::{AsRawFd, FromRawFd as _},
+            unix::fs::{PermissionsExt as _, symlink},
+        },
         path::PathBuf,
         process::Command,
         time::{Duration, Instant},
@@ -1231,11 +1389,98 @@ mod tests {
     ) -> Result<process::ExitStatus, StepExecutionError> {
         logged_with_limits(
             "/bin/sh",
+            None,
             DescendantContainment::ProcessGroup,
             limits,
             LogMode::Discard,
             configure,
         )
+    }
+
+    #[test]
+    fn retained_built_executable_uses_execveat_without_pathname_or_procfs_fallback() {
+        const CHILD_TEST: &str = "executor::tests::descriptor_exec_child_observes_retained_executable_fd_closed";
+        const HIGH_DESCRIPTOR_MINIMUM: RawFd = 512;
+        const RETAINED_DESCRIPTOR_ENV: &str = "CAST_TEST_RETAINED_EXECUTABLE_FD";
+
+        let temporary = crate::private_tempdir();
+        let work = temporary.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let program = work.join("test-binary");
+        std::fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let retained = crate::linux_fs::open_built_executable(&work, &program).unwrap();
+        let retained_descriptor =
+            fcntl(retained.as_raw_fd(), FcntlArg::F_DUPFD_CLOEXEC(HIGH_DESCRIPTOR_MINIMUM)).unwrap();
+        assert!(retained_descriptor >= HIGH_DESCRIPTOR_MINIMUM);
+        drop(retained);
+        // SAFETY: F_DUPFD_CLOEXEC returned one fresh owned descriptor.
+        let retained = unsafe { std::fs::File::from_raw_fd(retained_descriptor) };
+
+        std::fs::remove_file(&program).unwrap();
+        std::fs::write(&program, b"#!/bin/sh\nexit 91\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let args = vec![CHILD_TEST.to_owned(), "--exact".to_owned()];
+        let environment = BTreeMap::from([(RETAINED_DESCRIPTOR_ENV.to_owned(), retained.as_raw_fd().to_string())]);
+        let descriptor_exec =
+            DescriptorExec::new(retained.as_raw_fd(), program.to_str().unwrap(), &args, &environment).unwrap();
+        let status = logged_with_limits(
+            "/descriptor-exec-has-no-pathname-fallback",
+            Some(descriptor_exec),
+            DescendantContainment::ProcessGroup,
+            test_step_limits(1024 * 1024, 1024 * 1024, 1024 * 1024),
+            LogMode::Discard,
+            |command| command.current_dir(&work),
+        )
+        .unwrap();
+        assert!(
+            status.success(),
+            "descriptor execution followed the replaced public path"
+        );
+    }
+
+    #[test]
+    fn descriptor_exec_child_observes_retained_executable_fd_closed() {
+        const RETAINED_DESCRIPTOR_ENV: &str = "CAST_TEST_RETAINED_EXECUTABLE_FD";
+
+        let Ok(descriptor) = std::env::var(RETAINED_DESCRIPTOR_ENV) else {
+            return;
+        };
+        let descriptor = descriptor.parse::<RawFd>().unwrap();
+        // SAFETY: F_GETFD only inspects the numeric descriptor slot.
+        let result = unsafe { nix::libc::fcntl(descriptor, nix::libc::F_GETFD) };
+        assert_eq!(result, -1, "retained executable descriptor {descriptor} survived exec");
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(nix::libc::EBADF));
+    }
+
+    #[test]
+    fn descriptor_exec_rejects_shebang_without_pathname_fallback() {
+        let temporary = crate::private_tempdir();
+        let work = temporary.path().join("work");
+        std::fs::create_dir(&work).unwrap();
+        let program = work.join("script");
+        std::fs::write(&program, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let retained = crate::linux_fs::open_built_executable(&work, &program).unwrap();
+        let descriptor_exec =
+            DescriptorExec::new(retained.as_raw_fd(), program.to_str().unwrap(), &[], &BTreeMap::new()).unwrap();
+
+        let error = logged_with_limits(
+            "/descriptor-exec-has-no-pathname-fallback",
+            Some(descriptor_exec),
+            DescendantContainment::ProcessGroup,
+            test_step_limits(4_096, 4_096, 8_192),
+            LogMode::Discard,
+            |command| command.current_dir(&work),
+        )
+        .unwrap_err();
+        match error {
+            StepExecutionError::Spawn { source } => {
+                assert_eq!(source.raw_os_error(), Some(nix::libc::ENOENT), "{source}");
+            }
+            other => panic!("descriptor-executed shebang did not fail during execveat: {other}"),
+        }
     }
 
     #[test]
@@ -1526,6 +1771,7 @@ mod tests {
         );
         let result = logged_with_limits(
             "/bin/true",
+            None,
             DescendantContainment::PidNamespace,
             test_step_limits(32, 32, 64),
             LogMode::Discard,

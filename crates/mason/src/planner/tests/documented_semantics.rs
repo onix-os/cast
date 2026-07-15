@@ -372,10 +372,14 @@ fn assert_custom_step_semantics(declaration: &PackageSpec, plan: &DerivationPlan
             "binary(cc)",
             "binary(install)",
             "binary(ln)",
-            "binary(test)",
         ]
     );
     assert_eq!(declaration.builder.phases.build.steps.len(), 2);
+    let [StepSpec::RunBuilt { program, args }] = declaration.builder.phases.check.steps.as_slice() else {
+        panic!("custom check must execute the typed build-tree artifact");
+    };
+    assert_eq!(program.path, "build/custom-tool");
+    assert!(args.is_empty());
     let [
         StepSpec::Shell {
             interpreter,
@@ -395,6 +399,17 @@ fn assert_custom_step_semantics(declaration: &PackageSpec, plan: &DerivationPlan
         ["/usr/bin/install", "/usr/bin/ln"]
     );
     assert!(script.contains("custom-tool-compat"));
+    let frozen_check = plan
+        .jobs
+        .iter()
+        .flat_map(|job| &job.phases)
+        .find(|phase| phase.name.eq_ignore_ascii_case("check"))
+        .expect("custom plan lost check phase");
+    assert!(matches!(
+        frozen_check.steps.as_slice(),
+        [StepPlan::RunBuilt { program, args, .. }]
+            if program.ends_with("/build/custom-tool") && args.is_empty()
+    ));
     assert_eq!(plan.execution.network, NetworkMode::Disabled);
     assert_x86_64_platform(plan);
 }

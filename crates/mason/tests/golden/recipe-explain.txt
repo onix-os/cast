@@ -1,6 +1,6 @@
 derivation_explain {
   schema {
-    derivation_plan = 15
+    derivation_plan = 16
     build_lock = 6
   }
   identity {
@@ -864,6 +864,6 @@ derivation_explain {
   }
   result {
     source_date_epoch = 1700000000
-    derivation_id = "f855ee52edba6accf0afe01d272c57360ab05225e6e1e8fcf7e858d034272b32"
+    derivation_id = "b32db9b8570625a0fb53e5f5b62440f58005f583c30db01a905030a4b01c8e82"
   }
 }

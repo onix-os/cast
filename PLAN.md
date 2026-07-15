@@ -575,13 +575,25 @@ items below remain open until a non-skipped required-capability run provides
 that evidence.
 
 On 2026-07-14, `make examples` and `make execution-fixtures` passed for the
-complete checked-in corpus and all ten locked real-source fixtures. The
+complete checked-in corpus and all twelve locked real-source fixtures. The
 production-format offline bootstrap root also materialized successfully. The
 ordinary delegated lane then reported its narrowly classified lack of a
 reachable systemd user manager, while the same run with
 `REQUIRE_EXECUTION=1` rejected that condition. This is useful fail-closed host
 capability evidence, but it is not contentful execution or bundle-reproduction
 evidence and therefore does not close either item below.
+
+On 2026-07-15, the custom fixture became a real compiled C package. Its check
+phase uses the typed `RunBuilt` operation for the generated native Linux ELF.
+The relative authored path is frozen beneath the phase working directory and
+opened without symlink or mount traversal; `execveat` receives that exact
+close-on-exec inode capability without reopening its public pathname or using
+procfs. Scripts remain explicit `Shell` steps, and descriptor-executed shebangs
+fail closed. `make test`, `make examples`, and `make execution-fixtures` pass
+with the regenerated source archive and exact bootstrap closure. The required
+live container run remains blocked on this host by the
+narrowly classified supplementary-group `EPERM`, so this stronger offline and
+unit evidence still does not close the two required-execution items.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,

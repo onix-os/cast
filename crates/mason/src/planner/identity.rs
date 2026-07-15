@@ -154,6 +154,11 @@ fn encode_steps(encoder: &mut StructuralBuilderEncoder, steps: &[StepSpec]) {
                 encode_program(encoder, program);
                 encoder.strings(args);
             }
+            StepSpec::RunBuilt { program, args } => {
+                encoder.variant(18);
+                encoder.string(&program.path);
+                encoder.strings(args);
+            }
             StepSpec::Shell {
                 interpreter,
                 declared_programs,

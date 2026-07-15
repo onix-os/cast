@@ -45,8 +45,13 @@ type ProgramSpec = {
     requirement: DependencySpec,
 }
 
+// A relative build-tree path to one native Linux ELF executable. Scripts use
+// Shell explicitly; a descriptor-executed shebang fails without path fallback.
+type BuiltProgramSpec = { path: String }
+
 type StepSpec =
     | Run { program: ProgramSpec, args: Array String }
+    | RunBuilt { program: BuiltProgramSpec, args: Array String }
     | Shell {
         interpreter: ProgramSpec,
         declared_programs: Array ProgramSpec,
@@ -558,6 +563,8 @@ let output_program: OutputRef -> String -> ProgramSpec = \output path -> {
     requirement = Output { value = output },
 }
 
+let built_program: String -> BuiltProgramSpec = \path -> { path }
+
 let bash_program = binary_program "bash"
 
 let archive = \url hash -> ArchiveSource {
@@ -583,6 +590,7 @@ let git = \url git_ref -> GitSource {
     phase = \steps -> { steps },
     step = {
         run = \program args -> Run { program, args },
+        run_built = \program args -> RunBuilt { program, args },
         shell = \script -> Shell {
             interpreter = bash_program,
             declared_programs = [],
@@ -652,6 +660,7 @@ let git = \url git_ref -> GitSource {
         system_binary = system_binary_program,
         package = package_program,
         output = output_program,
+        built = built_program,
     },
     dep = {
         package = \name -> Package { value = package_ref name },

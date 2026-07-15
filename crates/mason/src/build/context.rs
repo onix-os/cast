@@ -250,7 +250,7 @@ impl BuildContext {
     /// the phase planner and therefore do not produce an executable step here.
     pub fn resolve_standard_step(&self, step: &StepSpec) -> Result<Option<StepPlan>, ContextError> {
         let command = match step {
-            StepSpec::Run { .. } | StepSpec::Shell { .. } => return Ok(None),
+            StepSpec::Run { .. } | StepSpec::RunBuilt { .. } | StepSpec::Shell { .. } => return Ok(None),
             StepSpec::CMakeConfigure { .. } => &self.policy.builders.cmake.setup,
             StepSpec::CMakeBuild => &self.policy.builders.cmake.build,
             StepSpec::CMakeInstall => &self.policy.builders.cmake.install,
@@ -303,6 +303,7 @@ impl BuildContext {
                 );
             }
             StepSpec::Run { .. }
+            | StepSpec::RunBuilt { .. }
             | StepSpec::Shell { .. }
             | StepSpec::CMakeBuild
             | StepSpec::CMakeInstall

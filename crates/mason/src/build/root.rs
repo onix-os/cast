@@ -208,6 +208,7 @@ fn frozen_executable_bindings(plan: &DerivationPlan) -> Result<Vec<forge::Frozen
         for step in phase.pre.iter().chain(&phase.steps).chain(&phase.post) {
             match step {
                 StepPlan::Run { program, .. } => executables.push(program),
+                StepPlan::RunBuilt { .. } => {}
                 StepPlan::Shell {
                     interpreter,
                     declared_programs,
@@ -441,6 +442,7 @@ fn extend_job_executables(inputs: &mut Vec<UnresolvedInput>, jobs: &[Job]) -> Re
                             request: program.requirement.canonical_name(),
                             origin: origin(JobExecutableRole::RunProgram),
                         }),
+                        StepPlan::RunBuilt { .. } => {}
                         StepPlan::Shell {
                             interpreter,
                             declared_programs,
@@ -733,7 +735,7 @@ mod tests {
     use forge::package::{Flags, Meta, Name};
     use gluon_config::Source;
     use stone_recipe::UpstreamSpec;
-    use stone_recipe::derivation::{LockedOutput, LockedOutputRef};
+    use stone_recipe::derivation::{JobPlan, LockedOutput, LockedOutputRef};
 
     use super::*;
 
@@ -1157,7 +1159,12 @@ let base = cast.mk_package (cast.meta {
                         environment: BTreeMap::new(),
                         working_dir: "/mason/build".to_owned(),
                     }],
-                    post: Vec::new(),
+                    post: vec![StepPlan::RunBuilt {
+                        program: "/mason/build/generated/self-test".to_owned(),
+                        args: vec!["--verify".to_owned()],
+                        environment: BTreeMap::new(),
+                        working_dir: "/mason/build".to_owned(),
+                    }],
                 },
             )]),
             work_dir: PathBuf::from("/mason/build"),
@@ -1206,7 +1213,25 @@ let base = cast.mk_package (cast.meta {
 
     #[test]
     fn frozen_executable_bindings_name_exact_locked_provider_packages() {
-        let plan = crate::package::test_derivation_plan();
+        let mut plan = crate::package::test_derivation_plan();
+        plan.jobs.push(JobPlan {
+            pgo_stage: None,
+            pgo_dir: None,
+            build_dir: "/mason/build".to_owned(),
+            work_dir: "/mason/build".to_owned(),
+            phases: vec![stone_recipe::derivation::PhasePlan {
+                name: "check".to_owned(),
+                pre: Vec::new(),
+                steps: vec![StepPlan::RunBuilt {
+                    program: "/mason/build/generated/self-test".to_owned(),
+                    args: Vec::new(),
+                    environment: BTreeMap::new(),
+                    working_dir: "/mason/build".to_owned(),
+                }],
+                post: Vec::new(),
+            }],
+        });
+        plan.validate().unwrap();
         let bindings = frozen_executable_bindings(&plan).unwrap();
 
         assert_eq!(bindings.len(), 16);

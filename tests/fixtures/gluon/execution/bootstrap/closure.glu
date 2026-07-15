@@ -306,7 +306,6 @@ let cmake_packages = [
 
 let custom_packages = [
     "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
-    "05c3a68a59a328130bdc9168840207c6b6e80aded711145498120f0c978510fc",
     "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
     "088b73089d76e6db2bae002949e2325c3b922aa96073bc88de0de9a7bb450125",
     "09d4173bbe9cc713cbcfdb4e448131a6d8475e52a0c7580806c6ec63feb1971b",
@@ -581,10 +580,9 @@ let meson_packages = [
         { name = "split", package_ids = cmake_packages },
     ],
     packages = {
-        total_download_bytes = 315882255,
+        total_download_bytes = 315553764,
         sha256 = [
             "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
-            "05c3a68a59a328130bdc9168840207c6b6e80aded711145498120f0c978510fc",
             "06f5cb2560f82bf23523d5f9d421d4d678f1e40d078bc7a4e8585b994a49aaaf",
             "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
             "088b73089d76e6db2bae002949e2325c3b922aa96073bc88de0de9a7bb450125",

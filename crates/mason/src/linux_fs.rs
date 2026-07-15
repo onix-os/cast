@@ -1,8 +1,10 @@
 //! Linux 5.6-compatible operations on retained filesystem capabilities.
 //!
 //! `O_PATH` descriptors cannot be passed to `fchmod(2)`, while
-//! `fchmodat2(2)` postdates Mason's Linux 5.6 baseline. The only pathname
-//! resolved here is a live decimal descriptor below authenticated procfs.
+//! `fchmodat2(2)` postdates Mason's Linux 5.6 baseline. Mode changes therefore
+//! resolve one live decimal descriptor below authenticated procfs. Native
+//! executable retention is independent of procfs: the executor passes the
+//! close-on-exec `O_PATH` capability directly to `execveat(2)`.
 
 use std::{
     ffi::{CStr, CString},
@@ -10,7 +12,10 @@ use std::{
     mem::{size_of, zeroed},
     os::{
         fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},
-        unix::fs::{MetadataExt as _, PermissionsExt as _},
+        unix::{
+            ffi::OsStrExt as _,
+            fs::{MetadataExt as _, PermissionsExt as _},
+        },
     },
     path::Path,
 };
@@ -23,6 +28,66 @@ const MAX_THREAD_SELF_BYTES: usize = MAX_DECIMAL_PID_BYTES * 2 + 6;
 struct InodeIdentity {
     device: u64,
     inode: u64,
+}
+
+/// Retain one native executable regular file strictly beneath the supplied root.
+///
+/// Every target component is resolved through openat2 without symlinks,
+/// magic links, or mount crossings. The returned `O_PATH` capability remains
+/// `FD_CLOEXEC` and is executed directly with `execveat(AT_EMPTY_PATH)`, so it
+/// is absent from the successfully replaced process image. The current native
+/// format is Linux ELF. A shebang script cannot preserve this close-on-exec
+/// descriptor for its interpreter and fails closed with no pathname fallback.
+pub(crate) fn open_built_executable(root: &Path, target: &Path) -> io::Result<std::fs::File> {
+    let relative = target.strip_prefix(root).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "built executable {} is outside working directory {}",
+                target.display(),
+                root.display()
+            ),
+        )
+    })?;
+    if relative.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "built executable must be a proper child of its working directory",
+        ));
+    }
+
+    let root_path = CString::new(root.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "working directory contains NUL"))?;
+    let root = openat2_file(
+        nix::libc::AT_FDCWD,
+        &root_path,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+    )?;
+    let relative = CString::new(relative.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "built executable path contains NUL"))?;
+    let executable = openat2_file(
+        root.as_raw_fd(),
+        &relative,
+        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        controlled_resolution(),
+    )?;
+    let metadata = executable.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("built executable {} is not a regular file", target.display()),
+        ));
+    }
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("built executable {} has no executable mode bit", target.display()),
+        ));
+    }
+    Ok(executable)
 }
 
 /// Change the mode of the exact inode retained by an `O_PATH` descriptor.
@@ -319,11 +384,40 @@ fn controlled_resolution() -> u64 {
 mod tests {
     use std::{
         ffi::CString,
-        os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+        os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
         process::Command,
     };
 
     use super::*;
+
+    #[test]
+    fn built_executable_is_retained_without_following_symlinks() {
+        let temporary = crate::private_tempdir();
+        let root = temporary.path().join("work");
+        std::fs::create_dir(&root).unwrap();
+        let executable = root.join("tool");
+        std::fs::write(&executable, b"exact executable bytes").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let retained = open_built_executable(&root, &executable).unwrap();
+        let expected = std::fs::metadata(&executable).unwrap();
+        let actual = retained.metadata().unwrap();
+        assert_eq!((actual.dev(), actual.ino()), (expected.dev(), expected.ino()));
+
+        let alias = root.join("alias");
+        symlink("tool", &alias).unwrap();
+        assert!(open_built_executable(&root, &alias).is_err());
+
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            open_built_executable(&root, &executable).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            open_built_executable(&root, temporary.path()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
 
     #[test]
     fn procfs_authentication_rejects_an_ordinary_filesystem() {

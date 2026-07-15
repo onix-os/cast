@@ -4,7 +4,7 @@ use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
 use thiserror::Error;
 
 use super::{
-    BuilderEnvironmentSpec, BuilderSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
+    BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
     PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, ProgramSpec, StepSpec,
     SupportedHooksSpec,
 };
@@ -116,6 +116,10 @@ enum GluonStepSpec {
         program: GluonProgramSpec,
         args: Vec<String>,
     },
+    RunBuilt {
+        program: GluonBuiltProgramSpec,
+        args: Vec<String>,
+    },
     Shell {
         interpreter: GluonProgramSpec,
         declared_programs: Vec<GluonProgramSpec>,
@@ -193,6 +197,11 @@ enum GluonDependencySpec {
 struct GluonProgramSpec {
     path: String,
     requirement: GluonDependencySpec,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuiltProgramSpec {
+    path: String,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -375,6 +384,10 @@ impl From<GluonStepSpec> for StepSpec {
                 program: program.into(),
                 args,
             },
+            GluonStepSpec::RunBuilt { program, args } => Self::RunBuilt {
+                program: program.into(),
+                args,
+            },
             GluonStepSpec::Shell {
                 interpreter,
                 declared_programs,
@@ -458,6 +471,12 @@ impl From<GluonProgramSpec> for ProgramSpec {
             path: spec.path,
             requirement: spec.requirement.into(),
         }
+    }
+}
+
+impl From<GluonBuiltProgramSpec> for BuiltProgramSpec {
+    fn from(spec: GluonBuiltProgramSpec) -> Self {
+        Self { path: spec.path }
     }
 }
 

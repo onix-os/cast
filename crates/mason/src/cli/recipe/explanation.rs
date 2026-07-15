@@ -750,6 +750,22 @@ fn format_steps(formatter: &mut Formatter, indent: usize, name: &str, steps: &[S
                 formatter.close(indent + 2);
                 formatter.string(indent + 2, "working_dir", working_dir);
             }
+            StepPlan::RunBuilt {
+                program,
+                args,
+                environment,
+                working_dir,
+            } => {
+                formatter.string(indent + 2, "kind", "run_built");
+                formatter.string(indent + 2, "program", program);
+                formatter.string_list(indent + 2, "args", args.iter().map(String::as_str));
+                formatter.open(indent + 2, "environment");
+                for (key, value) in environment {
+                    formatter.map_entry(indent + 3, key, value);
+                }
+                formatter.close(indent + 2);
+                formatter.string(indent + 2, "working_dir", working_dir);
+            }
             StepPlan::Shell {
                 interpreter,
                 declared_programs,

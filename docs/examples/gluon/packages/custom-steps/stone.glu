@@ -25,7 +25,9 @@ ln -s custom-tool "${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool-compat"
         },
     ],
     check = b.phase [
-        b.step.run (b.program.binary "test") ["-x", "build/custom-tool"],
+        b.step.run_built
+            (b.program.built "build/custom-tool")
+            [],
     ],
     .. b.defaults.scripts
 }
@@ -39,15 +41,14 @@ let base = b.mk_package (b.meta {
 })
 
 {
-    // Every executable is represented by a typed capability. Shell is an
-    // explicit escape hatch rather than an implicit host command namespace.
+    // External executables are typed provider capabilities; the generated ELF
+    // is a distinct native build-tree executable. Scripts use Shell explicitly.
     builder = b.builder.custom phases [
         b.dep.binary "mkdir",
         b.dep.package "schema-compiler",
         b.dep.binary "cc",
         b.dep.binary "install",
         b.dep.binary "ln",
-        b.dep.binary "test",
     ],
     sources = [
         b.source.archive

@@ -99,6 +99,10 @@ enum FrozenStepShape {
         program: String,
         first_argument: Option<String>,
     },
+    RunBuilt {
+        program: String,
+        first_argument: Option<String>,
+    },
     Shell {
         interpreter: String,
         declared_programs: Vec<String>,
@@ -123,6 +127,10 @@ fn step_shape(step: &stone_recipe::derivation::StepPlan) -> FrozenStepShape {
     match step {
         stone_recipe::derivation::StepPlan::Run { program, args, .. } => FrozenStepShape::Run {
             program: program.path.clone(),
+            first_argument: args.first().cloned(),
+        },
+        stone_recipe::derivation::StepPlan::RunBuilt { program, args, .. } => FrozenStepShape::RunBuilt {
+            program: program.clone(),
             first_argument: args.first().cloned(),
         },
         stone_recipe::derivation::StepPlan::Shell {
@@ -195,6 +203,10 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
     assert_eq!(job.pgo_dir, None, "{name}: unexpected PGO directory");
 
     let prepare = |destination: &str| phase("Prepare", vec![extract(destination)]);
+    let run_built = |program: &str, first_argument: &str| FrozenStepShape::RunBuilt {
+        program: Path::new(&job.work_dir).join(program).display().to_string(),
+        first_argument: Some(first_argument.to_owned()),
+    };
     let expected = match name {
         "cmake" | "factory-override" => vec![
             prepare(if name == "cmake" {
@@ -248,17 +260,20 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         "custom" => vec![
             prepare("cast-custom-fixture"),
             phase("Setup", vec![run("mkdir", "-p")]),
-            phase("Build", vec![run("cp", "payload.txt")]),
+            phase("Build", vec![run("cc", "-O2")]),
             phase(
                 "Install",
                 vec![FrozenStepShape::Shell {
                     interpreter: "/usr/bin/dash".to_owned(),
                     declared_programs: vec!["/usr/bin/install".to_owned()],
-                    script: r#"install -Dm644 build/payload.txt "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast-custom-fixture/payload.txt""#
+                    script: r#"install -Dm755 build/cast-custom-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-custom-fixture""#
                         .to_owned(),
                 }],
             ),
-            phase("Check", vec![run("cmp", "payload.txt")]),
+            phase(
+                "Check",
+                vec![run_built("build/cast-custom-fixture", "--self-test")],
+            ),
         ],
         "daemon-generated" => vec![
             prepare("cast-daemon-fixture"),
