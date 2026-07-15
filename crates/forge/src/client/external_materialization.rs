@@ -18,9 +18,10 @@ use nix::{
 
 use super::{
     AssetDirectoryIdentity, AssetMaterialization, BlitExecution, Error, PendingFile, asset_directory_identity,
-    asset_resolve_flags, blit_tree_into_open_root, effective_user_id, has_cast_control_topology,
-    open_absolute_directory, openat2_frozen, require_disjoint_materialization_target, require_no_default_acl,
-    require_single_component,
+    asset_resolve_flags, blit_tree_into_open_root,
+    candidate_metadata::{self, RetainedEphemeralUsr},
+    effective_user_id, has_cast_control_topology, open_absolute_directory, openat2_frozen,
+    require_disjoint_materialization_target, require_no_default_acl, require_single_component,
 };
 use crate::Installation;
 
@@ -309,7 +310,7 @@ impl RetainedExternalMaterializationTarget {
         tree: &vfs::Tree<PendingFile>,
         materialization: AssetMaterialization,
         execution: BlitExecution,
-    ) -> Result<(), Error> {
+    ) -> Result<RetainedEphemeralUsr, Error> {
         if materialization != AssetMaterialization::IndependentCopy {
             return Err(Error::FixedStagingCapabilityRequired {
                 operation: "hardlink an external materialization target",
@@ -322,6 +323,9 @@ impl RetainedExternalMaterializationTarget {
         self.target_identity =
             require_target_policy(&self.target, &self.admission.path).map_err(|_| self.admission.changed())?;
         self.require_named(installation)?;
+        let mut candidate_usr = candidate_metadata::retain_ephemeral_usr(self.target.file(), &self.admission.path)?;
+        candidate_usr.revalidate_under(self.target.file())?;
+        self.require_named(installation)?;
 
         blit_tree_into_open_root(
             installation,
@@ -331,8 +335,10 @@ impl RetainedExternalMaterializationTarget {
             execution,
             None,
             None,
-            None,
+            Some(candidate_usr.file()),
         )?;
+        candidate_usr.refresh_after_materialization(self.target.file())?;
+        self.require_named(installation)?;
 
         before_external_final_proof();
         fchmod(self.target.as_raw_fd(), Mode::from_bits_truncate(0o755))?;
@@ -340,11 +346,32 @@ impl RetainedExternalMaterializationTarget {
         self.parent.sync_all()?;
         self.target_identity =
             require_target_policy(&self.target, &self.admission.path).map_err(|_| self.admission.changed())?;
+        self.require_named(installation)?;
+        candidate_usr.revalidate_under(self.target.file())?;
+        self.require_named(installation)?;
+        Ok(candidate_usr)
+    }
+
+    pub(super) fn revalidate_candidate_usr(
+        &self,
+        installation: &Installation,
+        candidate_usr: &RetainedEphemeralUsr,
+    ) -> Result<(), Error> {
+        self.require_named(installation)?;
+        candidate_usr.revalidate_under(self.target.file())?;
         self.require_named(installation)
     }
 
-    pub(super) fn revalidate(&self, installation: &Installation) -> Result<(), Error> {
-        self.require_named(installation)
+    pub(super) fn create_root_abi(
+        &self,
+        installation: &Installation,
+        candidate_usr: &RetainedEphemeralUsr,
+    ) -> Result<super::RetainedRootAbi, Error> {
+        self.revalidate_candidate_usr(installation, candidate_usr)?;
+        let root_abi = super::create_root_links_retained(&self.admission.path, self.target.file())?;
+        self.revalidate_candidate_usr(installation, candidate_usr)?;
+        root_abi.revalidate()?;
+        Ok(root_abi)
     }
 
     pub(super) fn path(&self) -> &Path {

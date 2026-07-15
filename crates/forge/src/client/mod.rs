@@ -264,6 +264,7 @@ struct EphemeralCandidate {
     tree: vfs::Tree<PendingFile>,
     root: PathBuf,
     target: RetainedExternalMaterializationTarget,
+    candidate_usr: candidate_metadata::RetainedEphemeralUsr,
     active_state: active_state_snapshot::ActiveStateLease,
 }
 
@@ -2155,30 +2156,6 @@ impl Client {
         )
     }
 
-    #[cfg(test)]
-    fn apply_ephemeral_blit(
-        &self,
-        fstree: vfs::Tree<PendingFile>,
-        blit_root: &Path,
-        system_snapshot: SystemModel,
-    ) -> Result<(), Error> {
-        self.require_non_frozen()?;
-        let blit_root = self.require_configured_ephemeral_target(blit_root)?;
-        // `blit_root` is a public, caller-supplied destination and can name
-        // this installation's fixed staging wrapper even for an ephemeral
-        // client. Cooperating clients must not mutate that namespace while an
-        // inactive archived-repair candidate retains it.
-        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
-        active_state.revalidate(&self.installation)?;
-        let result = self.apply_ephemeral_blit_under_guard(fstree, &blit_root, system_snapshot);
-        let revalidation = active_state.revalidate(&self.installation);
-        match (result, revalidation) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(primary), _) => Err(primary),
-            (Ok(()), Err(revalidation)) => Err(revalidation),
-        }
-    }
-
     fn apply_ephemeral_candidate(
         &self,
         candidate: EphemeralCandidate,
@@ -2188,13 +2165,14 @@ impl Client {
             tree,
             root,
             target,
+            candidate_usr,
             active_state,
         } = candidate;
         active_state.revalidate(&self.installation)?;
         let root = self.require_configured_ephemeral_target(&root)?;
-        target.revalidate(&self.installation)?;
-        let result = self.apply_ephemeral_blit_under_guard(tree, &root, system_snapshot);
-        let revalidation = target.revalidate(&self.installation);
+        target.revalidate_candidate_usr(&self.installation, &candidate_usr)?;
+        let result = self.apply_ephemeral_blit_under_guard(tree, &root, &target, &candidate_usr, system_snapshot);
+        let revalidation = target.revalidate_candidate_usr(&self.installation, &candidate_usr);
         let active_revalidation = active_state.revalidate(&self.installation);
         match (result, revalidation, active_revalidation) {
             (Ok(()), Ok(()), Ok(())) => Ok(()),
@@ -2221,22 +2199,47 @@ impl Client {
         &self,
         fstree: vfs::Tree<PendingFile>,
         blit_root: &Path,
+        target: &RetainedExternalMaterializationTarget,
+        candidate_usr: &candidate_metadata::RetainedEphemeralUsr,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
-        record_os_release(&blit_root)?;
-        record_system_snapshot(&blit_root, system_snapshot)?;
-
-        create_root_links(&blit_root)?;
-        create_root_links(&self.installation.isolation_dir())?;
+        target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+        let root_abi = target.create_root_abi(&self.installation, candidate_usr)?;
+        target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+        let isolation_root_abi = create_root_links(&self.installation.isolation_dir())?;
+        target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
 
         // The container running triggers expects /etc to exist
         let etc = blit_root.join("etc");
         fs::create_dir_all(etc)?;
+        target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+
+        let metadata = candidate_metadata::decorate_ephemeral(candidate_usr, &system_snapshot)?;
+        let revalidate = || -> Result<(), Error> {
+            target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+            metadata.revalidate()?;
+            target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+            root_abi.revalidate()?;
+            isolation_root_abi.revalidate()
+        };
+        revalidate()?;
 
         // ephemeral tx triggers
-        Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?;
+        let transaction = Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree);
+        let transaction_revalidation = revalidate();
+        match (transaction, transaction_revalidation) {
+            (Ok(()), Ok(())) => {}
+            (Err(primary), _) => return Err(primary.into()),
+            (Ok(()), Err(revalidation)) => return Err(revalidation),
+        }
         // ephemeral system triggers
-        Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), &fstree)?;
+        let system = Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), &fstree);
+        let system_revalidation = revalidate();
+        match (system, system_revalidation) {
+            (Ok(()), Ok(())) => {}
+            (Err(primary), _) => return Err(primary.into()),
+            (Ok(()), Err(revalidation)) => return Err(revalidation),
+        }
 
         Ok(())
     }
@@ -2643,6 +2646,7 @@ impl Client {
             tree,
             root: _root,
             target: _target,
+            candidate_usr: _candidate_usr,
             active_state: _active_state,
         } = candidate;
         Ok(tree)
@@ -2666,7 +2670,7 @@ impl Client {
         let tree = self.vfs(packages)?;
         active_state.revalidate(&self.installation)?;
         let mut target = RetainedExternalMaterializationTarget::prepare_from(&self.installation, destination)?;
-        target.materialize(
+        let candidate_usr = target.materialize(
             &self.installation,
             &tree,
             AssetMaterialization::IndependentCopy,
@@ -2679,6 +2683,7 @@ impl Client {
             tree,
             root,
             target,
+            candidate_usr,
             active_state,
         })
     }
@@ -5547,6 +5552,13 @@ fn create_root_links(root: &Path) -> Result<RetainedRootAbi, Error> {
     create_root_links_with(root, |_| {}, |directory| directory.sync_all())
 }
 
+/// Establish the merged-/usr ABI through an already-retained root descriptor.
+/// The path is diagnostic and is used only to prove that the retained inode is
+/// still publicly named; no write authority is reacquired through it.
+pub(super) fn create_root_links_retained(root: &Path, retained: &std::fs::File) -> Result<RetainedRootAbi, Error> {
+    RootAbiPreflight::open_retained(root, retained)?.publish()
+}
+
 /// Inspect every stable and legacy staging name without mutating the root.
 ///
 /// Stateful activation performs this half before candidate identity preparation
@@ -5693,20 +5705,28 @@ impl RootAbiPreflight {
     where
         C: FnMut(RootAbiLinkCheckpoint),
     {
-        let root = if root.is_absolute() {
-            root.to_owned()
-        } else {
-            std::env::current_dir()
-                .map_err(|source| Error::OpenRootAbiDirectory {
-                    root: root.to_owned(),
-                    source,
-                })?
-                .join(root)
-        };
+        let root = absolute_root_abi_path(root)?;
         let directory = open_root_abi_directory(&root).map_err(|source| Error::OpenRootAbiDirectory {
             root: root.clone(),
             source,
         })?;
+        Self::open_directory_with(root, directory, checkpoint)
+    }
+
+    fn open_retained(root: &Path, retained: &std::fs::File) -> Result<Self, Error> {
+        let root = absolute_root_abi_path(root)?;
+        let retained = retained.try_clone().map_err(|source| Error::OpenRootAbiDirectory {
+            root: root.clone(),
+            source,
+        })?;
+        let directory = fs::File::from_parts(retained, root.clone());
+        Self::open_directory_with(root, directory, &mut |_| {})
+    }
+
+    fn open_directory_with<C>(root: PathBuf, directory: fs::File, checkpoint: &mut C) -> Result<Self, Error>
+    where
+        C: FnMut(RootAbiLinkCheckpoint),
+    {
         let identity = root_abi_directory_identity(&directory).map_err(|source| Error::StatRootAbiDirectory {
             root: root.clone(),
             source,
@@ -5828,6 +5848,19 @@ impl RootAbiPreflight {
                 })
                 .collect(),
         })
+    }
+}
+
+fn absolute_root_abi_path(root: &Path) -> Result<PathBuf, Error> {
+    if root.is_absolute() {
+        Ok(root.to_owned())
+    } else {
+        std::env::current_dir()
+            .map_err(|source| Error::OpenRootAbiDirectory {
+                root: root.to_owned(),
+                source,
+            })
+            .map(|current| current.join(root))
     }
 }
 
@@ -9439,12 +9472,14 @@ fn blit_root_from_admission(
 ) -> Result<(), Error> {
     let _writer_coordinator = fixed_staging::lock_coordinator()?;
     let mut target = RetainedExternalMaterializationTarget::prepare_from(installation, admission)?;
-    target.materialize(
-        installation,
-        tree,
-        AssetMaterialization::IndependentCopy,
-        BlitExecution::Parallel,
-    )
+    target
+        .materialize(
+            installation,
+            tree,
+            AssetMaterialization::IndependentCopy,
+            BlitExecution::Parallel,
+        )
+        .map(drop)
 }
 
 #[cfg(test)]
@@ -9456,7 +9491,9 @@ fn blit_root_with_materialization(
     execution: BlitExecution,
 ) -> Result<(), Error> {
     let mut target = RetainedExternalMaterializationTarget::prepare(installation, blit_target)?;
-    target.materialize(installation, tree, materialization, execution)
+    target
+        .materialize(installation, tree, materialization, execution)
+        .map(drop)
 }
 
 fn blit_tree_into_open_root(
@@ -11188,45 +11225,6 @@ fn effective_user_id() -> u32 {
     unsafe { nix::libc::geteuid() }
 }
 
-/// Record the operating system release info
-/// Requires `os-info.json` to be present in the root, otherwise
-/// we'll somewhat spitefully generate a generic os-release.
-fn record_os_release(root: &Path) -> Result<(), Error> {
-    let os_info_path = root.join("usr").join("lib").join("os-info.json");
-    let os_release_data = match os_info::load_os_info_from_path(os_info_path) {
-        Ok(ref info) => {
-            let os_rel: os_info::OsRelease = info.into();
-            os_rel.to_string()
-        }
-        Err(_) => {
-            // Fallback to a generic os-release to break the system
-            // TLDR: Implement your OS properly.
-            format!(
-                r#"NAME="Unbranded OS"
-                VERSION="{version}"
-                ID="unbranded-os"
-                VERSION_CODENAME={version}
-                VERSION_ID="{version}"
-                PRETTY_NAME="Unbranded OS {version} - I forgot to add os-info.json"
-                HOME_URL="https://github.com/AerynOS/os-info"
-                BUG_REPORT_URL="https://.com""#,
-                version = "no-os-info.json"
-            )
-        }
-    };
-
-    // It's possible this doesn't exist if
-    // we remove all packages (=
-    let dir = root.join("usr").join("lib");
-    if !dir.exists() {
-        fs::create_dir(&dir)?;
-    }
-
-    fs::write(dir.join("os-release"), os_release_data)?;
-
-    Ok(())
-}
-
 fn generate_system_snapshot(
     current: Option<LoadedSystemModel>,
     repositories: &repository::Manager,
@@ -11256,6 +11254,7 @@ fn generate_system_snapshot(
     }
 }
 
+#[cfg(test)]
 fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(), Error> {
     let path = system_model::snapshot_path(root);
     let dir = path.parent().expect("system snapshot path has a parent");
@@ -12279,6 +12278,11 @@ pub enum Error {
     },
     #[error("decorate a stateful candidate through retained metadata capabilities")]
     StatefulCandidateMetadata {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("prepare or decorate an ephemeral candidate through retained metadata capabilities")]
+    EphemeralCandidateMetadata {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
@@ -21491,45 +21495,52 @@ let cast = import! cast.system.v1
 
     #[test]
     fn ephemeral_root_and_isolation_root_abi_conflicts_are_both_non_destructive() {
-        let temporary = tempfile::tempdir().unwrap();
-        prepare_private_installation_root(temporary.path());
-        let installation_root = temporary.path().join("installation");
-        let blit_root = temporary.path().join("ephemeral");
+        let root_temporary = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(root_temporary.path());
+        let installation_root = root_temporary.path().join("installation");
+        let blit_root = root_temporary.path().join("ephemeral");
         fs::create_dir(&installation_root).unwrap();
-        fs::create_dir(&blit_root).unwrap();
-        prepare_private_installation_root(&blit_root);
         let installation = test_installation(&installation_root);
-        let client = Client::builder("root-abi-ephemeral-test", installation)
+        let client = Client::builder("root-abi-ephemeral-root-test", installation)
             .repositories(repository::Map::default())
             .ephemeral(&blit_root)
             .build()
             .unwrap();
-        fs::create_dir_all(blit_root.join("usr/lib")).unwrap();
+        let candidate = client
+            .materialize_ephemeral_candidate(std::iter::empty::<&package::Id>())
+            .unwrap();
 
         let foreign = blit_root.join("bin");
         fs::write(&foreign, b"foreign ephemeral entry").unwrap();
         let identity = root_abi_inode(&foreign);
         let error = client
-            .apply_ephemeral_blit(
-                vfs(Vec::new()).unwrap(),
-                &blit_root,
-                generated_system_snapshot("ephemeral-package"),
-            )
+            .apply_ephemeral_candidate(candidate, generated_system_snapshot("ephemeral-package"))
             .unwrap_err();
         assert!(matches!(error, Error::RootAbiLinkTypeConflict { path, .. } if path == foreign));
         assert_eq!(root_abi_inode(&foreign), identity);
         assert_eq!(fs::read(&foreign).unwrap(), b"foreign ephemeral entry");
-        fs::remove_file(&foreign).unwrap();
+        assert!(!blit_root.join("usr/lib/os-release").exists());
+        assert!(!blit_root.join("usr/lib/system-model.glu").exists());
 
+        let isolation_temporary = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(isolation_temporary.path());
+        let installation_root = isolation_temporary.path().join("installation");
+        let blit_root = isolation_temporary.path().join("ephemeral");
+        fs::create_dir(&installation_root).unwrap();
+        let installation = test_installation(&installation_root);
+        let client = Client::builder("root-abi-ephemeral-isolation-test", installation)
+            .repositories(repository::Map::default())
+            .ephemeral(&blit_root)
+            .build()
+            .unwrap();
+        let candidate = client
+            .materialize_ephemeral_candidate(std::iter::empty::<&package::Id>())
+            .unwrap();
         let isolation_foreign = client.installation.isolation_dir().join("bin");
         fs::write(&isolation_foreign, b"foreign isolation entry").unwrap();
         let isolation_identity = root_abi_inode(&isolation_foreign);
         let error = client
-            .apply_ephemeral_blit(
-                vfs(Vec::new()).unwrap(),
-                &blit_root,
-                generated_system_snapshot("ephemeral-package"),
-            )
+            .apply_ephemeral_candidate(candidate, generated_system_snapshot("ephemeral-package"))
             .unwrap_err();
         assert!(matches!(
             error,
@@ -21538,6 +21549,8 @@ let cast = import! cast.system.v1
         assert_eq!(root_abi_inode(&isolation_foreign), isolation_identity);
         assert_eq!(fs::read(&isolation_foreign).unwrap(), b"foreign isolation entry");
         assert_root_abi_links(&blit_root);
+        assert!(!blit_root.join("usr/lib/os-release").exists());
+        assert!(!blit_root.join("usr/lib/system-model.glu").exists());
     }
 
     #[test]

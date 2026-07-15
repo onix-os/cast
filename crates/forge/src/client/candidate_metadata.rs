@@ -41,6 +41,7 @@ pub(super) fn arm_applied_private_directory_publication_error(after_parent_sync:
 }
 
 const LIB_NAME: &CStr = c"lib";
+const USR_NAME: &CStr = c"usr";
 const OS_INFO_NAME: &CStr = c"os-info.json";
 const OS_RELEASE_NAME: &CStr = c"os-release";
 const SYSTEM_SNAPSHOT_NAME: &CStr = c"system-model.glu";
@@ -165,7 +166,15 @@ struct PreparedFile {
 #[derive(Clone, Copy, Debug)]
 enum MetadataContext {
     ArchivedRepair,
+    Ephemeral,
     Stateful,
+}
+
+/// Exact external `/usr` inode retained beneath the already-authenticated
+/// ephemeral materialization root. The diagnostic path is never reopened.
+#[derive(Debug)]
+pub(super) struct RetainedEphemeralUsr {
+    directory: RetainedDirectory,
 }
 
 /// Retains the exact generated files and their parent directories until the
@@ -200,6 +209,69 @@ pub(super) fn decorate_stateful<'candidate>(
     let (usr, usr_path) = identity.retained_candidate_usr();
     decorate_retained(MetadataContext::Stateful, usr, usr_path, snapshot)
         .map_err(|source| metadata_error(MetadataContext::Stateful, source))
+}
+
+pub(super) fn retain_ephemeral_usr(root: &File, root_path: &Path) -> Result<RetainedEphemeralUsr, Error> {
+    let context = MetadataContext::Ephemeral;
+    let directory = RetainedDirectory::retain_or_create(root, USR_NAME, root_path.join("usr"))
+        .map_err(|source| metadata_error(context, source))?;
+    directory
+        .require_named(root, USR_NAME)
+        .map_err(|source| metadata_error(context, source))?;
+    Ok(RetainedEphemeralUsr { directory })
+}
+
+pub(super) fn decorate_ephemeral<'candidate>(
+    usr: &'candidate RetainedEphemeralUsr,
+    snapshot: &SystemModel,
+) -> Result<CandidateMetadataProof<'candidate>, Error> {
+    decorate_retained(MetadataContext::Ephemeral, usr.file(), usr.diagnostic_path(), snapshot)
+        .map_err(|source| metadata_error(MetadataContext::Ephemeral, source))
+}
+
+impl RetainedEphemeralUsr {
+    pub(super) fn file(&self) -> &File {
+        &self.directory.file
+    }
+
+    pub(super) fn diagnostic_path(&self) -> &Path {
+        &self.directory.path
+    }
+
+    pub(super) fn revalidate_under(&self, root: &File) -> Result<(), Error> {
+        self.directory
+            .require_named(root, USR_NAME)
+            .map_err(|source| metadata_error(MetadataContext::Ephemeral, source))
+    }
+
+    /// Materialization may temporarily widen the retained directory mode and
+    /// then apply the declarative final mode. Re-observe that same descriptor
+    /// only after the blit has finished; never reacquire `usr` by pathname.
+    pub(super) fn refresh_after_materialization(&mut self, root: &File) -> Result<(), Error> {
+        self.directory.witness = directory_witness(&self.directory.file, &self.directory.path)
+            .map_err(|source| metadata_error(MetadataContext::Ephemeral, source))?;
+        require_no_access_acl(&self.directory.file, &self.directory.path).map_err(|source| {
+            metadata_error(
+                MetadataContext::Ephemeral,
+                metadata_io(
+                    "reject access ACL on retained ephemeral /usr",
+                    &self.directory.path,
+                    source,
+                ),
+            )
+        })?;
+        require_no_default_acl(&self.directory.file, &self.directory.path).map_err(|source| {
+            metadata_error(
+                MetadataContext::Ephemeral,
+                metadata_io(
+                    "reject default ACL on retained ephemeral /usr",
+                    &self.directory.path,
+                    source,
+                ),
+            )
+        })?;
+        self.revalidate_under(root)
+    }
 }
 
 fn decorate_retained<'candidate>(
@@ -269,6 +341,9 @@ impl CandidateMetadataProof<'_> {
 fn metadata_error(context: MetadataContext, source: MetadataError) -> Error {
     match context {
         MetadataContext::ArchivedRepair => Error::ArchivedStateRepair {
+            source: Box::new(source),
+        },
+        MetadataContext::Ephemeral => Error::EphemeralCandidateMetadata {
             source: Box::new(source),
         },
         MetadataContext::Stateful => Error::StatefulCandidateMetadata {

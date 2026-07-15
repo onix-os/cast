@@ -1,4 +1,4 @@
-//! Private creation and no-replace publication of candidate `/usr/lib`.
+//! Private creation and no-replace publication of candidate directories.
 
 use std::ffi::CString;
 
@@ -12,7 +12,7 @@ const PRIVATE_DIRECTORY_RANDOM_BYTES: usize = 16;
 
 impl RetainedDirectory {
     /// Create a fresh directory behind a kernel-random private name, retain
-    /// that exact inode, and only then publish it as `lib` with no-replace.
+    /// that exact inode, and only then publish it with no-replace.
     /// A failure leaves private residue inside the already-private candidate;
     /// the outer repair guard preserves that whole wrapper opaquely rather
     /// than guessing which name is safe to remove.
@@ -202,7 +202,7 @@ fn random_private_directory_name() -> Result<CString, MetadataError> {
     }
 
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let prefix = b".forge-metadata-lib-";
+    let prefix = b".forge-metadata-directory-";
     let mut encoded = Vec::with_capacity(prefix.len() + random.len() * 2);
     encoded.extend_from_slice(prefix);
     for byte in random {
