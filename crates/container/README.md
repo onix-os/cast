@@ -20,7 +20,14 @@ Below is a walkthrough to build and enter a container. The logic is simple but d
   1. `clone` a child process. This is like a `fork` on steroids: We can pass it flags to avoid sharing certain resources with the parent, e.g. PIDs, network access, or even user/group IDs, which is the foundation of a rootless container. Let's call the child process "Bill".
   1. Bill has no idea who are the users and groups! It lives within a new user namespace. We must make it wait to build/test a package until we assigned some. To pause the execution, we use a pipe: the parent on one end, Bill on the other. A `read` blocks until there's data coming out of the pipe.
   1. Parent-side, namespace user and group 0 are mapped to the caller. Linux does not let an unprivileged mapper both deny `setgroups` and then clear the supplementary groups inherited by Bill. For an unprivileged caller we therefore use the fixed `/usr/bin/newgidmap` helper plus one delegated `/etc/subgid` entry. That host ID is mapped only to a fixed, setup-only namespace slot.
-  1. Once the maps exist, Bill clears its complete supplementary-group list and verifies that its real/effective UID and GID are all zero before it mounts or runs anything. Rootful and rootless payloads consequently receive the same build-visible starting credentials; the caller's host groups are never inherited by build commands.
+  1. Once the maps exist, Bill reads its supplementary-group list. It performs
+     the raw `setgroups(0, NULL)` mutation unless that list is already exactly
+     empty, then sets all real, effective, and saved GID slots followed by all
+     real, effective, and saved UID slots to namespace root. Before mounting or
+     running anything it verifies those six slots, both filesystem credential
+     slots, and a still-empty supplementary-group list. Rootful and rootless
+     payloads consequently receive the same build-visible starting credentials;
+     the caller's host groups are never inherited by build commands.
   1. With Bill's identity crisis over, the parent writes a sentinel value into the pipe that makes the `read` function unblock.
   1. Bills has an isolated user and group, but not an isolated filesystem. Since we are now privileged inside it, we're able to choose a directory as the root directory, and bind-mount important filesystems like tmpfs, procfs and sysfs. We also bind-mount devices like `/dev/zero` and `/dev/urandom`. Finally, we perform a `pivot_root` to hide the host filesystem for good.
      - `pivot_root` is more secure than the well-known `chroot`, in that it's not possible to escape it.
