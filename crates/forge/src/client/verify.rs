@@ -24,6 +24,14 @@ use crate::{
 };
 
 pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::Error> {
+    client.require_stateful_scope()?;
+
+    // Retain one cooperating-writer lease from the authoritative scan through
+    // removal of any corrupt asset names. Do not carry this non-reentrant
+    // process mutex into cache publication or state materialization: each of
+    // those paths acquires and retains its own lease at its mutation boundary.
+    let writer_coordinator = client::fixed_staging::lock_coordinator()?;
+
     println!("Verifying assets");
 
     // Get all installed layouts, this is our source of truth
@@ -230,10 +238,18 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
             fs::remove_file(&path)?;
         }
 
+        // `cache_packages` acquires this coordinator only inside its blocking
+        // publication closures. Drop the scan lease before entering the async
+        // runtime so no std mutex guard crosses an await and cache publication
+        // cannot self-deadlock.
+        drop(writer_coordinator);
+
         println!("Reinstalling packages");
 
         // And re-cache all packages that comprise the corrupt / missing asset
         runtime::block_on(client.cache_packages(&issue_packages))?;
+    } else {
+        drop(writer_coordinator);
     }
 
     // Now we must fix any states that referenced these packages
@@ -262,24 +278,30 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
         let is_active = client.installation.active_state == Some(state.id);
 
         if is_active {
-            // Active repair still uses the legacy stateful materializer. This
-            // slice isolates inactive writable repair candidates only; the
-            // remaining hardlink policy belongs to the shared coordinator
-            // work tracked in PLAN.md.
-            let fstree = client.blit_root(state.selections.iter().map(|s| &s.package))?;
-            let system_model = client
-                .load_or_create_system_snapshot(crate::system_model::snapshot_path(&client.installation.root), state)?;
+            let candidate = client.materialize_stateful_candidate(state.selections.iter().map(|s| &s.package))?;
+            let current_state = client.state_db.get(state.id)?;
+            if current_state != *state {
+                return Err(client::Error::VerifyStateChanged { state: state.id });
+            }
+            let system_model = client.load_or_create_system_snapshot(
+                crate::system_model::snapshot_path(&client.installation.root),
+                &current_state,
+            )?;
 
             // Override install root with the newly blitted active state
-            client.apply_stateful_blit(fstree, state, None, system_model)?;
+            client.apply_stateful_candidate(candidate, &current_state, None, system_model)?;
         } else {
             // Inactive repair is writable by transaction triggers, so it must
             // receive independent package inodes and a coordinator token from
             // the first fixed-staging mutation through publication.
             let candidate = client.materialize_archived_repair_root(state.selections.iter().map(|s| &s.package))?;
+            let current_state = client.state_db.get(state.id)?;
+            if current_state != *state {
+                return Err(client::Error::VerifyStateChanged { state: state.id });
+            }
             let system_model = client.load_or_create_system_snapshot(
                 crate::system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
-                state,
+                &current_state,
             )?;
 
             // Repair an inactive state without running live System triggers,
@@ -287,7 +309,7 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
             // displaced archive or the fixed staging wrapper. The retained
             // repair guard publishes the whole candidate wrapper and parks the
             // old or failed wrapper opaquely in private quarantine.
-            client.repair_archived_state(candidate, state, system_model)?;
+            client.repair_archived_state(candidate, &current_state, system_model)?;
         }
 
         println!(" {} state #{}", "»".green(), state.id);

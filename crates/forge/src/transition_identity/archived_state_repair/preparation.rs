@@ -13,10 +13,20 @@ impl ArchivedStateRepairIdentity {
     /// replacement before any metadata or transaction trigger is allowed to
     /// run. The existing canonical wrapper, when present, is retained opaquely
     /// and is never authenticated from its potentially corrupt contents.
-    pub(crate) fn prepare(
+    pub(crate) fn prepare_retained_candidate(
         installation: &Installation,
         state_db: &db::state::Database,
         expected: &state::State,
+        candidate_usr: &std::fs::File,
+    ) -> Result<Self, ArchivedStateRepairError> {
+        Self::prepare_candidate(installation, state_db, expected, Some(candidate_usr))
+    }
+
+    fn prepare_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        expected: &state::State,
+        retained_candidate_usr: Option<&std::fs::File>,
     ) -> Result<Self, ArchivedStateRepairError> {
         installation
             .revalidate_root_directory()
@@ -99,8 +109,24 @@ impl ArchivedStateRepairIdentity {
                     },
                 )
             })?;
+        let retained_candidate = retained_candidate_usr
+            .map(|candidate_usr| crate::tree_marker::TreeMarkerStore::open(candidate_usr, &candidate_path))
+            .transpose()
+            .map_err(super::super::Error::from)
+            .map_err(|source| identity("retain caller-authenticated archived-repair candidate /usr", source))?;
+        if let Some(retained_candidate) = retained_candidate.as_ref() {
+            candidate_store
+                .require_same_directory(retained_candidate)
+                .map_err(super::super::Error::from)
+                .map_err(|source| identity("bind archived-repair candidate to retained materialization", source))?;
+        }
         let candidate = super::super::RetainedIdentity::prepare_strict(candidate_store, expected.id)
             .map_err(|source| identity("retain archived-repair candidate identity", source))?;
+        if let Some(retained_candidate) = retained_candidate.as_ref() {
+            candidate
+                .verify_store_with_state_id(retained_candidate)
+                .map_err(|source| identity("revalidate retained archived-repair candidate identity", source))?;
+        }
 
         let archive_path = roots.path.join(state_name.to_string_lossy().as_ref());
         let archive = match roots

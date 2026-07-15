@@ -14,7 +14,7 @@ use tui::{ProgressBar, ProgressStyle};
 
 use crate::{
     Installation,
-    client::{self, cache::asset_path},
+    client::{self, cache::asset_path, external_materialization::ExternalMaterializationAdmission},
     installation,
     linux_fs::{normalize_new_directory, require_named_directory},
     package::{self, MissingMetaFieldError},
@@ -26,13 +26,14 @@ pub fn extract(stones: Vec<&PathBuf>, output_dir: &Path) -> Result<(), Error> {
     let output_dir = output_dir.canonicalize()?;
 
     // Extraction needs Forge's asset materializer, not an installation rooted
-    // in the caller's working tree. Keep its transient authority private and
-    // on the output filesystem so hardlink materialization cannot fail merely
-    // because the system temporary directory lives on another mount.
+    // in the caller's working tree. Independent-copy materialization has no
+    // same-filesystem requirement, so keep transient cache authority in the
+    // default private tempfile namespace rather than touching output before
+    // its per-package destination has been admitted.
     let temporary = tempfile::Builder::new()
         .prefix(".cast-extract-")
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir_in(&output_dir)?;
+        .tempdir()?;
     let temporary_anchor = normalize_new_directory(temporary.path(), 0o700)?;
     let installation = Installation::open_frozen(temporary.path(), None)?;
     require_named_directory(temporary.path(), &temporary_anchor, 0o700)?;
@@ -60,8 +61,9 @@ pub fn extract(stones: Vec<&PathBuf>, output_dir: &Path) -> Result<(), Error> {
 
         println!("Extract: {path:?} -> {extraction_root:?}");
 
-        // Cleanup old extraction root
-        util::recreate_dir(&extraction_root)?;
+        // Admit the exact external destination before any recursive cleanup.
+        // Extraction never owns a nonempty tree or another Cast topology.
+        let extraction_target = ExternalMaterializationAdmission::admit(&installation, &extraction_root)?;
 
         fs::create_dir_all(installation.assets_path("v2"))?;
 
@@ -126,7 +128,7 @@ pub fn extract(stones: Vec<&PathBuf>, output_dir: &Path) -> Result<(), Error> {
             .collect::<Vec<_>>();
         let vfs = client::vfs(records)?;
 
-        client::blit_root(&installation, &vfs, &extraction_root.canonicalize()?)?;
+        client::blit_root_from_admission(&installation, &vfs, &extraction_target)?;
     }
 
     Ok(())

@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-client-startup-gate-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-client-startup-gate-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -205,15 +205,13 @@ forge-archived-repair-test:
 		client::archived_repair_tests::metadata::a_second_metadata_name_collision_preserves_the_partial_candidate_without_replacing_the_occupant \
 		client::archived_repair_tests::metadata::deleting_the_first_metadata_output_during_pair_publication_preserves_the_partial_candidate \
 		client::archived_repair_tests::metadata::replacing_the_first_metadata_output_during_pair_publication_never_adopts_the_occupant \
-		client::archived_repair_tests::materialization::a_live_archived_repair_candidate_serializes_the_public_low_level_blitter \
+		client::archived_repair_tests::materialization::the_public_low_level_blitter_rejects_fixed_staging_unchanged \
 		client::archived_repair_tests::materialization::archived_repair_materialization_uses_a_private_inode_and_never_chmods_the_asset_pool \
 		client::archived_repair_tests::materialization::a_write_at_the_transaction_trigger_boundary_cannot_mutate_cache_or_live_aliases \
 		client::archived_repair_tests::materialization::identical_digest_outputs_keep_distinct_package_modes_without_chmodding_aliases \
 		client::archived_repair_tests::materialization::nonempty_fixed_staging_crash_residue_is_refused_without_traversal_or_deletion \
-		client::archived_repair_tests::materialization::an_exact_empty_private_staging_baseline_is_replaced_nonrecursively \
+		client::archived_repair_tests::materialization::an_exact_empty_private_staging_baseline_is_reused_without_replacement \
 		client::archived_repair_tests::materialization::an_empty_staging_name_substitution_is_refused_without_removing_either_inode \
-		client::archived_repair_tests::materialization::an_interrupted_staging_removal_never_retries_against_a_substitute \
-		client::archived_repair_tests::materialization::a_moved_away_retained_wrapper_is_not_misclassified_as_removed \
 		client::archived_repair_tests::identity::same_content_state_id_inode_replacement_is_preserved_but_never_published \
 		client::archived_repair_tests::identity::same_content_tree_marker_inode_replacement_is_preserved_but_never_published \
 		client::archived_repair_tests::semantics::live_active_selection_change_is_detected_without_trusting_the_cached_field \
@@ -244,6 +242,43 @@ forge-archived-repair-test:
 		client::archived_repair_tests::namespace_races::externally_completed_missing_cleanup_is_adopted_without_a_second_restore \
 		client::archived_repair_tests::namespace_races::successful_preservation_reversal_is_ambiguous_without_a_second_exchange; do \
 		printf '%s\n' "$$listed" | grep -Fx "$$test: test" >/dev/null; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-fixed-staging-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::fixed_staging_transition::exact_empty_staging_is_reused_and_returns_the_published_usr_inode \
+		client::tests::fixed_staging_transition::exact_empty_legacy_staging_is_normalized_without_replacing_its_inode \
+		client::tests::fixed_staging_transition::nonempty_legacy_staging_residue_is_preserved_byte_for_byte \
+		client::tests::fixed_staging_transition::an_entry_inserted_before_fill_is_rejected_without_traversal \
+		client::tests::fixed_staging_transition::candidate_usr_publication_collision_preserves_private_and_public_trees \
+		client::tests::fixed_staging_transition::filled_private_usr_is_not_replaced_by_a_last_moment_public_occupant \
+		client::tests::fixed_staging_transition::stateful_candidate_same_digest_modes_and_writes_are_isolated_from_cache \
+		client::tests::fixed_staging_transition::stateful_candidate_rejects_corrupt_cache_bytes_without_publishing_usr \
+		client::tests::fixed_staging_transition::retained_state_id_write_never_targets_a_substituted_usr \
+		client::tests::fixed_staging_transition::archived_repair_state_id_write_uses_the_same_retained_usr \
+		client::tests::fixed_staging_transition::coordinator_lease_spans_state_allocation_and_retained_identity_preparation \
+		client::tests::fixed_staging_transition::public_and_cross_install_blitters_cannot_target_fixed_staging \
+		client::tests::fixed_staging_transition::ephemeral_materialization_rechecks_empty_target_under_the_lease \
+		client::tests::fixed_staging_transition::ephemeral_activate_and_boot_sync_fail_before_fixed_namespace_mutation \
+		client::tests::fixed_staging_transition::frozen_activate_boot_verify_and_prune_fail_before_installation_mutation \
+		client::tests::external_materialization::exact_empty_external_target_keeps_its_inode_and_becomes_a_sealed_empty_root \
+		client::tests::external_materialization::an_absent_empty_closure_publishes_one_empty_directory_instead_of_deleting_a_path \
+		client::tests::external_materialization::parent_path_replacement_after_retention_cannot_redirect_target_creation \
+		client::tests::external_materialization::directory_replacement_between_admission_and_preparation_is_rejected \
+		client::tests::external_materialization::symlink_replacement_between_admission_and_preparation_cannot_reach_a_safe_victim \
+		client::tests::external_materialization::absent_admitted_target_rejects_an_inserted_empty_directory_untouched \
+		client::tests::external_materialization::present_admitted_target_rejects_an_empty_inode_replacement_untouched \
+		client::tests::external_materialization::present_admitted_target_rejects_removal_without_recreating_its_name \
+		client::tests::external_materialization::absent_target_collision_is_never_adopted_or_removed \
+		client::tests::external_materialization::target_substitution_before_fill_preserves_both_inodes_without_writing_either \
+		client::tests::external_materialization::final_name_substitution_never_turns_a_filled_retained_root_into_success \
+		client::tests::external_materialization::symlink_and_nonempty_targets_are_left_untouched \
+		client::tests::external_materialization::world_writable_direct_parent_is_rejected_without_creating_or_removing_a_target \
+		client::tests::verify_reblits_and_preserves_the_existing_normalized_snapshot; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
@@ -593,6 +628,7 @@ help:
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
+	@echo "  forge-fixed-staging-test  Run retained fixed-staging and external-target security tests"
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
 	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"

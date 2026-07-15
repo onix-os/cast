@@ -1,58 +1,27 @@
 //! Alias-isolation and crash-residue proofs for archived-repair materialization.
 
-use std::{
-    cell::Cell,
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
-    rc::Rc,
-    sync::mpsc::{self, RecvTimeoutError},
-    time::Duration,
-};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
 use fs_err as fs;
 use stone::{StonePayloadLayoutFile, StonePayloadLayoutRecord};
 
 use super::*;
-use crate::client::{
-    archived_repair_materialization::{
-        arm_before_coordinator_lock, arm_before_staging_baseline_revalidation, arm_fixed_staging_removal,
-    },
-    cache,
-};
+use crate::client::{archived_repair_materialization::arm_before_staging_baseline_revalidation, cache};
 
 const CACHED_BYTES: &[u8] = b"persistent archived-repair asset bytes";
 
 #[test]
-fn a_live_archived_repair_candidate_serializes_the_public_low_level_blitter() {
+fn the_public_low_level_blitter_rejects_fixed_staging_unchanged() {
     let fixture = Fixture::new(false);
-    let candidate = fixture.empty_candidate();
-    let installation = fixture.client.installation.clone();
-    let staging = installation.staging_dir();
-    let staging_after = staging.clone();
-    let (reached_tx, reached_rx) = mpsc::channel();
-    let (proceed_tx, proceed_rx) = mpsc::channel();
-    let (done_tx, done_rx) = mpsc::channel();
+    let staging = fixture.client.installation.staging_dir();
+    let before = directory_identity(&staging);
+    let tree = crate::client::vfs(Vec::new()).unwrap();
 
-    let worker = std::thread::spawn(move || {
-        arm_before_coordinator_lock(move || {
-            reached_tx.send(()).unwrap();
-            proceed_rx.recv().unwrap();
-        });
-        let tree = crate::client::vfs(Vec::new()).unwrap();
-        crate::client::blit_root(&installation, &tree, &staging).unwrap();
-        done_tx.send(()).unwrap();
-    });
+    let result = crate::client::blit_root(&fixture.client.installation, &tree, &staging);
 
-    reached_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    proceed_tx.send(()).unwrap();
-    assert!(matches!(
-        done_rx.recv_timeout(Duration::from_millis(100)),
-        Err(RecvTimeoutError::Timeout)
-    ));
-
-    drop(candidate);
-    done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    worker.join().unwrap();
-    assert!(!staging_after.exists());
+    assert!(matches!(result, Err(Error::EphemeralInstallationRoot)));
+    assert_eq!(directory_identity(&staging), before);
+    assert_exact_empty_private_staging(&staging);
 }
 
 #[test]
@@ -184,7 +153,7 @@ fn nonempty_fixed_staging_crash_residue_is_refused_without_traversal_or_deletion
 }
 
 #[test]
-fn an_exact_empty_private_staging_baseline_is_replaced_nonrecursively() {
+fn an_exact_empty_private_staging_baseline_is_reused_without_replacement() {
     let fixture = Fixture::new(false);
     let staging = fixture.client.installation.staging_dir();
     assert_exact_empty_private_staging(&staging);
@@ -195,8 +164,14 @@ fn an_exact_empty_private_staging_baseline_is_replaced_nonrecursively() {
         .materialize_archived_repair_root(std::iter::empty::<&package::Id>())
         .unwrap();
 
-    assert_ne!(directory_identity(&staging), before);
-    assert_exact_empty_private_staging(&staging);
+    assert_eq!(directory_identity(&staging), before);
+    assert_eq!(staging.metadata().unwrap().permissions().mode() & 0o7777, 0o700);
+    assert_eq!(read_entry_names(&staging), [OsString::from("usr")]);
+    assert_eq!(
+        staging.join("usr").metadata().unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+    assert!(read_entry_names(&staging.join("usr")).is_empty());
     drop(candidate);
 }
 
@@ -223,53 +198,6 @@ fn an_empty_staging_name_substitution_is_refused_without_removing_either_inode()
     assert_ne!(directory_identity(&staging), retained);
     assert_exact_empty_private_staging(&staging);
     assert!(read_entry_names(&detached).is_empty());
-}
-
-#[test]
-fn an_interrupted_staging_removal_never_retries_against_a_substitute() {
-    let fixture = Fixture::new(false);
-    let staging = fixture.client.installation.staging_dir();
-    let replacement = Rc::new(Cell::new(None));
-    let hook_staging = staging.clone();
-    let hook_replacement = Rc::clone(&replacement);
-    arm_fixed_staging_removal(move || {
-        fs::remove_dir(&hook_staging).unwrap();
-        fs::create_dir(&hook_staging).unwrap();
-        fs::set_permissions(&hook_staging, std::fs::Permissions::from_mode(0o700)).unwrap();
-        hook_replacement.set(Some(directory_identity(&hook_staging)));
-        Err(nix::errno::Errno::EINTR)
-    });
-
-    let result = fixture
-        .client
-        .materialize_archived_repair_root(std::iter::empty::<&package::Id>());
-    assert!(matches!(result, Err(Error::ArchivedRepairMaterialization { .. })));
-
-    assert_eq!(Some(directory_identity(&staging)), replacement.get());
-    assert_exact_empty_private_staging(&staging);
-}
-
-#[test]
-fn a_moved_away_retained_wrapper_is_not_misclassified_as_removed() {
-    let fixture = Fixture::new(false);
-    let staging = fixture.client.installation.staging_dir();
-    let detached = fixture.client.installation.root_path("interrupted-detached-staging");
-    let original = directory_identity(&staging);
-    let hook_staging = staging.clone();
-    let hook_detached = detached.clone();
-    arm_fixed_staging_removal(move || {
-        fs::rename(&hook_staging, &hook_detached).unwrap();
-        Err(nix::errno::Errno::EINTR)
-    });
-
-    let result = fixture
-        .client
-        .materialize_archived_repair_root(std::iter::empty::<&package::Id>());
-    assert!(matches!(result, Err(Error::ArchivedRepairMaterialization { .. })));
-
-    assert!(!staging.exists());
-    assert_eq!(directory_identity(&detached), original);
-    assert_exact_empty_private_staging(&detached);
 }
 
 fn add_cached_regular(fixture: &Fixture, package: &package::Id, path: &str, mode: u32) -> (PathBuf, PathBuf) {

@@ -145,7 +145,7 @@ impl TriggerScope<'_> {
         match self {
             TriggerScope::Transaction(install, scope) => match scope {
                 super::Scope::Stateful => install.staging_path("usr").join(TRIGGER_RELATIVE_TO_USR),
-                super::Scope::Ephemeral { blit_root } => blit_root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
+                super::Scope::Ephemeral { destination } => destination.path().join("usr").join(TRIGGER_RELATIVE_TO_USR),
                 super::Scope::Frozen { destination } => destination.root_path.join("usr").join(TRIGGER_RELATIVE_TO_USR),
             },
             TriggerScope::RetainedTransaction { candidate_usr_path, .. } => {
@@ -153,7 +153,7 @@ impl TriggerScope<'_> {
             }
             TriggerScope::System(install, scope) => match scope {
                 super::Scope::Stateful => install.root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
-                super::Scope::Ephemeral { blit_root } => blit_root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
+                super::Scope::Ephemeral { destination } => destination.path().join("usr").join(TRIGGER_RELATIVE_TO_USR),
                 super::Scope::Frozen { destination } => destination.root_path.join("usr").join(TRIGGER_RELATIVE_TO_USR),
             },
         }
@@ -163,7 +163,7 @@ impl TriggerScope<'_> {
 fn scope_root_path(installation: &Installation, scope: &super::Scope, path: impl AsRef<Path>) -> PathBuf {
     match scope {
         super::Scope::Stateful => installation.root.join(path),
-        super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+        super::Scope::Ephemeral { destination } => destination.path().join(path),
         super::Scope::Frozen { destination } => destination.root_path.join(path),
     }
 }
@@ -171,7 +171,7 @@ fn scope_root_path(installation: &Installation, scope: &super::Scope, path: impl
 fn transaction_guest_path(installation: &Installation, scope: &super::Scope, path: impl AsRef<Path>) -> PathBuf {
     match scope {
         super::Scope::Stateful => installation.staging_path(path),
-        super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+        super::Scope::Ephemeral { destination } => destination.path().join(path),
         super::Scope::Frozen { destination } => destination.root_path.join(path),
     }
 }

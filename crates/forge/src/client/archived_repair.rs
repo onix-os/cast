@@ -104,6 +104,8 @@ impl Client {
         }
         let ArchivedRepairCandidate {
             tree: fstree,
+            staging: retained_staging,
+            candidate_usr,
             _coordinator,
         } = candidate;
         let staging = self.installation.staging_dir();
@@ -112,23 +114,40 @@ impl Client {
         // independent package inodes from byte zero. This is the only mutation
         // before the retained wrapper identity exists; the coordinator remains
         // owned here through metadata, triggers, and publication.
-        super::record_state_id(&staging, state.id).map_err(|source| Error::ArchivedStateRepair {
+        retained_staging
+            .revalidate(&self.installation)
+            .map_err(|source| archived_repair_staging_error(state, &staging, "before state metadata", source))?;
+        super::record_state_id_retained(&retained_staging, &candidate_usr, state.id).map_err(|source| {
+            Error::ArchivedStateRepair {
+                source: Box::new(RepairError::Preparation {
+                    state: state.id,
+                    staging: staging.clone(),
+                    source: Box::new(source),
+                }),
+            }
+        })?;
+        retained_staging
+            .revalidate(&self.installation)
+            .map_err(|source| archived_repair_staging_error(state, &staging, "after state metadata", source))?;
+        retained_staging
+            .revalidate(&self.installation)
+            .map_err(|source| archived_repair_staging_error(state, &staging, "before retained identity", source))?;
+        let identity = ArchivedStateRepairIdentity::prepare_retained_candidate(
+            &self.installation,
+            &self.state_db,
+            state,
+            &candidate_usr,
+        )
+        .map_err(|source| Error::ArchivedStateRepair {
             source: Box::new(RepairError::Preparation {
                 state: state.id,
                 staging: staging.clone(),
                 source: Box::new(source),
             }),
         })?;
-        let identity =
-            ArchivedStateRepairIdentity::prepare(&self.installation, &self.state_db, state).map_err(|source| {
-                Error::ArchivedStateRepair {
-                    source: Box::new(RepairError::Preparation {
-                        state: state.id,
-                        staging: staging.clone(),
-                        source: Box::new(source),
-                    }),
-                }
-            })?;
+        retained_staging
+            .revalidate(&self.installation)
+            .map_err(|source| archived_repair_staging_error(state, &staging, "after retained identity", source))?;
 
         let prepare = (|| {
             checkpoint(ArchivedRepairCheckpoint::IdentityPrepared)?;
@@ -214,6 +233,21 @@ impl Client {
                 }
             }
         }
+    }
+}
+
+fn archived_repair_staging_error(
+    state: &State,
+    staging: &std::path::Path,
+    phase: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> Error {
+    Error::ArchivedStateRepair {
+        source: Box::new(RepairError::Preparation {
+            state: state.id,
+            staging: staging.to_owned(),
+            source: Box::new(archived_repair_identity_error(state, phase, source)),
+        }),
     }
 }
 

@@ -18,13 +18,16 @@ use std::{
         fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
         unix::{
             ffi::{OsStrExt, OsStringExt},
-            fs::{MetadataExt, PermissionsExt},
+            fs::MetadataExt,
         },
     },
     path::{Component as PathComponent, Path, PathBuf},
     ptr::NonNull,
     time::{Duration, Instant},
 };
+
+#[cfg(test)]
+use std::os::unix::fs::PermissionsExt as _;
 
 use astr::AStr;
 use filetime::FileTime;
@@ -36,7 +39,7 @@ use nix::{
     fcntl::{self, OFlag},
     libc::{AT_FDCWD, RENAME_NOREPLACE, SYS_renameat2, syscall},
     sys::stat::{Mode, fchmod, fchmodat, mkdirat},
-    unistd::{UnlinkatFlags, linkat, mkdir, read, symlinkat, unlinkat, write},
+    unistd::{UnlinkatFlags, linkat, read, symlinkat, unlinkat, write},
 };
 use postblit::TriggerScope;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -46,6 +49,7 @@ use tracing::{info, info_span, trace};
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
 use vfs::tree::{BlitFile, Element, builder::TreeBuilder};
 
+use self::external_materialization::{ExternalMaterializationAdmission, RetainedExternalMaterializationTarget};
 use self::install::install;
 use self::prune::{prune_cache, prune_states};
 use self::remove::remove;
@@ -87,7 +91,9 @@ mod archived_repair_metadata;
 mod archived_repair_tests;
 mod boot;
 mod cache;
+mod external_materialization;
 mod fetch;
+mod fixed_staging;
 mod install;
 mod postblit;
 mod remove;
@@ -233,6 +239,15 @@ enum StatefulCandidateOrigin {
     Fresh,
     Archived,
     ActiveReblit,
+}
+
+/// One ephemeral filesystem candidate plus the process-local writer lease
+/// held from destructive materialization through metadata and trigger work.
+struct EphemeralCandidate {
+    tree: vfs::Tree<PendingFile>,
+    root: PathBuf,
+    target: RetainedExternalMaterializationTarget,
+    _coordinator: std::sync::MutexGuard<'static, ()>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -430,10 +445,7 @@ impl Client {
         }
         let destination_name = CString::new(root_name.as_bytes())
             .map_err(|_| Error::InvalidFrozenRootDestination(requested_root.clone()))?;
-        let blit_root = parent.join(root_name);
-        if blit_root == installation.root.canonicalize()? {
-            return Err(Error::EphemeralInstallationRoot);
-        }
+        let blit_root = require_disjoint_materialization_target(&installation, &parent.join(root_name))?;
         let destination_parent = open_frozen_destination_parent(&parent)?;
         let destination_parent_identity = frozen_root_identity(&destination_parent, &parent)?;
 
@@ -473,6 +485,14 @@ impl Client {
             Err(Error::FrozenClientProhibitedOperation)
         } else {
             Ok(())
+        }
+    }
+
+    fn require_stateful_scope(&self) -> Result<(), Error> {
+        match self.scope {
+            Scope::Stateful => Ok(()),
+            Scope::Ephemeral { .. } => Err(Error::EphemeralProhibitedOperation),
+            Scope::Frozen { .. } => Err(Error::FrozenClientProhibitedOperation),
         }
     }
 
@@ -602,18 +622,15 @@ impl Client {
     /// This is useful for installing a root to a container (for example, Mason) while
     /// using a shared cache.
     ///
-    /// Returns an error if `blit_root` is the same as the installation root,
-    /// since the system client should always be stateful.
+    /// Returns an error if the canonical destination is equal to, beneath, or
+    /// an ancestor of the installation root. Destructive ephemeral
+    /// materialization must be namespace-disjoint from all persistent state.
     pub fn ephemeral(self, blit_root: impl Into<PathBuf>) -> Result<Self, Error> {
         self.require_non_frozen()?;
-        let blit_root = blit_root.into();
-
-        if blit_root.canonicalize()? == self.installation.root.canonicalize()? {
-            return Err(Error::EphemeralInstallationRoot);
-        }
+        let destination = ExternalMaterializationAdmission::admit(&self.installation, &blit_root.into())?;
 
         Ok(Self {
-            scope: Scope::Ephemeral { blit_root },
+            scope: Scope::Ephemeral { destination },
             ..self
         })
     }
@@ -659,9 +676,7 @@ impl Client {
     }
 
     pub fn verify(&self, yes: bool, verbose: bool) -> Result<(), Error> {
-        if self.scope.is_ephemeral() {
-            return Err(Error::EphemeralProhibitedOperation);
-        }
+        self.require_stateful_scope()?;
         verify(self, yes, verbose)?;
         Ok(())
     }
@@ -671,9 +686,8 @@ impl Client {
     /// This allows automatic removal of unused states (and their associated assets)
     /// from the disk, acting as a garbage collection facility.
     pub fn prune_states(&self, strategy: prune::Strategy<'_>, yes: bool) -> Result<(), Error> {
-        if self.scope.is_ephemeral() {
-            return Err(Error::EphemeralProhibitedOperation);
-        }
+        self.require_stateful_scope()?;
+        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
 
         prune_states(self, strategy, yes)?;
 
@@ -685,9 +699,8 @@ impl Client {
     /// This will remove all downloaded stones & unpacked asset data for packages not
     /// in that set.
     pub fn prune_cache(&self) -> Result<usize, Error> {
-        if self.scope.is_ephemeral() {
-            return Err(Error::EphemeralProhibitedOperation);
-        }
+        self.require_stateful_scope()?;
+        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
 
         prune_cache(
             &self.state_db,
@@ -794,8 +807,8 @@ impl Client {
     ///
     /// Returns the old state that was archived.
     pub fn activate_state(&self, id: state::Id, skip_triggers: bool, skip_boot: bool) -> Result<state::Id, Error> {
-        self.require_non_frozen()?;
-        let _stateful_coordinator = archived_repair_materialization::lock_coordinator()?;
+        self.require_stateful_scope()?;
+        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
         let _guard = signal::ignore([Signal::SIGINT])?;
         let _inhibitor = signal::inhibit(
             vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
@@ -817,6 +830,7 @@ impl Client {
     where
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
+        self.require_stateful_scope()?;
         // Fetch the new state
         let new = self.state_db.get(id).map_err(|_| Error::StateDoesntExist(id))?;
 
@@ -936,19 +950,25 @@ impl Client {
 
         let old_state = self.installation.active_state;
 
-        let fstree = self.blit_root(selections.iter().map(|s| &s.package))?;
-
         let result = match &self.scope {
             Scope::Stateful => {
+                // The non-cloneable candidate retains the authenticated
+                // staging wrapper and the sole cooperating-writer lease from
+                // its first possible mutation through row allocation and
+                // durable tree-identity preparation.
+                let candidate = self.materialize_stateful_candidate(selections.iter().map(|s| &s.package))?;
+
                 // Add to db
                 let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
 
-                self.apply_stateful_blit(fstree, &state, old_state, system_snapshot)?;
+                self.apply_stateful_candidate(candidate, &state, old_state, system_snapshot)?;
 
                 Ok(Some(state))
             }
-            Scope::Ephemeral { blit_root } => {
-                self.apply_ephemeral_blit(fstree, blit_root, system_snapshot)?;
+            Scope::Ephemeral { destination } => {
+                let candidate = self.materialize_ephemeral_candidate(selections.iter().map(|s| &s.package))?;
+                debug_assert_eq!(candidate.root, destination.path());
+                self.apply_ephemeral_candidate(candidate, system_snapshot)?;
 
                 Ok(None)
             }
@@ -1029,18 +1049,59 @@ impl Client {
 
     pub fn apply_stateful_blit(
         &self,
-        fstree: vfs::Tree<PendingFile>,
+        _fstree: vfs::Tree<PendingFile>,
+        _state: &State,
+        _old_state: Option<state::Id>,
+        _system_snapshot: SystemModel,
+    ) -> Result<(), Error> {
+        Err(Error::FixedStagingCapabilityRequired {
+            operation: "apply a stateful blit",
+        })
+    }
+
+    fn apply_stateful_candidate(
+        &self,
+        candidate: fixed_staging::StatefulCandidate,
         state: &State,
         old_state: Option<state::Id>,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
-        let _stateful_coordinator = archived_repair_materialization::lock_coordinator()?;
-        self.apply_stateful_blit_with_checkpoint(fstree, state, old_state, system_snapshot, |_| Ok(()))
+        let fixed_staging::StatefulCandidate {
+            tree,
+            staging,
+            candidate_usr,
+            _coordinator,
+        } = candidate;
+        self.apply_stateful_blit_with_capability(
+            tree,
+            Some((&staging, &candidate_usr)),
+            state,
+            old_state,
+            system_snapshot,
+            |_| Ok(()),
+        )
     }
 
+    #[cfg(test)]
     fn apply_stateful_blit_with_checkpoint<F>(
         &self,
         fstree: vfs::Tree<PendingFile>,
+        state: &State,
+        old_state: Option<state::Id>,
+        system_snapshot: SystemModel,
+        checkpoint: F,
+    ) -> Result<(), Error>
+    where
+        F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
+    {
+        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
+        self.apply_stateful_blit_with_capability(fstree, None, state, old_state, system_snapshot, checkpoint)
+    }
+
+    fn apply_stateful_blit_with_capability<F>(
+        &self,
+        fstree: vfs::Tree<PendingFile>,
+        retained_staging: Option<(&fixed_staging::RetainedFixedStaging, &std::fs::File)>,
         state: &State,
         old_state: Option<state::Id>,
         system_snapshot: SystemModel,
@@ -1057,15 +1118,29 @@ impl Client {
         // creates and authenticates the candidate `/usr` before the tree
         // marker guard attempts to pin it. This also covers remove-last-package
         // and empty active-state verification reblits.
-        record_state_id(&self.installation.staging_dir(), state.id)?;
-        let tree_identity = self
-            .prepare_stateful_tree_identity(&candidate_usr, state.id)
-            .map_err(|source| Error::StatefulTreeIdentityPreparationFailed {
-                candidate: state.id,
-                previous: old_state,
-                location: candidate_usr,
-                source: Box::new(source.into()),
-            })?;
+        revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
+        let retained_usr = match retained_staging {
+            Some((staging, candidate_usr)) => {
+                record_state_id_retained(staging, candidate_usr, state.id)?;
+                Some(candidate_usr)
+            }
+            None => {
+                record_state_id(&self.installation.staging_dir(), state.id)?;
+                None
+            }
+        };
+        revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
+        let prepared_identity = match retained_usr.as_ref() {
+            Some(candidate) => self.prepare_stateful_tree_identity_retained(&candidate_usr, candidate, state.id),
+            None => self.prepare_stateful_tree_identity(&candidate_usr, state.id),
+        };
+        let tree_identity = prepared_identity.map_err(|source| Error::StatefulTreeIdentityPreparationFailed {
+            candidate: state.id,
+            previous: old_state,
+            location: candidate_usr,
+            source: Box::new(source.into()),
+        })?;
+        revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
         let (previous, candidate_origin) = match old_state {
             Some(id) => match self.state_db.get(id) {
                 Ok(previous) => (Some(previous), StatefulCandidateOrigin::Fresh),
@@ -1812,22 +1887,83 @@ impl Client {
         StatefulTreeIdentity::prepare(&self.installation, &self.state_db, candidate_usr, candidate_state)
     }
 
-    pub fn apply_ephemeral_blit(
+    fn prepare_stateful_tree_identity_retained(
+        &self,
+        candidate_usr_path: &Path,
+        candidate_usr: &std::fs::File,
+        candidate_state: state::Id,
+    ) -> Result<StatefulTreeIdentity, crate::transition_identity::Error> {
+        StatefulTreeIdentity::prepare_retained_candidate(
+            &self.installation,
+            &self.state_db,
+            candidate_usr_path,
+            candidate_usr,
+            candidate_state,
+        )
+    }
+
+    #[cfg(test)]
+    fn apply_ephemeral_blit(
         &self,
         fstree: vfs::Tree<PendingFile>,
         blit_root: &Path,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
         self.require_non_frozen()?;
+        let blit_root = self.require_configured_ephemeral_target(blit_root)?;
         // `blit_root` is a public, caller-supplied destination and can name
         // this installation's fixed staging wrapper even for an ephemeral
         // client. Cooperating clients must not mutate that namespace while an
         // inactive archived-repair candidate retains it.
-        let _staging_coordinator = archived_repair_materialization::lock_coordinator()?;
-        record_os_release(blit_root)?;
-        record_system_snapshot(blit_root, system_snapshot)?;
+        let _staging_coordinator = fixed_staging::lock_coordinator()?;
+        self.apply_ephemeral_blit_under_guard(fstree, &blit_root, system_snapshot)
+    }
 
-        create_root_links(blit_root)?;
+    fn apply_ephemeral_candidate(
+        &self,
+        candidate: EphemeralCandidate,
+        system_snapshot: SystemModel,
+    ) -> Result<(), Error> {
+        let EphemeralCandidate {
+            tree,
+            root,
+            target,
+            _coordinator,
+        } = candidate;
+        let root = self.require_configured_ephemeral_target(&root)?;
+        target.revalidate(&self.installation)?;
+        let result = self.apply_ephemeral_blit_under_guard(tree, &root, system_snapshot);
+        let revalidation = target.revalidate(&self.installation);
+        match (result, revalidation) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(primary), _) => Err(primary),
+            (Ok(()), Err(revalidation)) => Err(revalidation),
+        }
+    }
+
+    fn require_configured_ephemeral_target(&self, requested: &Path) -> Result<PathBuf, Error> {
+        let configured = match &self.scope {
+            Scope::Ephemeral { destination } => destination.path().to_owned(),
+            Scope::Stateful => return Err(Error::EphemeralProhibitedOperation),
+            Scope::Frozen { .. } => return Err(Error::FrozenClientProhibitedOperation),
+        };
+        let requested = require_disjoint_materialization_target(&self.installation, requested)?;
+        if requested != configured {
+            return Err(Error::EphemeralDestinationMismatch { configured, requested });
+        }
+        Ok(requested)
+    }
+
+    fn apply_ephemeral_blit_under_guard(
+        &self,
+        fstree: vfs::Tree<PendingFile>,
+        blit_root: &Path,
+        system_snapshot: SystemModel,
+    ) -> Result<(), Error> {
+        record_os_release(&blit_root)?;
+        record_system_snapshot(&blit_root, system_snapshot)?;
+
+        create_root_links(&blit_root)?;
         create_root_links(&self.installation.isolation_dir())?;
 
         // The container running triggers expects /etc to exist
@@ -1872,10 +2008,9 @@ impl Client {
         );
         total_progress.tick();
 
-        let unpacking_in_progress = cache::UnpackingInProgress::default();
-
-        // Download and unpack each package
-        let cached = stream::iter(packages)
+        // Network downloads remain concurrent and never hold the synchronous
+        // materialization-writer mutex.
+        let downloads = stream::iter(packages)
             .map(|package| async {
                 let package: &Package = package.borrow();
 
@@ -1913,20 +2048,33 @@ impl Client {
                 .await
                 .map_err(|err| Error::CacheFetch(err, package.meta.name.clone()))?;
 
-                let is_cached = download.was_cached;
-
-                // Move rest of blocking code to threadpool
-
-                let multi_progress = multi_progress.clone();
-                let total_progress = total_progress.clone();
-                let unpacking_in_progress = unpacking_in_progress.clone();
                 let package = (*package).clone();
                 let current_span = tracing::Span::current();
+                Ok::<_, Error>((package, download, progress_bar, current_span))
+            })
+            .buffer_unordered(environment::MAX_NETWORK_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
 
-                runtime::unblock(move || {
-                    let _guard = current_span.enter();
+        // Publish every asset and then the complete layout/install DB batch
+        // under one synchronous lease. Pruning and candidate readers can see
+        // either the old store or the complete new publication, never orphaned
+        // asset names in a gap before their metadata becomes reachable.
+        runtime::unblock({
+            let layout_db = self.layout_db.clone();
+            let install_db = self.install_db.clone();
+            let multi_progress = multi_progress.clone();
+            let total_progress = total_progress.clone();
+            move || {
+                let _writer_coordinator = fixed_staging::lock_coordinator()?;
+                let unpacking_in_progress = cache::UnpackingInProgress::default();
+                let mut cached = Vec::with_capacity(downloads.len());
+
+                for (package, download, progress_bar, current_span) in downloads {
+                    let _span_guard = current_span.enter();
                     let package_name = &package.meta.name;
                     let download_path = download.path().to_owned();
+                    let is_cached = download.was_cached;
 
                     // Set progress to unpacking
                     progress_bar.set_message(format!("{} {}", "Unpacking".yellow(), package_name.to_string().bold()));
@@ -1981,20 +2129,9 @@ impl Client {
                         package_name
                     );
 
-                    Ok((package, unpacked)) as Result<(Package, cache::UnpackedAsset), Error>
-                })
-                .await
-            })
-            // Use max network concurrency since we download files here
-            .buffer_unordered(environment::MAX_NETWORK_CONCURRENCY)
-            .try_collect::<Vec<_>>()
-            .await?;
+                    cached.push((package, unpacked));
+                }
 
-        // Add layouts & packages to DBs
-        runtime::unblock({
-            let layout_db = self.layout_db.clone();
-            let install_db = self.install_db.clone();
-            move || {
                 total_progress.set_position(0);
                 total_progress.set_length(2);
                 total_progress.set_message("Storing DB layouts");
@@ -2182,6 +2319,7 @@ impl Client {
                 BlitExecution::Sequential,
                 Some(&copy_manifest),
                 Some(deadline),
+                None,
             )?;
             create_frozen_root_links(root.as_raw_fd(), deadline)?;
             normalize_frozen_tree(
@@ -2239,9 +2377,9 @@ impl Client {
     ///
     /// The new `/usr` filesystem is written in optimal order to a staging tree by making
     /// use of the "at" family of functions (`mkdirat`, `linkat`, etc) with relative directory
-    /// file descriptors. Stateful roots hardlink files from the assets store to provide
-    /// deduplication, while ephemeral roots receive independent copies so build-time writes
-    /// cannot mutate the persistent asset store.
+    /// file descriptors. Every writable root receives independent, digest-
+    /// verified copies so trigger or build-time writes and per-path mode changes
+    /// cannot mutate the persistent content-addressed store.
     ///
     /// This provides a very quick means to generate a filesystem snapshot on-demand,
     /// which can then be activated via [`Self::promote_staging`]
@@ -2249,32 +2387,47 @@ impl Client {
         &self,
         packages: impl IntoIterator<Item = &'a package::Id>,
     ) -> Result<vfs::Tree<PendingFile>, Error> {
-        // Ephemeral destinations are caller-selected and may alias the fixed
-        // staging wrapper. Serialize every public blit boundary rather than
-        // assuming the scope proves the destination disjoint.
-        let _staging_coordinator = archived_repair_materialization::lock_coordinator()?;
-        let blit_target = match &self.scope {
-            Scope::Stateful => self.installation.staging_dir(),
-            Scope::Ephemeral { blit_root } => blit_root.to_owned(),
+        let candidate = self.materialize_ephemeral_candidate(packages)?;
+        let EphemeralCandidate {
+            tree,
+            root: _root,
+            target: _target,
+            _coordinator,
+        } = candidate;
+        Ok(tree)
+    }
+
+    fn materialize_ephemeral_candidate<'a>(
+        &self,
+        packages: impl IntoIterator<Item = &'a package::Id>,
+    ) -> Result<EphemeralCandidate, Error> {
+        let destination = match &self.scope {
+            Scope::Stateful => {
+                return Err(Error::FixedStagingCapabilityRequired {
+                    operation: "materialize a stateful client root",
+                });
+            }
+            Scope::Ephemeral { destination } => destination,
             Scope::Frozen { .. } => return Err(Error::FrozenClientProhibitedOperation),
         };
+        let coordinator = fixed_staging::lock_coordinator()?;
 
-        let fstree = self.vfs(packages)?;
-
-        let materialization = match &self.scope {
-            Scope::Stateful => AssetMaterialization::HardLink,
-            Scope::Ephemeral { .. } => AssetMaterialization::IndependentCopy,
-            Scope::Frozen { .. } => unreachable!("frozen scope returned above"),
-        };
-        blit_root_with_materialization(
+        let tree = self.vfs(packages)?;
+        let mut target = RetainedExternalMaterializationTarget::prepare_from(&self.installation, destination)?;
+        target.materialize(
             &self.installation,
-            &fstree,
-            &blit_target,
-            materialization,
+            &tree,
+            AssetMaterialization::IndependentCopy,
             BlitExecution::Parallel,
         )?;
+        let root = target.path().to_owned();
 
-        Ok(fstree)
+        Ok(EphemeralCandidate {
+            tree,
+            root,
+            target,
+            _coordinator: coordinator,
+        })
     }
 
     fn load_or_create_system_snapshot(&self, path: PathBuf, state: &State) -> Result<SystemModel, Error> {
@@ -2321,7 +2474,8 @@ impl Client {
 
     /// Synchronize boot for the active state
     pub fn synchronize_boot(&self) -> Result<(), Error> {
-        self.require_non_frozen()?;
+        self.require_stateful_scope()?;
+        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
         let Some(state_id) = self.installation.active_state else {
             return Err(Error::NoActiveState);
         };
@@ -8191,6 +8345,7 @@ fn read_frozen_normalization_symlink(file: &fs::File, path: &Path, deadline: Ins
 /// Frozen package metadata may legitimately make a directory read-only. The
 /// next materialization still has to be able to remove children within that
 /// directory. Symlinks are never followed.
+#[cfg(test)]
 fn make_tree_removable(path: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() {
@@ -8727,6 +8882,55 @@ fn frozen_collision(path: &str, first: &FrozenLayoutEntry, second: &FrozenLayout
     }
 }
 
+/// Resolve an existing destination, or its existing parent plus final name,
+/// and prove that materialization cannot reach any installation-root
+/// namespace. This rejects canonical pathname/symlink aliases as well as
+/// lexical descendants; retained capabilities provide the later write bound.
+pub(crate) fn require_disjoint_materialization_target(
+    installation: &Installation,
+    requested: &Path,
+) -> Result<PathBuf, Error> {
+    installation.revalidate_root_directory()?;
+    let installation_root = installation.root.canonicalize()?;
+    let target = match requested.canonicalize() {
+        Ok(target) => target,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            let name = requested.file_name().ok_or(Error::EphemeralInstallationRoot)?;
+            let parent = requested
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .canonicalize()?;
+            parent.join(name)
+        }
+        Err(source) => return Err(source.into()),
+    };
+    installation.revalidate_root_directory()?;
+
+    if target.starts_with(&installation_root)
+        || installation_root.starts_with(&target)
+        || target.ancestors().any(has_cast_control_topology)
+    {
+        Err(Error::EphemeralInstallationRoot)
+    } else {
+        installation.revalidate_root_directory()?;
+        Ok(target)
+    }
+}
+
+pub(super) fn has_cast_control_topology(path: &Path) -> bool {
+    [
+        path.join(".cast"),
+        path.join(".cast/root"),
+        path.join(".cast/root/staging"),
+    ]
+    .into_iter()
+    .all(|component| {
+        fs::symlink_metadata(component)
+            .is_ok_and(|metadata| metadata.file_type().is_dir() && !metadata.file_type().is_symlink())
+    })
+}
+
 /// Blit the packages to a filesystem root
 ///
 /// This functionality is core to all Cast filesystem transactions, forming the entire
@@ -8734,25 +8938,45 @@ fn frozen_collision(path: &str, first: &FrozenLayoutEntry, second: &FrozenLayout
 /// query their stored [`StonePayloadLayoutBody`] and cache into a [`vfs::Tree`].
 ///
 /// The new `/usr` filesystem is written in optimal order to a staging tree by making
-/// use of the "at" family of functions (`mkdirat`, `linkat`, etc) with relative directory
-/// file descriptors, linking files from the assets store to provide deduplication.
+/// use of the "at" family of functions (`mkdirat`, `openat`, etc) with relative
+/// directory file descriptors. Writable outputs receive digest-verified private
+/// inodes rather than aliases into the content-addressed store.
 ///
-/// This provides a very quick means to generate a hardlinked "snapshot" on-demand,
-/// which can then be activated via [`Self::promote_staging`]
-pub fn blit_root(installation: &Installation, tree: &vfs::Tree<PendingFile>, blit_target: &Path) -> Result<(), Error> {
-    // This public low-level entry point accepts an arbitrary target, including
-    // `installation.staging_dir()`. Keep it in the same cooperating-writer
-    // domain as Client's stateful and ephemeral materializers.
-    let _staging_coordinator = archived_repair_materialization::lock_coordinator()?;
+/// This produces a digest-verified private candidate which can then be
+/// published atomically via [`Self::promote_staging`] without aliasing writable
+/// state to the content-addressed store.
+#[cfg(test)]
+pub(crate) fn blit_root(
+    installation: &Installation,
+    tree: &vfs::Tree<PendingFile>,
+    blit_target: &Path,
+) -> Result<(), Error> {
+    let _staging_coordinator = fixed_staging::lock_coordinator()?;
     blit_root_with_materialization(
         installation,
         tree,
         blit_target,
-        AssetMaterialization::HardLink,
+        AssetMaterialization::IndependentCopy,
         BlitExecution::Parallel,
     )
 }
 
+fn blit_root_from_admission(
+    installation: &Installation,
+    tree: &vfs::Tree<PendingFile>,
+    admission: &ExternalMaterializationAdmission,
+) -> Result<(), Error> {
+    let _writer_coordinator = fixed_staging::lock_coordinator()?;
+    let mut target = RetainedExternalMaterializationTarget::prepare_from(installation, admission)?;
+    target.materialize(
+        installation,
+        tree,
+        AssetMaterialization::IndependentCopy,
+        BlitExecution::Parallel,
+    )
+}
+
+#[cfg(test)]
 fn blit_root_with_materialization(
     installation: &Installation,
     tree: &vfs::Tree<PendingFile>,
@@ -8760,90 +8984,8 @@ fn blit_root_with_materialization(
     materialization: AssetMaterialization,
     execution: BlitExecution,
 ) -> Result<(), Error> {
-    // undirt.
-    match fs::symlink_metadata(blit_target) {
-        Ok(_) => {
-            if materialization == AssetMaterialization::IndependentCopy {
-                make_tree_removable(blit_target)?;
-            }
-            fs::remove_dir_all(blit_target)?;
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-
-    // Preserve the historical stateful/ephemeral empty-tree behavior: the
-    // previous destination is removed and no replacement root is created.
-    if tree.len() == 0 {
-        return Ok(());
-    }
-
-    mkdir(blit_target, Mode::from_bits_truncate(0o755))?;
-    let root_dir = open_owned(
-        blit_target,
-        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
-        Mode::empty(),
-    )?;
-    fchmod(root_dir.as_raw_fd(), Mode::from_bits_truncate(0o755))?;
-    blit_tree_into_open_root(
-        installation,
-        tree,
-        root_dir.as_raw_fd(),
-        materialization,
-        execution,
-        None,
-        None,
-    )
-}
-
-/// Blit into a target name which the caller already proved absent. Unlike the
-/// historical stateful blitter this entry point never traverses or removes an
-/// existing target. It is used by archived repair after its retained baseline
-/// classifier has admitted and removed only an exact empty private wrapper.
-fn blit_root_into_missing_target_with_materialization(
-    installation: &Installation,
-    tree: &vfs::Tree<PendingFile>,
-    blit_target: &Path,
-    materialization: AssetMaterialization,
-    execution: BlitExecution,
-    root_mode: u32,
-) -> Result<(), Error> {
-    match fs::symlink_metadata(blit_target) {
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-        Ok(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!(
-                    "refusing non-destructive blit because target appeared after baseline proof: {}",
-                    blit_target.display()
-                ),
-            )
-            .into());
-        }
-        Err(source) => return Err(source.into()),
-    }
-
-    mkdir(blit_target, Mode::from_bits_truncate(root_mode))?;
-    let root_dir = open_owned(
-        blit_target,
-        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
-        Mode::empty(),
-    )?;
-    fchmod(root_dir.as_raw_fd(), Mode::from_bits_truncate(root_mode))?;
-
-    if tree.len() == 0 {
-        return Ok(());
-    }
-
-    blit_tree_into_open_root(
-        installation,
-        tree,
-        root_dir.as_raw_fd(),
-        materialization,
-        execution,
-        None,
-        None,
-    )
+    let mut target = RetainedExternalMaterializationTarget::prepare(installation, blit_target)?;
+    target.materialize(installation, tree, materialization, execution)
 }
 
 fn blit_tree_into_open_root(
@@ -8854,6 +8996,7 @@ fn blit_tree_into_open_root(
     execution: BlitExecution,
     copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
+    retained_top_level_usr: Option<&std::fs::File>,
 ) -> Result<(), Error> {
     require_blit_deadline(deadline)?;
 
@@ -8897,6 +9040,17 @@ fn blit_tree_into_open_root(
         require_blit_deadline(deadline)?;
         if let Some(root) = tree.structured() {
             if let Element::Directory(_, _, children) = root {
+                if tree.len() != 0
+                    && retained_top_level_usr.is_some()
+                    && (children.len() != 1
+                        || !matches!(children.first(), Some(Element::Directory(name, _, _)) if *name == "usr"))
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "stateful candidate must contain exactly one top-level usr directory",
+                    )
+                    .into());
+                }
                 stats = stats.merge(blit_children(
                     root_fd,
                     cache.as_ref(),
@@ -8906,6 +9060,7 @@ fn blit_tree_into_open_root(
                     execution,
                     copy_manifest,
                     deadline,
+                    retained_top_level_usr,
                 )?);
             }
         }
@@ -8953,6 +9108,7 @@ fn blit_element(
     execution: BlitExecution,
     copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
+    retained_usr: Option<&std::fs::File>,
 ) -> Result<BlitStats, Error> {
     require_blit_deadline(deadline)?;
     let mut stats = BlitStats::default();
@@ -8975,6 +9131,32 @@ fn blit_element(
 
     match element {
         Element::Directory(name, item, children) => {
+            if name == "usr"
+                && let Some(retained_usr) = retained_usr
+            {
+                let active_mode = match materialization {
+                    AssetMaterialization::HardLink => item.layout.mode,
+                    AssetMaterialization::IndependentCopy => item.layout.mode | 0o700,
+                };
+                fchmod(retained_usr.as_raw_fd(), Mode::from_bits_truncate(active_mode))?;
+                stats.num_dirs += 1;
+                stats = stats.merge(blit_children(
+                    retained_usr.as_raw_fd(),
+                    cache,
+                    children,
+                    progress,
+                    materialization,
+                    execution,
+                    copy_manifest,
+                    deadline,
+                    None,
+                )?);
+                if materialization == AssetMaterialization::IndependentCopy {
+                    fchmod(retained_usr.as_raw_fd(), Mode::from_bits_truncate(item.layout.mode))?;
+                }
+                return Ok(stats);
+            }
+
             // Construct within the parent
             blit_element_item(
                 parent,
@@ -9004,6 +9186,7 @@ fn blit_element(
                 execution,
                 copy_manifest,
                 deadline,
+                None,
             )?);
 
             // Frozen directories are created owner-accessible so restrictive
@@ -9018,6 +9201,13 @@ fn blit_element(
             Ok(stats)
         }
         Element::Child(name, item) => {
+            if name == "usr" && retained_usr.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "candidate top-level usr entry is not a directory",
+                )
+                .into());
+            }
             blit_element_item(
                 parent,
                 cache,
@@ -9043,6 +9233,7 @@ fn blit_children(
     execution: BlitExecution,
     copy_manifest: Option<&FrozenCopyManifest>,
     deadline: Option<Instant>,
+    retained_usr: Option<&std::fs::File>,
 ) -> Result<BlitStats, Error> {
     require_blit_deadline(deadline)?;
     match execution {
@@ -9061,6 +9252,7 @@ fn blit_children(
                         execution,
                         copy_manifest,
                         deadline,
+                        retained_usr,
                     )
                 })
                 .try_reduce(BlitStats::default, |left, right| Ok(left.merge(right)))
@@ -9075,6 +9267,7 @@ fn blit_children(
                 execution,
                 copy_manifest,
                 deadline,
+                retained_usr,
             )
             .map(|child_stats| stats.merge(child_stats))
         }),
@@ -9658,10 +9851,10 @@ enum AssetCopyCheckpoint {
 
 /// Copy one cached asset into a fresh inode under `parent`.
 ///
-/// Ephemeral package roots are writable by build steps, so hardlinking them to
-/// the persistent content store would let a write or chmod corrupt the cached
-/// asset. Keep the descriptor-relative traversal used by the blitter while
-/// giving the destination independent bytes and metadata.
+/// Writable package roots are modified by transaction triggers or build steps,
+/// so aliasing them to the persistent content store would let a write or chmod
+/// corrupt cached assets. Keep descriptor-relative traversal while giving each
+/// destination independent digest-verified bytes and metadata.
 fn copy_asset(
     pool: &AssetPool,
     source: &Path,
@@ -9782,10 +9975,6 @@ fn require_copy_target(file: &fs::File, expected_length: u64, expected_mode: u32
         )));
     }
     Ok(witness)
-}
-
-fn open_owned(path: &Path, flags: OFlag, mode: Mode) -> Result<OwnedFd, Errno> {
-    fcntl::open(path, flags, mode).map(raw_fd_into_owned)
 }
 
 fn openat_owned<P: ?Sized + nix::NixPath>(parent: RawFd, path: &P, flags: OFlag, mode: Mode) -> Result<OwnedFd, Errno> {
@@ -9915,6 +10104,59 @@ fn record_state_id(root: &Path, state: state::Id) -> Result<(), Error> {
     require_state_metadata_directory(&root.file, &usr)?;
     require_named_state_metadata_root(&root_path, &root)?;
     Ok(())
+}
+
+/// Write `.stateID` beneath the exact wrapper retained before candidate
+/// materialization. No pathname is reopened as write authority; the returned
+/// `/usr` descriptor is the same inode subsequently handed to tree-identity
+/// preparation.
+fn record_state_id_retained(
+    root: &fixed_staging::RetainedFixedStaging,
+    candidate_usr: &std::fs::File,
+    state: state::Id,
+) -> Result<(), Error> {
+    let root_file = root.directory();
+    let root_path = root.path();
+    let root_witness = state_metadata_directory_witness(root_file, root_path)?;
+    require_no_default_acl(root_file, root_path)?;
+
+    let usr_path = root_path.join("usr");
+    let usr_file = candidate_usr.try_clone()?;
+    let usr = StateMetadataDirectory {
+        path: usr_path.clone(),
+        witness: state_metadata_directory_witness(&usr_file, &usr_path)?,
+        file: usr_file,
+    };
+    require_state_metadata_directory(root_file, &usr)?;
+
+    fixed_staging::before_retained_state_metadata();
+    write_state_id(&usr, state.to_string().as_bytes())?;
+    usr.file.sync_all()?;
+    root_file.sync_all()?;
+    require_state_metadata_directory(root_file, &usr)?;
+    if state_metadata_directory_witness(root_file, root_path)? != root_witness {
+        return Err(io::Error::other(format!(
+            "retained state metadata root changed while writing {}",
+            usr_path.display()
+        ))
+        .into());
+    }
+    require_no_default_acl(root_file, root_path)?;
+    require_state_metadata_directory(root_file, &usr)?;
+    Ok(())
+}
+
+fn revalidate_fixed_staging(
+    retained: Option<&fixed_staging::RetainedFixedStaging>,
+    installation: &Installation,
+) -> Result<(), Error> {
+    retained
+        .map(|retained| retained.revalidate(installation))
+        .transpose()
+        .map(|_| ())
+        .map_err(|source| Error::StatefulCandidateMaterialization {
+            source: Box::new(source),
+        })
 }
 
 fn state_metadata_absolute_path(path: &Path) -> io::Result<PathBuf> {
@@ -10555,8 +10797,12 @@ fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(
 #[derive(Debug)]
 enum Scope {
     Stateful,
-    Ephemeral { blit_root: PathBuf },
-    Frozen { destination: FrozenRootDestination },
+    Ephemeral {
+        destination: ExternalMaterializationAdmission,
+    },
+    Frozen {
+        destination: FrozenRootDestination,
+    },
 }
 
 #[derive(Debug)]
@@ -10884,8 +11130,20 @@ pub enum Error {
         target: String,
         reason: &'static str,
     },
-    #[error("Ephemeral client not allowed on installation root")]
+    #[error("ephemeral/public materialization destination overlaps the installation root")]
     EphemeralInstallationRoot,
+    #[error("ephemeral postblit requested {requested:?}, but this client is bound to {configured:?}")]
+    EphemeralDestinationMismatch { configured: PathBuf, requested: PathBuf },
+    #[error(
+        "initial materialization target {path:?} must be an exact empty owner-controlled ACL-free directory (uid={owner}, mode={mode:04o})"
+    )]
+    UnsafeInitialMaterializationTarget { path: PathBuf, owner: u32, mode: u32 },
+    #[error("retained initial materialization target changed at {path:?}")]
+    InitialMaterializationTargetChanged { path: PathBuf },
+    #[error(
+        "initial materialization parent {path:?} must be an owner-controlled ACL-free directory (uid={owner}, mode={mode:04o})"
+    )]
+    UnsafeInitialMaterializationParent { path: PathBuf, owner: u32, mode: u32 },
     #[error("Operation not allowed with ephemeral client")]
     EphemeralProhibitedOperation,
     #[error("frozen-root materialization requires a dedicated frozen client")]
@@ -11532,6 +11790,15 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+    #[error("materialize a stateful candidate through retained fixed staging")]
+    StatefulCandidateMaterialization {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("{operation} cannot target fixed staging without its retained capability")]
+    FixedStagingCapabilityRequired { operation: &'static str },
+    #[error("state {state} database record changed between the verify scan and its retained repair")]
+    VerifyStateChanged { state: state::Id },
     #[error("fixed-staging cooperating-writer coordinator is poisoned")]
     FixedStagingCoordinatorPoisoned,
     #[error(
@@ -11635,13 +11902,16 @@ mod tests {
             fs::{FileTypeExt, MetadataExt, PermissionsExt, symlink},
             net::UnixListener,
         },
-        process::Command,
+        process::{Command, Stdio},
     };
 
     use gluon_config::Source;
 
     use super::*;
     use crate::test_support::prepare_private_installation_root;
+
+    mod external_materialization;
+    mod fixed_staging_transition;
 
     fn test_installation(root: &Path) -> Installation {
         prepare_private_installation_root(root);
@@ -17624,6 +17894,45 @@ let cast = import! cast.system.v1
 
     #[test]
     fn verify_reblits_and_preserves_the_existing_normalized_snapshot() {
+        const CHILD: &str = "CAST_VERIFY_REPAIR_TIMEOUT_CHILD";
+        const TEST: &str = "client::tests::verify_reblits_and_preserves_the_existing_normalized_snapshot";
+
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .arg(TEST)
+                .arg("--exact")
+                .arg("--nocapture")
+                .arg("--test-threads=1")
+                .env(CHILD, "1")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    let output = child.wait_with_output().unwrap();
+                    assert!(
+                        output.status.success(),
+                        "verify repair child failed\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let output = child.wait_with_output().unwrap();
+                    panic!(
+                        "verify repair exceeded 15 seconds (possible coordinator deadlock)\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+
         let temporary = tempfile::tempdir().unwrap();
         let mut client = stateful_test_client(temporary.path());
         fs::create_dir_all(client.installation.assets_path("v2")).unwrap();

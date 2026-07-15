@@ -9,6 +9,35 @@ impl StatefulTreeIdentity {
         candidate_path: &Path,
         candidate_state: state::Id,
     ) -> Result<Self, Error> {
+        Self::prepare_candidate(installation, state_db, candidate_path, None, candidate_state)
+    }
+
+    /// Prepare from an already-retained candidate `/usr` descriptor. The
+    /// public name is compared before marker creation, while every write is
+    /// descriptor-relative to the caller's exact inode.
+    pub(crate) fn prepare_retained_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+        candidate_usr: &std::fs::File,
+        candidate_state: state::Id,
+    ) -> Result<Self, Error> {
+        Self::prepare_candidate(
+            installation,
+            state_db,
+            candidate_path,
+            Some(candidate_usr),
+            candidate_state,
+        )
+    }
+
+    fn prepare_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+        retained_candidate_usr: Option<&std::fs::File>,
+        candidate_state: state::Id,
+    ) -> Result<Self, Error> {
         let root = &installation.root;
         let previous_path = root.join("usr");
         // Lock ordering is installation lock (owned by Installation), state
@@ -21,9 +50,19 @@ impl StatefulTreeIdentity {
         // Authenticate the materialized candidate and establish a strictly
         // empty, same-mount previous tree only when the retained root proves
         // that `usr` is genuinely absent.
-        let candidate_store = TreeMarkerStore::open_path(candidate_path)?;
+        let candidate_store = if let Some(candidate_usr) = retained_candidate_usr {
+            let retained = TreeMarkerStore::open(candidate_usr, candidate_path)?;
+            let named = TreeMarkerStore::open_path(candidate_path)?;
+            retained.require_same_directory(&named)?;
+            retained
+        } else {
+            TreeMarkerStore::open_path(candidate_path)?
+        };
         let previous_store = open_or_synthesize_live_usr(installation)?;
         let candidate = RetainedIdentity::prepare(candidate_store, Some(candidate_state))?;
+        if retained_candidate_usr.is_some() {
+            candidate.verify_named_read_only(candidate_path)?;
+        }
         let _candidate_slot_link = candidate.authorize_recovered_slot_link(installation, candidate_state)?;
         // The previous active tree is deliberately opaque during a repair:
         // only its already-retained marker is required. Its `.stateID` may be
