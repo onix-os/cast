@@ -108,7 +108,8 @@ forge-client-startup-gate-test:
 		client::startup_gate_tests::valid_unresolved_journal_precedes_system_intent_and_repository_construction \
 		client::startup_gate_tests::corrupt_canonical_journal_blocks_startup_without_rewriting_evidence \
 		client::startup_gate_tests::orphan_transition_row_blocks_startup_before_repository_construction \
-		client::startup_gate_tests::frozen_client_ignores_system_journal_and_persistent_transition_rows; do \
+		client::startup_gate_tests::frozen_client_ignores_system_journal_and_persistent_transition_rows \
+		client::startup_gate_tests::system_builder_cannot_use_frozen_discovery_to_bypass_the_startup_gate; do \
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done

@@ -195,3 +195,14 @@ fn frozen_client_ignores_system_journal_and_persistent_transition_rows() {
 
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
 }
+
+#[test]
+fn system_builder_cannot_use_frozen_discovery_to_bypass_the_startup_gate() {
+    let temporary = private_installation_tempdir();
+    let frozen_installation = Installation::open_frozen(temporary.path(), None).unwrap();
+
+    assert!(matches!(
+        Client::new("startup-gate-frozen-builder", frozen_installation),
+        Err(Error::SystemInstallationRequired)
+    ));
+}

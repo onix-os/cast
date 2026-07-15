@@ -140,15 +140,19 @@ impl ClientBuilder {
 
     /// Build the [`Client`]
     pub fn build(mut self) -> Result<Client, Error> {
+        if self.installation.is_frozen_cache() {
+            return Err(Error::SystemInstallationRequired);
+        }
+
         let install_db = db::meta::Database::new(self.installation.db_path("install").to_str().unwrap_or_default())?;
         let state_db = db::state::Database::new(self.installation.db_path("state").to_str().unwrap_or_default())?;
         let layout_db = db::layout::Database::new(self.installation.db_path("layout").to_str().unwrap_or_default())?;
 
-        let startup_gate = (!self.installation.is_frozen_cache())
-            .then(|| startup_gate::CleanSystemStartup::enter(&self.installation, &state_db))
-            .transpose()
-            .map_err(|source| Error::SystemStartupGate {
-                source: Box::new(source),
+        let startup_gate =
+            startup_gate::CleanSystemStartup::enter(&self.installation, &state_db).map_err(|source| {
+                Error::SystemStartupGate {
+                    source: Box::new(source),
+                }
             })?;
 
         if let Some(path) = self.system_intent_path {
@@ -10888,6 +10892,8 @@ pub enum Error {
     FrozenRootRequiresFrozenClient,
     #[error("frozen clients require an installation opened with Installation::open_frozen")]
     FrozenInstallationRequired,
+    #[error("system and ephemeral clients require an installation opened with Installation::open")]
+    SystemInstallationRequired,
     #[error("operation is not available on a dedicated frozen client")]
     FrozenClientProhibitedOperation,
     #[error("duplicate package ID in frozen closure: {0}")]
