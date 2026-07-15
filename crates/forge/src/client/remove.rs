@@ -15,7 +15,7 @@ use tui::{
     pretty::autoprint_columns,
 };
 
-use crate::{Client, Provider, client, db, registry::transaction, state::Selection};
+use crate::{Client, Provider, client, db, package, registry::transaction, state::Selection};
 
 /// Remove a set of packages.
 #[instrument(skip(client), fields(ephemeral = client.is_ephemeral()))]
@@ -23,7 +23,8 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
     let mut timing = Timing::default();
     let mut instant = Instant::now();
 
-    let installed = client.registry.list_installed()?;
+    let installed = client
+        .with_registry_snapshot(|registry| -> Result<Vec<crate::Package>, Error> { Ok(registry.list_installed()?) })?;
     let installed_ids = installed.iter().map(|p| p.id.clone()).collect::<BTreeSet<_>>();
 
     // Separate packages between installed / not installed (or invalid)
@@ -48,22 +49,22 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
     //
     // This will remove those packages & any package that depends on it. This will not remove
     // the packages it depends on if they are orphaned (see next step).
-    let tx_with_removed = {
+    let tx_with_removed = client.with_registry_snapshot(|registry| -> Result<BTreeSet<package::Id>, Error> {
         // Add all installed packages to transaction
-        let mut transaction = client.registry.transaction(transaction::Lookup::InstalledOnly)?;
+        let mut transaction = registry.transaction(transaction::Lookup::InstalledOnly)?;
         transaction.add(installed_ids.clone().into_iter().collect())?;
 
         // Remove all pkgs for removal
         transaction.remove(for_removal);
 
         // Finalized tx has all reverse deps removed
-        transaction.finalize().cloned().collect::<BTreeSet<_>>()
-    };
+        Ok(transaction.finalize().cloned().collect())
+    })?;
 
     // Build a new transaction w/ the leftover "explicit" packages. This will cause all orphaned
     // transitive dependencies to get dropped. These are packages that were depended on by removed
     // packages that are no longer depended on.
-    let finalized = {
+    let finalized = client.with_registry_snapshot(|registry| -> Result<BTreeSet<package::Id>, Error> {
         // Is an explicit package that still exists after removals
         let explicit_pkgs = installed
             .iter()
@@ -71,11 +72,11 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
             .map(|p| p.id.clone())
             .collect::<Vec<_>>();
 
-        let mut transaction = client.registry.transaction(transaction::Lookup::InstalledOnly)?;
+        let mut transaction = registry.transaction(transaction::Lookup::InstalledOnly)?;
         transaction.add(explicit_pkgs)?;
 
-        transaction.finalize().cloned().collect::<BTreeSet<_>>()
-    };
+        Ok(transaction.finalize().cloned().collect())
+    })?;
 
     // Resolve all removed packages, where removed is (installed - finalized)
     let removed = client.resolve_packages(installed_ids.difference(&finalized))?;
@@ -129,7 +130,7 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
     // Map finalized state to a [`Selection`] by referencing
     // it's value from the previous state
     let new_state_pkgs = {
-        let previous_selections = match client.installation.active_state {
+        let previous_selections = match client.active_state_for_planning()? {
             Some(id) => client.state_db.get(id)?.selections,
             None => vec![],
         };

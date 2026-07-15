@@ -74,7 +74,8 @@ pub(super) struct StatefulCandidate {
     pub(super) tree: vfs::Tree<PendingFile>,
     pub(super) staging: RetainedFixedStaging,
     pub(super) candidate_usr: std::fs::File,
-    pub(super) _coordinator: MutexGuard<'static, ()>,
+    pub(super) local_etc: super::transaction_root::RetainedLocalEtc,
+    pub(super) active_state: super::active_state_authority::ActiveStateAuthority,
 }
 
 #[derive(Debug, ThisError)]
@@ -485,7 +486,38 @@ impl Client {
             });
         }
 
-        let coordinator = lock_coordinator()?;
+        let local_etc = super::transaction_root::prepare_local_etc(&self.installation)?;
+        let active_state = super::active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
+        self.materialize_stateful_candidate_with_authority(packages, local_etc, active_state)
+    }
+
+    pub(super) fn materialize_active_verify_candidate<'a>(
+        &self,
+        packages: impl IntoIterator<Item = &'a package::Id>,
+        active_state: super::active_state_authority::ActiveStateAuthority,
+    ) -> Result<StatefulCandidate, super::Error> {
+        if active_state.active().is_none() {
+            return Err(super::Error::NoActiveState);
+        }
+        let local_etc = super::transaction_root::require_local_etc(&self.installation)?;
+        active_state.revalidate(&self.installation)?;
+        self.materialize_stateful_candidate_with_authority(packages, local_etc, active_state)
+    }
+
+    fn materialize_stateful_candidate_with_authority<'a>(
+        &self,
+        packages: impl IntoIterator<Item = &'a package::Id>,
+        local_etc: super::transaction_root::RetainedLocalEtc,
+        active_state: super::active_state_authority::ActiveStateAuthority,
+    ) -> Result<StatefulCandidate, super::Error> {
+        self.require_non_frozen()?;
+        if !matches!(&self.scope, Scope::Stateful) {
+            return Err(super::Error::StatefulCandidateMaterialization {
+                source: Box::new(FixedStagingError::StatefulClientRequired),
+            });
+        }
+        active_state.revalidate(&self.installation)?;
+        local_etc.revalidate(&self.installation)?;
         let tree = self.vfs(packages)?;
         let staging = RetainedFixedStaging::prepare_empty(&self.installation).map_err(|source| {
             super::Error::StatefulCandidateMaterialization {
@@ -502,12 +534,15 @@ impl Client {
             .map_err(|source| super::Error::StatefulCandidateMaterialization {
                 source: Box::new(source),
             })?;
+        active_state.revalidate(&self.installation)?;
+        local_etc.revalidate(&self.installation)?;
 
         Ok(StatefulCandidate {
             tree,
             staging,
             candidate_usr,
-            _coordinator: coordinator,
+            local_etc,
+            active_state,
         })
     }
 }

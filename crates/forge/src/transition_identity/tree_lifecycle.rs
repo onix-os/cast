@@ -118,6 +118,7 @@ impl StatefulTreeIdentity {
 
     /// Exchange the authenticated staged candidate with the authenticated live
     /// previous tree beneath retained parent descriptors.
+    #[cfg(test)]
     pub(crate) fn exchange_forward(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
         self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward, &|| Ok(()))
     }

@@ -19,6 +19,7 @@ use crate::{
 #[allow(unused, clippy::diverging_sub_expression)]
 #[instrument(skip(client))]
 pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
+    client.preflight_active_state_snapshot()?;
     client.require_non_frozen()?;
     // Ensure client is stateful
     if client.is_ephemeral() {
@@ -26,7 +27,8 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
     }
 
     // Get the previously installed Cast package.
-    let installed = client.registry.list_installed()?;
+    let installed = client
+        .with_registry_snapshot(|registry| -> Result<Vec<crate::Package>, Error> { Ok(registry.list_installed()?) })?;
     let Some(previous_cast) = installed.into_iter().find(|p| p.meta.name.as_str() == "cast") else {
         return todo!("error can't self upgrade without cast installed in current state");
     };
@@ -139,7 +141,7 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
 
     // Calculate the new state of packages (previous state - previous Cast + new Cast).
     let new_state_pkgs = {
-        let mut previous_selections = match client.installation.active_state {
+        let mut previous_selections = match client.active_state_for_planning()? {
             Some(id) => {
                 client
                     .state_db

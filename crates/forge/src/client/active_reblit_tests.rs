@@ -31,15 +31,21 @@ fn fixture() -> ActiveFixture {
     let temporary = tempfile::tempdir().unwrap();
     prepare_private_installation_root(temporary.path());
     let installation = Installation::open(temporary.path(), None).unwrap();
-    let mut client = Client::builder("active-reblit-wrapper-test", installation)
+    let client = Client::builder("active-reblit-wrapper-test", installation)
         .repositories(repository::Map::default())
         .build()
         .unwrap();
     let state = client.state_db.add(&[], Some("active"), None).unwrap();
-    client.installation.active_state = Some(state.id);
     record_state_id(&client.installation.root, state.id).unwrap();
     record_system_snapshot(&client.installation.root, snapshot("old-active")).unwrap();
     fs::write(client.installation.root.join("usr/old-payload"), b"old tree").unwrap();
+    drop(client);
+
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    let client = Client::builder("active-reblit-wrapper-test", installation)
+        .repositories(repository::Map::default())
+        .build()
+        .unwrap();
     let old_usr_inode = fs::symlink_metadata(client.installation.root.join("usr"))
         .unwrap()
         .ino();
@@ -160,7 +166,7 @@ fn active_reblit_rotates_the_whole_old_wrapper_and_leaves_exact_empty_staging() 
 }
 
 #[test]
-fn active_reblit_preserves_missing_or_corrupt_old_state_id_opaquely() {
+fn active_reblit_refuses_missing_or_malformed_live_state_id_without_staging_mutation() {
     for old_state_id in [None, Some(b"corrupt".as_slice())] {
         let fixture = fixture();
         let path = fixture.client.installation.root.join("usr/.stateID");
@@ -169,14 +175,18 @@ fn active_reblit_preserves_missing_or_corrupt_old_state_id_opaquely() {
             Some(contents) => fs::write(&path, contents).unwrap(),
         }
 
-        run(&fixture, |_| Ok(())).unwrap();
+        let error = run(&fixture, |_| Ok(())).unwrap_err();
 
-        assert_repaired_tree_live(&fixture);
-        let old = wrapper_quarantines(&fixture).pop().unwrap().join("usr/.stateID");
+        assert!(matches!(error, Error::LiveActiveStateProof { .. }), "{error:#?}");
+        let live = fixture.client.installation.root.join("usr");
+        assert_eq!(fs::symlink_metadata(&live).unwrap().ino(), fixture.old_usr_inode);
+        assert_eq!(fs::read(live.join("old-payload")).unwrap(), b"old tree");
         match old_state_id {
-            None => assert!(!old.exists()),
-            Some(contents) => assert_eq!(fs::read(old).unwrap(), contents),
+            None => assert!(!path.exists()),
+            Some(contents) => assert_eq!(fs::read(path).unwrap(), contents),
         }
+        assert_empty_fixed_staging(&fixture);
+        assert!(wrapper_quarantines(&fixture).is_empty());
     }
 }
 

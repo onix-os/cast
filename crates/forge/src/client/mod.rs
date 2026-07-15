@@ -84,6 +84,12 @@ pub use self::self_upgrade::self_upgrade;
 
 #[cfg(test)]
 mod active_reblit_tests;
+mod active_state_authority;
+#[cfg(test)]
+mod active_state_authority_tests;
+mod active_state_snapshot;
+#[cfg(test)]
+mod active_state_snapshot_tests;
 mod archived_repair;
 mod archived_repair_materialization;
 mod archived_repair_metadata;
@@ -103,6 +109,7 @@ mod startup_gate;
 #[cfg(test)]
 mod startup_gate_tests;
 mod sync;
+mod transaction_root;
 mod verify;
 
 pub mod extract;
@@ -150,6 +157,11 @@ impl ClientBuilder {
             return Err(Error::SystemInstallationRequired);
         }
 
+        // This is the first stateful filesystem/DB gate. Preserve the lock
+        // order used by every transition: cooperating-writer coordinator
+        // first, retained journal lock second. A stale Installation clone is
+        // therefore rejected before opening or creating any database handle.
+        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
         let install_db = db::meta::Database::new(self.installation.db_path("install").to_str().unwrap_or_default())?;
         let state_db = db::state::Database::new(self.installation.db_path("state").to_str().unwrap_or_default())?;
         let layout_db = db::layout::Database::new(self.installation.db_path("layout").to_str().unwrap_or_default())?;
@@ -175,8 +187,10 @@ impl ClientBuilder {
             repository::Manager::with_config_manager(config.clone(), self.installation.clone())?
         };
 
-        let registry = build_registry(&self.installation, &repositories, &install_db, &state_db)?;
+        let registry = build_registry(active_state.active(), &repositories, &install_db, &state_db)?;
+        active_state.revalidate(&self.installation)?;
         drop(startup_gate);
+        drop(active_state);
 
         let mut client = Client {
             config: Some(config),
@@ -247,7 +261,7 @@ struct EphemeralCandidate {
     tree: vfs::Tree<PendingFile>,
     root: PathBuf,
     target: RetainedExternalMaterializationTarget,
-    _coordinator: std::sync::MutexGuard<'static, ()>,
+    active_state: active_state_snapshot::ActiveStateLease,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,6 +411,32 @@ impl FrozenRootGuard {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static BEFORE_REGISTRY_SNAPSHOT_ACQUISITION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_before_registry_snapshot_acquisition(hook: impl FnOnce() + 'static) {
+    BEFORE_REGISTRY_SNAPSHOT_ACQUISITION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_registry_snapshot_acquisition() {
+    BEFORE_REGISTRY_SNAPSHOT_ACQUISITION.with(|slot| {
+        let hook = slot.borrow_mut().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_registry_snapshot_acquisition() {}
+
 impl Client {
     /// Construct a new ClientBuilder for the given [`Installation`]
     pub fn builder(client_name: impl ToString, installation: Installation) -> ClientBuilder {
@@ -496,6 +536,45 @@ impl Client {
         }
     }
 
+    fn preflight_active_state_snapshot(&self) -> Result<(), Error> {
+        if matches!(&self.scope, Scope::Stateful | Scope::Ephemeral { .. }) {
+            drop(active_state_snapshot::ActiveStateLease::acquire(&self.installation)?);
+        }
+        Ok(())
+    }
+
+    fn active_state_for_planning(&self) -> Result<Option<state::Id>, Error> {
+        match &self.scope {
+            Scope::Stateful | Scope::Ephemeral { .. } => {
+                let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
+                active_state.revalidate(&self.installation)?;
+                Ok(active_state.active())
+            }
+            Scope::Frozen { .. } => Err(Error::FrozenClientProhibitedOperation),
+        }
+    }
+
+    fn with_registry_snapshot<T, E>(&self, read: impl FnOnce(&Registry) -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<Error>,
+    {
+        let active_state = match &self.scope {
+            Scope::Frozen { .. } => None,
+            Scope::Stateful | Scope::Ephemeral { .. } => {
+                before_registry_snapshot_acquisition();
+                Some(active_state_snapshot::ActiveStateLease::acquire(&self.installation)?)
+            }
+        };
+        self.preflight_repository_integrity()?;
+        let result = read(&self.registry);
+        let repository_revalidation = self.preflight_repository_integrity();
+        if let Some(active_state) = active_state.as_ref() {
+            active_state.revalidate(&self.installation)?;
+        }
+        repository_revalidation?;
+        result
+    }
+
     fn preflight_repository_integrity(&self) -> Result<(), Error> {
         self.repositories
             .preflight_active_snapshots()
@@ -505,6 +584,7 @@ impl Client {
     /// Perform package installation
     pub fn install(&mut self, packages: &[&str], yes: bool, simulate: bool) -> Result<install::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_active_state_snapshot()?;
         self.preflight_repository_integrity()?;
         install(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
     }
@@ -521,6 +601,7 @@ impl Client {
         simulate: bool,
     ) -> Result<install::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_active_state_snapshot()?;
         self.preflight_repository_integrity()?;
         install::install_exact(self, packages, yes, simulate).map_err(|error| Error::Install(Box::new(error)))
     }
@@ -599,6 +680,7 @@ impl Client {
     /// Perform package removals
     pub fn remove(&mut self, packages: &[&str], yes: bool, simulate: bool) -> Result<remove::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_active_state_snapshot()?;
         remove(self, packages, yes, simulate).map_err(|error| Error::Remove(Box::new(error)))
     }
 
@@ -612,6 +694,7 @@ impl Client {
     /// Perform a sync
     pub fn sync(&mut self, yes: bool, simulate: bool) -> Result<sync::Timing, Error> {
         self.require_non_frozen()?;
+        self.preflight_active_state_snapshot()?;
         self.preflight_repository_integrity()?;
         sync(self, yes, simulate).map_err(|error| Error::Sync(Box::new(error)))
     }
@@ -639,6 +722,7 @@ impl Client {
     /// are downloaded and added to the meta db
     pub async fn ensure_repos_initialized(&mut self) -> Result<usize, Error> {
         self.require_non_frozen()?;
+        self.preflight_active_state_snapshot()?;
         let num_initialized = self.repositories.ensure_all_initialized().await?;
         self.rebuild_registry()?;
         Ok(num_initialized)
@@ -648,6 +732,7 @@ impl Client {
     /// registry with all active repositories.
     pub async fn refresh_repositories(&mut self) -> Result<(), Error> {
         self.require_non_frozen()?;
+        self.preflight_active_state_snapshot()?;
         // Reload manager if config sourced to pickup config changes
         // then refresh indexes
         if self.repositories.is_config_source() {
@@ -666,12 +751,21 @@ impl Client {
     }
 
     fn rebuild_registry(&mut self) -> Result<(), Error> {
-        self.registry = match &self.scope {
+        let registry = match &self.scope {
             Scope::Frozen { .. } => build_repository_registry(&self.repositories),
             Scope::Stateful | Scope::Ephemeral { .. } => {
-                build_registry(&self.installation, &self.repositories, &self.install_db, &self.state_db)?
+                let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
+                let registry = build_registry(
+                    active_state.active(),
+                    &self.repositories,
+                    &self.install_db,
+                    &self.state_db,
+                )?;
+                active_state.revalidate(&self.installation)?;
+                registry
             }
         };
+        self.registry = registry;
         Ok(())
     }
 
@@ -687,9 +781,9 @@ impl Client {
     /// from the disk, acting as a garbage collection facility.
     pub fn prune_states(&self, strategy: prune::Strategy<'_>, yes: bool) -> Result<(), Error> {
         self.require_stateful_scope()?;
-        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
+        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
 
-        prune_states(self, strategy, yes)?;
+        prune_states(self, strategy, yes, &active_state)?;
 
         Ok(())
     }
@@ -714,10 +808,13 @@ impl Client {
 
     /// Resolves the provided id with the underlying registry, returning the first matching [`Package`]
     pub fn resolve_package(&self, package: &package::Id) -> Result<Package, Error> {
-        self.preflight_repository_integrity()?;
-        let resolved = self.registry.by_id(package)?.into_iter().next();
-        self.preflight_repository_integrity()?;
-        resolved.ok_or(Error::MissingMetadata(package.clone()))
+        self.with_registry_snapshot(|registry| {
+            registry
+                .by_id(package)?
+                .into_iter()
+                .next()
+                .ok_or(Error::MissingMetadata(package.clone()))
+        })
     }
 
     fn resolve_frozen_repository_package(&self, package: &package::Id) -> Result<Package, Error> {
@@ -736,21 +833,21 @@ impl Client {
         &self,
         packages: impl IntoIterator<Item = &'a package::Id>,
     ) -> Result<Vec<Package>, Error> {
-        self.preflight_repository_integrity()?;
-        let mut metadata = packages
-            .into_iter()
-            .map(|id| {
-                self.registry
-                    .by_id(id)?
-                    .into_iter()
-                    .next()
-                    .ok_or(Error::MissingMetadata(id.clone()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        metadata.sort_by_key(|p| p.meta.name.to_string());
-        metadata.dedup_by_key(|p| p.meta.name.to_string());
-        self.preflight_repository_integrity()?;
-        Ok(metadata)
+        self.with_registry_snapshot(|registry| {
+            let mut metadata = packages
+                .into_iter()
+                .map(|id| {
+                    registry
+                        .by_id(id)?
+                        .into_iter()
+                        .next()
+                        .ok_or(Error::MissingMetadata(id.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            metadata.sort_by_key(|p| p.meta.name.to_string());
+            metadata.dedup_by_key(|p| p.meta.name.to_string());
+            Ok(metadata)
+        })
     }
 
     /// Content identities for all active repository indexes participating in
@@ -765,33 +862,25 @@ impl Client {
         provider: &Provider,
         flags: package::Flags,
     ) -> Result<Vec<Package>, Error> {
-        self.preflight_repository_integrity()?;
-        let packages = self
-            .registry
-            .by_provider(provider, flags)?
-            .into_iter()
-            .unique_by(|p| p.id.clone())
-            .collect();
-        self.preflight_repository_integrity()?;
-        Ok(packages)
+        self.with_registry_snapshot(|registry| {
+            Ok(registry
+                .by_provider(provider, flags)?
+                .into_iter()
+                .unique_by(|p| p.id.clone())
+                .collect())
+        })
     }
 
     /// Return sorted packages matching the given flags. Repository integrity
     /// failures are first-class and cannot be flattened into an empty list.
     pub fn list_packages(&self, flags: package::Flags) -> Result<Vec<Package>, Error> {
-        self.preflight_repository_integrity()?;
-        let packages = self.registry.list(flags)?;
-        self.preflight_repository_integrity()?;
-        Ok(packages)
+        self.with_registry_snapshot(|registry| registry.list(flags).map_err(Error::from))
     }
 
     /// Returns all packages with names containing the provided keyword
     /// and match the given flags
     pub fn search_packages(&self, keyword: &str, flags: package::Flags) -> Result<Vec<Package>, Error> {
-        self.preflight_repository_integrity()?;
-        let packages = self.registry.by_keyword(keyword, flags)?;
-        self.preflight_repository_integrity()?;
-        Ok(packages)
+        self.with_registry_snapshot(|registry| registry.by_keyword(keyword, flags).map_err(Error::from))
     }
 
     /// Activates the provided state and runs system triggers once applied.
@@ -808,7 +897,6 @@ impl Client {
     /// Returns the old state that was archived.
     pub fn activate_state(&self, id: state::Id, skip_triggers: bool, skip_boot: bool) -> Result<state::Id, Error> {
         self.require_stateful_scope()?;
-        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
         let _guard = signal::ignore([Signal::SIGINT])?;
         let _inhibitor = signal::inhibit(
             vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
@@ -831,11 +919,13 @@ impl Client {
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
         self.require_stateful_scope()?;
+        let _local_etc = transaction_root::prepare_local_etc(&self.installation)?;
+        let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
         // Fetch the new state
         let new = self.state_db.get(id).map_err(|_| Error::StateDoesntExist(id))?;
 
         // Get old (current) state
-        let Some(old_id) = self.installation.active_state else {
+        let Some(old_id) = active_state.active() else {
             return Err(Error::NoActiveState);
         };
 
@@ -849,6 +939,7 @@ impl Client {
         let fstree = self.vfs(new.selections.iter().map(|selection| &selection.package))?;
 
         let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
+        active_state.revalidate(&self.installation)?;
         let tree_identity = self
             .prepare_stateful_tree_identity(&archived_usr, new.id)
             .map_err(|source| Error::StatefulTreeIdentityPreparationFailed {
@@ -857,6 +948,7 @@ impl Client {
                 location: archived_usr.clone(),
                 source: Box::new(source.into()),
             })?;
+        active_state.refresh_after_tree_identity_preparation(&self.installation)?;
 
         // Exchange the exact archived-state wrapper with the fixed staging
         // wrapper. Both inodes remain retained so a racing path replacement
@@ -905,6 +997,7 @@ impl Client {
             !skip_triggers,
             !skip_boot,
             &tree_identity,
+            &active_state,
             &mut checkpoint,
         )?;
 
@@ -948,8 +1041,6 @@ impl Client {
             event_type = "progress_start",
         );
 
-        let old_state = self.installation.active_state;
-
         let result = match &self.scope {
             Scope::Stateful => {
                 // The non-cloneable candidate retains the authenticated
@@ -957,8 +1048,10 @@ impl Client {
                 // its first possible mutation through row allocation and
                 // durable tree-identity preparation.
                 let candidate = self.materialize_stateful_candidate(selections.iter().map(|s| &s.package))?;
+                let old_state = candidate.active_state.active();
 
                 // Add to db
+                candidate.active_state.revalidate(&self.installation)?;
                 let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
 
                 self.apply_stateful_candidate(candidate, &state, old_state, system_snapshot)?;
@@ -1002,7 +1095,17 @@ impl Client {
                 progress.set_message("Running transaction-scope triggers");
                 "transaction-scope-triggers"
             }
-            TriggerScope::RetainedTransaction { .. } => {
+            TriggerScope::RetainedTransaction {
+                kind: postblit::RetainedTransactionKind::Stateful,
+                ..
+            } => {
+                progress.set_message("Running transaction-scope triggers");
+                "transaction-scope-triggers"
+            }
+            TriggerScope::RetainedTransaction {
+                kind: postblit::RetainedTransactionKind::ArchivedRepair,
+                ..
+            } => {
                 progress.set_message("Running retained transaction-scope triggers");
                 "retained-transaction-scope-triggers"
             }
@@ -1070,13 +1173,16 @@ impl Client {
             tree,
             staging,
             candidate_usr,
-            _coordinator,
+            local_etc,
+            mut active_state,
         } = candidate;
         self.apply_stateful_blit_with_capability(
             tree,
             Some((&staging, &candidate_usr)),
+            local_etc,
             state,
             old_state,
+            &mut active_state,
             system_snapshot,
             |_| Ok(()),
         )
@@ -1094,16 +1200,28 @@ impl Client {
     where
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
-        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
-        self.apply_stateful_blit_with_capability(fstree, None, state, old_state, system_snapshot, checkpoint)
+        let local_etc = transaction_root::prepare_local_etc(&self.installation)?;
+        let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
+        self.apply_stateful_blit_with_capability(
+            fstree,
+            None,
+            local_etc,
+            state,
+            old_state,
+            &mut active_state,
+            system_snapshot,
+            checkpoint,
+        )
     }
 
     fn apply_stateful_blit_with_capability<F>(
         &self,
         fstree: vfs::Tree<PendingFile>,
         retained_staging: Option<(&fixed_staging::RetainedFixedStaging, &std::fs::File)>,
+        local_etc: transaction_root::RetainedLocalEtc,
         state: &State,
         old_state: Option<state::Id>,
+        active_state: &mut active_state_authority::ActiveStateAuthority,
         system_snapshot: SystemModel,
         mut checkpoint: F,
     ) -> Result<(), Error>
@@ -1130,6 +1248,8 @@ impl Client {
             }
         };
         revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
+        active_state.revalidate(&self.installation)?;
+        let captured_active_state = active_state.active();
         let prepared_identity = match retained_usr.as_ref() {
             Some(candidate) => self.prepare_stateful_tree_identity_retained(&candidate_usr, candidate, state.id),
             None => self.prepare_stateful_tree_identity(&candidate_usr, state.id),
@@ -1140,6 +1260,7 @@ impl Client {
             location: candidate_usr,
             source: Box::new(source.into()),
         })?;
+        active_state.refresh_after_tree_identity_preparation(&self.installation)?;
         revalidate_fixed_staging(retained_staging.map(|(staging, _)| staging), &self.installation)?;
         let (previous, candidate_origin) = match old_state {
             Some(id) => match self.state_db.get(id) {
@@ -1159,7 +1280,7 @@ impl Client {
             // does not archive the replaced corrupt tree on success. It still
             // needs the state value for boot repair if recovery reverses the
             // exchange.
-            None if self.installation.active_state == Some(state.id) => {
+            None if captured_active_state == Some(state.id) => {
                 (Some(state.clone()), StatefulCandidateOrigin::ActiveReblit)
             }
             None => (None, StatefulCandidateOrigin::Fresh),
@@ -1184,11 +1305,11 @@ impl Client {
             record_os_release(&self.installation.staging_dir())?;
             record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
 
-            create_root_links(&self.installation.isolation_dir())?;
+            let isolation_root = create_root_links(&self.installation.isolation_dir())?;
 
-            // The container running triggers expects /etc to exist.
-            let root_etc = self.installation.root.join("etc");
-            fs::create_dir_all(root_etc)?;
+            // The container running triggers receives this exact retained
+            // local /etc inode rather than resolving its mutable pathname.
+            local_etc.revalidate(&self.installation)?;
 
             let isolation_etc = self.installation.isolation_dir().join("etc");
             fs::create_dir_all(isolation_etc)?;
@@ -1196,11 +1317,27 @@ impl Client {
             // Transaction triggers run before `/usr` is exchanged. Their
             // arbitrary external side effects cannot be undone, but the
             // candidate tree can still be preserved outside the active root.
+            active_state.revalidate(&self.installation)?;
             tree_identity.verify_pre_exchange(
                 &self.installation.staging_path("usr"),
                 &self.installation.root.join("usr"),
             )?;
-            Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?;
+            match retained_usr {
+                Some(candidate_usr) => Self::apply_triggers(
+                    TriggerScope::RetainedTransaction {
+                        kind: postblit::RetainedTransactionKind::Stateful,
+                        installation: &self.installation,
+                        isolation_root: &isolation_root,
+                        local_etc: &local_etc,
+                        candidate_usr,
+                        candidate_usr_path: &self.installation.staging_path("usr"),
+                    },
+                    &fstree,
+                )?,
+                // Only unit-test adapters construct a stateful candidate
+                // without the production retained fixed-staging capability.
+                None => Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?,
+            }
             tree_identity.verify_pre_exchange(
                 &self.installation.staging_path("usr"),
                 &self.installation.root.join("usr"),
@@ -1237,6 +1374,7 @@ impl Client {
             true,
             true,
             &tree_identity,
+            active_state,
             &mut checkpoint,
         )
     }
@@ -1262,6 +1400,7 @@ impl Client {
         run_system_triggers: bool,
         run_boot_synchronization: bool,
         tree_identity: &StatefulTreeIdentity,
+        active_state: &active_state_authority::ActiveStateAuthority,
         checkpoint: &mut F,
     ) -> Result<(), Error>
     where
@@ -1281,6 +1420,7 @@ impl Client {
                 &self.installation.root.join("usr"),
             )
             .map_err(Error::from)
+            .and_then(|()| active_state.revalidate(&self.installation))
             .and_then(|()| {
                 if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                     tree_identity
@@ -1302,18 +1442,24 @@ impl Client {
             ));
         }
 
-        let promotion = if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
-            tree_identity.exchange_forward_validated(&self.installation, &|| {
+        let promotion = tree_identity.exchange_forward_validated(&self.installation, &|| {
+            active_state.revalidate(&self.installation).map_err(|source| {
+                crate::transition_identity::Error::RetainedExchange {
+                    operation: "revalidate active-state authority immediately before forward exchange",
+                    path: self.installation.root.join("usr/.stateID"),
+                    source: io::Error::other(source),
+                }
+            })?;
+            if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
                 tree_identity.verify_active_reblit_candidate_snapshot(
                     &self.installation,
                     &self.state_db,
                     candidate,
                     false,
-                )
-            })
-        } else {
-            self.promote_staging(tree_identity)
-        };
+                )?;
+            }
+            Ok(())
+        });
         if let Err(failure) = promotion {
             let outcome = failure.outcome();
             let primary = Error::from(failure);
@@ -1915,8 +2061,15 @@ impl Client {
         // this installation's fixed staging wrapper even for an ephemeral
         // client. Cooperating clients must not mutate that namespace while an
         // inactive archived-repair candidate retains it.
-        let _staging_coordinator = fixed_staging::lock_coordinator()?;
-        self.apply_ephemeral_blit_under_guard(fstree, &blit_root, system_snapshot)
+        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
+        active_state.revalidate(&self.installation)?;
+        let result = self.apply_ephemeral_blit_under_guard(fstree, &blit_root, system_snapshot);
+        let revalidation = active_state.revalidate(&self.installation);
+        match (result, revalidation) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(primary), _) => Err(primary),
+            (Ok(()), Err(revalidation)) => Err(revalidation),
+        }
     }
 
     fn apply_ephemeral_candidate(
@@ -1928,16 +2081,19 @@ impl Client {
             tree,
             root,
             target,
-            _coordinator,
+            active_state,
         } = candidate;
+        active_state.revalidate(&self.installation)?;
         let root = self.require_configured_ephemeral_target(&root)?;
         target.revalidate(&self.installation)?;
         let result = self.apply_ephemeral_blit_under_guard(tree, &root, system_snapshot);
         let revalidation = target.revalidate(&self.installation);
-        match (result, revalidation) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(primary), _) => Err(primary),
-            (Ok(()), Err(revalidation)) => Err(revalidation),
+        let active_revalidation = active_state.revalidate(&self.installation);
+        match (result, revalidation, active_revalidation) {
+            (Ok(()), Ok(()), Ok(())) => Ok(()),
+            (Err(primary), _, _) => Err(primary),
+            (Ok(()), Err(revalidation), _) => Err(revalidation),
+            (Ok(()), Ok(()), Err(revalidation)) => Err(revalidation),
         }
     }
 
@@ -1976,18 +2132,6 @@ impl Client {
         Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), &fstree)?;
 
         Ok(())
-    }
-
-    /// "Activate" the staging tree
-    /// In practice, this means we perform an atomic swap of the `/usr` directory on the
-    /// host filesystem with the `/usr` tree within the transaction tree.
-    ///
-    /// This is performed using `renameat2` and results in instantly available, atomically updated
-    /// `/usr`. In combination with the mandated "`/usr`` merge" and statelessness approach of
-    /// Serpent OS, provides a unique atomic upgrade strategy.
-    fn promote_staging(&self, tree_identity: &StatefulTreeIdentity) -> Result<(), RetainedExchangeFailure> {
-        debug_assert!(!self.scope.is_ephemeral());
-        tree_identity.exchange_forward(&self.installation)
     }
 
     /// Download & unpack the provided packages. Packages already cached will be validated & skipped.
@@ -2392,7 +2536,7 @@ impl Client {
             tree,
             root: _root,
             target: _target,
-            _coordinator,
+            active_state: _active_state,
         } = candidate;
         Ok(tree)
     }
@@ -2410,9 +2554,10 @@ impl Client {
             Scope::Ephemeral { destination } => destination,
             Scope::Frozen { .. } => return Err(Error::FrozenClientProhibitedOperation),
         };
-        let coordinator = fixed_staging::lock_coordinator()?;
+        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
 
         let tree = self.vfs(packages)?;
+        active_state.revalidate(&self.installation)?;
         let mut target = RetainedExternalMaterializationTarget::prepare_from(&self.installation, destination)?;
         target.materialize(
             &self.installation,
@@ -2420,13 +2565,14 @@ impl Client {
             AssetMaterialization::IndependentCopy,
             BlitExecution::Parallel,
         )?;
+        active_state.revalidate(&self.installation)?;
         let root = target.path().to_owned();
 
         Ok(EphemeralCandidate {
             tree,
             root,
             target,
-            _coordinator: coordinator,
+            active_state,
         })
     }
 
@@ -2455,8 +2601,17 @@ impl Client {
 
     /// Export the provided state as a [`SystemModel`]
     pub fn export_state(&self, state: state::Id) -> Result<SystemModel, Error> {
+        let active_state = match &self.scope {
+            Scope::Frozen { .. } => None,
+            Scope::Stateful | Scope::Ephemeral { .. } => {
+                Some(active_state_snapshot::ActiveStateLease::acquire(&self.installation)?)
+            }
+        };
         let state = self.state_db.get(state)?;
-        let is_active = self.installation.active_state == Some(state.id);
+        if let Some(active_state) = active_state.as_ref() {
+            active_state.revalidate(&self.installation)?;
+        }
+        let is_active = active_state.as_ref().and_then(|lease| lease.active()) == Some(state.id);
 
         let path = if is_active {
             system_model::snapshot_path(&self.installation.root)
@@ -2464,7 +2619,14 @@ impl Client {
             system_model::snapshot_path(&self.installation.root_path(state.id.to_string()))
         };
 
-        self.load_or_create_system_snapshot(path, &state)
+        let active_snapshot = active_state
+            .map(|active_state| active_state.suspend(&self.installation))
+            .transpose()?;
+        let snapshot = self.load_or_create_system_snapshot(path, &state)?;
+        if let Some(active_snapshot) = active_snapshot {
+            drop(active_snapshot.resume(&self.installation)?);
+        }
+        Ok(snapshot)
     }
 
     /// Print boot status to stdout
@@ -2475,12 +2637,13 @@ impl Client {
     /// Synchronize boot for the active state
     pub fn synchronize_boot(&self) -> Result<(), Error> {
         self.require_stateful_scope()?;
-        let _stateful_coordinator = fixed_staging::lock_coordinator()?;
-        let Some(state_id) = self.installation.active_state else {
+        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
+        let Some(state_id) = active_state.active() else {
             return Err(Error::NoActiveState);
         };
 
         let state = self.state_db.get(state_id)?;
+        active_state.revalidate(&self.installation)?;
 
         boot::synchronize(self, &state, None).map_err(Error::Boot)
     }
@@ -2501,10 +2664,18 @@ impl Client {
 
     /// Return the active [`State`] for this Cast [`Installation`]
     pub fn get_active_state(&self) -> Result<Option<State>, Error> {
-        match self.installation.active_state {
+        let active_state = match &self.scope {
+            Scope::Frozen { .. } => return Ok(None),
+            Scope::Stateful | Scope::Ephemeral { .. } => {
+                active_state_snapshot::ActiveStateLease::acquire(&self.installation)?
+            }
+        };
+        let state = match active_state.active() {
             Some(id) => self.get_state(id).map(Some),
             None => Ok(None),
-        }
+        }?;
+        active_state.revalidate(&self.installation)?;
+        Ok(state)
     }
 
     /// List all layout entries cached by this Cast [`Installation`], which
@@ -5265,8 +5436,50 @@ const ROOT_ABI_LINKS: [(&str, &str); 5] = [
 ];
 
 /// Establish the stable merged-/usr root ABI links without replacing anything.
-fn create_root_links(root: &Path) -> Result<(), Error> {
+fn create_root_links(root: &Path) -> Result<RetainedRootAbi, Error> {
     create_root_links_with(root, |_| {}, |directory| directory.sync_all())
+}
+
+/// Exact merged-/usr scratch-root capability established while the ABI links
+/// are provisioned. Transaction containers must consume this retained inode;
+/// reopening the public path would admit a replacement root after validation.
+#[derive(Debug)]
+pub(super) struct RetainedRootAbi {
+    root: PathBuf,
+    directory: fs::File,
+    anchor: std::fs::File,
+    identity: FrozenRootIdentity,
+    links: Vec<(&'static str, &'static str, PinnedRootAbiLink)>,
+}
+
+impl RetainedRootAbi {
+    pub(super) fn path(&self) -> &Path {
+        &self.root
+    }
+
+    pub(super) fn directory(&self) -> &std::fs::File {
+        &self.anchor
+    }
+
+    pub(super) fn revalidate(&self) -> Result<(), Error> {
+        require_root_abi_directory(&self.root, &self.directory, self.identity)?;
+        let anchor = self
+            .anchor
+            .metadata()
+            .map(|metadata| FrozenRootIdentity::from_metadata(&metadata))
+            .map_err(|source| Error::StatRootAbiDirectory {
+                root: self.root.clone(),
+                source,
+            })?;
+        if anchor != self.identity {
+            return Err(Error::RootAbiDirectoryReplaced(self.root.clone()));
+        }
+        for (source, target, link) in &self.links {
+            require_root_abi_staging_absent(&self.directory, &self.root, target)?;
+            require_pinned_root_abi_link(&self.directory, &self.root, source, target, link)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5276,7 +5489,7 @@ enum RootAbiLinkCheckpoint {
     AfterSync,
 }
 
-fn create_root_links_with<C, S>(root: &Path, mut checkpoint: C, mut sync: S) -> Result<(), Error>
+fn create_root_links_with<C, S>(root: &Path, mut checkpoint: C, mut sync: S) -> Result<RetainedRootAbi, Error>
 where
     C: FnMut(RootAbiLinkCheckpoint),
     S: FnMut(&fs::File) -> io::Result<()>,
@@ -5357,7 +5570,45 @@ where
             pinned.as_ref().expect("every root ABI link was pinned before sync"),
         )?;
     }
-    require_root_abi_directory(&root, &directory, identity)
+    require_root_abi_directory(&root, &directory, identity)?;
+    let anchor = openat2_file(
+        directory.as_raw_fd(),
+        c".",
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        crate::linux_fs::controlled_resolution(),
+    )
+    .map_err(|source| Error::OpenRootAbiDirectory {
+        root: root.clone(),
+        source,
+    })?;
+    if anchor
+        .metadata()
+        .map(|metadata| FrozenRootIdentity::from_metadata(&metadata))
+        .map_err(|source| Error::StatRootAbiDirectory {
+            root: root.clone(),
+            source,
+        })?
+        != identity
+    {
+        return Err(Error::RootAbiDirectoryReplaced(root));
+    }
+    Ok(RetainedRootAbi {
+        root,
+        directory,
+        anchor,
+        identity,
+        links: links
+            .into_iter()
+            .map(|(source, target, link)| {
+                (
+                    source,
+                    target,
+                    link.expect("every root ABI link was pinned before retention"),
+                )
+            })
+            .collect(),
+    })
 }
 
 fn open_root_abi_directory(root: &Path) -> io::Result<fs::File> {
@@ -10842,7 +11093,14 @@ std::thread_local! {
 fn observe_trigger_scope(scope: &TriggerScope<'_>) {
     let name = match scope {
         TriggerScope::Transaction(..) => "transaction",
-        TriggerScope::RetainedTransaction { .. } => "retained-transaction",
+        TriggerScope::RetainedTransaction {
+            kind: postblit::RetainedTransactionKind::Stateful,
+            ..
+        } => "transaction",
+        TriggerScope::RetainedTransaction {
+            kind: postblit::RetainedTransactionKind::ArchivedRepair,
+            ..
+        } => "retained-transaction",
         TriggerScope::System(..) => "system",
     };
     OBSERVED_TRIGGER_SCOPES.with(|observed| observed.borrow_mut().push(name));
@@ -10953,12 +11211,12 @@ impl fmt::Display for PendingFile {
 /// * `installdb`    - Installation database opened in the installation tree
 /// * `statedb`      - State database opened in the installation tree
 fn build_registry(
-    installation: &Installation,
+    active_state: Option<state::Id>,
     repositories: &repository::Manager,
     installdb: &db::meta::Database,
     statedb: &db::state::Database,
 ) -> Result<Registry, Error> {
-    let state = match installation.active_state {
+    let state = match active_state {
         Some(id) => Some(statedb.get(id)?),
         None => None,
     };
@@ -11009,6 +11267,18 @@ impl BlitStats {
 pub enum Error {
     #[error("root must have an active state")]
     NoActiveState,
+    #[error("{operation} at {path:?} while proving the live active-state selection")]
+    LiveActiveStateProof {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("active-state snapshot changed since installation discovery: expected {expected:?}, found {actual:?}")]
+    ActiveStateSnapshotChanged {
+        expected: Option<state::Id>,
+        actual: Option<state::Id>,
+    },
     #[error("state {0} already active")]
     StateAlreadyActive(state::Id),
     #[error("state {0} doesn't exist")]
@@ -13007,6 +13277,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let intent_path = system_model::intent_path(temporary.path());
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
+        fs::set_permissions(temporary.path().join("etc"), Permissions::from_mode(0o755)).unwrap();
         fs::write(
             &intent_path,
             r#"// Authored intent must remain unchanged.
@@ -13059,11 +13330,13 @@ cast.system
     #[test]
     fn ephemeral_import_evaluates_intent_and_records_only_a_generated_snapshot() {
         let temporary = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(temporary.path());
         let installation_root = temporary.path().join("installation");
         let blit_root = temporary.path().join("ephemeral-root");
         let intent_path = temporary.path().join("import.glu");
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir(&blit_root).unwrap();
+        prepare_private_installation_root(&blit_root);
 
         let authored = r#"// This authored source must never be copied into state.
 let cast = import! cast.system.v1
@@ -13107,10 +13380,12 @@ let cast = import! cast.system.v1
     #[test]
     fn ephemeral_blit_isolates_cached_asset_bytes_and_mode() {
         let temporary = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(temporary.path());
         let installation_root = temporary.path().join("installation");
         let blit_root = temporary.path().join("ephemeral-root");
         fs::create_dir(&installation_root).unwrap();
         fs::create_dir(&blit_root).unwrap();
+        prepare_private_installation_root(&blit_root);
 
         let installation = test_installation(&installation_root);
         let client = Client::builder("ephemeral-asset-isolation-test", installation)
@@ -17935,6 +18210,8 @@ let cast = import! cast.system.v1
 
         let temporary = tempfile::tempdir().unwrap();
         let mut client = stateful_test_client(temporary.path());
+        fs::create_dir_all(client.installation.root.join("etc")).unwrap();
+        fs::set_permissions(client.installation.root.join("etc"), Permissions::from_mode(0o755)).unwrap();
         fs::create_dir_all(client.installation.assets_path("v2")).unwrap();
 
         let package = package::Id::from("verify-package");
@@ -19536,7 +19813,12 @@ let cast = import! cast.system.v1
         )
         .unwrap();
         let staged = fixture.client.installation.staging_path("usr");
+        let mut active_state =
+            active_state_authority::ActiveStateAuthority::acquire(&fixture.client.installation).unwrap();
         let identity = fixture.client.prepare_stateful_tree_identity(&staged, next.id).unwrap();
+        active_state
+            .refresh_after_tree_identity_preparation(&fixture.client.installation)
+            .unwrap();
         let mut no_fault = |_| Ok(());
         fixture
             .client
@@ -19549,6 +19831,7 @@ let cast = import! cast.system.v1
                 false,
                 false,
                 &identity,
+                &active_state,
                 &mut no_fault,
             )
             .unwrap();
@@ -20466,8 +20749,12 @@ let cast = import! cast.system.v1
         let live_usr = client.installation.root.join("usr");
         assert!(!live_usr.exists());
 
+        let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&client.installation).unwrap();
         let tree_identity = client
             .prepare_stateful_tree_identity(&candidate_usr, candidate.id)
+            .unwrap();
+        active_state
+            .refresh_after_tree_identity_preparation(&client.installation)
             .unwrap();
         tree_identity.verify_pre_exchange(&candidate_usr, &live_usr).unwrap();
         let synthesized_token = recovery_tree_token(&live_usr);
@@ -20493,6 +20780,7 @@ let cast = import! cast.system.v1
                 false,
                 false,
                 &tree_identity,
+                &active_state,
                 &mut |_| Ok(()),
             )
             .unwrap();
@@ -20939,16 +21227,19 @@ let cast = import! cast.system.v1
     #[test]
     fn ephemeral_root_and_isolation_root_abi_conflicts_are_both_non_destructive() {
         let temporary = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(temporary.path());
         let installation_root = temporary.path().join("installation");
         let blit_root = temporary.path().join("ephemeral");
         fs::create_dir(&installation_root).unwrap();
-        fs::create_dir_all(blit_root.join("usr/lib")).unwrap();
+        fs::create_dir(&blit_root).unwrap();
+        prepare_private_installation_root(&blit_root);
         let installation = test_installation(&installation_root);
         let client = Client::builder("root-abi-ephemeral-test", installation)
             .repositories(repository::Map::default())
             .ephemeral(&blit_root)
             .build()
             .unwrap();
+        fs::create_dir_all(blit_root.join("usr/lib")).unwrap();
 
         let foreign = blit_root.join("bin");
         fs::write(&foreign, b"foreign ephemeral entry").unwrap();

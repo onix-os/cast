@@ -801,9 +801,13 @@ and instant rollback mechanism; it hardens their failure semantics.
   remains marker-only so a trigger-corrupted candidate can still be reversed and
   preserved. On success, one whole-wrapper `RENAME_EXCHANGE` moves the displaced
   old wrapper intact to the private `active-reblit-wrapper` slot and leaves the
-  exact empty replacement at fixed staging; the old payload remains opaque, so a
-  missing or corrupt old `.stateID` is preserved rather than authenticated or
-  repaired. Once the replacement reservation is retained, a pre-commit failure,
+  exact empty replacement at fixed staging. Entry into active-state verification
+  requires a strict retained proof of the live `.stateID`; a missing, malformed,
+  unsafe, or conflicting live selection fails closed before candidate staging is
+  mutated. After exchange, the displaced old payload remains opaque and is never
+  repaired in place. Restart-safe recovery from damaged live selection metadata
+  remains dependent on the durable baseline and startup reconciliation work
+  below. Once the replacement reservation is retained, a pre-commit failure,
   or a failure after a compensating `/usr` reverse, uses that same pre-reserved
   exchange to preserve the entire failed candidate wrapper and consumes no
   second quarantine name. If bounded-name exhaustion or a create/reopen failure

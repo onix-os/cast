@@ -12,7 +12,7 @@ use thiserror::Error as ThisError;
 
 use super::{
     Client, Error, TriggerScope, archived_repair_materialization::ArchivedRepairCandidate, archived_repair_metadata,
-    create_root_links,
+    create_root_links, postblit::RetainedTransactionKind,
 };
 use crate::{
     State, SystemModel,
@@ -106,11 +106,12 @@ impl Client {
             tree: fstree,
             staging: retained_staging,
             candidate_usr,
-            _coordinator,
+            active_state,
         } = candidate;
         let staging = self.installation.staging_dir();
 
-        // Materialization created the wrapper under `_coordinator` with
+        // Materialization created the wrapper under `active_state`'s
+        // coordinator with
         // independent package inodes from byte zero. This is the only mutation
         // before the retained wrapper identity exists; the coordinator remains
         // owned here through metadata, triggers, and publication.
@@ -132,6 +133,7 @@ impl Client {
         retained_staging
             .revalidate(&self.installation)
             .map_err(|source| archived_repair_staging_error(state, &staging, "before retained identity", source))?;
+        active_state.revalidate(&self.installation)?;
         let identity = ArchivedStateRepairIdentity::prepare_retained_candidate(
             &self.installation,
             &self.state_db,
@@ -150,6 +152,7 @@ impl Client {
             .map_err(|source| archived_repair_staging_error(state, &staging, "after retained identity", source))?;
 
         let prepare = (|| {
+            let local_etc = super::transaction_root::require_local_etc(&self.installation)?;
             checkpoint(ArchivedRepairCheckpoint::IdentityPrepared)?;
             identity
                 .verify_candidate_snapshot(&self.installation, &self.state_db)
@@ -159,7 +162,7 @@ impl Client {
             // Root ABI links belong to the container scratch root, never to
             // the candidate wrapper. Therefore staging remains exactly
             // `{usr}`, which is part of the guard's retained identity.
-            create_root_links(&self.installation.isolation_dir())?;
+            let isolation_root = create_root_links(&self.installation.isolation_dir())?;
 
             identity
                 .verify_candidate_snapshot(&self.installation, &self.state_db)
@@ -175,7 +178,10 @@ impl Client {
             let (candidate_usr, candidate_usr_path) = identity.retained_candidate_usr();
             Self::apply_triggers(
                 TriggerScope::RetainedTransaction {
+                    kind: RetainedTransactionKind::ArchivedRepair,
                     installation: &self.installation,
+                    isolation_root: &isolation_root,
+                    local_etc: &local_etc,
                     candidate_usr,
                     candidate_usr_path,
                 },

@@ -12,7 +12,10 @@ mod retained_transaction;
 
 use std::{
     io,
-    os::unix::process::{CommandExt, ExitStatusExt},
+    os::{
+        fd::AsRawFd as _,
+        unix::process::{CommandExt, ExitStatusExt},
+    },
     path::{Path, PathBuf},
     process::{self as std_process, Stdio},
 };
@@ -46,6 +49,7 @@ const TRANSACTION_PSEUDO_FILESYSTEMS: PseudoFilesystemPolicy = PseudoFilesystemP
     dev: DevPolicy::Minimal,
 };
 const TRANSACTION_ROOT_FILESYSTEM: RootFilesystemPolicy = RootFilesystemPolicy::ReadOnly;
+const TRIGGER_RELATIVE_TO_USR: &str = "share/cast/triggers";
 
 /// Transaction trigger wrapper
 /// These are loaded from `/usr/share/cast/triggers/tx.d/*.glu`
@@ -112,6 +116,12 @@ impl GluonCodec for SystemTriggerCodec {
 }
 
 /// The trigger scope determines the environment that the trigger runs in
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RetainedTransactionKind {
+    Stateful,
+    ArchivedRepair,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum TriggerScope<'a> {
     /// A transaction trigger, isolated to `/usr`
@@ -120,12 +130,13 @@ pub(super) enum TriggerScope<'a> {
     /// An inactive-state transaction trigger whose complete execution view is
     /// selected through retained filesystem capabilities.
     ///
-    /// Trigger configuration discovery is still performed through
-    /// `candidate_usr_path`; that bounded limitation is intentionally kept
-    /// separate from execution. Before a handler runs, the container root,
-    /// installation `/etc`, and candidate `/usr` are all descriptor-pinned.
+    /// Trigger discovery and handler execution both remain beneath retained
+    /// filesystem capabilities for the selected candidate.
     RetainedTransaction {
+        kind: RetainedTransactionKind,
         installation: &'a Installation,
+        isolation_root: &'a super::RetainedRootAbi,
+        local_etc: &'a super::transaction_root::RetainedLocalEtc,
         candidate_usr: &'a std::fs::File,
         candidate_usr_path: &'a Path,
     },
@@ -136,12 +147,7 @@ pub(super) enum TriggerScope<'a> {
 
 impl TriggerScope<'_> {
     /// Locate packaged trigger intent.
-    ///
-    /// The retained transaction arm remains path-based only for configuration
-    /// loading. Handler execution does not reuse this pathname as authority.
     fn trigger_root(&self) -> PathBuf {
-        const TRIGGER_RELATIVE_TO_USR: &str = "share/cast/triggers";
-
         match self {
             TriggerScope::Transaction(install, scope) => match scope {
                 super::Scope::Stateful => install.staging_path("usr").join(TRIGGER_RELATIVE_TO_USR),
@@ -197,19 +203,22 @@ pub(super) fn triggers<'a>(
 
     // Load appropriate triggers from their locations and convert back to a vec of Trigger
     let triggers = match scope {
-        TriggerScope::Transaction(..) | TriggerScope::RetainedTransaction { .. } => {
-            config::Manager::custom(&full_trigger_path)
-                .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
-                .map_err(|error| Error::Config(Box::new(error)))?
-                .into_iter()
-                .map(|l| l.value.0)
-                .collect_vec()
-        }
+        TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
+            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
+            .map_err(|error| Error::Config(Box::new(error)))?
+            .into_iter()
+            .map(|loaded| loaded.value.0)
+            .collect_vec(),
+        TriggerScope::RetainedTransaction {
+            candidate_usr,
+            candidate_usr_path,
+            ..
+        } => load_retained_transaction_triggers(candidate_usr, candidate_usr_path)?,
         TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
             .load_gluon(&Evaluator::default(), &SystemTriggerCodec)
             .map_err(|error| Error::Config(Box::new(error)))?
             .into_iter()
-            .map(|l| l.value.0)
+            .map(|loaded| loaded.value.0)
             .collect_vec(),
     };
 
@@ -222,6 +231,37 @@ pub(super) fn triggers<'a>(
         .map(|trigger| TriggerRunner { scope, trigger })
         .collect_vec();
     Ok(computed_commands)
+}
+
+fn load_retained_transaction_triggers(
+    candidate_usr: &std::fs::File,
+    candidate_usr_path: &Path,
+) -> Result<Vec<Trigger>, Error> {
+    let trigger_root_path = candidate_usr_path.join(TRIGGER_RELATIVE_TO_USR);
+    let trigger_root = match crate::linux_fs::openat2_file(
+        candidate_usr.as_raw_fd(),
+        c"share/cast/triggers",
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        crate::linux_fs::controlled_resolution(),
+    ) {
+        Ok(root) => root,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(Error::Config(Box::new(config::LoadGluonError::Enumerate {
+                path: trigger_root_path,
+                source,
+            })));
+        }
+    };
+    config::load_gluon_rooted(
+        &trigger_root_path,
+        &trigger_root,
+        &Evaluator::default(),
+        &TransactionTriggerCodec,
+    )
+    .map_err(|error| Error::Config(Box::new(error)))
+    .map(|loaded| loaded.into_iter().map(|loaded| loaded.value.0).collect_vec())
 }
 
 impl TriggerRunner<'_> {
@@ -252,10 +292,19 @@ impl TriggerRunner<'_> {
             }
             TriggerScope::RetainedTransaction {
                 installation,
+                isolation_root,
+                local_etc,
                 candidate_usr,
                 candidate_usr_path,
+                ..
             } => {
-                let isolation = retained_transaction::container(installation, candidate_usr, candidate_usr_path)?;
+                let isolation = retained_transaction::container(
+                    installation,
+                    isolation_root,
+                    local_etc,
+                    candidate_usr,
+                    candidate_usr_path,
+                )?;
                 retained_transaction::before_activation();
                 Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
             }
@@ -484,25 +533,6 @@ pub enum Error {
         source: io::Error,
     },
 
-    #[error("open retained transaction {role} directory `{}`", path.display())]
-    OpenRetainedTransactionDirectory {
-        role: &'static str,
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-
-    #[error("inspect retained transaction {role} directory `{}`", path.display())]
-    InspectRetainedTransactionDirectory {
-        role: &'static str,
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-
-    #[error("retained transaction {role} directory `{}` was replaced during container preparation", path.display())]
-    RetainedTransactionDirectoryReplaced { role: &'static str, path: PathBuf },
-
     #[error("prepare retained transaction container mount target `{}`", path.display())]
     PrepareRetainedTransactionMountTarget {
         path: PathBuf,
@@ -526,7 +556,10 @@ pub enum Error {
 mod tests {
     use std::{
         collections::BTreeMap,
-        os::{fd::AsRawFd, unix::fs::symlink},
+        os::{
+            fd::AsRawFd,
+            unix::fs::{OpenOptionsExt as _, symlink},
+        },
     };
 
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -583,6 +616,54 @@ let base = cast.trigger "depmod" "Update kernel module dependencies"
             .match_path("/usr/lib/modules/6.12.1/kernel")
             .expect("kernel path must match");
         assert_eq!(matched.variables.get("version").map(String::as_str), Some("6.12.1"));
+    }
+
+    #[test]
+    fn retained_trigger_discovery_ignores_fixed_staging_substitution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let staging = temporary.path().join("staging");
+        let candidate_usr_path = staging.join("usr");
+        let original = candidate_usr_path.join("share/cast/triggers/tx.d/original.glu");
+        fs_err::create_dir_all(original.parent().unwrap()).unwrap();
+        fs_err::write(&original, transaction_trigger_source("original", "/bin/true")).unwrap();
+        let candidate_usr = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(&candidate_usr_path)
+            .unwrap();
+
+        let displaced = temporary.path().join("displaced-staging");
+        let injected = candidate_usr_path.join("share/cast/triggers/tx.d/injected.glu");
+        fs_err::rename(&staging, &displaced).unwrap();
+        fs_err::create_dir_all(injected.parent().unwrap()).unwrap();
+        fs_err::write(&injected, transaction_trigger_source("injected", "/bin/false")).unwrap();
+
+        let loaded = load_retained_transaction_triggers(&candidate_usr, &candidate_usr_path).unwrap();
+
+        assert_eq!(
+            loaded.iter().map(|trigger| trigger.name.as_str()).collect_vec(),
+            ["original"]
+        );
+        assert!(injected.exists());
+        assert!(!loaded.iter().any(|trigger| trigger.name == "injected"));
+    }
+
+    fn transaction_trigger_source(name: &str, command: &str) -> String {
+        format!(
+            r#"let cast = import! cast.trigger.v1
+let base = cast.trigger "{name}" "Retained trigger discovery fixture"
+{{
+    paths = [cast.path
+        "/usr/share/{name}"
+        ["{name}"]
+        (cast.optional.set cast.path_kind.directory)],
+    handlers = [cast.handler.named "{name}" (cast.handler.run
+        "{command}"
+        [])],
+    .. base
+}}
+"#
+        )
     }
 
     #[test]

@@ -42,7 +42,25 @@ pub enum Strategy<'a> {
 
 /// Prune old states using [`Strategy`] and garbage collect
 /// all cached data related to those states being removed
-pub(super) fn prune_states(client: &Client, strategy: Strategy<'_>, yes: bool) -> Result<(), Error> {
+pub(super) fn prune_states(
+    client: &Client,
+    strategy: Strategy<'_>,
+    yes: bool,
+    active_state: &super::active_state_snapshot::ActiveStateLease,
+) -> Result<(), super::Error> {
+    match prune_states_inner(client, strategy, yes, active_state) {
+        Ok(()) => Ok(()),
+        Err(Error::ActiveState { source }) => Err(*source),
+        Err(source) => Err(super::Error::Prune(source)),
+    }
+}
+
+fn prune_states_inner(
+    client: &Client,
+    strategy: Strategy<'_>,
+    yes: bool,
+    active_state: &super::active_state_snapshot::ActiveStateLease,
+) -> Result<(), Error> {
     let installation = &client.installation;
     let layout_db = &client.layout_db;
     let state_db = &client.state_db;
@@ -53,7 +71,7 @@ pub(super) fn prune_states(client: &Client, strategy: Strategy<'_>, yes: bool) -
 
     // Only prune if the Cast root has an active state (otherwise
     // it's probably borked or not setup yet)
-    let Some(current_state_id) = installation.active_state else {
+    let Some(current_state_id) = active_state.active() else {
         return Err(Error::NoActiveState);
     };
     let current_state = state_db.get(current_state_id)?;
@@ -164,6 +182,7 @@ pub(super) fn prune_states(client: &Client, strategy: Strategy<'_>, yes: bool) -
     }
 
     // Prune these states / packages from all dbs
+    revalidate_active_state(active_state, installation)?;
     prune_databases(&removals, &package_removals, state_db, install_db, layout_db)?;
 
     timing.prune_db = instant.elapsed();
@@ -212,6 +231,7 @@ pub(super) fn prune_states(client: &Client, strategy: Strategy<'_>, yes: bool) -
         "Removing stale archive trees"
     );
 
+    revalidate_active_state(active_state, installation)?;
     remove_archived_states(&archive_paths)?;
 
     timing.prune_archives = instant.elapsed();
@@ -223,9 +243,21 @@ pub(super) fn prune_states(client: &Client, strategy: Strategy<'_>, yes: bool) -
     );
 
     // Sync boot to ensure pruned states are removed from boot entries
+    revalidate_active_state(active_state, installation)?;
     boot::synchronize(client, &current_state, None).map_err(Error::SyncBoot)?;
 
     Ok(())
+}
+
+fn revalidate_active_state(
+    active_state: &super::active_state_snapshot::ActiveStateLease,
+    installation: &Installation,
+) -> Result<(), Error> {
+    active_state
+        .revalidate(installation)
+        .map_err(|source| Error::ActiveState {
+            source: Box::new(source),
+        })
 }
 
 /// Prune all cached data that isn't related to any states
@@ -500,6 +532,11 @@ pub enum Error {
     NoActiveState,
     #[error("cannot prune the currently active state")]
     PruneCurrent,
+    #[error("active-state snapshot changed while pruning")]
+    ActiveState {
+        #[source]
+        source: Box<super::Error>,
+    },
     #[error("db")]
     DB(#[from] db::Error),
     #[error("repository integrity")]

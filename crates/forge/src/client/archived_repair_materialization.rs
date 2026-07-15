@@ -1,12 +1,11 @@
 //! Private, alias-free materialization for inactive archived-state repair.
 
-use std::sync::MutexGuard;
-
 use thiserror::Error as ThisError;
 
 use super::{
     AssetMaterialization, BlitExecution, Client, Error, PendingFile, Scope,
-    fixed_staging::{FixedStagingError, RetainedFixedStaging, lock_coordinator},
+    active_state_snapshot::ActiveStateLease,
+    fixed_staging::{FixedStagingError, RetainedFixedStaging},
 };
 use crate::package;
 
@@ -17,7 +16,7 @@ pub(super) struct ArchivedRepairCandidate {
     pub(super) tree: vfs::Tree<PendingFile>,
     pub(super) staging: RetainedFixedStaging,
     pub(super) candidate_usr: std::fs::File,
-    pub(super) _coordinator: MutexGuard<'static, ()>,
+    pub(super) active_state: ActiveStateLease,
 }
 
 #[derive(Debug, ThisError)]
@@ -51,7 +50,7 @@ impl Client {
             return Err(MaterializationError::StatefulClientRequired.into());
         }
 
-        let coordinator = lock_coordinator()?;
+        let active_state = ActiveStateLease::acquire(&self.installation)?;
         let tree = self.vfs(packages)?;
         let staging = RetainedFixedStaging::prepare_empty(&self.installation).map_err(|source| {
             MaterializationError::FixedStaging {
@@ -68,12 +67,13 @@ impl Client {
             .map_err(|source| MaterializationError::FixedStaging {
                 source: Box::new(source),
             })?;
+        active_state.revalidate(&self.installation)?;
 
         Ok(ArchivedRepairCandidate {
             tree,
             staging,
             candidate_usr,
-            _coordinator: coordinator,
+            active_state,
         })
     }
 }

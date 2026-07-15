@@ -34,13 +34,17 @@ pub fn install(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) ->
     let input = resolve_input(pkgs, client)?;
     debug!(resolved_packages = input.len(), "Resolved input packages");
 
-    // Add all inputs
-    let mut tx = client.registry.transaction(transaction::Lookup::PreferInstalled)?;
-
-    tx.add(input.clone())?;
+    // Resolve the transaction while retaining a proof for the exact active
+    // registry snapshot. Drop that proof before the separately guarded
+    // metadata resolution and before any later state transition.
+    let finalized = client.with_registry_snapshot(|registry| -> Result<Vec<package::Id>, Error> {
+        let mut tx = registry.transaction(transaction::Lookup::PreferInstalled)?;
+        tx.add(input.clone())?;
+        Ok(tx.finalize().cloned().collect())
+    })?;
 
     // Resolve transaction to metadata
-    let resolved = client.resolve_packages(tx.finalize())?;
+    let resolved = client.resolve_packages(finalized.iter())?;
 
     install_resolved(client, input, resolved, yes, simulate)
 }
@@ -133,7 +137,8 @@ fn install_resolved(
     let mut instant = Instant::now();
 
     // Get installed packages to check against
-    let installed = client.registry.list_installed()?;
+    let installed =
+        client.with_registry_snapshot(|registry| -> Result<Vec<Package>, Error> { Ok(registry.list_installed()?) })?;
     let is_installed = |p: &Package| installed.iter().any(|i| i.meta.name == p.meta.name);
 
     // Get missing packages that are:
@@ -222,7 +227,7 @@ fn install_resolved(
     // Calculate the new state of packages (old_state + missing)
     let new_state_pkgs = {
         // Only use previous state in stateful mode
-        let previous_selections = match client.installation.active_state {
+        let previous_selections = match client.active_state_for_planning()? {
             Some(id) if !client.is_ephemeral() => client.state_db.get(id)?.selections,
             _ => vec![],
         };
@@ -273,14 +278,15 @@ fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<package::Id>, Err
 /// Resolve a package name to the first package
 fn find_packages(id: &str, client: &Client) -> Result<(String, Option<Package>), Error> {
     let provider = Provider::from_name(id).unwrap();
-    let result = client
-        .registry
-        .by_provider(&provider, Flags::new().with_available())?
-        .into_iter()
-        .next();
+    client.with_registry_snapshot(|registry| -> Result<(String, Option<Package>), Error> {
+        let result = registry
+            .by_provider(&provider, Flags::new().with_available())?
+            .into_iter()
+            .next();
 
-    // First only, pre-sorted
-    Ok((id.into(), result))
+        // First only, pre-sorted
+        Ok((id.into(), result))
+    })
 }
 
 /// Simple timing information for Install
@@ -382,10 +388,15 @@ mod tests {
     }
 
     fn frozen_client(root: &std::path::Path, packages: Vec<Package>) -> Client {
+        prepare_private_installation_root(root);
+        let installation_root = root.join("installation");
+        if !installation_root.exists() {
+            fs_err::create_dir(&installation_root).unwrap();
+        }
+        prepare_private_installation_root(&installation_root);
         let blit_root = root.join("frozen-root");
         fs_err::create_dir(&blit_root).unwrap();
-        prepare_private_installation_root(root);
-        let installation = Installation::open_frozen(root, None).unwrap();
+        let installation = Installation::open_frozen(&installation_root, None).unwrap();
         let repositories = repository::Map::with([(
             repository::Id::new("explicit"),
             repository::Repository {
@@ -508,11 +519,12 @@ mod tests {
     fn public_frozen_materialization_ignores_ambient_active_and_cobble_candidates() {
         const STONE: &[u8] = include_bytes!("../../../../tests/fixtures/bash-completion-2.11-1-1-x86_64.stone");
         let temporary = tempfile::tempdir().unwrap();
-        let intent_path = system_model::intent_path(temporary.path());
+        let installation_root = temporary.path().join("installation");
+        let intent_path = system_model::intent_path(&installation_root);
         fs_err::create_dir_all(intent_path.parent().unwrap()).unwrap();
         fs_err::write(&intent_path, b"this is deliberately invalid Gluon").unwrap();
-        fs_err::create_dir_all(temporary.path().join("usr")).unwrap();
-        fs_err::write(temporary.path().join("usr/.stateID"), b"42").unwrap();
+        fs_err::create_dir_all(installation_root.join("usr")).unwrap();
+        fs_err::write(installation_root.join("usr/.stateID"), b"42").unwrap();
 
         let cobble_path = temporary.path().join("ambient.stone");
         fs_err::write(&cobble_path, STONE).unwrap();

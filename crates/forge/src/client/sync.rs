@@ -30,7 +30,8 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
     let system_model = client.installation.system_model.clone();
 
     // Grab all the existing installed packages
-    let installed = client.registry.list_installed()?;
+    let installed =
+        client.with_registry_snapshot(|registry| -> Result<Vec<Package>, Error> { Ok(registry.list_installed()?) })?;
 
     // Resolve the final state of packages after considering sync updates
     let finalized = if let Some(system_model) = &system_model {
@@ -168,7 +169,7 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
             .collect()
     } else {
         // Map finalized state to a [`Selection`] by referencing it's value from the previous state
-        let previous_selections = match client.installation.active_state {
+        let previous_selections = match client.active_state_for_planning()? {
             Some(id) => client.state_db.get(id)?.selections,
             None => vec![],
         };
@@ -221,33 +222,36 @@ pub fn sync(client: &Client, yes: bool, simulate: bool) -> Result<Timing, Error>
 /// Used to sync in "implicit" mode, where the active state is the source of truth
 #[tracing::instrument(skip_all)]
 fn resolve_with_installed(client: &Client, packages: &[Package]) -> Result<Vec<Package>, Error> {
-    let all_ids = packages.iter().map(|p| &p.id).collect::<BTreeSet<_>>();
+    let finalized = client.with_registry_snapshot(|registry| -> Result<Vec<package::Id>, Error> {
+        let all_ids = packages.iter().map(|p| &p.id).collect::<BTreeSet<_>>();
 
-    // For each explicit package, replace it w/ it's sync'd change (if available)
-    // or return the original package
-    let mut with_sync = Vec::new();
-    for package in packages.iter().filter(|package| package.flags.explicit) {
-        let lookup = client
-            .registry
-            .by_name(&package.meta.name, package::Flags::new().with_available())?
-            .into_iter()
-            .next();
-        if let Some(lookup) = lookup
-            && !all_ids.contains(&lookup.id)
-        {
-            with_sync.push(lookup.id);
-        } else {
-            with_sync.push(package.id.clone());
+        // For each explicit package, replace it w/ it's sync'd change (if available)
+        // or return the original package
+        let mut with_sync = Vec::new();
+        for package in packages.iter().filter(|package| package.flags.explicit) {
+            let lookup = registry
+                .by_name(&package.meta.name, package::Flags::new().with_available())?
+                .into_iter()
+                .next();
+            if let Some(lookup) = lookup
+                && !all_ids.contains(&lookup.id)
+            {
+                with_sync.push(lookup.id);
+            } else {
+                with_sync.push(package.id.clone());
+            }
         }
-    }
 
-    // Build a new tx from this sync'd package set
-    let mut tx = client.registry.transaction(transaction::Lookup::PreferAvailable)?;
-    // Add all explicit packages to build the final tx state
-    tx.add(with_sync)?;
+        // Build a new tx from this sync'd package set
+        let mut tx = registry.transaction(transaction::Lookup::PreferAvailable)?;
+        // Add all explicit packages to build the final tx state
+        tx.add(with_sync)?;
+        Ok(tx.finalize().cloned().collect())
+    })?;
 
-    // Resolve the tx
-    Ok(client.resolve_packages(tx.finalize())?)
+    // Resolve after releasing the registry snapshot lease so a later state
+    // transition cannot deadlock on the cooperating-writer coordinator.
+    Ok(client.resolve_packages(finalized.iter())?)
 }
 
 /// Returns the resolved package set based on packages defined by the system intent.
@@ -256,26 +260,28 @@ fn resolve_with_installed(client: &Client, packages: &[Package]) -> Result<Vec<P
 /// state + configured repos as the source of truth
 #[tracing::instrument(skip_all)]
 fn resolve_with_system_model(client: &Client, system_model: &LoadedSystemModel) -> Result<Vec<Package>, Error> {
-    // Lookup the available package for each
-    let packages = system_model
-        .packages
-        .iter()
-        .map(|provider| -> Result<package::Id, Error> {
-            Ok(client
-                .registry
-                .by_provider_id_only(provider, package::Flags::default().with_available())?
-                .into_iter()
-                .next()
-                .ok_or(Error::MissingSystemModelPackage(provider.clone()))?)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let finalized = client.with_registry_snapshot(|registry| -> Result<Vec<package::Id>, Error> {
+        // Lookup the available package for each
+        let packages = system_model
+            .packages
+            .iter()
+            .map(|provider| -> Result<package::Id, Error> {
+                Ok(registry
+                    .by_provider_id_only(provider, package::Flags::default().with_available())?
+                    .into_iter()
+                    .next()
+                    .ok_or(Error::MissingSystemModelPackage(provider.clone()))?)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-    // Add them to a transaction that only resolves transitives from available repositories
-    let mut tx = client.registry.transaction(transaction::Lookup::AvailableOnly)?;
-    tx.add(packages)?;
+        // Add them to a transaction that only resolves transitives from available repositories
+        let mut tx = registry.transaction(transaction::Lookup::AvailableOnly)?;
+        tx.add(packages)?;
+        Ok(tx.finalize().cloned().collect())
+    })?;
 
-    // Resolve the tx
-    Ok(client.resolve_packages(tx.finalize())?)
+    // Resolve the tx after releasing the first snapshot lease.
+    Ok(client.resolve_packages(finalized.iter())?)
 }
 
 /// Simple timing information for Sync

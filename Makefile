@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-client-startup-gate-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -101,6 +101,20 @@ test: lint config-formats-test delegated-fixture-runner-test cache-clean-test ex
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
+config-rooted-gluon-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p config --lib -- --list )"; \
+	for test in \
+		rooted_gluon::tests::rooted_load_uses_the_retained_tree_after_public_path_substitution \
+		rooted_gluon::tests::rooted_load_rejects_nested_import_directory_substitution_during_decode; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p config --lib "$$test" -- --exact --test-threads=1; \
+	done; \
+	chain_test=source::tests::descriptor_root_rejects_substitution_beneath_a_retained_import_directory; \
+	gluon_listed="$$( $(CARGO) test -p gluon_config --lib -- --list )"; \
+	printf '%s\n' "$$gluon_listed" | grep -Fqx "$$chain_test: test"; \
+	$(CARGO) test -p gluon_config --lib "$$chain_test" -- --exact --test-threads=1
+
 forge-client-startup-gate-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
@@ -110,6 +124,49 @@ forge-client-startup-gate-test:
 		client::startup_gate_tests::orphan_transition_row_blocks_startup_before_repository_construction \
 		client::startup_gate_tests::frozen_client_ignores_system_journal_and_persistent_transition_rows \
 		client::startup_gate_tests::system_builder_cannot_use_frozen_discovery_to_bypass_the_startup_gate; do \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-active-state-snapshot-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::active_state_snapshot_tests::exact_empty_and_authenticated_marker_only_first_install_baselines_are_accepted \
+		client::active_state_snapshot_tests::missing_state_id_rejects_nonempty_or_unauthenticated_marker_only_usr \
+		client::active_state_snapshot_tests::clean_live_selection_changes_are_distinct_from_invalid_evidence \
+		client::active_state_snapshot_tests::malformed_and_unsafe_state_ids_fail_closed_instead_of_becoming_absence \
+		client::active_state_snapshot_tests::wrong_mode_and_nonregular_state_ids_are_rejected_and_preserved \
+		client::active_state_snapshot_tests::usr_and_state_id_symlinks_are_never_followed \
+		client::active_state_snapshot_tests::installation_discovery_is_bounded_and_never_follows_unsafe_state_entries \
+		client::active_state_snapshot_tests::state_id_final_name_replacement_is_rejected_with_both_inodes_preserved \
+		client::active_state_snapshot_tests::same_inode_state_id_rewrite_after_first_read_is_rejected \
+		client::active_state_snapshot_tests::state_id_insertion_during_absence_proof_is_rejected_untouched \
+		client::active_state_snapshot_tests::foreign_entry_inserted_after_first_empty_scan_is_rejected_untouched \
+		client::active_state_snapshot_tests::retained_lease_rejects_same_inode_state_id_aba_after_acquisition \
+		client::active_state_snapshot_tests::retained_lease_rejects_whole_usr_replacement_and_restore \
+		client::active_state_snapshot_tests::stale_builder_rejects_before_opening_database_files \
+		client::active_state_snapshot_tests::reused_client_rejects_a_second_state_before_database_allocation \
+		client::active_state_snapshot_tests::state_id_aba_during_candidate_fill_fails_before_row_allocation_or_tree_identity \
+		client::active_state_snapshot_tests::stale_cloned_client_cannot_activate_after_a_sibling_transition \
+		client::active_state_snapshot_tests::stale_verify_prune_boot_and_read_apis_fail_before_authoritative_work \
+		client::active_state_snapshot_tests::stale_registry_queries_fail_before_reading_the_construction_time_active_plugin \
+		client::active_state_snapshot_tests::workflow_registry_reads_reject_a_sibling_transition_after_public_preflight \
+		client::active_state_snapshot_tests::available_closure_rejects_a_sibling_transition_even_without_requests \
+		cli::sync::tests::sync_import_cli_evaluates_authored_intent_for_an_ephemeral_target \
+		client::tests::ephemeral_import_evaluates_intent_and_records_only_a_generated_snapshot \
+		client::tests::ephemeral_blit_isolates_cached_asset_bytes_and_mode \
+		client::tests::ephemeral_root_and_isolation_root_abi_conflicts_are_both_non_destructive \
+		client::install::tests::frozen_resolution_uses_only_exact_ids_without_dependency_recomposition \
+		client::install::tests::public_frozen_materialization_ignores_ambient_active_and_cobble_candidates \
+		client::install::tests::metadata_only_frozen_closure_publishes_without_an_asset_pool \
+		client::install::tests::frozen_client_rejects_other_mutating_apis_before_side_effects \
+		client::active_state_snapshot_tests::stale_stateful_candidate_fails_before_fixed_staging_mutation \
+		client::active_state_snapshot_tests::stale_ephemeral_candidate_fails_before_touching_its_external_target \
+		client::active_state_authority_tests::restart_rejects_missing_or_malformed_active_metadata_before_client_construction \
+		client::active_state_authority_tests::public_verify_rejects_damaged_active_metadata_without_repairing_it \
+		client::active_state_authority_tests::matching_canonical_bytes_with_unsafe_metadata_fail_closed \
+		client::active_state_authority_tests::suspended_strict_authority_rejects_same_inode_mutation_before_resume; do \
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
@@ -157,7 +214,7 @@ forge-active-reblit-wrapper-test:
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
 		client::active_reblit_tests::active_reblit_rotates_the_whole_old_wrapper_and_leaves_exact_empty_staging \
-		client::active_reblit_tests::active_reblit_preserves_missing_or_corrupt_old_state_id_opaquely \
+		client::active_reblit_tests::active_reblit_refuses_missing_or_malformed_live_state_id_without_staging_mutation \
 		client::active_reblit_tests::active_reblit_rejects_same_inode_state_id_rewrite_before_exchange \
 		client::active_reblit_tests::active_reblit_rejects_same_content_new_state_id_inode \
 		client::active_reblit_tests::active_reblit_exchange_preflight_rejects_last_moment_state_id_replacement \
@@ -189,6 +246,8 @@ forge-archived-repair-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
+		client::postblit::tests::retained_trigger_discovery_ignores_fixed_staging_substitution \
+		client::postblit::retained_transaction::tests::container_rejects_an_isolation_root_replacement_after_abi_provisioning \
 		client::postblit::retained_transaction::tests::writable_bind_ignores_fixed_staging_substitution \
 		client::archived_repair_tests::archived_repair_replaces_the_whole_wrapper_and_preserves_old_payload_opaquely \
 		client::archived_repair_tests::archived_repair_publishes_missing_wrapper_directly_and_restores_empty_staging \
@@ -278,6 +337,10 @@ forge-fixed-staging-test:
 		client::tests::external_materialization::final_name_substitution_never_turns_a_filled_retained_root_into_success \
 		client::tests::external_materialization::symlink_and_nonempty_targets_are_left_untouched \
 		client::tests::external_materialization::world_writable_direct_parent_is_rejected_without_creating_or_removing_a_target \
+		client::transaction_root::tests::created_local_etc_is_normalized_and_authenticated \
+		client::transaction_root::tests::private_name_substitution_is_rejected_without_chmodding_the_replacement \
+		client::transaction_root::tests::preexisting_group_writable_or_symlink_local_etc_is_preserved_and_rejected \
+		client::transaction_root::tests::final_name_substitution_during_local_etc_proof_is_rejected \
 		client::tests::verify_reblits_and_preserves_the_existing_normalized_snapshot; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
@@ -626,7 +689,9 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
+	@echo "  config-rooted-gluon-test  Run descriptor-rooted Gluon substitution-race tests"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
+	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
 	@echo "  forge-fixed-staging-test  Run retained fixed-staging and external-target security tests"

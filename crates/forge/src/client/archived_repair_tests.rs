@@ -53,6 +53,11 @@ impl Fixture {
         prepare_strict_live_tree_marker(&client.installation);
         fs::write(client.installation.root.join("usr/live-sentinel"), b"live").unwrap();
         fs::create_dir(client.installation.root.join("etc")).unwrap();
+        fs::set_permissions(
+            client.installation.root.join("etc"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         fs::write(client.installation.root.join("etc/local-sentinel"), b"local").unwrap();
         fs::create_dir(client.installation.root.join("boot")).unwrap();
         fs::write(client.installation.root.join("boot/boot-sentinel"), b"boot").unwrap();
@@ -352,17 +357,20 @@ fn archived_repair_detects_active_row_deletion_and_reports_preservation_incomple
 #[test]
 fn archived_repair_rejects_a_target_selected_active_before_guard_preparation() {
     let mut fixture = Fixture::new(false);
+    let candidate = fixture.empty_candidate();
     fixture.client.installation.active_state = Some(fixture.repaired.id);
 
     let error = fixture
         .client
-        .repair_archived_state(
-            fixture.empty_candidate(),
-            &fixture.repaired,
-            fixture.snapshot("became-active"),
-        )
+        .repair_archived_state(candidate, &fixture.repaired, fixture.snapshot("became-active"))
         .unwrap_err();
-    assert!(matches!(repair_error(error), RepairError::Preparation { .. }));
+    assert!(matches!(
+        error,
+        Error::ActiveStateSnapshotChanged {
+            expected: Some(expected),
+            actual: Some(actual),
+        } if expected == fixture.repaired.id && actual == fixture.active.id
+    ));
     assert!(!fixture.archived_root.exists());
     assert_eq!(
         fixture.client.state_db.get(fixture.repaired.id).unwrap(),

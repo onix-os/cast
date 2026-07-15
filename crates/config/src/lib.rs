@@ -8,11 +8,13 @@ use std::{
 };
 
 mod gluon;
+mod rooted_gluon;
 
 pub use self::gluon::{
     DecodedGluon, DeleteGluonError, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError,
     LoadGluonError, LoadedGluonConfig, SaveGluonError,
 };
+pub use self::rooted_gluon::load_gluon_rooted;
 
 pub trait Config {
     fn domain() -> String;

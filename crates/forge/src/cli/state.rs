@@ -224,13 +224,13 @@ pub fn verify(args: &ArgMatches, installation: Installation, yes: bool, global_v
 
 fn export(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
     let export = Export::from_arg_matches(args).expect("validate by clap");
+    let client = Client::new(environment::NAME, installation)?;
 
     let id = match export.id {
         Some(id) => state::Id::from(id),
-        None => installation.active_state.ok_or(Error::NoActiveState)?,
+        None => client.get_active_state()?.ok_or(Error::NoActiveState)?.id,
     };
 
-    let client = Client::new(environment::NAME, installation)?;
     let system_model = client.export_state(id)?;
 
     match export.output {

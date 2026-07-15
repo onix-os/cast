@@ -211,7 +211,6 @@ fn set_path_descriptor_times_with_deadline(
 /// mandatory so a final digest cannot perturb the timestamp witness it is
 /// meant to authenticate; freshly materialized package files are required to
 /// be owned by the effective user, so lack of permission fails closed.
-#[cfg(test)]
 pub(crate) fn open_path_descriptor_readonly(file: &std::fs::File) -> io::Result<std::fs::File> {
     open_path_descriptor_readonly_with_deadline(file, None)
 }

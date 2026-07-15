@@ -10,12 +10,12 @@ use super::*;
 fn metadata_decoration_never_follows_a_candidate_lib_symlink() {
     let fixture = Fixture::new(true);
     let old_wrapper = directory_identity(&fixture.archived_root);
-    let candidate = fixture.empty_candidate();
-    let staging = fixture.client.installation.staging_dir();
-    record_state_id(&staging, fixture.repaired.id).unwrap();
     let external = fixture.client.installation.root.join("usr/live-metadata-target");
     fs::create_dir(&external).unwrap();
     fs::write(external.join("sentinel"), b"outside-candidate").unwrap();
+    let candidate = fixture.empty_candidate();
+    let staging = fixture.client.installation.staging_dir();
+    record_state_id(&staging, fixture.repaired.id).unwrap();
     symlink(&external, staging.join("usr/lib")).unwrap();
 
     let preserved = expect_preserved_metadata_failure(&fixture, candidate, fixture.snapshot("lib-symlink-must-fail"));
@@ -36,13 +36,13 @@ fn metadata_decoration_never_follows_a_candidate_lib_symlink() {
 #[test]
 fn metadata_decoration_never_follows_an_os_info_symlink() {
     let fixture = Fixture::new(false);
+    let external = fixture.client.installation.root.join("usr/live-os-info.json");
+    fs::write(&external, b"external-input-must-not-be-read-through-a-link").unwrap();
     let candidate = fixture.empty_candidate();
     let staging = fixture.client.installation.staging_dir();
     record_state_id(&staging, fixture.repaired.id).unwrap();
     let lib = staging.join("usr/lib");
-    let external = fixture.client.installation.root.join("usr/live-os-info.json");
     fs::create_dir_all(&lib).unwrap();
-    fs::write(&external, b"external-input-must-not-be-read-through-a-link").unwrap();
     symlink(&external, lib.join("os-info.json")).unwrap();
 
     let preserved =
@@ -66,18 +66,18 @@ fn metadata_decoration_never_follows_an_os_info_symlink() {
 fn existing_metadata_outputs_are_preserved_without_mutating_regular_or_hardlinked_inodes() {
     for output in ["os-release", "system-model.glu"] {
         let fixture = Fixture::new(true);
-        let candidate = fixture.empty_candidate();
-        let staging = fixture.client.installation.staging_dir();
-        record_state_id(&staging, fixture.repaired.id).unwrap();
-        let lib = staging.join("usr/lib");
         let external = fixture
             .client
             .installation
             .root
             .join("usr")
             .join(format!("live-{output}"));
-        fs::create_dir_all(&lib).unwrap();
         fs::write(&external, format!("outside-{output}")).unwrap();
+        let candidate = fixture.empty_candidate();
+        let staging = fixture.client.installation.staging_dir();
+        record_state_id(&staging, fixture.repaired.id).unwrap();
+        let lib = staging.join("usr/lib");
+        fs::create_dir_all(&lib).unwrap();
         fs::hard_link(&external, lib.join(output)).unwrap();
         let identity = inode_identity(&external);
         assert_eq!(fs::metadata(&external).unwrap().nlink(), 2);

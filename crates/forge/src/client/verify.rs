@@ -30,7 +30,8 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
     // removal of any corrupt asset names. Do not carry this non-reentrant
     // process mutex into cache publication or state materialization: each of
     // those paths acquires and retains its own lease at its mutation boundary.
-    let writer_coordinator = client::fixed_staging::lock_coordinator()?;
+    let writer_lease = client::active_state_authority::ActiveStateAuthority::acquire(&client.installation)?;
+    let active_state = writer_lease.active();
 
     println!("Verifying assets");
 
@@ -131,7 +132,7 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
         .try_fold(Vec::new, |mut acc, state| {
             pb.set_message(format!("Verifying state #{}", state.id));
 
-            let is_active = client.installation.active_state == Some(state.id);
+            let is_active = active_state == Some(state.id);
 
             let vfs = client.vfs(state.selections.iter().map(|s| &s.package))?;
 
@@ -178,6 +179,7 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
     pb.finish_and_clear();
 
     if issues.is_empty() {
+        writer_lease.revalidate(&client.installation)?;
         println!("No issues found");
         return Ok(());
     }
@@ -231,7 +233,8 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
         .collect::<Result<Vec<_>, _>>()?;
 
     // We had some corrupt or missing assets, let's resolve that!
-    if !issue_packages.is_empty() {
+    let writer_snapshot = if !issue_packages.is_empty() {
+        writer_lease.revalidate(&client.installation)?;
         // Remove all corrupt assets
         for corrupt_hash in issues.iter().filter_map(Issue::corrupt_hash) {
             let path = cache::asset_path(&client.installation, corrupt_hash);
@@ -242,16 +245,16 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
         // publication closures. Drop the scan lease before entering the async
         // runtime so no std mutex guard crosses an await and cache publication
         // cannot self-deadlock.
-        drop(writer_coordinator);
+        let writer_snapshot = writer_lease.suspend(&client.installation)?;
 
         println!("Reinstalling packages");
 
         // And re-cache all packages that comprise the corrupt / missing asset
         runtime::block_on(client.cache_packages(&issue_packages))?;
+        writer_snapshot
     } else {
-        drop(writer_coordinator);
-    }
-
+        writer_lease.suspend(&client.installation)?
+    };
     // Now we must fix any states that referenced these packages
     // or had their own VFS issues that require a reblit
     let issue_states = states
@@ -268,50 +271,52 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
 
     println!("Reblitting affected states");
 
-    // Reblit each state
-    for id in issue_states {
+    // Resume the exact pre-cache proof rather than recapturing a fresh live
+    // tree. If the active state needs repair, consume that authority into its
+    // candidate before releasing the coordinator for archived repairs.
+    let active_issue = active_state.filter(|id| issue_states.contains(id));
+    if let Some(id) = active_issue {
         let state = states
             .iter()
-            .find(|s| s.id == *id)
+            .find(|state| state.id == id)
             .expect("must come from states originally");
-
-        let is_active = client.installation.active_state == Some(state.id);
-
-        if is_active {
-            let candidate = client.materialize_stateful_candidate(state.selections.iter().map(|s| &s.package))?;
-            let current_state = client.state_db.get(state.id)?;
-            if current_state != *state {
-                return Err(client::Error::VerifyStateChanged { state: state.id });
-            }
-            let system_model = client.load_or_create_system_snapshot(
-                crate::system_model::snapshot_path(&client.installation.root),
-                &current_state,
-            )?;
-
-            // Override install root with the newly blitted active state
-            client.apply_stateful_candidate(candidate, &current_state, None, system_model)?;
-        } else {
-            // Inactive repair is writable by transaction triggers, so it must
-            // receive independent package inodes and a coordinator token from
-            // the first fixed-staging mutation through publication.
-            let candidate = client.materialize_archived_repair_root(state.selections.iter().map(|s| &s.package))?;
-            let current_state = client.state_db.get(state.id)?;
-            if current_state != *state {
-                return Err(client::Error::VerifyStateChanged { state: state.id });
-            }
-            let system_model = client.load_or_create_system_snapshot(
-                crate::system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
-                &current_state,
-            )?;
-
-            // Repair an inactive state without running live System triggers,
-            // exposing a partial archive, or recursively deleting either the
-            // displaced archive or the fixed staging wrapper. The retained
-            // repair guard publishes the whole candidate wrapper and parks the
-            // old or failed wrapper opaquely in private quarantine.
-            client.repair_archived_state(candidate, &current_state, system_model)?;
+        let current_state = client.state_db.get(state.id)?;
+        if current_state != *state {
+            return Err(client::Error::VerifyStateChanged { state: state.id });
         }
+        let system_model = client.load_or_create_system_snapshot(
+            crate::system_model::snapshot_path(&client.installation.root),
+            &current_state,
+        )?;
+        let active_authority = writer_snapshot.resume(&client.installation)?;
+        let candidate = client.materialize_active_verify_candidate(
+            state.selections.iter().map(|selection| &selection.package),
+            active_authority,
+        )?;
+        client.apply_stateful_candidate(candidate, &current_state, None, system_model)?;
+        println!(" {} state #{}", "»".green(), state.id);
+    } else {
+        drop(writer_snapshot.resume(&client.installation)?);
+    }
 
+    // Inactive repair is writable by transaction triggers, so each state gets
+    // independent package inodes and its own coordinator token after the live
+    // authority has been consumed or released.
+    for id in issue_states.into_iter().filter(|id| Some(**id) != active_issue) {
+        let state = states
+            .iter()
+            .find(|state| state.id == *id)
+            .expect("must come from states originally");
+        let current_state = client.state_db.get(state.id)?;
+        if current_state != *state {
+            return Err(client::Error::VerifyStateChanged { state: state.id });
+        }
+        let system_model = client.load_or_create_system_snapshot(
+            crate::system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
+            &current_state,
+        )?;
+        let candidate = client.materialize_archived_repair_root(state.selections.iter().map(|s| &s.package))?;
+        client.repair_archived_state(candidate, &current_state, system_model)?;
         println!(" {} state #{}", "»".green(), state.id);
     }
 
@@ -342,8 +347,7 @@ impl Issue {
     fn corrupt_hash(&self) -> Option<&str> {
         match self {
             Issue::CorruptAsset { hash, .. } => Some(hash),
-            Issue::MissingAsset { .. } => None,
-            Issue::MissingVFSPath { .. } => None,
+            Issue::MissingAsset { .. } | Issue::MissingVFSPath { .. } => None,
         }
     }
 

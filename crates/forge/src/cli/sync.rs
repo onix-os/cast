@@ -73,7 +73,7 @@ pub fn handle(args: &ArgMatches, installation: Installation, yes: bool) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use crate::system_model;
+    use crate::{system_model, test_support::prepare_private_installation_root};
     use fs_err as fs;
 
     use super::*;
@@ -81,12 +81,14 @@ mod tests {
     #[test]
     fn sync_import_cli_evaluates_authored_intent_for_an_ephemeral_target() {
         let temporary = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(temporary.path());
         let root = temporary.path().join("installation");
         let target = temporary.path().join("ephemeral-target");
         let intent = temporary.path().join("import.glu");
         fs::create_dir(&root).unwrap();
         fs::create_dir(&target).unwrap();
-        crate::test_support::prepare_private_installation_root(&root);
+        prepare_private_installation_root(&root);
+        prepare_private_installation_root(&target);
         let authored = r#"// This source is owned by the caller.
 let cast = import! cast.system.v1
 {
