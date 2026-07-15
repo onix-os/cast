@@ -8,14 +8,13 @@
 //! Trigger intent is loaded from `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu`
 //! and do not yet support local triggers
 mod process;
+mod retained_ephemeral;
 mod retained_transaction;
+mod retained_trigger_discovery;
 
 use std::{
     io,
-    os::{
-        fd::AsRawFd as _,
-        unix::process::{CommandExt, ExitStatusExt},
-    },
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::{Path, PathBuf},
     process::{self as std_process, Stdio},
 };
@@ -122,10 +121,16 @@ pub(super) enum RetainedTransactionKind {
     ArchivedRepair,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RetainedEphemeralPhase {
+    Transaction,
+    System,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum TriggerScope<'a> {
-    /// A transaction trigger, isolated to `/usr`
-    Transaction(&'a Installation, &'a super::Scope),
+    /// A stateful transaction trigger, isolated to the staged `/usr`.
+    Transaction(&'a Installation),
 
     /// An inactive-state transaction trigger whose complete execution view is
     /// selected through retained filesystem capabilities.
@@ -141,44 +146,30 @@ pub(super) enum TriggerScope<'a> {
         candidate_usr_path: &'a Path,
     },
 
-    /// A system trigger with reduced sandboxing, capable of writes outside `/usr`
-    System(&'a Installation, &'a super::Scope),
+    /// An external ephemeral trigger whose discovery and complete execution
+    /// view are selected through retained filesystem capabilities.
+    RetainedEphemeral {
+        phase: RetainedEphemeralPhase,
+        installation: &'a Installation,
+        isolation_root: &'a super::RetainedRootAbi,
+        view: super::external_materialization::RetainedEphemeralTriggerView<'a>,
+    },
+
+    /// A stateful system trigger with reduced sandboxing.
+    System(&'a Installation),
 }
 
 impl TriggerScope<'_> {
     /// Locate packaged trigger intent.
     fn trigger_root(&self) -> PathBuf {
         match self {
-            TriggerScope::Transaction(install, scope) => match scope {
-                super::Scope::Stateful => install.staging_path("usr").join(TRIGGER_RELATIVE_TO_USR),
-                super::Scope::Ephemeral { destination } => destination.path().join("usr").join(TRIGGER_RELATIVE_TO_USR),
-                super::Scope::Frozen { destination } => destination.root_path.join("usr").join(TRIGGER_RELATIVE_TO_USR),
-            },
+            TriggerScope::Transaction(install) => install.staging_path("usr").join(TRIGGER_RELATIVE_TO_USR),
             TriggerScope::RetainedTransaction { candidate_usr_path, .. } => {
                 candidate_usr_path.join(TRIGGER_RELATIVE_TO_USR)
             }
-            TriggerScope::System(install, scope) => match scope {
-                super::Scope::Stateful => install.root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
-                super::Scope::Ephemeral { destination } => destination.path().join("usr").join(TRIGGER_RELATIVE_TO_USR),
-                super::Scope::Frozen { destination } => destination.root_path.join("usr").join(TRIGGER_RELATIVE_TO_USR),
-            },
+            TriggerScope::RetainedEphemeral { view, .. } => view.usr().1.join(TRIGGER_RELATIVE_TO_USR),
+            TriggerScope::System(install) => install.root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
         }
-    }
-}
-
-fn scope_root_path(installation: &Installation, scope: &super::Scope, path: impl AsRef<Path>) -> PathBuf {
-    match scope {
-        super::Scope::Stateful => installation.root.join(path),
-        super::Scope::Ephemeral { destination } => destination.path().join(path),
-        super::Scope::Frozen { destination } => destination.root_path.join(path),
-    }
-}
-
-fn transaction_guest_path(installation: &Installation, scope: &super::Scope, path: impl AsRef<Path>) -> PathBuf {
-    match scope {
-        super::Scope::Stateful => installation.staging_path(path),
-        super::Scope::Ephemeral { destination } => destination.path().join(path),
-        super::Scope::Frozen { destination } => destination.root_path.join(path),
     }
 }
 
@@ -199,69 +190,81 @@ pub(super) fn triggers<'a>(
     scope: TriggerScope<'a>,
     fstree: &vfs::tree::Tree<PendingFile>,
 ) -> Result<Vec<TriggerRunner<'a>>, Error> {
+    let retained_ephemeral = match scope {
+        TriggerScope::RetainedEphemeral {
+            installation,
+            isolation_root,
+            view,
+            ..
+        } => Some((installation, isolation_root, view)),
+        _ => None,
+    };
+    if let Some((installation, isolation_root, view)) = retained_ephemeral {
+        retained_ephemeral::revalidate(installation, isolation_root, view)?;
+    }
     let full_trigger_path = scope.trigger_root();
 
-    // Load appropriate triggers from their locations and convert back to a vec of Trigger
-    let triggers = match scope {
-        TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
-            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
-            .map_err(|error| Error::Config(Box::new(error)))?
-            .into_iter()
-            .map(|loaded| loaded.value.0)
-            .collect_vec(),
-        TriggerScope::RetainedTransaction {
-            candidate_usr,
-            candidate_usr_path,
-            ..
-        } => load_retained_transaction_triggers(candidate_usr, candidate_usr_path)?,
-        TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
-            .load_gluon(&Evaluator::default(), &SystemTriggerCodec)
-            .map_err(|error| Error::Config(Box::new(error)))?
-            .into_iter()
-            .map(|loaded| loaded.value.0)
-            .collect_vec(),
-    };
+    let primary = (|| -> Result<Vec<TriggerRunner<'a>>, Error> {
+        // Load appropriate triggers from their locations and convert back to a vec of Trigger
+        let triggers = match scope {
+            TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
+                .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
+                .map_err(|error| Error::Config(Box::new(error)))?
+                .into_iter()
+                .map(|loaded| loaded.value.0)
+                .collect_vec(),
+            TriggerScope::RetainedTransaction {
+                candidate_usr,
+                candidate_usr_path,
+                ..
+            } => retained_trigger_discovery::load_transaction(candidate_usr, candidate_usr_path)?,
+            TriggerScope::RetainedEphemeral { phase, view, .. } => {
+                let (candidate_usr, candidate_usr_path) = view.usr();
+                match phase {
+                    RetainedEphemeralPhase::Transaction => {
+                        retained_trigger_discovery::load_transaction(candidate_usr, candidate_usr_path)?
+                    }
+                    RetainedEphemeralPhase::System => {
+                        retained_trigger_discovery::load_system(candidate_usr, candidate_usr_path)?
+                    }
+                }
+            }
+            TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
+                .load_gluon(&Evaluator::default(), &SystemTriggerCodec)
+                .map_err(|error| Error::Config(Box::new(error)))?
+                .into_iter()
+                .map(|loaded| loaded.value.0)
+                .collect_vec(),
+        };
 
-    // Load trigger collection, process all the paths, convert to scoped TriggerRunner vec
-    let mut collection = triggers::Collection::new(triggers.iter())?;
-    collection.process_paths(fstree.iter().map(|m| m.to_string()));
-    let computed_commands = collection
-        .bake()?
-        .into_iter()
-        .map(|trigger| TriggerRunner { scope, trigger })
-        .collect_vec();
-    Ok(computed_commands)
+        // Load trigger collection, process all the paths, convert back to scoped runners.
+        let mut collection = triggers::Collection::new(triggers.iter())?;
+        collection.process_paths(fstree.iter().map(|m| m.to_string()));
+        Ok(collection
+            .bake()?
+            .into_iter()
+            .map(|trigger| TriggerRunner { scope, trigger })
+            .collect_vec())
+    })();
+    let revalidation = retained_ephemeral.map_or(Ok(()), |(installation, isolation_root, view)| {
+        retained_ephemeral::revalidate(installation, isolation_root, view)
+    });
+    combine_retained_ephemeral_result(primary, revalidation)
 }
 
-fn load_retained_transaction_triggers(
-    candidate_usr: &std::fs::File,
-    candidate_usr_path: &Path,
-) -> Result<Vec<Trigger>, Error> {
-    let trigger_root_path = candidate_usr_path.join(TRIGGER_RELATIVE_TO_USR);
-    let trigger_root = match crate::linux_fs::openat2_file(
-        candidate_usr.as_raw_fd(),
-        c"share/cast/triggers",
-        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-        0,
-        crate::linux_fs::controlled_resolution(),
-    ) {
-        Ok(root) => root,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => {
-            return Err(Error::Config(Box::new(config::LoadGluonError::Enumerate {
-                path: trigger_root_path,
-                source,
-            })));
-        }
-    };
-    config::load_gluon_rooted(
-        &trigger_root_path,
-        &trigger_root,
-        &Evaluator::default(),
-        &TransactionTriggerCodec,
-    )
-    .map_err(|error| Error::Config(Box::new(error)))
-    .map(|loaded| loaded.into_iter().map(|loaded| loaded.value.0).collect_vec())
+fn combine_retained_ephemeral_result<T>(
+    primary: Result<T, Error>,
+    revalidation: Result<(), Error>,
+) -> Result<T, Error> {
+    match (primary, revalidation) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(_), Err(revalidation)) => Err(revalidation),
+        (Err(primary), Err(revalidation)) => Err(Error::RetainedEphemeralOperationAndRevalidation {
+            primary: Box::new(primary),
+            revalidation: Box::new(revalidation),
+        }),
+    }
 }
 
 impl TriggerRunner<'_> {
@@ -278,14 +281,14 @@ impl TriggerRunner<'_> {
     /// `-D` argument with `cast install`)
     pub fn execute(&self) -> Result<(), Error> {
         match self.scope {
-            TriggerScope::Transaction(install, scope) => {
+            TriggerScope::Transaction(install) => {
                 // TODO: Add caching support via /var/
                 let isolation = Container::new(install.isolation_dir())
                     .networking(false)
                     .root_filesystem(TRANSACTION_ROOT_FILESYSTEM)
                     .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS)
-                    .bind_ro(scope_root_path(install, scope, "etc"), "/etc")
-                    .bind_rw(transaction_guest_path(install, scope, "usr"), "/usr")
+                    .bind_ro(install.root.join("etc"), "/etc")
+                    .bind_rw(install.staging_path("usr"), "/usr")
                     .work_dir("/");
 
                 Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
@@ -308,15 +311,39 @@ impl TriggerRunner<'_> {
                 retained_transaction::before_activation();
                 Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
             }
-            TriggerScope::System(install, scope) => {
-                // OK, if the root == `/` then we can run directly, otherwise we need to containerise with RW.
-                if install.root.to_string_lossy() == "/" {
+            TriggerScope::RetainedEphemeral {
+                phase,
+                installation,
+                isolation_root,
+                view,
+            } => {
+                let isolation = retained_ephemeral::container(phase, installation, isolation_root, view)?;
+                retained_ephemeral::before_activation();
+                let primary = isolation
+                    .run(|| execute_trigger_directly(&self.trigger))
+                    .map_err(Error::from);
+                let revalidation = retained_ephemeral::revalidate(installation, isolation_root, view);
+                match (primary, revalidation) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(primary), Ok(())) => Err(primary),
+                    (Ok(()), Err(revalidation)) => Err(revalidation),
+                    (Err(primary), Err(revalidation)) => Err(Error::RetainedEphemeralOperationAndRevalidation {
+                        primary: Box::new(primary),
+                        revalidation: Box::new(revalidation),
+                    }),
+                }
+            }
+            TriggerScope::System(install) => {
+                // This variant is stateful-only. External ephemeral system
+                // triggers have a distinct retained variant and therefore can
+                // never reach the live-root direct-execution branch.
+                if trigger_scope_may_execute_directly(self.scope) {
                     Ok(execute_trigger_directly(&self.trigger)?)
                 } else {
                     let isolation = Container::new(install.isolation_dir())
                         .networking(false)
-                        .bind_rw(scope_root_path(install, scope, "etc"), "/etc")
-                        .bind_rw(scope_root_path(install, scope, "usr"), "/usr")
+                        .bind_rw(install.root.join("etc"), "/etc")
+                        .bind_rw(install.root.join("usr"), "/usr")
                         .work_dir("/");
 
                     Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
@@ -324,6 +351,10 @@ impl TriggerRunner<'_> {
             }
         }
     }
+}
+
+fn trigger_scope_may_execute_directly(scope: TriggerScope<'_>) -> bool {
+    matches!(scope, TriggerScope::System(installation) if installation.root == Path::new("/"))
 }
 
 /// Internal executor for triggers.
@@ -548,6 +579,29 @@ pub enum Error {
         source: io::Error,
     },
 
+    #[error("prepare retained ephemeral trigger mount target `{}`", path.display())]
+    PrepareRetainedEphemeralMountTarget {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("pin retained ephemeral trigger {role} source `{}`", path.display())]
+    PinRetainedEphemeralSource {
+        role: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error(
+        "retained ephemeral trigger operation failed with {primary}; the following authority revalidation also failed: {revalidation}"
+    )]
+    RetainedEphemeralOperationAndRevalidation {
+        primary: Box<Error>,
+        revalidation: Box<Error>,
+    },
+
     #[error("io")]
     IO(#[from] io::Error),
 }
@@ -556,10 +610,7 @@ pub enum Error {
 mod tests {
     use std::{
         collections::BTreeMap,
-        os::{
-            fd::AsRawFd,
-            unix::fs::{OpenOptionsExt as _, symlink},
-        },
+        os::{fd::AsRawFd, unix::fs::symlink},
     };
 
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
@@ -616,54 +667,6 @@ let base = cast.trigger "depmod" "Update kernel module dependencies"
             .match_path("/usr/lib/modules/6.12.1/kernel")
             .expect("kernel path must match");
         assert_eq!(matched.variables.get("version").map(String::as_str), Some("6.12.1"));
-    }
-
-    #[test]
-    fn retained_trigger_discovery_ignores_fixed_staging_substitution() {
-        let temporary = tempfile::tempdir().unwrap();
-        let staging = temporary.path().join("staging");
-        let candidate_usr_path = staging.join("usr");
-        let original = candidate_usr_path.join("share/cast/triggers/tx.d/original.glu");
-        fs_err::create_dir_all(original.parent().unwrap()).unwrap();
-        fs_err::write(&original, transaction_trigger_source("original", "/bin/true")).unwrap();
-        let candidate_usr = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
-            .open(&candidate_usr_path)
-            .unwrap();
-
-        let displaced = temporary.path().join("displaced-staging");
-        let injected = candidate_usr_path.join("share/cast/triggers/tx.d/injected.glu");
-        fs_err::rename(&staging, &displaced).unwrap();
-        fs_err::create_dir_all(injected.parent().unwrap()).unwrap();
-        fs_err::write(&injected, transaction_trigger_source("injected", "/bin/false")).unwrap();
-
-        let loaded = load_retained_transaction_triggers(&candidate_usr, &candidate_usr_path).unwrap();
-
-        assert_eq!(
-            loaded.iter().map(|trigger| trigger.name.as_str()).collect_vec(),
-            ["original"]
-        );
-        assert!(injected.exists());
-        assert!(!loaded.iter().any(|trigger| trigger.name == "injected"));
-    }
-
-    fn transaction_trigger_source(name: &str, command: &str) -> String {
-        format!(
-            r#"let cast = import! cast.trigger.v1
-let base = cast.trigger "{name}" "Retained trigger discovery fixture"
-{{
-    paths = [cast.path
-        "/usr/share/{name}"
-        ["{name}"]
-        (cast.optional.set cast.path_kind.directory)],
-    handlers = [cast.handler.named "{name}" (cast.handler.run
-        "{command}"
-        [])],
-    .. base
-}}
-"#
-        )
     }
 
     #[test]

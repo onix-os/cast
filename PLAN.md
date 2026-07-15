@@ -718,9 +718,19 @@ and instant rollback mechanism; it hardens their failure semantics.
   completes the same `/usr` fsync suffix as ordinary success. Focused tests cover
   symlink escapes, existing regular and hardlinked outputs, final-name races,
   candidate substitution, trigger-time deletion/rewrite/replacement/hardlink,
-  sealed success, compensating recovery, and atomic rollback. Ephemeral
-  decoration and other path-based lifecycle/cleanup paths remain, so this item
-  is intentionally still open.
+  sealed success, compensating recovery, and atomic rollback. External
+  ephemeral application now retains the exact target, `/usr`, and separately
+  published `/etc`; publishes the root ABI through the retained target
+  descriptor; and keeps the metadata, root-ABI, isolation-root, and active-state
+  proofs live across both trigger phases. Transaction and system trigger
+  discovery is rooted beneath the retained `/usr`, while execution pins exact
+  `/usr` and `/etc` descriptors into an anchored container. The system phase is
+  structurally unable to enter the live-root direct-execution branch. Focused
+  production-path tests cover metadata mutation, target and `/usr` substitution,
+  `/etc` publication and replacement races, pinned bind substitution, invalid
+  and destructive replacement triggers, and retained root-ABI publication.
+  Other path-based lifecycle and cleanup paths remain, so this item is
+  intentionally still open.
 - [x] Land the descriptor-relative `/usr/.cast-tree-id` primitive independently
   of coordinator integration. Its fixed v1 frame is bounded, checksummed, and
   locked by an exact golden; pre-journal publication uses an anonymous

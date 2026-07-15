@@ -6,11 +6,12 @@ use stone::{StonePayloadLayoutFile, StonePayloadLayoutRecord};
 use super::*;
 use crate::client::external_materialization::{
     ExternalMaterializationAdmission, RetainedExternalMaterializationTarget, arm_after_parent_retained,
-    arm_before_absent_target_creation, arm_before_external_fill, arm_before_external_final_proof,
+    arm_after_root_abi_initial_proof, arm_before_absent_target_creation, arm_before_etc_publication,
+    arm_before_external_fill, arm_before_external_final_proof,
 };
 
 #[test]
-fn exact_empty_external_target_keeps_its_inode_and_becomes_a_sealed_empty_root() {
+fn exact_empty_external_target_keeps_its_inode_and_retains_an_empty_usr() {
     let fixture = ExternalFixture::new();
     fs::create_dir(&fixture.target).unwrap();
     fs::set_permissions(&fixture.target, Permissions::from_mode(0o700)).unwrap();
@@ -20,11 +21,13 @@ fn exact_empty_external_target_keeps_its_inode_and_becomes_a_sealed_empty_root()
 
     assert_eq!(directory_identity(&fixture.target), before);
     assert_eq!(mode(&fixture.target), 0o755);
-    assert!(fs::read_dir(&fixture.target).unwrap().next().is_none());
+    assert_eq!(fs::read_dir(&fixture.target).unwrap().count(), 1);
+    assert!(fixture.target.join("usr").is_dir());
+    assert!(fs::read_dir(fixture.target.join("usr")).unwrap().next().is_none());
 }
 
 #[test]
-fn an_absent_empty_closure_publishes_one_empty_directory_instead_of_deleting_a_path() {
+fn an_absent_empty_closure_publishes_a_root_with_one_retained_usr() {
     let fixture = ExternalFixture::new();
     assert!(!fixture.target.exists());
 
@@ -32,7 +35,9 @@ fn an_absent_empty_closure_publishes_one_empty_directory_instead_of_deleting_a_p
 
     assert!(fixture.target.is_dir());
     assert_eq!(mode(&fixture.target), 0o755);
-    assert!(fs::read_dir(&fixture.target).unwrap().next().is_none());
+    assert_eq!(fs::read_dir(&fixture.target).unwrap().count(), 1);
+    assert!(fixture.target.join("usr").is_dir());
+    assert!(fs::read_dir(fixture.target.join("usr")).unwrap().next().is_none());
 }
 
 #[test]
@@ -272,6 +277,130 @@ fn world_writable_direct_parent_is_rejected_without_creating_or_removing_a_targe
     assert_eq!(fs::read(parent.join("sentinel")).unwrap(), b"retain");
 }
 
+#[test]
+fn ephemeral_trigger_view_retains_exact_usr_and_publishes_exact_etc() {
+    let fixture = ExternalFixture::new();
+    let mut target =
+        RetainedExternalMaterializationTarget::prepare(&fixture.client.installation, &fixture.target).unwrap();
+    let candidate_usr = target
+        .materialize(
+            &fixture.client.installation,
+            &empty_tree(),
+            AssetMaterialization::IndependentCopy,
+            BlitExecution::Sequential,
+        )
+        .unwrap();
+
+    let view = target
+        .prepare_trigger_view(&fixture.client.installation, &candidate_usr)
+        .unwrap();
+
+    view.revalidate(&fixture.client.installation).unwrap();
+    assert_eq!(view.root_path(), fixture.target);
+    assert_eq!(view.usr().1, fixture.target.join("usr"));
+    assert_eq!(view.etc().1, fixture.target.join("etc"));
+    assert_eq!(mode(view.usr().1), 0o755);
+    assert_eq!(mode(view.etc().1), 0o755);
+    assert_eq!(directory_identity(view.usr().1), descriptor_identity(view.usr().0));
+    assert_eq!(directory_identity(view.etc().1), descriptor_identity(view.etc().0));
+}
+
+#[test]
+fn ephemeral_trigger_etc_publication_never_adopts_a_racing_occupant() {
+    let fixture = ExternalFixture::new();
+    let mut target =
+        RetainedExternalMaterializationTarget::prepare(&fixture.client.installation, &fixture.target).unwrap();
+    let candidate_usr = target
+        .materialize(
+            &fixture.client.installation,
+            &empty_tree(),
+            AssetMaterialization::IndependentCopy,
+            BlitExecution::Sequential,
+        )
+        .unwrap();
+    let racing_etc = fixture.target.join("etc");
+    let hook_etc = racing_etc.clone();
+    arm_before_etc_publication(move || {
+        fs::create_dir(&hook_etc).unwrap();
+        fs::set_permissions(&hook_etc, Permissions::from_mode(0o755)).unwrap();
+        fs::write(hook_etc.join("occupant"), b"racing-etc").unwrap();
+    });
+
+    let result = target.prepare_trigger_view(&fixture.client.installation, &candidate_usr);
+
+    assert!(matches!(result, Err(Error::EphemeralTriggerAuthority { .. })));
+    assert_eq!(fs::read(racing_etc.join("occupant")).unwrap(), b"racing-etc");
+}
+
+#[test]
+fn ephemeral_trigger_view_rejects_named_etc_replacement() {
+    let fixture = ExternalFixture::new();
+    let mut target =
+        RetainedExternalMaterializationTarget::prepare(&fixture.client.installation, &fixture.target).unwrap();
+    let candidate_usr = target
+        .materialize(
+            &fixture.client.installation,
+            &empty_tree(),
+            AssetMaterialization::IndependentCopy,
+            BlitExecution::Sequential,
+        )
+        .unwrap();
+    let view = target
+        .prepare_trigger_view(&fixture.client.installation, &candidate_usr)
+        .unwrap();
+    let original = descriptor_identity(view.etc().0);
+    let detached = fixture.target.join("detached-etc");
+    fs::rename(fixture.target.join("etc"), &detached).unwrap();
+    fs::create_dir(fixture.target.join("etc")).unwrap();
+    fs::set_permissions(fixture.target.join("etc"), Permissions::from_mode(0o755)).unwrap();
+
+    assert!(matches!(
+        view.revalidate(&fixture.client.installation),
+        Err(Error::EphemeralTriggerAuthority { .. })
+    ));
+    assert_eq!(directory_identity(&detached), original);
+    assert_ne!(directory_identity(&fixture.target.join("etc")), original);
+    assert_eq!(descriptor_identity(view.etc().0), original);
+}
+
+#[test]
+fn retained_root_abi_publication_never_writes_through_a_replaced_target_name() {
+    let fixture = ExternalFixture::new();
+    let mut target =
+        RetainedExternalMaterializationTarget::prepare(&fixture.client.installation, &fixture.target).unwrap();
+    let candidate_usr = target
+        .materialize(
+            &fixture.client.installation,
+            &empty_tree(),
+            AssetMaterialization::IndependentCopy,
+            BlitExecution::Sequential,
+        )
+        .unwrap();
+    let retained_root = directory_identity(&fixture.target);
+    let detached = fixture.target.with_extension("retained-root-abi");
+    let hook_target = fixture.target.clone();
+    let hook_detached = detached.clone();
+    arm_after_root_abi_initial_proof(move || {
+        fs::rename(&hook_target, &hook_detached).unwrap();
+        fs::create_dir(&hook_target).unwrap();
+        fs::set_permissions(&hook_target, Permissions::from_mode(0o755)).unwrap();
+    });
+
+    let result = target.create_root_abi(&fixture.client.installation, &candidate_usr);
+
+    assert!(
+        matches!(result, Err(Error::RootAbiDirectoryReplaced(ref path)) if *path == fixture.target),
+        "unexpected retained root-ABI race result: {result:#?}"
+    );
+    assert_eq!(directory_identity(&detached), retained_root);
+    assert_root_abi_links(&detached);
+    assert!(fs::read_dir(&fixture.target).unwrap().next().is_none());
+    assert!(!fixture.target.join("usr/lib/os-release").exists());
+    assert!(!fixture.target.join("usr/lib/system-model.glu").exists());
+    assert!(!detached.join("usr/lib/os-release").exists());
+    assert!(!detached.join("usr/lib/system-model.glu").exists());
+}
+
 struct ExternalFixture {
     _temporary: tempfile::TempDir,
     client: Client,
@@ -318,6 +447,11 @@ fn directory_tree() -> vfs::Tree<PendingFile> {
 
 fn directory_identity(path: &Path) -> (u64, u64) {
     let metadata = fs::symlink_metadata(path).unwrap();
+    (metadata.dev(), metadata.ino())
+}
+
+fn descriptor_identity(file: &std::fs::File) -> (u64, u64) {
+    let metadata = file.metadata().unwrap();
     (metadata.dev(), metadata.ino())
 }
 

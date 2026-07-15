@@ -1122,6 +1122,20 @@ impl Client {
                 progress.set_message("Running retained transaction-scope triggers");
                 "retained-transaction-scope-triggers"
             }
+            TriggerScope::RetainedEphemeral {
+                phase: postblit::RetainedEphemeralPhase::Transaction,
+                ..
+            } => {
+                progress.set_message("Running retained ephemeral transaction-scope triggers");
+                "retained-ephemeral-transaction-scope-triggers"
+            }
+            TriggerScope::RetainedEphemeral {
+                phase: postblit::RetainedEphemeralPhase::System,
+                ..
+            } => {
+                progress.set_message("Running retained ephemeral system-scope triggers");
+                "retained-ephemeral-system-scope-triggers"
+            }
             TriggerScope::System(..) => {
                 progress.set_message("Running system-scope triggers");
                 "system-scope-triggers"
@@ -1361,7 +1375,7 @@ impl Client {
                 )?,
                 // Only unit-test adapters construct a stateful candidate
                 // without the production retained fixed-staging capability.
-                None => Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree)?,
+                None => Self::apply_triggers(TriggerScope::Transaction(&self.installation), &fstree)?,
             }
             tree_identity.verify_pre_exchange(
                 &self.installation.staging_path("usr"),
@@ -1593,7 +1607,7 @@ impl Client {
             if run_system_triggers {
                 system_triggers_incomplete = true;
                 checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggersStarted)?;
-                Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), fstree)?;
+                Self::apply_triggers(TriggerScope::System(&self.installation), fstree)?;
                 tree_identity.verify_forward_exchange(
                     &self.installation.root.join("usr"),
                     &self.installation.staging_path("usr"),
@@ -2164,14 +2178,15 @@ impl Client {
         let EphemeralCandidate {
             tree,
             root,
-            target,
+            mut target,
             candidate_usr,
             active_state,
         } = candidate;
         active_state.revalidate(&self.installation)?;
-        let root = self.require_configured_ephemeral_target(&root)?;
+        self.require_configured_ephemeral_target(&root)?;
         target.revalidate_candidate_usr(&self.installation, &candidate_usr)?;
-        let result = self.apply_ephemeral_blit_under_guard(tree, &root, &target, &candidate_usr, system_snapshot);
+        let result =
+            self.apply_ephemeral_blit_under_guard(tree, &mut target, &candidate_usr, &active_state, system_snapshot);
         let revalidation = target.revalidate_candidate_usr(&self.installation, &candidate_usr);
         let active_revalidation = active_state.revalidate(&self.installation);
         match (result, revalidation, active_revalidation) {
@@ -2198,9 +2213,9 @@ impl Client {
     fn apply_ephemeral_blit_under_guard(
         &self,
         fstree: vfs::Tree<PendingFile>,
-        blit_root: &Path,
-        target: &RetainedExternalMaterializationTarget,
+        target: &mut RetainedExternalMaterializationTarget,
         candidate_usr: &candidate_metadata::RetainedEphemeralUsr,
+        active_state: &active_state_snapshot::ActiveStateLease,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
         target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
@@ -2208,24 +2223,32 @@ impl Client {
         target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
         let isolation_root_abi = create_root_links(&self.installation.isolation_dir())?;
         target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
-
-        // The container running triggers expects /etc to exist
-        let etc = blit_root.join("etc");
-        fs::create_dir_all(etc)?;
-        target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+        let trigger_view = target.prepare_trigger_view(&self.installation, candidate_usr)?;
+        trigger_view.revalidate(&self.installation)?;
 
         let metadata = candidate_metadata::decorate_ephemeral(candidate_usr, &system_snapshot)?;
         let revalidate = || -> Result<(), Error> {
-            target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+            trigger_view.revalidate(&self.installation)?;
             metadata.revalidate()?;
-            target.revalidate_candidate_usr(&self.installation, candidate_usr)?;
+            trigger_view.revalidate(&self.installation)?;
             root_abi.revalidate()?;
-            isolation_root_abi.revalidate()
+            isolation_root_abi.revalidate()?;
+            active_state.revalidate(&self.installation)
         };
         revalidate()?;
 
         // ephemeral tx triggers
-        let transaction = Self::apply_triggers(TriggerScope::Transaction(&self.installation, &self.scope), &fstree);
+        before_ephemeral_transaction_triggers();
+        let transaction = Self::apply_triggers(
+            TriggerScope::RetainedEphemeral {
+                phase: postblit::RetainedEphemeralPhase::Transaction,
+                installation: &self.installation,
+                isolation_root: &isolation_root_abi,
+                view: trigger_view,
+            },
+            &fstree,
+        );
+        after_ephemeral_transaction_triggers();
         let transaction_revalidation = revalidate();
         match (transaction, transaction_revalidation) {
             (Ok(()), Ok(())) => {}
@@ -2233,7 +2256,17 @@ impl Client {
             (Ok(()), Err(revalidation)) => return Err(revalidation),
         }
         // ephemeral system triggers
-        let system = Self::apply_triggers(TriggerScope::System(&self.installation, &self.scope), &fstree);
+        before_ephemeral_system_triggers();
+        let system = Self::apply_triggers(
+            TriggerScope::RetainedEphemeral {
+                phase: postblit::RetainedEphemeralPhase::System,
+                installation: &self.installation,
+                isolation_root: &isolation_root_abi,
+                view: trigger_view,
+            },
+            &fstree,
+        );
+        after_ephemeral_system_triggers();
         let system_revalidation = revalidate();
         match (system, system_revalidation) {
             (Ok(()), Ok(())) => {}
@@ -11306,7 +11339,91 @@ impl Scope {
 #[cfg(test)]
 std::thread_local! {
     static OBSERVED_TRIGGER_SCOPES: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+    static BEFORE_EPHEMERAL_TRANSACTION_TRIGGERS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_EPHEMERAL_SYSTEM_TRIGGERS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_EPHEMERAL_TRANSACTION_TRIGGERS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_EPHEMERAL_SYSTEM_TRIGGERS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
+
+#[cfg(test)]
+fn arm_before_ephemeral_transaction_triggers(hook: impl FnOnce() + 'static) {
+    BEFORE_EPHEMERAL_TRANSACTION_TRIGGERS.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn arm_before_ephemeral_system_triggers(hook: impl FnOnce() + 'static) {
+    BEFORE_EPHEMERAL_SYSTEM_TRIGGERS.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_ephemeral_transaction_triggers() {
+    BEFORE_EPHEMERAL_TRANSACTION_TRIGGERS.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_ephemeral_transaction_triggers() {}
+
+#[cfg(test)]
+fn before_ephemeral_system_triggers() {
+    BEFORE_EPHEMERAL_SYSTEM_TRIGGERS.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_ephemeral_system_triggers() {}
+
+#[cfg(test)]
+fn arm_after_ephemeral_transaction_triggers(hook: impl FnOnce() + 'static) {
+    AFTER_EPHEMERAL_TRANSACTION_TRIGGERS.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn arm_after_ephemeral_system_triggers(hook: impl FnOnce() + 'static) {
+    AFTER_EPHEMERAL_SYSTEM_TRIGGERS.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_ephemeral_transaction_triggers() {
+    AFTER_EPHEMERAL_TRANSACTION_TRIGGERS.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_ephemeral_transaction_triggers() {}
+
+#[cfg(test)]
+fn after_ephemeral_system_triggers() {
+    AFTER_EPHEMERAL_SYSTEM_TRIGGERS.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_ephemeral_system_triggers() {}
 
 #[cfg(test)]
 fn observe_trigger_scope(scope: &TriggerScope<'_>) {
@@ -11320,6 +11437,14 @@ fn observe_trigger_scope(scope: &TriggerScope<'_>) {
             kind: postblit::RetainedTransactionKind::ArchivedRepair,
             ..
         } => "retained-transaction",
+        TriggerScope::RetainedEphemeral {
+            phase: postblit::RetainedEphemeralPhase::Transaction,
+            ..
+        } => "transaction",
+        TriggerScope::RetainedEphemeral {
+            phase: postblit::RetainedEphemeralPhase::System,
+            ..
+        } => "system",
         TriggerScope::System(..) => "system",
     };
     OBSERVED_TRIGGER_SCOPES.with(|observed| observed.borrow_mut().push(name));
@@ -12286,6 +12411,11 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+    #[error("prepare or revalidate retained ephemeral trigger authority")]
+    EphemeralTriggerAuthority {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("stateful candidate {candidate} reached activation without its retained metadata proof")]
     StatefulCandidateMetadataProofRequired { candidate: state::Id },
     #[error("materialize an inactive archived state")]
@@ -12413,6 +12543,7 @@ mod tests {
     use super::*;
     use crate::test_support::prepare_private_installation_root;
 
+    mod ephemeral_candidate_metadata;
     mod external_materialization;
     mod fixed_staging_transition;
     mod root_abi_preflight;

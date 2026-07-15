@@ -1,5 +1,7 @@
 //! Retained capability for one external writable materialization root.
 
+mod retained_ephemeral_trigger;
+
 use std::{
     ffi::{CStr, OsString},
     io,
@@ -25,6 +27,11 @@ use super::{
 };
 use crate::Installation;
 
+pub(super) use retained_ephemeral_trigger::RetainedEphemeralTriggerView;
+
+#[cfg(test)]
+pub(super) use retained_ephemeral_trigger::arm_before_etc_publication;
+
 #[cfg(test)]
 thread_local! {
     static AFTER_PARENT_RETAINED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -34,6 +41,8 @@ thread_local! {
     static BEFORE_EXTERNAL_FILL_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static BEFORE_EXTERNAL_FINAL_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_ROOT_ABI_INITIAL_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -212,6 +221,7 @@ pub(super) struct RetainedExternalMaterializationTarget {
     parent: fs::File,
     target: fs::File,
     target_identity: AssetDirectoryIdentity,
+    trigger_etc: Option<retained_ephemeral_trigger::RetainedEphemeralEtc>,
 }
 
 impl RetainedExternalMaterializationTarget {
@@ -288,6 +298,7 @@ impl RetainedExternalMaterializationTarget {
             parent,
             target,
             target_identity,
+            trigger_etc: None,
         })
     }
 
@@ -368,10 +379,35 @@ impl RetainedExternalMaterializationTarget {
         candidate_usr: &RetainedEphemeralUsr,
     ) -> Result<super::RetainedRootAbi, Error> {
         self.revalidate_candidate_usr(installation, candidate_usr)?;
+        after_root_abi_initial_proof();
         let root_abi = super::create_root_links_retained(&self.admission.path, self.target.file())?;
         self.revalidate_candidate_usr(installation, candidate_usr)?;
         root_abi.revalidate()?;
         Ok(root_abi)
+    }
+
+    pub(super) fn prepare_trigger_view<'candidate>(
+        &'candidate mut self,
+        installation: &Installation,
+        candidate_usr: &'candidate RetainedEphemeralUsr,
+    ) -> Result<RetainedEphemeralTriggerView<'candidate>, Error> {
+        self.revalidate_candidate_usr(installation, candidate_usr)
+            .map_err(retained_ephemeral_trigger::authority_error)?;
+        if self.trigger_etc.is_none() {
+            self.trigger_etc = Some(retained_ephemeral_trigger::RetainedEphemeralEtc::create(
+                self.target.file(),
+                &self.admission.path,
+            )?);
+        }
+        let view = RetainedEphemeralTriggerView::new(
+            self,
+            candidate_usr,
+            self.trigger_etc
+                .as_ref()
+                .expect("ephemeral /etc capability was installed above"),
+        );
+        view.revalidate(installation)?;
+        Ok(view)
     }
 
     pub(super) fn path(&self) -> &Path {
@@ -403,6 +439,13 @@ pub(super) fn arm_before_external_fill(hook: impl FnOnce() + 'static) {
 #[cfg(test)]
 pub(super) fn arm_before_external_final_proof(hook: impl FnOnce() + 'static) {
     BEFORE_EXTERNAL_FINAL_PROOF_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+pub(super) fn arm_after_root_abi_initial_proof(hook: impl FnOnce() + 'static) {
+    AFTER_ROOT_ABI_INITIAL_PROOF_HOOK.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });
 }
@@ -454,6 +497,18 @@ fn before_external_final_proof() {
 
 #[cfg(not(test))]
 fn before_external_final_proof() {}
+
+#[cfg(test)]
+fn after_root_abi_initial_proof() {
+    AFTER_ROOT_ABI_INITIAL_PROOF_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_root_abi_initial_proof() {}
 
 fn require_empty_directory(directory: &fs::File, path: &Path) -> Result<(), Error> {
     if first_directory_entry(directory)?.is_some() {

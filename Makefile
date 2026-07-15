@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -252,7 +252,8 @@ forge-archived-repair-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
-		client::postblit::tests::retained_trigger_discovery_ignores_fixed_staging_substitution \
+		client::postblit::retained_trigger_discovery::tests::transaction_codec_loads_from_retained_descriptor_after_public_path_substitution \
+		client::postblit::retained_trigger_discovery::tests::system_codec_loads_from_retained_descriptor_after_public_path_substitution \
 		client::postblit::retained_transaction::tests::container_rejects_an_isolation_root_replacement_after_abi_provisioning \
 		client::postblit::retained_transaction::tests::writable_bind_ignores_fixed_staging_substitution \
 		client::archived_repair_tests::archived_repair_replaces_the_whole_wrapper_and_preserves_old_payload_opaquely \
@@ -326,6 +327,34 @@ forge-stateful-candidate-metadata-test:
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+forge-ephemeral-candidate-metadata-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::tests::ephemeral_candidate_metadata::ephemeral_candidate_metadata_never_follows_lib_or_os_info_symlinks \
+		client::tests::ephemeral_candidate_metadata::ephemeral_candidate_metadata_never_follows_output_symlinks \
+		client::tests::ephemeral_candidate_metadata::ephemeral_candidate_metadata_preserves_existing_output_inodes \
+		client::tests::ephemeral_candidate_metadata::ephemeral_candidate_metadata_final_name_races_are_no_replace \
+		client::tests::ephemeral_candidate_metadata::ephemeral_candidate_metadata_rejects_first_output_deletion_or_replacement \
+		client::tests::ephemeral_candidate_metadata::retained_ephemeral_metadata_proof_rejects_post_transaction_mutation \
+		client::tests::ephemeral_candidate_metadata::retained_ephemeral_metadata_proof_rejects_post_system_mutation \
+		client::tests::ephemeral_candidate_metadata::target_or_usr_substitution_before_transaction_discovery_cannot_reach_replacement_triggers \
+		client::tests::ephemeral_candidate_metadata::target_or_usr_substitution_between_phases_cannot_reach_replacement_system_triggers \
+		client::postblit::retained_ephemeral::tests::retained_ephemeral_phase_policies_keep_transaction_etc_read_only \
+		client::postblit::retained_ephemeral::tests::transaction_container_mounts_usr_read_write_and_etc_read_only \
+		client::postblit::retained_ephemeral::tests::system_container_mounts_usr_and_etc_read_write \
+		client::postblit::retained_ephemeral::tests::public_root_usr_and_etc_substitution_cannot_redirect_pinned_system_binds \
+		client::postblit::retained_ephemeral::tests::container_rejects_an_isolation_root_substitution \
+		client::postblit::retained_ephemeral::tests::retained_ephemeral_system_scope_never_uses_live_root_direct_execution \
+		client::tests::external_materialization::ephemeral_trigger_view_retains_exact_usr_and_publishes_exact_etc \
+		client::tests::external_materialization::ephemeral_trigger_etc_publication_never_adopts_a_racing_occupant \
+		client::tests::external_materialization::ephemeral_trigger_view_rejects_named_etc_replacement \
+		client::tests::external_materialization::retained_root_abi_publication_never_writes_through_a_replaced_target_name \
+		client::tests::ephemeral_candidate_metadata::successful_ephemeral_metadata_is_exact_evaluable_and_root_abi_complete; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
 forge-fixed-staging-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
@@ -346,8 +375,8 @@ forge-fixed-staging-test:
 		client::tests::fixed_staging_transition::ephemeral_materialization_rechecks_empty_target_under_the_lease \
 		client::tests::fixed_staging_transition::ephemeral_activate_and_boot_sync_fail_before_fixed_namespace_mutation \
 		client::tests::fixed_staging_transition::frozen_activate_boot_verify_and_prune_fail_before_installation_mutation \
-		client::tests::external_materialization::exact_empty_external_target_keeps_its_inode_and_becomes_a_sealed_empty_root \
-		client::tests::external_materialization::an_absent_empty_closure_publishes_one_empty_directory_instead_of_deleting_a_path \
+		client::tests::external_materialization::exact_empty_external_target_keeps_its_inode_and_retains_an_empty_usr \
+		client::tests::external_materialization::an_absent_empty_closure_publishes_a_root_with_one_retained_usr \
 		client::tests::external_materialization::parent_path_replacement_after_retention_cannot_redirect_target_creation \
 		client::tests::external_materialization::directory_replacement_between_admission_and_preparation_is_rejected \
 		client::tests::external_materialization::symlink_replacement_between_admission_and_preparation_cannot_reach_a_safe_victim \
@@ -716,6 +745,7 @@ help:
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
+	@echo "  forge-ephemeral-candidate-metadata-test  Run retained external candidate and trigger tests"
 	@echo "  forge-fixed-staging-test  Run retained fixed-staging and external-target security tests"
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
 	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
