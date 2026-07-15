@@ -161,7 +161,12 @@ impl ClientBuilder {
 
     /// Build the [`Client`]
     pub fn build(mut self) -> Result<Client, Error> {
-        if self.installation.is_frozen_cache() {
+        // A system or ephemeral Client owns mutable databases, the startup
+        // coordinator, and transition journals. Reject every non-mutable
+        // installation mode before acquiring any of that authority. In
+        // particular, an explicit read-only snapshot must never become a
+        // mutable client merely because its underlying root is writable.
+        if !self.installation.is_mutable_system() {
             return Err(Error::SystemInstallationRequired);
         }
 
@@ -11898,7 +11903,7 @@ pub enum Error {
     FrozenRootRequiresFrozenClient,
     #[error("frozen clients require an installation opened with Installation::open_frozen")]
     FrozenInstallationRequired,
-    #[error("system and ephemeral clients require an installation opened with Installation::open")]
+    #[error("system and ephemeral clients require Installation::open on a writable system root")]
     SystemInstallationRequired,
     #[error("operation is not available on a dedicated frozen client")]
     FrozenClientProhibitedOperation,

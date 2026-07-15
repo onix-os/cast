@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -114,6 +114,33 @@ config-rooted-gluon-test:
 	gluon_listed="$$( $(CARGO) test -p gluon_config --lib -- --list )"; \
 	printf '%s\n' "$$gluon_listed" | grep -Fqx "$$chain_test: test"; \
 	$(CARGO) test -p gluon_config --lib "$$chain_test" -- --exact --test-threads=1
+
+forge-read-only-installation-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		installation::snapshot::tests::two_readers_share_global_and_custom_cache_locks_until_the_last_reader_drops \
+		installation::snapshot::tests::writable_root_opened_explicitly_read_only_never_becomes_mutable_or_frozen \
+		installation::snapshot::tests::mutable_and_frozen_modes_do_not_expose_read_only_snapshot_authority \
+		installation::snapshot::tests::explicit_snapshot_is_rejected_before_client_coordinator_or_database_mutation \
+		installation::snapshot::tests::naturally_read_only_open_is_rejected_before_client_coordinator_or_database_mutation \
+		installation::snapshot::tests::contended_shared_snapshot_lock_has_a_typed_zero_budget_timeout_without_mutation \
+		installation::snapshot::tests::missing_cast_fails_without_creating_or_changing_any_entry \
+		installation::snapshot::tests::missing_default_cache_fails_without_recreating_or_changing_any_entry \
+		installation::snapshot::tests::missing_global_lock_fails_without_recreating_it \
+		installation::snapshot::tests::missing_custom_cache_lock_fails_without_recreating_it \
+		installation::snapshot::tests::missing_custom_cache_directory_fails_without_creating_or_changing_any_entry \
+		installation::snapshot::tests::retained_snapshot_rejects_installation_root_substitution \
+		installation::snapshot::tests::retained_snapshot_rejects_cast_directory_substitution \
+		installation::snapshot::tests::retained_snapshot_rejects_lockfile_substitution \
+		installation::snapshot::tests::retained_snapshot_rejects_default_cache_directory_substitution \
+		installation::snapshot::tests::retained_snapshot_rejects_custom_cache_directory_substitution \
+		installation::snapshot::tests::retained_snapshot_rejects_custom_cache_lockfile_substitution \
+		installation::snapshot::tests::open_revalidate_clone_and_drop_leave_recursive_metadata_and_contents_unchanged; do \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 forge-client-startup-gate-test:
 	@set -eu; \
@@ -816,6 +843,7 @@ help:
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  config-rooted-gluon-test  Run descriptor-rooted Gluon substitution-race tests"
+	@echo "  forge-read-only-installation-test  Run retained read-only snapshot and mutable-client rejection tests"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"

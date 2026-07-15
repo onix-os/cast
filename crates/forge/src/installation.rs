@@ -31,6 +31,7 @@ use crate::{
 };
 
 mod lockfile;
+mod snapshot;
 
 /// System mutability - do we have readwrite?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
@@ -80,14 +81,27 @@ pub struct Installation {
     /// to the installation for mutable operations
     _locks: Vec<lockfile::Lock>,
 
-    /// Whether preliminary host active-state discovery was permitted while
-    /// opening this installation.
-    discovery: Discovery,
+    /// Retained read-only namespace capabilities and shared locks. This is
+    /// present only for an explicit snapshot open and is shared by clones.
+    snapshot_authority: Option<Arc<snapshot::Authority>>,
+
+    /// Construction mode is kept as a type instead of being inferred from
+    /// filesystem permissions. In particular, an explicit read-only snapshot
+    /// remains distinct even when its installation root is writable.
+    access: Access,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Discovery {
     System,
+    FrozenCache,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Access {
+    Mutable,
+    NaturallyReadOnly,
+    ReadOnlySnapshot,
     FrozenCache,
 }
 
@@ -98,6 +112,53 @@ impl Installation {
     /// and mode policy.
     pub fn open(root: impl Into<PathBuf>, cache_dir: Option<PathBuf>) -> Result<Self, Error> {
         Self::open_with_discovery(root.into(), cache_dir, Discovery::System)
+    }
+
+    /// Open an existing installation as a retained read-only snapshot.
+    ///
+    /// Unlike [`Self::open`], this mode never provisions, repairs, changes,
+    /// syncs, or removes filesystem entries. The existing `.cast` directory
+    /// and every applicable lockfile must already be safe. Shared locks and
+    /// retained directory capabilities remain held by every clone.
+    pub fn open_read_only(root: impl Into<PathBuf>, cache_dir: Option<PathBuf>) -> Result<Self, Error> {
+        Self::open_read_only_with_lock_timeout(root.into(), cache_dir, snapshot::SHARED_LOCK_TIMEOUT)
+    }
+
+    fn open_read_only_with_lock_timeout(
+        root: PathBuf,
+        cache_dir: Option<PathBuf>,
+        lock_timeout: std::time::Duration,
+    ) -> Result<Self, Error> {
+        if !root.exists() || !root.is_dir() {
+            return Err(Error::RootInvalid);
+        }
+
+        let root_directory = open_installation_root_path(&root).map_err(|source| Error::ValidateRootDirectory {
+            path: root.clone(),
+            source,
+        })?;
+        let authority = snapshot::Authority::open(&root, &root_directory, cache_dir.as_deref(), lock_timeout)?;
+        let active_state = read_state_id(&root_directory);
+
+        if let Some(id) = &active_state {
+            trace!("Active State ID: {id}");
+        } else {
+            warn!("Unable to discover Active State ID");
+        }
+
+        let installation = Self {
+            root,
+            mutability: Mutability::ReadOnly,
+            active_state,
+            cache_dir,
+            system_model: None,
+            root_directory: Arc::new(root_directory),
+            _locks: vec![],
+            snapshot_authority: Some(Arc::new(authority)),
+            access: Access::ReadOnlySnapshot,
+        };
+        installation.revalidate_read_only_snapshot()?;
+        Ok(installation)
     }
 
     /// Open only the persistent package cache used to materialize a frozen
@@ -208,12 +269,29 @@ impl Installation {
             system_model: None,
             root_directory: Arc::new(root_directory),
             _locks,
-            discovery,
+            snapshot_authority: None,
+            access: match (discovery, mutability) {
+                (Discovery::System, Mutability::ReadWrite) => Access::Mutable,
+                (Discovery::System, Mutability::ReadOnly) => Access::NaturallyReadOnly,
+                (Discovery::FrozenCache, _) => Access::FrozenCache,
+            },
         })
     }
 
     pub(crate) fn is_frozen_cache(&self) -> bool {
-        matches!(self.discovery, Discovery::FrozenCache)
+        matches!(self.access, Access::FrozenCache)
+    }
+
+    /// Return whether this installation owns explicit shared snapshot
+    /// authority rather than mutable or frozen-cache authority.
+    pub(crate) fn is_read_only_snapshot(&self) -> bool {
+        matches!(self.access, Access::ReadOnlySnapshot)
+    }
+
+    /// Return whether this installation was opened as a writable system,
+    /// rather than inferring mutation authority from a path or boolean.
+    pub(crate) fn is_mutable_system(&self) -> bool {
+        matches!(self.access, Access::Mutable)
     }
 
     /// Borrow the exact installation-root inode authenticated before locks,
@@ -232,6 +310,20 @@ impl Installation {
                 source,
             }
         })
+    }
+
+    /// Revalidate every retained component that authorizes an explicit
+    /// read-only snapshot. Mutable and frozen-cache installations cannot be
+    /// accidentally treated as snapshot authority.
+    pub(crate) fn revalidate_read_only_snapshot(&self) -> Result<(), Error> {
+        if !self.is_read_only_snapshot() {
+            return Err(Error::ReadOnlySnapshotAuthorityRequired);
+        }
+        let authority = self
+            .snapshot_authority
+            .as_deref()
+            .ok_or(Error::ReadOnlySnapshotAuthorityRequired)?;
+        authority.revalidate(&self.root, &self.root_directory)
     }
 
     /// Return true if we lack write access
@@ -1421,6 +1513,25 @@ pub enum Error {
     },
     #[error("acquiring lockfile")]
     Lockfile(#[from] lockfile::Error),
+    #[error("open existing read-only snapshot directory `{}`", path.display())]
+    OpenReadOnlySnapshotDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("open existing read-only snapshot lockfile `{}`", path.display())]
+    OpenReadOnlySnapshotLockfile {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("timed out after {timeout:?} acquiring shared read-only snapshot lock `{}`", path.display())]
+    ReadOnlySnapshotLockTimeout {
+        path: PathBuf,
+        timeout: std::time::Duration,
+    },
+    #[error("explicit read-only snapshot authority is required")]
+    ReadOnlySnapshotAuthorityRequired,
 }
 
 #[cfg(test)]
