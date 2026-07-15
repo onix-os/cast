@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -182,6 +182,13 @@ stone-recipe-derivation-provenance-test:
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 300s $(CARGO) test -p stone_recipe --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+container-cgroup-test:
+	@set -eu; \
+	listed="$$( timeout 120s $(CARGO) test -p container --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^cgroup::tests::.*: test$$' <<<"$$listed" )"; \
+	test "$$count" = 41; \
+	timeout 300s $(CARGO) test -p container --lib "cgroup::tests::" -- --test-threads=1
 
 forge-client-startup-gate-test:
 	@set -eu; \
@@ -887,6 +894,7 @@ help:
 	@echo "  forge-read-only-installation-test  Run retained read-only snapshot and mutable-client rejection tests"
 	@echo "  forge-read-only-substrate-test  Run immutable database-image and clean-journal substrate tests"
 	@echo "  stone-recipe-derivation-provenance-test  Run exact derivation provenance identity and validation tests"
+	@echo "  container-cgroup-test  Run all extracted cgroup lifecycle and parser tests"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
