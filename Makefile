@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test container-process-runtime-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test container-process-runtime-test gitwrap-repository-fs-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -214,6 +214,36 @@ container-process-runtime-test:
 		tests::signal_overrides_are_serialized_across_concurrent_runs; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 120s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+gitwrap-repository-fs-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p gitwrap --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		tests::repository_limits_accept_exact_n_and_reject_n_plus_one \
+		tests::strict_entry_quota_rejects_n_plus_one_without_sampling_slack \
+		tests::live_scan_may_retry_a_vanished_name_but_strict_scan_fails_closed \
+		tests::live_scan_allows_initial_absence_without_building_a_strict_inventory \
+		tests::strict_relative_path_allocation_is_prechecked_against_snapshot_budget \
+		tests::strict_two_snapshot_verification_rejects_same_name_inode_replacement \
+		tests::descriptor_rooted_quota_scan_never_follows_nested_or_root_symlinks \
+		tests::quota_scan_rejects_nesting_before_exhausting_parent_descriptors \
+		tests::quota_scan_rejects_a_budget_too_small_for_one_cursor \
+		tests::quota_scanner_reserves_descriptors_already_open_in_the_parent \
+		tests::repository_rejects_a_replaced_public_path_while_root_is_pinned \
+		tests::quota_scan_uses_the_subprocess_absolute_deadline \
+		tests::oversized_cached_mirror_is_rejected_before_git_is_started \
+		tests::remote_url_mutation_is_rejected_when_it_crosses_repository_quota \
+		tests::failed_public_fetch_never_deletes_a_caller_owned_repository \
+		tests::incremental_quota_scan_does_not_starve_a_full_stdout_pipe \
+		tests::oversized_clone_is_rejected_without_final_or_staging_state \
+		tests::published_mirror_and_credential_config_are_owner_private \
+		tests::private_mirror_strips_hostile_local_config_before_open_and_fetch \
+		tests::private_mirror_origin_is_checked_before_config_is_rewritten \
+		tests::sha256_object_format_commit_ids_are_accepted; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 180s $(CARGO) test -p gitwrap --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 forge-client-startup-gate-test:
@@ -922,6 +952,7 @@ help:
 	@echo "  stone-recipe-derivation-provenance-test  Run exact derivation provenance identity and validation tests"
 	@echo "  container-cgroup-test  Run all extracted cgroup lifecycle and parser tests"
 	@echo "  container-process-runtime-test  Run host-safe process-runtime, pidfd, and signal tests"
+	@echo "  gitwrap-repository-fs-test  Run repository filesystem identity, quota, and mirror tests"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
