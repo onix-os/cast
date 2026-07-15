@@ -261,30 +261,33 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
 
         let is_active = client.installation.active_state == Some(state.id);
 
-        // Blits to staging dir
-        let fstree = client.blit_root(state.selections.iter().map(|s| &s.package))?;
-
         if is_active {
+            // Active repair still uses the legacy stateful materializer. This
+            // slice isolates inactive writable repair candidates only; the
+            // remaining hardlink policy belongs to the shared coordinator
+            // work tracked in PLAN.md.
+            let fstree = client.blit_root(state.selections.iter().map(|s| &s.package))?;
             let system_model = client
                 .load_or_create_system_snapshot(crate::system_model::snapshot_path(&client.installation.root), state)?;
 
             // Override install root with the newly blitted active state
             client.apply_stateful_blit(fstree, state, None, system_model)?;
         } else {
+            // Inactive repair is writable by transaction triggers, so it must
+            // receive independent package inodes and a coordinator token from
+            // the first fixed-staging mutation through publication.
+            let candidate = client.materialize_archived_repair_root(state.selections.iter().map(|s| &s.package))?;
             let system_model = client.load_or_create_system_snapshot(
                 crate::system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
                 state,
             )?;
 
-            // Use the staged blit as an ephemeral target for the non-active
-            // state, then atomically exchange it with the existing archive or
-            // publish it with no-replace when the archive is missing.
-            client::record_state_id(&client.installation.staging_dir(), state.id)?;
-            client.apply_ephemeral_blit(fstree, &client.installation.staging_dir(), system_model)?;
-            client.publish_rebuilt_archived_state(state.id)?;
-            // After exchange this removes only the displaced corrupt tree; a
-            // no-replace publication leaves merely the staging wrapper/links.
-            fs::remove_dir_all(client.installation.staging_dir())?;
+            // Repair an inactive state without running live System triggers,
+            // exposing a partial archive, or recursively deleting either the
+            // displaced archive or the fixed staging wrapper. The retained
+            // repair guard publishes the whole candidate wrapper and parks the
+            // old or failed wrapper opaquely in private quarantine.
+            client.repair_archived_state(candidate, state, system_model)?;
         }
 
         println!(" {} state #{}", "»".green(), state.id);

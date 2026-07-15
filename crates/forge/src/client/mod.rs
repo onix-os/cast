@@ -34,7 +34,7 @@ use itertools::Itertools;
 use nix::{
     errno::Errno,
     fcntl::{self, OFlag},
-    libc::{AT_FDCWD, RENAME_EXCHANGE, RENAME_NOREPLACE, SYS_renameat2, syscall},
+    libc::{AT_FDCWD, RENAME_NOREPLACE, SYS_renameat2, syscall},
     sys::stat::{Mode, fchmod, fchmodat, mkdirat},
     unistd::{UnlinkatFlags, linkat, mkdir, read, symlinkat, unlinkat, write},
 };
@@ -80,6 +80,11 @@ pub use self::self_upgrade::self_upgrade;
 
 #[cfg(test)]
 mod active_reblit_tests;
+mod archived_repair;
+mod archived_repair_materialization;
+mod archived_repair_metadata;
+#[cfg(test)]
+mod archived_repair_tests;
 mod boot;
 mod cache;
 mod fetch;
@@ -219,12 +224,6 @@ enum StatefulCandidateOrigin {
 enum PreviousUsrLocation {
     Staging,
     Archived(state::Id),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArchivedStatePublication {
-    Exchanged,
-    Published,
 }
 
 #[derive(Debug, Default)]
@@ -781,6 +780,7 @@ impl Client {
     /// Returns the old state that was archived.
     pub fn activate_state(&self, id: state::Id, skip_triggers: bool, skip_boot: bool) -> Result<state::Id, Error> {
         self.require_non_frozen()?;
+        let _stateful_coordinator = archived_repair_materialization::lock_coordinator()?;
         let _guard = signal::ignore([Signal::SIGINT])?;
         let _inhibitor = signal::inhibit(
             vec!["shutdown", "sleep", "idle", "handle-lid-switch"],
@@ -952,6 +952,8 @@ impl Client {
 
     /// Apply all triggers with the given scope, wrapping with a progressbar.
     fn apply_triggers(scope: TriggerScope<'_>, fstree: &vfs::Tree<PendingFile>) -> Result<(), postblit::Error> {
+        #[cfg(test)]
+        observe_trigger_scope(&scope);
         let triggers = postblit::triggers(scope, fstree)?;
 
         let progress = ProgressBar::new(triggers.len() as u64).with_style(
@@ -964,6 +966,10 @@ impl Client {
             TriggerScope::Transaction(..) => {
                 progress.set_message("Running transaction-scope triggers");
                 "transaction-scope-triggers"
+            }
+            TriggerScope::RetainedTransaction { .. } => {
+                progress.set_message("Running retained transaction-scope triggers");
+                "retained-transaction-scope-triggers"
             }
             TriggerScope::System(..) => {
                 progress.set_message("Running system-scope triggers");
@@ -1013,6 +1019,7 @@ impl Client {
         old_state: Option<state::Id>,
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
+        let _stateful_coordinator = archived_repair_materialization::lock_coordinator()?;
         self.apply_stateful_blit_with_checkpoint(fstree, state, old_state, system_snapshot, |_| Ok(()))
     }
 
@@ -1790,29 +1797,6 @@ impl Client {
         StatefulTreeIdentity::prepare(&self.installation, &self.state_db, candidate_usr, candidate_state)
     }
 
-    /// Atomically publish a repaired non-active state without first deleting
-    /// the only archived tree. Existing archives are exchanged with staging;
-    /// missing archives are installed with no-replace publication.
-    fn publish_rebuilt_archived_state(&self, state: state::Id) -> Result<ArchivedStatePublication, Error> {
-        let staged = self.installation.staging_path("usr");
-        let archived = self.installation.root_path(state.to_string()).join("usr");
-
-        match fs::symlink_metadata(&archived) {
-            Ok(_) => {
-                Self::atomic_swap(&staged, &archived)?;
-                Ok(ArchivedStatePublication::Exchanged)
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if let Some(parent) = archived.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                rename_noreplace(&staged, &archived)?;
-                Ok(ArchivedStatePublication::Published)
-            }
-            Err(error) => Err(error.into()),
-        }
-    }
-
     pub fn apply_ephemeral_blit(
         &self,
         fstree: vfs::Tree<PendingFile>,
@@ -1820,6 +1804,11 @@ impl Client {
         system_snapshot: SystemModel,
     ) -> Result<(), Error> {
         self.require_non_frozen()?;
+        // `blit_root` is a public, caller-supplied destination and can name
+        // this installation's fixed staging wrapper even for an ephemeral
+        // client. Cooperating clients must not mutate that namespace while an
+        // inactive archived-repair candidate retains it.
+        let _staging_coordinator = archived_repair_materialization::lock_coordinator()?;
         record_os_release(blit_root)?;
         record_system_snapshot(blit_root, system_snapshot)?;
 
@@ -1848,25 +1837,6 @@ impl Client {
     fn promote_staging(&self, tree_identity: &StatefulTreeIdentity) -> Result<(), RetainedExchangeFailure> {
         debug_assert!(!self.scope.is_ephemeral());
         tree_identity.exchange_forward(&self.installation)
-    }
-
-    /// syscall based wrapper for renameat2 so we can support musl libc which
-    /// unfortunately does not expose the API.
-    /// largely modelled on existing renameat2 API in nix crae
-    fn atomic_swap<A: ?Sized + nix::NixPath, B: ?Sized + nix::NixPath>(old_path: &A, new_path: &B) -> nix::Result<()> {
-        let result = old_path.with_nix_path(|old| {
-            new_path.with_nix_path(|new| unsafe {
-                syscall(
-                    SYS_renameat2,
-                    AT_FDCWD,
-                    old.as_ptr(),
-                    AT_FDCWD,
-                    new.as_ptr(),
-                    RENAME_EXCHANGE,
-                )
-            })
-        })?? as i32;
-        Errno::result(result).map(drop)
     }
 
     /// Download & unpack the provided packages. Packages already cached will be validated & skipped.
@@ -2264,6 +2234,10 @@ impl Client {
         &self,
         packages: impl IntoIterator<Item = &'a package::Id>,
     ) -> Result<vfs::Tree<PendingFile>, Error> {
+        // Ephemeral destinations are caller-selected and may alias the fixed
+        // staging wrapper. Serialize every public blit boundary rather than
+        // assuming the scope proves the destination disjoint.
+        let _staging_coordinator = archived_repair_materialization::lock_coordinator()?;
         let blit_target = match &self.scope {
             Scope::Stateful => self.installation.staging_dir(),
             Scope::Ephemeral { blit_root } => blit_root.to_owned(),
@@ -6308,34 +6282,6 @@ fn remove_empty_frozen_private_directory(
     }
 }
 
-/// Transitional pathname helper still used by the stateful coordinator.
-/// Frozen-root publication and private-stage cleanup must use retained-parent
-/// operations instead; the remaining stateful callers are tracked by Phase 11.
-fn rename_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
-    let source_name = CString::new(source.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source path contains NUL"))?;
-    let destination_name = CString::new(destination.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "destination path contains NUL"))?;
-    // SAFETY: both C strings remain live for the syscall. RENAME_NOREPLACE
-    // prevents replacement but does not authenticate either parent; do not
-    // introduce new callers.
-    let result = unsafe {
-        syscall(
-            SYS_renameat2,
-            AT_FDCWD,
-            source_name.as_ptr(),
-            AT_FDCWD,
-            destination_name.as_ptr(),
-            RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
 struct FrozenDiscardDirectoryStream(NonNull<nix::libc::DIR>);
 
 impl Drop for FrozenDiscardDirectoryStream {
@@ -8744,6 +8690,10 @@ fn frozen_collision(path: &str, first: &FrozenLayoutEntry, second: &FrozenLayout
 /// This provides a very quick means to generate a hardlinked "snapshot" on-demand,
 /// which can then be activated via [`Self::promote_staging`]
 pub fn blit_root(installation: &Installation, tree: &vfs::Tree<PendingFile>, blit_target: &Path) -> Result<(), Error> {
+    // This public low-level entry point accepts an arbitrary target, including
+    // `installation.staging_dir()`. Keep it in the same cooperating-writer
+    // domain as Client's stateful and ephemeral materializers.
+    let _staging_coordinator = archived_repair_materialization::lock_coordinator()?;
     blit_root_with_materialization(
         installation,
         tree,
@@ -8785,6 +8735,56 @@ fn blit_root_with_materialization(
         Mode::empty(),
     )?;
     fchmod(root_dir.as_raw_fd(), Mode::from_bits_truncate(0o755))?;
+    blit_tree_into_open_root(
+        installation,
+        tree,
+        root_dir.as_raw_fd(),
+        materialization,
+        execution,
+        None,
+        None,
+    )
+}
+
+/// Blit into a target name which the caller already proved absent. Unlike the
+/// historical stateful blitter this entry point never traverses or removes an
+/// existing target. It is used by archived repair after its retained baseline
+/// classifier has admitted and removed only an exact empty private wrapper.
+fn blit_root_into_missing_target_with_materialization(
+    installation: &Installation,
+    tree: &vfs::Tree<PendingFile>,
+    blit_target: &Path,
+    materialization: AssetMaterialization,
+    execution: BlitExecution,
+    root_mode: u32,
+) -> Result<(), Error> {
+    match fs::symlink_metadata(blit_target) {
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "refusing non-destructive blit because target appeared after baseline proof: {}",
+                    blit_target.display()
+                ),
+            )
+            .into());
+        }
+        Err(source) => return Err(source.into()),
+    }
+
+    mkdir(blit_target, Mode::from_bits_truncate(root_mode))?;
+    let root_dir = open_owned(
+        blit_target,
+        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_RDONLY,
+        Mode::empty(),
+    )?;
+    fchmod(root_dir.as_raw_fd(), Mode::from_bits_truncate(root_mode))?;
+
+    if tree.len() == 0 {
+        return Ok(());
+    }
+
     blit_tree_into_open_root(
         installation,
         tree,
@@ -10537,6 +10537,26 @@ impl Scope {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static OBSERVED_TRIGGER_SCOPES: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn observe_trigger_scope(scope: &TriggerScope<'_>) {
+    let name = match scope {
+        TriggerScope::Transaction(..) => "transaction",
+        TriggerScope::RetainedTransaction { .. } => "retained-transaction",
+        TriggerScope::System(..) => "system",
+    };
+    OBSERVED_TRIGGER_SCOPES.with(|observed| observed.borrow_mut().push(name));
+}
+
+#[cfg(test)]
+fn take_observed_trigger_scopes() -> Vec<&'static str> {
+    OBSERVED_TRIGGER_SCOPES.with(|observed| std::mem::take(&mut *observed.borrow_mut()))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AssetMaterialization {
     HardLink,
@@ -11445,6 +11465,18 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+    #[error("repair an inactive archived state")]
+    ArchivedStateRepair {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("materialize an inactive archived state")]
+    ArchivedRepairMaterialization {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("fixed-staging cooperating-writer coordinator is poisoned")]
+    FixedStagingCoordinatorPoisoned,
     #[error(
         "active-state reblit for state {state} committed, but whole-wrapper cleanup ended with {outcome}; do not reverse through fixed staging"
     )]
@@ -17379,57 +17411,6 @@ let cast = import! cast.system.v1
             &expected,
             "active-package",
         );
-    }
-
-    #[test]
-    fn rebuilt_non_active_state_atomically_exchanges_with_existing_archive() {
-        let temporary = tempfile::tempdir().unwrap();
-        let client = stateful_test_client(temporary.path());
-        let state = client.state_db.add(&[], Some("archived"), None).unwrap();
-
-        let archived_root = client.installation.root_path(state.id.to_string());
-        let old = generated_system_snapshot("old-archived-package");
-        let old_encoded = old.encoded().to_owned();
-        record_state_id(&archived_root, state.id).unwrap();
-        record_system_snapshot(&archived_root, old).unwrap();
-
-        let repaired = generated_system_snapshot("repaired-archived-package");
-        let repaired_encoded = repaired.encoded().to_owned();
-        record_state_id(&client.installation.staging_dir(), state.id).unwrap();
-        record_system_snapshot(&client.installation.staging_dir(), repaired).unwrap();
-
-        let publication = client.publish_rebuilt_archived_state(state.id).unwrap();
-        assert_eq!(publication, ArchivedStatePublication::Exchanged);
-        assert_generated_snapshot(
-            &system_model::snapshot_path(&archived_root),
-            &repaired_encoded,
-            "repaired-archived-package",
-        );
-        assert_generated_snapshot(
-            &system_model::snapshot_path(&client.installation.staging_dir()),
-            &old_encoded,
-            "old-archived-package",
-        );
-    }
-
-    #[test]
-    fn rebuilt_missing_non_active_state_uses_noreplace_publication() {
-        let temporary = tempfile::tempdir().unwrap();
-        let client = stateful_test_client(temporary.path());
-        let state = client.state_db.add(&[], Some("missing archive"), None).unwrap();
-        let repaired = generated_system_snapshot("repaired-missing-package");
-        let repaired_encoded = repaired.encoded().to_owned();
-        record_state_id(&client.installation.staging_dir(), state.id).unwrap();
-        record_system_snapshot(&client.installation.staging_dir(), repaired).unwrap();
-
-        let publication = client.publish_rebuilt_archived_state(state.id).unwrap();
-        assert_eq!(publication, ArchivedStatePublication::Published);
-        assert_generated_snapshot(
-            &system_model::snapshot_path(&client.installation.root_path(state.id.to_string())),
-            &repaired_encoded,
-            "repaired-missing-package",
-        );
-        assert!(!client.installation.staging_path("usr").exists());
     }
 
     struct StatefulTransitionFixture {

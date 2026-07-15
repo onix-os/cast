@@ -33,6 +33,7 @@ use crate::{
 
 mod active_previous_slot_parking;
 mod archived_candidate;
+mod archived_state_repair;
 mod candidate_quarantine;
 mod error;
 mod fault_injection;
@@ -66,6 +67,20 @@ pub(crate) use archived_candidate::{
     RetainedArchivedCandidateMoveFaultPoint, arm_before_archived_candidate_slot_marker_location,
     arm_before_retained_archived_candidate_exchange, arm_before_retired_archived_candidate_slot_move,
     arm_retained_archived_candidate_move_fault,
+};
+#[allow(unused_imports)]
+pub(crate) use archived_state_repair::{
+    ArchivedStateRepairError, ArchivedStateRepairFailure, ArchivedStateRepairIdentity, ArchivedStateRepairOutcome,
+    ArchivedStateRepairPublication,
+};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use archived_state_repair::{
+    ArchivedStateRepairFaultPoint, ArchivedStateRepairNamespaceMove, archived_state_repair_namespace_syscall_count,
+    arm_archived_state_repair_faults, arm_before_archived_state_repair_cleanup,
+    arm_before_archived_state_repair_namespace_syscall, arm_before_archived_state_repair_preservation,
+    arm_before_archived_state_repair_publication, arm_before_archived_state_repair_suffix_retry,
+    arm_between_archived_state_repair_layout_reads,
 };
 #[cfg(test)]
 pub(crate) use fault_injection::{
@@ -742,6 +757,22 @@ fn live_usr_io(operation: &'static str, path: &Path, source: io::Error) -> Error
 impl RetainedIdentity {
     fn prepare(store: TreeMarkerStore, state: Option<state::Id>) -> Result<Self, Error> {
         let marker = store.adopt_or_create_before_journal_for_transition()?;
+        Self::with_marker(store, marker, state)
+    }
+
+    /// Strict preparation for a newly materialized tree which cannot already
+    /// own a state-slot hardlink. Archived repair must reject `nlink=2`
+    /// transition markers rather than deferring their authorization.
+    fn prepare_strict(store: TreeMarkerStore, state: state::Id) -> Result<Self, Error> {
+        let marker = store.adopt_or_create_before_journal()?;
+        Self::with_marker(store, marker, Some(state))
+    }
+
+    fn with_marker(
+        store: TreeMarkerStore,
+        marker: RetainedTreeMarker,
+        state: Option<state::Id>,
+    ) -> Result<Self, Error> {
         let state_id = state
             .map(|state| state_tree_metadata::RetainedTreeStateId::retain(&store, state))
             .transpose()?;
@@ -776,10 +807,18 @@ impl RetainedIdentity {
     fn verify_named_with_state_id(&self, path: &Path) -> Result<(), Error> {
         self.verify_named_read_only(path)?;
         let named_store = TreeMarkerStore::open_path(path)?;
-        self.store.require_same_directory(&named_store)?;
+        self.verify_store_with_state_id(&named_store)
+    }
+
+    /// Strict descriptor-bound candidate proof. Unlike the path convenience
+    /// wrapper above, callers can bind this check to a wrapper directory they
+    /// already retained before any trigger or namespace mutation.
+    fn verify_store_with_state_id(&self, named_store: &TreeMarkerStore) -> Result<(), Error> {
+        self.verify_store_read_only(named_store)?;
+        self.store.require_same_directory(named_store)?;
         let state_id = self.state_id.as_ref().ok_or_else(|| Error::LiveUsr {
             operation: "load retained candidate state ID",
-            path: path.to_owned(),
+            path: named_store.display_path().to_owned(),
             source: io::Error::other("candidate state ID identity was not retained"),
         })?;
         state_id.revalidate(&self.store, &named_store)?;

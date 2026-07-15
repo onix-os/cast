@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-active-reblit-wrapper-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -169,6 +169,68 @@ forge-active-reblit-wrapper-test:
 		client::active_reblit_tests::active_reblit_rejects_a_slot_moved_back_to_canonical_after_triggers \
 		client::active_reblit_tests::active_reblit_reversal_cannot_report_success_after_parked_slot_is_moved_back; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-archived-repair-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::postblit::retained_transaction::tests::writable_bind_ignores_fixed_staging_substitution \
+		client::archived_repair_tests::archived_repair_replaces_the_whole_wrapper_and_preserves_old_payload_opaquely \
+		client::archived_repair_tests::archived_repair_publishes_missing_wrapper_directly_and_restores_empty_staging \
+		client::archived_repair_tests::archived_repair_runs_only_transaction_scope_and_never_mutates_live_namespaces \
+		client::archived_repair_tests::archived_repair_preserves_a_trigger_corrupted_candidate_as_one_opaque_wrapper \
+		client::archived_repair_tests::archived_repair_rejects_a_foreign_canonical_file_without_touching_it \
+		client::archived_repair_tests::archived_repair_preserves_an_old_wrapper_with_no_state_id_without_repairing_it \
+		client::archived_repair_tests::archived_repair_detects_active_row_deletion_and_reports_preservation_incomplete \
+		client::archived_repair_tests::archived_repair_rejects_a_target_selected_active_before_guard_preparation \
+		client::archived_repair_tests::metadata::metadata_decoration_never_follows_a_candidate_lib_symlink \
+		client::archived_repair_tests::metadata::metadata_decoration_never_follows_an_os_info_symlink \
+		client::archived_repair_tests::metadata::existing_metadata_outputs_are_preserved_without_mutating_regular_or_hardlinked_inodes \
+		client::archived_repair_tests::metadata::successful_metadata_publication_creates_independent_sealed_files \
+		client::archived_repair_tests::metadata::a_second_metadata_name_collision_preserves_the_partial_candidate_without_replacing_the_occupant \
+		client::archived_repair_tests::metadata::deleting_the_first_metadata_output_during_pair_publication_preserves_the_partial_candidate \
+		client::archived_repair_tests::metadata::replacing_the_first_metadata_output_during_pair_publication_never_adopts_the_occupant \
+		client::archived_repair_tests::materialization::a_live_archived_repair_candidate_serializes_the_public_low_level_blitter \
+		client::archived_repair_tests::materialization::archived_repair_materialization_uses_a_private_inode_and_never_chmods_the_asset_pool \
+		client::archived_repair_tests::materialization::a_write_at_the_transaction_trigger_boundary_cannot_mutate_cache_or_live_aliases \
+		client::archived_repair_tests::materialization::identical_digest_outputs_keep_distinct_package_modes_without_chmodding_aliases \
+		client::archived_repair_tests::materialization::nonempty_fixed_staging_crash_residue_is_refused_without_traversal_or_deletion \
+		client::archived_repair_tests::materialization::an_exact_empty_private_staging_baseline_is_replaced_nonrecursively \
+		client::archived_repair_tests::materialization::an_empty_staging_name_substitution_is_refused_without_removing_either_inode \
+		client::archived_repair_tests::materialization::an_interrupted_staging_removal_never_retries_against_a_substitute \
+		client::archived_repair_tests::materialization::a_moved_away_retained_wrapper_is_not_misclassified_as_removed \
+		client::archived_repair_tests::identity::same_content_state_id_inode_replacement_is_preserved_but_never_published \
+		client::archived_repair_tests::identity::same_content_tree_marker_inode_replacement_is_preserved_but_never_published \
+		client::archived_repair_tests::semantics::live_active_selection_change_is_detected_without_trusting_the_cached_field \
+		client::archived_repair_tests::semantics::repaired_target_row_deletion_is_detected_and_the_candidate_is_still_preserved \
+		client::archived_repair_tests::semantics::same_content_live_state_id_inode_replacement_fails_closed \
+		client::archived_repair_tests::semantics::same_content_live_tree_marker_inode_replacement_fails_closed \
+		client::archived_repair_tests::semantics::same_content_whole_live_usr_replacement_fails_closed \
+		client::archived_repair_tests::faults::every_single_archived_repair_publication_fault_resumes_without_tree_loss \
+		client::archived_repair_tests::faults::archived_repair_preparation_faults_leave_candidate_staged_and_archive_unchanged \
+		client::archived_repair_tests::faults::preparation_reports_primary_and_exact_reservation_cleanup_failures \
+		client::archived_repair_tests::faults::queued_not_applied_publication_faults_preserve_candidate_once \
+		client::archived_repair_tests::faults::queued_applied_suffix_faults_never_reverse_committed_candidate \
+		client::archived_repair_tests::faults::substituted_staging_before_publication_is_ambiguous_and_never_adopted \
+		client::archived_repair_tests::faults::substituted_staging_before_preservation_is_ambiguous_and_never_overwritten \
+		client::archived_repair_tests::faults::substituted_roots_parent_proof_is_ambiguous_without_a_rename_or_retry \
+		client::archived_repair_tests::faults::substituted_quarantine_parent_proof_is_ambiguous_without_a_rename_or_retry \
+		client::archived_repair_tests::faults::replacement_content_substitution_is_ambiguous_without_a_rename_or_retry \
+		client::archived_repair_tests::faults::replacement_inode_substitution_is_ambiguous_without_a_rename_or_retry \
+		client::archived_repair_tests::faults::archived_repair_quarantine_scan_skips_foreign_file_types \
+		client::archived_repair_tests::faults::archived_repair_quarantine_exhaustion_preserves_every_namespace \
+		client::archived_repair_tests::faults::externally_completed_cleanup_is_adopted_without_a_second_exchange \
+		client::archived_repair_tests::faults::a_layout_change_between_sandwich_reads_is_ambiguous_and_never_reversed \
+		client::archived_repair_tests::faults::publication_suffix_retry_reconciles_staging_substitution_as_ambiguous \
+		client::archived_repair_tests::faults::preservation_suffix_retry_reconciles_staging_substitution_as_ambiguous \
+		client::archived_repair_tests::namespace_races::successful_existing_publication_reversal_is_ambiguous_without_a_second_exchange \
+		client::archived_repair_tests::namespace_races::externally_published_missing_candidate_is_adopted_without_a_second_publish \
+		client::archived_repair_tests::namespace_races::successful_existing_cleanup_reversal_is_ambiguous_without_a_second_exchange \
+		client::archived_repair_tests::namespace_races::externally_completed_missing_cleanup_is_adopted_without_a_second_restore \
+		client::archived_repair_tests::namespace_races::successful_preservation_reversal_is_ambiguous_without_a_second_exchange; do \
+		printf '%s\n' "$$listed" | grep -Fx "$$test: test" >/dev/null; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
@@ -494,6 +556,7 @@ help:
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
+	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
 	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"

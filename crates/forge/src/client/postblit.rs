@@ -8,6 +8,7 @@
 //! Trigger intent is loaded from `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu`
 //! and do not yet support local triggers
 mod process;
+mod retained_transaction;
 
 use std::{
     io,
@@ -116,57 +117,62 @@ pub(super) enum TriggerScope<'a> {
     /// A transaction trigger, isolated to `/usr`
     Transaction(&'a Installation, &'a super::Scope),
 
+    /// An inactive-state transaction trigger whose complete execution view is
+    /// selected through retained filesystem capabilities.
+    ///
+    /// Trigger configuration discovery is still performed through
+    /// `candidate_usr_path`; that bounded limitation is intentionally kept
+    /// separate from execution. Before a handler runs, the container root,
+    /// installation `/etc`, and candidate `/usr` are all descriptor-pinned.
+    RetainedTransaction {
+        installation: &'a Installation,
+        candidate_usr: &'a std::fs::File,
+        candidate_usr_path: &'a Path,
+    },
+
     /// A system trigger with reduced sandboxing, capable of writes outside `/usr`
     System(&'a Installation, &'a super::Scope),
 }
 
 impl TriggerScope<'_> {
-    // Determine the correct root directory
-    fn root_dir(&self) -> PathBuf {
+    /// Locate packaged trigger intent.
+    ///
+    /// The retained transaction arm remains path-based only for configuration
+    /// loading. Handler execution does not reuse this pathname as authority.
+    fn trigger_root(&self) -> PathBuf {
+        const TRIGGER_RELATIVE_TO_USR: &str = "share/cast/triggers";
+
         match self {
             TriggerScope::Transaction(install, scope) => match scope {
-                super::Scope::Stateful => install.staging_dir().clone(),
-                super::Scope::Ephemeral { blit_root } => blit_root.clone(),
-                super::Scope::Frozen { destination } => destination.root_path.clone(),
+                super::Scope::Stateful => install.staging_path("usr").join(TRIGGER_RELATIVE_TO_USR),
+                super::Scope::Ephemeral { blit_root } => blit_root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
+                super::Scope::Frozen { destination } => destination.root_path.join("usr").join(TRIGGER_RELATIVE_TO_USR),
             },
+            TriggerScope::RetainedTransaction { candidate_usr_path, .. } => {
+                candidate_usr_path.join(TRIGGER_RELATIVE_TO_USR)
+            }
             TriggerScope::System(install, scope) => match scope {
-                super::Scope::Stateful => install.root.clone(),
-                super::Scope::Ephemeral { blit_root } => blit_root.clone(),
-                super::Scope::Frozen { destination } => destination.root_path.clone(),
+                super::Scope::Stateful => install.root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
+                super::Scope::Ephemeral { blit_root } => blit_root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
+                super::Scope::Frozen { destination } => destination.root_path.join("usr").join(TRIGGER_RELATIVE_TO_USR),
             },
         }
     }
+}
 
-    /// Join "host" paths, outside the staging filesystem. Ensure no sandbox break for ephemeral
-    fn host_path(&self, path: impl AsRef<Path>) -> PathBuf {
-        match self {
-            TriggerScope::Transaction(install, scope) => match scope {
-                super::Scope::Stateful => install.root.join(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
-                super::Scope::Frozen { destination } => destination.root_path.join(path),
-            },
-            TriggerScope::System(install, scope) => match scope {
-                super::Scope::Stateful => install.root.join(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
-                super::Scope::Frozen { destination } => destination.root_path.join(path),
-            },
-        }
+fn scope_root_path(installation: &Installation, scope: &super::Scope, path: impl AsRef<Path>) -> PathBuf {
+    match scope {
+        super::Scope::Stateful => installation.root.join(path),
+        super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+        super::Scope::Frozen { destination } => destination.root_path.join(path),
     }
+}
 
-    /// Join guest paths, inside the staging filesystem. Ensure no sandbox break for ephemeral
-    fn guest_path(&self, path: impl AsRef<Path>) -> PathBuf {
-        match self {
-            TriggerScope::Transaction(install, scope) => match scope {
-                super::Scope::Stateful => install.staging_path(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
-                super::Scope::Frozen { destination } => destination.root_path.join(path),
-            },
-            TriggerScope::System(install, scope) => match scope {
-                super::Scope::Stateful => install.root.join(path),
-                super::Scope::Ephemeral { blit_root } => blit_root.join(path),
-                super::Scope::Frozen { destination } => destination.root_path.join(path),
-            },
-        }
+fn transaction_guest_path(installation: &Installation, scope: &super::Scope, path: impl AsRef<Path>) -> PathBuf {
+    match scope {
+        super::Scope::Stateful => installation.staging_path(path),
+        super::Scope::Ephemeral { blit_root } => blit_root.join(path),
+        super::Scope::Frozen { destination } => destination.root_path.join(path),
     }
 }
 
@@ -187,26 +193,18 @@ pub(super) fn triggers<'a>(
     scope: TriggerScope<'a>,
     fstree: &vfs::tree::Tree<PendingFile>,
 ) -> Result<Vec<TriggerRunner<'a>>, Error> {
-    // Pre-calculate trigger root path once
-    let trigger_root = {
-        let mut path = PathBuf::with_capacity(50);
-        path.push("usr");
-        path.push("share");
-        path.push("cast");
-        path.push("triggers");
-        path
-    };
-
-    let full_trigger_path = scope.root_dir().join(&trigger_root);
+    let full_trigger_path = scope.trigger_root();
 
     // Load appropriate triggers from their locations and convert back to a vec of Trigger
     let triggers = match scope {
-        TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
-            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
-            .map_err(|error| Error::Config(Box::new(error)))?
-            .into_iter()
-            .map(|l| l.value.0)
-            .collect_vec(),
+        TriggerScope::Transaction(..) | TriggerScope::RetainedTransaction { .. } => {
+            config::Manager::custom(&full_trigger_path)
+                .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
+                .map_err(|error| Error::Config(Box::new(error)))?
+                .into_iter()
+                .map(|l| l.value.0)
+                .collect_vec()
+        }
         TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
             .load_gluon(&Evaluator::default(), &SystemTriggerCodec)
             .map_err(|error| Error::Config(Box::new(error)))?
@@ -240,27 +238,36 @@ impl TriggerRunner<'_> {
     /// `-D` argument with `cast install`)
     pub fn execute(&self) -> Result<(), Error> {
         match self.scope {
-            TriggerScope::Transaction(install, _) => {
+            TriggerScope::Transaction(install, scope) => {
                 // TODO: Add caching support via /var/
                 let isolation = Container::new(install.isolation_dir())
                     .networking(false)
                     .root_filesystem(TRANSACTION_ROOT_FILESYSTEM)
                     .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS)
-                    .bind_ro(self.scope.host_path("etc"), "/etc")
-                    .bind_rw(self.scope.guest_path("usr"), "/usr")
+                    .bind_ro(scope_root_path(install, scope, "etc"), "/etc")
+                    .bind_rw(transaction_guest_path(install, scope, "usr"), "/usr")
                     .work_dir("/");
 
                 Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
             }
-            TriggerScope::System(install, _) => {
+            TriggerScope::RetainedTransaction {
+                installation,
+                candidate_usr,
+                candidate_usr_path,
+            } => {
+                let isolation = retained_transaction::container(installation, candidate_usr, candidate_usr_path)?;
+                retained_transaction::before_activation();
+                Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
+            }
+            TriggerScope::System(install, scope) => {
                 // OK, if the root == `/` then we can run directly, otherwise we need to containerise with RW.
                 if install.root.to_string_lossy() == "/" {
                     Ok(execute_trigger_directly(&self.trigger)?)
                 } else {
                     let isolation = Container::new(install.isolation_dir())
                         .networking(false)
-                        .bind_rw(self.scope.host_path("etc"), "/etc")
-                        .bind_rw(self.scope.guest_path("usr"), "/usr")
+                        .bind_rw(scope_root_path(install, scope, "etc"), "/etc")
+                        .bind_rw(scope_root_path(install, scope, "usr"), "/usr")
                         .work_dir("/");
 
                     Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
@@ -472,6 +479,40 @@ pub enum Error {
 
     #[error("delete trigger could not unlink `{}`", path.display())]
     DeletePath {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("open retained transaction {role} directory `{}`", path.display())]
+    OpenRetainedTransactionDirectory {
+        role: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("inspect retained transaction {role} directory `{}`", path.display())]
+    InspectRetainedTransactionDirectory {
+        role: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("retained transaction {role} directory `{}` was replaced during container preparation", path.display())]
+    RetainedTransactionDirectoryReplaced { role: &'static str, path: PathBuf },
+
+    #[error("prepare retained transaction container mount target `{}`", path.display())]
+    PrepareRetainedTransactionMountTarget {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("pin retained transaction {role} source `{}`", path.display())]
+    PinRetainedTransactionSource {
+        role: &'static str,
         path: PathBuf,
         #[source]
         source: io::Error,
