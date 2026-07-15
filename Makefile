@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-read-only-installation-test forge-read-only-substrate-test stone-recipe-derivation-provenance-test container-cgroup-test container-process-runtime-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -189,6 +189,32 @@ container-cgroup-test:
 	count="$$( timeout 10s grep -c '^cgroup::tests::.*: test$$' <<<"$$listed" )"; \
 	test "$$count" = 41; \
 	timeout 300s $(CARGO) test -p container --lib "cgroup::tests::" -- --test-threads=1
+
+# Socket-diagnostic tests remain in the complete `make test` lane. The local
+# sandbox denies their `send(MSG_NOSIGNAL | MSG_DONTWAIT)` syscall with EPERM;
+# this focused lane covers the two moved helpers plus every host-safe pidfd,
+# signal-mask, signal-action, and lifecycle test without misreporting a skip.
+container-process-runtime-test:
+	@set -eu; \
+	listed="$$( timeout 120s $(CARGO) test -p container --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		process_runtime::launch_support::tests::clone_stack_has_a_non_accessible_guard_and_read_write_usable_mapping \
+		process_runtime::launch_support::tests::error_transport_format_is_bounded_even_for_cyclic_and_huge_sources \
+		tests::pidfd_wait_and_signal_preserve_exact_terminal_statuses \
+		tests::valid_pidfd_cleanup_kills_and_reaps_without_numeric_wait \
+		tests::pidfd_reap_deadline_is_finite_and_leaves_authority_recoverable \
+		tests::successful_cgroup_drain_retry_reaps_by_pidfd_and_restores_primary_failure \
+		tests::already_reaped_pidfd_cleanup_accepts_only_the_authoritative_terminal_pair \
+		tests::dropping_unrecovered_pidfd_authority_aborts_an_isolated_process \
+		tests::invalid_pidfd_cleanup_never_falls_back_and_retains_authority \
+		tests::signal_override_restores_the_exact_previous_action \
+		tests::blocked_clone_signal_mask_restores_the_exact_previous_mask \
+		tests::raw_clone_child_guard_can_retain_blocked_mask_until_exit \
+		tests::signal_overrides_are_serialized_across_concurrent_runs; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 120s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 forge-client-startup-gate-test:
 	@set -eu; \
@@ -895,6 +921,7 @@ help:
 	@echo "  forge-read-only-substrate-test  Run immutable database-image and clean-journal substrate tests"
 	@echo "  stone-recipe-derivation-provenance-test  Run exact derivation provenance identity and validation tests"
 	@echo "  container-cgroup-test  Run all extracted cgroup lifecycle and parser tests"
+	@echo "  container-process-runtime-test  Run host-safe process-runtime, pidfd, and signal tests"
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"

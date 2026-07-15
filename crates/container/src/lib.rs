@@ -3,17 +3,12 @@
 
 use std::io::{self, Read as _, Write as _};
 use std::num::NonZeroU64;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::io::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::ptr::NonNull;
-use std::sync::{
-    Mutex, MutexGuard,
-    atomic::{AtomicI32, Ordering},
-};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fs_err::{self as fs, PathExt as _};
 use nc::syscalls::syscall5;
@@ -29,11 +24,10 @@ use nix::libc::{
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::sched::{CloneFlags, clone};
 use nix::sys::prctl::set_pdeathsig;
-use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, kill, sigaction};
-use nix::sys::signalfd::SigSet;
+use nix::sys::signal::Signal;
 use nix::sys::stat::{Mode, umask};
-use nix::sys::wait::{Id as WaitId, WaitPidFlag, WaitStatus, waitid, waitpid};
-use nix::unistd::{Pid, close, fchdir, pivot_root, read, sethostname, tcsetpgrp};
+use nix::sys::wait::WaitStatus;
+use nix::unistd::{close, fchdir, pivot_root, read, sethostname};
 use snafu::{ResultExt, Snafu};
 
 use self::clone3::{Clone3Outcome, clone3_into_cgroup};
@@ -43,7 +37,18 @@ pub mod cgroup;
 mod clone3;
 mod credentials;
 mod idmap;
+mod process_runtime;
 mod seccomp;
+
+#[cfg(test)]
+use self::process_runtime::LEGACY_TEST_ACTIVATION_LOCK;
+use self::process_runtime::{
+    BlockedSignalMask, ChildLifecycle, CloneStack, SignalOverride, SyncSocket, abort_child, cleanup_pidfd_child,
+    close_sync_endpoint, format_error, send_packet_no_signal, set_fd_nonblocking,
+};
+pub use self::process_runtime::{ChildPidfdQuarantine, forward_sigint, set_term_fg};
+#[cfg(test)]
+use self::process_runtime::{send_pidfd_signal, wait_for_pidfd, wait_for_pidfd_reap};
 
 // linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
 const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
@@ -2933,669 +2938,6 @@ fn set_current_dir(path: impl AsRef<Path>) -> Result<(), ContainerError> {
     std::env::set_current_dir(path).with_context(|_| SetCurrentDirSnafu { path: path.to_owned() })
 }
 
-static SIGNAL_OVERRIDE_LOCK: Mutex<()> = Mutex::new(());
-
-// libtest runs unit tests on a thread pool, while the legacy compatibility
-// path must exercise a fork-like clone child that executes Rust setup code.
-// Production builds do not get this escape hatch: they authenticate an exact
-// single-task supervisor immediately before clone. Serializing the live unit
-// fixtures prevents several test-only activations from cloning across one
-// another; the harness-free integration test exercises the production guard.
-#[cfg(test)]
-static LEGACY_TEST_ACTIVATION_LOCK: Mutex<()> = Mutex::new(());
-
-struct BlockedSignalMask {
-    previous: nix::libc::sigset_t,
-    active: bool,
-    restore_on_drop: bool,
-}
-
-impl BlockedSignalMask {
-    fn block_all() -> io::Result<Self> {
-        // SAFETY: both sets are fully initialized output objects and
-        // pthread_sigmask changes only the calling thread's mask.
-        let mut blocked: nix::libc::sigset_t = unsafe { std::mem::zeroed() };
-        if unsafe { nix::libc::sigfillset(&mut blocked) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: zero is a valid initial representation for this output set;
-        // pthread_sigmask fills it with the previous mask on success.
-        let mut previous: nix::libc::sigset_t = unsafe { std::mem::zeroed() };
-        let status = unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, &blocked, &mut previous) };
-        if status != 0 {
-            return Err(io::Error::from_raw_os_error(status));
-        }
-        Ok(Self {
-            previous,
-            active: true,
-            restore_on_drop: true,
-        })
-    }
-
-    /// Preserve the blocked mask if this guard is dropped before its explicit
-    /// restore point. The raw clone child uses this immediately after the
-    /// fork-like return: any setup error or panic must reach `_exit` without
-    /// permitting inherited signal handlers to run against copied userspace
-    /// state. The parent's copy keeps ordinary RAII restoration enabled.
-    fn retain_blocked_on_drop(&mut self) {
-        self.restore_on_drop = false;
-    }
-
-    fn restore(&mut self) -> io::Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-        // SAFETY: previous was produced by pthread_sigmask for this same
-        // thread before clone. A zero third argument discards the old mask.
-        let status =
-            unsafe { nix::libc::pthread_sigmask(nix::libc::SIG_SETMASK, &self.previous, std::ptr::null_mut()) };
-        if status != 0 {
-            return Err(io::Error::from_raw_os_error(status));
-        }
-        self.active = false;
-        Ok(())
-    }
-}
-
-impl Drop for BlockedSignalMask {
-    fn drop(&mut self) {
-        if self.restore_on_drop {
-            let _ = self.restore();
-        }
-    }
-}
-
-struct SignalOverride {
-    signal: Signal,
-    previous: SigAction,
-    restored: bool,
-    _serial: MutexGuard<'static, ()>,
-}
-
-impl SignalOverride {
-    fn install(signal: Signal) -> Result<Self, nix::Error> {
-        let serial = SIGNAL_OVERRIDE_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-        // SAFETY: action is fully initialized and signal is validated by nix.
-        let previous = unsafe { sigaction(signal, &action)? };
-        Ok(Self {
-            signal,
-            previous,
-            restored: false,
-            _serial: serial,
-        })
-    }
-
-    fn restore(mut self) -> Result<(), nix::Error> {
-        // SAFETY: previous was returned by sigaction for this exact signal.
-        unsafe { sigaction(self.signal, &self.previous)? };
-        self.restored = true;
-        Ok(())
-    }
-}
-
-impl Drop for SignalOverride {
-    fn drop(&mut self) {
-        if !self.restored {
-            // Best-effort restoration during early return or unwinding. The
-            // explicit success path reports restoration failure.
-            unsafe {
-                let _ = sigaction(self.signal, &self.previous);
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ChildLifecycle {
-    Legacy { pid: Pid },
-    Pidfd { pid: Pid, pidfd: OwnedFd },
-}
-
-impl ChildLifecycle {
-    fn pid(&self) -> Pid {
-        match self {
-            Self::Legacy { pid } | Self::Pidfd { pid, .. } => *pid,
-        }
-    }
-
-    fn wait(&self) -> Result<WaitStatus, Errno> {
-        match self {
-            Self::Legacy { pid } => wait_for_child(*pid),
-            Self::Pidfd { pidfd, .. } => wait_for_pidfd(pidfd.as_fd(), WaitPidFlag::WEXITED),
-        }
-    }
-
-    fn cleanup(self) -> Result<(), Error> {
-        match self {
-            Self::Legacy { pid } => {
-                abort_child(pid);
-                Ok(())
-            }
-            Self::Pidfd { pidfd, .. } => match cleanup_pidfd_child(pidfd) {
-                Ok(()) => Ok(()),
-                Err(failure) => Err(Error::ChildCleanup {
-                    cleanup: failure.cleanup,
-                    pidfd: Some(ChildPidfdQuarantine::new(failure.pidfd)),
-                }),
-            },
-        }
-    }
-
-    fn cleanup_after_failure(self, primary: Error) -> Error {
-        match self.cleanup() {
-            Ok(()) => primary,
-            Err(Error::ChildCleanup { cleanup, pidfd }) => Error::ChildCleanupAfterFailure {
-                primary: Box::new(primary),
-                cleanup,
-                pidfd,
-            },
-            Err(unexpected) => Error::ChildCleanupAfterFailure {
-                primary: Box::new(primary),
-                cleanup: io::Error::other(format!("unexpected exact-child cleanup error: {unexpected}")),
-                pidfd: None,
-            },
-        }
-    }
-}
-
-/// Exact clone3-child authority retained after cleanup could not prove reap.
-///
-/// Losing the last exact handle while the child may still be live or unreaped
-/// would turn a lifecycle failure into an unauthenticated numeric-PID problem.
-/// Drop therefore fails stop instead of closing the descriptor or starting a
-/// helper thread: a helper would permanently violate the exact single-task
-/// precondition for every later fork-like clone in this supervisor. Callers
-/// that can recover must borrow the descriptor or explicitly take ownership
-/// with [`Self::into_owned_fd`] before this guard is dropped.
-#[derive(Debug)]
-pub struct ChildPidfdQuarantine {
-    pidfd: Option<OwnedFd>,
-}
-
-impl ChildPidfdQuarantine {
-    fn new(pidfd: OwnedFd) -> Self {
-        Self { pidfd: Some(pidfd) }
-    }
-
-    pub fn into_owned_fd(mut self) -> OwnedFd {
-        self.pidfd.take().expect("pidfd quarantine must own its descriptor")
-    }
-}
-
-impl AsFd for ChildPidfdQuarantine {
-    fn as_fd(&self) -> BorrowedFd<'_> {
-        self.pidfd
-            .as_ref()
-            .expect("pidfd quarantine must own its descriptor")
-            .as_fd()
-    }
-}
-
-impl Drop for ChildPidfdQuarantine {
-    fn drop(&mut self) {
-        if self.pidfd.is_some() {
-            const MESSAGE: &[u8] =
-                b"fatal: dropping unrecovered exact-child pidfd authority; refusing to continue supervisor\n";
-            // SAFETY: MESSAGE is a live immutable byte slice for the complete
-            // write. A diagnostic failure is deliberately ignored because the
-            // immediately following abort is the authoritative fail-stop.
-            unsafe {
-                nix::libc::write(nix::libc::STDERR_FILENO, MESSAGE.as_ptr().cast(), MESSAGE.len());
-            }
-            std::process::abort();
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PidfdCleanupFailure {
-    cleanup: io::Error,
-    pidfd: OwnedFd,
-}
-
-fn send_pidfd_signal(pidfd: BorrowedFd<'_>, signal: Signal) -> Result<(), Errno> {
-    let mut interrupted = 0;
-    loop {
-        // SAFETY: pidfd is a live borrowed descriptor, a null siginfo requests
-        // ordinary process-directed signal semantics, and flags must be zero.
-        let result = unsafe {
-            syscall(
-                nix::libc::SYS_pidfd_send_signal,
-                pidfd.as_raw_fd(),
-                signal as nix::libc::c_int,
-                std::ptr::null::<nix::libc::siginfo_t>(),
-                0_u32,
-            )
-        };
-        match Errno::result(result) {
-            Err(Errno::EINTR) if interrupted < MAX_CONTROL_EINTR_RETRIES => interrupted += 1,
-            Ok(_) => return Ok(()),
-            Err(source) => return Err(source),
-        }
-    }
-}
-
-fn wait_for_pidfd(pidfd: BorrowedFd<'_>, flags: WaitPidFlag) -> Result<WaitStatus, Errno> {
-    let mut interrupted = 0;
-    loop {
-        match waitid(WaitId::PIDFd(pidfd), flags) {
-            Err(Errno::EINTR) if interrupted < MAX_CONTROL_EINTR_RETRIES => interrupted += 1,
-            result => return result,
-        }
-    }
-}
-
-fn cleanup_pidfd_child(pidfd: OwnedFd) -> Result<(), PidfdCleanupFailure> {
-    let signal = send_pidfd_signal(pidfd.as_fd(), Signal::SIGKILL);
-    if signal.is_ok() {
-        return wait_for_pidfd_reap(pidfd.as_fd(), PIDFD_REAP_TIMEOUT)
-            .map_or_else(|cleanup| Err(PidfdCleanupFailure { cleanup, pidfd }), |_| Ok(()));
-    }
-
-    // Do not block when the authoritative signal operation failed: the exact
-    // child may still be parked on the release socket. One nonblocking pidfd
-    // wait may nevertheless prove that it exited independently.
-    let signal = signal.unwrap_err();
-    match wait_for_pidfd(pidfd.as_fd(), WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
-        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => Ok(()),
-        Ok(status) => Err(PidfdCleanupFailure {
-            cleanup: io::Error::other(format!(
-                "pidfd_send_signal(SIGKILL) failed: {signal}; waitid(P_PIDFD, WNOHANG) did not prove exact child termination: {status:?}"
-            )),
-            pidfd,
-        }),
-        // Linux defines pidfd_send_signal(ESRCH) to mean that the exact target
-        // has terminated and already been waited on. The matching P_PIDFD
-        // ECHILD result confirms that no waitable child remains. No other error
-        // pair is accepted: in particular, an ordinary or closed descriptor
-        // must remain a structured cleanup failure rather than impersonating a
-        // completed pidfd lifecycle.
-        Err(Errno::ECHILD) if signal == Errno::ESRCH => Ok(()),
-        Err(wait) => Err(PidfdCleanupFailure {
-            cleanup: io::Error::new(
-                io::Error::from_raw_os_error(wait as i32).kind(),
-                format!("pidfd_send_signal(SIGKILL) failed: {signal}; waitid(P_PIDFD, WNOHANG) failed: {wait}"),
-            ),
-            pidfd,
-        }),
-    }
-}
-
-fn wait_for_pidfd_reap(pidfd: BorrowedFd<'_>, timeout: Duration) -> io::Result<WaitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match wait_for_pidfd(pidfd, WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
-            Ok(status @ (WaitStatus::Exited(..) | WaitStatus::Signaled(..))) => return Ok(status),
-            Ok(WaitStatus::StillAlive) => {}
-            Ok(status) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("waitid(P_PIDFD, WNOHANG) returned nonterminal child status {status:?}"),
-                ));
-            }
-            Err(source) => {
-                return Err(io::Error::new(
-                    io::Error::from_raw_os_error(source as i32).kind(),
-                    format!("waitid(P_PIDFD, WNOHANG) while reaping SIGKILLed child: {source}"),
-                ));
-            }
-        }
-
-        let now = Instant::now();
-        if now >= deadline {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("waitid(P_PIDFD, WNOHANG) did not reap SIGKILLed child within {timeout:?}"),
-            ));
-        }
-        std::thread::sleep(PIDFD_REAP_POLL_INTERVAL.min(deadline.duration_since(now)));
-    }
-}
-
-fn wait_for_child(pid: Pid) -> Result<WaitStatus, nix::Error> {
-    loop {
-        match waitpid(pid, None) {
-            Err(Errno::EINTR) => {}
-            result => return result,
-        }
-    }
-}
-
-fn abort_child(pid: Pid) {
-    let _ = kill(pid, Signal::SIGKILL);
-    let _ = wait_for_child(pid);
-}
-
-pub fn set_term_fg(pgid: Pid) -> Result<(), nix::Error> {
-    // Ignore SIGTTOU and get previous handler
-    let prev_handler = unsafe {
-        sigaction(
-            Signal::SIGTTOU,
-            &SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty()),
-        )?
-    };
-    // Set term fg to pid
-    let res = tcsetpgrp(io::stdin().as_raw_fd(), pgid);
-    // Set up old handler
-    unsafe { sigaction(Signal::SIGTTOU, &prev_handler)? };
-
-    match res {
-        Ok(_) => {}
-        // Ignore ENOTTY error
-        Err(nix::Error::ENOTTY) => {}
-        Err(e) => return Err(e),
-    }
-
-    Ok(())
-}
-
-/// Forwards `SIGINT` from the current process to the [`Pid`] process
-pub fn forward_sigint(pid: Pid) -> Result<(), nix::Error> {
-    static PID: AtomicI32 = AtomicI32::new(0);
-
-    PID.store(pid.as_raw(), Ordering::Relaxed);
-
-    extern "C" fn on_int(_: i32) {
-        let pid = Pid::from_raw(PID.load(Ordering::Relaxed));
-        let _ = kill(pid, Signal::SIGINT);
-    }
-
-    let action = SigAction::new(SigHandler::Handler(on_int), SaFlags::empty(), SigSet::empty());
-    unsafe { sigaction(Signal::SIGINT, &action)? };
-
-    Ok(())
-}
-
-fn format_error(error: impl std::error::Error) -> String {
-    let mut output = String::new();
-    let mut current: Option<&dyn std::error::Error> = Some(&error);
-    for depth in 0..MAX_ERROR_SOURCE_DEPTH {
-        let Some(source) = current else {
-            break;
-        };
-        if depth != 0 && !push_bounded_error_text(&mut output, ": ") {
-            break;
-        }
-        let rendered = {
-            let mut writer = BoundedErrorWriter { output: &mut output };
-            std::fmt::write(&mut writer, format_args!("{source}"))
-        };
-        if rendered.is_err() {
-            break;
-        }
-        current = source.source();
-    }
-    if current.is_some() {
-        let _ = push_bounded_error_text(&mut output, " [truncated]");
-    }
-    output
-}
-
-struct BoundedErrorWriter<'a> {
-    output: &'a mut String,
-}
-
-impl std::fmt::Write for BoundedErrorWriter<'_> {
-    fn write_str(&mut self, text: &str) -> std::fmt::Result {
-        if push_bounded_error_text(self.output, text) {
-            Ok(())
-        } else {
-            Err(std::fmt::Error)
-        }
-    }
-}
-
-fn push_bounded_error_text(output: &mut String, text: &str) -> bool {
-    let remaining = MAX_CHILD_ERROR_BYTES.saturating_sub(output.len());
-    if text.len() <= remaining {
-        output.push_str(text);
-        return true;
-    }
-    let mut end = remaining.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    output.push_str(&text[..end]);
-    false
-}
-
-/// Per-run clone stack with a protected low-address guard page. Linux clone
-/// starts at the high end of the supplied slice and grows downward, so stack
-/// exhaustion faults instead of corrupting an adjacent allocator object.
-struct CloneStack {
-    mapping: NonNull<nix::libc::c_void>,
-    mapping_len: usize,
-    page_size: usize,
-}
-
-impl CloneStack {
-    fn new() -> io::Result<Self> {
-        // SAFETY: sysconf has no pointer arguments.
-        let page_size = unsafe { nix::libc::sysconf(nix::libc::_SC_PAGESIZE) };
-        let page_size = usize::try_from(page_size)
-            .ok()
-            .filter(|size| size.is_power_of_two())
-            .ok_or_else(|| io::Error::other("kernel returned an invalid page size"))?;
-        let mapping_len = CLONE_STACK_BYTES
-            .checked_add(page_size)
-            .ok_or_else(|| io::Error::other("clone stack mapping length overflow"))?;
-        // SAFETY: anonymous mapping uses no input pointer or file descriptor.
-        let mapping = unsafe {
-            nix::libc::mmap(
-                std::ptr::null_mut(),
-                mapping_len,
-                nix::libc::PROT_NONE,
-                nix::libc::MAP_PRIVATE | nix::libc::MAP_ANONYMOUS | nix::libc::MAP_STACK,
-                -1,
-                0,
-            )
-        };
-        if mapping == nix::libc::MAP_FAILED {
-            return Err(io::Error::last_os_error());
-        }
-        let Some(mapping) = NonNull::new(mapping) else {
-            // A null mapping is legal only on hosts that permit mapping page
-            // zero, but NonNull is part of this type's safety invariant.
-            // SAFETY: mmap returned this exact live mapping and length.
-            unsafe {
-                nix::libc::munmap(mapping, mapping_len);
-            }
-            return Err(io::Error::other("clone stack mapping unexpectedly starts at null"));
-        };
-        // SAFETY: the mapping is page aligned and the selected range excludes
-        // exactly the first guard page.
-        let usable = unsafe { mapping.as_ptr().cast::<u8>().add(page_size).cast() };
-        if unsafe { nix::libc::mprotect(usable, CLONE_STACK_BYTES, nix::libc::PROT_READ | nix::libc::PROT_WRITE) } == -1
-        {
-            let source = io::Error::last_os_error();
-            // SAFETY: mapping and length came from the successful mmap above.
-            unsafe {
-                nix::libc::munmap(mapping.as_ptr(), mapping_len);
-            }
-            return Err(source);
-        }
-        Ok(Self {
-            mapping,
-            mapping_len,
-            page_size,
-        })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        // SAFETY: the usable range was made read-write, is wholly owned by this
-        // value, and remains mapped until Drop after the child is reaped.
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                self.mapping.as_ptr().cast::<u8>().add(self.page_size),
-                CLONE_STACK_BYTES,
-            )
-        }
-    }
-
-    #[cfg(test)]
-    fn guard_address(&self) -> usize {
-        self.mapping.as_ptr() as usize
-    }
-
-    #[cfg(test)]
-    fn usable_address(&self) -> usize {
-        self.guard_address() + self.page_size
-    }
-}
-
-impl Drop for CloneStack {
-    fn drop(&mut self) {
-        // SAFETY: this value owns the complete live mapping.
-        unsafe {
-            nix::libc::munmap(self.mapping.as_ptr(), self.mapping_len);
-        }
-    }
-}
-
-/// Parent-owned bidirectional synchronization socket. `SOCK_SEQPACKET` keeps
-/// the release byte and one bounded diagnostic as distinct atomic messages;
-/// `MSG_NOSIGNAL` ensures child death can never terminate the supervisor.
-struct SyncSocket {
-    supervisor: Option<RawFd>,
-    child: Option<RawFd>,
-}
-
-impl SyncSocket {
-    fn new() -> Result<Self, Error> {
-        let mut endpoints = [-1_i32; 2];
-        // SAFETY: endpoints is a writable two-element output array and all
-        // socket domain/type/protocol values are valid Linux constants.
-        if unsafe {
-            nix::libc::socketpair(
-                nix::libc::AF_UNIX,
-                nix::libc::SOCK_SEQPACKET | nix::libc::SOCK_CLOEXEC,
-                0,
-                endpoints.as_mut_ptr(),
-            )
-        } == -1
-        {
-            return Err(Error::Nix { source: Errno::last() });
-        }
-        let supervisor = match rehome_sync_fd(endpoints[0]) {
-            Ok(fd) => fd,
-            Err(source) => {
-                let _ = close(endpoints[1]);
-                return Err(Error::Nix { source });
-            }
-        };
-        let child = match rehome_sync_fd(endpoints[1]) {
-            Ok(fd) => fd,
-            Err(source) => {
-                let _ = close(supervisor);
-                return Err(Error::Nix { source });
-            }
-        };
-        Ok(Self {
-            supervisor: Some(supervisor),
-            child: Some(child),
-        })
-    }
-
-    fn raw(&self) -> (RawFd, RawFd) {
-        (self.supervisor_fd(), self.child_fd())
-    }
-
-    fn supervisor_fd(&self) -> RawFd {
-        self.supervisor.unwrap_or(-1)
-    }
-
-    fn child_fd(&self) -> RawFd {
-        self.child.unwrap_or(-1)
-    }
-
-    fn close_child_endpoint(&mut self) -> Result<(), nix::Error> {
-        let Some(fd) = self.child.take() else {
-            return Err(Errno::EBADF);
-        };
-        close_sync_endpoint(fd)
-    }
-}
-
-fn close_sync_endpoint(fd: RawFd) -> Result<(), Errno> {
-    match close(fd) {
-        Ok(()) | Err(Errno::EINTR) => Ok(()),
-        Err(source) => Err(source),
-    }
-}
-
-fn send_packet_no_signal(fd: RawFd, bytes: &[u8]) -> Result<usize, Errno> {
-    let mut interrupted = 0;
-    loop {
-        // SAFETY: bytes remains readable for its declared length and send does
-        // not retain the pointer. MSG_NOSIGNAL converts peer closure to EPIPE;
-        // MSG_DONTWAIT prevents a compromised child-side producer from ever
-        // turning the supervisor's control path into an unbounded wait.
-        let sent = unsafe {
-            nix::libc::send(
-                fd,
-                bytes.as_ptr().cast(),
-                bytes.len(),
-                nix::libc::MSG_NOSIGNAL | nix::libc::MSG_DONTWAIT,
-            )
-        };
-        if sent >= 0 {
-            return usize::try_from(sent).map_err(|_| Errno::EOVERFLOW);
-        }
-        let source = Errno::last();
-        if source == Errno::EINTR && interrupted < MAX_CONTROL_EINTR_RETRIES {
-            interrupted += 1;
-            continue;
-        }
-        return Err(source);
-    }
-}
-
-fn rehome_sync_fd(fd: RawFd) -> Result<RawFd, Errno> {
-    if fd >= 3 {
-        return Ok(fd);
-    }
-    // SAFETY: the source descriptor is live and success returns a new
-    // close-on-exec descriptor numbered at least three.
-    let duplicated = unsafe { nix::libc::fcntl(fd, nix::libc::F_DUPFD_CLOEXEC, 3) };
-    if duplicated == -1 {
-        let source = Errno::last();
-        let _ = close(fd);
-        return Err(source);
-    }
-    if let Err(source) = close(fd) {
-        let _ = close(duplicated);
-        return Err(source);
-    }
-    Ok(duplicated)
-}
-
-fn set_fd_nonblocking(fd: RawFd) -> Result<(), Errno> {
-    // SAFETY: fd is live for both fcntl calls.
-    let flags = unsafe { nix::libc::fcntl(fd, nix::libc::F_GETFL) };
-    if flags == -1 {
-        return Err(Errno::last());
-    }
-    // SAFETY: F_SETFL updates only status flags on the same live descriptor.
-    if unsafe { nix::libc::fcntl(fd, nix::libc::F_SETFL, flags | nix::libc::O_NONBLOCK) } == -1 {
-        return Err(Errno::last());
-    }
-    Ok(())
-}
-
-impl Drop for SyncSocket {
-    fn drop(&mut self) {
-        if let Some(fd) = self.supervisor.take() {
-            let _ = close(fd);
-        }
-        if let Some(fd) = self.child.take() {
-            let _ = close(fd);
-        }
-    }
-}
-
 struct Bind {
     source: BindSource,
     target: PathBuf,
@@ -4013,7 +3355,6 @@ enum Message {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt;
     use std::io::{self, Read as _, Write as _};
     use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
     use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
@@ -4031,15 +3372,15 @@ mod tests {
     use nix::unistd::{mkfifo, read};
 
     use super::{
-        AnchoredMountTargetKind, Bind, BindSource, BlockedSignalMask, CLONE_STACK_BYTES, CapabilityData,
-        ChildLifecycle, ChildPidfdQuarantine, CloneStack, Container, ContainerError, DevPolicy,
-        Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER,
-        MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
-        PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
-        RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback,
-        TmpfsLimits, TmpfsLimitsError, capability_is_set, checked_prctl_value, cleanup_pidfd_child,
-        close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, format_error,
-        namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
+        AnchoredMountTargetKind, Bind, BindSource, BlockedSignalMask, CapabilityData, ChildLifecycle,
+        ChildPidfdQuarantine, Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy,
+        MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER, MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message,
+        PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy,
+        PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SignalOverride,
+        SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback, TmpfsLimits, TmpfsLimitsError,
+        capability_is_set, checked_prctl_value, cleanup_pidfd_child, close_sync_endpoint,
+        contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, namespace_flags,
+        normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
         pin_anchored_bind_sources, prctl, prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions,
         read_capabilities, read_child_error, reopen_pinned_readonly, require_atomic_cgroup_bind_policy,
         require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
@@ -4358,29 +3699,6 @@ mod tests {
         fs::write(temporary.path(), b"different-size").unwrap();
         let after = descriptor_stat(file.as_raw_fd()).unwrap();
         assert!(!resolver_stat_stable(&before, &after));
-    }
-
-    #[test]
-    fn error_transport_format_is_bounded_even_for_cyclic_and_huge_sources() {
-        #[derive(Debug)]
-        struct CyclicHugeError;
-        impl fmt::Display for CyclicHugeError {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                for _ in 0..(MAX_CHILD_ERROR_BYTES * 4) {
-                    formatter.write_str("x")?;
-                }
-                Ok(())
-            }
-        }
-        impl std::error::Error for CyclicHugeError {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                Some(self)
-            }
-        }
-
-        let rendered = format_error(CyclicHugeError);
-        assert_eq!(rendered.len(), MAX_CHILD_ERROR_BYTES);
-        assert!(rendered.bytes().all(|byte| byte == b'x'));
     }
 
     #[test]
@@ -6231,32 +5549,6 @@ mod tests {
         assert!(fcntl(retained.as_fd().as_raw_fd(), FcntlArg::F_GETFD).is_ok());
         assert!(failure.take_child_pidfd().is_none());
         drop(retained.into_owned_fd());
-    }
-
-    #[test]
-    fn clone_stack_has_a_non_accessible_guard_and_read_write_usable_mapping() {
-        fn permissions(address: usize) -> Option<String> {
-            let maps = fs::read_to_string("/proc/self/maps").ok()?;
-            maps.lines().find_map(|line| {
-                let mut fields = line.split_whitespace();
-                let mut range = fields.next()?.split('-');
-                let start = usize::from_str_radix(range.next()?, 16).ok()?;
-                let end = usize::from_str_radix(range.next()?, 16).ok()?;
-                let permissions = fields.next()?;
-                (start <= address && address < end).then(|| permissions.to_owned())
-            })
-        }
-
-        let mut stack = CloneStack::new().unwrap();
-        let guard = stack.guard_address();
-        let usable = stack.usable_address();
-        assert_eq!(permissions(guard).as_deref(), Some("---p"));
-        assert_eq!(permissions(usable).as_deref(), Some("rw-p"));
-        let slice = stack.as_mut_slice();
-        assert_eq!(slice.len(), CLONE_STACK_BYTES);
-        assert_eq!(slice.as_ptr() as usize, usable);
-        slice[0] = 1;
-        slice[CLONE_STACK_BYTES - 1] = 2;
     }
 
     #[test]
