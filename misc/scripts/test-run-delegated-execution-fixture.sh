@@ -139,19 +139,20 @@ EOF
 chmod 755 "$fakebin/systemd-run"
 
 run_fixture() {
+    selector=$1
     env \
         PATH="$fakebin:$PATH" \
         TMPDIR="$private_tmp" \
         CAST_BOOTSTRAP_PACKAGE_STORE="$package_store" \
-        CAST_REQUIRE_EXECUTION="$1" \
+        CAST_REQUIRE_EXECUTION="$2" \
         CARGO="$fakebin/cargo" \
         FAKE_ARTIFACT="$artifact" \
         FAKE_SOURCE="$root/crates/mason/tests/delegated_execution_fixture.rs" \
         FAKE_STATE="$state" \
-        FAKE_MANAGER="$2" \
-        FAKE_SYSTEMD_RUN_MODE="$3" \
-        FAKE_STOP_MODE="${4:-success}" \
-        "$runner" custom
+        FAKE_MANAGER="$3" \
+        FAKE_SYSTEMD_RUN_MODE="$4" \
+        FAKE_STOP_MODE="${5:-success}" \
+        "$runner" "$selector"
 }
 
 reset_state() {
@@ -159,7 +160,7 @@ reset_state() {
 }
 
 reset_state
-run_fixture 1 ready success
+run_fixture custom 1 ready success
 args="$state/systemd-run-args"
 unit=$(cat "$state/unit")
 case "$unit" in
@@ -183,9 +184,30 @@ done
 grep -Fqx -- "--unit=$unit" "$args"
 grep -Fqx -- "$unit" "$state/stops"
 
+fixture_count=0
+for fixture_directory in "$root/tests/fixtures/gluon/execution/packages"/*; do
+    test -d "$fixture_directory" || continue
+    fixture=${fixture_directory##*/}
+    fixture_count=$((fixture_count + 1))
+    reset_state
+    run_fixture "$fixture" 1 ready success
+    grep -Fqx -- "--setenv=CAST_EXECUTION_FIXTURE=$fixture" "$state/systemd-run-args"
+done
+test "$fixture_count" -gt 0
+
 reset_state
 set +e
-run_fixture 1 ready signal >"$work/signal.out" 2>"$work/signal.err"
+run_fixture not-an-execution-fixture 1 ready success >"$work/invalid.out" 2>"$work/invalid.err"
+status=$?
+set -e
+test "$status" -eq 2
+grep -Fq 'fixture must be exactly `all` or one of:' "$work/invalid.err"
+test ! -e "$state/cargo-calls"
+test ! -e "$state/systemd-run-args"
+
+reset_state
+set +e
+run_fixture custom 1 ready signal >"$work/signal.out" 2>"$work/signal.err"
 status=$?
 set -e
 test "$status" -eq 143
@@ -194,7 +216,7 @@ grep -Fqx -- "$unit" "$state/stops"
 
 reset_state
 set +e
-run_fixture 1 ready signal-before-accept >"$work/delayed.out" 2>"$work/delayed.err"
+run_fixture custom 1 ready signal-before-accept >"$work/delayed.out" 2>"$work/delayed.err"
 status=$?
 set -e
 test "$status" -eq 143
@@ -203,7 +225,7 @@ grep -Fqx -- "$unit" "$state/stops"
 
 reset_state
 set +e
-run_fixture 1 ready failure >"$work/failure.out" 2>"$work/failure.err"
+run_fixture custom 1 ready failure >"$work/failure.out" 2>"$work/failure.err"
 status=$?
 set -e
 test "$status" -eq 42
@@ -212,7 +234,7 @@ grep -Fqx -- "$unit" "$state/stops"
 
 reset_state
 set +e
-run_fixture 1 ready foreign >"$work/foreign.out" 2>"$work/foreign.err"
+run_fixture custom 1 ready foreign >"$work/foreign.out" 2>"$work/foreign.err"
 status=$?
 set -e
 test "$status" -eq 42
@@ -222,7 +244,7 @@ test ! -e "$state/kills"
 
 reset_state
 set +e
-run_fixture 1 ready failure fail >"$work/stop-failure.out" 2>"$work/stop-failure.err"
+run_fixture custom 1 ready failure fail >"$work/stop-failure.out" 2>"$work/stop-failure.err"
 status=$?
 set -e
 test "$status" -eq 42
@@ -232,7 +254,7 @@ grep -Fq 'forcing its control group down' "$work/stop-failure.err"
 
 reset_state
 set +e
-run_fixture 1 ready failure signal >"$work/second-signal.out" 2>"$work/second-signal.err"
+run_fixture custom 1 ready failure signal >"$work/second-signal.out" 2>"$work/second-signal.err"
 status=$?
 set -e
 test "$status" -eq 42
@@ -240,13 +262,13 @@ unit=$(cat "$state/unit")
 grep -Fqx -- "$unit" "$state/stops"
 
 reset_state
-run_fixture 0 missing success >"$work/optional.out" 2>"$work/optional.err"
+run_fixture custom 0 missing success >"$work/optional.out" 2>"$work/optional.err"
 grep -Fq 'SKIP delegated execution fixture' "$work/optional.err"
 test ! -e "$state/cargo-calls"
 
 reset_state
 set +e
-run_fixture 1 missing success >"$work/required.out" 2>"$work/required.err"
+run_fixture custom 1 missing success >"$work/required.out" 2>"$work/required.err"
 status=$?
 set -e
 test "$status" -eq 1
