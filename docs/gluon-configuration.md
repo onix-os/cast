@@ -480,11 +480,13 @@ make examples
 ```
 
 The target checks and evaluates each recipe through the public Cast CLI,
-freezes each one hermetically with exact generated locks, repeats every result
-to prove deterministic output and plan identity, and exercises the minimal
-source-less recipe through execution and Stone packaging when the host permits
-the required unprivileged namespace. Fictional remote example URLs are replaced
-with local content-addressed fixtures during the planner proof.
+freezes each one hermetically with exact generated locks, and repeats every
+result to prove deterministic output and plan identity. Its synthetic
+metadata-only providers are required to fail before frozen execution or Stone
+publication. Fictional remote example URLs are replaced with local
+content-addressed fixtures during the planner proof; real compilation and
+packaging use the separate contentful execution-fixture lane documented in the
+example corpus.
 
 ## Compatibility policy
 
