@@ -336,6 +336,10 @@ forge-frozen-publication-test:
 	for test in \
 		linux_fs::tests::expired_rename_deadline_preserves_both_namespaces \
 		linux_fs::tests::expired_sync_filesystem_deadline_fails_before_syncfs \
+		client::tests::frozen_blit_returns_an_opath_guard_accepted_by_anchored_container \
+		client::tests::frozen_publication_rejects_a_readable_activation_descriptor_before_rename \
+		client::tests::frozen_publication_rejects_a_foreign_opath_activation_anchor_before_rename \
+		client::tests::frozen_publication_rejects_an_inheritable_opath_activation_anchor_before_rename \
 		client::tests::frozen_root_publication_never_replaces_an_existing_destination \
 		client::tests::frozen_publication_adopts_an_applied_rename_even_when_the_syscall_reports_error \
 		client::tests::frozen_publication_reconciles_an_applied_rename_after_the_work_deadline_expires \

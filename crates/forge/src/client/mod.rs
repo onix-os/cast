@@ -2180,7 +2180,7 @@ impl Client {
             // Keep the descriptor opened before blitting as provenance across
             // normalization and publication. A replacement staging name can
             // never become the returned root token.
-            publish_frozen_root(&stage, destination, root, deadline)
+            publish_frozen_root(&stage, destination, root, root_anchor, deadline)
         })();
 
         let cleanup_deadline = frozen_namespace_recovery_deadline();
@@ -5845,12 +5845,14 @@ fn publish_frozen_root(
     stage: &FrozenPrivateDirectory,
     destination: &FrozenRootDestination,
     staged_root: &fs::File,
+    staged_root_anchor: fs::File,
     deadline: Instant,
 ) -> Result<MaterializedFrozenRoot, Error> {
     publish_frozen_root_with(
         stage,
         destination,
         staged_root,
+        staged_root_anchor,
         deadline,
         |source_directory, source_name, destination_directory, destination_name| {
             renameat2_noreplace_until(
@@ -5868,6 +5870,7 @@ fn publish_frozen_root_with(
     stage: &FrozenPrivateDirectory,
     destination: &FrozenRootDestination,
     staged_root: &fs::File,
+    staged_root_anchor: fs::File,
     deadline: Instant,
     rename: impl FnOnce(&fs::File, &CStr, &fs::File, &CStr) -> io::Result<()>,
 ) -> Result<MaterializedFrozenRoot, Error> {
@@ -5877,6 +5880,37 @@ fn publish_frozen_root_with(
     require_frozen_private_directory_entries(stage, &[b"root"], deadline)?;
 
     let staged_identity = frozen_root_identity(staged_root, &stage.path.join("root"))?;
+    let anchor_identity = frozen_root_identity(&staged_root_anchor, &stage.path.join("root"))?;
+    // Activation must retain the capability opened from the private staging
+    // namespace, never reopen the replaceable public destination after the
+    // rename. Keep that invariant explicit here because Container's anchored
+    // API deliberately rejects ordinary readable directory descriptors.
+    // SAFETY: the retained file owns a live descriptor for the fcntl call.
+    let anchor_flags = unsafe { nix::libc::fcntl(staged_root_anchor.as_raw_fd(), nix::libc::F_GETFL) };
+    if anchor_flags == -1 {
+        return Err(Error::OpenFrozenExecutableRoot {
+            path: stage.path.join("root"),
+            source: io::Error::last_os_error(),
+        });
+    }
+    // SAFETY: the retained file owns a live descriptor for the fcntl call.
+    let anchor_descriptor_flags = unsafe { nix::libc::fcntl(staged_root_anchor.as_raw_fd(), nix::libc::F_GETFD) };
+    if anchor_descriptor_flags == -1 {
+        return Err(Error::OpenFrozenExecutableRoot {
+            path: stage.path.join("root"),
+            source: io::Error::last_os_error(),
+        });
+    }
+    if anchor_identity != staged_identity
+        || anchor_flags & (nix::libc::O_PATH | nix::libc::O_DIRECTORY) != nix::libc::O_PATH | nix::libc::O_DIRECTORY
+        || anchor_descriptor_flags & nix::libc::FD_CLOEXEC == 0
+    {
+        return Err(Error::FrozenPublicationNamespaceMismatch {
+            stage: stage.path.clone(),
+            destination: destination.root_path.clone(),
+            reason: "the retained activation anchor is not the exact close-on-exec staged O_PATH directory",
+        });
+    }
     if staged_identity.device != destination.parent_identity.device || staged_identity.device != stage.identity.device {
         return Err(Error::FrozenPublicationNamespaceMismatch {
             stage: stage.path.clone(),
@@ -6029,6 +6063,7 @@ fn publish_frozen_root_with(
                 recovery_deadline,
             )? != FrozenPublicationNameState::Expected
             || frozen_root_identity(staged_root, &destination.root_path)? != staged_identity
+            || frozen_root_identity(&staged_root_anchor, &destination.root_path)? != staged_identity
         {
             return Err(Error::FrozenPublicationNamespaceMismatch {
                 stage: stage.path.clone(),
@@ -6038,7 +6073,7 @@ fn publish_frozen_root_with(
         }
         let materialized = MaterializedFrozenRoot {
             root_path: destination.root_path.clone(),
-            root: staged_root.try_clone()?,
+            root: staged_root_anchor,
             identity: staged_identity,
         };
         materialized.revalidate()?;
@@ -15805,12 +15840,29 @@ let cast = import! cast.system.v1
 
     fn frozen_publication_fixture(
         parent_path: &Path,
-    ) -> (FrozenRootDestination, FrozenPrivateDirectory, fs::File, Instant) {
+    ) -> (
+        FrozenRootDestination,
+        FrozenPrivateDirectory,
+        fs::File,
+        fs::File,
+        Instant,
+    ) {
         let deadline = Instant::now() + Duration::from_secs(30);
         let destination = frozen_publication_destination(parent_path, "published");
         let stage = create_frozen_private_directory(&destination, b".publication-test-", deadline).unwrap();
         mkdirat(stage.file.as_raw_fd(), "root", Mode::from_bits_truncate(0o755)).unwrap();
         fs::write(stage.path.join("root/candidate"), b"retained candidate").unwrap();
+        let root_anchor = openat2_frozen_until(
+            stage.file.as_raw_fd(),
+            Path::new("root"),
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            (nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_SYMLINKS
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_XDEV) as u64,
+            deadline,
+        )
+        .unwrap();
         let root = openat2_frozen_until(
             stage.file.as_raw_fd(),
             Path::new("root"),
@@ -15826,7 +15878,11 @@ let cast = import! cast.system.v1
             deadline,
         )
         .unwrap();
-        (destination, stage, root, deadline)
+        assert_eq!(
+            frozen_root_identity(&root_anchor, &stage.path.join("root")).unwrap(),
+            frozen_root_identity(&root, &stage.path.join("root")).unwrap()
+        );
+        (destination, stage, root, root_anchor, deadline)
     }
 
     fn frozen_discard_fixture(parent_path: &Path) -> (FrozenRootDestination, fs::File, FrozenRootIdentity, Instant) {
@@ -15850,6 +15906,159 @@ let cast = import! cast.system.v1
             .collect::<Vec<_>>();
         names.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
         names
+    }
+
+    #[test]
+    fn frozen_blit_returns_an_opath_guard_accepted_by_anchored_container() {
+        let temporary = tempfile::tempdir().unwrap();
+        let installation_root = temporary.path().join("installation");
+        let frozen_root = temporary.path().join("frozen-root");
+        fs::create_dir(&installation_root).unwrap();
+        fs::create_dir(&frozen_root).unwrap();
+        let client = Client::frozen(
+            "frozen-activation-anchor-test",
+            frozen_test_installation(&installation_root),
+            repository::Map::default(),
+            &frozen_root,
+        )
+        .unwrap();
+        let package = package::Id::from("directory-only-activation-provider");
+        client
+            .layout_db
+            .add(
+                &package,
+                &StonePayloadLayoutRecord {
+                    uid: 0,
+                    gid: 0,
+                    mode: nix::libc::S_IFDIR | 0o755,
+                    tag: 0,
+                    file: StonePayloadLayoutFile::Directory("share".into()),
+                },
+            )
+            .unwrap();
+        client.discard_frozen_root().unwrap();
+
+        let materialized = client
+            .blit_frozen_root(std::slice::from_ref(&package), 1_700_000_000)
+            .unwrap();
+        let guard = client
+            .require_materialized_frozen_executables(materialized, std::slice::from_ref(&package), &[])
+            .unwrap();
+        let retained_identity = frozen_root_identity(&guard.root, guard.root_path()).unwrap();
+        let anchor = guard.revalidated_anchor().unwrap();
+        // SAFETY: the guard retains the borrowed descriptor for this call.
+        let status_flags = unsafe { nix::libc::fcntl(anchor.as_raw_fd(), nix::libc::F_GETFL) };
+        assert_ne!(status_flags, -1);
+        assert_eq!(
+            status_flags & (nix::libc::O_PATH | nix::libc::O_DIRECTORY),
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY
+        );
+        // SAFETY: the guard retains the borrowed descriptor for this call.
+        let descriptor_flags = unsafe { nix::libc::fcntl(anchor.as_raw_fd(), nix::libc::F_GETFD) };
+        assert_ne!(descriptor_flags, -1);
+        assert_ne!(descriptor_flags & nix::libc::FD_CLOEXEC, 0);
+        let _container = container::Container::new_anchored(guard.root_path(), &anchor).unwrap();
+
+        let displaced = temporary.path().join("displaced-frozen-root");
+        fs::rename(&frozen_root, &displaced).unwrap();
+        fs::create_dir(&frozen_root).unwrap();
+        assert_eq!(
+            frozen_root_identity(&guard.root, &displaced).unwrap(),
+            retained_identity,
+            "the guard must retain the pre-publication inode rather than reopen the public path"
+        );
+        assert_ne!(
+            frozen_root_identity(&open_frozen_root_anchor(&frozen_root).unwrap(), &frozen_root).unwrap(),
+            retained_identity
+        );
+        assert!(matches!(
+            guard.revalidate(),
+            Err(Error::FrozenExecutableRootReplaced(path)) if path == frozen_root
+        ));
+    }
+
+    #[test]
+    fn frozen_publication_rejects_a_readable_activation_descriptor_before_rename() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        drop(root_anchor);
+
+        let error = publish_frozen_root(&stage, &destination, &root, root.try_clone().unwrap(), deadline).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenPublicationNamespaceMismatch {
+                reason: "the retained activation anchor is not the exact close-on-exec staged O_PATH directory",
+                ..
+            }
+        ));
+        assert!(!destination.root_path.exists());
+        assert_eq!(
+            fs::read(stage.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+    }
+
+    #[test]
+    fn frozen_publication_rejects_a_foreign_opath_activation_anchor_before_rename() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        drop(root_anchor);
+        let foreign = temporary.path().join("foreign-anchor");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("untouched"), b"foreign inode").unwrap();
+        let foreign_anchor = open_frozen_root_anchor(&foreign).unwrap();
+
+        let error = publish_frozen_root(&stage, &destination, &root, foreign_anchor, deadline).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenPublicationNamespaceMismatch {
+                reason: "the retained activation anchor is not the exact close-on-exec staged O_PATH directory",
+                ..
+            }
+        ));
+        assert!(!destination.root_path.exists());
+        assert_eq!(
+            fs::read(stage.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
+        assert_eq!(fs::read(foreign.join("untouched")).unwrap(), b"foreign inode");
+    }
+
+    #[test]
+    fn frozen_publication_rejects_an_inheritable_opath_activation_anchor_before_rename() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
+        let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
+        // SAFETY: root_anchor owns a live descriptor for both fcntl calls.
+        let descriptor_flags = unsafe { nix::libc::fcntl(root_anchor.as_raw_fd(), nix::libc::F_GETFD) };
+        assert_ne!(descriptor_flags, -1);
+        // SAFETY: F_SETFD updates only descriptor-local inheritance flags.
+        assert_ne!(
+            unsafe {
+                nix::libc::fcntl(
+                    root_anchor.as_raw_fd(),
+                    nix::libc::F_SETFD,
+                    descriptor_flags & !nix::libc::FD_CLOEXEC,
+                )
+            },
+            -1
+        );
+
+        let error = publish_frozen_root(&stage, &destination, &root, root_anchor, deadline).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::FrozenPublicationNamespaceMismatch {
+                reason: "the retained activation anchor is not the exact close-on-exec staged O_PATH directory",
+                ..
+            }
+        ));
+        assert!(!destination.root_path.exists());
+        assert_eq!(
+            fs::read(stage.path.join("root/candidate")).unwrap(),
+            b"retained candidate"
+        );
     }
 
     #[test]
@@ -15909,6 +16118,17 @@ let cast = import! cast.system.v1
         fs::write(raced_stage.path.join("root/candidate"), b"candidate").unwrap();
         fs::create_dir(&raced_destination).unwrap();
         fs::write(raced_destination.join("winner"), b"winner").unwrap();
+        let raced_activation_anchor = openat2_frozen_until(
+            raced_stage.file.as_raw_fd(),
+            Path::new("root"),
+            nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+            (nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_SYMLINKS
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_XDEV) as u64,
+            deadline,
+        )
+        .unwrap();
         let raced_anchor = openat2_frozen_until(
             raced_stage.file.as_raw_fd(),
             Path::new("root"),
@@ -15929,6 +16149,7 @@ let cast = import! cast.system.v1
                 &raced_stage,
                 &raced_destination_authority,
                 &raced_anchor,
+                raced_activation_anchor,
                 deadline,
             ),
             Err(Error::FrozenRootDestinationExists(path)) if path == raced_destination
@@ -15940,13 +16161,14 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_publication_adopts_an_applied_rename_even_when_the_syscall_reports_error() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
         let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
 
         let materialized = publish_frozen_root_with(
             &stage,
             &destination,
             &root,
+            root_anchor,
             deadline,
             |source_directory, source_name, destination_directory, destination_name| {
                 renameat2_noreplace_until(
@@ -15973,7 +16195,7 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_publication_reconciles_an_applied_rename_after_the_work_deadline_expires() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, stage, root, fixture_deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, stage, root, root_anchor, fixture_deadline) = frozen_publication_fixture(temporary.path());
         let _lock = lock_frozen_destination_until(&destination, fixture_deadline).unwrap();
         let work_deadline = Instant::now() + Duration::from_secs(1);
 
@@ -15981,6 +16203,7 @@ let cast = import! cast.system.v1
             &stage,
             &destination,
             &root,
+            root_anchor,
             work_deadline,
             |source_directory, source_name, destination_directory, destination_name| {
                 renameat2_noreplace_until(
@@ -16068,10 +16291,10 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_publication_error_before_rename_preserves_the_retained_stage_for_bounded_cleanup() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
         let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
 
-        let error = publish_frozen_root_with(&stage, &destination, &root, deadline, |_, _, _, _| {
+        let error = publish_frozen_root_with(&stage, &destination, &root, root_anchor, deadline, |_, _, _, _| {
             Err(io::Error::from_raw_os_error(nix::libc::EIO))
         })
         .unwrap_err();
@@ -16090,7 +16313,7 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_publication_reconciles_a_racing_destination_without_replacing_it() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
         let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
         let winner = destination.root_path.clone();
 
@@ -16098,6 +16321,7 @@ let cast = import! cast.system.v1
             &stage,
             &destination,
             &root,
+            root_anchor,
             deadline,
             |source_directory, source_name, destination_directory, destination_name| {
                 fs::create_dir(&winner)?;
@@ -16126,7 +16350,7 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_publication_detects_destination_substitution_and_never_deletes_the_foreign_tree() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
         let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
         let public = destination.root_path.clone();
         let displaced = temporary.path().join("displaced-retained-root");
@@ -16135,6 +16359,7 @@ let cast = import! cast.system.v1
             &stage,
             &destination,
             &root,
+            root_anchor,
             deadline,
             |source_directory, source_name, destination_directory, destination_name| {
                 renameat2_noreplace_until(
@@ -16162,14 +16387,14 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_publication_rejects_a_foreign_stage_name_without_publishing_or_deleting_it() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, stage, root, deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, stage, root, root_anchor, deadline) = frozen_publication_fixture(temporary.path());
         let _lock = lock_frozen_destination_until(&destination, deadline).unwrap();
         let displaced = temporary.path().join("displaced-intended-root");
         fs::rename(stage.path.join("root"), &displaced).unwrap();
         fs::create_dir(stage.path.join("root")).unwrap();
         fs::write(stage.path.join("root/foreign"), b"must survive").unwrap();
 
-        let error = publish_frozen_root(&stage, &destination, &root, deadline).unwrap_err();
+        let error = publish_frozen_root(&stage, &destination, &root, root_anchor, deadline).unwrap_err();
         assert!(matches!(error, Error::FrozenPublicationNamespaceMismatch { .. }));
         assert!(!destination.root_path.exists());
         assert_eq!(fs::read(stage.path.join("root/foreign")).unwrap(), b"must survive");
@@ -16181,7 +16406,7 @@ let cast = import! cast.system.v1
     #[test]
     fn frozen_destination_lock_serializes_cooperating_publishers_with_a_finite_wait() {
         let temporary = tempfile::tempdir().unwrap();
-        let (destination, _stage, _root, deadline) = frozen_publication_fixture(temporary.path());
+        let (destination, _stage, _root, _root_anchor, deadline) = frozen_publication_fixture(temporary.path());
         let _first = lock_frozen_destination_until(&destination, deadline).unwrap();
         let second_parent = open_frozen_destination_parent(temporary.path()).unwrap();
         let second = FrozenRootDestination {
