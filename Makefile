@@ -589,25 +589,31 @@ fixture-sources-check:
 
 execution-fixtures: fixture-sources-check
 	@echo "Checking locked offline execution-source fixtures..."
-	@$(CARGO) test -p mason --lib \
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
-		--exact --list | \
+		--exact --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
 		--exact --nocapture
 	@echo "Checking the declarative pinned Stone bootstrap manifest and index..."
-	@$(CARGO) test -p mason --lib \
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
-		--exact --list | \
+		--exact --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
 	@echo "Resolving all twelve execution fixtures against the pinned real Stone index..."
-	@$(CARGO) test -p mason --lib \
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
-		--exact --list | \
+		--exact --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
@@ -654,9 +660,11 @@ execution-capability-preflight-test:
 
 bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."
-	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
+	@set -eu; \
+	listed="$$( TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
-		--ignored --exact --list | \
+		--ignored --exact --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files: test'
 	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::fetch_pinned_bootstrap_package_files -- \
@@ -665,9 +673,11 @@ bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 bootstrap-fixtures-offline: bootstrap-fixture-selection bootstrap-execution-requirement bootstrap-fixtures-tmp
 	@echo "Requiring the complete verified bootstrap store; this lane performs no downloads..."
 	@echo "Materializing the complete closure as a production-format offline root mirror..."
-	@set -o pipefail; TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
+	@set -eu; \
+	listed="$$( TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
-		--ignored --exact --list | \
+		--ignored --exact --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror: test'
 	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::contentful_bootstrap_materializes_a_complete_offline_root_mirror -- \
