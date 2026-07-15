@@ -13,6 +13,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
 use std::process;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use container::{
     Container, DevPolicy, Error, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy,
@@ -302,6 +303,7 @@ fn prove_parked_task_is_rejected() {
     let result = container.run::<io::Error>(|| Ok(()));
     drop(release_sender);
     parked.join().expect("parked task exits cleanly");
+    wait_for_joined_task_quiescence(parked_tid);
 
     assert_eq!(
         observed.len(),
@@ -364,6 +366,27 @@ fn numeric_task_ids() -> Vec<libc::c_long> {
         .collect::<Vec<_>>();
     tasks.sort_unstable();
     tasks
+}
+
+fn wait_for_joined_task_quiescence(joined_tid: libc::c_long) {
+    const TIMEOUT: Duration = Duration::from_secs(2);
+    const POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let tasks = numeric_task_ids();
+        if !tasks.contains(&joined_tid) {
+            return;
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            panic!(
+                "joined parked task {joined_tid} did not quiesce from procfs within {TIMEOUT:?}; observed tasks {tasks:?}"
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL.min(deadline.duration_since(now)));
+    }
 }
 
 fn assert_exact_main_task(context: &str) {
