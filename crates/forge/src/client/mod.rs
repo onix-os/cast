@@ -12679,6 +12679,7 @@ mod tests {
     mod external_materialization;
     mod fixed_staging_transition;
     mod root_abi_preflight;
+    mod state_prune;
     mod stateful_candidate_metadata;
 
     fn test_installation(root: &Path) -> Installation {

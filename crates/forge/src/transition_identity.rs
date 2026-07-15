@@ -33,12 +33,14 @@ use crate::{
 
 mod active_previous_slot_parking;
 mod archived_candidate;
+mod archived_state_prune;
 mod archived_state_repair;
 mod candidate_quarantine;
 mod error;
 mod fault_injection;
 mod namespace_helpers;
 mod previous_tree_move;
+mod prune_residue;
 mod reusable_previous_slot;
 mod slot_link_recovery;
 mod staging_wrapper_rotation;
@@ -68,6 +70,15 @@ pub(crate) use archived_candidate::{
     arm_before_retained_archived_candidate_exchange, arm_before_retired_archived_candidate_slot_move,
     arm_retained_archived_candidate_move_fault,
 };
+pub(crate) use archived_state_prune::{
+    ArchivedStatePruneError, MAX_ARCHIVED_STATE_PRUNE_BATCH, RetainedArchivedStatePrune,
+};
+#[cfg(test)]
+pub(crate) use archived_state_prune::{
+    ArchivedStatePruneFaultPoint, ArchivedStatePruneLimits, archived_state_prune_quarantine_name,
+    arm_archived_state_prune_fault, arm_before_archived_state_prune_child_unlink,
+    arm_before_archived_state_prune_wrapper_move,
+};
 #[allow(unused_imports)]
 pub(crate) use archived_state_repair::{
     ArchivedStateRepairError, ArchivedStateRepairFailure, ArchivedStateRepairIdentity, ArchivedStateRepairOutcome,
@@ -89,6 +100,9 @@ pub(crate) use fault_injection::{
     arm_quarantine_fault, arm_quarantine_faults, arm_retained_exchange_fault, arm_retained_previous_move_fault,
     arm_retained_previous_move_faults,
 };
+#[cfg(test)]
+pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;
+pub(crate) use prune_residue::{ArchivedStatePruneResidueError, audit_archived_state_prune_residue};
 pub(crate) use staging_wrapper_rotation::{
     RetainedStagingWrapperRotationFailure, RetainedStagingWrapperRotationOutcome,
 };
@@ -536,7 +550,8 @@ impl RetainedDirectory {
                 | nix::libc::O_DIRECTORY
                 | nix::libc::O_CLOEXEC
                 | nix::libc::O_NOFOLLOW
-                | nix::libc::O_NONBLOCK,
+                | nix::libc::O_NONBLOCK
+                | nix::libc::O_NOATIME,
             0,
             controlled_resolution(),
         )

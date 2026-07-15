@@ -118,10 +118,16 @@ config-rooted-gluon-test:
 forge-client-startup-gate-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	test -n "$$listed"; \
 	for test in \
 		client::startup_gate_tests::valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repositories \
 		client::startup_gate_tests::corrupt_canonical_journal_blocks_startup_without_rewriting_evidence \
 		client::startup_gate_tests::orphan_transition_row_precedes_malformed_live_state_and_repository_construction \
+		client::startup_gate_tests::archived_state_prune_residue_types_block_startup_before_live_state_intent_and_repositories \
+		client::startup_gate_tests::archived_state_prune_residue_inserted_between_bounded_scans_blocks_startup \
+		client::startup_gate_tests::archived_state_prune_residue_audit_rejects_an_oversized_quarantine_without_removing_entries \
+		client::startup_gate_tests::archived_state_prune_residue_audit_accepts_unrelated_entries_without_changing_them \
+		client::startup_gate_tests::archived_state_prune_residue_audit_rejects_root_or_quarantine_substitution \
 		client::startup_gate_tests::clean_startup_loads_the_default_intent_only_after_strict_discovery \
 		client::startup_gate_tests::explicit_intent_remains_authoritative_without_loading_the_malformed_default \
 		client::startup_gate_tests::cli_notice_preserves_full_verbose_and_failed_startup_semantics \
@@ -218,6 +224,49 @@ forge-transition-identity-test:
 		client::tests::first_install_rejects_a_racing_nonempty_usr_occupant_unchanged \
 		client::tests::duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-state-prune-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		client::boot::tests::prune_exclusions_are_applied_before_bounded_rollback_selection \
+		client::boot::tests::excluded_state_is_ineligible_even_when_its_canonical_path_exists \
+		client::tests::state_prune::fresh_exact_wrapper_is_detached_committed_and_deleted \
+		client::tests::state_prune::boot_projection::production_client_prune_completes_detach_boot_db_delete_and_gc_order \
+		client::tests::state_prune::boot_projection::definitely_not_applied_boot_fault_restores_archives_without_touching_boot \
+		client::tests::state_prune::boot_projection::ambiguous_post_projection_is_compensated_before_reservations_are_retired \
+		client::tests::state_prune::boot_projection::failed_ambiguous_boot_compensation_leaves_restart_blocking_residue \
+		client::tests::state_prune::boot_projection::active_state_failure_after_prepare_or_detach_restores_archives_before_boot \
+		client::tests::state_prune::boot_projection::active_state_failure_after_boot_restores_prior_projection_before_retiring_reservations \
+		client::tests::state_prune::startup_residue::prepared_process_loss_blocks_reopened_client_without_changing_evidence \
+		client::tests::state_prune::startup_residue::detached_pre_database_process_loss_blocks_reopened_client_without_changing_evidence \
+		client::tests::state_prune::startup_residue::post_database_process_loss_blocks_reopened_client_without_changing_stranded_evidence \
+		client::tests::state_prune::authorized_two_link_state_slot_wrapper_is_pruned_exactly \
+		client::tests::state_prune::deletion_batches_more_than_256_entries_without_retaining_one_fd_per_entry \
+		client::tests::state_prune::empty_batch_is_rejected_before_any_reservation \
+		client::tests::state_prune::oversized_batch_is_rejected_before_any_reservation_or_wrapper_open \
+		client::tests::state_prune::client_rejects_oversized_selection_before_loading_or_printing_snapshots \
+		client::tests::state_prune::applied_detach_fault_keeps_database_evidence_and_retries_suffix \
+		client::tests::state_prune::multi_state_partial_detach_restores_every_wrapper_then_retires_reservations \
+		client::tests::state_prune::preexisting_prune_residue_blocks_the_batch_before_its_first_reservation \
+		client::tests::state_prune::restored_phase_retries_a_partially_applied_reservation_unlink \
+		client::tests::state_prune::canonical_wrapper_substitution_before_move_is_never_adopted \
+		client::tests::state_prune::foreign_quarantine_wrapper_occupant_is_preserved_without_moving_canonical \
+		client::tests::state_prune::deterministic_quarantine_residue_is_preserved_and_rejected \
+		client::tests::state_prune::metadata_corruption_is_rejected_without_reservation \
+		client::tests::state_prune::phase_api_forbids_delete_before_database_and_restore_after_database \
+		client::tests::state_prune::mode_zero_directories_and_symlinks_are_deleted_without_following_targets \
+		client::tests::state_prune::child_substitution_in_final_check_syscall_window_preserves_foreign_entry \
+		client::tests::state_prune::partial_private_unlink_and_sync_faults_retry_in_process \
+		client::tests::state_prune::aggregate_delete_boundaries_fail_closed \
+		client::tests::state_prune::mounted_descendant_is_rejected_or_test_is_skipped_only_for_unavailable_mounting \
+		db::state::test::exact_archived_removal_rejects_an_empty_batch \
+		db::state::test::exact_archived_removal_rejects_duplicate_changed_and_transition_rows \
+		db::state::test::exact_archived_removal_reconciles_not_applied_applied_and_ambiguous_reports; do \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
@@ -770,6 +819,7 @@ help:
 	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
+	@echo "  forge-state-prune-test  Run exact retained archived-state prune and restart-residue tests"
 	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
 	@echo "  forge-ephemeral-candidate-metadata-test  Run retained external candidate and trigger tests"
 	@echo "  forge-fixed-staging-test  Run retained fixed-staging and external-target security tests"

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
-// SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 
 //! Boot management integration in Cast
 
 use std::{
+    collections::BTreeSet,
     io,
     path::{Path, PathBuf},
     str::FromStr,
@@ -27,6 +27,66 @@ use crate::{Installation, State, db, package::Id, state::Id as StateId};
 use super::Client;
 
 const MAX_ROLLBACK_STATES: usize = 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectionSyncOutcome {
+    NotApplicable,
+    NotApplied,
+    Applied,
+    Ambiguous,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProjectionSyncFaultPoint {
+    BeforeSideEffects,
+    AfterSideEffects,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BOOT_PROJECTION_SYNC: std::cell::RefCell<std::collections::VecDeque<Box<dyn FnOnce(&[StateId])>>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    static PROJECTION_SYNC_FAULT: std::cell::Cell<Option<ProjectionSyncFaultPoint>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn arm_boot_projection_sync(hook: impl FnOnce(&[StateId]) + 'static) {
+    BOOT_PROJECTION_SYNC.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(slot.len() < 4, "too many boot projection hooks armed");
+        slot.push_back(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn arm_projection_sync_fault(point: ProjectionSyncFaultPoint) {
+    PROJECTION_SYNC_FAULT.with(|slot| assert!(slot.replace(Some(point)).is_none(), "boot projection fault armed"));
+}
+
+#[cfg(test)]
+fn run_boot_projection_sync(projected: &[StateId]) -> bool {
+    BOOT_PROJECTION_SYNC.with(|slot| {
+        let Some(hook) = slot.borrow_mut().pop_front() else {
+            return false;
+        };
+        hook(projected);
+        true
+    })
+}
+
+#[cfg(test)]
+fn projection_sync_checkpoint(point: ProjectionSyncFaultPoint) -> Result<(), Error> {
+    if PROJECTION_SYNC_FAULT.with(|slot| slot.get()) == Some(point) {
+        PROJECTION_SYNC_FAULT.with(|slot| slot.set(None));
+        return Err(match point {
+            ProjectionSyncFaultPoint::BeforeSideEffects => Error::InjectedProjectionBeforeSideEffects,
+            ProjectionSyncFaultPoint::AfterSideEffects => Error::InjectedProjectionAfterSideEffects,
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -54,6 +114,30 @@ pub enum Error {
 
     #[error("incomplete kernel tree")]
     IncompleteKernel(String),
+
+    #[error("cannot exclude active boot state {0}")]
+    ExcludedHead(i32),
+
+    #[error("exact prune boot projection was skipped without being applied")]
+    ExactProjectionSkipped,
+
+    #[cfg(test)]
+    #[error("injected boot projection fault before side effects")]
+    InjectedProjectionBeforeSideEffects,
+
+    #[cfg(test)]
+    #[error("injected boot projection fault after side effects")]
+    InjectedProjectionAfterSideEffects,
+}
+
+impl Error {
+    pub(crate) fn projection_sync_outcome(&self) -> ProjectionSyncOutcome {
+        #[cfg(test)]
+        if matches!(self, Self::InjectedProjectionBeforeSideEffects) {
+            return ProjectionSyncOutcome::NotApplied;
+        }
+        ProjectionSyncOutcome::Ambiguous
+    }
 }
 
 /// Simple mapping type for kernel discovery paths, retaining the layout reference
@@ -136,7 +220,16 @@ fn select_rollback_state_ids<T: Ord>(
     immediate_previous: Option<StateId>,
     candidates: impl IntoIterator<Item = (StateId, T)>,
 ) -> Vec<StateId> {
-    let immediate_previous = immediate_previous.filter(|id| *id != head);
+    select_rollback_state_ids_excluding(head, immediate_previous, candidates, &BTreeSet::new())
+}
+
+fn select_rollback_state_ids_excluding<T: Ord>(
+    head: StateId,
+    immediate_previous: Option<StateId>,
+    candidates: impl IntoIterator<Item = (StateId, T)>,
+    excluded: &BTreeSet<StateId>,
+) -> Vec<StateId> {
+    let immediate_previous = immediate_previous.filter(|id| *id != head && !excluded.contains(id));
     let mut selected = Vec::with_capacity(MAX_ROLLBACK_STATES);
     if let Some(id) = immediate_previous {
         selected.push(id);
@@ -146,7 +239,7 @@ fn select_rollback_state_ids<T: Ord>(
     selected.extend(
         candidates
             .into_iter()
-            .filter(|(id, _)| *id != head && Some(*id) != immediate_previous)
+            .filter(|(id, _)| *id != head && Some(*id) != immediate_previous && !excluded.contains(id))
             .sorted_by(|(left_id, left_created), (right_id, right_created)| {
                 right_created.cmp(left_created).then_with(|| right_id.cmp(left_id))
             })
@@ -173,22 +266,31 @@ fn resolve_rollback_states<T: Clone, E>(
         .collect()
 }
 
-/// Return the bounded rollback states for the active head, pinning its
-/// immediate predecessor when supplied by a state transition.
-fn rollback_states(
+fn rollback_states_excluding(
     client: &Client,
     state: &State,
     immediate_previous: Option<&State>,
+    excluded: &BTreeSet<StateId>,
 ) -> Result<Vec<State>, db::Error> {
-    let ids = select_rollback_state_ids(
-        state.id,
-        immediate_previous.map(|previous| previous.id),
-        client.state_db.list_ids()?,
-    );
+    let candidates = client.state_db.list_ids()?;
+    let ids = if excluded.is_empty() {
+        select_rollback_state_ids(state.id, immediate_previous.map(|previous| previous.id), candidates)
+    } else {
+        select_rollback_state_ids_excluding(
+            state.id,
+            immediate_previous.map(|previous| previous.id),
+            candidates,
+            excluded,
+        )
+    };
 
     resolve_rollback_states(ids, immediate_previous.map(|previous| (previous.id, previous)), |id| {
         client.state_db.get(id)
     })
+}
+
+fn boot_state_is_eligible(state_id: StateId, excluded: &BTreeSet<StateId>, sysroot_exists: bool) -> bool {
+    !excluded.contains(&state_id) && sysroot_exists
 }
 
 /// Generate a schema for the root
@@ -216,6 +318,23 @@ fn os_schema_for_root(root: &Path) -> Result<Schema, Error> {
 /// retained as the first rollback choice even when activating a lower ID.
 /// Standalone synchronization and pruning may pass `None`.
 pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&State>) -> Result<(), Error> {
+    synchronize_excluding(client, state, immediate_previous, &BTreeSet::new()).map(|_| ())
+}
+
+/// Synchronize boot metadata while categorically excluding exact state IDs.
+///
+/// Pruning supplies its removal set before rollback selection, so excluded
+/// candidates neither consume the bounded rollback capacity nor reappear if a
+/// foreign inode races into a detached canonical archive name.
+pub(crate) fn synchronize_excluding(
+    client: &Client,
+    state: &State,
+    immediate_previous: Option<&State>,
+    excluded: &BTreeSet<StateId>,
+) -> Result<ProjectionSyncOutcome, Error> {
+    if excluded.contains(&state.id) {
+        return Err(Error::ExcludedHead(i32::from(state.id)));
+    }
     let root = client.installation.root.clone();
     let is_native = root.to_string_lossy() == "/";
     // Create an appropriate configuration
@@ -234,11 +353,14 @@ pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&S
     let systemd = Pattern::from_str("lib*/systemd/boot/efi/*.efi")?;
     let booty_bits = boot_files_from_new_state(&client.installation, &head_layouts, &systemd);
 
-    let mut all_states = rollback_states(client, state, immediate_previous)?;
+    let mut all_states = rollback_states_excluding(client, state, immediate_previous, excluded)?;
 
-    // no fun times without a bootloder
-    if booty_bits.is_empty() {
-        return Ok(());
+    let exact_prune_projection = !excluded.is_empty();
+    // Ordinary synchronization keeps its historical no-bootloader no-op.
+    // Pruning may not: if stale entries cannot be removed, it must fail before
+    // exact state rows are deleted and the caller restores the prior layout.
+    if booty_bits.is_empty() && !exact_prune_projection {
+        return Ok(ProjectionSyncOutcome::NotApplicable);
     }
 
     let global_schema = os_schema_for_root(&root)?;
@@ -247,6 +369,9 @@ pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&S
     let mut all_kernels = vec![];
     all_states.insert(0, state.clone());
     for state in all_states.iter() {
+        if excluded.contains(&state.id) {
+            continue;
+        }
         let layouts = layouts_for_state(client, state)?;
         let local_kernels = kernel_files_from_state(&layouts, &kernel_pattern);
         let mapped = global_schema.discover_system_kernels(local_kernels.into_iter())?;
@@ -265,7 +390,7 @@ pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&S
                     client.installation.root_path(state_id.to_string()).to_owned()
                 };
 
-                if !sysroot.exists() {
+                if !boot_state_is_eligible(state_id, excluded, sysroot.exists()) {
                     return None;
                 }
 
@@ -286,6 +411,23 @@ pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&S
         })
         .collect::<Vec<_>>();
 
+    #[cfg(test)]
+    projection_sync_checkpoint(ProjectionSyncFaultPoint::BeforeSideEffects)?;
+
+    #[cfg(test)]
+    {
+        let projected = all_kernels
+            .iter()
+            .filter_map(|(kernels, state_id)| {
+                (!kernels.is_empty() && !excluded.contains(state_id)).then_some(*state_id)
+            })
+            .collect::<Vec<_>>();
+        if run_boot_projection_sync(&projected) {
+            projection_sync_checkpoint(ProjectionSyncFaultPoint::AfterSideEffects)?;
+            return Ok(ProjectionSyncOutcome::Applied);
+        }
+    }
+
     for entry in entries.iter_mut() {
         if let Err(e) = entry.load_cmdline_snippets(&config) {
             log::warn!("Failed to load cmdline snippets: {e}");
@@ -293,8 +435,8 @@ pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&S
     }
 
     // no usable entries, lets get out of here.
-    if entries.is_empty() {
-        return Ok(());
+    if entries.is_empty() && !exact_prune_projection {
+        return Ok(ProjectionSyncOutcome::NotApplicable);
     }
 
     let manager = blsforme::Manager::new(&config)?
@@ -309,14 +451,22 @@ pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&S
         manager.sync(&global_schema)?;
     }
 
-    Ok(())
+    #[cfg(test)]
+    projection_sync_checkpoint(ProjectionSyncFaultPoint::AfterSideEffects)?;
+
+    Ok(ProjectionSyncOutcome::Applied)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use crate::state::Id;
 
-    use super::{MAX_ROLLBACK_STATES, resolve_rollback_states, select_rollback_state_ids};
+    use super::{
+        MAX_ROLLBACK_STATES, boot_state_is_eligible, resolve_rollback_states, select_rollback_state_ids,
+        select_rollback_state_ids_excluding,
+    };
 
     fn id(value: i32) -> Id {
         Id::from(value)
@@ -370,6 +520,29 @@ mod tests {
 
         assert_eq!(result, Err("state database lookup failed"));
         assert_eq!(requested, [id(7)]);
+    }
+
+    #[test]
+    fn prune_exclusions_are_applied_before_bounded_rollback_selection() {
+        let excluded = BTreeSet::from([id(10), id(8)]);
+        let selected = select_rollback_state_ids_excluding(
+            id(11),
+            Some(id(10)),
+            [(id(10), 10), (id(9), 9), (id(8), 8), (id(7), 7), (id(6), 6), (id(5), 5)],
+            &excluded,
+        );
+
+        assert_eq!(selected, [id(9), id(7), id(6), id(5)]);
+        assert_eq!(selected.len(), MAX_ROLLBACK_STATES);
+    }
+
+    #[test]
+    fn excluded_state_is_ineligible_even_when_its_canonical_path_exists() {
+        let excluded = BTreeSet::from([id(8)]);
+
+        assert!(!boot_state_is_eligible(id(8), &excluded, true));
+        assert!(boot_state_is_eligible(id(7), &excluded, true));
+        assert!(!boot_state_is_eligible(id(7), &excluded, false));
     }
 }
 

@@ -1,7 +1,9 @@
 use std::{
     cell::RefCell,
+    ffi::OsString,
     fs,
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
+    os::unix::ffi::OsStringExt as _,
+    os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _, symlink},
     path::Path,
     rc::Rc,
 };
@@ -11,6 +13,7 @@ use crate::{
     repository::{self, Priority, Repository, Source},
     state::TransitionId,
     test_support::{prepare_private_installation_root, private_installation_tempdir},
+    transition_identity::ArchivedStatePruneResidueError,
     transition_journal::{
         BootId, MountNamespaceIdentity, Operation, Previous, PreviousOrigin, QuarantineName, RuntimeEpoch,
         RuntimeTreeIdentity, StorageError, TransitionJournalStore, TransitionRecord, TreeToken,
@@ -71,6 +74,10 @@ fn guarded_repositories() -> repository::Map {
 
 fn canonical_journal(root: &Path) -> std::path::PathBuf {
     root.join(".cast/journal/state-transition")
+}
+
+fn prune_residue(root: &Path, state: i32) -> std::path::PathBuf {
+    root.join(format!(".cast/quarantine/state-prune-{state}-{}", "a".repeat(32)))
 }
 
 fn create_journal(installation: &Installation) -> Vec<u8> {
@@ -165,6 +172,8 @@ fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repo
     let (intent_path, malformed_intent) = write_malformed_system_intent(temporary.path());
     let installation = Installation::open(temporary.path(), None).unwrap();
     let canonical_before = create_journal(&installation);
+    let residue = prune_residue(temporary.path(), 70);
+    fs::create_dir(&residue).unwrap();
     let malformed_state = create_malformed_live_state(temporary.path());
 
     let error = expect_startup_gate_error(
@@ -189,6 +198,7 @@ fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repo
     ));
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
     assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
+    assert!(residue.is_dir());
     assert_eq!(
         fs::read(temporary.path().join("usr/.stateID")).unwrap(),
         malformed_state
@@ -232,6 +242,8 @@ fn orphan_transition_row_precedes_malformed_live_state_and_repository_constructi
         .add_with_transition(&transition_id(), &[], Some("orphan"), None)
         .unwrap();
     drop(state_db);
+    let residue = prune_residue(temporary.path(), 71);
+    fs::create_dir(&residue).unwrap();
     let malformed_state = create_malformed_live_state(temporary.path());
 
     let error = expect_startup_gate_error(
@@ -250,7 +262,248 @@ fn orphan_transition_row_precedes_malformed_live_state_and_repository_constructi
         malformed_state
     );
     assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
+    assert!(residue.is_dir());
     assert_repository_construction_not_started(&installation);
+}
+
+#[test]
+fn archived_state_prune_residue_types_block_startup_before_live_state_intent_and_repositories() {
+    for kind in ["directory", "file", "symlink", "fifo", "invalid-name"] {
+        let temporary = private_installation_tempdir();
+        let (intent_path, malformed_intent) = write_malformed_system_intent(temporary.path());
+        let installation = Installation::open(temporary.path(), None).unwrap();
+        let residue = if kind == "invalid-name" {
+            let mut name = b"state-prune-80-".to_vec();
+            name.extend([0xff, 0xfe]);
+            temporary.path().join(".cast/quarantine").join(OsString::from_vec(name))
+        } else {
+            prune_residue(temporary.path(), 80)
+        };
+        let outside = temporary.path().join("outside-sentinel");
+        fs::write(&outside, b"outside-unchanged").unwrap();
+        match kind {
+            "directory" => {
+                fs::create_dir(&residue).unwrap();
+                fs::write(residue.join("retained-evidence"), b"directory-unchanged").unwrap();
+            }
+            "file" => fs::write(&residue, b"file-unchanged").unwrap(),
+            "symlink" => symlink(&outside, &residue).unwrap(),
+            "fifo" => nix::unistd::mkfifo(&residue, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap(),
+            "invalid-name" => fs::write(&residue, b"invalid-name-unchanged").unwrap(),
+            _ => unreachable!(),
+        }
+        let before = fs::symlink_metadata(&residue).unwrap();
+        let malformed_state = create_malformed_live_state(temporary.path());
+
+        let error = expect_startup_gate_error(
+            Client::builder(format!("startup-gate-prune-residue-{kind}"), installation.clone())
+                .repositories(guarded_repositories())
+                .build(),
+        );
+
+        assert!(matches!(
+            error.as_ref(),
+            startup_gate::Error::ArchivedStatePruneResidue(ArchivedStatePruneResidueError::Residue { path })
+                if path == &residue
+        ));
+        let after = fs::symlink_metadata(&residue).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()), "{kind}");
+        match kind {
+            "directory" => assert_eq!(
+                fs::read(residue.join("retained-evidence")).unwrap(),
+                b"directory-unchanged"
+            ),
+            "file" => assert_eq!(fs::read(&residue).unwrap(), b"file-unchanged"),
+            "symlink" => assert_eq!(fs::read_link(&residue).unwrap(), outside),
+            "fifo" => assert!(fs::symlink_metadata(&residue).unwrap().file_type().is_fifo()),
+            "invalid-name" => assert_eq!(fs::read(&residue).unwrap(), b"invalid-name-unchanged"),
+            _ => unreachable!(),
+        }
+        assert_eq!(fs::read(&outside).unwrap(), b"outside-unchanged");
+        assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
+        assert_eq!(
+            fs::read(temporary.path().join("usr/.stateID")).unwrap(),
+            malformed_state
+        );
+        assert_system_databases_opened(&installation);
+        assert_repository_construction_not_started(&installation);
+    }
+}
+
+#[test]
+fn archived_state_prune_residue_inserted_between_bounded_scans_blocks_startup() {
+    let temporary = private_installation_tempdir();
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    let residue = prune_residue(temporary.path(), 81);
+    let inserted = residue.clone();
+    crate::transition_identity::arm_after_archived_state_prune_residue_first_scan(move || {
+        fs::create_dir(&inserted).unwrap();
+        fs::write(inserted.join("retained-evidence"), b"inserted-unchanged").unwrap();
+    });
+
+    let error = expect_startup_gate_error(Client::new("startup-gate-prune-residue-race", installation));
+
+    assert!(matches!(
+        error.as_ref(),
+        startup_gate::Error::ArchivedStatePruneResidue(ArchivedStatePruneResidueError::Residue { path })
+            if path == &residue
+    ));
+    assert_eq!(
+        fs::read(residue.join("retained-evidence")).unwrap(),
+        b"inserted-unchanged"
+    );
+}
+
+#[test]
+fn archived_state_prune_residue_audit_rejects_an_oversized_quarantine_without_removing_entries() {
+    let temporary = private_installation_tempdir();
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    let quarantine = temporary.path().join(".cast/quarantine");
+    for index in 0..=4_096 {
+        fs::write(quarantine.join(format!("unrelated-{index:04}")), b"").unwrap();
+    }
+
+    let error = expect_startup_gate_error(Client::new("startup-gate-prune-residue-bound", installation));
+
+    assert!(matches!(
+        error.as_ref(),
+        startup_gate::Error::ArchivedStatePruneResidue(ArchivedStatePruneResidueError::Namespace(_))
+    ));
+    assert_eq!(fs::read_dir(&quarantine).unwrap().count(), 4_097);
+}
+
+#[test]
+fn archived_state_prune_residue_audit_accepts_unrelated_entries_without_changing_them() {
+    let temporary = private_installation_tempdir();
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    let quarantine = temporary.path().join(".cast/quarantine");
+    let directory = quarantine.join("unrelated-directory");
+    let file = quarantine.join("unrelated-file");
+    let link = quarantine.join("unrelated-link");
+    let outside = temporary.path().join("unrelated-outside");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("payload"), b"directory-unchanged").unwrap();
+    fs::write(&file, b"file-unchanged").unwrap();
+    fs::write(&outside, b"outside-unchanged").unwrap();
+    symlink(&outside, &link).unwrap();
+    let quarantine_before = fs::symlink_metadata(&quarantine).unwrap();
+    let identities = [&directory, &file, &link].map(|path| {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.mode(),
+            metadata.len(),
+            metadata.atime(),
+            metadata.atime_nsec(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        )
+    });
+
+    drop(Client::new("startup-gate-unrelated-quarantine", installation).unwrap());
+
+    for (path, expected) in [&directory, &file, &link].into_iter().zip(identities) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert_eq!(
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.mode(),
+                metadata.len(),
+                metadata.atime(),
+                metadata.atime_nsec(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
+            expected
+        );
+    }
+    let quarantine_after = fs::symlink_metadata(&quarantine).unwrap();
+    assert_eq!(
+        (
+            quarantine_after.dev(),
+            quarantine_after.ino(),
+            quarantine_after.mode(),
+            quarantine_after.len(),
+            quarantine_after.atime(),
+            quarantine_after.atime_nsec(),
+            quarantine_after.mtime(),
+            quarantine_after.mtime_nsec(),
+            quarantine_after.ctime(),
+            quarantine_after.ctime_nsec(),
+        ),
+        (
+            quarantine_before.dev(),
+            quarantine_before.ino(),
+            quarantine_before.mode(),
+            quarantine_before.len(),
+            quarantine_before.atime(),
+            quarantine_before.atime_nsec(),
+            quarantine_before.mtime(),
+            quarantine_before.mtime_nsec(),
+            quarantine_before.ctime(),
+            quarantine_before.ctime_nsec(),
+        )
+    );
+    assert_eq!(fs::read(directory.join("payload")).unwrap(), b"directory-unchanged");
+    assert_eq!(fs::read(file).unwrap(), b"file-unchanged");
+    assert_eq!(fs::read_link(link).unwrap(), outside);
+    assert_eq!(fs::read(outside).unwrap(), b"outside-unchanged");
+}
+
+#[test]
+fn archived_state_prune_residue_audit_rejects_root_or_quarantine_substitution() {
+    for replace_root in [false, true] {
+        let parent = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(parent.path());
+        let root = parent.path().join("installation");
+        fs::create_dir(&root).unwrap();
+        prepare_private_installation_root(&root);
+        let installation = Installation::open(&root, None).unwrap();
+        let original_quarantine = root.join(".cast/quarantine");
+        let detached = parent.path().join(if replace_root {
+            "detached-installation"
+        } else {
+            "detached-quarantine"
+        });
+        let hook_root = root.clone();
+        let hook_detached = detached.clone();
+        crate::transition_identity::arm_after_archived_state_prune_residue_first_scan(move || {
+            if replace_root {
+                fs::rename(&hook_root, &hook_detached).unwrap();
+                fs::create_dir(&hook_root).unwrap();
+                prepare_private_installation_root(&hook_root);
+            } else {
+                fs::rename(hook_root.join(".cast/quarantine"), &hook_detached).unwrap();
+                fs::create_dir(hook_root.join(".cast/quarantine")).unwrap();
+                fs::set_permissions(hook_root.join(".cast/quarantine"), fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        });
+
+        let error = expect_startup_gate_error(Client::new(
+            format!("startup-gate-prune-audit-substitution-{replace_root}"),
+            installation,
+        ));
+
+        assert!(matches!(
+            error.as_ref(),
+            startup_gate::Error::ArchivedStatePruneResidue(
+                ArchivedStatePruneResidueError::Namespace(_) | ArchivedStatePruneResidueError::Installation(_)
+            )
+        ));
+        if replace_root {
+            assert!(detached.join(".cast/quarantine").is_dir());
+            assert!(root.is_dir());
+        } else {
+            assert!(detached.is_dir());
+            assert!(original_quarantine.is_dir());
+        }
+    }
 }
 
 #[test]
@@ -478,6 +731,8 @@ fn frozen_client_ignores_system_journal_and_persistent_transition_rows() {
         .unwrap();
     drop(state_db);
     let canonical_before = create_journal(&installation);
+    let residue = prune_residue(temporary.path(), 90);
+    fs::create_dir(&residue).unwrap();
     drop(installation);
 
     let frozen_installation = Installation::open_frozen(temporary.path(), None).unwrap();
@@ -494,6 +749,7 @@ fn frozen_client_ignores_system_journal_and_persistent_transition_rows() {
     drop(client);
 
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
+    assert!(residue.is_dir());
     assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
 }
 

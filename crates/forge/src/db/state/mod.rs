@@ -13,7 +13,12 @@ use crate::state::{self, Id, Selection, TransitionId};
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/state/migrations");
 
+mod exact_archived_removal;
 mod schema;
+
+pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
+#[cfg(test)]
+use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -503,6 +508,82 @@ mod test {
         assert_eq!(state.description.as_deref(), Some("test"));
 
         assert_eq!(state.selections, selections);
+    }
+
+    #[test]
+    fn exact_archived_removal_rejects_an_empty_batch() {
+        let database = Database::new(":memory:").unwrap();
+
+        let error = database.remove_exact_archived(&[]).unwrap_err();
+
+        assert!(matches!(error, ExactArchivedRemovalError::EmptyBatch));
+        assert!(error.definitely_not_applied());
+    }
+
+    #[test]
+    fn exact_archived_removal_rejects_duplicate_changed_and_transition_rows() {
+        let database = Database::new(":memory:").unwrap();
+        let ordinary = database.add(&[], Some("ordinary"), None).unwrap();
+        assert!(matches!(
+            database.remove_exact_archived(&[ordinary.clone(), ordinary.clone()]),
+            Err(ExactArchivedRemovalError::Duplicate { state_id }) if state_id == i32::from(ordinary.id)
+        ));
+        assert_eq!(database.get(ordinary.id).unwrap(), ordinary);
+
+        let mut changed = ordinary.clone();
+        changed.summary = Some("changed snapshot".to_owned());
+        assert!(matches!(
+            database.remove_exact_archived(&[changed]),
+            Err(ExactArchivedRemovalError::Changed { state_id }) if state_id == i32::from(ordinary.id)
+        ));
+        assert_eq!(database.get(ordinary.id).unwrap(), ordinary);
+
+        let token = transition_id('d');
+        let correlated = database
+            .add_with_transition(&token, &[], Some("correlated"), None)
+            .unwrap();
+        assert!(matches!(
+            database.remove_exact_archived(&[correlated.clone()]),
+            Err(ExactArchivedRemovalError::TransitionPresent { state_id })
+                if state_id == i32::from(correlated.id)
+        ));
+        assert_eq!(database.get(correlated.id).unwrap(), correlated);
+    }
+
+    #[test]
+    fn exact_archived_removal_reconciles_not_applied_applied_and_ambiguous_reports() {
+        let not_applied_database = Database::new(":memory:").unwrap();
+        let not_applied = not_applied_database.add(&[], Some("not applied"), None).unwrap();
+        arm_exact_archived_removal_fault(ExactArchivedRemovalFault::ReportBeforeTransaction);
+        let error = not_applied_database
+            .remove_exact_archived(&[not_applied.clone()])
+            .unwrap_err();
+        assert!(error.definitely_not_applied());
+        assert_eq!(not_applied_database.get(not_applied.id).unwrap(), not_applied);
+
+        let applied_database = Database::new(":memory:").unwrap();
+        let applied = applied_database.add(&[], Some("applied"), None).unwrap();
+        arm_exact_archived_removal_fault(ExactArchivedRemovalFault::ReportAfterCommit);
+        applied_database.remove_exact_archived(&[applied.clone()]).unwrap();
+        assert!(applied_database.get(applied.id).is_err());
+
+        let ambiguous_database = Database::new(":memory:").unwrap();
+        let restored = ambiguous_database.add(&[], Some("restored"), None).unwrap();
+        let missing = ambiguous_database.add(&[], Some("missing"), None).unwrap();
+        arm_exact_archived_removal_fault(ExactArchivedRemovalFault::ReportAfterCommitAndRestoreFirst);
+        let error = ambiguous_database
+            .remove_exact_archived(&[restored.clone(), missing.clone()])
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ExactArchivedRemovalError::AmbiguousBatch {
+                missing: 1,
+                exact: 1,
+                ..
+            }
+        ));
+        assert_eq!(ambiguous_database.get(restored.id).unwrap(), restored);
+        assert!(ambiguous_database.get(missing.id).is_err());
     }
 
     #[test]

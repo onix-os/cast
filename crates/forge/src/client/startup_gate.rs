@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{Installation, db, installation, transition_journal};
+use crate::{Installation, db, installation, transition_identity, transition_journal};
 
 use super::active_state_snapshot::ActiveStateLease;
 
@@ -37,6 +37,8 @@ impl CleanSystemStartup {
             });
         }
 
+        transition_identity::audit_archived_state_prune_residue(installation, &journal)?;
+
         installation.revalidate_root_directory()?;
         Ok(Self { _journal: journal })
     }
@@ -63,6 +65,8 @@ pub(super) enum Error {
     TransitionEvidence(#[from] db::state::TransitionEvidenceError),
     #[error("state {state} retains orphan transition {transition} while the canonical journal is absent")]
     OrphanTransitionRow { state: i32, transition: String },
+    #[error("audit interrupted archived-state prune evidence")]
+    ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
     #[error("revalidate installation root after startup discovery")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]

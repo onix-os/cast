@@ -168,3 +168,28 @@ impl RetainedTreeMarker {
         }
     }
 }
+
+impl TreeMarkerStore {
+    /// Read canonical recovery evidence while allowing exactly one unresolved
+    /// state-slot hardlink.
+    ///
+    /// This is the read-only counterpart to
+    /// [`Self::adopt_or_create_before_journal_for_transition`]. It cannot
+    /// create, repair, chmod, unlink, or publish a marker. Callers receiving an
+    /// `nlink=2` marker must authenticate the sole extra link as the exact
+    /// state-wrapper slot before ordinary marker revalidation is enabled.
+    pub(crate) fn read_for_transition_recovery(&self) -> Result<RetainedTreeMarker, TreeMarkerError> {
+        self.validate_usr()?;
+        self.reject_temporary()?;
+        let marker = self
+            .load_canonical_for_transition()?
+            .ok_or_else(|| TreeMarkerError::Missing {
+                path: self.marker_path(),
+            })?;
+        self.reject_temporary()?;
+        if !marker.needs_slot_link_authorization() {
+            marker.revalidate(self)?;
+        }
+        Ok(marker)
+    }
+}

@@ -7,9 +7,7 @@
 //! system states (i.e. historical snapshots) that cleans up database entries
 //! and assets on disk by way of refcounting.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 use std::{
     io,
@@ -21,15 +19,19 @@ use itertools::Itertools;
 use thiserror::Error;
 
 use tracing::info;
-use tui::{ProgressBar, ProgressStyle, Styled};
+use tui::Styled;
 use tui::{
     dialoguer::{Confirm, theme::ColorfulTheme},
     pretty::autoprint_columns,
 };
 
 use crate::client::boot;
-use crate::util;
-use crate::{Client, Installation, State, client::cache, db, package, repository, state};
+use crate::{
+    Client, Installation, State,
+    client::cache,
+    db, package, repository, state,
+    transition_identity::{ArchivedStatePruneError, MAX_ARCHIVED_STATE_PRUNE_BATCH, RetainedArchivedStatePrune},
+};
 
 /// The prune strategy for removing old states
 #[derive(Debug, Clone, Copy)]
@@ -117,47 +119,31 @@ fn prune_states_inner(
         // TODO: Print no states to be removed
         return Ok(());
     }
+    if removal_ids.len() > MAX_ARCHIVED_STATE_PRUNE_BATCH {
+        return Err(Error::PruneBatchTooLarge {
+            actual: removal_ids.len(),
+            limit: MAX_ARCHIVED_STATE_PRUNE_BATCH,
+        });
+    }
 
-    // Keep track of how many active states are using a package
-    let mut packages_counts = BTreeMap::<package::Id, usize>::new();
     let mut removals = vec![];
 
-    // Get net refcount of each package in all states
+    // Load exact state snapshots for the retained prune session. Package
+    // garbage-collection candidates are deliberately recomputed only after
+    // the state rows and exact quarantined wrappers are gone.
     for (id, _) in state_ids {
-        // Get metadata
         let state = state_db.get(id)?;
-
-        // Increment each package
-        for selection in &state.selections {
-            *packages_counts.entry(selection.package.clone()).or_default() += 1;
-        }
-
-        // Decrement if removal
         if removal_ids.contains(&id) {
-            // Ensure we're not pruning the active state!!
             if id == current_state.id {
                 return Err(Error::PruneCurrent);
-            }
-
-            for selection in &state.selections {
-                *packages_counts.entry(selection.package.clone()).or_default() -= 1;
             }
             removals.push(state);
         }
     }
 
-    // Get all packages which were decremented to 0,
-    // these are the packages we want to remove since
-    // no more states reference them
-    let package_removals = packages_counts
-        .into_iter()
-        .filter_map(|(pkg, count)| (count == 0).then_some(pkg))
-        .collect::<Vec<_>>();
-
     timing.resolve = instant.elapsed();
     info!(
         total_resolved_states = removals.len(),
-        total_resolved_packages = package_removals.len(),
         resolve_time_ms = timing.resolve.as_millis(),
         "Resolved states marked for removal"
     );
@@ -181,70 +167,148 @@ fn prune_states_inner(
         return Err(Error::Cancelled);
     }
 
-    // Prune these states / packages from all dbs
+    // Authenticate every canonical archive and reserve every exact private
+    // quarantine while both the active-state coordinator and retained journal
+    // lock are held. No database or boot evidence has changed yet.
     revalidate_active_state(active_state, installation)?;
-    prune_databases(&removals, &package_removals, state_db, install_db, layout_db)?;
+    let mut archived = RetainedArchivedStatePrune::prepare(installation, state_db, &removals)?;
+    let boot_exclusions = removals.iter().map(|state| state.id).collect::<BTreeSet<_>>();
+
+    info!(
+        total_archived_paths = removals.len(),
+        progress = 0.0,
+        event_type = "progress_start",
+        "Detaching stale archive trees"
+    );
+
+    if let Err(primary) = revalidate_active_state(active_state, installation) {
+        return Err(restore_archives_after_active_state_failure(
+            &mut archived,
+            installation,
+            primary,
+            "revalidate active state after archived-state prune preparation",
+        ));
+    }
+    let detached = match archived.detach_all(installation, state_db) {
+        Ok(detached) => detached,
+        Err(primary) => {
+            return Err(restore_archives_before_boot_change(
+                &mut archived,
+                installation,
+                primary,
+                "detach archived-state wrappers",
+            ));
+        }
+    };
+
+    // Boot sees the exact desired post-prune projection while the state rows
+    // still exist and the removed wrappers are privately detached. Explicit
+    // exclusions are applied before the bounded rollback selection and again
+    // while materializing entries; path absence is never prune intent. A
+    // failure restores both wrappers and the prior boot projection.
+    if let Err(primary) = revalidate_active_state(active_state, installation) {
+        return Err(restore_archives_after_active_state_failure(
+            &mut archived,
+            installation,
+            primary,
+            "revalidate active state after archived-state wrapper detachment",
+        ));
+    }
+    match boot::synchronize_excluding(client, &current_state, None, &boot_exclusions) {
+        Ok(boot::ProjectionSyncOutcome::Applied) => {}
+        Ok(boot::ProjectionSyncOutcome::NotApplicable) => {
+            return Err(restore_boot_and_archives(
+                &mut archived,
+                installation,
+                client,
+                &current_state,
+                boot::Error::ExactProjectionSkipped,
+            ));
+        }
+        Ok(outcome) => unreachable!("non-success boot projection returned as success: {outcome:?}"),
+        Err(primary) => {
+            return Err(restore_boot_and_archives(
+                &mut archived,
+                installation,
+                client,
+                &current_state,
+                primary,
+            ));
+        }
+    }
+
+    if let Err(primary) = revalidate_active_state(active_state, installation) {
+        return Err(restore_archives_and_boot_after_active_state_failure(
+            &mut archived,
+            installation,
+            client,
+            &current_state,
+            primary,
+            "revalidate active state after archived-state boot projection",
+        ));
+    }
+    if let Err(primary) = archived.remove_database_rows(installation, state_db) {
+        let not_applied = matches!(
+            &primary,
+            ArchivedStatePruneError::StateDatabase(source) if source.definitely_not_applied()
+        );
+        if not_applied {
+            return Err(restore_archives_and_boot_after_failure(
+                &mut archived,
+                installation,
+                client,
+                &current_state,
+                primary,
+                "remove exact archived-state database rows",
+            ));
+        }
+        return Err(primary.into());
+    }
 
     timing.prune_db = instant.elapsed();
     info!(
         prune_db_time_ms = timing.prune_db.as_millis(),
-        "Pruned stale packages & states from databases"
+        "Durably detached archives and removed exact state rows"
     );
     instant = Instant::now();
 
-    // Remove orphaned downloads
-    remove_orphaned_files(
-        // root
-        installation.cache_path("downloads").join("v1"),
-        // final set of hashes to compare against
-        install_db.file_hashes()?,
-        // path builder using hash
-        |hash| cache::download_path(installation, &hash).ok(),
-    )?;
-
-    // Remove orphaned assets
-    remove_orphaned_files(
-        // root
-        installation.assets_path("v2"),
-        // final set of hashes to compare against
-        layout_db.file_hashes()?,
-        // path builder using hash
-        |hash| Some(cache::asset_path(installation, &hash)),
-    )?;
-
-    timing.orphaned_files = instant.elapsed();
-    info!(
-        orphaned_file_time_ms = timing.orphaned_files.as_millis(),
-        "Removed orphaned files"
-    );
-    instant = Instant::now();
-
-    let archive_paths = removals
-        .iter()
-        .map(|s| installation.root_path(s.id.to_string()))
-        .collect::<Vec<_>>();
-
-    info!(
-        total_archived_paths = archive_paths.len(),
-        progress = 0.0,
-        event_type = "progress_start",
-        "Removing stale archive trees"
-    );
-
-    revalidate_active_state(active_state, installation)?;
-    remove_archived_states(&archive_paths)?;
+    archived.delete_detached(installation)?;
 
     timing.prune_archives = instant.elapsed();
     info!(
         duration_ms = timing.prune_archives.as_millis(),
-        items_processed = archive_paths.len(),
+        items_processed = detached.len(),
         progress = 1.0,
         event_type = "progress_completed",
     );
 
-    // Sync boot to ensure pruned states are removed from boot entries
-    revalidate_active_state(active_state, installation)?;
-    boot::synchronize(client, &current_state, None).map_err(Error::SyncBoot)?;
+    for state in &detached {
+        println!(
+            "{} {:?}",
+            "Removed".green(),
+            installation.root_path(state.state.to_string())
+        );
+    }
+
+    // Only now derive package GC from the remaining authoritative state DB.
+    // A partial archive failure can therefore never invalidate package/layout
+    // rows or CAS data needed by an unpruned state.
+    let package_removals = unreferenced_removed_packages(&removals, state_db)?;
+    prune_package_databases(&package_removals, install_db, layout_db)?;
+
+    remove_orphaned_files(
+        installation.cache_path("downloads").join("v1"),
+        install_db.file_hashes()?,
+        |hash| cache::download_path(installation, &hash).ok(),
+    )?;
+    remove_orphaned_files(installation.assets_path("v2"), layout_db.file_hashes()?, |hash| {
+        Some(cache::asset_path(installation, &hash))
+    })?;
+    timing.orphaned_files = instant.elapsed();
+    info!(
+        orphaned_file_time_ms = timing.orphaned_files.as_millis(),
+        "Removed unreferenced package metadata and files"
+    );
 
     Ok(())
 }
@@ -258,6 +322,158 @@ fn revalidate_active_state(
         .map_err(|source| Error::ActiveState {
             source: Box::new(source),
         })
+}
+
+fn restore_archives_after_active_state_failure(
+    archived: &mut RetainedArchivedStatePrune,
+    installation: &Installation,
+    primary: Error,
+    operation: &'static str,
+) -> Error {
+    if let Err(rollback) = archived.restore_wrappers(installation) {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = archived.retire_reservations() {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    primary
+}
+
+fn restore_archives_and_boot_after_active_state_failure(
+    archived: &mut RetainedArchivedStatePrune,
+    installation: &Installation,
+    client: &Client,
+    current_state: &State,
+    primary: Error,
+    operation: &'static str,
+) -> Error {
+    if let Err(rollback) = archived.restore_wrappers(installation) {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = boot::synchronize(client, current_state, None) {
+        return Error::ArchivedStatePruneBootRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = archived.retire_reservations() {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    primary
+}
+
+fn restore_archives_before_boot_change(
+    archived: &mut RetainedArchivedStatePrune,
+    installation: &Installation,
+    primary: ArchivedStatePruneError,
+    operation: &'static str,
+) -> Error {
+    if let Err(rollback) = archived.restore_wrappers(installation) {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = archived.retire_reservations() {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    Error::ArchivedStatePrune {
+        source: Box::new(primary),
+    }
+}
+
+fn restore_archives_and_boot_after_failure(
+    archived: &mut RetainedArchivedStatePrune,
+    installation: &Installation,
+    client: &Client,
+    current_state: &State,
+    primary: ArchivedStatePruneError,
+    operation: &'static str,
+) -> Error {
+    if let Err(rollback) = archived.restore_wrappers(installation) {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = boot::synchronize(client, current_state, None) {
+        return Error::ArchivedStatePruneBootRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = archived.retire_reservations() {
+        return Error::ArchivedStatePruneRollback {
+            operation,
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    Error::ArchivedStatePrune {
+        source: Box::new(primary),
+    }
+}
+
+fn restore_boot_and_archives(
+    archived: &mut RetainedArchivedStatePrune,
+    installation: &Installation,
+    client: &Client,
+    current_state: &State,
+    primary: boot::Error,
+) -> Error {
+    if primary.projection_sync_outcome() == boot::ProjectionSyncOutcome::NotApplied {
+        if let Err(rollback) = archived.restore_all(installation) {
+            return Error::BootArchiveRollback {
+                primary: Box::new(primary),
+                rollback: Box::new(rollback),
+            };
+        }
+        return Error::SyncBoot(primary);
+    }
+
+    if let Err(rollback) = archived.restore_wrappers(installation) {
+        return Error::BootArchiveRollback {
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = boot::synchronize(client, current_state, None) {
+        return Error::BootProjectionRollback {
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    if let Err(rollback) = archived.retire_reservations() {
+        return Error::BootArchiveRollback {
+            primary: Box::new(primary),
+            rollback: Box::new(rollback),
+        };
+    }
+    Error::SyncBoot(primary)
 }
 
 /// Prune all cached data that isn't related to any states
@@ -338,32 +554,27 @@ pub(super) fn prune_cache(
     Ok(num_removed_files)
 }
 
-/// Removes the provided states & packages from the databases
-/// When any removals cause a filesystem asset to become completely unreffed
-/// it will be permanently deleted from disk.
-///
-/// # Arguments
-///
-/// * `states`     - The states to prune from the DB
-/// * `packages`   - any packages to prune from the DB
-/// * `state_db`   - Client State database
-/// * `install_db` - Client "installed" database
-/// * `layout_db`  - Client layout database
-fn prune_databases(
-    states: &[State],
+fn prune_package_databases(
     packages: &[package::Id],
-    state_db: &db::state::Database,
     install_db: &db::meta::Database,
     layout_db: &db::layout::Database,
 ) -> Result<(), Error> {
-    // Remove db states
-    state_db.batch_remove(states.iter().map(|s| &s.id))?;
-    // Remove db metadata
     install_db.batch_remove(packages)?;
-    // Remove db layouts
     layout_db.batch_remove(packages)?;
-
     Ok(())
+}
+
+fn unreferenced_removed_packages(removed: &[State], state_db: &db::state::Database) -> Result<Vec<package::Id>, Error> {
+    let removed = removed
+        .iter()
+        .flat_map(|state| state.selections.iter().map(|selection| selection.package.clone()))
+        .collect::<BTreeSet<_>>();
+    let retained = state_db
+        .all()?
+        .into_iter()
+        .flat_map(|state| state.selections.into_iter().map(|selection| selection.package))
+        .collect::<BTreeSet<_>>();
+    Ok(removed.difference(&retained).cloned().collect())
 }
 
 /// Removes all files under `root` that no longer exist in the provided `final_hashes` set
@@ -481,40 +692,6 @@ fn remove_empty_dirs(starting: &Path, root: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn remove_archived_states(archive_paths: &[PathBuf]) -> Result<(), Error> {
-    println!();
-
-    let progressbar = ProgressBar::new(archive_paths.len() as u64).with_style(
-        ProgressStyle::with_template("\n|{bar:20.cyan/blue}| {pos}/{len}")
-            .unwrap()
-            .progress_chars("■= "),
-    );
-    progressbar.tick();
-
-    let counter = Arc::new(AtomicUsize::new(0));
-
-    util::par_remove_dirs_all(archive_paths, |path, res| match res {
-        Ok(_) => {
-            let cnt = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            info!(
-                progress = cnt as f32 / archive_paths.len() as f32,
-                current = cnt,
-                total = archive_paths.len(),
-                event_type = "progress_update",
-                "Removed archived state: {:?}",
-                path
-            );
-            progressbar.inc(1);
-            progressbar.suspend(|| println!("{} {path:?}", "Removed".green()));
-        }
-        Err(e) => eprintln!("Failed to remove archived state: {path:?} ({e})"),
-    })?;
-
-    progressbar.finish_and_clear();
-
-    Ok(())
-}
-
 /// Simple timing information for Prune
 #[derive(Default)]
 pub struct Timing {
@@ -532,10 +709,43 @@ pub enum Error {
     NoActiveState,
     #[error("cannot prune the currently active state")]
     PruneCurrent,
+    #[error("state prune batch has {actual} states, exceeding the retained limit of {limit}")]
+    PruneBatchTooLarge { actual: usize, limit: usize },
     #[error("active-state snapshot changed while pruning")]
     ActiveState {
         #[source]
         source: Box<super::Error>,
+    },
+    #[error("retained archived-state pruning")]
+    ArchivedStatePrune {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("{operation} failed and restoring exact archived wrappers also failed")]
+    ArchivedStatePruneRollback {
+        operation: &'static str,
+        #[source]
+        primary: Box<dyn std::error::Error + Send + Sync + 'static>,
+        rollback: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("{operation} failed; wrappers were restored but restoring the prior boot projection failed")]
+    ArchivedStatePruneBootRollback {
+        operation: &'static str,
+        #[source]
+        primary: Box<dyn std::error::Error + Send + Sync + 'static>,
+        rollback: Box<boot::Error>,
+    },
+    #[error("boot synchronization failed and restoring exact archived wrappers also failed")]
+    BootArchiveRollback {
+        #[source]
+        primary: Box<boot::Error>,
+        rollback: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("boot synchronization failed; wrappers were restored but restoring the prior boot projection failed")]
+    BootProjectionRollback {
+        #[source]
+        primary: Box<boot::Error>,
+        rollback: Box<boot::Error>,
     },
     #[error("db")]
     DB(#[from] db::Error),
@@ -547,4 +757,12 @@ pub enum Error {
     Dialog(#[from] tui::dialoguer::Error),
     #[error("synchronize boot")]
     SyncBoot(#[source] boot::Error),
+}
+
+impl From<ArchivedStatePruneError> for Error {
+    fn from(source: ArchivedStatePruneError) -> Self {
+        Self::ArchivedStatePrune {
+            source: Box::new(source),
+        }
+    }
 }

@@ -185,6 +185,7 @@ fn revalidate_proof(
     active_proof: &ActiveStateProof,
     installation: &Installation,
 ) -> Result<(), super::Error> {
+    before_active_state_revalidation();
     if installation.active_state != active {
         return Err(super::Error::ActiveStateSnapshotChanged {
             expected: installation.active_state,
@@ -825,12 +826,24 @@ fn changed(path: &Path, message: &'static str) -> super::Error {
 
 #[cfg(test)]
 thread_local! {
+    static BEFORE_ACTIVE_STATE_REVALIDATION_HOOKS:
+        std::cell::RefCell<std::collections::VecDeque<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     static AFTER_STATE_ID_READ_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static AFTER_STATE_ID_ABSENCE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static AFTER_BASELINE_LAYOUT_PROOF_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_before_active_state_revalidation(hook: impl FnOnce() + 'static) {
+    BEFORE_ACTIVE_STATE_REVALIDATION_HOOKS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(slot.len() < 8, "too many active-state revalidation hooks armed");
+        slot.push_back(Box::new(hook));
+    });
 }
 
 #[cfg(test)]
@@ -853,6 +866,18 @@ pub(super) fn arm_after_baseline_layout_proof(hook: impl FnOnce() + 'static) {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });
 }
+
+#[cfg(test)]
+fn before_active_state_revalidation() {
+    BEFORE_ACTIVE_STATE_REVALIDATION_HOOKS.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().pop_front() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_active_state_revalidation() {}
 
 #[cfg(test)]
 fn after_state_id_read() {
