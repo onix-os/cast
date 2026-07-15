@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-client-startup-gate-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -100,6 +100,18 @@ product-names:
 test: lint config-formats-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
+
+forge-client-startup-gate-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::startup_gate_tests::valid_unresolved_journal_precedes_system_intent_and_repository_construction \
+		client::startup_gate_tests::corrupt_canonical_journal_blocks_startup_without_rewriting_evidence \
+		client::startup_gate_tests::orphan_transition_row_blocks_startup_before_repository_construction \
+		client::startup_gate_tests::frozen_client_ignores_system_journal_and_persistent_transition_rows; do \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 forge-transition-identity-test:
 	@set -eu; \
@@ -577,6 +589,7 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
+	@echo "  forge-client-startup-gate-test  Run focused system-client startup recovery-evidence tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"

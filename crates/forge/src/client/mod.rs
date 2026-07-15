@@ -93,6 +93,9 @@ mod postblit;
 mod remove;
 mod resolve;
 mod self_upgrade;
+mod startup_gate;
+#[cfg(test)]
+mod startup_gate_tests;
 mod sync;
 mod verify;
 
@@ -137,16 +140,23 @@ impl ClientBuilder {
 
     /// Build the [`Client`]
     pub fn build(mut self) -> Result<Client, Error> {
+        let install_db = db::meta::Database::new(self.installation.db_path("install").to_str().unwrap_or_default())?;
+        let state_db = db::state::Database::new(self.installation.db_path("state").to_str().unwrap_or_default())?;
+        let layout_db = db::layout::Database::new(self.installation.db_path("layout").to_str().unwrap_or_default())?;
+
+        let startup_gate = (!self.installation.is_frozen_cache())
+            .then(|| startup_gate::CleanSystemStartup::enter(&self.installation, &state_db))
+            .transpose()
+            .map_err(|source| Error::SystemStartupGate {
+                source: Box::new(source),
+            })?;
+
         if let Some(path) = self.system_intent_path {
             self.installation.system_model =
                 Some(system_model::load(&path)?.ok_or(Error::ImportSystemIntentDoesntExist(path.to_owned()))?);
         }
 
         let config = config::Manager::system(&self.installation.root, "cast");
-        let install_db = db::meta::Database::new(self.installation.db_path("install").to_str().unwrap_or_default())?;
-        let state_db = db::state::Database::new(self.installation.db_path("state").to_str().unwrap_or_default())?;
-        let layout_db = db::layout::Database::new(self.installation.db_path("layout").to_str().unwrap_or_default())?;
-
         let repositories = if let Some(repos) = self.repositories {
             repository::Manager::with_explicit(&self.client_name, repos, self.installation.clone())?
         } else if let Some(system_model) = &self.installation.system_model {
@@ -156,6 +166,7 @@ impl ClientBuilder {
         };
 
         let registry = build_registry(&self.installation, &repositories, &install_db, &state_db)?;
+        drop(startup_gate);
 
         let mut client = Client {
             config: Some(config),
@@ -11495,6 +11506,11 @@ pub enum Error {
     PostBlit(#[from] postblit::Error),
     #[error("boot")]
     Boot(#[from] boot::Error),
+    #[error("establish clean system-client startup baseline")]
+    SystemStartupGate {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("prepare or authenticate durable state-transition tree identities")]
     StatefulTreeIdentity {
         #[source]
