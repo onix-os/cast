@@ -644,6 +644,13 @@ unit evidence still does not close the two required-execution items.
   selects every fixture with `REQUIRE_EXECUTION=1`; its harness-free runner
   creates an authenticated, bounded-lifetime delegated systemd unit and CI
   establishes and preflights the required user manager first.
+  The complete live execution, bundle decoding, and repeated-build assertions
+  are implemented, but the two items above remain open pending one non-skipped
+  `make fixtures-ci` run attached to the exact accepted commit. A local required
+  custom-fixture run reached the delegated service and then failed closed at
+  credential preflight because this host denies isolated `setgroups`; no build
+  or publication was misreported as successful. CI now also covers `develop`,
+  matching the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production
 boundaries; all four standard builders plus the custom and split-output cases
@@ -877,14 +884,15 @@ and instant rollback mechanism; it hardens their failure semantics.
   exact candidate. This remains an in-process, cooperating-lock boundary: it
   cannot make a filesystem rename and SQLite deletion atomic against an
   uncooperative same-UID writer. It does not create a journal record, reconcile
-  a reboot, durably fence an ambiguous post-exchange namespace, replace the
-  still-path-based repaired-archive publication move, perform the bounded
-  descriptor-recursive stable-inventory proof, authenticate the entire
+  a reboot, durably fence an ambiguous post-exchange namespace, perform the
+  bounded descriptor-recursive stable-inventory proof, authenticate the entire
   activation namespace, or finish the pre-journal baseline and coordinator
-  items below. Candidate materialization before the identity guard still enters
-  through `blit_root_with_materialization`, whose existing pathname cleanup is
-  destructive; this slice therefore does not claim the complete active-reblit
-  operation is descriptor-safe from its first filesystem mutation.
+  items below. Repaired-archive publication is descriptor-relative, and
+  production stateful materialization already uses the retained fixed-staging
+  capability; `blit_root_with_materialization` is test-only. Destructive
+  pathname cleanup still remains in archived-state pruning and other legacy
+  garbage-collection paths, so this item does not claim complete lifecycle
+  safety.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree
