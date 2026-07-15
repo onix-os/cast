@@ -355,6 +355,27 @@ fn public_and_cross_install_blitters_cannot_target_fixed_staging() {
 }
 
 #[test]
+fn frozen_client_rejects_destination_beneath_installation_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let installation_root = temporary.path().join("installation");
+    fs::create_dir(&installation_root).unwrap();
+    let installation = frozen_test_installation(&installation_root);
+    let destination = installation_root.join("frozen-root");
+    let root_before = directory_identity(&installation_root);
+
+    let result = Client::frozen(
+        "frozen-overlap-rejection",
+        installation,
+        repository::Map::default(),
+        &destination,
+    );
+
+    assert!(matches!(result, Err(Error::EphemeralInstallationRoot)));
+    assert_eq!(directory_identity(&installation_root), root_before);
+    assert!(!destination.exists());
+}
+
+#[test]
 fn ephemeral_materialization_rechecks_empty_target_under_the_lease() {
     let temporary = tempfile::tempdir().unwrap();
     fs::set_permissions(temporary.path(), Permissions::from_mode(0o700)).unwrap();

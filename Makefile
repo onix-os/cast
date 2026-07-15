@@ -261,6 +261,7 @@ forge-fixed-staging-test:
 		client::tests::fixed_staging_transition::archived_repair_state_id_write_uses_the_same_retained_usr \
 		client::tests::fixed_staging_transition::coordinator_lease_spans_state_allocation_and_retained_identity_preparation \
 		client::tests::fixed_staging_transition::public_and_cross_install_blitters_cannot_target_fixed_staging \
+		client::tests::fixed_staging_transition::frozen_client_rejects_destination_beneath_installation_root \
 		client::tests::fixed_staging_transition::ephemeral_materialization_rechecks_empty_target_under_the_lease \
 		client::tests::fixed_staging_transition::ephemeral_activate_and_boot_sync_fail_before_fixed_namespace_mutation \
 		client::tests::fixed_staging_transition::frozen_activate_boot_verify_and_prune_fail_before_installation_mutation \

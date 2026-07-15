@@ -181,12 +181,12 @@ fn frozen_client_ignores_system_journal_and_persistent_transition_rows() {
     drop(installation);
 
     let frozen_installation = Installation::open_frozen(temporary.path(), None).unwrap();
-    let frozen_root = temporary.path().join("frozen-root");
+    let frozen_destination = private_installation_tempdir();
     let client = match Client::frozen(
         "startup-gate-frozen",
         frozen_installation,
         guarded_repositories(),
-        &frozen_root,
+        frozen_destination.path(),
     ) {
         Ok(client) => client,
         Err(error) => panic!("frozen client unexpectedly consulted system recovery evidence: {error:?}"),
