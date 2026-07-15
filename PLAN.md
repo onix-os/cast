@@ -701,8 +701,18 @@ and instant rollback mechanism; it hardens their failure semantics.
   remains only a stale-clone witness; a mismatch is rejected rather than
   refreshed. Focused tests prove unresolved journal and orphan evidence precede
   malformed live state. Startup reconciliation and the read-only shared snapshot
-  path are not implemented, and default system intent is still loaded by
-  `Installation::open` before this client gate, so this item remains open.
+  path are not implemented. Default authored intent is no longer evaluated by
+  `Installation::open`: the mutable client retains the exact `etc/cast`
+  directory, loads `system.glu` and its imports through the descriptor-rooted
+  Gluon source authority only after the clean startup gate and strict active
+  state discovery, and revalidates that active proof around evaluation. The
+  journal and active-state guards remain live through repository and registry
+  construction. Explicit imports retain their user-selected path semantics but
+  also run after the gate, and repository CLI construction can no longer bypass
+  this ordering. Focused tests cover journal/orphan precedence, frozen-client
+  separation, CLI notice timing, unsafe source metadata, and root, directory,
+  and source substitution. Startup reconciliation and the read-only shared
+  snapshot path still keep this item open.
 - [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
   with one retained capability namespace. Resolve beneath authenticated
   directory descriptors without symlink, magic-link, or mount traversal. Give
