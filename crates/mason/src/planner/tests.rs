@@ -52,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 51] = [
+const PACKAGE_EXAMPLES: [&str; 53] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -63,6 +63,7 @@ const PACKAGE_EXAMPLES: [&str; 51] = [
     "custom-steps",
     "dependency-roles",
     "desktop-application",
+    "explicit-git-subprojects",
     "explicit-package-scope",
     "external-patch-source",
     "factory-override",
@@ -81,6 +82,7 @@ const PACKAGE_EXAMPLES: [&str; 51] = [
     "meta-package",
     "minimal",
     "multiple-sources",
+    "native-codegen-target-library",
     "nodejs-vendored-application",
     "optional-component-source-graph",
     "options-tuning",
@@ -120,10 +122,14 @@ const EXECUTION_FIXTURES: [&str; 10] = [
 
 #[path = "tests/bootstrap.rs"]
 mod bootstrap;
+#[path = "tests/documented_semantics/code_generation.rs"]
+mod documented_code_generation;
 #[path = "tests/documented_semantics/dependencies.rs"]
 mod documented_dependencies;
 #[path = "tests/documented_semantics/generated.rs"]
 mod documented_generated;
+#[path = "tests/documented_semantics/git_subprojects.rs"]
+mod documented_git_subprojects;
 #[path = "tests/documented_semantics/outputs.rs"]
 mod documented_outputs;
 #[path = "tests/documented_semantics/overrides.rs"]
@@ -1179,6 +1185,7 @@ fn assert_x86_64_platform(plan: &DerivationPlan) {
 fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
     match name {
         "backend-choice-factory" => documented_variants::assert_semantics(declaration, plan),
+        "explicit-git-subprojects" => documented_git_subprojects::assert_semantics(declaration, plan),
         "explicit-package-scope" => documented_scopes::assert_semantics(declaration, plan),
         "factory-override" => assert_factory_override_semantics(declaration, plan),
         "gettext-catalogs" => assert_gettext_catalog_semantics(declaration, plan),
@@ -1186,6 +1193,7 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "kernel-module-factory" => assert_kernel_module_factory_semantics(declaration, plan),
         "layered-overrides" => assert_layered_override_semantics(declaration, plan),
         "maven-application" => assert_maven_application_semantics(declaration, plan),
+        "native-codegen-target-library" => documented_code_generation::assert_semantics(declaration, plan),
         "nodejs-vendored-application" => assert_nodejs_vendored_application_semantics(declaration, plan),
         "optional-component-source-graph" => documented_sources::assert_semantics(declaration, plan),
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),

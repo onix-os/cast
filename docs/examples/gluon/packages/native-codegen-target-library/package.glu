@@ -1,0 +1,106 @@
+let b = import! cast.package.v3
+
+\inputs ->
+    let pname = "generated-packet-library"
+
+    let phases = b.scripts {
+        setup = b.phase [
+            b.step.run (b.program.binary "mkdir") ["-p", "build"],
+        ],
+        build = b.phase [
+            b.step.run inputs.generator_program [
+                "--input",
+                "source/schema/packet.idl",
+                "--header",
+                "build/packet-generated.h",
+                "--source",
+                "build/packet-generated.c",
+            ],
+            b.step.run (b.program.binary "cc") [
+                "-fPIC",
+                "-O2",
+                "-c",
+                "build/packet-generated.c",
+                "-o",
+                "build/packet-generated.o",
+            ],
+            b.step.run (b.program.binary "cc") [
+                "-shared",
+                "-Wl,-soname,libpacket-generated.so.1",
+                "build/packet-generated.o",
+                "-lpacket-runtime",
+                "-o",
+                "build/libpacket-generated.so.1.0.0",
+            ],
+        ],
+        install = b.phase [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [
+                    b.program.binary "install",
+                    b.program.binary "ln",
+                ],
+                script = r#"
+install -Dm755 build/libpacket-generated.so.1.0.0 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so.1.0.0"
+ln -s libpacket-generated.so.1.0.0 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so.1"
+ln -s libpacket-generated.so.1 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libpacket-generated.so"
+install -Dm644 build/packet-generated.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/packet-generated.h"
+"#,
+            },
+        ],
+        check = b.phase [
+            b.step.run (b.program.binary "test") ["-s", "build/packet-generated.h"],
+        ],
+        .. b.defaults.scripts
+    }
+
+    let root = b.output_with {
+        summary = b.optional.set "Generated packet target library",
+        runtime_inputs = [inputs.target_runtime],
+        paths = [b.path.any "/usr/lib/libpacket-generated.so.*"],
+        .. b.output "out"
+    }
+
+    let development = b.output_with {
+        summary = b.optional.set "Generated packet development interface",
+        runtime_inputs = [b.dep.output (b.package_ref pname) "out"],
+        paths = [
+            b.path.any "/usr/include/packet-generated.h",
+            b.path.symlink "/usr/lib/libpacket-generated.so",
+        ],
+        .. b.output "devel"
+    }
+
+    let base = b.mk_package (b.meta {
+        pname,
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/generated-packet-library",
+        license = ["Apache-2.0"],
+    })
+
+    {
+        builder = b.builder.custom phases [
+            b.dep.binary "mkdir",
+            b.dep.binary "cc",
+            b.dep.binary "bash",
+            b.dep.binary "install",
+            b.dep.binary "ln",
+            b.dep.binary "test",
+        ],
+        native_build_inputs = [inputs.generator_dependency],
+        build_inputs = [inputs.target_library],
+        outputs = [root, development],
+        sources = [
+            b.source.archive_with {
+                url = "https://example.invalid/generated-packet-library-1.0.0.tar.xz",
+                hash = "7777777777777777777777777777777777777777777777777777777777777777",
+                rename = b.optional.set "generated-packet-library.tar.xz",
+                strip_dirs = b.optional.set 1,
+                unpack = b.boolean.true,
+                unpack_dir = b.optional.set "source",
+            },
+        ],
+        architectures = ["x86_64", "aarch64"],
+        .. base
+    }

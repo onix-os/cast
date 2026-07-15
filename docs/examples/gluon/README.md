@@ -42,6 +42,8 @@ needed by a declarative userspace.
 | [`hooks`](packages/hooks/stone.glu) | Structural pre/post hooks around a standard builder. |
 | [`post-install-smoke-test`](packages/post-install-smoke-test/stone.glu) | An installCheck-style hook executing the artifact from the staged install tree. |
 | [`multiple-sources`](packages/multiple-sources/stone.glu) | Archives, locked Git, renamed files, unpack policy, and destinations. |
+| [`explicit-git-subprojects`](packages/explicit-git-subprojects/stone.glu) | Three independently locked Git trees composed into one explicit subproject layout without recursive fetching. |
+| [`native-codegen-target-library`](packages/native-codegen-target-library/stone.glu) | A build-platform generator and target-platform library kept in distinct typed dependency roles. |
 | [`split-outputs`](packages/split-outputs/stone.glu) | Runtime, development, documentation, and root output rules. |
 | [`typed-output-routing`](packages/typed-output-routing/stone.glu) | Ordered catch-all, executable, symlink, and special-file collection rules across explicit outputs. |
 | [`conflicts`](packages/conflicts/stone.glu) | Typed conflicts, exclusions, provides, and path kinds. |
