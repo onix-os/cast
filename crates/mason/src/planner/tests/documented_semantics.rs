@@ -154,7 +154,7 @@ fn assert_header_only_semantics(declaration: &PackageSpec, plan: &DerivationPlan
         panic!("header-only consumer check must remain one structural compiler step");
     };
     assert_eq!(program.path, "/usr/bin/cc");
-    assert_eq!(args.as_slice(), ["-Iinclude", "-fsyntax-only", "tests/smoke.c"]);
+    assert_eq!(args.as_slice(), ["-I./include", "-fsyntax-only", "tests/smoke.c"]);
     assert!(matches!(
         extraction_steps(plan).as_slice(),
         [StepPlan::ExtractArchive { source: 0, .. }]

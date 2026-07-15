@@ -4,7 +4,7 @@ let phases = b.scripts {
     check = b.phase [
         // The compiler verifies a consumer, but the package itself emits no
         // runtime library or executable.
-        b.step.run (b.program.binary "cc") ["-Iinclude", "-fsyntax-only", "tests/smoke.c"],
+        b.step.run (b.program.binary "cc") ["-I./include", "-fsyntax-only", "tests/smoke.c"],
     ],
     install = b.phase [
         b.step.shell_with {
