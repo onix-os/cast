@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -97,7 +97,7 @@ product-names:
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
 # separately by harness-free container and delegated Mason integration targets.
-test: lint config-formats-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
+test: lint config-formats-test examples-gate-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
@@ -553,23 +553,32 @@ cache-clean-test:
 
 examples:
 	@echo "Checking every Gluon package example through the public Cast CLI..."
-	@$(CARGO) test -p cast --test gluon_examples -- --list | \
+	@set -eu; \
+	listed="$$( $(CARGO) test -p cast --test gluon_examples -- --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'every_gluon_package_example_passes_the_public_cast_cli: test'
 	@$(CARGO) test -p cast --test gluon_examples \
 		every_gluon_package_example_passes_the_public_cast_cli -- \
 		--exact --nocapture
 	@echo "Freezing every Gluon package example through the hermetic planner..."
-	@$(CARGO) test -p mason --lib -- --list | \
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib -- --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks -- \
 		--exact --nocapture
 	@echo "Proving metadata-only providers fail before frozen execution..."
-	@$(CARGO) test -p mason --lib -- --list | \
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib -- --list )"; \
+	printf '%s\n' "$$listed" | \
 		grep -Fqx 'planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution: test'
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution -- \
 		--exact --nocapture
+
+examples-gate-test:
+	@"$(TOP_DIR)/misc/scripts/test-examples-gate.sh"
 
 fixture-sources:
 	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh"
@@ -750,6 +759,7 @@ help:
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
 	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
+	@echo "  examples-gate-test  Test example discovery and failure propagation"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  execution-capability-preflight-test  Test optional/required preflight policy and classification"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
