@@ -495,13 +495,13 @@ pub(super) fn arm_before_publication(name: &'static str, hook: impl FnOnce() + '
     });
 }
 
-fn before_publication(name: &CStr) {
+fn before_publication(_name: &CStr) {
     #[cfg(test)]
     BEFORE_PUBLICATION.with(|slot| {
         let matches = slot
             .borrow()
             .as_ref()
-            .is_some_and(|(expected, _)| name.to_bytes() == expected.as_bytes());
+            .is_some_and(|(expected, _)| _name.to_bytes() == expected.as_bytes());
         if matches {
             let (_, hook) = slot.borrow_mut().take().expect("matched metadata publication hook");
             hook();
