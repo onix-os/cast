@@ -1,0 +1,775 @@
+use std::{fmt::Write as _, str};
+
+use gluon_config::{Evaluator, Source};
+
+use super::{
+    AnalyzerRole, BuildLock, BuildLockDecodeError, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
+    GENERATED_GLUON_MARKER, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedOutput,
+    LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection, Platform, RepositorySnapshot,
+    STANDALONE_GLUON_TYPES,
+};
+
+/// Decode a standalone generated lock using the restricted Gluon evaluator.
+pub fn decode_build_lock(logical_name: &str, bytes: &[u8]) -> Result<BuildLock, BuildLockDecodeError> {
+    let source = str::from_utf8(bytes)?;
+    let evaluated = Evaluator::default()
+        .evaluate::<GluonBuildLock>(&Source::new(logical_name, source))
+        .map_err(|error| BuildLockDecodeError::Evaluation(Box::new(error)))?;
+    let mut lock = BuildLock::try_from(evaluated.value)?;
+    lock.normalize();
+    lock.validate()?;
+    Ok(lock)
+}
+
+/// Encode a canonical, import-free `build.lock.glu` value.
+pub fn encode_build_lock(lock: &BuildLock) -> String {
+    let mut lock = lock.clone();
+    lock.normalize();
+
+    let mut output = String::from(GENERATED_GLUON_MARKER);
+    output.push_str("// Canonical standalone build lock. Schema version is explicit below.\n");
+    output.push_str(STANDALONE_GLUON_TYPES);
+    output.push_str("{\n");
+    writeln!(output, "    schema_version = {},", lock.schema_version).unwrap();
+    writeln!(
+        output,
+        "    request_fingerprint = {},",
+        gluon_string(&lock.request_fingerprint)
+    )
+    .unwrap();
+    output.push_str("    repositories = [\n");
+    for repository in &lock.repositories {
+        output.push_str("        {\n");
+        writeln!(output, "            id = {},", gluon_string(&repository.id)).unwrap();
+        writeln!(
+            output,
+            "            index_uri = {},",
+            gluon_string(&repository.index_uri)
+        )
+        .unwrap();
+        writeln!(output, "            snapshot = {},", gluon_string(&repository.snapshot)).unwrap();
+        output.push_str("        },\n");
+    }
+    output.push_str("    ],\n");
+    output.push_str("    requests = [\n");
+    for request in &lock.requests {
+        output.push_str("        {\n");
+        writeln!(output, "            request = {},", gluon_string(&request.request)).unwrap();
+        writeln!(
+            output,
+            "            package_id = {},",
+            gluon_string(&request.package_id)
+        )
+        .unwrap();
+        writeln!(output, "            output = {},", gluon_string(&request.output)).unwrap();
+        output.push_str("            origins = [\n");
+        for origin in &request.origins {
+            encode_input_origin(&mut output, origin, 16);
+        }
+        output.push_str("            ],\n");
+        output.push_str("        },\n");
+    }
+    output.push_str("    ],\n");
+    output.push_str("    packages = [\n");
+    for package in &lock.packages {
+        encode_package(&mut output, package);
+    }
+    output.push_str("    ],\n");
+    encode_platform(&mut output, "build_platform", &lock.build_platform, 4);
+    encode_platform(&mut output, "host_platform", &lock.host_platform, 4);
+    encode_platform(&mut output, "target_platform", &lock.target_platform, 4);
+    encode_identity(&mut output, "policy", &lock.policy, 4);
+    encode_identity(&mut output, "target", &lock.target, 4);
+    encode_identity(&mut output, "profile", &lock.profile, 4);
+    encode_identity(&mut output, "toolchain", &lock.toolchain, 4);
+    encode_identity(&mut output, "builder", &lock.builder, 4);
+    output.push_str("}\n");
+    output
+}
+
+fn encode_package(output: &mut String, package: &LockedPackage) {
+    output.push_str("        {\n");
+    writeln!(
+        output,
+        "            package_id = {},",
+        gluon_string(&package.package_id)
+    )
+    .unwrap();
+    writeln!(output, "            name = {},", gluon_string(&package.name)).unwrap();
+    writeln!(output, "            version = {},", gluon_string(&package.version)).unwrap();
+    writeln!(
+        output,
+        "            architecture = {},",
+        gluon_string(&package.architecture)
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "            repository = {},",
+        gluon_string(&package.repository)
+    )
+    .unwrap();
+    output.push_str("            outputs = [\n");
+    for locked_output in &package.outputs {
+        output.push_str("                {\n");
+        writeln!(
+            output,
+            "                    name = {},",
+            gluon_string(&locked_output.name)
+        )
+        .unwrap();
+        output.push_str("                },\n");
+    }
+    output.push_str("            ],\n");
+    output.push_str("            dependencies = [\n");
+    for dependency in &package.dependencies {
+        output.push_str("                {\n");
+        writeln!(
+            output,
+            "                    package_id = {},",
+            gluon_string(&dependency.package_id)
+        )
+        .unwrap();
+        writeln!(
+            output,
+            "                    output = {},",
+            gluon_string(&dependency.output)
+        )
+        .unwrap();
+        output.push_str("                },\n");
+    }
+    output.push_str("            ],\n");
+    output.push_str("        },\n");
+}
+
+fn encode_platform(output: &mut String, field: &str, platform: &Platform, indent: usize) {
+    let pad = " ".repeat(indent);
+    writeln!(output, "{pad}{field} = {{").unwrap();
+    writeln!(
+        output,
+        "{pad}    architecture = {},",
+        gluon_string(&platform.architecture)
+    )
+    .unwrap();
+    writeln!(output, "{pad}    vendor = {},", gluon_string(&platform.vendor)).unwrap();
+    writeln!(
+        output,
+        "{pad}    operating_system = {},",
+        gluon_string(&platform.operating_system)
+    )
+    .unwrap();
+    writeln!(output, "{pad}    abi = {},", gluon_string(&platform.abi)).unwrap();
+    writeln!(output, "{pad}}},").unwrap();
+}
+
+fn encode_identity(output: &mut String, field: &str, identity: &LockedIdentity, indent: usize) {
+    let pad = " ".repeat(indent);
+    writeln!(output, "{pad}{field} = {{").unwrap();
+    writeln!(output, "{pad}    name = {},", gluon_string(&identity.name)).unwrap();
+    writeln!(
+        output,
+        "{pad}    fingerprint = {},",
+        gluon_string(&identity.fingerprint)
+    )
+    .unwrap();
+    writeln!(output, "{pad}}},").unwrap();
+}
+
+fn encode_input_origin(output: &mut String, origin: &InputOrigin, indent: usize) {
+    let pad = " ".repeat(indent);
+    match origin {
+        InputOrigin::BuilderTool { selection, index } => {
+            writeln!(
+                output,
+                "{pad}BuilderToolOrigin {{ selection = {}, index = {index} }},",
+                encode_package_input_selection(selection)
+            )
+            .unwrap();
+        }
+        InputOrigin::NativeBuild { selection, index } => {
+            writeln!(
+                output,
+                "{pad}NativeBuildOrigin {{ selection = {}, index = {index} }},",
+                encode_package_input_selection(selection)
+            )
+            .unwrap();
+        }
+        InputOrigin::Build { selection, index } => {
+            writeln!(
+                output,
+                "{pad}BuildOrigin {{ selection = {}, index = {index} }},",
+                encode_package_input_selection(selection)
+            )
+            .unwrap();
+        }
+        InputOrigin::Check { selection, index } => {
+            writeln!(
+                output,
+                "{pad}CheckOrigin {{ selection = {}, index = {index} }},",
+                encode_package_input_selection(selection)
+            )
+            .unwrap();
+        }
+        InputOrigin::OutputRuntime {
+            output: output_name,
+            index,
+        } => {
+            writeln!(
+                output,
+                "{pad}OutputRuntimeOrigin {{ output = {}, index = {index} }},",
+                gluon_string(output_name)
+            )
+            .unwrap();
+        }
+        InputOrigin::Policy { source, field, index } => {
+            writeln!(
+                output,
+                "{pad}PolicyOrigin {{ source = {}, field = {}, index = {index} }},",
+                gluon_string(source),
+                gluon_string(field)
+            )
+            .unwrap();
+        }
+        InputOrigin::JobExecutable {
+            job,
+            phase,
+            phase_name,
+            section,
+            step,
+            role,
+        } => {
+            writeln!(output, "{pad}JobExecutableOrigin {{").unwrap();
+            writeln!(output, "{pad}    job = {job},").unwrap();
+            writeln!(output, "{pad}    phase = {phase},").unwrap();
+            writeln!(output, "{pad}    phase_name = {},", gluon_string(phase_name)).unwrap();
+            writeln!(output, "{pad}    section = {},", encode_job_step_section(*section)).unwrap();
+            writeln!(output, "{pad}    step = {step},").unwrap();
+            writeln!(output, "{pad}    role = {},", encode_job_executable_role(role)).unwrap();
+            writeln!(output, "{pad}}},").unwrap();
+        }
+        InputOrigin::Analyzer { role } => {
+            writeln!(
+                output,
+                "{pad}AnalyzerOrigin {{ role = {} }},",
+                encode_analyzer_role(*role)
+            )
+            .unwrap();
+        }
+        InputOrigin::CompilerExecutable { role } => {
+            writeln!(
+                output,
+                "{pad}CompilerExecutableOrigin {{ role = {} }},",
+                encode_compiler_executable_role(*role)
+            )
+            .unwrap();
+        }
+        InputOrigin::CompilerCache { role } => {
+            writeln!(
+                output,
+                "{pad}CompilerCacheOrigin {{ role = {} }},",
+                encode_compiler_cache_role(*role)
+            )
+            .unwrap();
+        }
+        InputOrigin::MoldLinker => {
+            writeln!(output, "{pad}MoldLinkerOrigin,").unwrap();
+        }
+    }
+}
+
+fn encode_package_input_selection(selection: &PackageInputSelection) -> String {
+    match selection {
+        PackageInputSelection::Package => "PackageSelection".to_owned(),
+        PackageInputSelection::Profile { name } => {
+            format!("ProfileSelection {{ name = {} }}", gluon_string(name))
+        }
+    }
+}
+
+fn encode_job_step_section(section: JobStepSection) -> &'static str {
+    match section {
+        JobStepSection::Pre => "PreSection",
+        JobStepSection::Steps => "StepsSection",
+        JobStepSection::Post => "PostSection",
+    }
+}
+
+fn encode_job_executable_role(role: &JobExecutableRole) -> String {
+    match role {
+        JobExecutableRole::RunProgram => "RunProgramRole".to_owned(),
+        JobExecutableRole::ShellInterpreter => "ShellInterpreterRole".to_owned(),
+        JobExecutableRole::ShellDeclaredProgram { index } => {
+            format!("ShellDeclaredProgramRole {{ index = {index} }}")
+        }
+    }
+}
+
+fn encode_analyzer_role(role: AnalyzerRole) -> &'static str {
+    match role {
+        AnalyzerRole::PkgConfig => "PkgConfigAnalyzerRole",
+        AnalyzerRole::Python => "PythonAnalyzerRole",
+        AnalyzerRole::Objcopy => "ObjcopyAnalyzerRole",
+        AnalyzerRole::Strip => "StripAnalyzerRole",
+    }
+}
+
+fn encode_compiler_executable_role(role: CompilerExecutableRole) -> &'static str {
+    match role {
+        CompilerExecutableRole::Cc => "CcCompilerRole",
+        CompilerExecutableRole::Cxx => "CxxCompilerRole",
+        CompilerExecutableRole::Objc => "ObjcCompilerRole",
+        CompilerExecutableRole::Objcxx => "ObjcxxCompilerRole",
+        CompilerExecutableRole::Cpp => "CppCompilerRole",
+        CompilerExecutableRole::Objcpp => "ObjcppCompilerRole",
+        CompilerExecutableRole::Objcxxcpp => "ObjcxxcppCompilerRole",
+        CompilerExecutableRole::Ar => "ArCompilerRole",
+        CompilerExecutableRole::Ld => "LdCompilerRole",
+        CompilerExecutableRole::Objcopy => "ObjcopyCompilerRole",
+        CompilerExecutableRole::Nm => "NmCompilerRole",
+        CompilerExecutableRole::Ranlib => "RanlibCompilerRole",
+        CompilerExecutableRole::Strip => "StripCompilerRole",
+    }
+}
+
+fn encode_compiler_cache_role(role: CompilerCacheRole) -> &'static str {
+    match role {
+        CompilerCacheRole::Ccache => "CcacheRole",
+        CompilerCacheRole::Sccache => "SccacheRole",
+    }
+}
+
+fn gluon_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonBuildLock {
+    schema_version: i64,
+    request_fingerprint: String,
+    repositories: Vec<GluonRepositorySnapshot>,
+    requests: Vec<GluonLockedRequest>,
+    packages: Vec<GluonLockedPackage>,
+    build_platform: GluonPlatform,
+    host_platform: GluonPlatform,
+    target_platform: GluonPlatform,
+    policy: GluonLockedIdentity,
+    target: GluonLockedIdentity,
+    profile: GluonLockedIdentity,
+    toolchain: GluonLockedIdentity,
+    builder: GluonLockedIdentity,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonPlatform {
+    architecture: String,
+    vendor: String,
+    operating_system: String,
+    abi: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonRepositorySnapshot {
+    id: String,
+    index_uri: String,
+    snapshot: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonLockedIdentity {
+    name: String,
+    fingerprint: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonLockedPackage {
+    package_id: String,
+    name: String,
+    version: String,
+    architecture: String,
+    repository: String,
+    outputs: Vec<GluonLockedOutput>,
+    dependencies: Vec<GluonLockedOutputRef>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonLockedRequest {
+    request: String,
+    package_id: String,
+    output: String,
+    origins: Vec<GluonInputOrigin>,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonPackageInputSelection {
+    PackageSelection,
+    ProfileSelection { name: String },
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonJobStepSection {
+    PreSection,
+    StepsSection,
+    PostSection,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonJobExecutableRole {
+    RunProgramRole,
+    ShellInterpreterRole,
+    ShellDeclaredProgramRole { index: i64 },
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonAnalyzerRole {
+    PkgConfigAnalyzerRole,
+    PythonAnalyzerRole,
+    ObjcopyAnalyzerRole,
+    StripAnalyzerRole,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonCompilerExecutableRole {
+    CcCompilerRole,
+    CxxCompilerRole,
+    ObjcCompilerRole,
+    ObjcxxCompilerRole,
+    CppCompilerRole,
+    ObjcppCompilerRole,
+    ObjcxxcppCompilerRole,
+    ArCompilerRole,
+    LdCompilerRole,
+    ObjcopyCompilerRole,
+    NmCompilerRole,
+    RanlibCompilerRole,
+    StripCompilerRole,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonCompilerCacheRole {
+    CcacheRole,
+    SccacheRole,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+#[allow(clippy::enum_variant_names)]
+enum GluonInputOrigin {
+    BuilderToolOrigin {
+        selection: GluonPackageInputSelection,
+        index: i64,
+    },
+    NativeBuildOrigin {
+        selection: GluonPackageInputSelection,
+        index: i64,
+    },
+    BuildOrigin {
+        selection: GluonPackageInputSelection,
+        index: i64,
+    },
+    CheckOrigin {
+        selection: GluonPackageInputSelection,
+        index: i64,
+    },
+    OutputRuntimeOrigin {
+        output: String,
+        index: i64,
+    },
+    PolicyOrigin {
+        source: String,
+        field: String,
+        index: i64,
+    },
+    JobExecutableOrigin {
+        job: i64,
+        phase: i64,
+        phase_name: String,
+        section: GluonJobStepSection,
+        step: i64,
+        role: GluonJobExecutableRole,
+    },
+    AnalyzerOrigin {
+        role: GluonAnalyzerRole,
+    },
+    CompilerExecutableOrigin {
+        role: GluonCompilerExecutableRole,
+    },
+    CompilerCacheOrigin {
+        role: GluonCompilerCacheRole,
+    },
+    MoldLinkerOrigin,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonLockedOutput {
+    name: String,
+}
+
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonLockedOutputRef {
+    package_id: String,
+    output: String,
+}
+
+impl TryFrom<GluonBuildLock> for BuildLock {
+    type Error = BuildLockValidationError;
+
+    fn try_from(lock: GluonBuildLock) -> Result<Self, Self::Error> {
+        Ok(Self {
+            schema_version: u32::try_from(lock.schema_version).map_err(|_| {
+                BuildLockValidationError::IntegerOutOfRange {
+                    field: "schema_version".to_owned(),
+                    value: lock.schema_version,
+                    expected: "non-negative 32-bit integer",
+                }
+            })?,
+            request_fingerprint: lock.request_fingerprint,
+            repositories: lock.repositories.into_iter().map(Into::into).collect(),
+            requests: lock
+                .requests
+                .into_iter()
+                .enumerate()
+                .map(|(index, request)| LockedRequest::try_from_gluon(request, index))
+                .collect::<Result<_, _>>()?,
+            packages: lock.packages.into_iter().map(Into::into).collect(),
+            build_platform: lock.build_platform.into(),
+            host_platform: lock.host_platform.into(),
+            target_platform: lock.target_platform.into(),
+            policy: lock.policy.into(),
+            target: lock.target.into(),
+            profile: lock.profile.into(),
+            toolchain: lock.toolchain.into(),
+            builder: lock.builder.into(),
+        })
+    }
+}
+
+impl From<GluonPlatform> for Platform {
+    fn from(platform: GluonPlatform) -> Self {
+        Self {
+            architecture: platform.architecture,
+            vendor: platform.vendor,
+            operating_system: platform.operating_system,
+            abi: platform.abi,
+        }
+    }
+}
+
+impl From<GluonRepositorySnapshot> for RepositorySnapshot {
+    fn from(repository: GluonRepositorySnapshot) -> Self {
+        Self {
+            id: repository.id,
+            index_uri: repository.index_uri,
+            snapshot: repository.snapshot,
+        }
+    }
+}
+
+impl From<GluonLockedIdentity> for LockedIdentity {
+    fn from(identity: GluonLockedIdentity) -> Self {
+        Self {
+            name: identity.name,
+            fingerprint: identity.fingerprint,
+        }
+    }
+}
+
+impl From<GluonLockedPackage> for LockedPackage {
+    fn from(package: GluonLockedPackage) -> Self {
+        Self {
+            package_id: package.package_id,
+            name: package.name,
+            version: package.version,
+            architecture: package.architecture,
+            repository: package.repository,
+            outputs: package.outputs.into_iter().map(Into::into).collect(),
+            dependencies: package.dependencies.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl LockedRequest {
+    fn try_from_gluon(request: GluonLockedRequest, request_index: usize) -> Result<Self, BuildLockValidationError> {
+        Ok(Self {
+            request: request.request,
+            package_id: request.package_id,
+            output: request.output,
+            origins: request
+                .origins
+                .into_iter()
+                .enumerate()
+                .map(|(origin_index, origin)| origin.try_into_origin(request_index, origin_index))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl GluonInputOrigin {
+    fn try_into_origin(
+        self,
+        request_index: usize,
+        origin_index: usize,
+    ) -> Result<InputOrigin, BuildLockValidationError> {
+        let field = format!("requests[{request_index}].origins[{origin_index}]");
+        Ok(match self {
+            Self::BuilderToolOrigin { selection, index } => InputOrigin::BuilderTool {
+                selection: selection.into(),
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+            Self::NativeBuildOrigin { selection, index } => InputOrigin::NativeBuild {
+                selection: selection.into(),
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+            Self::BuildOrigin { selection, index } => InputOrigin::Build {
+                selection: selection.into(),
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+            Self::CheckOrigin { selection, index } => InputOrigin::Check {
+                selection: selection.into(),
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+            Self::OutputRuntimeOrigin { output, index } => InputOrigin::OutputRuntime {
+                output,
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+            Self::PolicyOrigin {
+                source,
+                field: policy_field,
+                index,
+            } => InputOrigin::Policy {
+                source,
+                field: policy_field,
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+            Self::JobExecutableOrigin {
+                job,
+                phase,
+                phase_name,
+                section,
+                step,
+                role,
+            } => InputOrigin::JobExecutable {
+                job: input_index(&format!("{field}.job"), job)?,
+                phase: input_index(&format!("{field}.phase"), phase)?,
+                phase_name,
+                section: section.into(),
+                step: input_index(&format!("{field}.step"), step)?,
+                role: role.try_into_role(&format!("{field}.role"))?,
+            },
+            Self::AnalyzerOrigin { role } => InputOrigin::Analyzer { role: role.into() },
+            Self::CompilerExecutableOrigin { role } => InputOrigin::CompilerExecutable { role: role.into() },
+            Self::CompilerCacheOrigin { role } => InputOrigin::CompilerCache { role: role.into() },
+            Self::MoldLinkerOrigin => InputOrigin::MoldLinker,
+        })
+    }
+}
+
+fn input_index(field: &str, value: i64) -> Result<u32, BuildLockValidationError> {
+    u32::try_from(value).map_err(|_| BuildLockValidationError::IntegerOutOfRange {
+        field: field.to_owned(),
+        value,
+        expected: "non-negative 32-bit integer",
+    })
+}
+
+impl From<GluonPackageInputSelection> for PackageInputSelection {
+    fn from(selection: GluonPackageInputSelection) -> Self {
+        match selection {
+            GluonPackageInputSelection::PackageSelection => Self::Package,
+            GluonPackageInputSelection::ProfileSelection { name } => Self::Profile { name },
+        }
+    }
+}
+
+impl From<GluonJobStepSection> for JobStepSection {
+    fn from(section: GluonJobStepSection) -> Self {
+        match section {
+            GluonJobStepSection::PreSection => Self::Pre,
+            GluonJobStepSection::StepsSection => Self::Steps,
+            GluonJobStepSection::PostSection => Self::Post,
+        }
+    }
+}
+
+impl GluonJobExecutableRole {
+    fn try_into_role(self, field: &str) -> Result<JobExecutableRole, BuildLockValidationError> {
+        Ok(match self {
+            Self::RunProgramRole => JobExecutableRole::RunProgram,
+            Self::ShellInterpreterRole => JobExecutableRole::ShellInterpreter,
+            Self::ShellDeclaredProgramRole { index } => JobExecutableRole::ShellDeclaredProgram {
+                index: input_index(&format!("{field}.index"), index)?,
+            },
+        })
+    }
+}
+
+impl From<GluonAnalyzerRole> for AnalyzerRole {
+    fn from(role: GluonAnalyzerRole) -> Self {
+        match role {
+            GluonAnalyzerRole::PkgConfigAnalyzerRole => Self::PkgConfig,
+            GluonAnalyzerRole::PythonAnalyzerRole => Self::Python,
+            GluonAnalyzerRole::ObjcopyAnalyzerRole => Self::Objcopy,
+            GluonAnalyzerRole::StripAnalyzerRole => Self::Strip,
+        }
+    }
+}
+
+impl From<GluonCompilerExecutableRole> for CompilerExecutableRole {
+    fn from(role: GluonCompilerExecutableRole) -> Self {
+        match role {
+            GluonCompilerExecutableRole::CcCompilerRole => Self::Cc,
+            GluonCompilerExecutableRole::CxxCompilerRole => Self::Cxx,
+            GluonCompilerExecutableRole::ObjcCompilerRole => Self::Objc,
+            GluonCompilerExecutableRole::ObjcxxCompilerRole => Self::Objcxx,
+            GluonCompilerExecutableRole::CppCompilerRole => Self::Cpp,
+            GluonCompilerExecutableRole::ObjcppCompilerRole => Self::Objcpp,
+            GluonCompilerExecutableRole::ObjcxxcppCompilerRole => Self::Objcxxcpp,
+            GluonCompilerExecutableRole::ArCompilerRole => Self::Ar,
+            GluonCompilerExecutableRole::LdCompilerRole => Self::Ld,
+            GluonCompilerExecutableRole::ObjcopyCompilerRole => Self::Objcopy,
+            GluonCompilerExecutableRole::NmCompilerRole => Self::Nm,
+            GluonCompilerExecutableRole::RanlibCompilerRole => Self::Ranlib,
+            GluonCompilerExecutableRole::StripCompilerRole => Self::Strip,
+        }
+    }
+}
+
+impl From<GluonCompilerCacheRole> for CompilerCacheRole {
+    fn from(role: GluonCompilerCacheRole) -> Self {
+        match role {
+            GluonCompilerCacheRole::CcacheRole => Self::Ccache,
+            GluonCompilerCacheRole::SccacheRole => Self::Sccache,
+        }
+    }
+}
+
+impl From<GluonLockedOutput> for LockedOutput {
+    fn from(output: GluonLockedOutput) -> Self {
+        Self { name: output.name }
+    }
+}
+
+impl From<GluonLockedOutputRef> for LockedOutputRef {
+    fn from(output: GluonLockedOutputRef) -> Self {
+        Self {
+            package_id: output.package_id,
+            output: output.output,
+        }
+    }
+}
