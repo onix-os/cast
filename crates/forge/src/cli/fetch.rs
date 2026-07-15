@@ -34,7 +34,7 @@ struct Command {
 pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let Command { output_dir, packages } = Command::from_arg_matches(args).unwrap();
 
-    let mut client = Client::new(environment::NAME, installation)?;
+    let mut client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     let packages = packages.iter().map(String::as_str).collect::<Vec<_>>();
 

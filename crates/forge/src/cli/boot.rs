@@ -16,24 +16,24 @@ pub fn command() -> Command {
 }
 
 /// Handle status for now
-pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     match args.subcommand() {
-        Some(("status", args)) => status(args, installation),
-        Some(("sync", args)) => sync(args, installation),
+        Some(("status", args)) => status(args, installation, verbose),
+        Some(("sync", args)) => sync(args, installation, verbose),
         _ => unreachable!(),
     }
 }
 
-fn status(_args: &ArgMatches, installation: Installation) -> Result<(), Error> {
-    let client = Client::new(environment::NAME, installation).map_err(Error::Client)?;
+fn status(_args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose).map_err(Error::Client)?;
 
     client.print_boot_status()?;
 
     Ok(())
 }
 
-fn sync(_args: &ArgMatches, installation: Installation) -> Result<(), Error> {
-    let client = Client::new(environment::NAME, installation)?;
+fn sync(_args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     client.synchronize_boot()?;
 

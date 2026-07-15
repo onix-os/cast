@@ -13,8 +13,8 @@ This will remove all downloaded stones & unpacked asset data for packages not in
     )
 }
 
-pub(super) fn handle_prune(_args: &ArgMatches, installation: Installation) -> Result<(), Error> {
-    let client = Client::new(environment::NAME, installation).map_err(Error::SetupClient)?;
+pub(super) fn handle_prune(_args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose).map_err(Error::SetupClient)?;
 
     let num_removed_files = client.prune_cache().map_err(Error::PruneCache)?;
 

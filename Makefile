@@ -122,6 +122,12 @@ forge-client-startup-gate-test:
 		client::startup_gate_tests::valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repositories \
 		client::startup_gate_tests::corrupt_canonical_journal_blocks_startup_without_rewriting_evidence \
 		client::startup_gate_tests::orphan_transition_row_precedes_malformed_live_state_and_repository_construction \
+		client::startup_gate_tests::clean_startup_loads_the_default_intent_only_after_strict_discovery \
+		client::startup_gate_tests::explicit_intent_remains_authoritative_without_loading_the_malformed_default \
+		client::startup_gate_tests::cli_notice_preserves_full_verbose_and_failed_startup_semantics \
+		client::startup_gate_tests::unsafe_symlink_and_hardlinked_default_sources_fail_unchanged \
+		client::startup_gate_tests::default_source_substitution_after_retention_fails_closed \
+		client::startup_gate_tests::default_intent_root_and_directory_name_substitution_fail_closed \
 		client::startup_gate_tests::frozen_client_ignores_system_journal_and_persistent_transition_rows \
 		client::startup_gate_tests::system_builder_cannot_use_frozen_discovery_to_bypass_the_startup_gate; do \
 		grep -Fqx "$$test: test" <<<"$$listed"; \

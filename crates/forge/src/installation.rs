@@ -63,7 +63,12 @@ pub struct Installation {
     /// otherwise derived from root
     pub cache_dir: Option<PathBuf>,
 
-    /// If defined, the user-authored desired system intent of the installation.
+    /// If defined, the user-authored desired system intent selected by a
+    /// successfully constructed system Client.
+    ///
+    /// Opening an Installation never evaluates authored intent. The system
+    /// client startup gate populates this only after recovery evidence and the
+    /// strict live-state selection have been authenticated.
     pub system_model: Option<LoadedSystemModel>,
 
     /// Authenticated installation-root capability retained for the lifetime of
@@ -75,8 +80,8 @@ pub struct Installation {
     /// to the installation for mutable operations
     _locks: Vec<lockfile::Lock>,
 
-    /// Whether host system intent and active state discovery was permitted
-    /// while opening this installation.
+    /// Whether preliminary host active-state discovery was permitted while
+    /// opening this installation.
     discovery: Discovery,
 }
 
@@ -98,9 +103,10 @@ impl Installation {
     /// Open only the persistent package cache used to materialize a frozen
     /// root.
     ///
-    /// Unlike [`Self::open`], this never reads the installation's active state
-    /// or authored `system.glu`. Frozen callers must supply their complete
-    /// repository and package intent explicitly.
+    /// Unlike [`Self::open`], this never reads the installation's preliminary
+    /// active-state witness. Neither opening mode evaluates authored
+    /// `system.glu`; frozen callers must supply their complete repository and
+    /// package intent explicitly.
     pub fn open_frozen(root: impl Into<PathBuf>, cache_dir: Option<PathBuf>) -> Result<Self, Error> {
         Self::open_with_discovery(root.into(), cache_dir, Discovery::FrozenCache)
     }
@@ -172,7 +178,7 @@ impl Installation {
             None => vec![],
         };
 
-        let (active_state, system_model) = match discovery {
+        let active_state = match discovery {
             Discovery::System => {
                 let active_state = read_state_id(&root_directory);
 
@@ -182,11 +188,9 @@ impl Installation {
                     warn!("Unable to discover Active State ID");
                 }
 
-                let system_model =
-                    system_model::load(&system_model::intent_path(&root)).map_err(Error::LoadSystemModel)?;
-                (active_state, system_model)
+                active_state
             }
-            Discovery::FrozenCache => (None, None),
+            Discovery::FrozenCache => None,
         };
 
         require_open_directories_still_named(
@@ -201,7 +205,7 @@ impl Installation {
             mutability,
             active_state,
             cache_dir,
-            system_model,
+            system_model: None,
             root_directory: Arc::new(root_directory),
             _locks,
             discovery,
@@ -1417,8 +1421,6 @@ pub enum Error {
     },
     #[error("acquiring lockfile")]
     Lockfile(#[from] lockfile::Error),
-    #[error("load authored Gluon system intent")]
-    LoadSystemModel(#[from] system_model::LoadError),
 }
 
 #[cfg(test)]
@@ -1433,12 +1435,12 @@ mod tests {
 
     use fs_err as fs;
 
-    use crate::{Provider, test_support::private_installation_tempdir};
+    use crate::test_support::private_installation_tempdir;
 
     use super::*;
 
     #[test]
-    fn open_loads_only_the_canonical_authored_system_intent() {
+    fn open_defers_canonical_authored_system_intent_to_the_client_gate() {
         let temporary = private_installation_tempdir();
         let path = system_model::intent_path(temporary.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1451,16 +1453,14 @@ mod tests {
         fs::write(&path, authored).unwrap();
 
         let installation = Installation::open(temporary.path(), None).unwrap();
-        let intent = installation.system_model.as_ref().unwrap();
-
         assert_eq!(installation.system_intent_path(), path);
-        assert_eq!(intent.authored_source(), authored);
-        assert!(intent.packages.contains(&Provider::package_name("alpha")));
+        assert!(installation.system_model.is_none());
+        assert_eq!(fs::read_to_string(&path).unwrap(), authored);
         assert!(!system_model::snapshot_path(temporary.path()).exists());
     }
 
     #[test]
-    fn frozen_open_skips_active_state_and_invalid_system_intent() {
+    fn both_open_modes_defer_invalid_system_intent_but_frozen_skips_active_state() {
         let temporary = private_installation_tempdir();
         let intent_path = system_model::intent_path(temporary.path());
         fs::create_dir_all(intent_path.parent().unwrap()).unwrap();
@@ -1474,10 +1474,9 @@ mod tests {
         assert!(frozen.is_frozen_cache());
         drop(frozen);
 
-        assert!(matches!(
-            Installation::open(temporary.path(), None),
-            Err(Error::LoadSystemModel(_))
-        ));
+        let system = Installation::open(temporary.path(), None).unwrap();
+        assert_eq!(system.active_state, Some(state::Id::from(73)));
+        assert!(system.system_model.is_none());
     }
 
     fn mode(path: &Path) -> u32 {

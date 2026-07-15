@@ -3,10 +3,14 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[cfg(test)]
+use crate::system_model;
 use crate::{
-    Installation, Repository, environment,
+    Installation, Repository,
+    client::{self, Client},
+    environment,
     repository::{self, Priority},
-    runtime, system_model,
+    runtime,
 };
 use clap::{Arg, ArgAction, ArgMatches, Command, arg, builder::ValueParser};
 use itertools::Itertools;
@@ -108,24 +112,18 @@ pub fn command() -> Command {
 }
 
 /// Handle subcommands to `repo`
-pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
-    let config = config::Manager::system(&installation.root, "cast");
-
-    let system_intent = system_model::load(&installation.system_intent_path())?;
-
-    let manager = if let Some(system_intent) = &system_intent {
-        repository::Manager::with_system_model(environment::NAME, system_intent.clone(), installation.clone())?
-    } else {
-        repository::Manager::with_config_manager(config, installation.clone())?
-    };
+pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
+    let system_intent_path = client.system_intent().map(|intent| intent.path().to_owned());
+    let manager = client.into_repository_manager();
 
     let handler = match args.subcommand() {
         Some(("list", _)) => Action::List,
         Some(("update", cmd_args)) => Action::Update(cmd_args.get_one::<String>("NAME").cloned()),
-        Some((command, _)) if system_intent.is_some() => {
+        Some((command, _)) if system_intent_path.is_some() => {
             return Err(Error::SystemIntentDisallowed {
                 command: command.to_owned(),
-                path: installation.system_intent_path(),
+                path: system_intent_path.expect("guarded by is_some"),
             });
         }
         Some(("add", cmd_args)) => Action::Add(
@@ -312,10 +310,10 @@ fn parse_root_index_options(s: &str) -> Result<RootIndexOptions, String> {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("setup client")]
+    Client(#[from] client::Error),
     #[error("repo manager")]
     RepositoryManager(#[from] repository::manager::Error),
-    #[error("load authored Gluon system intent")]
-    LoadSystemModel(#[from] system_model::LoadError),
     #[error(
         "`cast repo {command}` is not allowed while authored Gluon system intent is active; edit repositories in {path:?}"
     )]
@@ -358,7 +356,7 @@ let cast = import! cast.system.v1
         for args in cases {
             let matches = command().try_get_matches_from(args).unwrap();
             let installation = Installation::open(temporary.path(), None).unwrap();
-            let error = handle(&matches, installation).unwrap_err();
+            let error = handle(&matches, installation, false).unwrap_err();
             let Error::SystemIntentDisallowed { command, path } = error else {
                 panic!("expected system-intent rejection, got {error}");
             };

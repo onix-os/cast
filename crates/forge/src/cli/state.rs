@@ -93,15 +93,15 @@ struct Export {
 
 pub fn handle(args: &ArgMatches, installation: Installation, yes: bool, verbose: bool) -> Result<(), Error> {
     match args.subcommand() {
-        Some(("active", _)) => active(installation),
-        Some(("list", _)) => list(installation),
-        Some(("activate", args)) => activate(args, installation),
-        Some(("build-vfs", _)) => build_vfs(installation),
-        Some(("query", args)) => query(args, installation),
-        Some(("prune", args)) => prune(args, installation, yes),
-        Some(("remove", args)) => remove(args, installation, yes),
+        Some(("active", _)) => active(installation, verbose),
+        Some(("list", _)) => list(installation, verbose),
+        Some(("activate", args)) => activate(args, installation, verbose),
+        Some(("build-vfs", _)) => build_vfs(installation, verbose),
+        Some(("query", args)) => query(args, installation, verbose),
+        Some(("prune", args)) => prune(args, installation, yes, verbose),
+        Some(("remove", args)) => remove(args, installation, yes, verbose),
         Some(("verify", args)) => verify(args, installation, yes, verbose),
-        Some(("export", args)) => export(args, installation),
+        Some(("export", args)) => export(args, installation, verbose),
         _ => unreachable!(),
     }
 }
@@ -122,8 +122,8 @@ pub fn parse_id_or_range(s: &str) -> Result<Vec<u64>, String> {
 }
 
 /// List the active state
-pub fn active(installation: Installation) -> Result<(), Error> {
-    let client = Client::new(environment::NAME, installation)?;
+pub fn active(installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     if let Some(state) = client.get_active_state()? {
         print_state(state);
@@ -133,8 +133,8 @@ pub fn active(installation: Installation) -> Result<(), Error> {
 }
 
 /// List all known states, newest first
-pub fn list(installation: Installation) -> Result<(), Error> {
-    let client = Client::new(environment::NAME, installation)?;
+pub fn list(installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     for state in client.list_states()?.into_iter().rev() {
         print_state(state);
@@ -143,12 +143,12 @@ pub fn list(installation: Installation) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn activate(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn activate(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let new_id = *args.get_one::<u64>("ID").unwrap() as i32;
     let skip_triggers = args.get_flag("skip-triggers");
     let skip_boot = args.get_flag("skip-boot");
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
     let old_id = client.activate_state(new_id.into(), skip_triggers, skip_boot)?;
 
     println!(
@@ -160,8 +160,8 @@ pub fn activate(args: &ArgMatches, installation: Installation) -> Result<(), Err
     Ok(())
 }
 
-pub fn build_vfs(installation: Installation) -> Result<(), Error> {
-    let client = Client::new(environment::NAME, installation)?;
+pub fn build_vfs(installation: Installation, verbose: bool) -> Result<(), Error> {
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     if let Some(state) = client.get_active_state()? {
         let fstree = client.vfs(state.selections.iter().map(|selection| &selection.package))?;
@@ -172,10 +172,10 @@ pub fn build_vfs(installation: Installation) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn query(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn query(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let id = *args.get_one::<u64>("ID").unwrap() as i32;
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     let state = client.get_state(id.into())?;
 
@@ -185,16 +185,16 @@ pub fn query(args: &ArgMatches, installation: Installation) -> Result<(), Error>
     Ok(())
 }
 
-pub fn prune(args: &ArgMatches, installation: Installation, yes: bool) -> Result<(), Error> {
+pub fn prune(args: &ArgMatches, installation: Installation, yes: bool, verbose: bool) -> Result<(), Error> {
     let keep = *args.get_one::<u64>("keep").unwrap();
     let include_newer = args.get_flag("include-newer");
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
     client.prune_states(prune::Strategy::KeepRecent { keep, include_newer }, yes)?;
 
     Ok(())
 }
 
-pub fn remove(args: &ArgMatches, installation: Installation, yes: bool) -> Result<(), Error> {
+pub fn remove(args: &ArgMatches, installation: Installation, yes: bool, verbose: bool) -> Result<(), Error> {
     let ids = args
         .get_many::<String>("ID")
         .into_iter()
@@ -207,7 +207,7 @@ pub fn remove(args: &ArgMatches, installation: Installation, yes: bool) -> Resul
         .map(|id| state::Id::from(id as i32))
         .collect::<Vec<state::Id>>();
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
     client.prune_states(prune::Strategy::Remove(&ids), yes)?;
 
     Ok(())
@@ -216,15 +216,15 @@ pub fn remove(args: &ArgMatches, installation: Installation, yes: bool) -> Resul
 pub fn verify(args: &ArgMatches, installation: Installation, yes: bool, global_verbose: bool) -> Result<(), Error> {
     let verbose = global_verbose || args.get_flag("verbose");
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, global_verbose)?;
     client.verify(yes, verbose)?;
 
     Ok(())
 }
 
-fn export(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+fn export(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let export = Export::from_arg_matches(args).expect("validate by clap");
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     let id = match export.id {
         Some(id) => state::Id::from(id),

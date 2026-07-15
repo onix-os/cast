@@ -3,6 +3,7 @@
 
 use std::{
     collections::BTreeSet,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -12,7 +13,12 @@ use thiserror::Error;
 use crate::{Package, dependency, repository};
 
 pub mod gluon;
+mod rooted;
 pub mod spec;
+
+#[cfg(test)]
+pub(crate) use rooted::arm_after_rooted_system_source_retained;
+pub(crate) use rooted::load_rooted;
 
 /// User-authored desired system intent, relative to an installation root.
 pub const SYSTEM_INTENT_PATH: &str = "etc/cast/system.glu";
@@ -173,8 +179,12 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
     let source = source_root
         .load(Path::new(file_name), evaluator.limits().max_source_bytes)
         .map_err(gluon::EvaluationError::from)?;
+    Ok(Some(load_source(path, source, &evaluator)?))
+}
+
+fn load_source(path: &Path, source: Source, evaluator: &Evaluator) -> Result<LoadedSystemModel, LoadError> {
     let authored_source = source.text().to_owned();
-    let evaluated = gluon::evaluate_with(&evaluator, &source)?;
+    let evaluated = gluon::evaluate_with(evaluator, &source)?;
     let authored_fingerprint = evaluated.fingerprint;
     let SystemModel {
         disable_warning,
@@ -190,7 +200,7 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
         Some(authored_fingerprint.sha256.clone())
     };
 
-    Ok(Some(LoadedSystemModel {
+    Ok(LoadedSystemModel {
         disable_warning,
         repositories,
         packages,
@@ -202,7 +212,7 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
             source_fingerprint,
         }),
         path: path.to_owned(),
-    }))
+    })
 }
 
 /// Create a canonical generated system model.
@@ -314,6 +324,14 @@ pub enum LoadError {
     InvalidPath(PathBuf),
     #[error("evaluate system model")]
     Evaluation(#[from] gluon::EvaluationError),
+    #[error("retain descriptor-rooted system model source {path}")]
+    RetainRootedSource {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("descriptor-rooted system model source changed during evaluation: {0}")]
+    RootedSourceChanged(PathBuf),
 }
 
 #[derive(Debug, Error)]

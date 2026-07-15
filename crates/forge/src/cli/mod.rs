@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use clap::{ArgMatches, Command};
 use thiserror::Error;
-use tui::Styled;
 
 use crate::{Installation, installation};
 
@@ -142,17 +141,19 @@ pub fn try_dispatch(command: &str, args: &ArgMatches, context: &Context) -> Resu
     let installation = open_installation(context)?;
 
     match command {
-        "boot" => boot::handle(args, installation).map_err(Error::Boot)?,
+        "boot" => boot::handle(args, installation, context.verbose).map_err(Error::Boot)?,
         "fetch" => fetch::handle(args, installation, context.verbose).map_err(Error::Fetch)?,
-        "info" => info::handle(args, installation).map_err(Error::Info)?,
-        "install" => install::handle(args, installation, context.assume_yes).map_err(Error::Install)?,
-        "list" => list::handle(args, installation).map_err(Error::List)?,
-        "remove" => remove::handle(args, installation, context.assume_yes).map_err(Error::Remove)?,
-        "repo" => repo::handle(args, installation).map_err(Error::Repo)?,
-        "search" => search::handle(args, installation).map_err(Error::Search)?,
-        "search-file" => search_file::handle(args, installation).map_err(Error::SearchFile)?,
+        "info" => info::handle(args, installation, context.verbose).map_err(Error::Info)?,
+        "install" => {
+            install::handle(args, installation, context.assume_yes, context.verbose).map_err(Error::Install)?
+        }
+        "list" => list::handle(args, installation, context.verbose).map_err(Error::List)?,
+        "remove" => remove::handle(args, installation, context.assume_yes, context.verbose).map_err(Error::Remove)?,
+        "repo" => repo::handle(args, installation, context.verbose).map_err(Error::Repo)?,
+        "search" => search::handle(args, installation, context.verbose).map_err(Error::Search)?,
+        "search-file" => search_file::handle(args, installation, context.verbose).map_err(Error::SearchFile)?,
         "state" => state::handle(args, installation, context.assume_yes, context.verbose).map_err(Error::State)?,
-        "sync" => sync::handle(args, installation, context.assume_yes).map_err(Error::Sync)?,
+        "sync" => sync::handle(args, installation, context.assume_yes, context.verbose).map_err(Error::Sync)?,
         "extract" | "index" | "inspect" => unreachable!("rootless commands return before opening an installation"),
         _ => unreachable!("Cast command names and package dispatch must stay aligned"),
     }
@@ -169,46 +170,12 @@ pub fn try_dispatch_cache(command: &str, args: &ArgMatches, context: &Context) -
     }
 
     let installation = open_installation(context)?;
-    cache::handle_prune(args, installation).map_err(|error| Error::Cache(Box::new(error)))?;
+    cache::handle_prune(args, installation, context.verbose).map_err(|error| Error::Cache(Box::new(error)))?;
     Ok(true)
 }
 
 fn open_installation(context: &Context) -> Result<Installation, Error> {
-    let installation = Installation::open(context.root.clone(), context.cache_dir.clone())?;
-
-    if let Some(system_model) = installation.system_model.as_ref() {
-        if !system_model.disable_warning {
-            print_system_model_warning(&installation, false);
-        } else if context.verbose {
-            print_system_model_warning(&installation, true);
-        }
-    }
-
-    Ok(installation)
-}
-
-fn print_system_model_warning(installation: &Installation, first_line_only: bool) {
-    let path = installation.system_intent_path();
-
-    eprintln!(
-        "{}: authored Gluon system intent at {path:?} is active.",
-        "INFO".green()
-    );
-
-    if !first_line_only {
-        eprintln!(
-            "Hence:
-- This system intent is the source of truth and defines all
-  repositories & installed packages.
-- Any changes made via `cast` commands will be temporary
-  until the authored intent is updated.
-- The system state can be reverted to match the declared intent
-  by doing a `cast sync`.
-- Each state stores a generated `/usr/lib/system-model.glu` snapshot;
-  it is not the authored source and should not be edited.
-- To disable declarative system intent, remove or rename {path:?}.",
-        );
-    }
+    Installation::open(context.root.clone(), context.cache_dir.clone()).map_err(Error::Installation)
 }
 
 #[derive(Debug, Error)]

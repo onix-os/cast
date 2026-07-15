@@ -1,17 +1,23 @@
-use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
+use std::{
+    cell::RefCell,
+    fs,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
+    path::Path,
+    rc::Rc,
+};
 
 use crate::{
-    Installation,
+    Installation, Provider,
     repository::{self, Priority, Repository, Source},
     state::TransitionId,
-    test_support::private_installation_tempdir,
+    test_support::{prepare_private_installation_root, private_installation_tempdir},
     transition_journal::{
         BootId, MountNamespaceIdentity, Operation, Previous, PreviousOrigin, QuarantineName, RuntimeEpoch,
         RuntimeTreeIdentity, StorageError, TransitionJournalStore, TransitionRecord, TreeToken,
     },
 };
 
-use super::{Client, Error, startup_gate};
+use super::{Client, Error, arm_system_intent_notice_capture, disarm_system_intent_notice_capture, startup_gate};
 
 const TRANSITION_ID: &str = "0123456789abcdef0123456789abcdef";
 
@@ -85,6 +91,42 @@ fn create_malformed_live_state(root: &Path) -> Vec<u8> {
     malformed.to_vec()
 }
 
+fn write_system_intent(root: &Path, package: &str) -> std::path::PathBuf {
+    write_system_intent_with_warning(root, package, true)
+}
+
+fn write_system_intent_with_warning(root: &Path, package: &str, disable_warning: bool) -> std::path::PathBuf {
+    let etc = root.join("etc");
+    let cast = etc.join("cast");
+    fs::create_dir_all(&cast).unwrap();
+    fs::set_permissions(&etc, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(&cast, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = cast.join("system.glu");
+    fs::write(
+        &path,
+        format!(
+            r#"let cast = import! cast.system.v1
+{{
+    disable_warning = cast.boolean.{},
+    packages = ["{package}"],
+    .. cast.system
+}}
+"#,
+            if disable_warning { "true" } else { "false" },
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    path
+}
+
+fn write_malformed_system_intent(root: &Path) -> (std::path::PathBuf, Vec<u8>) {
+    let path = write_system_intent(root, "will-be-replaced-with-malformed-source");
+    let malformed = b"this canonical default must not be evaluated before recovery evidence".to_vec();
+    fs::write(&path, &malformed).unwrap();
+    (path, malformed)
+}
+
 fn expect_startup_gate_error(result: Result<Client, Error>) -> Box<startup_gate::Error> {
     let source = match result {
         Err(Error::SystemStartupGate { source }) => source,
@@ -120,14 +162,19 @@ fn assert_system_databases_opened(installation: &Installation) {
 #[test]
 fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repositories() {
     let temporary = private_installation_tempdir();
+    let (intent_path, malformed_intent) = write_malformed_system_intent(temporary.path());
     let installation = Installation::open(temporary.path(), None).unwrap();
     let canonical_before = create_journal(&installation);
     let malformed_state = create_malformed_live_state(temporary.path());
-    let missing_intent = temporary.path().join("must-not-load.gluon");
 
     let error = expect_startup_gate_error(
         Client::builder("startup-gate-valid-journal", installation.clone())
-            .system_intent_path(missing_intent)
+            .repositories(guarded_repositories())
+            .build(),
+    );
+    let explicit_error = expect_startup_gate_error(
+        Client::builder("startup-gate-explicit-journal", installation.clone())
+            .system_intent_path(temporary.path().join("must-not-load-explicit.glu"))
             .repositories(guarded_repositories())
             .build(),
     );
@@ -136,7 +183,12 @@ fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repo
         error.as_ref(),
         startup_gate::Error::UnresolvedJournal { transition } if transition == TRANSITION_ID
     ));
+    assert!(matches!(
+        explicit_error.as_ref(),
+        startup_gate::Error::UnresolvedJournal { transition } if transition == TRANSITION_ID
+    ));
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
+    assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
     assert_eq!(
         fs::read(temporary.path().join("usr/.stateID")).unwrap(),
         malformed_state
@@ -173,6 +225,7 @@ fn corrupt_canonical_journal_blocks_startup_without_rewriting_evidence() {
 #[test]
 fn orphan_transition_row_precedes_malformed_live_state_and_repository_construction() {
     let temporary = private_installation_tempdir();
+    let (intent_path, malformed_intent) = write_malformed_system_intent(temporary.path());
     let installation = Installation::open(temporary.path(), None).unwrap();
     let state_db = crate::db::state::Database::new(installation.db_path("state").to_str().unwrap()).unwrap();
     let orphan = state_db
@@ -196,12 +249,228 @@ fn orphan_transition_row_precedes_malformed_live_state_and_repository_constructi
         fs::read(temporary.path().join("usr/.stateID")).unwrap(),
         malformed_state
     );
+    assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
     assert_repository_construction_not_started(&installation);
+}
+
+#[test]
+fn clean_startup_loads_the_default_intent_only_after_strict_discovery() {
+    let temporary = private_installation_tempdir();
+    let intent_path = write_system_intent(temporary.path(), "default-loaded");
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    assert!(installation.system_model.is_none());
+
+    let client = Client::new("startup-gate-default-intent", installation).unwrap();
+    let loaded = client.installation.system_model.as_ref().unwrap();
+
+    assert_eq!(loaded.path(), intent_path);
+    assert!(loaded.packages.contains(&Provider::package_name("default-loaded")));
+}
+
+#[test]
+fn explicit_intent_remains_authoritative_without_loading_the_malformed_default() {
+    let temporary = private_installation_tempdir();
+    let (default_path, malformed_default) = write_malformed_system_intent(temporary.path());
+    let explicit = temporary.path().join("explicit-system.glu");
+    fs::write(
+        &explicit,
+        r#"let cast = import! cast.system.v1
+{
+    disable_warning = cast.boolean.true,
+    packages = ["explicit-loaded"],
+    .. cast.system
+}
+"#,
+    )
+    .unwrap();
+    let installation = Installation::open(temporary.path(), None).unwrap();
+
+    let client = Client::builder("startup-gate-explicit-intent", installation)
+        .system_intent_path(&explicit)
+        .build()
+        .unwrap();
+    let loaded = client.installation.system_model.as_ref().unwrap();
+
+    assert_eq!(loaded.path(), explicit);
+    assert!(loaded.packages.contains(&Provider::package_name("explicit-loaded")));
+    assert_eq!(fs::read(default_path).unwrap(), malformed_default);
+}
+
+#[test]
+fn cli_notice_preserves_full_verbose_and_failed_startup_semantics() {
+    let full_root = private_installation_tempdir();
+    let full_path = write_system_intent_with_warning(full_root.path(), "full-notice", false);
+    let full_capture = Rc::new(RefCell::new(None));
+    let sink = Rc::clone(&full_capture);
+    arm_system_intent_notice_capture(move |notice| *sink.borrow_mut() = Some(notice));
+    let full_client = Client::builder(
+        "startup-gate-full-notice",
+        Installation::open(full_root.path(), None).unwrap(),
+    )
+    .system_intent_notice(false)
+    .build()
+    .unwrap();
+    assert!(full_client.system_intent().is_some());
+    assert!(!disarm_system_intent_notice_capture());
+    let full_notice = full_capture.borrow_mut().take().unwrap();
+    assert!(full_notice.contains(&format!("{full_path:?} is active")));
+    assert!(full_notice.contains("Hence:"));
+    assert!(full_notice.contains("cast sync"));
+
+    let verbose_root = private_installation_tempdir();
+    let verbose_path = write_system_intent(verbose_root.path(), "verbose-first-line");
+    let verbose_capture = Rc::new(RefCell::new(None));
+    let sink = Rc::clone(&verbose_capture);
+    arm_system_intent_notice_capture(move |notice| *sink.borrow_mut() = Some(notice));
+    Client::builder(
+        "startup-gate-verbose-notice",
+        Installation::open(verbose_root.path(), None).unwrap(),
+    )
+    .system_intent_notice(true)
+    .build()
+    .unwrap();
+    assert!(!disarm_system_intent_notice_capture());
+    let verbose_notice = verbose_capture.borrow_mut().take().unwrap();
+    assert!(verbose_notice.contains(&format!("{verbose_path:?} is active")));
+    assert!(!verbose_notice.contains("Hence:"));
+    assert_eq!(verbose_notice.lines().count(), 1);
+
+    let failed_root = private_installation_tempdir();
+    write_system_intent_with_warning(failed_root.path(), "must-not-notice", false);
+    let installation = Installation::open(failed_root.path(), None).unwrap();
+    create_journal(&installation);
+    let failed_capture = Rc::new(RefCell::new(None));
+    let sink = Rc::clone(&failed_capture);
+    arm_system_intent_notice_capture(move |notice| *sink.borrow_mut() = Some(notice));
+    expect_startup_gate_error(
+        Client::builder("startup-gate-failed-notice", installation)
+            .system_intent_notice(true)
+            .build(),
+    );
+    assert!(disarm_system_intent_notice_capture());
+    assert!(failed_capture.borrow().is_none());
+}
+
+#[test]
+fn unsafe_symlink_and_hardlinked_default_sources_fail_unchanged() {
+    for kind in ["source-mode", "directory-mode", "symlink", "hardlink"] {
+        let temporary = private_installation_tempdir();
+        let canonical = write_system_intent(temporary.path(), "must-not-load");
+        let cast = canonical.parent().unwrap().to_owned();
+        let original = fs::read(&canonical).unwrap();
+        let other = cast.join("other.glu");
+
+        match kind {
+            "source-mode" => fs::set_permissions(&canonical, fs::Permissions::from_mode(0o666)).unwrap(),
+            "directory-mode" => fs::set_permissions(&cast, fs::Permissions::from_mode(0o777)).unwrap(),
+            "symlink" => {
+                fs::rename(&canonical, &other).unwrap();
+                symlink("other.glu", &canonical).unwrap();
+            }
+            "hardlink" => {
+                fs::rename(&canonical, &other).unwrap();
+                fs::hard_link(&other, &canonical).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = fs::symlink_metadata(&canonical).unwrap();
+        let installation = Installation::open(temporary.path(), None).unwrap();
+        let error = expect_startup_gate_error(Client::new(format!("startup-gate-unsafe-default-{kind}"), installation));
+
+        assert!(matches!(error.as_ref(), startup_gate::Error::DefaultSystemIntent(_)));
+        let after = fs::symlink_metadata(&canonical).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()), "{kind}");
+        if kind == "symlink" {
+            assert_eq!(fs::read_link(&canonical).unwrap(), Path::new("other.glu"));
+            assert_eq!(fs::read(&other).unwrap(), original);
+        } else {
+            assert_eq!(fs::read(&canonical).unwrap(), original);
+        }
+    }
+}
+
+#[test]
+fn default_source_substitution_after_retention_fails_closed() {
+    let temporary = private_installation_tempdir();
+    let canonical = write_system_intent(temporary.path(), "retained-source");
+    let retained = canonical.with_file_name("retained-system.glu");
+    let original = fs::read(&canonical).unwrap();
+    let hook_canonical = canonical.clone();
+    let hook_retained = retained.clone();
+    crate::system_model::arm_after_rooted_system_source_retained(move || {
+        fs::rename(&hook_canonical, &hook_retained).unwrap();
+        fs::write(
+            &hook_canonical,
+            r#"let cast = import! cast.system.v1
+{
+    disable_warning = cast.boolean.true,
+    packages = ["replacement-injected"],
+    .. cast.system
+}
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&hook_canonical, fs::Permissions::from_mode(0o644)).unwrap();
+    });
+
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    let error = expect_startup_gate_error(Client::new("startup-gate-source-substitution", installation));
+
+    assert!(matches!(error.as_ref(), startup_gate::Error::DefaultSystemIntent(_)));
+    assert_eq!(fs::read(retained).unwrap(), original);
+    assert!(fs::read_to_string(canonical).unwrap().contains("replacement-injected"));
+}
+
+#[test]
+fn default_intent_root_and_directory_name_substitution_fail_closed() {
+    for replace_root in [true, false] {
+        let parent = tempfile::tempdir().unwrap();
+        prepare_private_installation_root(parent.path());
+        let root = parent.path().join("installation");
+        fs::create_dir(&root).unwrap();
+        prepare_private_installation_root(&root);
+        let original = write_system_intent(&root, "retained-original");
+        let original_bytes = fs::read(&original).unwrap();
+        let installation = Installation::open(&root, None).unwrap();
+        let detached = parent.path().join(if replace_root {
+            "detached-installation"
+        } else {
+            "detached-cast"
+        });
+        let hook_root = root.clone();
+        let injected = root.join("etc/cast/system.glu");
+
+        startup_gate::arm_after_default_directory_retained(move || {
+            if replace_root {
+                fs::rename(&hook_root, &detached).unwrap();
+                fs::create_dir(&hook_root).unwrap();
+                prepare_private_installation_root(&hook_root);
+                write_system_intent(&hook_root, "replacement-injected");
+            } else {
+                fs::rename(hook_root.join("etc/cast"), &detached).unwrap();
+                write_system_intent(&hook_root, "replacement-injected");
+            }
+        });
+
+        let error = expect_startup_gate_error(Client::new(
+            format!("startup-gate-default-substitution-{replace_root}"),
+            installation,
+        ));
+        assert!(matches!(error.as_ref(), startup_gate::Error::DefaultSystemIntent(_)));
+        assert!(fs::read_to_string(&injected).unwrap().contains("replacement-injected"));
+        let retained_source = if replace_root {
+            parent.path().join("detached-installation/etc/cast/system.glu")
+        } else {
+            parent.path().join("detached-cast/system.glu")
+        };
+        assert_eq!(fs::read(retained_source).unwrap(), original_bytes);
+    }
 }
 
 #[test]
 fn frozen_client_ignores_system_journal_and_persistent_transition_rows() {
     let temporary = private_installation_tempdir();
+    let (intent_path, malformed_intent) = write_malformed_system_intent(temporary.path());
     let installation = Installation::open(temporary.path(), None).unwrap();
     let state_db = crate::db::state::Database::new(installation.db_path("state").to_str().unwrap()).unwrap();
     state_db
@@ -225,6 +494,7 @@ fn frozen_client_ignores_system_journal_and_persistent_transition_rows() {
     drop(client);
 
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
+    assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
 }
 
 #[test]

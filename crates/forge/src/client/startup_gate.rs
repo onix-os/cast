@@ -2,6 +2,10 @@ use thiserror::Error;
 
 use crate::{Installation, db, installation, transition_journal};
 
+use super::active_state_snapshot::ActiveStateLease;
+
+mod default_system_intent;
+
 /// Exclusive proof that no interrupted system transition predates client
 /// construction.
 ///
@@ -36,6 +40,17 @@ impl CleanSystemStartup {
         installation.revalidate_root_directory()?;
         Ok(Self { _journal: journal })
     }
+
+    /// Evaluate the canonical system intent only after strict active-state
+    /// discovery, while this retained journal guard and the active lease's
+    /// cooperating-writer coordinator are both still alive.
+    pub(super) fn load_default_system_intent(
+        &self,
+        installation: &Installation,
+        _active_state: &ActiveStateLease,
+    ) -> Result<Option<crate::system_model::LoadedSystemModel>, Error> {
+        default_system_intent::load(installation).map_err(Error::DefaultSystemIntent)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -50,4 +65,9 @@ pub(super) enum Error {
     OrphanTransitionRow { state: i32, transition: String },
     #[error("revalidate installation root after startup discovery")]
     Installation(#[from] installation::Error),
+    #[error("load canonical authored system intent after the system startup gate")]
+    DefaultSystemIntent(#[source] default_system_intent::Error),
 }
+
+#[cfg(test)]
+pub(super) use default_system_intent::arm_after_default_directory_retained;

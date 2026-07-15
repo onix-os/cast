@@ -122,6 +122,7 @@ pub struct ClientBuilder {
     installation: Installation,
     repositories: Option<repository::Map>,
     system_intent_path: Option<PathBuf>,
+    system_intent_notice: Option<bool>,
     blit_root: Option<PathBuf>,
 }
 
@@ -135,6 +136,13 @@ impl ClientBuilder {
     /// Import user-authored Gluon system intent from the provided path.
     pub fn system_intent_path(mut self, path: impl Into<PathBuf>) -> ClientBuilder {
         self.system_intent_path = Some(path.into());
+        self
+    }
+
+    /// Emit the interactive declarative-intent notice only after a complete,
+    /// successful client build. Library callers remain silent by default.
+    pub(crate) fn system_intent_notice(mut self, verbose: bool) -> ClientBuilder {
+        self.system_intent_notice = Some(verbose);
         self
     }
 
@@ -176,10 +184,18 @@ impl ClientBuilder {
             })?;
         let active_state = active_state_reservation.discover_after_startup_gate(&self.installation, &startup_gate)?;
 
+        active_state.revalidate(&self.installation)?;
         if let Some(path) = self.system_intent_path {
             self.installation.system_model =
                 Some(system_model::load(&path)?.ok_or(Error::ImportSystemIntentDoesntExist(path.to_owned()))?);
+        } else {
+            self.installation.system_model = startup_gate
+                .load_default_system_intent(&self.installation, &active_state)
+                .map_err(|source| Error::SystemStartupGate {
+                    source: Box::new(source),
+                })?;
         }
+        active_state.revalidate(&self.installation)?;
 
         let config = config::Manager::system(&self.installation.root, "cast");
         let repositories = if let Some(repos) = self.repositories {
@@ -209,7 +225,80 @@ impl ClientBuilder {
         if let Some(blit_root) = self.blit_root {
             client = client.ephemeral(blit_root)?;
         }
+        if let Some(verbose) = self.system_intent_notice {
+            print_system_intent_notice(&client, verbose);
+        }
         Ok(client)
+    }
+}
+
+fn print_system_intent_notice(client: &Client, verbose: bool) {
+    if let Some(notice) = render_system_intent_notice(client, verbose) {
+        emit_system_intent_notice(notice);
+    }
+}
+
+fn render_system_intent_notice(client: &Client, verbose: bool) -> Option<String> {
+    let Some(system_model) = client.system_intent() else {
+        return None;
+    };
+    if system_model.disable_warning && !verbose {
+        return None;
+    }
+    let path = system_model.path();
+    let first_line = format!(
+        "{}: authored Gluon system intent at {path:?} is active.",
+        "INFO".green()
+    );
+    if system_model.disable_warning {
+        return Some(first_line);
+    }
+
+    Some(format!(
+        "{first_line}
+Hence:
+- This system intent is the source of truth and defines all
+  repositories & installed packages.
+- Any changes made via `cast` commands will be temporary
+  until the authored intent is updated.
+- The system state can be reverted to match the declared intent
+  by doing a `cast sync`.
+- Each state stores a generated `/usr/lib/system-model.glu` snapshot;
+  it is not the authored source and should not be edited.
+- To disable declarative system intent, remove or rename {path:?}.",
+    ))
+}
+
+#[cfg(not(test))]
+fn emit_system_intent_notice(notice: String) {
+    eprintln!("{notice}");
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SYSTEM_INTENT_NOTICE_CAPTURE: std::cell::RefCell<Option<Box<dyn FnOnce(String)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn arm_system_intent_notice_capture(capture: impl FnOnce(String) + 'static) {
+    SYSTEM_INTENT_NOTICE_CAPTURE.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(capture)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn disarm_system_intent_notice_capture() -> bool {
+    SYSTEM_INTENT_NOTICE_CAPTURE.with(|slot| slot.borrow_mut().take().is_some())
+}
+
+#[cfg(test)]
+fn emit_system_intent_notice(notice: String) {
+    let capture = SYSTEM_INTENT_NOTICE_CAPTURE.with(|slot| slot.borrow_mut().take());
+    if let Some(capture) = capture {
+        capture(notice);
+    } else {
+        eprintln!("{notice}");
     }
 }
 
@@ -449,13 +538,39 @@ impl Client {
             installation,
             repositories: None,
             system_intent_path: None,
+            system_intent_notice: None,
             blit_root: None,
         }
+    }
+
+    /// Construct a CLI client whose declarative-intent notice is emitted only
+    /// after the startup gate, strict discovery, intent evaluation,
+    /// repositories, and registry all succeed.
+    pub(crate) fn for_cli(
+        client_name: impl ToString,
+        installation: Installation,
+        verbose: bool,
+    ) -> Result<Client, Error> {
+        Self::builder(client_name, installation)
+            .system_intent_notice(verbose)
+            .build()
+    }
+
+    pub(crate) fn cli_builder(client_name: impl ToString, installation: Installation, verbose: bool) -> ClientBuilder {
+        Self::builder(client_name, installation).system_intent_notice(verbose)
     }
 
     /// Construct a new Client for the given [`Installation`]
     pub fn new(client_name: impl ToString, installation: Installation) -> Result<Client, Error> {
         Self::builder(client_name.to_string(), installation).build()
+    }
+
+    pub(crate) fn system_intent(&self) -> Option<&LoadedSystemModel> {
+        self.installation.system_model.as_ref()
+    }
+
+    pub(crate) fn into_repository_manager(self) -> repository::Manager {
+        self.repositories
     }
 
     /// Construct a cache-only client for one frozen root materialization.

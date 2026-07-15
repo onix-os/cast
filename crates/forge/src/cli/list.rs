@@ -43,7 +43,7 @@ enum Sync {
 }
 
 /// Handle listing by filter
-pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let (filter_flags, sync) = match args.subcommand() {
         Some(("available", _)) => (Flags::new().with_available(), None),
         Some(("installed", args)) => {
@@ -67,7 +67,7 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
     };
 
     // Grab a client for the target, enumerate packages
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
     let pkgs = client.list_packages(filter_flags)?;
 
     let sync_available = if sync.is_some() {

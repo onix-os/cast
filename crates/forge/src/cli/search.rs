@@ -104,11 +104,11 @@ fn query_packages(
     }
 }
 
-pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let only_installed = args.get_flag(FLAG_INSTALLED);
     let provider = determine_provider(args)?;
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
     let flags = if only_installed {
         package::Flags::new().with_installed()
     } else {

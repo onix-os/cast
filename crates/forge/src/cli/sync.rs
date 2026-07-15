@@ -42,13 +42,13 @@ pub struct Command {
 }
 
 #[instrument(skip_all)]
-pub fn handle(args: &ArgMatches, installation: Installation, yes: bool) -> Result<(), Error> {
+pub fn handle(args: &ArgMatches, installation: Installation, yes: bool, verbose: bool) -> Result<(), Error> {
     let command = Command::from_arg_matches(args).expect("validated by clap");
 
     let simulate = command.dry_run;
     let update = command.update;
 
-    let mut client_builder = Client::builder(environment::NAME, installation);
+    let mut client_builder = Client::cli_builder(environment::NAME, installation, verbose);
 
     if let Some(path) = &command.import {
         client_builder = client_builder.system_intent_path(path);
@@ -110,7 +110,7 @@ let cast = import! cast.system.v1
             .unwrap();
         let installation = Installation::open(&root, None).unwrap();
 
-        handle(&matches, installation, false).unwrap();
+        handle(&matches, installation, false, false).unwrap();
 
         assert_eq!(fs::read_to_string(&intent).unwrap(), authored);
         assert!(!system_model::snapshot_path(&root).exists());

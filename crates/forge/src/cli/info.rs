@@ -24,7 +24,7 @@ pub fn command() -> Command {
 }
 
 /// For all arguments, try to match a package
-pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let pkgs = args
         .get_many::<String>("NAME")
         .into_iter()
@@ -33,7 +33,7 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
         .collect::<Vec<_>>();
     let show_files = args.get_flag("files");
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     for pkg in pkgs {
         let lookup = Provider::from_name(&pkg).unwrap();

@@ -25,7 +25,7 @@ pub fn command() -> Command {
         )
 }
 
-pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error> {
+pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
     let mut keyword = String::from(args.get_one::<String>(ARG_KEYWORD).unwrap());
 
     // Cast's database doesn't record the /usr/ prefix, so strip any combination of it.
@@ -39,7 +39,7 @@ pub fn handle(args: &ArgMatches, installation: Installation) -> Result<(), Error
         }
     }
 
-    let client = Client::new(environment::NAME, installation)?;
+    let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     let layouts = client.list_layouts()?;
 
