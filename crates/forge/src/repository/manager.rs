@@ -59,6 +59,7 @@ const INDEX_IDENTITY_BUFFER_SIZE: usize = 64 * 1024;
 const MAX_INDEX_GENERATIONS: usize = 32;
 const MAX_INDEX_GENERATION_BYTES: u64 = 512 * 1024 * 1024;
 
+#[cfg(test)]
 pub(crate) fn immutable_index_path(state: &repository::Cached, sha256: &str) -> std::path::PathBuf {
     index_storage::immutable_index_path(state, sha256)
 }
