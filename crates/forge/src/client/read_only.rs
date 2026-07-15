@@ -136,8 +136,17 @@ impl ReadOnlyClient {
         &self,
         operation: impl FnOnce(&Self) -> Result<T, ReadOnlyClientError>,
     ) -> Result<T, ReadOnlyClientError> {
+        self.query_with_post_operation(operation, || {})
+    }
+
+    fn query_with_post_operation<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, ReadOnlyClientError>,
+        post_operation: impl FnOnce(),
+    ) -> Result<T, ReadOnlyClientError> {
         self.revalidate_snapshot()?;
         let result = operation(self);
+        post_operation();
         // Always perform the trailing proof. A namespace change supersedes an
         // otherwise successful or failed image query.
         self.revalidate_snapshot()?;

@@ -4,6 +4,9 @@ use std::{
     io::Read as _,
     os::unix::fs::{FileExt as _, MetadataExt as _, OpenOptionsExt as _, symlink},
     path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
+    time::Duration,
 };
 
 use diesel::{Connection as _, SqliteConnection, connection::SimpleConnection as _};
@@ -17,7 +20,7 @@ use crate::{
     test_support::private_installation_tempdir,
 };
 
-use super::{MAX_DATABASE_IMAGE_BYTES, ReadOnlyConnection, ReadOnlyError, Step};
+use super::{MAX_DATABASE_IMAGE_BYTES, QueryLimits, ReadOnlyConnection, ReadOnlyError, Step};
 
 struct Fixture {
     _temporary: tempfile::TempDir,
@@ -255,6 +258,39 @@ fn opcode_and_deadline_interruptions_are_deterministic_and_handlers_are_cleared(
             reason: "monotonic SQLite query deadline elapsed"
         })
     ));
+    assert_scalar(&connection);
+}
+
+#[test]
+fn connection_mutex_wait_uses_the_same_finite_query_deadline() {
+    let fixture = fixture();
+    let (_installation, connection) = state_connection(&fixture);
+    let holder_connection = connection.clone();
+    let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
+    let (release_sender, release_receiver) = mpsc::sync_channel(0);
+    let holder = thread::spawn(move || {
+        let _raw = holder_connection.raw.lock().unwrap();
+        ready_sender.send(()).unwrap();
+        release_receiver.recv().unwrap();
+    });
+    ready_receiver.recv().unwrap();
+
+    let result = connection.snapshot_with_limits(
+        QueryLimits {
+            callback_budget: usize::MAX,
+            deadline: Duration::from_millis(20),
+        },
+        |_| Ok(()),
+    );
+    assert!(matches!(
+        result,
+        Err(ReadOnlyError::QueryInterrupted {
+            reason: "monotonic SQLite query deadline elapsed while waiting for the connection"
+        })
+    ));
+
+    release_sender.send(()).unwrap();
+    holder.join().unwrap();
     assert_scalar(&connection);
 }
 

@@ -335,6 +335,26 @@ fn public_queries_revalidate_journal_database_and_live_state_namespaces() {
     ));
 }
 
+#[test]
+fn trailing_revalidation_detects_post_operation_changes_and_supersedes_operation_errors() {
+    let success_fixture = fixture();
+    let success_client = ReadOnlyClient::new(snapshot(&success_fixture)).unwrap();
+    let success = success_client.query_with_post_operation(
+        |_| Ok(()),
+        || fs::create_dir(success_fixture.root.join(".cast/journal")).unwrap(),
+    );
+    assert!(matches!(success, Err(ReadOnlyClientError::Journal { .. })));
+
+    let error_fixture = fixture();
+    let error_client = ReadOnlyClient::new(snapshot(&error_fixture)).unwrap();
+    let operation_state = state::Id::from(999);
+    let error = error_client.query_with_post_operation(
+        |_| Err::<(), _>(ReadOnlyClientError::ActiveStateMissing { state: operation_state }),
+        || fs::create_dir(error_fixture.root.join(".cast/journal")).unwrap(),
+    );
+    assert!(matches!(error, Err(ReadOnlyClientError::Journal { .. })));
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct Witness {
     device: u64,

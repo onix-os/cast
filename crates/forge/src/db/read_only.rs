@@ -6,9 +6,10 @@ use std::{
     ptr::{self, NonNull},
     slice,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, TryLockError,
         atomic::{AtomicU8, AtomicUsize, Ordering},
     },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -34,6 +35,7 @@ const MAX_SQL_BYTES: c_int = 64 * 1024;
 const PROGRESS_OPCODE_INTERVAL: c_int = 1_000;
 const QUERY_PROGRESS_CALLBACK_BUDGET: usize = 50_000;
 const QUERY_DEADLINE: Duration = Duration::from_secs(2);
+const CONNECTION_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const MAX_MIGRATION_ROWS: usize = 8;
 
 #[derive(Clone, Debug)]
@@ -173,9 +175,9 @@ impl ReadOnlyConnection {
         &self,
         operation: impl FnOnce(&ReadOnlyRow) -> Result<T, ReadOnlyError>,
     ) -> Result<T, ReadOnlyError> {
-        // The monotonic deadline starts after this connection's cooperative
-        // mutex is acquired. The finite opcode callback bounds SQLite work;
-        // it is not a scheduler or hostile-thread preemption guarantee.
+        // One monotonic budget covers both cooperative connection admission
+        // and SQLite work. The opcode callback remains cooperative rather than
+        // a hostile-thread preemption guarantee.
         self.snapshot_with_limits(
             QueryLimits {
                 callback_budget: QUERY_PROGRESS_CALLBACK_BUDGET,
@@ -190,11 +192,13 @@ impl ReadOnlyConnection {
         limits: QueryLimits,
         operation: impl FnOnce(&ReadOnlyRow) -> Result<T, ReadOnlyError>,
     ) -> Result<T, ReadOnlyError> {
-        let mut raw = self.raw.lock().map_err(|_| ReadOnlyError::LockPoisoned)?;
+        let started = Instant::now();
+        let deadline = started.checked_add(limits.deadline).unwrap_or(started);
+        let mut raw = self.lock_raw_until(deadline)?;
         if raw.poisoned {
             return Err(ReadOnlyError::ConnectionPoisoned);
         }
-        raw.arm_progress(limits);
+        raw.arm_progress(limits.callback_budget, deadline);
         let row = ReadOnlyRow {
             database: raw.handle.as_ptr(),
         };
@@ -240,6 +244,38 @@ impl ReadOnlyConnection {
                 let source = raw.progress.decorate(source);
                 raw.clear_progress();
                 transaction_failure(&mut raw, &row, source)
+            }
+        }
+    }
+
+    fn lock_raw_until(&self, deadline: Instant) -> Result<MutexGuard<'_, RawConnection>, ReadOnlyError> {
+        let mut contended = false;
+        loop {
+            match self.raw.try_lock() {
+                Ok(raw) => {
+                    if contended && Instant::now() >= deadline {
+                        drop(raw);
+                        return Err(ReadOnlyError::QueryInterrupted {
+                            reason: "monotonic SQLite query deadline elapsed while waiting for the connection",
+                        });
+                    }
+                    return Ok(raw);
+                }
+                Err(TryLockError::Poisoned(_)) => return Err(ReadOnlyError::LockPoisoned),
+                Err(TryLockError::WouldBlock) => {
+                    contended = true;
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(ReadOnlyError::QueryInterrupted {
+                            reason: "monotonic SQLite query deadline elapsed while waiting for the connection",
+                        });
+                    }
+                    thread::sleep(
+                        deadline
+                            .saturating_duration_since(now)
+                            .min(CONNECTION_LOCK_POLL_INTERVAL),
+                    );
+                }
             }
         }
     }
@@ -347,8 +383,8 @@ impl ReadOnlyConnection {
 }
 
 impl RawConnection {
-    fn arm_progress(&mut self, limits: QueryLimits) {
-        self.progress.arm(limits);
+    fn arm_progress(&mut self, callback_budget: usize, deadline: Instant) {
+        self.progress.arm(callback_budget, deadline);
         let context = (&*self.progress as *const ProgressState).cast_mut().cast::<c_void>();
         unsafe {
             sqlite::sqlite3_progress_handler(
@@ -377,12 +413,9 @@ impl ProgressState {
         }
     }
 
-    fn arm(&self, limits: QueryLimits) {
-        self.remaining_callbacks
-            .store(limits.callback_budget, Ordering::Release);
+    fn arm(&self, callback_budget: usize, deadline: Instant) {
+        self.remaining_callbacks.store(callback_budget, Ordering::Release);
         self.interrupted.store(InterruptReason::None as u8, Ordering::Release);
-        let now = Instant::now();
-        let deadline = now.checked_add(limits.deadline).unwrap_or(now);
         *self.deadline.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(deadline);
     }
 
