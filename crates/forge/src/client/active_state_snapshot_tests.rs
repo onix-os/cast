@@ -384,7 +384,32 @@ fn retained_lease_rejects_whole_usr_replacement_and_restore() {
 }
 
 #[test]
-fn stale_builder_rejects_before_opening_database_files() {
+fn malformed_live_state_after_installation_open_blocks_repositories_after_database_open() {
+    let temporary = tempfile::tempdir().unwrap();
+    let installation = empty_installation(temporary.path());
+    let db_paths = [
+        installation.db_path("install"),
+        installation.db_path("state"),
+        installation.db_path("layout"),
+    ];
+    assert!(db_paths.iter().all(|path| !path.exists()));
+    let usr = temporary.path().join("usr");
+    fs::create_dir(&usr).unwrap();
+    fs::set_permissions(&usr, Permissions::from_mode(0o755)).unwrap();
+    fs::write(usr.join(".stateID"), b"malformed").unwrap();
+    fs::set_permissions(usr.join(".stateID"), Permissions::from_mode(0o644)).unwrap();
+
+    let result = Client::builder("stale-builder", installation)
+        .repositories(repository::Map::default())
+        .build();
+
+    assert_proof_failure(result);
+    assert!(db_paths.iter().all(|path| path.exists()));
+    assert_eq!(fs::read_dir(temporary.path().join(".cast/repo")).unwrap().count(), 0);
+}
+
+#[test]
+fn stale_builder_opens_databases_but_rejects_before_repository_construction() {
     let temporary = tempfile::tempdir().unwrap();
     let installation = empty_installation(temporary.path());
     let db_paths = [
@@ -401,7 +426,8 @@ fn stale_builder_rejects_before_opening_database_files() {
         .build();
 
     assert_changed(result, None, Some(selected));
-    assert!(db_paths.iter().all(|path| !path.exists()));
+    assert!(db_paths.iter().all(|path| path.exists()));
+    assert_eq!(fs::read_dir(temporary.path().join(".cast/repo")).unwrap().count(), 0);
 }
 
 #[test]

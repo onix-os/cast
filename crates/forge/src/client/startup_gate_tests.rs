@@ -74,6 +74,17 @@ fn create_journal(installation: &Installation) -> Vec<u8> {
     fs::read(canonical_journal(&installation.root)).unwrap()
 }
 
+fn create_malformed_live_state(root: &Path) -> Vec<u8> {
+    let usr = root.join("usr");
+    fs::create_dir(&usr).unwrap();
+    fs::set_permissions(&usr, fs::Permissions::from_mode(0o755)).unwrap();
+    let state_id = usr.join(".stateID");
+    let malformed = b"malformed";
+    fs::write(&state_id, malformed).unwrap();
+    fs::set_permissions(&state_id, fs::Permissions::from_mode(0o644)).unwrap();
+    malformed.to_vec()
+}
+
 fn expect_startup_gate_error(result: Result<Client, Error>) -> Box<startup_gate::Error> {
     let source = match result {
         Err(Error::SystemStartupGate { source }) => source,
@@ -97,11 +108,21 @@ fn assert_repository_construction_not_started(installation: &Installation) {
     );
 }
 
+fn assert_system_databases_opened(installation: &Installation) {
+    for name in ["install", "state", "layout"] {
+        assert!(
+            installation.db_path(name).is_file(),
+            "{name} database was not opened before the startup gate"
+        );
+    }
+}
+
 #[test]
-fn valid_unresolved_journal_precedes_system_intent_and_repository_construction() {
+fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repositories() {
     let temporary = private_installation_tempdir();
     let installation = Installation::open(temporary.path(), None).unwrap();
     let canonical_before = create_journal(&installation);
+    let malformed_state = create_malformed_live_state(temporary.path());
     let missing_intent = temporary.path().join("must-not-load.gluon");
 
     let error = expect_startup_gate_error(
@@ -116,6 +137,11 @@ fn valid_unresolved_journal_precedes_system_intent_and_repository_construction()
         startup_gate::Error::UnresolvedJournal { transition } if transition == TRANSITION_ID
     ));
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
+    assert_eq!(
+        fs::read(temporary.path().join("usr/.stateID")).unwrap(),
+        malformed_state
+    );
+    assert_system_databases_opened(&installation);
     assert_repository_construction_not_started(&installation);
 }
 
@@ -145,7 +171,7 @@ fn corrupt_canonical_journal_blocks_startup_without_rewriting_evidence() {
 }
 
 #[test]
-fn orphan_transition_row_blocks_startup_before_repository_construction() {
+fn orphan_transition_row_precedes_malformed_live_state_and_repository_construction() {
     let temporary = private_installation_tempdir();
     let installation = Installation::open(temporary.path(), None).unwrap();
     let state_db = crate::db::state::Database::new(installation.db_path("state").to_str().unwrap()).unwrap();
@@ -153,6 +179,7 @@ fn orphan_transition_row_blocks_startup_before_repository_construction() {
         .add_with_transition(&transition_id(), &[], Some("orphan"), None)
         .unwrap();
     drop(state_db);
+    let malformed_state = create_malformed_live_state(temporary.path());
 
     let error = expect_startup_gate_error(
         Client::builder("startup-gate-orphan", installation.clone())
@@ -165,6 +192,10 @@ fn orphan_transition_row_blocks_startup_before_repository_construction() {
         startup_gate::Error::OrphanTransitionRow { state, transition }
             if *state == i32::from(orphan.id) && transition == TRANSITION_ID
     ));
+    assert_eq!(
+        fs::read(temporary.path().join("usr/.stateID")).unwrap(),
+        malformed_state
+    );
     assert_repository_construction_not_started(&installation);
 }
 

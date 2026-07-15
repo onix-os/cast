@@ -119,9 +119,9 @@ forge-client-startup-gate-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
-		client::startup_gate_tests::valid_unresolved_journal_precedes_system_intent_and_repository_construction \
+		client::startup_gate_tests::valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repositories \
 		client::startup_gate_tests::corrupt_canonical_journal_blocks_startup_without_rewriting_evidence \
-		client::startup_gate_tests::orphan_transition_row_blocks_startup_before_repository_construction \
+		client::startup_gate_tests::orphan_transition_row_precedes_malformed_live_state_and_repository_construction \
 		client::startup_gate_tests::frozen_client_ignores_system_journal_and_persistent_transition_rows \
 		client::startup_gate_tests::system_builder_cannot_use_frozen_discovery_to_bypass_the_startup_gate; do \
 		grep -Fqx "$$test: test" <<<"$$listed"; \
@@ -145,7 +145,8 @@ forge-active-state-snapshot-test:
 		client::active_state_snapshot_tests::foreign_entry_inserted_after_first_empty_scan_is_rejected_untouched \
 		client::active_state_snapshot_tests::retained_lease_rejects_same_inode_state_id_aba_after_acquisition \
 		client::active_state_snapshot_tests::retained_lease_rejects_whole_usr_replacement_and_restore \
-		client::active_state_snapshot_tests::stale_builder_rejects_before_opening_database_files \
+		client::active_state_snapshot_tests::malformed_live_state_after_installation_open_blocks_repositories_after_database_open \
+		client::active_state_snapshot_tests::stale_builder_opens_databases_but_rejects_before_repository_construction \
 		client::active_state_snapshot_tests::reused_client_rejects_a_second_state_before_database_allocation \
 		client::active_state_snapshot_tests::state_id_aba_during_candidate_fill_fails_before_row_allocation_or_tree_identity \
 		client::active_state_snapshot_tests::stale_cloned_client_cannot_activate_after_a_sibling_transition \

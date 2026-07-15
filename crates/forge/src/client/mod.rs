@@ -157,11 +157,13 @@ impl ClientBuilder {
             return Err(Error::SystemInstallationRequired);
         }
 
-        // This is the first stateful filesystem/DB gate. Preserve the lock
-        // order used by every transition: cooperating-writer coordinator
-        // first, retained journal lock second. A stale Installation clone is
-        // therefore rejected before opening or creating any database handle.
-        let active_state = active_state_snapshot::ActiveStateLease::acquire(&self.installation)?;
+        // Preserve the lock order used by every transition: cooperating-writer
+        // coordinator first, retained journal lock second. Strict live-state
+        // discovery is deliberately deferred until the databases, journal,
+        // and orphan evidence have been inspected, but taking the coordinator
+        // only after the journal would introduce an ABBA deadlock with an
+        // in-flight transition.
+        let active_state_reservation = active_state_snapshot::ActiveStateReservation::acquire()?;
         let install_db = db::meta::Database::new(self.installation.db_path("install").to_str().unwrap_or_default())?;
         let state_db = db::state::Database::new(self.installation.db_path("state").to_str().unwrap_or_default())?;
         let layout_db = db::layout::Database::new(self.installation.db_path("layout").to_str().unwrap_or_default())?;
@@ -172,6 +174,7 @@ impl ClientBuilder {
                     source: Box::new(source),
                 }
             })?;
+        let active_state = active_state_reservation.discover_after_startup_gate(&self.installation, &startup_gate)?;
 
         if let Some(path) = self.system_intent_path {
             self.installation.system_model =

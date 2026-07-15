@@ -60,6 +60,16 @@ pub(super) struct ActiveStateLease {
     _coordinator: MutexGuard<'static, ()>,
 }
 
+/// A cooperating-writer guard reserved before the startup journal lock.
+///
+/// This type carries no live-state observation. System startup consumes it
+/// only after presenting the retained clean-startup gate, which preserves the
+/// coordinator-then-journal lock order without trusting preliminary
+/// Installation discovery as authority.
+pub(super) struct ActiveStateReservation {
+    coordinator: MutexGuard<'static, ()>,
+}
+
 /// Exact active-namespace evidence with no process-local writer mutex. It can
 /// cross an async cache operation, but authorizes no mutation by itself.
 pub(super) struct ActiveStateSnapshot {
@@ -95,6 +105,13 @@ struct CapturedActiveState {
 impl ActiveStateLease {
     pub(super) fn acquire(installation: &Installation) -> Result<Self, super::Error> {
         let coordinator = super::fixed_staging::lock_coordinator()?;
+        Self::acquire_with_coordinator(installation, coordinator)
+    }
+
+    fn acquire_with_coordinator(
+        installation: &Installation,
+        coordinator: MutexGuard<'static, ()>,
+    ) -> Result<Self, super::Error> {
         let captured = capture(installation)?;
         let actual = captured.active;
         let expected = installation.active_state;
@@ -128,6 +145,26 @@ impl ActiveStateLease {
         } = self;
         drop(_coordinator);
         Ok(ActiveStateSnapshot { active, proof })
+    }
+}
+
+impl ActiveStateReservation {
+    pub(super) fn acquire() -> Result<Self, super::Error> {
+        Ok(Self {
+            coordinator: super::fixed_staging::lock_coordinator()?,
+        })
+    }
+
+    /// Perform authoritative live-state discovery only after startup recovery
+    /// evidence has been inspected. The preliminary Installation observation
+    /// remains a stale-detection witness rather than namespace authority; a
+    /// mismatch still rejects a reused Installation clone.
+    pub(super) fn discover_after_startup_gate(
+        self,
+        installation: &Installation,
+        _startup_gate: &super::startup_gate::CleanSystemStartup,
+    ) -> Result<ActiveStateLease, super::Error> {
+        ActiveStateLease::acquire_with_coordinator(installation, self.coordinator)
     }
 }
 

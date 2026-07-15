@@ -685,6 +685,17 @@ and instant rollback mechanism; it hardens their failure semantics.
   live-state discovery, then repositories and the active registry. Frozen
   clients skip system recovery. Read-only clients must take a shared,
   non-mutating snapshot lock and fail closed on any unresolved journal.
+  As of 2026-07-15, mutable construction takes the cooperating-writer guard
+  before the journal to preserve the transition lock order, but defers strict
+  live-state discovery until after database opening, retained fail-closed
+  journal inspection, and the bounded orphan-token audit. The journal guard
+  remains held through repository and active-registry construction. The strict
+  result is checked against the preliminary Installation observation, which
+  remains only a stale-clone witness; a mismatch is rejected rather than
+  refreshed. Focused tests prove unresolved journal and orphan evidence precede
+  malformed live state. Startup reconciliation and the read-only shared snapshot
+  path are not implemented, and default system intent is still loaded by
+  `Installation::open` before this client gate, so this item remains open.
 - [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
   with one retained capability namespace. Resolve beneath authenticated
   directory descriptors without symlink, magic-link, or mount traversal. Give
