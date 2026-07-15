@@ -1,11 +1,13 @@
 .PHONY: forge-read-only-installation-test forge-read-only-substrate-test \
-	stone-recipe-derivation-provenance-test container-cgroup-test \
+	forge-read-only-client-test \
+	stone-recipe-derivation-provenance-test \
+	stone-recipe-derivation-validation-test container-cgroup-test \
 	container-process-runtime-test gitwrap-repository-fs-test \
 	forge-security-fixture-test
 
 forge-read-only-installation-test:
 	@set -eu; \
-	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	test -n "$$listed"; \
 	for test in \
 		installation::snapshot::tests::two_readers_share_global_and_custom_cache_locks_until_the_last_reader_drops \
@@ -26,13 +28,13 @@ forge-read-only-installation-test:
 		installation::snapshot::tests::retained_snapshot_rejects_custom_cache_directory_substitution \
 		installation::snapshot::tests::retained_snapshot_rejects_custom_cache_lockfile_substitution \
 		installation::snapshot::tests::open_revalidate_clone_and_drop_leave_recursive_metadata_and_contents_unchanged; do \
-		grep -Fqx "$$test: test" <<<"$$listed"; \
-		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 forge-read-only-substrate-test:
 	@set -eu; \
-	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	test -n "$$listed"; \
 	for test in \
 		db::read_only::tests::deserialized_adapters_query_exact_state_meta_and_selected_layout_without_mutation \
@@ -48,9 +50,16 @@ forge-read-only-substrate-test:
 		transition_journal::read_only::tests::absent_and_preexisting_clean_journals_are_retained_without_provisioning \
 		transition_journal::read_only::tests::valid_canonical_transition_fails_closed_and_is_preserved \
 		transition_journal::read_only::tests::corrupt_canonical_and_interrupted_temporary_fail_closed_unchanged; do \
-		grep -Fqx "$$test: test" <<<"$$listed"; \
-		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+forge-read-only-client-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^client::read_only::tests::.*: test$$' <<<"$$listed" )"; \
+	test "$$count" = 11; \
+	timeout 600s $(CARGO) test -p forge --lib "client::read_only::tests::" -- --test-threads=1
 
 stone-recipe-derivation-provenance-test:
 	@set -eu; \
@@ -70,6 +79,13 @@ stone-recipe-derivation-provenance-test:
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 300s $(CARGO) test -p stone_recipe --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+stone-recipe-derivation-validation-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^derivation::tests::.*: test$$' <<<"$$listed" )"; \
+	test "$$count" = 66; \
+	timeout 900s $(CARGO) test -p stone_recipe --lib "derivation::tests::" -- --test-threads=1
 
 container-cgroup-test:
 	@set -eu; \
