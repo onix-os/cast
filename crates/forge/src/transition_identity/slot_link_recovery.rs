@@ -11,16 +11,18 @@ use super::{
 use crate::{Installation, state};
 
 #[derive(Clone, Copy)]
-enum WrapperKind {
+pub(super) enum WrapperKind {
     Canonical,
     Parked,
 }
 
-struct RecoveredSlotLink {
-    name: CString,
-    wrapper: RetainedDirectory,
-    marker: RetainedStateSlotMarker,
-    kind: WrapperKind,
+pub(super) struct RecoveredSlotLink {
+    pub(super) roots: RetainedDirectory,
+    pub(super) state: state::Id,
+    pub(super) name: CString,
+    pub(super) wrapper: RetainedDirectory,
+    pub(super) marker: RetainedStateSlotMarker,
+    pub(super) kind: WrapperKind,
 }
 
 impl RetainedIdentity {
@@ -28,9 +30,9 @@ impl RetainedIdentity {
         &self,
         installation: &Installation,
         state: state::Id,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<RecoveredSlotLink>, Error> {
         if !self.marker.needs_slot_link_authorization() {
-            return Ok(());
+            return Ok(None);
         }
 
         let roots_path = installation.root_path("");
@@ -57,7 +59,8 @@ impl RetainedIdentity {
         self.marker.authorize_recovered_slot_link()?;
         recovered.marker.require_named(&recovered.wrapper)?;
         self.require_recovered_wrapper_layout(&recovered.wrapper, &recovered.marker, recovered.kind)?;
-        self.revalidate_retained()
+        self.revalidate_retained()?;
+        Ok(Some(recovered))
     }
 
     fn inspect_recovery_wrapper(
@@ -89,6 +92,8 @@ impl RetainedIdentity {
             });
         }
         *found = Some(RecoveredSlotLink {
+            roots: roots.clone_retained()?,
+            state,
             name,
             wrapper,
             marker,

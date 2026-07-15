@@ -26,6 +26,11 @@ pub(crate) enum Error {
     DuplicateAuthorizedStateSlotLinks { state: i32 },
     #[error("tree marker has a persistent state-slot link but the installation has no active state identity")]
     AuthorizedStateSlotLinkWithoutState,
+    #[error("park or revalidate the retained active previous-state slot")]
+    ActivePreviousSlotParking {
+        #[source]
+        source: Box<super::active_previous_slot_parking::ActivePreviousSlotParkingError>,
+    },
     #[error("{operation} in retained /usr exchange namespace at `{}`", path.display())]
     RetainedExchange {
         operation: &'static str,
@@ -212,6 +217,16 @@ pub(crate) enum Error {
     JournalAppeared { transition: String },
     #[error("orphan transition row for state {state} and transition {transition} blocks tree-marker publication")]
     OrphanTransitionRow { state: i32, transition: String },
+    #[error("load retained active-reblit state row {state}")]
+    ActiveReblitStateLookup {
+        state: i32,
+        #[source]
+        source: db::Error,
+    },
+    #[error("retained active-reblit state row {state} changed during the guarded operation")]
+    ActiveReblitStateChanged { state: i32 },
+    #[error("active state changed during reblit: expected {expected}, found {actual:?}")]
+    ActiveReblitSelectionChanged { expected: i32, actual: Option<i32> },
     #[error(
         "candidate tree `{}` and previous tree `{}` carry duplicate permanent token {token}",
         candidate.display(),

@@ -775,18 +775,62 @@ and instant rollback mechanism; it hardens their failure semantics.
   unexpected I/O and duplicate authenticated layouts fail closed. Repeated
   archived activations therefore reuse the same exact wrapper past the
   256-name scan bound during normal operation.
-  Failed preparation
-  retains the candidate at its authenticated pre-transition location and keeps
-  its database row; any preservation durability fault retains the database
-  correlation and the exact candidate either in staging or in its retained
-  quarantine slot. This remains an in-process, cooperating-lock boundary: it
+  Active-state verification reblits now reserve an exact empty 0700 replacement
+  wrapper before the live `/usr` exchange. The bounded 256-name scan skips every
+  occupied final-component type without adoption, and exhaustion is discovered
+  while the old live tree is untouched. Once that replacement is retained and
+  durable, but still before triggers or the live exchange, an authorized
+  marker-only wrapper at the old active state's canonical decimal name is
+  retained and moved with one descriptor-relative no-replace rename into the
+  bounded `archived-candidate-slot` namespace already recognized by slot-link
+  recovery. Exact canonical/parking reconciliation makes the outcome sticky;
+  an applied move resumes only marker, wrapper, and roots sync plus final proof.
+  Foreign occupants and exhaustion are preserved unchanged. Every later active
+  snapshot requires the exact old wrapper to remain marker-only and parked with
+  the canonical name absent, so a trigger cannot silently re-poison the next
+  ordinary archive. The old quarantined tree and parked wrapper retain their
+  exact two-link marker pair, while the repaired live tree's new token can be
+  archived into a fresh canonical wrapper on the following transition. The
+  candidate's `.stateID` is retained
+  as one exact owner-owned 0644, single-link inode beside its retained tree
+  marker; bounded full reads, metadata witnesses, final-name reopen, and marker
+  sandwiches reject same-inode rewrites and same-content inode replacement after
+  transaction triggers, inside the exchange preflight, after system triggers,
+  before and after boot synchronization, and at final proof. Recovery movement
+  remains marker-only so a trigger-corrupted candidate can still be reversed and
+  preserved. On success, one whole-wrapper `RENAME_EXCHANGE` moves the displaced
+  old wrapper intact to the private `active-reblit-wrapper` slot and leaves the
+  exact empty replacement at fixed staging; the old payload remains opaque, so a
+  missing or corrupt old `.stateID` is preserved rather than authenticated or
+  repaired. Once the replacement reservation is retained, a pre-commit failure,
+  or a failure after a compensating `/usr` reverse, uses that same pre-reserved
+  exchange to preserve the entire failed candidate wrapper and consumes no
+  second quarantine name. If bounded-name exhaustion or a create/reopen failure
+  occurs before any reservation is retained, recovery instead uses the existing
+  marker-authenticated `/usr` quarantine while leaving the live tree and every
+  foreign wrapper-name occupant unchanged. Applied suffix failures resume
+  without a second wrapper exchange, NotApplied final cleanup returns through
+  swapped recovery, and ambiguous substitution is never retried or guessed
+  through.
+  `make forge-active-reblit-wrapper-test` covers every preparation/rotation
+  fault, queued NotApplied and Applied faults, strict state-ID races, whole-wrapper
+  sentinels, foreign-name collisions and exhaustion fallback, repeated same-client
+  reblits, authorized two-link slot parking faults/races/exhaustion, and a
+  subsequent ordinary archive after repair.
+  Failed preparation never promotes the candidate, keeps its database row, and
+  leaves or preserves the exact candidate in staging or its retained quarantine
+  slot. Any preservation durability fault retains that database correlation and
+  exact candidate. This remains an in-process, cooperating-lock boundary: it
   cannot make a filesystem rename and SQLite deletion atomic against an
   uncooperative same-UID writer. It does not create a journal record, reconcile
   a reboot, durably fence an ambiguous post-exchange namespace, replace the
   still-path-based repaired-archive publication move, perform the bounded
   descriptor-recursive stable-inventory proof, authenticate the entire
   activation namespace, or finish the pre-journal baseline and coordinator
-  items below.
+  items below. Candidate materialization before the identity guard still enters
+  through `blit_root_with_materialization`, whose existing pathname cleanup is
+  destructive; this slice therefore does not claim the complete active-reblit
+  operation is descriptor-safe from its first filesystem mutation.
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree

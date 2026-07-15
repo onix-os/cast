@@ -130,6 +130,18 @@ pub(crate) enum TreeMarkerError {
 }
 
 impl TreeMarkerStore {
+    pub(crate) fn retained_directory(&self) -> &File {
+        &self.usr
+    }
+
+    pub(crate) fn display_path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn revalidate_directory(&self) -> Result<(), TreeMarkerError> {
+        self.validate_usr()
+    }
+
     /// Open and authenticate one named `/usr` directory without following a
     /// symlink or procfs magic link in any pathname component.
     ///

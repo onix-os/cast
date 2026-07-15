@@ -25,7 +25,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 .DEFAULT_GOAL := cast
 
-.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test forge-transition-identity-test forge-active-reblit-wrapper-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples execution-fixtures delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -135,6 +135,39 @@ forge-transition-identity-test:
 		client::tests::first_install_rejects_a_preexisting_nonempty_unmanaged_usr_unchanged \
 		client::tests::first_install_rejects_a_racing_nonempty_usr_occupant_unchanged \
 		client::tests::duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees; do \
+		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
+forge-active-reblit-wrapper-test:
+	@set -eu; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		client::active_reblit_tests::active_reblit_rotates_the_whole_old_wrapper_and_leaves_exact_empty_staging \
+		client::active_reblit_tests::active_reblit_preserves_missing_or_corrupt_old_state_id_opaquely \
+		client::active_reblit_tests::active_reblit_rejects_same_inode_state_id_rewrite_before_exchange \
+		client::active_reblit_tests::active_reblit_rejects_same_content_new_state_id_inode \
+		client::active_reblit_tests::active_reblit_exchange_preflight_rejects_last_moment_state_id_replacement \
+		client::active_reblit_tests::active_reblit_system_boundary_corruption_reverses_and_preserves_bad_candidate \
+		client::active_reblit_tests::active_reblit_pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot \
+		client::active_reblit_tests::every_single_staging_wrapper_fault_is_resumed_without_tree_loss \
+		client::active_reblit_tests::queued_not_applied_rotation_faults_reverse_then_preserve_one_whole_wrapper \
+		client::active_reblit_tests::queued_applied_suffix_faults_never_exchange_the_wrapper_twice \
+		client::active_reblit_tests::staging_wrapper_substitution_is_ambiguous_and_never_retried \
+		client::active_reblit_tests::staging_wrapper_scan_skips_foreign_types_and_uses_next_index \
+		client::active_reblit_tests::staging_wrapper_name_exhaustion_falls_back_without_touching_live_or_occupants \
+		client::active_reblit_tests::staging_wrapper_pre_retention_substitution_uses_marker_authenticated_fallback \
+		client::active_reblit_tests::two_successful_active_reblits_on_one_client_use_distinct_wrapper_slots \
+		client::active_reblit_tests::active_reblit_preserves_authorized_two_link_previous_marker_pair \
+		client::active_reblit_tests::every_single_active_previous_slot_parking_fault_resumes_without_a_second_move \
+		client::active_reblit_tests::active_previous_slot_parking_exhaustion_preserves_every_name_and_old_live_tree \
+		client::active_reblit_tests::active_previous_slot_scan_skips_every_foreign_occupant_kind \
+		client::active_reblit_tests::queued_active_previous_slot_suffix_faults_keep_the_move_applied \
+		client::active_reblit_tests::active_previous_slot_substitution_never_moves_or_adopts_the_foreign_wrapper \
+		client::active_reblit_tests::active_previous_slot_parking_adopts_an_exact_externally_applied_move \
+		client::active_reblit_tests::already_parked_previous_slot_with_foreign_canonical_name_fails_closed \
+		client::active_reblit_tests::active_reblit_rejects_a_slot_moved_back_to_canonical_after_triggers \
+		client::active_reblit_tests::active_reblit_reversal_cannot_report_success_after_parked_slot_is_moved_back; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done

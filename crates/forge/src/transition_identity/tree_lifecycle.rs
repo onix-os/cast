@@ -23,15 +23,20 @@ impl StatefulTreeIdentity {
         // that `usr` is genuinely absent.
         let candidate_store = TreeMarkerStore::open_path(candidate_path)?;
         let previous_store = open_or_synthesize_live_usr(installation)?;
-        let candidate = RetainedIdentity::prepare(candidate_store)?;
-        candidate.authorize_recovered_slot_link(installation, candidate_state)?;
-        let previous = RetainedIdentity::prepare(previous_store)?;
-        if previous.marker.needs_slot_link_authorization() {
+        let candidate = RetainedIdentity::prepare(candidate_store, Some(candidate_state))?;
+        let _candidate_slot_link = candidate.authorize_recovered_slot_link(installation, candidate_state)?;
+        // The previous active tree is deliberately opaque during a repair:
+        // only its already-retained marker is required. Its `.stateID` may be
+        // the corrupt evidence this reblit is replacing.
+        let previous = RetainedIdentity::prepare(previous_store, None)?;
+        let previous_slot_link = if previous.marker.needs_slot_link_authorization() {
             let previous_state = installation
                 .active_state
                 .ok_or(Error::AuthorizedStateSlotLinkWithoutState)?;
-            previous.authorize_recovered_slot_link(installation, previous_state)?;
-        }
+            previous.authorize_recovered_slot_link(installation, previous_state)?
+        } else {
+            None
+        };
         if candidate.marker.token() == previous.marker.token() {
             return Err(Error::DuplicateTreeToken {
                 candidate: candidate_path.to_owned(),
@@ -55,6 +60,12 @@ impl StatefulTreeIdentity {
             quarantine_attempt: Mutex::new(None),
             previous_archive_attempt: Mutex::new(None),
             archived_candidate_attempt: Mutex::new(None),
+            active_reblit_rotation: Mutex::new(None),
+            active_previous_slot_parking: Mutex::new(
+                previous_slot_link
+                    .map(active_previous_slot_parking::RetainedActivePreviousSlotParking::from_recovered)
+                    .transpose()?,
+            ),
         })
     }
 
@@ -69,13 +80,23 @@ impl StatefulTreeIdentity {
     /// Exchange the authenticated staged candidate with the authenticated live
     /// previous tree beneath retained parent descriptors.
     pub(crate) fn exchange_forward(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward)
+        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward, &|| Ok(()))
+    }
+
+    /// Forward exchange with one final read-only validation executed inside
+    /// the descriptor-bound preflight immediately before the single syscall.
+    pub(crate) fn exchange_forward_validated(
+        &self,
+        installation: &Installation,
+        validate: &impl Fn() -> Result<(), Error>,
+    ) -> Result<(), RetainedExchangeFailure> {
+        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward, validate)
     }
 
     /// Reverse an earlier forward exchange through the same retained
     /// capability namespace.
     pub(crate) fn exchange_reverse(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Reverse)
+        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Reverse, &|| Ok(()))
     }
 
     /// Finish durability after a reverse exchange which is already proven to
@@ -102,6 +123,7 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         direction: RetainedExchangeDirection,
+        validate: &impl Fn() -> Result<(), Error>,
     ) -> Result<(), RetainedExchangeFailure> {
         let not_applied = |source| RetainedExchangeFailure {
             outcome: RetainedExchangeOutcome::NotApplied,
@@ -152,6 +174,7 @@ impl StatefulTreeIdentity {
         )
         .map_err(not_applied)?;
         retained_exchange_checkpoint(RetainedExchangeFaultPoint::BeforeRename).map_err(not_applied)?;
+        validate().map_err(not_applied)?;
 
         // Never retry this syscall: an EINTR or injected error may describe an
         // exchange which the kernel already completed.  Both retained parent

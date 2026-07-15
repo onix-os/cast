@@ -31,6 +31,7 @@ use crate::{
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
 };
 
+mod active_previous_slot_parking;
 mod archived_candidate;
 mod candidate_quarantine;
 mod error;
@@ -39,7 +40,9 @@ mod namespace_helpers;
 mod previous_tree_move;
 mod reusable_previous_slot;
 mod slot_link_recovery;
+mod staging_wrapper_rotation;
 mod state_slot_marker;
+mod state_tree_metadata;
 mod tree_lifecycle;
 
 pub(crate) use error::Error;
@@ -50,6 +53,11 @@ use fault_injection::{
 };
 use namespace_helpers::*;
 
+#[cfg(test)]
+pub(crate) use active_previous_slot_parking::{
+    RetainedActivePreviousSlotParkingFaultPoint, arm_active_previous_slot_parking_faults,
+    arm_before_active_previous_slot_parking_rename,
+};
 pub(crate) use archived_candidate::{
     ArchivedCandidateError, RetainedArchivedCandidateMoveFailure, RetainedArchivedCandidateMoveOutcome,
 };
@@ -65,6 +73,13 @@ pub(crate) use fault_injection::{
     arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename, arm_before_retained_previous_move_rename,
     arm_quarantine_fault, arm_quarantine_faults, arm_retained_exchange_fault, arm_retained_previous_move_fault,
     arm_retained_previous_move_faults,
+};
+pub(crate) use staging_wrapper_rotation::{
+    RetainedStagingWrapperRotationFailure, RetainedStagingWrapperRotationOutcome,
+};
+#[cfg(test)]
+pub(crate) use staging_wrapper_rotation::{
+    RetainedStagingWrapperRotationFaultPoint, arm_before_staging_wrapper_exchange, arm_staging_wrapper_rotation_faults,
 };
 
 const LIVE_USR_NAME: &CStr = c"usr";
@@ -401,12 +416,15 @@ pub(crate) struct StatefulTreeIdentity {
     quarantine_attempt: Mutex<Option<RetainedQuarantineAttempt>>,
     previous_archive_attempt: Mutex<Option<RetainedPreviousArchiveAttempt>>,
     archived_candidate_attempt: Mutex<Option<archived_candidate::RetainedArchivedCandidateAttempt>>,
+    active_reblit_rotation: Mutex<Option<staging_wrapper_rotation::RetainedStagingWrapperRotation>>,
+    active_previous_slot_parking: Mutex<Option<active_previous_slot_parking::RetainedActivePreviousSlotParking>>,
 }
 
 #[derive(Debug)]
 struct RetainedIdentity {
     store: TreeMarkerStore,
     marker: RetainedTreeMarker,
+    state_id: Option<state_tree_metadata::RetainedTreeStateId>,
 }
 
 impl StatefulTreeIdentity {
@@ -722,9 +740,16 @@ fn live_usr_io(operation: &'static str, path: &Path, source: io::Error) -> Error
 }
 
 impl RetainedIdentity {
-    fn prepare(store: TreeMarkerStore) -> Result<Self, Error> {
+    fn prepare(store: TreeMarkerStore, state: Option<state::Id>) -> Result<Self, Error> {
         let marker = store.adopt_or_create_before_journal_for_transition()?;
-        Ok(Self { store, marker })
+        let state_id = state
+            .map(|state| state_tree_metadata::RetainedTreeStateId::retain(&store, state))
+            .transpose()?;
+        Ok(Self {
+            store,
+            marker,
+            state_id,
+        })
     }
 
     /// This method is intentionally incapable of reaching marker creation.
@@ -742,6 +767,23 @@ impl RetainedIdentity {
         self.revalidate_retained()?;
         self.store.require_same_directory(named_store)?;
         self.marker.require_same_marker(&named).map_err(Error::from)
+    }
+
+    /// Strict candidate-only proof. Recovery movement deliberately continues
+    /// to use marker-only verification so a trigger-corrupted `.stateID` can
+    /// still be reversed and quarantined rather than stranding the bad tree
+    /// live.
+    fn verify_named_with_state_id(&self, path: &Path) -> Result<(), Error> {
+        self.verify_named_read_only(path)?;
+        let named_store = TreeMarkerStore::open_path(path)?;
+        self.store.require_same_directory(&named_store)?;
+        let state_id = self.state_id.as_ref().ok_or_else(|| Error::LiveUsr {
+            operation: "load retained candidate state ID",
+            path: path.to_owned(),
+            source: io::Error::other("candidate state ID identity was not retained"),
+        })?;
+        state_id.revalidate(&self.store, &named_store)?;
+        self.verify_store_read_only(&named_store)
     }
 
     fn matches_store_read_only(&self, named_store: &TreeMarkerStore) -> Result<bool, Error> {

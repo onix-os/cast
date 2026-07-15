@@ -68,7 +68,8 @@ use crate::{
     transition_identity::{
         ArchivedCandidateError, FailedCandidateKind, QuarantinedCandidate, RetainedArchivedCandidateMoveFailure,
         RetainedArchivedCandidateMoveOutcome, RetainedExchangeFailure, RetainedExchangeOutcome,
-        RetainedPreviousMoveFailure, RetainedPreviousMoveOutcome, StatefulTreeIdentity,
+        RetainedPreviousMoveFailure, RetainedPreviousMoveOutcome, RetainedStagingWrapperRotationFailure,
+        RetainedStagingWrapperRotationOutcome, StatefulTreeIdentity,
     },
 };
 
@@ -77,6 +78,8 @@ pub use self::index::index;
 pub use self::resolve::{AvailableClosure, Error as ResolveError, ResolvedPackage, ResolvedRequest};
 pub use self::self_upgrade::self_upgrade;
 
+#[cfg(test)]
+mod active_reblit_tests;
 mod boot;
 mod cache;
 mod fetch;
@@ -1065,6 +1068,21 @@ impl Client {
             None => (None, StatefulCandidateOrigin::Fresh),
         };
 
+        if candidate_origin == StatefulCandidateOrigin::ActiveReblit
+            && let Err(primary) = tree_identity
+                .prepare_active_reblit_staging_rotation(&self.installation, &self.state_db, state)
+                .map_err(Error::from)
+        {
+            return Err(self.preserve_unswapped_candidate(
+                state.id,
+                previous.as_ref().map(|state| state.id),
+                candidate_origin,
+                primary,
+                &tree_identity,
+                &mut checkpoint,
+            ));
+        }
+
         let prepare = (|| {
             record_os_release(&self.installation.staging_dir())?;
             record_system_snapshot(&self.installation.staging_dir(), system_snapshot)?;
@@ -1090,6 +1108,14 @@ impl Client {
                 &self.installation.staging_path("usr"),
                 &self.installation.root.join("usr"),
             )?;
+            if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                tree_identity.verify_active_reblit_candidate_snapshot(
+                    &self.installation,
+                    &self.state_db,
+                    state,
+                    false,
+                )?;
+            }
             checkpoint(StatefulTransitionCheckpoint::AfterTransactionTriggers)?;
             Ok(())
         })();
@@ -1158,6 +1184,15 @@ impl Client {
                 &self.installation.root.join("usr"),
             )
             .map_err(Error::from)
+            .and_then(|()| {
+                if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                    tree_identity
+                        .verify_active_reblit_candidate_snapshot(&self.installation, &self.state_db, candidate, false)
+                        .map_err(Error::from)
+                } else {
+                    Ok(())
+                }
+            })
             .and_then(|()| checkpoint(StatefulTransitionCheckpoint::BeforeUsrExchange))
         {
             return Err(self.preserve_unswapped_candidate(
@@ -1170,7 +1205,19 @@ impl Client {
             ));
         }
 
-        if let Err(failure) = self.promote_staging(tree_identity) {
+        let promotion = if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+            tree_identity.exchange_forward_validated(&self.installation, &|| {
+                tree_identity.verify_active_reblit_candidate_snapshot(
+                    &self.installation,
+                    &self.state_db,
+                    candidate,
+                    false,
+                )
+            })
+        } else {
+            self.promote_staging(tree_identity)
+        };
+        if let Err(failure) = promotion {
             let outcome = failure.outcome();
             let primary = Error::from(failure);
             return match outcome {
@@ -1211,6 +1258,14 @@ impl Client {
                 &self.installation.root.join("usr"),
                 &self.installation.staging_path("usr"),
             )?;
+            if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                tree_identity.verify_active_reblit_candidate_snapshot(
+                    &self.installation,
+                    &self.state_db,
+                    candidate,
+                    true,
+                )?;
+            }
             checkpoint(StatefulTransitionCheckpoint::AfterUsrExchange)?;
 
             // Root ABI links refer into `/usr`, so the same links remain valid
@@ -1225,6 +1280,14 @@ impl Client {
                     &self.installation.root.join("usr"),
                     &self.installation.staging_path("usr"),
                 )?;
+                if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                    tree_identity.verify_active_reblit_candidate_snapshot(
+                        &self.installation,
+                        &self.state_db,
+                        candidate,
+                        true,
+                    )?;
+                }
                 system_triggers_incomplete = false;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggers)?;
@@ -1262,10 +1325,34 @@ impl Client {
             if run_boot_synchronization {
                 checkpoint(StatefulTransitionCheckpoint::BeforeCandidateBootSynchronization)?;
                 tree_identity.verify_candidate_for_recovery(&self.installation.root.join("usr"))?;
+                if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                    tree_identity.verify_active_reblit_candidate_snapshot(
+                        &self.installation,
+                        &self.state_db,
+                        candidate,
+                        true,
+                    )?;
+                }
                 candidate_boot_synchronization_started = true;
                 checkpoint(StatefulTransitionCheckpoint::AfterCandidateBootSynchronizationStarted)?;
+                if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                    tree_identity.verify_active_reblit_candidate_snapshot(
+                        &self.installation,
+                        &self.state_db,
+                        candidate,
+                        true,
+                    )?;
+                }
                 boot::synchronize(self, candidate, previous)?;
                 tree_identity.verify_candidate_for_recovery(&self.installation.root.join("usr"))?;
+                if candidate_origin == StatefulCandidateOrigin::ActiveReblit {
+                    tree_identity.verify_active_reblit_candidate_snapshot(
+                        &self.installation,
+                        &self.state_db,
+                        candidate,
+                        true,
+                    )?;
+                }
             }
 
             if candidate_origin == StatefulCandidateOrigin::Archived {
@@ -1276,6 +1363,36 @@ impl Client {
         })();
 
         match primary {
+            Ok(()) if candidate_origin == StatefulCandidateOrigin::ActiveReblit => {
+                match tree_identity.rotate_active_reblit_staging(&self.installation, &self.state_db, candidate) {
+                    Ok(()) => Ok(()),
+                    Err(failure) if failure.outcome() == RetainedStagingWrapperRotationOutcome::NotApplied => Err(self
+                        .recover_swapped_candidate(
+                            candidate.id,
+                            previous,
+                            candidate_origin,
+                            PreviousUsrLocation::Staging,
+                            None,
+                            false,
+                            candidate_boot_synchronization_started,
+                            Error::from(failure),
+                            tree_identity,
+                            checkpoint,
+                        )),
+                    Err(failure) => {
+                        let outcome = match failure.outcome() {
+                            RetainedStagingWrapperRotationOutcome::Applied => "applied",
+                            RetainedStagingWrapperRotationOutcome::Ambiguous => "ambiguous",
+                            RetainedStagingWrapperRotationOutcome::NotApplied => "not-applied",
+                        };
+                        Err(Error::ActiveReblitCommittedCleanupIncomplete {
+                            state: candidate.id,
+                            outcome,
+                            source: Box::new(failure),
+                        })
+                    }
+                }
+            }
             Ok(()) => Ok(()),
             Err(primary) => Err(self.recover_swapped_candidate(
                 candidate.id,
@@ -1497,7 +1614,10 @@ impl Client {
             tree_identity,
         ) {
             Ok(preservation) => preservation,
-            Err(first) if candidate_origin != StatefulCandidateOrigin::Archived || quarantine_archived_candidate => {
+            Err(first)
+                if candidate_origin == StatefulCandidateOrigin::Fresh
+                    || (candidate_origin == StatefulCandidateOrigin::Archived && quarantine_archived_candidate) =>
+            {
                 match self.preserve_failed_candidate(
                     candidate,
                     candidate_origin,
@@ -1624,6 +1744,16 @@ impl Client {
         quarantine_archived_candidate: bool,
         tree_identity: &StatefulTreeIdentity,
     ) -> Result<Option<QuarantinedCandidate>, Error> {
+        if candidate_origin == StatefulCandidateOrigin::ActiveReblit
+            && tree_identity
+                .has_active_reblit_staging_rotation()
+                .map_err(Error::from)?
+        {
+            tree_identity
+                .preserve_failed_active_reblit_wrapper(&self.installation, candidate)
+                .map_err(Error::from)?;
+            return Ok(None);
+        }
         if candidate_origin == StatefulCandidateOrigin::Archived && !quarantine_archived_candidate {
             self.rearchive_archived_candidate(tree_identity, candidate)?;
             tree_identity
@@ -11316,6 +11446,15 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
     #[error(
+        "active-state reblit for state {state} committed, but whole-wrapper cleanup ended with {outcome}; do not reverse through fixed staging"
+    )]
+    ActiveReblitCommittedCleanupIncomplete {
+        state: state::Id,
+        outcome: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error(
         "durable tree-identity preparation for candidate {candidate} failed before activation; candidate tree remains at {location:?}, previous state is {previous:?}, and the candidate database row was not invalidated"
     )]
     StatefulTreeIdentityPreparationFailed {
@@ -11383,6 +11522,14 @@ impl From<ArchivedCandidateError> for Error {
 
 impl From<RetainedArchivedCandidateMoveFailure> for Error {
     fn from(source: RetainedArchivedCandidateMoveFailure) -> Self {
+        Self::StatefulTreeIdentity {
+            source: Box::new(source),
+        }
+    }
+}
+
+impl From<RetainedStagingWrapperRotationFailure> for Error {
+    fn from(source: RetainedStagingWrapperRotationFailure) -> Self {
         Self::StatefulTreeIdentity {
             source: Box::new(source),
         }
@@ -20758,12 +20905,15 @@ let cast = import! cast.system.v1
                     &state,
                     None,
                     failed_model,
-                    |checkpoint| {
-                        if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
-                            Err(injected_state_transition_error("active-state reblit"))
-                        } else {
+                    |checkpoint| match checkpoint {
+                        StatefulTransitionCheckpoint::AfterTransactionTriggers => {
+                            fs::write(client.installation.staging_path("wrapper-sentinel"), package)?;
                             Ok(())
                         }
+                        StatefulTransitionCheckpoint::AfterUsrExchange => {
+                            Err(injected_state_transition_error("active-state reblit"))
+                        }
+                        _ => Ok(()),
                     },
                 )
                 .unwrap_err();
@@ -20789,7 +20939,7 @@ let cast = import! cast.system.v1
                 "restored-active-package",
             );
             assert!(!client.installation.root_path(state.id.to_string()).join("usr").exists());
-            assert!(!client.installation.staging_path("usr").exists());
+            assert_eq!(fs::read_dir(client.installation.staging_dir()).unwrap().count(), 0);
         }
 
         let quarantine_dir = client.installation.state_quarantine_dir();
@@ -20802,25 +20952,33 @@ let cast = import! cast.system.v1
         assert_eq!(quarantines.iter().collect::<BTreeSet<_>>().len(), 2);
 
         let mut preserved_snapshots = BTreeSet::new();
+        let mut preserved_tokens = BTreeSet::new();
+        let mut preserved_sentinels = BTreeSet::new();
         for quarantine in quarantines {
             assert!(
                 quarantine
                     .file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with(&format!("failed-active-reblit-{}-", state.id))
+                    .starts_with(&format!("replaced-active-reblit-wrapper-{}-", state.id))
             );
             assert_eq!(
                 fs::read_to_string(quarantine.join("usr/.stateID")).unwrap(),
                 state.id.to_string()
             );
             let token = recovery_tree_token(&quarantine.join("usr"));
-            assert_eq!(
-                quarantine.file_name().unwrap().to_string_lossy(),
-                format!("failed-active-reblit-{}-{token}", state.id)
-            );
+            preserved_tokens.insert(token);
+            preserved_sentinels.insert(fs::read_to_string(quarantine.join("wrapper-sentinel")).unwrap());
             preserved_snapshots.insert(fs::read_to_string(system_model::snapshot_path(&quarantine)).unwrap());
         }
+        assert_eq!(preserved_tokens.len(), 2);
+        assert_eq!(
+            preserved_sentinels,
+            BTreeSet::from([
+                "first-failed-reblit-package".to_owned(),
+                "second-failed-reblit-package".to_owned(),
+            ])
+        );
         assert_eq!(preserved_snapshots, failed_snapshots);
     }
 
