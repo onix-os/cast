@@ -1,11 +1,13 @@
 .PHONY: forge-read-only-installation-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
+	forge-transition-journal-test \
 	stone-recipe-derivation-provenance-test \
-	stone-recipe-derivation-validation-test \
+	stone-recipe-derivation-validation-test stone-recipe-build-lock-test \
 	stone-recipe-package-validation-test \
 	stone-recipe-build-policy-validation-test container-cgroup-test \
 	container-process-runtime-test container-mount-boundary-test \
-	mason-package-collect-test \
+	container-root-host-safe-test mason-package-collect-test \
+	mason-package-collect-transaction-test \
 	gitwrap-repository-fs-test forge-repository-manager-test \
 	forge-security-fixture-test
 
@@ -96,6 +98,13 @@ forge-transition-journal-contract-test:
 		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+forge-transition-journal-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 51; \
+	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
+
 stone-recipe-derivation-provenance-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
@@ -121,6 +130,13 @@ stone-recipe-derivation-validation-test:
 	count="$$( timeout 10s grep -c '^derivation::tests::.*: test$$' <<<"$$listed" )"; \
 	test "$$count" = 66; \
 	timeout 900s $(CARGO) test -p stone_recipe --lib "derivation::tests::" -- --test-threads=1
+
+stone-recipe-build-lock-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^derivation::build_lock::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 13; \
+	timeout 900s $(CARGO) test -p stone_recipe --lib "derivation::build_lock::tests::" -- --test-threads=1
 
 stone-recipe-package-validation-test:
 	@set -eu; \
@@ -217,12 +233,45 @@ container-mount-boundary-test:
 		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+# The complete lane intentionally retains five socket-diagnostic tests which
+# this local sandbox denies with EPERM. Run every other direct root test here,
+# one-by-one, so the extraction is still covered without converting a denial
+# into a false skip or weakening the tests themselves.
+container-root-host-safe-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 64; \
+	ran=0; \
+	for test in $$( timeout 10s grep '^tests::.*: test$$' <<<"$$listed" | timeout 10s sed 's/: test$$//' ); do \
+		case "$$test" in \
+			tests::child_error_read_does_not_wait_for_a_leaked_descendant_socket|\
+			tests::raw_clone_child_panic_is_contained_and_reported|\
+			tests::synchronization_socket_blocks_child_until_one_atomic_release|\
+			tests::synchronization_socket_is_close_on_exec_blocking_and_nosignal|\
+			tests::synchronization_socket_preserves_the_maximum_diagnostic_packet) continue ;; \
+		esac; \
+		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
+		ran=$$((ran + 1)); \
+	done; \
+	timeout 10s test "$$ran" = 59
+
 mason-package-collect-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^package::collect::tests::.*: test$$' <<<"$$listed" )"; \
 	test "$$count" = 27; \
 	timeout 900s $(CARGO) test -p mason --lib "package::collect::tests::" -- --test-threads=1
+
+mason-package-collect-transaction-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	mutation_count="$$( timeout 10s grep -c '^package::collect::mutation::tests::.*: test$$' <<<"$$listed" )"; \
+	publication_count="$$( timeout 10s grep -c '^package::collect::publication::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$mutation_count" = 11; \
+	timeout 10s test "$$publication_count" = 11; \
+	timeout 900s $(CARGO) test -p mason --lib "package::collect::mutation::tests::" -- --test-threads=1; \
+	timeout 900s $(CARGO) test -p mason --lib "package::collect::publication::tests::" -- --test-threads=1
 
 gitwrap-repository-fs-test:
 	@set -eu; \
