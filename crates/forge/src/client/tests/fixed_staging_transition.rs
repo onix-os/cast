@@ -302,6 +302,13 @@ fn stateful_trigger_preparation_never_follows_a_replaced_isolation_root() {
         .installation
         .staging_path("usr/share/cast/triggers/tx.d/isolation-root-race.glu");
     fs::create_dir_all(trigger.parent().unwrap()).unwrap();
+    for directory in [
+        client.installation.staging_path("usr/share/cast"),
+        client.installation.staging_path("usr/share/cast/triggers"),
+        client.installation.staging_path("usr/share/cast/triggers/tx.d"),
+    ] {
+        fs::set_permissions(directory, Permissions::from_mode(0o755)).unwrap();
+    }
     fs::write(
         &trigger,
         r#"let cast = import! cast.trigger.v1
@@ -318,6 +325,7 @@ let base = cast.trigger "isolation-root-race" "Retained isolation root race proo
 "#,
     )
     .unwrap();
+    fs::set_permissions(&trigger, Permissions::from_mode(0o644)).unwrap();
 
     let hook_isolation = isolation.clone();
     let hook_detached = detached.clone();

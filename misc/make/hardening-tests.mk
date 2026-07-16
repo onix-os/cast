@@ -1,5 +1,5 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
-	forge-mutable-startup-namespace-test \
+	forge-mutable-startup-namespace-test forge-candidate-pre-journal-durability-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
@@ -72,6 +72,45 @@ forge-mutable-startup-namespace-test:
 		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+forge-candidate-pre-journal-durability-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	prefix_count="$$( timeout 10s grep -Ec '^(transition_identity::prejournal_inventory::tests|client::tests)::candidate_pre_journal_.*: test$$' <<<"$$listed" )"; \
+	core_count="$$( timeout 10s grep -c '^transition_identity::prejournal_inventory::tests::candidate_pre_journal_.*: test$$' <<<"$$listed" )"; \
+	client_count="$$( timeout 10s grep -c '^client::tests::candidate_pre_journal_.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$prefix_count" = 12; \
+	timeout 10s test "$$core_count" = 10; \
+	timeout 10s test "$$client_count" = 2; \
+	for test in \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_nested_tree_seals_and_allows_sole_new_marker \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_existing_marker_is_adopted_without_delta \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_add_delete_replace_and_content_changes_fail \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_same_metadata_content_rewrite_fails \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_symlink_is_opaque_and_target_change_fails \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_special_mount_and_hardlink_entries_fail \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_entry_depth_and_name_bounds_are_inclusive \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_regular_byte_bound_is_inclusive \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_operation_and_deadline_bounds_are_inclusive \
+		transition_identity::prejournal_inventory::tests::candidate_pre_journal_access_and_default_acls_fail \
+		client::tests::candidate_pre_journal_namespace_substitution_preserves_detached_cast_and_replacement_before_markers \
+		client::tests::candidate_pre_journal_legacy_hardlinked_archived_payload_fails_before_marker_or_exchange \
+		client::tests::failed_first_install_can_retry_the_exact_marker_only_previous_baseline \
+		client::tests::first_install_marker_retry_rejects_marker_plus_foreign_content_unchanged \
+		client::tests::exact_parked_tree_marker_hardlink_is_reauthorized_after_reopen; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 1200s $(CARGO) test -p forge --lib "candidate_pre_journal_" -- --test-threads=1; \
+	timeout 300s $(CARGO) test -p forge --lib \
+		"client::tests::failed_first_install_can_retry_the_exact_marker_only_previous_baseline" \
+		-- --exact --test-threads=1; \
+	timeout 300s $(CARGO) test -p forge --lib \
+		"client::tests::first_install_marker_retry_rejects_marker_plus_foreign_content_unchanged" \
+		-- --exact --test-threads=1; \
+	timeout 300s $(CARGO) test -p forge --lib \
+		"client::tests::exact_parked_tree_marker_hardlink_is_reauthorized_after_reopen" \
+		-- --exact --test-threads=1
+
 forge-linux-fs-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
@@ -127,7 +166,7 @@ forge-client-direct-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -Ec '^client::tests::[^:]+: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 211; \
+	timeout 10s test "$$count" = 213; \
 	timeout 1200s $(CARGO) test -p forge --lib "client::tests::" -- --test-threads=1
 
 forge-database-adapter-test:

@@ -54,9 +54,17 @@ impl StatefulTreeIdentity {
         // Lock ordering is installation lock (owned by Installation), state
         // database (already opened), then journal lock. Do not invent a second
         // lock for marker publication.
-        installation.revalidate_root_directory()?;
-        let journal = TransitionJournalStore::open_retained(installation.root_directory(), root)?;
-        require_clean_baseline(&journal, state_db)?;
+        installation.revalidate_mutable_namespace()?;
+        let cast = installation.retained_mutable_cast_directory()?;
+        after_candidate_mutable_namespace_preflight();
+        let journal = TransitionJournalStore::open_in_retained_cast(cast, root);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        let journal = journal?;
+        let baseline = require_clean_baseline(&journal, state_db);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        baseline?;
 
         // Authenticate the materialized candidate and establish a strictly
         // empty, same-mount previous tree only when the retained root proves
@@ -70,11 +78,36 @@ impl StatefulTreeIdentity {
             TreeMarkerStore::open_path(candidate_path)?
         };
         let previous_store = open_or_synthesize_live_usr(installation)?;
+        let candidate_durability = RetainedCandidateDurabilitySeal::seal_before_marker(
+            candidate_store.retained_directory(),
+            candidate_path,
+            CandidateInventoryLimits::default(),
+        );
+        // A recursive durability proof can be long-running. Re-establish that
+        // its retained candidate is still reachable through both its exact
+        // child name and the complete mutable installation namespace before
+        // publishing any marker. Authority errors supersede any simultaneous
+        // inventory failure.
+        let candidate_name =
+            TreeMarkerStore::open_path(candidate_path).and_then(|named| candidate_store.require_same_directory(&named));
+        let previous_name = require_named_live_usr(installation, previous_store.retained_directory(), &previous_path);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        candidate_name?;
+        previous_name?;
+        let candidate_durability = candidate_durability?;
         let candidate = RetainedIdentity::prepare(candidate_store, Some(candidate_state))?;
-        if retained_candidate_usr.is_some() {
-            candidate.verify_named_read_only(candidate_path)?;
-        }
         let _candidate_slot_link = candidate.authorize_recovered_slot_link(installation, candidate_state)?;
+        // Marker publication is the only admitted inventory delta. Bind that
+        // delta to the exact retained marker and state-ID inode on both sides
+        // of the post-publication inventory and durability pass.
+        candidate.verify_named_with_state_id(candidate_path)?;
+        let durability = candidate_durability.validate_after_marker();
+        let identity = candidate.verify_named_with_state_id(candidate_path);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        identity?;
+        durability?;
         // The previous active tree is deliberately opaque during a repair:
         // only its already-retained marker is required. Its `.stateID` may be
         // the corrupt evidence this reblit is replacing.
@@ -100,8 +133,10 @@ impl StatefulTreeIdentity {
         // A cooperating writer cannot pass either held flock. Repeating the
         // evidence audit after marker publication also makes the ordering an
         // executable invariant rather than a comment.
-        require_clean_baseline(&journal, state_db)?;
-        installation.revalidate_root_directory()?;
+        let baseline = require_clean_baseline(&journal, state_db);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        baseline?;
 
         Ok(Self {
             journal,
@@ -405,3 +440,28 @@ impl StatefulTreeIdentity {
         self.candidate.verify_named_read_only(path)
     }
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static AFTER_CANDIDATE_MUTABLE_NAMESPACE_PREFLIGHT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn arm_after_candidate_mutable_namespace_preflight(hook: impl FnOnce() + 'static) {
+    AFTER_CANDIDATE_MUTABLE_NAMESPACE_PREFLIGHT.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_candidate_mutable_namespace_preflight() {
+    AFTER_CANDIDATE_MUTABLE_NAMESPACE_PREFLIGHT.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_candidate_mutable_namespace_preflight() {}

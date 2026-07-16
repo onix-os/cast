@@ -56,6 +56,17 @@ impl RetainedIdentity {
         recovered.wrapper.revalidate_child(&roots, &recovered.name)?;
         recovered.marker.require_named(&recovered.wrapper)?;
         self.require_recovered_wrapper_layout(&recovered.wrapper, &recovered.marker, recovered.kind)?;
+        // A prior in-process publication may have linked the marker before a
+        // wrapper fsync reported failure. Reopening proves the exact sole
+        // hardlink; repeat both inode and containing-directory durability
+        // before authorizing nlink=2 for a new pre-journal baseline.
+        recovered.marker.sync()?;
+        recovered
+            .wrapper
+            .sync("sync recovered state-slot wrapper before link authorization")?;
+        recovered.wrapper.revalidate_child(&roots, &recovered.name)?;
+        recovered.marker.require_named(&recovered.wrapper)?;
+        self.require_recovered_wrapper_layout(&recovered.wrapper, &recovered.marker, recovered.kind)?;
         self.marker.authorize_recovered_slot_link()?;
         recovered.marker.require_named(&recovered.wrapper)?;
         self.require_recovered_wrapper_layout(&recovered.wrapper, &recovered.marker, recovered.kind)?;

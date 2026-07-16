@@ -73,6 +73,178 @@ fn orphan_transition_row_blocks_marker_publication_before_activation() {
 }
 
 #[test]
+fn candidate_pre_journal_namespace_substitution_preserves_detached_cast_and_replacement_before_markers() {
+    let fixture = stateful_transition_fixture(false);
+    let cast = fixture.client.installation.root.join(".cast");
+    let detached = fixture
+        .client
+        .installation
+        .root
+        .join("detached-candidate-pre-journal-cast");
+    let cast_identity = root_abi_inode(&cast);
+    let candidate_usr = fixture.client.installation.staging_path("usr");
+    let candidate_usr_identity = root_abi_inode(&candidate_usr);
+    let detached_candidate_usr = detached.join("root/staging/usr");
+    let live_usr = fixture.client.installation.root.join("usr");
+    let live_usr_identity = root_abi_inode(&live_usr);
+    let global_lock = cast.join(".cast-lockfile");
+    let journal_lock = cast.join("journal/state-transition.lock");
+    let global_lock_identity = root_abi_inode(&global_lock);
+    let journal_lock_identity = root_abi_inode(&journal_lock);
+    let database_identities = ["install", "state", "layout"].map(|name| {
+        let path = cast.join("db").join(name);
+        (name, root_abi_inode(&path))
+    });
+
+    assert!(!cast.join("journal/state-transition").exists());
+    assert!(!candidate_usr.join(".cast-tree-id").exists());
+    assert!(!live_usr.join(".cast-tree-id").exists());
+
+    let replacement_marker = cast.join("foreign-replacement");
+    let hook_cast = cast.clone();
+    let hook_detached = detached.clone();
+    let hook_marker = replacement_marker.clone();
+    crate::transition_identity::arm_after_candidate_mutable_namespace_preflight(move || {
+        fs::rename(&hook_cast, &hook_detached).unwrap();
+        fs::create_dir(&hook_cast).unwrap();
+        fs::set_permissions(&hook_cast, Permissions::from_mode(0o700)).unwrap();
+        fs::write(&hook_marker, b"replacement must remain untouched").unwrap();
+    });
+
+    let error = fixture
+        .client
+        .prepare_stateful_tree_identity(&candidate_usr, fixture.candidate.id)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::transition_identity::Error::Installation(installation::Error::PrepareDirectory {
+            path,
+            ..
+        }) if path == cast
+    ));
+
+    let mut replacement_names = fs::read_dir(&cast)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    replacement_names.sort();
+    assert_eq!(replacement_names, [OsString::from("foreign-replacement")]);
+    assert_ne!(root_abi_inode(&cast), cast_identity);
+    assert_eq!(root_abi_inode(&detached), cast_identity);
+    assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement must remain untouched");
+    assert_eq!(fs::metadata(&cast).unwrap().permissions().mode() & 0o7777, 0o700);
+    assert!(!cast.join(".cast-lockfile").exists());
+    assert!(!cast.join("db").exists());
+    assert!(!cast.join("journal").exists());
+
+    assert_eq!(root_abi_inode(&detached.join(".cast-lockfile")), global_lock_identity);
+    assert_eq!(
+        root_abi_inode(&detached.join("journal/state-transition.lock")),
+        journal_lock_identity
+    );
+    assert!(!detached.join("journal/state-transition").exists());
+    for (name, identity) in database_identities {
+        assert_eq!(root_abi_inode(&detached.join("db").join(name)), identity);
+    }
+
+    assert!(!candidate_usr.exists());
+    assert_eq!(root_abi_inode(&detached_candidate_usr), candidate_usr_identity);
+    assert!(!detached_candidate_usr.join(".cast-tree-id").exists());
+    assert_eq!(root_abi_inode(&live_usr), live_usr_identity);
+    assert!(!live_usr.join(".cast-tree-id").exists());
+    assert_eq!(
+        fs::read_to_string(detached_candidate_usr.join(".stateID")).unwrap(),
+        fixture.candidate.id.to_string()
+    );
+    assert_eq!(
+        fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+        fixture.previous.id.to_string()
+    );
+    assert_eq!(fixture.client.state_db.get(fixture.candidate.id).unwrap().id, fixture.candidate.id);
+    assert_eq!(fixture.client.state_db.get(fixture.previous.id).unwrap().id, fixture.previous.id);
+}
+
+#[test]
+fn candidate_pre_journal_legacy_hardlinked_archived_payload_fails_before_marker_or_exchange() {
+    let fixture = stateful_transition_fixture(true);
+    let installation = &fixture.client.installation;
+    let archived_usr = installation.root_path(fixture.candidate.id.to_string()).join("usr");
+    let live_usr = installation.root.join("usr");
+    let payload = archived_usr.join("lib/system-model.glu");
+    let external = installation.root.join("legacy-archived-payload-hardlink");
+    let archived_usr_identity = root_abi_inode(&archived_usr);
+    let live_usr_identity = root_abi_inode(&live_usr);
+    let payload_identity = root_abi_inode(&payload);
+    let payload_bytes = fs::read(&payload).unwrap();
+    let candidate_row = fixture.client.state_db.get(fixture.candidate.id).unwrap();
+    let previous_row = fixture.client.state_db.get(fixture.previous.id).unwrap();
+    assert_eq!(fs::metadata(&payload).unwrap().nlink(), 1);
+
+    fs::hard_link(&payload, &external).unwrap();
+    assert_eq!(root_abi_inode(&external), payload_identity);
+    assert_eq!(fs::metadata(&payload).unwrap().nlink(), 2);
+
+    let error = fixture
+        .client
+        .activate_state(fixture.candidate.id, true, true)
+        .unwrap_err();
+    let Error::StatefulTreeIdentityPreparationFailed {
+        candidate,
+        previous: Some(previous),
+        location,
+        source,
+    } = error
+    else {
+        panic!("expected archived candidate identity preparation failure");
+    };
+    assert_eq!(candidate, fixture.candidate.id);
+    assert_eq!(previous, fixture.previous.id);
+    assert_eq!(location, archived_usr);
+    let Error::StatefulTreeIdentity { source } = *source else {
+        panic!("expected tree identity source");
+    };
+    let identity_source = source
+        .downcast_ref::<crate::transition_identity::Error>()
+        .unwrap_or_else(|| panic!("expected transition identity source, got {source:#?}"));
+    let crate::transition_identity::Error::CandidateInventory(inventory_source) = identity_source else {
+        panic!("expected candidate inventory source, got {identity_source:#?}");
+    };
+    let crate::transition_identity::CandidateInventoryError::UnexpectedHardlink { path, links } = inventory_source
+    else {
+        panic!("expected unexpected-hardlink source, got {inventory_source:#?}");
+    };
+    assert_eq!(path, &payload);
+    assert_eq!(*links, 2);
+
+    assert_eq!(root_abi_inode(&archived_usr), archived_usr_identity);
+    assert_eq!(root_abi_inode(&live_usr), live_usr_identity);
+    assert!(!installation.staging_path("usr").exists());
+    assert!(!archived_usr.join(".cast-tree-id").exists());
+    assert!(!live_usr.join(".cast-tree-id").exists());
+    let journal = crate::transition_journal::TransitionJournalStore::open(&installation.root).unwrap();
+    assert!(journal.load().unwrap().is_none());
+    assert!(!installation.root.join(".cast/journal/state-transition").exists());
+
+    assert_eq!(root_abi_inode(&payload), payload_identity);
+    assert_eq!(root_abi_inode(&external), payload_identity);
+    assert_eq!(fs::metadata(&payload).unwrap().nlink(), 2);
+    assert_eq!(fs::metadata(&external).unwrap().nlink(), 2);
+    assert_eq!(fs::read(&payload).unwrap(), payload_bytes);
+    assert_eq!(fs::read(&external).unwrap(), payload_bytes);
+    assert_eq!(
+        fs::read_to_string(archived_usr.join(".stateID")).unwrap(),
+        fixture.candidate.id.to_string()
+    );
+    assert_eq!(
+        fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+        fixture.previous.id.to_string()
+    );
+    assert_eq!(fixture.client.state_db.get(fixture.candidate.id).unwrap(), candidate_row);
+    assert_eq!(fixture.client.state_db.get(fixture.previous.id).unwrap(), previous_row);
+    assert_eq!(fixture.client.installation.active_state, Some(fixture.previous.id));
+}
+
+#[test]
 fn first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr() {
     let temporary = tempfile::tempdir().unwrap();
     let client = stateful_test_client(temporary.path());

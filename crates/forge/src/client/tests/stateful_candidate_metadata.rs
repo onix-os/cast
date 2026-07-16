@@ -19,7 +19,7 @@ fn stateful_candidate_metadata_never_follows_lib_or_os_info_symlinks() {
             symlink(&external, &candidate_lib).unwrap();
         } else {
             fs::write(&external, b"external-input").unwrap();
-            fs::create_dir(&candidate_lib).unwrap();
+            create_canonical_candidate_directory(&candidate_lib);
             symlink(&external, candidate_lib.join("os-info.json")).unwrap();
         }
 
@@ -58,7 +58,7 @@ fn stateful_candidate_metadata_never_follows_output_symlinks() {
         fs::write(&external, format!("external-{output}")).unwrap();
         let external_identity = inode_identity(&external);
         let lib = installation.staging_path("usr/lib");
-        fs::create_dir(&lib).unwrap();
+        create_canonical_candidate_directory(&lib);
         symlink(&external, lib.join(output)).unwrap();
 
         let error = apply_fresh_candidate(&fixture, |_| Ok(())).unwrap_err();
@@ -84,28 +84,32 @@ fn stateful_candidate_metadata_preserves_existing_output_inodes() {
             let live_identity = inode_identity(&installation.root.join("usr"));
             let lib = installation.staging_path("usr/lib");
             let candidate_output = lib.join(output);
-            fs::create_dir(&lib).unwrap();
+            create_canonical_candidate_directory(&lib);
 
             let external = installation.root.join(format!("external-{output}-{hardlinked}"));
             if hardlinked {
-                fs::write(&external, format!("external-{output}")).unwrap();
+                write_canonical_candidate_file(&external, format!("external-{output}"));
                 fs::hard_link(&external, &candidate_output).unwrap();
             } else {
-                fs::write(&candidate_output, format!("candidate-occupant-{output}")).unwrap();
+                write_canonical_candidate_file(&candidate_output, format!("candidate-occupant-{output}"));
             }
             let occupant_identity = inode_identity(&candidate_output);
             let occupant_bytes = fs::read(&candidate_output).unwrap();
 
             let error = apply_fresh_candidate(&fixture, |_| Ok(())).unwrap_err();
+            if hardlinked {
+                assert_prejournal_hardlink_failure(&fixture, error, live_identity, &candidate_output);
+                assert_eq!(inode_identity(&candidate_output), occupant_identity);
+                assert_eq!(inode_identity(&external), occupant_identity);
+                assert_eq!(fs::read(&candidate_output).unwrap(), occupant_bytes);
+                assert_eq!(fs::read(&external).unwrap(), occupant_bytes);
+                continue;
+            }
             let quarantine = assert_preserved_metadata_failure(&fixture, error, live_identity, &[]);
             let preserved = quarantine.join("usr/lib").join(output);
 
             assert_eq!(inode_identity(&preserved), occupant_identity);
             assert_eq!(fs::read(&preserved).unwrap(), occupant_bytes);
-            if hardlinked {
-                assert_eq!(inode_identity(&external), occupant_identity);
-                assert_eq!(fs::read(&external).unwrap(), occupant_bytes);
-            }
         }
     }
 }
@@ -117,7 +121,7 @@ fn stateful_candidate_metadata_final_name_races_are_no_replace() {
         let installation = &fixture.client.installation;
         let live_identity = inode_identity(&installation.root.join("usr"));
         let external = installation.root.join(format!("external-{output}-race"));
-        fs::write(&external, format!("racing-{output}")).unwrap();
+        write_canonical_candidate_file(&external, format!("racing-{output}"));
         let external_identity = inode_identity(&external);
         let hook_external = external.clone();
         let hook_output = installation.staging_path("usr/lib").join(output);
@@ -385,6 +389,50 @@ fn assert_preserved_metadata_failure(
     quarantine
 }
 
+fn assert_prejournal_hardlink_failure(
+    fixture: &StatefulTransitionFixture,
+    error: Error,
+    live_identity: (u64, u64),
+    expected_path: &Path,
+) {
+    let Error::StatefulTreeIdentityPreparationFailed {
+        candidate,
+        previous: Some(previous),
+        location,
+        source,
+    } = error
+    else {
+        panic!("expected pre-journal candidate identity failure");
+    };
+    assert_eq!(candidate, fixture.candidate.id);
+    assert_eq!(previous, fixture.previous.id);
+    assert_eq!(location, fixture.client.installation.staging_path("usr"));
+    let Error::StatefulTreeIdentity { source } = *source else {
+        panic!("expected retained tree-identity source");
+    };
+    assert!(matches!(
+        source.downcast_ref::<crate::transition_identity::Error>(),
+        Some(crate::transition_identity::Error::CandidateInventory(
+            crate::transition_identity::CandidateInventoryError::UnexpectedHardlink { path, links }
+        )) if path == expected_path && *links == 2
+    ));
+
+    assert!(take_observed_trigger_scopes().is_empty());
+    assert_live_unchanged(fixture, live_identity);
+    assert_eq!(
+        fixture.client.state_db.get(fixture.candidate.id).unwrap().id,
+        fixture.candidate.id
+    );
+    assert!(fixture.client.installation.staging_path("usr").exists());
+    assert!(!fixture.client.installation.staging_path("usr/.cast-tree-id").exists());
+    assert!(
+        fs::read_dir(fixture.client.installation.state_quarantine_dir())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
 fn assert_live_unchanged(fixture: &StatefulTransitionFixture, expected_identity: (u64, u64)) {
     let live = fixture.client.installation.root.join("usr");
     assert_eq!(inode_identity(&live), expected_identity);
@@ -402,4 +450,14 @@ fn assert_live_unchanged(fixture: &StatefulTransitionFixture, expected_identity:
 fn inode_identity(path: &Path) -> (u64, u64) {
     let metadata = fs::symlink_metadata(path).unwrap();
     (metadata.dev(), metadata.ino())
+}
+
+fn create_canonical_candidate_directory(path: &Path) {
+    fs::create_dir(path).unwrap();
+    fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
+}
+
+fn write_canonical_candidate_file(path: &Path, contents: impl AsRef<[u8]>) {
+    fs::write(path, contents).unwrap();
+    fs::set_permissions(path, Permissions::from_mode(0o644)).unwrap();
 }

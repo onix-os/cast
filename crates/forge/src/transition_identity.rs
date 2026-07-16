@@ -39,6 +39,7 @@ mod candidate_quarantine;
 mod error;
 mod fault_injection;
 mod namespace_helpers;
+mod prejournal_inventory;
 mod previous_tree_move;
 mod prune_residue;
 mod reusable_previous_slot;
@@ -55,6 +56,11 @@ use fault_injection::{
     quarantine_checkpoint, retained_exchange_checkpoint, retained_previous_move_checkpoint,
 };
 use namespace_helpers::*;
+
+#[allow(unused_imports)]
+pub(crate) use prejournal_inventory::{
+    CandidateInventoryBoundary, CandidateInventoryError, CandidateInventoryLimits, RetainedCandidateDurabilitySeal,
+};
 
 #[cfg(test)]
 pub(crate) use active_previous_slot_parking::{
@@ -112,6 +118,8 @@ pub(crate) use staging_wrapper_rotation::{
 pub(crate) use staging_wrapper_rotation::{
     RetainedStagingWrapperRotationFaultPoint, arm_before_staging_wrapper_exchange, arm_staging_wrapper_rotation_faults,
 };
+#[cfg(test)]
+pub(crate) use tree_lifecycle::arm_after_candidate_mutable_namespace_preflight;
 
 const LIVE_USR_NAME: &CStr = c"usr";
 const TREE_MARKER_NAME: &[u8] = b".cast-tree-id";

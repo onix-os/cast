@@ -692,7 +692,9 @@ fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(
     let path = system_model::snapshot_path(root);
     let dir = path.parent().expect("system snapshot path has a parent");
     fs::create_dir_all(dir)?;
-    fs::write(path, system_snapshot.encoded())?;
+    fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))?;
+    fs::write(&path, system_snapshot.encoded())?;
+    fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
 
     Ok(())
 }

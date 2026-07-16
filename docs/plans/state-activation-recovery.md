@@ -314,9 +314,42 @@ and instant rollback mechanism; it hardens their failure semantics.
   exercises every final and `.next` conflict, archived-candidate ordering,
   retained absence and inode replacement at the exchange boundary, and
   compensating recovery when a foreign name wins after `/usr` exchange but
-  before root-link publication. Authenticated scratch cleanup, recursive
-  candidate durability/inventory, complete previous-tree classification, and
-  trigger-proof marker reservation remain open, so this item is not complete.
+  before root-link publication. As of 2026-07-16, the candidate portion also
+  retains the exact candidate `/usr` and performs an iterative, raw-byte,
+  descriptor-rooted inventory without following symlinks or crossing mounts.
+  Entry, depth, raw-name, regular-byte, operation, and cooperative deadline
+  bounds fail closed, while attacker-scaled collections, paths, names, and
+  buffers use fallible reservations. Regular contents are SHA-256 hashed inside
+  full metadata sandwiches; symlink targets remain opaque bytes; special
+  inodes, duplicate or non-marker hardlinks, foreign owners, POSIX ACLs,
+  extended attributes on regular files and directories, external-write mode
+  bits, and the special mode bits already forbidden by Stone materialization
+  are rejected. Canonical symlinks cannot carry user or file-capability xattrs;
+  security-label symlink attributes are outside the supported package model
+  rather than inspected through an unsafe pathname fallback. This canonical
+  boundary therefore deliberately excludes SELinux-, IMA-, or EVM-labeled
+  candidate filesystems until those attributes gain a typed declarative model.
+  Every exact file and directory is synced
+  bottom-up, symlink namespace durability receives a filesystem barrier, and a
+  complete second inventory must match. Marker publication then admits only a
+  sole new canonical one-link marker or exact adoption of a previously strict
+  marker, followed by marker, root, inventory, `.stateID`, candidate-name,
+  live-`/usr`-name, and mutable-namespace revalidation. Reopened authorized
+  two-link marker recovery repeats marker and containing-wrapper durability
+  before accepting that link.
+
+  This is deliberately a cooperating-writer proof for a private staging
+  wrapper, not a kernel freeze against same-UID inode-reuse or create/delete
+  ABA. An archive produced by the former CAS-hardlink materializer whose
+  ordinary payload still has `nlink != 1` fails closed; aliases already removed
+  down to one link remain admissible. Current `state verify` does not discover a
+  byte-correct surviving alias, so backward activation requires an explicit
+  independent-copy repair or migration surface rather than silent adoption.
+  The authenticated canonical marker's sole authorized second link remains the
+  only exception. This boundary still creates no live journal and cannot
+  reconcile a reboot. Authenticated scratch cleanup, complete
+  previous-tree classification, trigger-proof marker reservation, and
+  coordinator integration remain open, so this item is not complete.
 - [ ] Drive new-state creation, archived-state activation, and active-state
   reblits through the same journal coordinator. Persist each intent before DB
   allocation, candidate decoration, trigger execution, `/usr` exchange,

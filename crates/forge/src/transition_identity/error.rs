@@ -18,6 +18,8 @@ pub(crate) enum Error {
     StateEvidence(#[from] db::state::TransitionEvidenceError),
     #[error("prepare or authenticate a durable tree marker")]
     TreeMarker(#[from] TreeMarkerError),
+    #[error("establish the retained candidate pre-journal durability baseline")]
+    CandidateInventory(#[from] super::prejournal_inventory::CandidateInventoryError),
     #[error("prepare or authenticate a reusable state-slot marker")]
     StateSlotMarker(#[from] state_slot_marker::Error),
     #[error("tree marker for state {state} has a second link but no exact authorized state-slot wrapper")]

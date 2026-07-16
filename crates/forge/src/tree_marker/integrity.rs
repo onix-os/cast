@@ -25,7 +25,7 @@ pub(super) const MAGIC_END: usize = MAGIC.len();
 pub(super) const VERSION_END: usize = MAGIC_END + size_of::<u16>();
 pub(super) const LENGTH_END: usize = VERSION_END + size_of::<u32>();
 pub(super) const CHECKSUM_END: usize = LENGTH_END + CHECKSUM_LENGTH;
-pub(super) const FRAME_LENGTH: usize = CHECKSUM_END + TOKEN_LENGTH;
+pub(crate) const FRAME_LENGTH: usize = CHECKSUM_END + TOKEN_LENGTH;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct InodeIdentity {

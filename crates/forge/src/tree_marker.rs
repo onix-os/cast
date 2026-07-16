@@ -34,6 +34,7 @@ use crate::{
 mod integrity;
 mod retained;
 
+pub(crate) use integrity::FRAME_LENGTH as TREE_MARKER_FRAME_LENGTH;
 use integrity::*;
 
 const MARKER_NAME: &CStr = c".cast-tree-id";
