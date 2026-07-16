@@ -24,7 +24,11 @@ use super::{
     StateIdFingerprint, TreeLocation, UsrFingerprint, WrapperFingerprint, controlled_directory_witness, open_directory,
 };
 
-pub(in crate::client::startup_reconciliation::activation_namespace) use effect::PendingReverseExchangeReconciliation;
+#[cfg(test)]
+pub(in crate::client) use effect::arm_before_reverse_exchange_reconciliation_capture;
+pub(in crate::client::startup_reconciliation::activation_namespace) use effect::{
+    AppliedReverseExchangeReconciliation, PendingReverseExchangeReconciliation, ReverseExchangeReconciliation,
+};
 
 /// Stable inode fields which a retained exchange must never change.
 ///

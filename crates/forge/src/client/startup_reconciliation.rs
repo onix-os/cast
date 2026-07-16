@@ -1,9 +1,10 @@
-//! Read-only classification of one durable transition found during startup.
+//! Classification and sealed semantic reconciliation of one durable startup
+//! transition.
 //!
-//! This module owns evidence; it does not execute recovery.  In particular,
-//! opening known names is not treated as a complete activation-namespace
-//! proof, and an unresolved state-slot marker hardlink is never authorized
-//! here.
+//! Admission remains read-only. Only a consumed rollback-reverse effect lease
+//! plus the startup-recovery seal can cross the private one-shot exchange
+//! boundary; this module still performs no parent sync, journal advance,
+//! database mutation, cleanup, trigger, or broader recovery dispatch.
 
 use std::{fmt, path::PathBuf};
 
@@ -41,9 +42,10 @@ pub(in crate::client) use usr_rollback_resume_route_authority::{
 
 #[allow(unused_imports)] // intentionally unwired until the consuming reverse effect lands
 pub(in crate::client) use usr_rollback_reverse_authority::{
-    UsrRollbackReverseAdmission, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyEffectLease,
-    UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError, UsrRollbackReverseFinishAuthority,
-    UsrRollbackReverseFinishEffectLease,
+    UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
+    UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyEffectLease,
+    UsrRollbackReverseApplyReconciliation, UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError,
+    UsrRollbackReverseFinishAuthority, UsrRollbackReverseFinishEffectLease,
 };
 
 #[cfg(test)]
@@ -64,6 +66,10 @@ use activation_namespace::{
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
     UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::{
+    arm_before_reverse_exchange_reconciliation_capture, arm_before_usr_rollback_reverse_effect_final_namespace_capture,
 };
 #[cfg(test)]
 use database_evidence::{

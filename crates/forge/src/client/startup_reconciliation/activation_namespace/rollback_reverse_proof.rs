@@ -1,9 +1,13 @@
 //! Independent retained namespace proof for one persisted `/usr` reversal.
 //!
-//! This proof is intentionally read-only. It authenticates an exact
+//! Admission through this proof is read-only. It authenticates an exact
 //! `ReverseExchangeIntent` namespace as either POST (the reverse still needs
-//! applying) or PRE (only the future durability suffix remains), but exposes
-//! no descriptor, rename, sync, or persistence operation.
+//! applying) or PRE (only the future durability suffix remains). Only its
+//! private child can consume the resulting opaque effect evidence into the
+//! one-shot exchange boundary; no descriptor, sync, or persistence operation
+//! is exposed.
+
+mod effect_reconciliation;
 
 use crate::{
     Installation,
@@ -16,6 +20,13 @@ use super::{
         ReverseExchangeCaptureError, capture_snapshot,
     },
     policy::{NamespacePolicyConflict, UsrExchangeLayout, assess_snapshot_layout},
+};
+
+#[cfg(test)]
+pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_reverse_effect_final_namespace_capture;
+pub(in crate::client::startup_reconciliation) use effect_reconciliation::{
+    UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,
+    UsrRollbackReverseNamespaceApplyReconciliation,
 };
 
 #[derive(Debug)]

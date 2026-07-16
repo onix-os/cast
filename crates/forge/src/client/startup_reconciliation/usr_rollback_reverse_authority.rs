@@ -1,10 +1,13 @@
-//! Sealed, read-only admission for the future persisted `/usr` reverse effect.
+//! Sealed admission and semantic reconciliation for one `/usr` reverse effect.
 //!
-//! This module deliberately stops at evidence typestate. POST evidence becomes
-//! an apply authority and PRE evidence becomes a finish authority. Each may be
-//! consumed only with a startup-recovery seal into a disjoint opaque effect
-//! lease; none of these types exposes a rename, sync, journal advance, database
-//! write, namespace snapshot, or raw retained descriptor.
+//! Read-only POST/PRE evidence becomes disjoint opaque effect leases. A private
+//! child can consume either lease only with the startup-recovery seal: POST may
+//! make one exchange attempt and PRE makes none. This module deliberately stops
+//! before parent sync, journal advance, database mutation, cleanup, triggers,
+//! or production dispatch, and never exposes a namespace snapshot or raw
+//! retained descriptor.
+
+mod effect_reconciliation;
 
 use crate::{
     Installation, db,
@@ -22,6 +25,11 @@ use super::{
     DatabaseEvidence, InspectionError, UsrExchangeLayout, UsrRollbackReverseNamespaceEffectEvidence,
     UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
     database_ownership_evidence_compatible, inspect_database, metadata_provenance_evidence_compatible,
+};
+
+pub(in crate::client) use effect_reconciliation::{
+    UsrRollbackReverseAlreadySatisfiedEffectAuthority, UsrRollbackReverseAppliedEffectAuthority,
+    UsrRollbackReverseApplyReconciliation,
 };
 
 /// Exact result of read-only reverse-effect admission.
@@ -335,6 +343,10 @@ impl From<crate::installation::Error> for UsrRollbackReverseAuthorityError {
 enum UsrRollbackReverseAuthorityErrorKind {
     #[error("startup rollback-reverse authority was paired with a different open journal store")]
     JournalBindingMismatch,
+    #[error("read the exact rollback-reverse journal during effect reconciliation")]
+    JournalReadDuringEffect(#[source] crate::transition_journal::StorageError),
+    #[error("the exact rollback-reverse journal changed during effect reconciliation")]
+    JournalChangedDuringEffect,
     #[error("exact startup rollback-reverse evidence no longer selects its retained typestate")]
     ReverseEvidenceMismatch,
     #[error("inspect exact rollback-reverse database evidence")]
@@ -377,5 +389,12 @@ fn run_between_initial_database_captures() {
 #[cfg(not(test))]
 fn run_between_initial_database_captures() {}
 
+#[cfg(test)]
+#[allow(dead_code)] // shared fixture contains wider startup-recovery helpers
+#[path = "../startup_recovery/test_support.rs"]
+mod test_fixture;
+#[cfg(test)]
+#[path = "usr_rollback_reverse_authority/tests/support.rs"]
+mod test_support;
 #[cfg(test)]
 mod tests;

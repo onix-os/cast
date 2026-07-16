@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::fixture::{DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase};
+use super::test_fixture::{DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReverseLayout {
@@ -20,10 +20,30 @@ pub(super) enum ReverseLayout {
     Pre,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EffectOperationKind {
+    NewState,
+    Archived,
+    ActiveReblit,
+}
+
+impl EffectOperationKind {
+    pub(super) const ALL: [Self; 3] = [Self::NewState, Self::Archived, Self::ActiveReblit];
+
+    fn fixture_kind(self) -> OperationKind {
+        match self {
+            Self::NewState => OperationKind::NewState,
+            Self::Archived => OperationKind::Archived,
+            Self::ActiveReblit => OperationKind::ActiveReblit,
+        }
+    }
+}
+
 pub(super) struct ReverseFixture {
     pub(super) fixture: Fixture,
     pub(super) reverse_intent: TransitionRecord,
     pub(super) record: TransitionRecord,
+    initial_database: DatabaseSnapshot,
 }
 
 impl ReverseFixture {
@@ -52,6 +72,10 @@ impl ReverseFixture {
             ReverseLayout::Pre,
             true,
         )
+    }
+
+    pub(super) fn for_effect(kind: EffectOperationKind, layout: ReverseLayout) -> Self {
+        Self::new(kind.fixture_kind(), layout)
     }
 
     fn build(fixture: Fixture, kind: OperationKind, layout: ReverseLayout, restored: bool) -> Self {
@@ -89,10 +113,12 @@ impl ReverseFixture {
         };
         drop(journal);
         assert_eq!(fixture.canonical_record(), record);
+        let initial_database = fixture.database_snapshot();
         Self {
             fixture,
             reverse_intent,
             record,
+            initial_database,
         }
     }
 
@@ -124,6 +150,25 @@ impl ReverseFixture {
         assert_eq!(self.fixture.canonical_bytes(), expected.0);
         assert_eq!(self.fixture.database_snapshot(), expected.1);
         assert_eq!(self.fixture.namespace_snapshot(), expected.2);
+    }
+
+    pub(super) fn assert_non_namespace_unchanged(&self) {
+        assert_eq!(self.fixture.canonical_record(), self.record);
+        assert_eq!(self.fixture.database_snapshot(), self.initial_database);
+    }
+
+    pub(super) fn namespace_change_hook(&self, name: String) -> impl FnOnce() + 'static {
+        let inserted = self.fixture.installation.state_quarantine_dir().join(name);
+        move || super::test_fixture::create_private_directory(&inserted)
+    }
+
+    pub(super) fn candidate_transition_clear_hook(&self) -> impl FnOnce() + 'static {
+        let database = self.fixture.database.clone();
+        let candidate = self.fixture.candidate_state;
+        let transition = self.reverse_intent.transition_id.clone();
+        move || {
+            database.clear_transition_if_matches(candidate, &transition).unwrap();
+        }
     }
 }
 

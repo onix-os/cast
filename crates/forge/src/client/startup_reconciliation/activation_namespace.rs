@@ -1,9 +1,10 @@
 //! Descriptor-rooted, bounded startup inventory of the activation namespace.
 //!
-//! This module is intentionally read-only. The diagnostic inventory and the
-//! independent rollback-decision, rollback-routing, and rollback-reverse
-//! proofs expose no rename, link, unlink, creation, repair, sync, or
-//! journal-advance operation.
+//! Diagnostic inventory and admission are read-only. The independent
+//! rollback-decision and rollback-routing proofs expose no effects. A private
+//! rollback-reverse child may consume already sealed effect evidence into one
+//! exchange attempt, but exposes no descriptor, sync, persistence, cleanup,
+//! trigger, or general namespace-mutation API.
 
 mod capture;
 mod decision_proof;
@@ -20,6 +21,8 @@ use crate::{
     transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
 };
 
+#[cfg(test)]
+pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 #[cfg(test)]
 pub(in crate::client) use decision_proof::arm_before_usr_rollback_decision_fresh_namespace_capture;
@@ -35,10 +38,13 @@ pub(super) use resume_route_proof::{
     UsrRollbackResumeRouteNamespaceProof,
 };
 #[cfg(test)]
+pub(in crate::client) use rollback_reverse_proof::arm_before_usr_rollback_reverse_effect_final_namespace_capture;
+#[cfg(test)]
 pub(in crate::client) use rollback_reverse_proof::arm_before_usr_rollback_reverse_fresh_namespace_capture;
 pub(super) use rollback_reverse_proof::{
-    UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
-    UsrRollbackReverseNamespaceProof,
+    UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,
+    UsrRollbackReverseNamespaceApplyReconciliation, UsrRollbackReverseNamespaceEffectEvidence,
+    UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
 };
 
 /// Complete read-only evidence collected around one startup assessment.

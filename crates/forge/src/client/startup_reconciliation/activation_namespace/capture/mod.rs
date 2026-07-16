@@ -34,10 +34,14 @@ use crate::{
 
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
+#[cfg(test)]
+#[allow(unused_imports)] // exported for the later authority-level ambiguity contracts
+pub(in crate::client) use reverse_exchange::arm_before_reverse_exchange_reconciliation_capture;
 #[allow(unused_imports)] // consumed when the reverse-effect executor is wired
 pub(super) use reverse_exchange::{
-    PendingReverseExchangeReconciliation, ProjectedReverseNamespace, RetainedReverseExchangeParents,
-    ReverseExchangeCaptureError, ReverseExchangeParentIdentity,
+    AppliedReverseExchangeReconciliation, PendingReverseExchangeReconciliation, ProjectedReverseNamespace,
+    RetainedReverseExchangeParents, ReverseExchangeCaptureError, ReverseExchangeParentIdentity,
+    ReverseExchangeReconciliation,
 };
 use wrappers::*;
 

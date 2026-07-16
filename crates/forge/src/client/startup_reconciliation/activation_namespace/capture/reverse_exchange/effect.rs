@@ -4,12 +4,20 @@
 //! exactly one direction-neutral exchange attempt. The raw syscall report is
 //! retained only as diagnostic evidence behind a pending-reconciliation
 //! typestate: success does not prove application, and failure does not prove
-//! non-application. No semantic outcome is available until a later checkpoint
-//! adds fresh namespace reconciliation.
+//! non-application. The private reconciliation child consumes that typestate
+//! and classifies only a fresh authenticated namespace.
+
+mod reconciliation;
 
 use crate::transition_identity::{Error, exchange_retained_usr_once};
 
 use super::RetainedReverseExchangeParents;
+
+#[cfg(test)]
+pub(in crate::client) use reconciliation::arm_before_reverse_exchange_reconciliation_capture;
+pub(in crate::client::startup_reconciliation::activation_namespace) use reconciliation::{
+    AppliedReverseExchangeReconciliation, ReverseExchangeReconciliation,
+};
 
 /// Consumed parent capabilities plus an uninterpreted raw syscall report.
 ///
@@ -18,7 +26,7 @@ use super::RetainedReverseExchangeParents;
 /// step must consume the whole value and compare a fresh authenticated
 /// namespace before it can expose any semantic result.
 #[must_use = "a reverse exchange attempt must be reconciled against a fresh namespace"]
-#[allow(dead_code)] // consumed by the later fresh-reconciliation checkpoint
+#[allow(dead_code)] // consumed by the later rollback-reverse executor
 pub(in crate::client::startup_reconciliation::activation_namespace) struct PendingReverseExchangeReconciliation {
     parents: RetainedReverseExchangeParents,
     raw_report: Result<(), Error>,
