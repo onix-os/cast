@@ -1,10 +1,13 @@
 //! Normalized namespace evidence for one retained reverse `/usr` exchange.
 //!
-//! This module deliberately stops before mutation. It projects candidate and
+//! The projection in this module remains mutation-free: it maps candidate and
 //! previous trees by permanent token, defines the sole metadata delta allowed
 //! by a POST-to-PRE exchange, and retains opaque parent descriptors for later
-//! value-only identity checks. It exposes no syscall, sync, raw descriptor, or
-//! callback boundary.
+//! value-only identity checks. The private [`effect`] child owns the single
+//! consuming syscall boundary without exposing descriptors or interpreting a
+//! raw syscall report as the namespace outcome.
+
+mod effect;
 
 use std::{fs::File, path::PathBuf};
 
@@ -20,6 +23,8 @@ use super::{
     Budget, CaptureError, InodeWitness, NamespaceFingerprint, NamespaceSnapshot, RootAbiFingerprint,
     StateIdFingerprint, TreeLocation, UsrFingerprint, WrapperFingerprint, controlled_directory_witness, open_directory,
 };
+
+pub(in crate::client::startup_reconciliation::activation_namespace) use effect::PendingReverseExchangeReconciliation;
 
 /// Stable inode fields which a retained exchange must never change.
 ///

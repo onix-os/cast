@@ -36,8 +36,8 @@ use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
 #[allow(unused_imports)] // consumed when the reverse-effect executor is wired
 pub(super) use reverse_exchange::{
-    ProjectedReverseNamespace, RetainedReverseExchangeParents, ReverseExchangeCaptureError,
-    ReverseExchangeParentIdentity,
+    PendingReverseExchangeReconciliation, ProjectedReverseNamespace, RetainedReverseExchangeParents,
+    ReverseExchangeCaptureError, ReverseExchangeParentIdentity,
 };
 use wrappers::*;
 

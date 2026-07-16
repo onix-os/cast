@@ -267,7 +267,7 @@ forge-transition-journal-coordinator-test:
 	timeout 10s grep -Fqx 'use crate::linux_fs::renameat2_exchange_once;' "$$raw_exchange"; \
 	timeout 10s test "$$( timeout 10s grep -Ec '^[[:space:]]*renameat2_exchange_once\(' "$$raw_exchange" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'begin_retained_exchange_syscall_attempt()' "$$raw_exchange" )" = 2; \
-	timeout 10s test "$$( timeout 10s rg -n 'exchange_retained_usr_once\(' crates/forge/src --glob '*.rs' | timeout 10s wc -l )" = 2; \
+	timeout 10s test "$$( timeout 10s rg -n 'exchange_retained_usr_once\(' crates/forge/src --glob '*.rs' | timeout 10s wc -l )" = 3; \
 	if timeout 10s grep -nE 'RetainedExchange(Direction|Layout)|ExchangeJournalGuard|finish_exchange|sync_all|revalidate' "$$raw_exchange"; then \
 		timeout 10s printf '%s\n' 'raw retained /usr syscall adapter absorbed authorization, reconciliation, or durability policy' >&2; exit 1; \
 	else \
