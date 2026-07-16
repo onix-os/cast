@@ -155,7 +155,7 @@ forge-transition-journal-coordinator-test:
 	if widened="$$( timeout 10s grep -nE \
 		'pub\(crate\).*(StatefulTransactionTriggerAuthority|StatefulTransactionTriggerFailure|run_transaction_triggers)' \
 		crates/forge/src/transition_identity/journal_coordinator/mod.rs "$$trigger_contract" )"; then \
-		timeout 10s printf '%s\n' 'unwired transaction-trigger authority was widened before an owned metadata proof exists:' "$$widened" >&2; \
+		timeout 10s printf '%s\n' 'unwired transaction-trigger authority was widened before metadata-aware live integration:' "$$widened" >&2; \
 		exit 1; \
 	else \
 		status=$$?; \

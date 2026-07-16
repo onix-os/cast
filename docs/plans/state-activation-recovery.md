@@ -462,16 +462,21 @@ and instant rollback mechanism; it hardens their failure semantics.
   This callback is a sequencing contract, not production-safe live trigger
   authorization. Its authority, failure type, and consuming runner are scoped
   to the coordinator module and cannot be obtained by a client. In particular,
-  `CandidatePrepared` currently retains only exact `.stateID` evidence, while
-  the live `CandidateMetadataProof` borrows the tree identity and cannot survive
-  moving that identity into the coordinator. Before visibility can widen,
-  candidate preparation must return an owned metadata token (using an exact
-  duplicated candidate descriptor), and the coordinator must require its
-  `os-release` and `system-model.glu` proofs immediately before trigger intent
-  and again after the effect. The callback's post-effect inventory deliberately
-  cannot substitute for that semantic proof because it baselines intentional
-  payload changes. No client metadata code is changed or silently bypassed by
-  this unwired slice.
+  `CandidatePrepared` currently retains only exact `.stateID` evidence. The
+  live `CandidateMetadataProof` now duplicates the authenticated candidate
+  descriptor before any decoration side effect, owns that descriptor, and can
+  revalidate the exact `os-release` and `system-model.glu` inodes after the
+  source tree identity has been dropped. A one-shot descriptor-clone fault
+  proves that failure creates neither `usr/lib` nor either metadata output, and
+  a same-byte canonical-name substitution is still rejected through the owned
+  proof. This removes the self-referential lifetime blocker, but the proof is
+  not yet transferred into or retained by the durable coordinator. Before
+  visibility can widen, the coordinator's candidate-preparation boundary must
+  accept that exact owned proof and require it immediately before trigger
+  intent and again after the effect. The callback's post-effect inventory
+  deliberately cannot substitute for that semantic proof because it baselines
+  intentional payload changes. No live client path is changed or silently
+  bypassed by this still-unwired slice.
 
   The focused `make forge-transition-journal-coordinator-test` lane freezes
   those three phase/generation sequences, request-derived origins and options,
@@ -480,9 +485,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   substitution rejection, and fail-stop lock release. Its static gates prove
   that no coordinator method has a callsite outside the contract module and
   that the trigger runner and authority have not been widened beyond that
-  module before the owned metadata bridge exists. No live activation path
-  creates or advances this coordinator, and there is still no phase-specific
-  recovery executor; the read-only startup assessment described below cannot
+  module before metadata-aware coordinator integration exists. No live
+  activation path creates or advances this coordinator, and there is still no
+  phase-specific recovery executor; the read-only startup assessment below cannot
   advance it. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot

@@ -45,6 +45,25 @@ pub(super) fn arm_applied_private_directory_publication_error(after_parent_sync:
     private_directory::arm_applied_publication_error(after_parent_sync);
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CANDIDATE_USR_CLONE_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_candidate_usr_clone_fault() {
+    CANDIDATE_USR_CLONE_FAULT.with(|fault| {
+        assert!(!fault.replace(true), "candidate /usr clone fault is already armed");
+    });
+}
+
+#[cfg(test)]
+pub(super) fn assert_candidate_usr_clone_fault_consumed() {
+    CANDIDATE_USR_CLONE_FAULT.with(|fault| {
+        assert!(!fault.get(), "candidate /usr clone fault was not consumed");
+    });
+}
+
 const LIB_NAME: &CStr = c"lib";
 const USR_NAME: &CStr = c"usr";
 const OS_INFO_NAME: &CStr = c"os-info.json";
@@ -187,9 +206,9 @@ pub(super) struct RetainedEphemeralUsr {
 /// must not treat successful decoration as a one-time pathname check: the
 /// proof is deliberately revalidated while these descriptors remain live.
 #[derive(Debug)]
-pub(super) struct CandidateMetadataProof<'candidate> {
+pub(super) struct CandidateMetadataProof {
     context: MetadataContext,
-    usr: &'candidate File,
+    usr: File,
     usr_path: PathBuf,
     lib: RetainedDirectory,
     release: PreparedFile,
@@ -198,19 +217,19 @@ pub(super) struct CandidateMetadataProof<'candidate> {
     snapshot_bytes: Vec<u8>,
 }
 
-pub(super) fn decorate_archived<'candidate>(
-    identity: &'candidate ArchivedStateRepairIdentity,
+pub(super) fn decorate_archived(
+    identity: &ArchivedStateRepairIdentity,
     snapshot: &SystemModel,
-) -> Result<CandidateMetadataProof<'candidate>, Error> {
+) -> Result<CandidateMetadataProof, Error> {
     let (usr, usr_path) = identity.retained_candidate_usr();
     decorate_retained(MetadataContext::ArchivedRepair, usr, usr_path, snapshot)
         .map_err(|source| metadata_error(MetadataContext::ArchivedRepair, source))
 }
 
-pub(super) fn decorate_stateful<'candidate>(
-    identity: &'candidate StatefulTreeIdentity,
+pub(super) fn decorate_stateful(
+    identity: &StatefulTreeIdentity,
     snapshot: &SystemModel,
-) -> Result<CandidateMetadataProof<'candidate>, Error> {
+) -> Result<CandidateMetadataProof, Error> {
     let (usr, usr_path) = identity.retained_candidate_usr();
     decorate_retained(MetadataContext::Stateful, usr, usr_path, snapshot)
         .map_err(|source| metadata_error(MetadataContext::Stateful, source))
@@ -226,10 +245,10 @@ pub(super) fn retain_ephemeral_usr(root: &File, root_path: &Path) -> Result<Reta
     Ok(RetainedEphemeralUsr { directory })
 }
 
-pub(super) fn decorate_ephemeral<'candidate>(
-    usr: &'candidate RetainedEphemeralUsr,
+pub(super) fn decorate_ephemeral(
+    usr: &RetainedEphemeralUsr,
     snapshot: &SystemModel,
-) -> Result<CandidateMetadataProof<'candidate>, Error> {
+) -> Result<CandidateMetadataProof, Error> {
     decorate_retained(MetadataContext::Ephemeral, usr.file(), usr.diagnostic_path(), snapshot)
         .map_err(|source| metadata_error(MetadataContext::Ephemeral, source))
 }
@@ -279,31 +298,32 @@ impl RetainedEphemeralUsr {
     }
 }
 
-fn decorate_retained<'candidate>(
+fn decorate_retained(
     context: MetadataContext,
-    usr: &'candidate File,
+    usr: &File,
     usr_path: &Path,
     snapshot: &SystemModel,
-) -> Result<CandidateMetadataProof<'candidate>, MetadataError> {
+) -> Result<CandidateMetadataProof, MetadataError> {
+    let usr = clone_candidate_usr(usr, usr_path)?;
     let snapshot = bounded_output("system-model.glu", snapshot.encoded().as_bytes())?.to_vec();
-    let lib = RetainedDirectory::retain_or_create(usr, LIB_NAME, usr_path.join("lib"))?;
+    let lib = RetainedDirectory::retain_or_create(&usr, LIB_NAME, usr_path.join("lib"))?;
     let os_release = load_os_release(&lib)?;
     let os_release = bounded_output("os-release", os_release.as_bytes())?.to_vec();
 
     // Refuse every deterministic conflict before either canonical name is
     // published. A racing conflict after this point still cannot be replaced
     // because descriptor linking is no-replace.
-    lib.require_named(usr, LIB_NAME)?;
+    lib.require_named(&usr, LIB_NAME)?;
     lib.require_absent(OS_RELEASE_NAME)?;
     lib.require_absent(SYSTEM_SNAPSHOT_NAME)?;
     let prepared_release = PreparedFile::new(&lib, &os_release, lib.path.join("os-release"))?;
     let prepared_snapshot = PreparedFile::new(&lib, &snapshot, lib.path.join("system-model.glu"))?;
 
-    publish(usr, &lib, OS_RELEASE_NAME, &prepared_release, &os_release)?;
-    lib.require_named(usr, LIB_NAME)?;
+    publish(&usr, &lib, OS_RELEASE_NAME, &prepared_release, &os_release)?;
+    lib.require_named(&usr, LIB_NAME)?;
     after_first_publication();
-    publish(usr, &lib, SYSTEM_SNAPSHOT_NAME, &prepared_snapshot, &snapshot)?;
-    lib.require_named(usr, LIB_NAME)?;
+    publish(&usr, &lib, SYSTEM_SNAPSHOT_NAME, &prepared_snapshot, &snapshot)?;
+    lib.require_named(&usr, LIB_NAME)?;
     lib.sync()?;
     usr.sync_all()
         .map_err(|source| metadata_io("sync candidate /usr after metadata decoration", usr_path, source))?;
@@ -321,7 +341,20 @@ fn decorate_retained<'candidate>(
     Ok(proof)
 }
 
-impl CandidateMetadataProof<'_> {
+fn clone_candidate_usr(usr: &File, usr_path: &Path) -> Result<File, MetadataError> {
+    #[cfg(test)]
+    if CANDIDATE_USR_CLONE_FAULT.with(|fault| fault.replace(false)) {
+        return Err(metadata_io(
+            "retain candidate /usr for metadata proof",
+            usr_path,
+            io::Error::other("injected candidate /usr clone failure"),
+        ));
+    }
+    usr.try_clone()
+        .map_err(|source| metadata_io("retain candidate /usr for metadata proof", usr_path, source))
+}
+
+impl CandidateMetadataProof {
     pub(super) fn revalidate(&self) -> Result<(), Error> {
         self.revalidate_inner()
             .map_err(|source| metadata_error(self.context, source))
@@ -333,7 +366,7 @@ impl CandidateMetadataProof<'_> {
 
     fn revalidate_inner(&self) -> Result<(), MetadataError> {
         require_published_pair(
-            self.usr,
+            &self.usr,
             &self.lib,
             &self.release,
             &self.release_bytes,

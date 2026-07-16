@@ -384,6 +384,8 @@ forge-stateful-candidate-metadata-test:
 		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_final_name_races_are_no_replace \
 		client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_trigger_mutation \
 		client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_system_trigger_mutation \
+		client::tests::stateful_candidate_metadata::candidate_usr_clone_failure_precedes_all_metadata_decoration \
+		client::tests::stateful_candidate_metadata::owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution \
 		client::tests::stateful_candidate_metadata::candidate_usr_substitution_before_metadata_never_decorates_replacement \
 		client::tests::stateful_candidate_metadata::successful_stateful_metadata_is_sealed_and_rollback_capable; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \

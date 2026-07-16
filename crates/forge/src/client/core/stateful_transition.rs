@@ -269,7 +269,7 @@ impl Client {
         run_system_triggers: bool,
         run_boot_synchronization: bool,
         tree_identity: &StatefulTreeIdentity,
-        metadata: Option<&candidate_metadata::CandidateMetadataProof<'_>>,
+        metadata: Option<&candidate_metadata::CandidateMetadataProof>,
         live_root_abi: RootAbiPreflight,
         active_state: &active_state_authority::ActiveStateAuthority,
         checkpoint: &mut F,

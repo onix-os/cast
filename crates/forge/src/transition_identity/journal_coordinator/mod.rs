@@ -8,8 +8,9 @@
 //! than allowing another in-process effect to guess which record became
 //! durable. The transaction-trigger runner is deliberately visible only inside
 //! this contract module. It is not eligible for live wiring until candidate
-//! preparation returns an owned metadata proof which the coordinator can
-//! require before trigger intent and revalidate after the effect.
+//! preparation transfers its owned metadata proof into the coordinator, which
+//! must require that exact proof before trigger intent and revalidate it after
+//! the effect.
 
 mod error;
 mod request;
