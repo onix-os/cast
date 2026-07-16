@@ -1,6 +1,7 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
 	forge-mutable-startup-namespace-test forge-candidate-pre-journal-durability-test \
 	forge-transition-journal-coordinator-test forge-transition-recovery-classifier-test \
+	forge-startup-reconciliation-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
@@ -154,6 +155,27 @@ forge-transition-recovery-classifier-test:
 	timeout 10s test "$$count" = 3; \
 	timeout 300s $(CARGO) test -p forge --lib \
 		"transition_journal::recovery::tests::recovery_classifier_" \
+		-- --test-threads=1
+
+forge-startup-reconciliation-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^client::startup_reconciliation::tests::startup_reconciliation_.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 8; \
+	for test in \
+		client::startup_reconciliation::tests::startup_reconciliation_database_phase_matrix_is_exact \
+		client::startup_reconciliation::tests::startup_reconciliation_matching_allocation_behind_journal_is_retained \
+		client::startup_reconciliation::tests::startup_reconciliation_inconsistent_database_audit_is_blocked \
+		client::startup_reconciliation::tests::startup_reconciliation_current_and_historical_runtime_epochs_are_distinguished \
+		client::startup_reconciliation::tests::startup_reconciliation_two_link_tree_marker_remains_unresolved \
+		client::startup_reconciliation::tests::startup_reconciliation_final_tree_name_substitution_is_not_retained \
+		client::startup_reconciliation::tests::startup_reconciliation_retains_exact_database_instance \
+		client::startup_reconciliation::tests::startup_reconciliation_pending_error_releases_journal_before_retry; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib \
+		"client::startup_reconciliation::tests::startup_reconciliation_" \
 		-- --test-threads=1
 
 forge-linux-fs-test:

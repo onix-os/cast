@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{Installation, db, installation, transition_identity, transition_journal};
 
-use super::active_state_snapshot::ActiveStateLease;
+use super::{active_state_snapshot::ActiveStateLease, startup_reconciliation};
 
 mod default_system_intent;
 
@@ -14,7 +14,7 @@ mod default_system_intent;
 /// before returning the client because stateful operations acquire their own
 /// retained journal store.
 pub(super) struct CleanSystemStartup {
-    _journal: transition_journal::TransitionJournalStore,
+    _authority: startup_reconciliation::StartupRecoveryAuthority,
 }
 
 impl CleanSystemStartup {
@@ -31,28 +31,37 @@ impl CleanSystemStartup {
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         let record = record?;
-        if let Some(record) = record {
-            return Err(Error::UnresolvedJournal {
-                transition: record.transition_id.as_str().to_owned(),
-            });
-        }
-
-        let orphan = state_db.audit_in_flight_transition();
+        let in_flight = state_db.audit_in_flight_transition();
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        let orphan = orphan?;
-        if let Some(orphan) = orphan {
+        let in_flight = in_flight?;
+        if let Some(record) = record {
+            let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                installation,
+                state_db,
+                journal,
+                record,
+                in_flight,
+            )
+            .map_err(|source| match source {
+                startup_reconciliation::InspectionError::Database(source) => Error::TransitionEvidence(source),
+                startup_reconciliation::InspectionError::Installation(source) => Error::Installation(source),
+            })?;
+            return Err(Error::RecoveryPending(pending));
+        }
+        if let Some(orphan) = in_flight {
             return Err(Error::OrphanTransitionRow {
                 state: i32::from(orphan.state_id),
                 transition: orphan.transition_id.as_str().to_owned(),
             });
         }
 
-        let residue = transition_identity::audit_archived_state_prune_residue(installation, &journal);
+        let authority = startup_reconciliation::StartupRecoveryAuthority::new(installation, journal, state_db);
+        let residue = transition_identity::audit_archived_state_prune_residue(installation, authority.journal());
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         residue?;
-        Ok(Self { _journal: journal })
+        Ok(Self { _authority: authority })
     }
 
     /// Evaluate the canonical system intent only after strict active-state
@@ -96,8 +105,8 @@ fn after_mutable_namespace_preflight() {}
 pub(super) enum Error {
     #[error("inspect retained state-transition journal")]
     Journal(#[from] transition_journal::StorageError),
-    #[error("state-transition journal {transition} requires recovery before client startup")]
-    UnresolvedJournal { transition: String },
+    #[error(transparent)]
+    RecoveryPending(#[from] startup_reconciliation::PendingSystemTransition),
     #[error("audit in-flight state-transition rows")]
     TransitionEvidence(#[from] db::state::TransitionEvidenceError),
     #[error("state {state} retains orphan transition {transition} while the canonical journal is absent")]

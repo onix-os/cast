@@ -676,11 +676,14 @@ appendix.
 Completed foundations include canonical transition IDs, no-replace merged-/usr
 link publication, the bounded checksummed journal, retained tree identity and
 marker primitives, strict startup evidence gates, and database ownership
-probes. The remaining closure is to finish recovery-ordered mutable client
-construction, replace residual path-based lifecycle authority, establish the
-durable pre-journal baseline, route every state transition through one durable
-coordinator, reconcile every persisted phase on startup, and prove convergence
-with deterministic interruption coverage.
+probes. They now also include the persisted-phase recovery-direction classifier
+and a diagnostic-only startup assessment which releases mutation authority
+before returning and cannot execute stale evidence. The remaining closure is
+to finish recovery-ordered mutable client construction, replace residual
+path-based lifecycle authority, establish the durable pre-journal baseline,
+route every state transition through one durable coordinator, execute every
+persisted phase on startup, and prove convergence with deterministic
+interruption coverage.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

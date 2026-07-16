@@ -48,7 +48,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   result is checked against the preliminary Installation observation, which
   remains only a stale-clone witness; a mismatch is rejected rather than
   refreshed. Focused tests prove unresolved journal and orphan evidence precede
-  malformed live state. Startup reconciliation is not implemented. The public
+  malformed live state. Startup recovery execution is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -438,7 +438,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   effect callbacks or authorization wrappers and therefore does not yet
   structurally enforce arbitrary external-effect sequencing. No live
   activation path creates or advances this coordinator, and there is still no
-  startup reconciliation or recovery implementation. This item remains open.
+  phase-specific recovery executor; the read-only startup assessment described
+  below cannot advance it. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in
@@ -446,6 +447,34 @@ and instant rollback mechanism; it hardens their failure semantics.
   candidate, never guess through a foreign occupant, and retain an
   undeletable `BootRepairUnverified` record when boot side effects cannot be
   proved repaired.
+  As of 2026-07-16, startup has a deliberately read-only, fail-closed
+  assessment checkpoint. It classifies every validated persisted phase as
+  begin rollback, resume rollback, roll forward, finalize rollback, or manual
+  boot repair; correlates the exact candidate and previous database rows with
+  a before/after global transition audit; distinguishes allocation committed
+  behind an older journal generation; and rejects phase-incompatible cleared,
+  missing, foreign, or changing ownership. Runtime tree witnesses are compared
+  only when two epoch captures match the journal's creation epoch. Every known
+  live, staging, state-slot, and quarantine name is reopened through a final
+  directory-and-marker identity sandwich, while an otherwise valid two-link
+  state-slot marker remains typed but unauthorized.
+
+  This snapshot is not recovery authority. It always records that a complete
+  descriptor-rooted activation-namespace inventory is still required and
+  exposes no mutation API. Inspection retains the installation, journal, and
+  exact database capabilities through its final revalidation, then releases
+  the mutable installation/global locks and exclusive journal before returning
+  `RecoveryPending`; keeping that journal after the startup coordinator was
+  released would permit a coordinator/journal ABBA deadlock. A retry must
+  independently acquire locks in canonical order and reload the journal. The
+  focused `make forge-startup-reconciliation-test` lane proves eight exact
+  contracts, including the complete database phase matrix, pre-allocation
+  rollback, a database mutation between sandwich reads, current versus
+  historical epochs, unauthenticated `nlink=2`, final directory and marker
+  substitution, exact database retention, and a bounded second startup while
+  the first diagnostic remains alive. Phase-specific namespace inventory and
+  all rollback/roll-forward effects remain unimplemented, so this item stays
+  open.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

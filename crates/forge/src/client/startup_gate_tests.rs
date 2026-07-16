@@ -15,8 +15,8 @@ use crate::{
     test_support::{prepare_private_installation_root, private_installation_tempdir},
     transition_identity::ArchivedStatePruneResidueError,
     transition_journal::{
-        BootId, MountNamespaceIdentity, Operation, Previous, PreviousOrigin, QuarantineName, RuntimeEpoch,
-        RuntimeTreeIdentity, StorageError, TransitionJournalStore, TransitionRecord, TreeToken,
+        BootId, MountNamespaceIdentity, Operation, Previous, PreviousOrigin, QuarantineName, RecoveryDisposition,
+        RuntimeEpoch, RuntimeTreeIdentity, StorageError, TransitionJournalStore, TransitionRecord, TreeToken,
     },
 };
 
@@ -181,21 +181,28 @@ fn valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repo
             .repositories(guarded_repositories())
             .build(),
     );
+    assert!(matches!(
+        error.as_ref(),
+        startup_gate::Error::RecoveryPending(pending)
+            if pending.transition_id().as_str() == TRANSITION_ID
+                && matches!(pending.disposition(), RecoveryDisposition::BeginRollback { .. })
+    ));
+    // A diagnostic retains the exact evidence snapshot but no mutable startup
+    // authority. Keep it alive while a second attempt independently reloads
+    // the canonical journal in coordinator-then-journal lock order.
     let explicit_error = expect_startup_gate_error(
         Client::builder("startup-gate-explicit-journal", installation.clone())
             .system_intent_path(temporary.path().join("must-not-load-explicit.glu"))
             .repositories(guarded_repositories())
             .build(),
     );
-
-    assert!(matches!(
-        error.as_ref(),
-        startup_gate::Error::UnresolvedJournal { transition } if transition == TRANSITION_ID
-    ));
     assert!(matches!(
         explicit_error.as_ref(),
-        startup_gate::Error::UnresolvedJournal { transition } if transition == TRANSITION_ID
+        startup_gate::Error::RecoveryPending(pending)
+            if pending.transition_id().as_str() == TRANSITION_ID
+                && matches!(pending.disposition(), RecoveryDisposition::BeginRollback { .. })
     ));
+    drop(error);
     assert_eq!(fs::read(canonical_journal(temporary.path())).unwrap(), canonical_before);
     assert_eq!(fs::read(intent_path).unwrap(), malformed_intent);
     assert!(residue.is_dir());

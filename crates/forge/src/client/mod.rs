@@ -112,6 +112,7 @@ mod self_upgrade;
 mod startup_gate;
 #[cfg(test)]
 mod startup_gate_tests;
+mod startup_reconciliation;
 mod sync;
 mod transaction_root;
 mod verify;
