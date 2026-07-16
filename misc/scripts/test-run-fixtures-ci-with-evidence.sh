@@ -6,9 +6,64 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-fixtures-ci-with-evidence.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixtures-ci-evidence-test.XXXXXXXXXXXX")
 current_case=initialization
+tracked_runner_pid=
+tracked_gate_fifo=
+tracked_gate_token=
+
+pid_is_live() {
+    live_pid=$1
+    IFS= read -r live_stat 2>/dev/null <"/proc/$live_pid/stat" || return 1
+    live_tail=${live_stat##*) }
+    live_state=${live_tail%% *}
+    case "$live_state" in
+        Z|X|'') return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 cleanup() {
     cleanup_status=$?
     trap - EXIT HUP INT TERM
+    set +e
+    cleanup_gate_writer_pid=
+    if [ -n "$tracked_gate_fifo" ]; then
+        if [ -p "$tracked_gate_fifo" ]; then
+            (
+                printf '%s\n' "${tracked_gate_token:-release}" \
+                    >"$tracked_gate_fifo"
+            ) &
+            cleanup_gate_writer_pid=$!
+        else
+            printf '%s\n' "${tracked_gate_token:-continue}" \
+                >"$tracked_gate_fifo" 2>/dev/null || :
+        fi
+    fi
+    if [ -n "$tracked_runner_pid" ]; then
+        kill -TERM "$tracked_runner_pid" 2>/dev/null || :
+        cleanup_runner_attempt=0
+        while pid_is_live "$tracked_runner_pid" \
+            && [ "$cleanup_runner_attempt" -lt 200 ]; do
+            cleanup_runner_attempt=$((cleanup_runner_attempt + 1))
+            sleep 0.01
+        done
+        if pid_is_live "$tracked_runner_pid"; then
+            kill -KILL "$tracked_runner_pid" 2>/dev/null || :
+        fi
+        wait "$tracked_runner_pid" 2>/dev/null || :
+    fi
+    if [ -n "$cleanup_gate_writer_pid" ]; then
+        kill -TERM "$cleanup_gate_writer_pid" 2>/dev/null || :
+        cleanup_writer_attempt=0
+        while pid_is_live "$cleanup_gate_writer_pid" \
+            && [ "$cleanup_writer_attempt" -lt 100 ]; do
+            cleanup_writer_attempt=$((cleanup_writer_attempt + 1))
+            sleep 0.01
+        done
+        if pid_is_live "$cleanup_gate_writer_pid"; then
+            kill -KILL "$cleanup_gate_writer_pid" 2>/dev/null || :
+        fi
+        wait "$cleanup_gate_writer_pid" 2>/dev/null || :
+    fi
     if [ "$cleanup_status" -ne 0 ]; then
         printf 'bounded fixture CI evidence test failed during case: %s\n' \
             "$current_case" >&2
@@ -24,10 +79,11 @@ trap 'exit 143' TERM
 fakebin="$work/bin"
 evidence="$work/evidence"
 outer_state="$work/outer-state"
+gates="$work/gates"
 real_tee=$(command -v tee)
 real_jq=$(command -v jq)
 fake_commit=$(git -C "$root" rev-parse --verify HEAD)
-mkdir -p "$fakebin" "$evidence" "$outer_state"
+mkdir -p "$fakebin" "$evidence" "$outer_state" "$gates"
 chmod 700 "$evidence"
 
 grep -Fq 'CAST_FIXTURE_EVIDENCE_DIR="$${CAST_FIXTURE_EVIDENCE_DIR:-$(TOP_DIR)/target/fixture-evidence}"' \
@@ -88,6 +144,32 @@ EOF_PROOF
     chmod 644 "$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json"
 }
 
+wait_for_child_receipt() {
+    receipt_path=$1
+    child_pid=$2
+    receipt_label=$3
+    receipt_attempt=0
+    while [ ! -f "$receipt_path" ]; do
+        if ! kill -0 "$child_pid" 2>/dev/null; then
+            printf '%s child %s exited before publishing %s: %s\n' \
+                "$receipt_label" "$child_pid" "$receipt_label" "$receipt_path" >&2
+            return 1
+        fi
+        receipt_attempt=$((receipt_attempt + 1))
+        if [ "$receipt_attempt" -gt 1000 ]; then
+            printf 'timed out waiting for %s from child %s: %s\n' \
+                "$receipt_label" "$child_pid" "$receipt_path" >&2
+            return 1
+        fi
+        sleep 0.01
+    done
+    if [ -L "$receipt_path" ]; then
+        printf '%s receipt must not be a symlink: %s\n' \
+            "$receipt_label" "$receipt_path" >&2
+        return 1
+    fi
+}
+
 case "$FAKE_MAKE_MODE" in
     success)
         printf 'BEGIN-SUCCESS\n'
@@ -102,15 +184,30 @@ case "$FAKE_MAKE_MODE" in
     success-public-late-proof)
         : "${FAKE_PUBLIC_EVIDENCE_DIR:?}"
         : "${FAKE_OUTER_STATE:?}"
+        : "${FAKE_DESCENDANT_GATE:?}"
         emit_proof
         setsid sh -c '
+            set -eu
             trap "" HUP INT TERM
-            sleep 2
-            printf "%s\n" forged-after-success >"$1"
+            proof_path=$1
+            ready_path=$2
+            release_path=$3
+            natural_exit_path=$4
+            : >"$ready_path"
+            IFS= read -r release_token <"$release_path"
+            test "$release_token" = release
+            printf "%s\n" forged-after-success >"$proof_path"
+            : >"$natural_exit_path"
         ' public-proof-writer \
             "$FAKE_PUBLIC_EVIDENCE_DIR/fixtures-ci-proof.json" \
+            "$FAKE_DESCENDANT_GATE.ready" \
+            "$FAKE_DESCENDANT_GATE.release" \
+            "$FAKE_DESCENDANT_GATE.natural-exit" \
             </dev/null >/dev/null 2>&1 &
-        printf '%s\n' "$!" >"$FAKE_OUTER_STATE/descendant-pid"
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" >"$FAKE_OUTER_STATE/descendant-pid"
+        wait_for_child_receipt "$FAKE_DESCENDANT_GATE.ready" \
+            "$descendant_pid" 'public late-proof writer readiness'
         printf 'SUCCESS-WITH-CGROUP-DESCENDANT\n'
         ;;
     success-no-proof)
@@ -133,11 +230,24 @@ case "$FAKE_MAKE_MODE" in
         ;;
     failure-fifo-descendant)
         : "${FAKE_OUTER_STATE:?}"
+        : "${FAKE_DESCENDANT_GATE:?}"
         setsid sh -c '
+            set -eu
             trap "" HUP INT TERM
-            sleep 5
-        ' fifo-holder &
-        printf '%s\n' "$!" >"$FAKE_OUTER_STATE/descendant-pid"
+            ready_path=$1
+            release_path=$2
+            natural_exit_path=$3
+            : >"$ready_path"
+            IFS= read -r release_token <"$release_path"
+            test "$release_token" = release
+            : >"$natural_exit_path"
+        ' fifo-holder "$FAKE_DESCENDANT_GATE.ready" \
+            "$FAKE_DESCENDANT_GATE.release" \
+            "$FAKE_DESCENDANT_GATE.natural-exit" &
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" >"$FAKE_OUTER_STATE/descendant-pid"
+        wait_for_child_receipt "$FAKE_DESCENDANT_GATE.ready" \
+            "$descendant_pid" 'FIFO descendant readiness'
         printf 'FAILURE-WITH-FIFO-DESCENDANT\n'
         exit 37
         ;;
@@ -209,41 +319,48 @@ case "$FAKE_MAKE_MODE" in
         done
         ;;
     double-signal)
+        : "${FAKE_OUTER_STATE:?}"
+        : "${FAKE_DOUBLE_SIGNAL_GATE:?}"
         emit_proof
         printf 'BEGIN-DOUBLE-SIGNAL\n'
         wrapper_pid=${CAST_FIXTURE_WRAPPER_PID:?}
-        (
-            trap '' TERM
-            signal_attempt=0
-            while [ "$signal_attempt" -lt 20 ] \
-                && kill -0 "$wrapper_pid" 2>/dev/null; do
-                kill -TERM "$wrapper_pid" 2>/dev/null || exit 0
-                signal_attempt=$((signal_attempt + 1))
-                printf '%s\n' "$signal_attempt" \
-                    >"$FAKE_OUTER_STATE/double-signal-count"
-                sleep 0.01
-            done
-        ) </dev/null >/dev/null 2>&1 &
-        exit 143
+        printf '%s\n' "$wrapper_pid" >"$FAKE_OUTER_STATE/wrapper-pid"
+        : >"$FAKE_DOUBLE_SIGNAL_GATE.ready"
+        IFS= read -r hold_token <"$FAKE_DOUBLE_SIGNAL_GATE.hold"
+        test "$hold_token" = continue
         ;;
     signal-late-proof)
         trap '' HUP INT TERM
         : "${FAKE_LATE_PID_FILE:?}"
+        : "${FAKE_DESCENDANT_GATE:?}"
         setsid sh -c '
+            set -eu
             trap "" HUP INT TERM
-            sleep 2
-            printf "%s\n" late-proof >"$1" 2>/dev/null || :
+            proof_path=$1
+            ready_path=$2
+            release_path=$3
+            natural_exit_path=$4
+            : >"$ready_path"
+            IFS= read -r release_token <"$release_path"
+            test "$release_token" = release
+            printf "%s\n" late-proof >"$proof_path" 2>/dev/null || :
+            : >"$natural_exit_path"
         ' late-proof-writer \
             "$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json" \
+            "$FAKE_DESCENDANT_GATE.ready" \
+            "$FAKE_DESCENDANT_GATE.release" \
+            "$FAKE_DESCENDANT_GATE.natural-exit" \
             </dev/null >/dev/null 2>&1 &
-        printf '%s\n' "$!" >"$FAKE_LATE_PID_FILE"
-        printf '%s\n' "$!" >"$FAKE_OUTER_STATE/descendant-pid"
+        descendant_pid=$!
+        printf '%s\n' "$descendant_pid" >"$FAKE_LATE_PID_FILE"
+        printf '%s\n' "$descendant_pid" >"$FAKE_OUTER_STATE/descendant-pid"
+        wait_for_child_receipt "$FAKE_DESCENDANT_GATE.ready" \
+            "$descendant_pid" 'signal late-proof writer readiness'
         printf 'BEGIN-SIGNAL-LATE-PROOF\n'
         wrapper_pid=${CAST_FIXTURE_WRAPPER_PID:?}
         kill -TERM "$wrapper_pid"
-        while :; do
-            sleep 1
-        done
+        IFS= read -r hold_token <"$FAKE_DESCENDANT_GATE.payload-hold"
+        test "$hold_token" = release
         ;;
     finalize-failure)
         emit_proof
@@ -376,6 +493,16 @@ set -e
 # before the client can report completion.
 if [ -f "$FAKE_OUTER_STATE/descendant-pid" ]; then
     descendant=$(cat "$FAKE_OUTER_STATE/descendant-pid")
+    descendant_gate=${FAKE_DESCENDANT_GATE-}
+    if [ -n "$descendant_gate" ]; then
+        if [ ! -f "$descendant_gate.ready" ] \
+            || [ -L "$descendant_gate.ready" ]; then
+            printf 'descendant readiness receipt is missing or unsafe: %s\n' \
+                "$descendant_gate.ready" >&2
+            exit 72
+        fi
+        : >"$descendant_gate.drain-started"
+    fi
     kill -TERM "$descendant" 2>/dev/null || :
     attempts=0
     while process_is_live "$descendant"; do
@@ -386,6 +513,9 @@ if [ -f "$FAKE_OUTER_STATE/descendant-pid" ]; then
         test "$attempts" -le 40 || exit 70
         sleep 0.05
     done
+    if [ -n "$descendant_gate" ]; then
+        : >"$descendant_gate.drained"
+    fi
 fi
 rm -f "$FAKE_OUTER_STATE/active" "$FAKE_OUTER_STATE/command-pid"
 exit "$status"
@@ -420,9 +550,10 @@ case "${1-}" in
         test "${4-}" = --value
         case "$property" in
             --property=LoadState)
-                if [ -n "${FAKE_LOAD_STATE_DELAY_SECONDS-}" ]; then
-                    : >"$FAKE_OUTER_STATE/load-state-entered"
-                    sleep "$FAKE_LOAD_STATE_DELAY_SECONDS"
+                if [ -n "${FAKE_LOAD_STATE_GATE-}" ]; then
+                    : >"$FAKE_LOAD_STATE_GATE.ready"
+                    IFS= read -r gate_token <"$FAKE_LOAD_STATE_GATE.continue"
+                    test "$gate_token" = continue
                 fi
                 if [ -f "$FAKE_OUTER_STATE/active" ] \
                     && [ "$(cat "$FAKE_OUTER_STATE/unit")" = "$unit" ]; then
@@ -459,6 +590,13 @@ case "${1-}" in
             test "$(cat "$FAKE_OUTER_STATE/unit")" = "$unit"
         fi
         printf '%s\n' "$unit" >>"$FAKE_OUTER_STATE/stops"
+        if [ "$command" = stop ] \
+            && [ -n "${FAKE_FINALIZE_STOP_GATE-}" ] \
+            && mkdir "$FAKE_FINALIZE_STOP_GATE.claim" 2>/dev/null; then
+            : >"$FAKE_FINALIZE_STOP_GATE.ready"
+            IFS= read -r gate_token <"$FAKE_FINALIZE_STOP_GATE.continue"
+            test "$gate_token" = continue
+        fi
         signal=TERM
         test "$command" = stop || signal=KILL
         if [ -f "$FAKE_OUTER_STATE/command-pid" ]; then
@@ -466,6 +604,16 @@ case "${1-}" in
         fi
         if [ -f "$FAKE_OUTER_STATE/descendant-pid" ]; then
             descendant=$(cat "$FAKE_OUTER_STATE/descendant-pid")
+            descendant_gate=${FAKE_DESCENDANT_GATE-}
+            if [ "$command" = stop ] && [ -n "$descendant_gate" ]; then
+                if [ ! -f "$descendant_gate.ready" ] \
+                    || [ -L "$descendant_gate.ready" ]; then
+                    printf 'descendant readiness receipt is missing or unsafe: %s\n' \
+                        "$descendant_gate.ready" >&2
+                    exit 72
+                fi
+                : >"$descendant_gate.drain-started"
+            fi
             kill -"$signal" "$descendant" 2>/dev/null || :
             if [ "$command" = stop ]; then
                 attempts=0
@@ -481,6 +629,9 @@ case "${1-}" in
                     printf 'fake systemctl could not drain live descendant %s\n' \
                         "$descendant" >&2
                     exit 70
+                fi
+                if [ -n "$descendant_gate" ]; then
+                    : >"$descendant_gate.drained"
                 fi
             fi
         fi
@@ -513,20 +664,31 @@ EOF
 chmod 755 "$fakebin/tee"
 
 run_wrapper() {
-    current_case=$1
+    wrapper_launch=call
+    if [ "${1-}" = --exec ]; then
+        wrapper_launch=exec
+        shift
+    fi
+    wrapper_case=$1
+    wrapper_timeout=$2
+    current_case=$wrapper_case
     rm -f "$outer_state"/*
-    env \
+    set -- env \
         PATH="$fakebin:$PATH" \
         MAKE="$fakebin/make" \
         FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_FIXTURE_LOG_MAX_BYTES=256 \
-        CAST_FIXTURE_CI_TIMEOUT_SECONDS="$2" \
+        CAST_FIXTURE_CI_TIMEOUT_SECONDS="$wrapper_timeout" \
         CAST_FIXTURE_CI_KILL_AFTER_SECONDS="${CAST_FIXTURE_CI_KILL_AFTER_SECONDS-1}" \
         CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS="${CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS-}" \
         FAKE_LATE_PID_FILE="$work/late-child.pid" \
         FAKE_GIT_COMMIT="$fake_commit" \
         FAKE_GIT_STATUS_MODE="${FAKE_GIT_STATUS_MODE-clean}" \
         FAKE_JQ_SIGNAL_CALL="${FAKE_JQ_SIGNAL_CALL-}" \
+        FAKE_DESCENDANT_GATE="${FAKE_DESCENDANT_GATE-}" \
+        FAKE_DOUBLE_SIGNAL_GATE="${FAKE_DOUBLE_SIGNAL_GATE-}" \
+        FAKE_FINALIZE_STOP_GATE="${FAKE_FINALIZE_STOP_GATE-}" \
+        FAKE_LOAD_STATE_GATE="${FAKE_LOAD_STATE_GATE-}" \
         FAKE_OUTER_STATE="$outer_state" \
         FAKE_PUBLIC_EVIDENCE_DIR="$evidence" \
         FAKE_TEE_MODE="${FAKE_TEE_MODE-pass}" \
@@ -534,8 +696,12 @@ run_wrapper() {
         CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE="${CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE-}" \
         REAL_JQ="$real_jq" \
         REAL_TEE="$real_tee" \
-        FAKE_MAKE_MODE="$1" \
+        FAKE_MAKE_MODE="$wrapper_case" \
         "$runner"
+    if [ "$wrapper_launch" = exec ]; then
+        exec "$@"
+    fi
+    "$@"
 }
 
 assert_bounded_inventory() {
@@ -562,434 +728,48 @@ process_is_live() {
     esac
 }
 
-set +e
-run_wrapper success 10 >"$work/success.out" 2>&1
-status=$?
-set -e
-if [ "$status" -ne 0 ]; then
-    cat "$work/success.out" >&2
-    exit 1
-fi
-grep -Fq 'BEGIN-SUCCESS' "$work/success.out"
-grep -Fq 'END-SUCCESS' "$work/success.out"
-test "$(grep -c '^bounded-success-line-' "$work/success.out")" -eq 80
-if ! tr -d '\000' <"$work/success.out" | cmp -s - "$work/success.out"; then
-    printf '%s\n' 'redirected fixture output contains a NUL hole' >&2
-    exit 1
-fi
-grep -Fq 'END-SUCCESS' "$evidence/fixtures-ci.log"
-jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
-assert_bounded_inventory
-
-# Parent death before command completion must be observed by the private
-# release monitor. It stops the authenticated unit, terminates the supervisor
-# group, and lets the independent logger finish on FIFO EOF.
-current_case=parent-sigkill-active
-set +e
-run_wrapper parent-sigkill-active 10 >"$work/active-parent-sigkill.out" 2>&1 &
-active_invocation_pid=$!
-set -e
-active_probe=0
-while [ ! -f "$outer_state/active-parent-ready" ]; do
-    active_probe=$((active_probe + 1))
-    test "$active_probe" -le 300
-    sleep 0.01
-done
-active_wrapper_pid=$(cat "$outer_state/wrapper-pid")
-active_supervisor_pid=$(cat "$outer_state/supervisor-pid")
-active_payload_pid=$(cat "$outer_state/payload-pid")
-active_logger_pid=
-active_logger_probe=0
-while [ -z "$active_logger_pid" ] && [ "$active_logger_probe" -lt 300 ]; do
-    active_logger_probe=$((active_logger_probe + 1))
-    children_path="/proc/$active_wrapper_pid/task/$active_wrapper_pid/children"
-    if [ -r "$children_path" ]; then
-        for child_pid in $(cat "$children_path"); do
-            child_command=
-            if [ -r "/proc/$child_pid/cmdline" ]; then
-                child_command=$(tr '\000' ' ' 2>/dev/null \
-                    <"/proc/$child_pid/cmdline" || :)
-            fi
-            case "$child_command" in
-                *--capture-log*) active_logger_pid=$child_pid ;;
-            esac
-        done
-    fi
-    [ -n "$active_logger_pid" ] || sleep 0.01
-done
-if [ -z "$active_logger_pid" ]; then
-    printf 'could not identify the bounded logger child for wrapper %s\n' \
-        "$active_wrapper_pid" >&2
-    exit 1
-fi
-active_unit=$(cat "$outer_state/unit")
-kill -KILL "$active_wrapper_pid"
-set +e
-wait "$active_invocation_pid"
-active_status=$?
-set -e
-test "$active_status" -eq 137
-active_drain=0
-while process_is_live "$active_supervisor_pid" \
-    || process_is_live "$active_payload_pid" \
-    || process_is_live "$active_logger_pid" \
-    || [ -e "$outer_state/active" ]; do
-    active_drain=$((active_drain + 1))
-    test "$active_drain" -le 500
-    sleep 0.01
-done
-grep -Fqx "$active_unit" "$outer_state/stops"
-test ! -e "$evidence/fixtures-ci-proof.json"
-rm -rf "$evidence"/.fixtures-ci-run.*
-rm -f "$evidence"/.fixtures-ci.log.tmp "$evidence/fixtures-ci.log"
-
-# Kill the parent only after it consumed the status record but before release.
-# The supervisor is then blocked on the release FIFO and must exit on real EOF.
-rm -f "$work/parent-release-gate.ready" "$work/parent-release-gate.continue"
-current_case=parent-sigkill-release
-set +e
-CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE="$work/parent-release-gate" \
-    run_wrapper parent-sigkill 10 >"$work/parent-sigkill.out" 2>&1 &
-parent_invocation_pid=$!
-set -e
-parent_probe=0
-while { [ ! -f "$outer_state/wrapper-pid" ] \
-    || [ ! -f "$outer_state/supervisor-pid" ] \
-    || [ ! -f "$work/parent-release-gate.ready" ]; }
-do
-    parent_probe=$((parent_probe + 1))
-    test "$parent_probe" -le 200
-    sleep 0.01
-done
-killed_wrapper_pid=$(cat "$outer_state/wrapper-pid")
-killed_supervisor_pid=$(cat "$outer_state/supervisor-pid")
-kill -KILL "$killed_wrapper_pid"
-set +e
-wait "$parent_invocation_pid"
-parent_status=$?
-set -e
-test "$parent_status" -eq 137
-supervisor_probe=0
-while process_is_live "$killed_supervisor_pid"; do
-    supervisor_probe=$((supervisor_probe + 1))
-    test "$supervisor_probe" -le 300
-    sleep 0.01
-done
-test ! -e "$evidence/fixtures-ci-proof.json"
-rm -rf "$evidence"/.fixtures-ci-run.*
-rm -f "$evidence"/.fixtures-ci.log.tmp "$evidence/fixtures-ci.log"
-
-setup_attempt=1
-current_case=setup-signal
-while [ "$setup_attempt" -le 30 ]; do
-    rm -f "$outer_state"/*
-    env \
-        PATH="$fakebin:$PATH" \
-        MAKE="$fakebin/make" \
-        FIXTURE_EVIDENCE_DIR="$evidence" \
-        CAST_FIXTURE_LOG_MAX_BYTES=256 \
-        CAST_FIXTURE_CI_TIMEOUT_SECONDS=10 \
-        CAST_FIXTURE_CI_KILL_AFTER_SECONDS=1 \
-        FAKE_LATE_PID_FILE="$work/late-child.pid" \
-        FAKE_GIT_COMMIT="$fake_commit" \
-        FAKE_GIT_STATUS_MODE=clean \
-        FAKE_JQ_SIGNAL_CALL= \
-        FAKE_LOAD_STATE_DELAY_SECONDS=0.05 \
-        FAKE_OUTER_STATE="$outer_state" \
-        FAKE_PUBLIC_EVIDENCE_DIR="$evidence" \
-        FAKE_TEE_MODE=pass \
-        REAL_JQ="$real_jq" \
-        REAL_TEE="$real_tee" \
-        FAKE_MAKE_MODE=success \
-        "$runner" >"$work/setup-signal-$setup_attempt.out" 2>&1 &
-    setup_wrapper_pid=$!
-    setup_probe=1
-    while [ ! -e "$outer_state/load-state-entered" ] \
-        && [ "$setup_probe" -le 100 ]; do
-        sleep 0.005
-        setup_probe=$((setup_probe + 1))
+wait_for_receipt() {
+    receipt_path=$1
+    receipt_owner_pid=$2
+    receipt_label=$3
+    receipt_attempt=0
+    while [ ! -f "$receipt_path" ]; do
+        if ! process_is_live "$receipt_owner_pid"; then
+            printf 'case=%s label=%s receipt=%s owner=%s exited early\n' \
+                "$current_case" "$receipt_label" "$receipt_path" \
+                "$receipt_owner_pid" >&2
+            return 1
+        fi
+        receipt_attempt=$((receipt_attempt + 1))
+        if [ "$receipt_attempt" -gt 1000 ]; then
+            printf 'case=%s label=%s receipt=%s owner=%s timed out\n' \
+                "$current_case" "$receipt_label" "$receipt_path" \
+                "$receipt_owner_pid" >&2
+            return 1
+        fi
+        sleep 0.01
     done
-    test -e "$outer_state/load-state-entered"
-    kill -TERM "$setup_wrapper_pid"
-    set +e
-    wait "$setup_wrapper_pid"
-    status=$?
-    set -e
-    test "$status" -eq 143
-    test ! -e "$evidence/fixtures-ci-proof.json"
-    assert_bounded_inventory
-    setup_attempt=$((setup_attempt + 1))
-done
+    if [ -L "$receipt_path" ]; then
+        printf 'case=%s label=%s receipt=%s owner=%s is a symlink\n' \
+            "$current_case" "$receipt_label" "$receipt_path" \
+            "$receipt_owner_pid" >&2
+        return 1
+    fi
+}
 
-set +e
-run_wrapper success-public-late-proof 10 >"$work/success-public-late-proof.out" 2>&1
-status=$?
-set -e
-if [ "$status" -ne 0 ]; then
-    cat "$work/success-public-late-proof.out" >&2
-    exit 1
-fi
-public_late_pid=$(cat "$outer_state/descendant-pid")
-sleep 3
-jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
-if grep -Fq 'forged-after-success' "$evidence/fixtures-ci-proof.json"; then
-    printf '%s\n' 'successful fixture proof was replaced after promotion' >&2
-    exit 1
-fi
-if process_is_live "$public_late_pid"; then
-    printf 'successful service descendant escaped its control group: %s\n' \
-        "$public_late_pid" >&2
-    exit 1
-fi
-assert_bounded_inventory
+require_receipt() {
+    receipt_path=$1
+    receipt_label=$2
+    if [ ! -f "$receipt_path" ] || [ -L "$receipt_path" ]; then
+        printf 'case=%s label=%s receipt=%s missing or unsafe\n' \
+            "$current_case" "$receipt_label" "$receipt_path" >&2
+        return 1
+    fi
+}
 
-for validation_call in 1 2; do
-    set +e
-    FAKE_JQ_SIGNAL_CALL="$validation_call" run_wrapper success 10 \
-        >"$work/validation-signal-$validation_call.out" 2>&1
-    status=$?
-    set -e
-    test "$status" -eq 143
-    test ! -e "$evidence/fixtures-ci-proof.json"
-    assert_bounded_inventory
-done
-
-set +e
-FAKE_GIT_STATUS_MODE=dirty run_wrapper success 10 \
-    >"$work/dirty-checkout.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 1
-grep -Fq 'fixture CI proof refuses a checkout which differs from commit' \
-    "$work/dirty-checkout.out"
-test ! -e "$evidence/fixtures-ci-proof.json"
-assert_bounded_inventory
-
-set +e
-run_wrapper success-no-proof 10 >"$work/success-no-proof.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 1
-grep -Fq 'successful fixture CI did not publish one regular proof' "$work/success-no-proof.out"
-test ! -e "$evidence/fixtures-ci-proof.json"
-grep -Fq 'SUCCESS-WITHOUT-PROOF' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-failure_started=$(date +%s)
-set +e
-run_wrapper failure-fifo-descendant 10 >"$work/failure-fifo-descendant.out" 2>&1
-status=$?
-set -e
-failure_elapsed=$(($(date +%s) - failure_started))
-test "$status" -eq 37
-test "$failure_elapsed" -lt 4
-fifo_descendant=$(cat "$outer_state/descendant-pid")
-if process_is_live "$fifo_descendant"; then
-    printf 'failed service FIFO descendant escaped its control group: %s\n' \
-        "$fifo_descendant" >&2
-    exit 1
-fi
-test ! -e "$evidence/fixtures-ci-proof.json"
-assert_bounded_inventory
-
-set +e
-run_wrapper malformed-proof 10 >"$work/malformed-proof.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 1
-grep -Fq 'does not exactly match' "$work/malformed-proof.out"
-test ! -e "$evidence/fixtures-ci-proof.json"
-grep -Fq 'MALFORMED-PROOF' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-printf 'stale-proof\n' >"$evidence/fixtures-ci-proof.json"
-set +e
-run_wrapper failure 10 >"$work/failure.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 37
-test ! -e "$evidence/fixtures-ci-proof.json"
-grep -Fq 'END-FAILURE' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-set +e
-run_wrapper emit-then-fail 10 >"$work/emit-then-fail.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 38
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-grep -Fq 'EMIT-THEN-FAIL' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-set +e
-run_wrapper timeout 1 >"$work/timeout.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 124
-test ! -e "$evidence/fixtures-ci-proof.json"
-grep -Fq 'BEGIN-TIMEOUT' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-set +e
-run_wrapper ignore-term 1 >"$work/ignore-term.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 137
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-grep -Fq 'BEGIN-IGNORE-TERM' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-set +e
-run_wrapper signal 10 >"$work/signal.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 143
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-grep -Fq 'BEGIN-SIGNAL' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-set +e
-run_wrapper signal-supervisor 10 >"$work/supervisor-signal.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 143
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-grep -Fq 'BEGIN-SUPERVISOR-SIGNAL' "$work/supervisor-signal.out"
-if ! grep -Fq 'latched supervisor reaped command and watchdog (status 143)' \
-    "$evidence/fixtures-ci.log"; then
-    printf '%s\n' 'bounded supervisor-signal log did not retain the final supervisor receipt:' >&2
-    cat "$evidence/fixtures-ci.log" >&2
-    exit 1
-fi
-assert_bounded_inventory
-
-set +e
-CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS=1 \
-    run_wrapper freeze-supervisor 10 >"$work/frozen-supervisor.out" 2>&1
-frozen_status=$?
-set -e
-frozen_supervisor_pid=$(cat "$outer_state/supervisor-pid")
-frozen_unit=$(cat "$outer_state/unit")
-test "$frozen_status" -eq 124
-if process_is_live "$frozen_supervisor_pid"; then
-    printf 'autonomously bounded fixture supervisor remained live: %s\n' \
-        "$frozen_supervisor_pid" >&2
-    exit 1
-fi
-grep -Fqx "$frozen_unit" "$outer_state/stops"
-test ! -e "$evidence/fixtures-ci-proof.json"
-grep -Fq 'status channel exceeded its 1-second bound' \
-    "$work/frozen-supervisor.out"
-assert_bounded_inventory
-
-set +e
-CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP=1 \
-    run_wrapper success 10 >"$work/post-reap-signal.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 143
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-assert_bounded_inventory
-
-set +e
-run_wrapper double-signal 10 >"$work/double-signal.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 143
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-test "$(cat "$outer_state/double-signal-count")" -ge 2
-grep -Fq 'BEGIN-DOUBLE-SIGNAL' "$evidence/fixtures-ci.log"
-assert_bounded_inventory
-
-rm -f "$work/late-child.pid"
-set +e
-run_wrapper signal-late-proof 10 >"$work/signal-late-proof.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 143
-test -f "$work/late-child.pid"
-late_child_pid=$(cat "$work/late-child.pid")
-sleep 3
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-if process_is_live "$late_child_pid"; then
-    printf 'detached late-proof writer outlived its bounded test window: %s\n' \
-        "$late_child_pid" >&2
-    exit 1
-fi
-grep -Fq 'BEGIN-SIGNAL-LATE-PROOF' "$work/signal-late-proof.out"
-# The public log deliberately retains only its final byte window; later cleanup
-# receipts may evict this early marker. Other cases prove captured-log content.
-assert_bounded_inventory
-
-set +e
-FAKE_TEE_MODE=fail run_wrapper success 10 >"$work/tee-failure.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 75
-test ! -e "$evidence/fixtures-ci-proof.json"
-assert_bounded_inventory
-
-set +e
-run_wrapper finalize-failure 10 >"$work/finalize-failure.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 1
-test ! -e "$evidence/fixtures-ci-proof.json"
-test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-test -d "$evidence/.fixtures-ci.log.tmp"
-rm -rf "$evidence/.fixtures-ci.log.tmp"
-test ! -e "$evidence/fixtures-ci.log"
-
-hostile_marker="$work/make-expansion-ran"
-hostile_evidence="$work/\$(shell touch $hostile_marker)"
-rm -f "$outer_state"/*
-env \
-    PATH="$fakebin:$PATH" \
-    MAKE="$fakebin/make" \
-    FIXTURE_EVIDENCE_DIR="$hostile_evidence" \
-    CAST_FIXTURE_LOG_MAX_BYTES=256 \
-    CAST_FIXTURE_CI_TIMEOUT_SECONDS=10 \
-    CAST_FIXTURE_CI_KILL_AFTER_SECONDS=1 \
-    FAKE_LATE_PID_FILE="$work/late-child.pid" \
-    FAKE_GIT_COMMIT="$fake_commit" \
-    FAKE_GIT_STATUS_MODE=clean \
-    FAKE_JQ_SIGNAL_CALL= \
-    FAKE_OUTER_STATE="$outer_state" \
-    FAKE_TEE_MODE=pass \
-    REAL_JQ="$real_jq" \
-    REAL_TEE="$real_tee" \
-    FAKE_MAKE_MODE=success \
-    "$runner" >"$work/hostile-evidence.out" 2>&1
-test ! -e "$hostile_marker"
-jq -e '.result == "passed"' "$hostile_evidence/fixtures-ci-proof.json" >/dev/null
-rm -rf "$hostile_evidence"
-
-set +e
-env \
-    PATH="$fakebin:$PATH" \
-    MAKE="$fakebin/make" \
-    FIXTURE_EVIDENCE_DIR="$evidence" \
-    CAST_FIXTURE_LOG_MAX_BYTES=1048577 \
-    CAST_FIXTURE_CI_TIMEOUT_SECONDS=10 \
-    FAKE_MAKE_MODE=success \
-    "$runner" >"$work/oversized.out" 2>&1
-status=$?
-set -e
-test "$status" -eq 2
-grep -Fq 'must be between 1 and 1048576' "$work/oversized.out"
-
-# Individually valid maxima must compose into the default status-channel bound
-# rather than rejecting a production configuration at its documented edge.
-CAST_FIXTURE_CI_KILL_AFTER_SECONDS=300 \
-    run_wrapper success 21600 >"$work/maximum-bounds.out" 2>&1
-jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
-assert_bounded_inventory
+. "$root/misc/scripts/test-run-fixtures-ci-lifecycle-cases.sh"
+. "$root/misc/scripts/test-run-fixtures-ci-result-cases.sh"
+. "$root/misc/scripts/test-run-fixtures-ci-signal-cases.sh"
+. "$root/misc/scripts/test-run-fixtures-ci-boundary-cases.sh"
 
 printf '%s\n' 'bounded fixture CI evidence tests passed'
