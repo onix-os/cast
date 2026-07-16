@@ -1,0 +1,300 @@
+//! Sealed, read-only admission for the future persisted `/usr` reverse effect.
+//!
+//! This module deliberately stops at evidence typestate. POST evidence becomes
+//! an apply authority and PRE evidence becomes a finish authority, but neither
+//! type currently exposes a rename, sync, journal advance, database write, or
+//! raw retained descriptor.
+
+use crate::{
+    Installation, db,
+    transition_journal::{
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
+        TransitionJournalStore, TransitionRecord,
+    },
+};
+
+use super::super::{active_state_snapshot::ActiveStateReservation, startup_gate::UsrRollbackReverseSeal};
+use super::{
+    DatabaseEvidence, InspectionError, UsrExchangeLayout, UsrRollbackReverseNamespaceError,
+    UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof, database_ownership_evidence_compatible,
+    inspect_database, metadata_provenance_evidence_compatible,
+};
+
+/// Exact result of read-only reverse-effect admission.
+#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+pub(in crate::client) enum UsrRollbackReverseAdmission<'reservation> {
+    NotApplicable,
+    Deferred,
+    Apply(UsrRollbackReverseApplyAuthority<'reservation>),
+    Finish(UsrRollbackReverseFinishAuthority<'reservation>),
+}
+
+/// Common evidence retained privately behind the disjoint POST/PRE typestates.
+#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+pub(in crate::client) struct UsrRollbackReverseAuthority<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: UsrRollbackReverseNamespaceProof,
+    journal_binding: TransitionJournalBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+/// Exact `ReverseExchangeIntent + POST` evidence. A future executor may
+/// consume this type to make one reverse exchange attempt.
+#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+pub(in crate::client) struct UsrRollbackReverseApplyAuthority<'reservation> {
+    evidence: UsrRollbackReverseAuthority<'reservation>,
+}
+
+/// Exact `ReverseExchangeIntent + PRE` evidence. A future executor may consume
+/// this type only to finish exchange-parent durability and journal completion.
+#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+pub(in crate::client) struct UsrRollbackReverseFinishAuthority<'reservation> {
+    evidence: UsrRollbackReverseAuthority<'reservation>,
+}
+
+impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
+    /// Capture is sealed and read-only. Production cannot construct the seal
+    /// until the future startup dispatcher is intentionally wired.
+    #[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+    pub(in crate::client) fn capture(
+        _startup_gate_seal: &UsrRollbackReverseSeal,
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        state_db: &db::state::Database,
+        active_state_reservation: &'reservation ActiveStateReservation,
+        record: &TransitionRecord,
+        initial_in_flight: Option<db::state::InFlightTransition>,
+    ) -> Result<UsrRollbackReverseAdmission<'reservation>, UsrRollbackReverseAuthorityError> {
+        if record.phase != Phase::ReverseExchangeIntent {
+            return Ok(UsrRollbackReverseAdmission::NotApplicable);
+        }
+
+        let journal_binding = journal.binding();
+        installation.revalidate_mutable_namespace()?;
+        let namespace_inspection = match UsrRollbackReverseNamespaceInspection::begin(installation, journal, record) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackReverseAdmission::Deferred),
+        };
+        let database = inspect_database(record, state_db, initial_in_flight)?;
+        if !database_is_compatible(record, &database) || !reverse_plan_is_exact(record) {
+            return Ok(UsrRollbackReverseAdmission::Deferred);
+        }
+
+        run_between_initial_database_captures();
+        let in_flight_after = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
+        let database_after = inspect_database(record, state_db, in_flight_after)?;
+        if !database_is_compatible(record, &database_after) || database != database_after {
+            return Ok(UsrRollbackReverseAdmission::Deferred);
+        }
+        let namespace = match namespace_inspection.finish(installation, journal, record) {
+            Ok(namespace) => namespace,
+            Err(_) => return Ok(UsrRollbackReverseAdmission::Deferred),
+        };
+
+        let retained_state_db = state_db.clone();
+        debug_assert!(retained_state_db.same_instance(state_db));
+        installation.revalidate_mutable_namespace()?;
+        let layout = namespace.layout();
+        let authority = Self {
+            installation: installation.clone(),
+            state_db: retained_state_db,
+            record: record.clone(),
+            database,
+            namespace,
+            journal_binding,
+            _active_state_reservation: active_state_reservation,
+        };
+        Ok(match layout {
+            UsrExchangeLayout::Post => {
+                UsrRollbackReverseAdmission::Apply(UsrRollbackReverseApplyAuthority { evidence: authority })
+            }
+            UsrExchangeLayout::Pre => {
+                UsrRollbackReverseAdmission::Finish(UsrRollbackReverseFinishAuthority { evidence: authority })
+            }
+        })
+    }
+
+    fn revalidate(
+        &self,
+        journal: &TransitionJournalStore,
+        expected_layout: UsrExchangeLayout,
+    ) -> Result<(), UsrRollbackReverseAuthorityError> {
+        // Per-open binding must be the first observation. No namespace or
+        // database evidence may be consulted for a mixed journal store.
+        if !journal.has_binding(&self.journal_binding) {
+            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
+        }
+        self.installation.revalidate_mutable_namespace()?;
+        let database_before = inspect_current_database(&self.record, &self.state_db)?;
+        require_exact_database(&self.database, database_before)?;
+        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        let database_after = inspect_current_database(&self.record, &self.state_db)?;
+        require_exact_database(&self.database, database_after)?;
+        if !reverse_plan_is_exact(&self.record) || self.namespace.layout() != expected_layout {
+            return Err(UsrRollbackReverseAuthorityErrorKind::ReverseEvidenceMismatch.into());
+        }
+        self.installation.revalidate_mutable_namespace()?;
+        Ok(())
+    }
+}
+
+impl UsrRollbackReverseApplyAuthority<'_> {
+    /// Revalidate only the exact POST typestate; this remains read-only.
+    #[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+    pub(in crate::client) fn revalidate(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<(), UsrRollbackReverseAuthorityError> {
+        self.evidence.revalidate(journal, UsrExchangeLayout::Post)
+    }
+}
+
+impl UsrRollbackReverseFinishAuthority<'_> {
+    /// Revalidate only the exact PRE typestate; this remains read-only.
+    #[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+    pub(in crate::client) fn revalidate(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<(), UsrRollbackReverseAuthorityError> {
+        self.evidence.revalidate(journal, UsrExchangeLayout::Pre)
+    }
+}
+
+fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
+    let Some(rollback) = record.rollback.as_ref() else {
+        return false;
+    };
+    if record.phase != Phase::ReverseExchangeIntent
+        || !matches!(
+            rollback.source,
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+        )
+        || rollback.previous_archive != RollbackAction::NotRequired
+        || rollback.usr_exchange != RollbackAction::Pending
+        || rollback.candidate.action != RollbackAction::Pending
+        || rollback.boot != BootRollback::NotRequired
+    {
+        return false;
+    }
+    let fresh_is_exact = match record.operation {
+        Operation::NewState => rollback.fresh_db == RollbackAction::Pending,
+        Operation::ActivateArchived | Operation::ActiveReblit => rollback.fresh_db == RollbackAction::NotRequired,
+    };
+    let candidate_disposition_is_exact = match record.operation {
+        Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,
+        Operation::NewState | Operation::ActiveReblit => rollback.candidate.disposition == AbortDisposition::Quarantine,
+    };
+    fresh_is_exact
+        && candidate_disposition_is_exact
+        && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
+}
+
+fn inspect_current_database(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<DatabaseEvidence, UsrRollbackReverseAuthorityError> {
+    let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
+    let evidence = inspect_database(record, state_db, in_flight)?;
+    if database_is_compatible(record, &evidence) {
+        Ok(evidence)
+    } else {
+        Err(UsrRollbackReverseAuthorityErrorKind::DatabaseIncompatible {
+            evidence: Box::new(evidence),
+        }
+        .into())
+    }
+}
+
+fn database_is_compatible(record: &TransitionRecord, evidence: &DatabaseEvidence) -> bool {
+    database_ownership_evidence_compatible(record, evidence)
+        && metadata_provenance_evidence_compatible(record, evidence)
+}
+
+fn require_exact_database(
+    expected: &DatabaseEvidence,
+    actual: DatabaseEvidence,
+) -> Result<(), UsrRollbackReverseAuthorityError> {
+    if *expected == actual {
+        Ok(())
+    } else {
+        Err(UsrRollbackReverseAuthorityErrorKind::DatabaseChanged {
+            expected: Box::new(expected.clone()),
+            actual: Box::new(actual),
+        }
+        .into())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub(in crate::client) struct UsrRollbackReverseAuthorityError(#[from] UsrRollbackReverseAuthorityErrorKind);
+
+impl From<InspectionError> for UsrRollbackReverseAuthorityError {
+    fn from(source: InspectionError) -> Self {
+        UsrRollbackReverseAuthorityErrorKind::Inspection(source).into()
+    }
+}
+
+impl From<UsrRollbackReverseNamespaceError> for UsrRollbackReverseAuthorityError {
+    fn from(source: UsrRollbackReverseNamespaceError) -> Self {
+        UsrRollbackReverseAuthorityErrorKind::Namespace(source).into()
+    }
+}
+
+impl From<crate::installation::Error> for UsrRollbackReverseAuthorityError {
+    fn from(source: crate::installation::Error) -> Self {
+        UsrRollbackReverseAuthorityErrorKind::Installation(source).into()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum UsrRollbackReverseAuthorityErrorKind {
+    #[error("startup rollback-reverse authority was paired with a different open journal store")]
+    JournalBindingMismatch,
+    #[error("exact startup rollback-reverse evidence no longer selects its retained typestate")]
+    ReverseEvidenceMismatch,
+    #[error("inspect exact rollback-reverse database evidence")]
+    Inspection(#[source] InspectionError),
+    #[error("revalidate the independent rollback-reverse namespace proof")]
+    Namespace(#[source] UsrRollbackReverseNamespaceError),
+    #[error("revalidate retained mutable installation namespace around rollback-reverse authority")]
+    Installation(#[source] crate::installation::Error),
+    #[error("rollback-reverse database evidence is incompatible: {evidence:?}")]
+    DatabaseIncompatible { evidence: Box<DatabaseEvidence> },
+    #[error("rollback-reverse database evidence changed from {expected:?} to {actual:?}")]
+    DatabaseChanged {
+        expected: Box<DatabaseEvidence>,
+        actual: Box<DatabaseEvidence>,
+    },
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BETWEEN_INITIAL_DATABASE_CAPTURES: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::client) fn arm_between_usr_rollback_reverse_database_captures(hook: impl FnOnce() + 'static) {
+    BETWEEN_INITIAL_DATABASE_CAPTURES.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn run_between_initial_database_captures() {
+    BETWEEN_INITIAL_DATABASE_CAPTURES.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_between_initial_database_captures() {}
+
+#[cfg(test)]
+mod tests;

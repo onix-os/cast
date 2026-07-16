@@ -23,6 +23,7 @@ mod metadata_provenance;
 mod replacement_mutation_authority;
 mod usr_rollback_decision_authority;
 mod usr_rollback_resume_route_authority;
+mod usr_rollback_reverse_authority;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
@@ -38,19 +39,30 @@ pub(in crate::client) use usr_rollback_resume_route_authority::{
     UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority, UsrRollbackResumeRouteAuthorityError,
 };
 
+#[allow(unused_imports)] // intentionally unwired until the consuming reverse effect lands
+pub(in crate::client) use usr_rollback_reverse_authority::{
+    UsrRollbackReverseAdmission, UsrRollbackReverseApplyAuthority, UsrRollbackReverseAuthority,
+    UsrRollbackReverseAuthorityError, UsrRollbackReverseFinishAuthority,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_resume_route_authority::arm_between_usr_rollback_resume_route_database_captures;
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_reverse_authority::arm_between_usr_rollback_reverse_database_captures;
 
 #[cfg(test)]
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use activation_namespace::arm_before_usr_rollback_decision_fresh_namespace_capture;
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::arm_before_usr_rollback_resume_route_fresh_namespace_capture;
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_usr_rollback_reverse_fresh_namespace_capture;
 use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
     UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
-    UsrRollbackResumeRouteNamespaceProof,
+    UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
+    UsrRollbackReverseNamespaceProof,
 };
 #[cfg(test)]
 use database_evidence::{

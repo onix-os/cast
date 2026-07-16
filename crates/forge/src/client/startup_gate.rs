@@ -66,6 +66,20 @@ impl UsrRollbackResumeRouteSeal {
     }
 }
 
+/// Unforgeable safe-code token reserved for the future persisted `/usr`
+/// reverse-effect dispatcher. Production construction is intentionally absent
+/// until that consuming effect and its crash contract are implemented.
+pub(in crate::client) struct UsrRollbackReverseSeal {
+    _private: (),
+}
+
+impl UsrRollbackReverseSeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,
