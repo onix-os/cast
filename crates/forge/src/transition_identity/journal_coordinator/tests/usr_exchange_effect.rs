@@ -78,6 +78,71 @@ fn expected_usr_exchanged_generation(candidate_kind: CandidateKind) -> u64 {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct UsrExchangeDatabaseSnapshot {
+    states: Vec<crate::State>,
+    in_flight: Option<db::state::InFlightTransition>,
+    candidate_ownership: TransitionOwnership,
+    candidate_provenance: Option<db::state::MetadataProvenance>,
+    previous_ownership: TransitionOwnership,
+    previous_provenance: Option<db::state::MetadataProvenance>,
+}
+
+fn usr_exchange_database_snapshot(
+    fixture: &CoordinatorFixture,
+    source: &TransitionRecord,
+) -> UsrExchangeDatabaseSnapshot {
+    UsrExchangeDatabaseSnapshot {
+        states: fixture.database.all().unwrap(),
+        in_flight: fixture.database.audit_in_flight_transition().unwrap(),
+        candidate_ownership: fixture
+            .database
+            .transition_ownership(fixture.candidate_state, &source.transition_id)
+            .unwrap(),
+        candidate_provenance: fixture.database.metadata_provenance(fixture.candidate_state).unwrap(),
+        previous_ownership: fixture
+            .database
+            .transition_ownership(fixture.previous_state, &source.transition_id)
+            .unwrap(),
+        previous_provenance: fixture.database.metadata_provenance(fixture.previous_state).unwrap(),
+    }
+}
+
+fn assert_exact_pending_reverse_decision(source: &TransitionRecord, actual: &TransitionRecord) {
+    assert_eq!(actual.phase, Phase::RollbackDecided);
+    assert_eq!(actual.generation, source.generation + 1);
+    assert_eq!(actual.transition_id, source.transition_id);
+    assert_eq!(actual.operation, source.operation);
+    assert_eq!(actual.creation_epoch, source.creation_epoch);
+    assert_eq!(actual.candidate, source.candidate);
+    assert_eq!(actual.previous, source.previous);
+    assert_eq!(actual.options, source.options);
+    assert_eq!(actual.quarantine_name, source.quarantine_name);
+    assert_eq!(
+        actual.rollback,
+        Some(RollbackPlan {
+            source: ForwardPhase::UsrExchangeIntent,
+            previous_archive: RollbackAction::NotRequired,
+            usr_exchange: RollbackAction::Pending,
+            candidate: CandidateRollback {
+                action: RollbackAction::Pending,
+                disposition: if source.operation == Operation::ActivateArchived {
+                    AbortDisposition::Rearchive
+                } else {
+                    AbortDisposition::Quarantine
+                },
+            },
+            fresh_db: if source.operation == Operation::NewState {
+                RollbackAction::Pending
+            } else {
+                RollbackAction::NotRequired
+            },
+            boot: BootRollback::NotRequired,
+            external_effects_may_remain: source.operation != Operation::ActivateArchived,
+        })
+    );
+}
+
 fn assert_root_links_absent(fixture: &CoordinatorFixture) {
     for name in ["bin", "sbin", "lib", "lib32", "lib64"] {
         assert_state_metadata_name_absent(&fixture.installation.root.join(name));
@@ -277,31 +342,61 @@ fn journal_coordinator_usr_exchange_effect_raw_result_matrix_never_retries() {
 
 #[test]
 fn journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry() {
-    for point in [
-        RetainedExchangeFaultPoint::StagingParentSync,
-        RetainedExchangeFaultPoint::InstallationRootSync,
-        RetainedExchangeFaultPoint::FinalRevalidation,
+    for candidate_kind in [
+        CandidateKind::NewState,
+        CandidateKind::Archived,
+        CandidateKind::ActiveReblit,
     ] {
-        let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(CandidateKind::NewState);
-        let intent_record = intent.record().clone();
-        let candidate = directory_identity(&fixture.candidate_path);
-        let previous = directory_identity(&fixture.installation.root.join("usr"));
-        reset_retained_exchange_syscall_count();
-        arm_retained_exchange_fault(point);
+        for point in [
+            RetainedExchangeFaultPoint::StagingParentSync,
+            RetainedExchangeFaultPoint::InstallationRootSync,
+            RetainedExchangeFaultPoint::FinalRevalidation,
+        ] {
+            let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(candidate_kind);
+            let intent_record = intent.record().clone();
+            let candidate = directory_identity(&fixture.candidate_path);
+            let previous = directory_identity(&fixture.installation.root.join("usr"));
+            reset_retained_exchange_syscall_count();
+            arm_retained_exchange_fault(point);
 
-        let failure = intent.execute_usr_exchange(authority).unwrap_err();
+            let failure = intent.execute_usr_exchange(authority).unwrap_err();
 
-        assert!(matches!(
-            failure,
-            UsrExchangeEffectFailure::Exchange {
-                outcome: RetainedExchangeOutcome::Applied,
-                ..
-            }
-        ));
-        assert_eq!(retained_exchange_syscall_count(), 1);
-        assert_exchange_layout(&fixture, true, candidate, previous);
-        assert_eq!(read_canonical(&fixture.installation.root), intent_record);
-        assert_root_links_absent(&fixture);
+            assert!(matches!(
+                failure,
+                UsrExchangeEffectFailure::Exchange {
+                    outcome: RetainedExchangeOutcome::Applied,
+                    ..
+                }
+            ));
+            assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {point:?}");
+            assert_exchange_layout(&fixture, true, candidate, previous);
+            assert_eq!(read_canonical(&fixture.installation.root), intent_record);
+            assert_root_links_absent(&fixture);
+
+            let namespace_before = snapshot_startup_recovery_namespace(&fixture.installation.root);
+            let database_before = usr_exchange_database_snapshot(&fixture, &intent_record);
+
+            assert_usr_exchange_intent_post_recovers_to_pending_reverse(
+                &fixture.installation,
+                &fixture.database,
+            );
+
+            assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {point:?}");
+            assert_exact_pending_reverse_decision(
+                &intent_record,
+                &read_canonical(&fixture.installation.root),
+            );
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                namespace_before,
+                "{candidate_kind:?} {point:?}"
+            );
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {point:?}"
+            );
+        }
     }
 }
 

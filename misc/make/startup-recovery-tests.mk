@@ -8,7 +8,7 @@ forge-startup-usr-rollback-decision-test:
 	timeout 10s test "$$count" = 11; \
 	for test in \
 		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_usr_rollback_decision_admitted_matrix_persists_exact_plan \
-		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_usr_rollback_decision_intent_post_defers_parent_durability \
+		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_usr_rollback_decision_exchanged_pre_remains_incompatible \
 		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_usr_rollback_decision_changes_only_the_canonical_journal \
 		client::startup_recovery::usr_rollback_decision::tests::evidence_races::startup_usr_rollback_decision_database_and_provenance_conflicts_never_advance \
 		client::startup_recovery::usr_rollback_decision::tests::evidence_races::startup_usr_rollback_decision_namespace_layout_and_abi_conflicts_never_advance \
@@ -52,17 +52,18 @@ forge-startup-usr-rollback-decision-test:
 	timeout 10s test "$$binding_capture_count" = 1; \
 	binding_check_count="$$( timeout 10s rg -n 'journal\.has_binding\(&self\.journal_binding\)' "$$authority" | timeout 10s wc -l )"; \
 	timeout 10s test "$$binding_check_count" = 1; \
-	timeout 10s awk '$$0 == "    pub(in crate::client) fn revalidate(" { active = 1; next } active && $$0 == "        if !journal.has_binding(&self.journal_binding) {" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /journal\.load/) { exit 1 } END { exit !found }' "$$authority"; \
+	timeout 10s awk '$$0 ~ /^impl UsrRollbackDecisionEvidence/ { evidence = 1; next } evidence && $$0 ~ /^    fn revalidate\(/ { active = 1; next } active && $$0 == "        if !journal.has_binding(&self.journal_binding) {" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /journal\.load/) { exit 1 } END { exit !found }' "$$authority"; \
 	timeout 10s grep -Fqx 'pub(crate) struct TransitionJournalBinding(Arc<()>);' "$$journal_store"; \
 	timeout 10s grep -Fqx '    binding: Arc<()>,' "$$journal_store"; \
 	timeout 10s grep -Fqx '            binding: Arc::new(()),' "$$journal_store"; \
 	timeout 10s grep -Fqx '        Arc::ptr_eq(&self.binding, &expected.0)' "$$journal_store"; \
-	intent_post_count="$$( timeout 10s rg -n '^            \(Phase::UsrExchangeIntent, UsrExchangeLayout::Post\) => \{' "$$authority" | timeout 10s wc -l )"; \
+	intent_post_count="$$( timeout 10s rg -n '^            \(Phase::UsrExchangeIntent, UsrExchangeLayout::Post\) => None,$$' "$$authority" | timeout 10s wc -l )"; \
 	timeout 10s test "$$intent_post_count" = 1; \
-	durability_deferral_count="$$( timeout 10s rg -n 'UsrRollbackDecisionDeferral::ForwardExchangeDurabilityUnproven' "$$authority" | timeout 10s wc -l )"; \
-	timeout 10s test "$$durability_deferral_count" = 1; \
-	timeout 10s grep -Fqx '            (Phase::UsrExchangeIntent, UsrExchangeLayout::Pre) => InitialRollbackAction::AlreadySatisfied,' "$$authority"; \
-	timeout 10s grep -Fqx '            (Phase::UsrExchanged, UsrExchangeLayout::Post) => InitialRollbackAction::Pending,' "$$authority"; \
+	parent_required_count="$$( timeout 10s rg -n 'UsrRollbackDecisionAdmission::ParentDurabilityRequired\(' "$$authority" | timeout 10s wc -l )"; \
+	timeout 10s test "$$parent_required_count" = 1; \
+	if timeout 10s rg -n 'UsrRollbackDecisionDeferral::ForwardExchangeDurabilityUnproven' "$$authority"; then exit 1; fi; \
+	timeout 10s grep -Fqx '            (Phase::UsrExchangeIntent, UsrExchangeLayout::Pre) => Some(InitialRollbackAction::AlreadySatisfied),' "$$authority"; \
+	timeout 10s grep -Fqx '            (Phase::UsrExchanged, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),' "$$authority"; \
 	blocker_count="$$( timeout 10s rg -n 'RecoveryBlocker::ForwardExchangeDurabilityUnproven' "$$reconciliation" | timeout 10s wc -l )"; \
 	timeout 10s test "$$blocker_count" = 1; \
 	timeout 10s grep -Fq 'record.phase == Phase::UsrExchangeIntent && namespace.usr_exchange_layout() == Some(UsrExchangeLayout::Post)' "$$reconciliation"; \

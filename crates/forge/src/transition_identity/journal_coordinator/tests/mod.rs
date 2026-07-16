@@ -6,12 +6,16 @@ use std::{
 
 use crate::{
     Installation,
-    client::{JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight},
+    client::{
+        JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight,
+        assert_usr_exchange_intent_post_recovers_to_pending_reverse, snapshot_startup_recovery_namespace,
+    },
     db,
     state::{self, TransitionId},
     test_support::private_installation_tempdir,
     transition_journal::{
-        CandidateOrigin, Operation, Phase, PreviousOrigin, RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalStore,
+        AbortDisposition, BootRollback, CandidateOrigin, CandidateRollback, ForwardPhase, Operation, Phase,
+        PreviousOrigin, RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalStore,
         TransitionRecord, decode,
     },
     tree_marker::TreeMarkerStore,

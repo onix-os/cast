@@ -112,7 +112,14 @@ mod startup_gate;
 mod startup_gate_tests;
 mod startup_reconciliation;
 mod startup_recovery;
+#[cfg(test)]
+#[path = "startup_recovery/forward_origin_test_support.rs"]
+mod startup_recovery_forward_origin_test_support;
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
+#[cfg(test)]
+pub(crate) use startup_recovery_forward_origin_test_support::{
+    assert_usr_exchange_intent_post_recovers_to_pending_reverse, snapshot_startup_recovery_namespace,
+};
 mod sync;
 mod transaction_root;
 mod verify;

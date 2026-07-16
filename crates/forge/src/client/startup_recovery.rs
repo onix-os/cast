@@ -5,7 +5,21 @@
 //! freshly reopened lock-bearing journal store for uninterrupted diagnostic
 //! inspection; failure returns neither a store nor reusable authority.
 
+mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
+
+pub(in crate::client) use usr_exchange_parent_durability::{
+    UsrExchangeParentDurabilityCompletionSeal, UsrExchangeParentDurabilityError,
+    normalize_usr_exchange_parent_durability,
+};
+
+#[cfg(test)]
+#[allow(unused_imports)] // exported for focused parent-durability contracts
+pub(crate) use usr_exchange_parent_durability::{
+    UsrExchangeParentDurabilityEvent, UsrExchangeParentDurabilityFaultPoint,
+    arm_before_usr_exchange_parent_durability_final_revalidation, arm_usr_exchange_parent_durability_fault,
+    reset_usr_exchange_parent_durability_events, take_usr_exchange_parent_durability_events,
+};
 
 #[allow(unused_imports)] // unwired until the startup recovery dispatcher lands
 pub(super) use usr_rollback_decision::{

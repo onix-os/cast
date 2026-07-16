@@ -30,7 +30,8 @@ pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDe
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use usr_rollback_decision_authority::arm_between_usr_rollback_decision_database_captures;
 pub(in crate::client) use usr_rollback_decision_authority::{
-    UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority, UsrRollbackDecisionAuthorityError,
+    UsrExchangeParentDurabilityAuthority, UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority,
+    UsrRollbackDecisionAuthorityError,
 };
 
 #[cfg(test)]

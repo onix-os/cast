@@ -97,7 +97,15 @@ impl CleanSystemStartup {
                 &record,
                 in_flight.clone(),
             )?;
-            if let startup_reconciliation::UsrRollbackDecisionAdmission::Ready(authority) = decision {
+            let authority = match decision {
+                startup_reconciliation::UsrRollbackDecisionAdmission::Ready(authority) => Some(authority),
+                startup_reconciliation::UsrRollbackDecisionAdmission::ParentDurabilityRequired(authority) => Some(
+                    super::startup_recovery::normalize_usr_exchange_parent_durability(&journal, authority)?,
+                ),
+                startup_reconciliation::UsrRollbackDecisionAdmission::NotApplicable
+                | startup_reconciliation::UsrRollbackDecisionAdmission::Deferred(_) => None,
+            };
+            if let Some(authority) = authority {
                 let (journal, record) =
                     super::startup_recovery::persist_usr_rollback_decision_and_reopen(journal, authority)?;
                 let in_flight = state_db.audit_in_flight_transition()?;
@@ -199,6 +207,8 @@ pub(super) enum Error {
     ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
+    #[error("normalize exact startup /usr exchange-parent durability")]
+    UsrExchangeParentDurability(#[from] super::startup_recovery::UsrExchangeParentDurabilityError),
     #[error("persist and reconcile the exact startup /usr rollback decision")]
     UsrRollbackDecisionPersistence(#[from] super::startup_recovery::UsrRollbackDecisionPersistenceError),
     #[error("revalidate retained mutable installation namespace during startup")]

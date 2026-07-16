@@ -296,6 +296,32 @@ impl NamespaceSnapshot {
         )
     }
 
+    /// Borrow the exact retained `.cast/root/staging` directory captured by
+    /// this namespace inventory.
+    ///
+    /// The returned path is diagnostic only. Durability callers must sync the
+    /// descriptor and must never reopen the staging parent through that path.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn retained_staging_parent(
+        &self,
+    ) -> Result<(&File, PathBuf, (u64, u64)), CaptureError> {
+        let mut matches = self.roots_entries.iter().filter(|wrapper| {
+            wrapper.fingerprint.name == b"staging" && wrapper.fingerprint.role == TreeLocation::Staging
+        });
+        let staging = matches
+            .next()
+            .ok_or(CaptureError::FixedWrapperMissing { name: "staging" })?;
+        if matches.next().is_some() {
+            return Err(CaptureError::DirectoryContentsChanged {
+                path: self.roots_path.clone(),
+            });
+        }
+        Ok((
+            &staging.directory,
+            self.roots_path.join("staging"),
+            (staging.fingerprint.witness.device, staging.fingerprint.witness.inode),
+        ))
+    }
+
     pub(crate) fn revalidate_retained(&self) -> Result<(), CaptureError> {
         let mut budget = Budget::new()?;
         require_witness(

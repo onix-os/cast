@@ -6,6 +6,7 @@
 
 mod capture;
 mod decision_proof;
+mod parent_durability;
 mod policy;
 
 #[cfg(test)]

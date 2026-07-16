@@ -22,8 +22,8 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackDecisionNamespac
 
 #[derive(Debug)]
 pub(in crate::client::startup_reconciliation) struct UsrRollbackDecisionNamespaceProof {
-    before: NamespaceSnapshot,
-    after: NamespaceSnapshot,
+    pub(super) before: NamespaceSnapshot,
+    pub(super) after: NamespaceSnapshot,
     layout: UsrExchangeLayout,
 }
 

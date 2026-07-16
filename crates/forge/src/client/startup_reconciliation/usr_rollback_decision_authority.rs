@@ -8,7 +8,10 @@ use crate::{
     },
 };
 
-use super::super::{active_state_snapshot::ActiveStateReservation, startup_gate::UsrRollbackDecisionSeal};
+use super::super::{
+    active_state_snapshot::ActiveStateReservation, startup_gate::UsrRollbackDecisionSeal,
+    startup_recovery::UsrExchangeParentDurabilityCompletionSeal,
+};
 use super::{
     DatabaseEvidence, InspectionError, UsrExchangeLayout, UsrRollbackDecisionNamespaceError,
     UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof, database_ownership_evidence_compatible,
@@ -21,13 +24,13 @@ use super::{
 pub(in crate::client) enum UsrRollbackDecisionAdmission<'reservation> {
     NotApplicable,
     Deferred(UsrRollbackDecisionDeferral),
+    ParentDurabilityRequired(UsrExchangeParentDurabilityAuthority<'reservation>),
     Ready(UsrRollbackDecisionAuthority<'reservation>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum UsrRollbackDecisionDeferral {
     IncompatibleEvidence,
-    ForwardExchangeDurabilityUnproven,
 }
 
 /// Exact, retained database/namespace evidence plus the cooperating-writer
@@ -37,13 +40,25 @@ pub(in crate::client) enum UsrRollbackDecisionDeferral {
 /// witness. Its only role here is to keep cooperating namespace writers
 /// excluded until the executor either persists the decision or fails stop.
 pub(in crate::client) struct UsrRollbackDecisionAuthority<'reservation> {
+    evidence: UsrRollbackDecisionEvidence<'reservation>,
+    observations: RollbackObservations,
+}
+
+/// Exact Intent+POST evidence which may become rollback-decision authority
+/// only after both exchange-parent durability barriers complete.
+pub(in crate::client) struct UsrExchangeParentDurabilityAuthority<'reservation> {
+    evidence: UsrRollbackDecisionEvidence<'reservation>,
+}
+
+/// Evidence shared by direct rollback-decision admission and the narrower
+/// parent-durability normalization typestate.
+struct UsrRollbackDecisionEvidence<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackDecisionNamespaceProof,
     journal_binding: TransitionJournalBinding,
-    observations: RollbackObservations,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -116,13 +131,9 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         };
 
         let usr_exchange = match (record.phase, namespace.layout()) {
-            (Phase::UsrExchangeIntent, UsrExchangeLayout::Pre) => InitialRollbackAction::AlreadySatisfied,
-            (Phase::UsrExchangeIntent, UsrExchangeLayout::Post) => {
-                return Ok(UsrRollbackDecisionAdmission::Deferred(
-                    UsrRollbackDecisionDeferral::ForwardExchangeDurabilityUnproven,
-                ));
-            }
-            (Phase::UsrExchanged, UsrExchangeLayout::Post) => InitialRollbackAction::Pending,
+            (Phase::UsrExchangeIntent, UsrExchangeLayout::Pre) => Some(InitialRollbackAction::AlreadySatisfied),
+            (Phase::UsrExchangeIntent, UsrExchangeLayout::Post) => None,
+            (Phase::UsrExchanged, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),
             (Phase::UsrExchanged, UsrExchangeLayout::Pre) => {
                 return Ok(UsrRollbackDecisionAdmission::Deferred(
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
@@ -130,20 +141,27 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             }
             _ => unreachable!("rollback-decision admission is restricted to /usr exchange phases"),
         };
-        let observations = rollback_observations(record.operation, usr_exchange);
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
         installation.revalidate_mutable_namespace()?;
-        Ok(UsrRollbackDecisionAdmission::Ready(Self {
+        let evidence = UsrRollbackDecisionEvidence {
             installation: installation.clone(),
             state_db: retained_state_db,
             record: record.clone(),
             database,
             namespace,
             journal_binding,
-            observations,
             _active_state_reservation: active_state_reservation,
-        }))
+        };
+        Ok(match usr_exchange {
+            Some(usr_exchange) => UsrRollbackDecisionAdmission::Ready(Self {
+                observations: rollback_observations(record.operation, usr_exchange),
+                evidence,
+            }),
+            None => UsrRollbackDecisionAdmission::ParentDurabilityRequired(UsrExchangeParentDurabilityAuthority {
+                evidence,
+            }),
+        })
     }
 
     /// Revalidate the owned source record, retained namespace inventories, and
@@ -152,6 +170,28 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackDecisionAuthorityError> {
+        self.evidence.revalidate(journal)
+    }
+
+    pub(in crate::client) fn installation(&self) -> &Installation {
+        &self.evidence.installation
+    }
+
+    pub(in crate::client) fn record(&self) -> &TransitionRecord {
+        &self.evidence.record
+    }
+
+    pub(in crate::client) fn observations(&self) -> RollbackObservations {
+        self.observations
+    }
+}
+
+impl UsrRollbackDecisionEvidence<'_> {
+    /// Revalidate the owned source record, retained namespace inventories, and
+    /// an exact database/namespace/database sandwich immediately around use.
+    fn revalidate(&self, journal: &TransitionJournalStore) -> Result<(), UsrRollbackDecisionAuthorityError> {
+        // Per-open journal identity is deliberately the first check. No
+        // namespace, database, or durability action may run for a mixed store.
         if !journal.has_binding(&self.journal_binding) {
             return Err(UsrRollbackDecisionAuthorityErrorKind::JournalBindingMismatch.into());
         }
@@ -164,17 +204,57 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
+}
+
+impl<'reservation> UsrExchangeParentDurabilityAuthority<'reservation> {
+    /// Revalidate exact Intent+POST normalization authority. The shared
+    /// evidence routine performs the per-open journal binding check first.
+    pub(in crate::client) fn revalidate(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<(), UsrRollbackDecisionAuthorityError> {
+        self.evidence.revalidate(journal)?;
+        self.require_intent_post()
+    }
+
+    /// Apply only the retained staging-parent durability barrier.
+    pub(in crate::client) fn sync_retained_staging_parent(
+        &self,
+        before_sync: impl FnOnce() -> std::io::Result<()>,
+    ) -> Result<(u64, u64), UsrRollbackDecisionAuthorityError> {
+        self.evidence
+            .namespace
+            .sync_retained_staging_parent(before_sync)
+            .map_err(UsrRollbackDecisionAuthorityError::from)
+    }
 
     pub(in crate::client) fn installation(&self) -> &Installation {
-        &self.installation
+        &self.evidence.installation
     }
 
-    pub(in crate::client) fn record(&self) -> &TransitionRecord {
-        &self.record
+    /// Consume completed normalization authority into the existing sealed
+    /// rollback-decision capability. Only the normalizer can construct the
+    /// completion seal.
+    pub(in crate::client) fn complete(
+        self,
+        _seal: UsrExchangeParentDurabilityCompletionSeal,
+    ) -> Result<UsrRollbackDecisionAuthority<'reservation>, UsrRollbackDecisionAuthorityError> {
+        self.require_intent_post()?;
+        let operation = self.evidence.record.operation;
+        Ok(UsrRollbackDecisionAuthority {
+            evidence: self.evidence,
+            observations: rollback_observations(operation, InitialRollbackAction::Pending),
+        })
     }
 
-    pub(in crate::client) fn observations(&self) -> RollbackObservations {
-        self.observations
+    fn require_intent_post(&self) -> Result<(), UsrRollbackDecisionAuthorityError> {
+        if self.evidence.record.phase == Phase::UsrExchangeIntent
+            && self.evidence.namespace.layout() == UsrExchangeLayout::Post
+        {
+            Ok(())
+        } else {
+            Err(UsrRollbackDecisionAuthorityErrorKind::ParentDurabilitySourceMismatch.into())
+        }
     }
 }
 
@@ -250,6 +330,8 @@ impl From<crate::installation::Error> for UsrRollbackDecisionAuthorityError {
 enum UsrRollbackDecisionAuthorityErrorKind {
     #[error("startup rollback-decision authority was paired with a different open journal store")]
     JournalBindingMismatch,
+    #[error("startup parent-durability authority is not bound to exact UsrExchangeIntent + POST evidence")]
+    ParentDurabilitySourceMismatch,
     #[error("inspect exact rollback-decision database evidence")]
     Inspection(#[source] InspectionError),
     #[error("revalidate the independent rollback-decision namespace proof")]

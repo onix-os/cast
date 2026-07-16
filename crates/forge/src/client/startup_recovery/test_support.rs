@@ -67,6 +67,7 @@ impl OperationKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // the shared rollback-only instantiation does not use IntentPost
 pub(super) enum SourceCase {
     IntentPre,
     IntentPost,
@@ -246,6 +247,31 @@ impl Fixture {
         }
     }
 
+    #[allow(dead_code)] // consumed only by the parent-durability test instantiation
+    pub(super) fn expected_pending_reverse_plan(&self) -> RollbackPlan {
+        assert_eq!(self.source.phase, Phase::UsrExchangeIntent);
+        RollbackPlan {
+            source: ForwardPhase::UsrExchangeIntent,
+            previous_archive: RollbackAction::NotRequired,
+            usr_exchange: RollbackAction::Pending,
+            candidate: CandidateRollback {
+                action: RollbackAction::Pending,
+                disposition: if self.kind == OperationKind::Archived {
+                    AbortDisposition::Rearchive
+                } else {
+                    AbortDisposition::Quarantine
+                },
+            },
+            fresh_db: if self.kind == OperationKind::NewState {
+                RollbackAction::Pending
+            } else {
+                RollbackAction::NotRequired
+            },
+            boot: BootRollback::NotRequired,
+            external_effects_may_remain: self.kind != OperationKind::Archived,
+        }
+    }
+
     pub(super) fn assert_exact_decision(&self, actual: &TransitionRecord) {
         assert_eq!(actual.phase, Phase::RollbackDecided);
         assert_eq!(actual.generation, self.source.generation + 1);
@@ -257,6 +283,20 @@ impl Fixture {
         assert_eq!(actual.options, self.source.options);
         assert_eq!(actual.quarantine_name, self.source.quarantine_name);
         assert_eq!(actual.rollback, Some(self.expected_plan()));
+    }
+
+    #[allow(dead_code)] // consumed only by the parent-durability test instantiation
+    pub(super) fn assert_exact_pending_reverse_decision(&self, actual: &TransitionRecord) {
+        assert_eq!(actual.phase, Phase::RollbackDecided);
+        assert_eq!(actual.generation, self.source.generation + 1);
+        assert_eq!(actual.transition_id, self.source.transition_id);
+        assert_eq!(actual.operation, self.source.operation);
+        assert_eq!(actual.creation_epoch, self.source.creation_epoch);
+        assert_eq!(actual.candidate, self.source.candidate);
+        assert_eq!(actual.previous, self.source.previous);
+        assert_eq!(actual.options, self.source.options);
+        assert_eq!(actual.quarantine_name, self.source.quarantine_name);
+        assert_eq!(actual.rollback, Some(self.expected_pending_reverse_plan()));
     }
 
     pub(super) fn database_snapshot(&self) -> DatabaseSnapshot {
@@ -280,6 +320,13 @@ impl Fixture {
         let mut entries = Vec::new();
         snapshot_directory(&self.installation.root, &self.installation.root, &mut entries);
         entries
+    }
+
+    #[allow(dead_code)] // consumed only by the parent-durability test instantiation
+    pub(super) fn durability_parent_identities(&self) -> ((u64, u64), (u64, u64)) {
+        let staging = fs::symlink_metadata(self.installation.root.join(".cast/root/staging")).unwrap();
+        let root = self.installation.root_directory().metadata().unwrap();
+        ((staging.dev(), staging.ino()), (root.dev(), root.ino()))
     }
 
     pub(super) fn assert_source_unchanged(&self) {

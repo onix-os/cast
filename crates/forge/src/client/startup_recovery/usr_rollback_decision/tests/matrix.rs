@@ -39,17 +39,15 @@ fn startup_usr_rollback_decision_admitted_matrix_persists_exact_plan() {
 }
 
 #[test]
-fn startup_usr_rollback_decision_intent_post_defers_parent_durability() {
+fn startup_usr_rollback_decision_exchanged_pre_remains_incompatible() {
     for kind in OperationKind::ALL {
-        let fixture = Fixture::new(kind, SourceCase::IntentPost);
+        let fixture = Fixture::new(kind, SourceCase::ExchangedPre);
         let before = fixture.canonical_bytes();
         let error = fixture.enter();
         let pending = pending(&error);
-        assert_eq!(pending.phase(), Phase::UsrExchangeIntent, "{kind:?}");
+        assert_eq!(pending.phase(), Phase::UsrExchanged, "{kind:?}");
         assert!(
-            pending
-                .blockers()
-                .contains(&RecoveryBlocker::ForwardExchangeDurabilityUnproven),
+            pending.blockers().contains(&RecoveryBlocker::PhaseNamespaceConflict),
             "{kind:?}: {:?}",
             pending.blockers()
         );
