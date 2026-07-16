@@ -10,6 +10,7 @@ mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
 mod usr_rollback_resume_route;
 mod usr_rollback_reverse_durability;
+mod usr_rollback_reverse_persistence;
 
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
@@ -64,5 +65,14 @@ pub(super) use usr_rollback_resume_route::{
     persist_usr_rollback_resume_route_and_reopen,
 };
 
+#[allow(unused_imports)] // unwired until the reverse startup dispatcher lands
+pub(super) use usr_rollback_reverse_persistence::{
+    DurableUsrRollbackReverseRecord, UsrRollbackReversePersistenceError, UsrRollbackReverseReopenError,
+    persist_usr_rollback_reverse_and_reopen,
+};
+
 #[cfg(test)]
 pub(crate) use usr_rollback_resume_route::arm_before_usr_rollback_resume_route_final_revalidation;
+
+#[cfg(test)]
+pub(crate) use usr_rollback_reverse_persistence::arm_before_usr_rollback_reverse_persistence_final_revalidation;

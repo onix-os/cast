@@ -28,13 +28,34 @@ forge-startup-usr-rollback-reverse-durability-test:
 	timeout 10s grep -Fqx '    outcome: RollbackActionOutcome,' "$$authority"; \
 	timeout 10s grep -Fq 'outcome: RollbackActionOutcome::Applied,' "$$authority"; \
 	timeout 10s grep -Fq 'outcome: RollbackActionOutcome::AlreadySatisfied,' "$$authority"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'if !journal.has_binding(&self._effect.journal_binding) {' "$$authority" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'if !journal.has_binding(&self._effect.journal_binding) {' "$$authority" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'namespace.complete_parent_durability(&installation, &record)' "$$authority" )" = 2; \
+	timeout 10s grep -Fqx '    pub(in crate::client) fn installation(&self) -> &Installation {' "$$authority"; \
+	timeout 10s grep -Fqx '    pub(in crate::client) fn record(&self) -> &TransitionRecord {' "$$authority"; \
+	timeout 10s grep -Fqx '    pub(in crate::client) fn usr_restored_successor(&self) -> Result<TransitionRecord, CodecError> {' "$$authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'self._effect.record.rollback_successor(Some(self.outcome))' "$$authority" )" = 1; \
+	if timeout 10s rg -n 'fn outcome\(' "$$authority"; then exit 1; fi; \
+	if timeout 10s rg -n '^[[:space:]]{8,}outcome: RollbackActionOutcome([,)]|$$)' "$$authority"; then exit 1; fi; \
+	timeout 10s rg -U -q '#\[cfg\(test\)\]\nimpl UsrRollbackReverseDurableEffectAuthority<'"'"'_> \{\n    pub\(in crate::client\) fn outcome_for_test\(&self\) -> RollbackActionOutcome \{' "$$authority"; \
+	revalidate_line="$$( timeout 10s grep -nF '    pub(in crate::client) fn revalidate(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	binding_line="$$( timeout 10s grep -nF '        if !journal.has_binding(&self._effect.journal_binding) {' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	pre_line="$$( timeout 10s grep -nF '        require_pre_namespace_evidence(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	namespace_line="$$( timeout 10s grep -nF '        let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	trailing_line="$$( timeout 10s grep -nF '        let trailing_evidence = require_post_namespace_evidence(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	namespace_result_line="$$( timeout 10s grep -nF '        namespace_result?;' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	trailing_result_line="$$( timeout 10s grep -nFx '        trailing_evidence' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$revalidate_line" -lt "$$binding_line"; \
+	timeout 10s test "$$binding_line" -lt "$$pre_line"; \
+	timeout 10s test "$$pre_line" -lt "$$namespace_line"; \
+	timeout 10s test "$$namespace_line" -lt "$$trailing_line"; \
+	timeout 10s test "$$trailing_line" -lt "$$namespace_result_line"; \
+	timeout 10s test "$$namespace_result_line" -lt "$$trailing_result_line"; \
 	if timeout 10s rg -n 'RollbackActionOutcome|outcome:' "$$parent"; then exit 1; fi; \
 	callers="$$( timeout 10s rg -n 'complete_(applied|already_satisfied)_usr_rollback_reverse_durability\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_reverse_durability.rs' | timeout 10s wc -l )"; \
 	timeout 10s test "$$callers" = 0; \
 	if timeout 10s rg -n 'exchange_retained_usr_once|attempt_usr_exchange_once|renameat2|RENAME_EXCHANGE|unlinkat|linkat|symlinkat' "$$authority" "$$executor"; then exit 1; fi; \
-	if timeout 10s rg -n '\.advance[[:space:]]*\(|rollback_successor|forward_successor|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' "$$authority" "$$executor"; then exit 1; fi; \
+	if timeout 10s rg -n 'rollback_successor|forward_successor' "$$executor"; then exit 1; fi; \
+	if timeout 10s rg -n '\.advance[[:space:]]*\(|forward_successor|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' "$$authority" "$$executor"; then exit 1; fi; \
 	if timeout 10s rg -n 'AsRawFd|IntoRawFd|FromRawFd|AsFd|RawFd|BorrowedFd|OwnedFd|as_raw_fd|into_raw_fd|from_raw_fd|as_fd[[:space:]]*\(|std::fs::File|fs::File|unsafe[[:space:]]*\{' "$$authority" "$$executor"; then exit 1; fi; \
 	if timeout 10s rg -n 'File::open|OpenOptions|open_beneath|openat2|openat[[:space:]]*\(' "$$authority" "$$executor"; then exit 1; fi; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while)[[:space:]]' "$$authority" "$$executor"; then exit 1; fi; \

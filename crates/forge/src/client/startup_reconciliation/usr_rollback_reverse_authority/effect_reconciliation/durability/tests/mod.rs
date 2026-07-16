@@ -1,13 +1,20 @@
 //! Focused contracts for the sealed reverse parent-durability bridge.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
             UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
             UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyReconciliation,
+            UsrRollbackReverseDurableEffectAuthority,
             activation_namespace::{
                 UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
+                arm_before_usr_rollback_reverse_durable_namespace_capture,
                 arm_before_usr_rollback_reverse_namespace_final_pre_capture,
                 arm_before_usr_rollback_reverse_namespace_installation_root_sync,
                 arm_usr_rollback_reverse_namespace_durability_fault,
@@ -21,10 +28,11 @@ use crate::{
         },
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
-    transition_journal::{RollbackActionOutcome, TransitionJournalStore},
+    transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore},
 };
 
 use super::super::super::test_support::{EffectOperationKind, ReverseFixture, ReverseLayout};
+use super::arm_before_durable_trailing_evidence;
 
 fn reconcile_applied<'reservation>(
     fixture: &ReverseFixture,
@@ -56,6 +64,43 @@ fn reconcile_already_satisfied<'reservation>(
         .unwrap()
         .reconcile(&seal, journal)
         .unwrap()
+}
+
+fn complete_durable<'reservation>(
+    fixture: &ReverseFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    initial_layout: ReverseLayout,
+) -> UsrRollbackReverseDurableEffectAuthority<'reservation> {
+    match initial_layout {
+        ReverseLayout::Post => {
+            complete_applied_usr_rollback_reverse_durability(journal, reconcile_applied(fixture, journal, reservation))
+                .unwrap()
+        }
+        ReverseLayout::Pre => complete_already_satisfied_usr_rollback_reverse_durability(
+            journal,
+            reconcile_already_satisfied(fixture, journal, reservation),
+        )
+        .unwrap(),
+    }
+}
+
+fn assert_durable_surface(
+    fixture: &ReverseFixture,
+    journal: &TransitionJournalStore,
+    durable: &UsrRollbackReverseDurableEffectAuthority<'_>,
+    expected_outcome: RollbackActionOutcome,
+) {
+    durable.revalidate(journal).unwrap();
+    assert_eq!(durable.installation().root, fixture.fixture.installation.root);
+    assert_eq!(durable.record(), &fixture.record);
+
+    let successor = durable.usr_restored_successor().unwrap();
+    assert_eq!(successor.phase, Phase::UsrRestored);
+    assert_eq!(
+        successor,
+        fixture.record.rollback_successor(Some(expected_outcome)).unwrap()
+    );
 }
 
 fn reset_events() {
@@ -94,6 +139,12 @@ enum DurabilityRaceBoundary {
     BeforeSync,
     BetweenSyncs,
     AfterParentSyncs,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DurableRevalidationChange {
+    BeforeRevalidation,
+    DuringNamespaceCapture,
 }
 
 fn exercise_durability_race(boundary: DurabilityRaceBoundary, race: DurabilityRace, initial_layout: ReverseLayout) {
@@ -173,6 +224,77 @@ fn exercise_durability_race_matrix(boundary: DurabilityRaceBoundary) {
     }
 }
 
+fn exercise_durable_revalidation_change(
+    change: DurableRevalidationChange,
+    race: DurabilityRace,
+    initial_layout: ReverseLayout,
+) {
+    let operation = match race {
+        DurabilityRace::Database => EffectOperationKind::NewState,
+        DurabilityRace::Journal | DurabilityRace::Namespace => EffectOperationKind::Archived,
+    };
+    let fixture = ReverseFixture::for_effect(operation, initial_layout);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    reset_retained_exchange_syscall_count();
+    let durable = complete_durable(&fixture, &journal, &reservation, initial_layout);
+    reset_events();
+
+    let hook: Box<dyn FnOnce()> = match race {
+        DurabilityRace::Database => Box::new(fixture.candidate_transition_clear_hook()),
+        DurabilityRace::Journal => Box::new(fixture.journal_change_hook()),
+        DurabilityRace::Namespace => Box::new(
+            fixture.namespace_change_hook(format!("reverse-durable-revalidation-{change:?}-{initial_layout:?}")),
+        ),
+    };
+    match change {
+        DurableRevalidationChange::BeforeRevalidation => hook(),
+        DurableRevalidationChange::DuringNamespaceCapture => {
+            arm_before_usr_rollback_reverse_durable_namespace_capture(hook)
+        }
+    }
+
+    let trailing_evidence_calls = Arc::new(AtomicUsize::new(0));
+    let expect_trailing_after_namespace_failure = matches!(
+        (change, race),
+        (
+            DurableRevalidationChange::DuringNamespaceCapture,
+            DurabilityRace::Namespace
+        )
+    );
+    if expect_trailing_after_namespace_failure {
+        let trailing_evidence_calls = Arc::clone(&trailing_evidence_calls);
+        arm_before_durable_trailing_evidence(move || {
+            trailing_evidence_calls.fetch_add(1, Ordering::Relaxed);
+        });
+    }
+
+    assert!(durable.revalidate(&journal).is_err());
+    assert_eq!(
+        retained_exchange_syscall_count(),
+        usize::from(initial_layout == ReverseLayout::Post),
+        "{change:?} {race:?} {initial_layout:?}"
+    );
+    assert!(take_events().is_empty(), "{change:?} {race:?} {initial_layout:?}");
+    assert_eq!(
+        trailing_evidence_calls.load(Ordering::Relaxed),
+        usize::from(expect_trailing_after_namespace_failure),
+        "{change:?} {race:?} {initial_layout:?}"
+    );
+}
+
+fn exercise_durable_revalidation_matrix(change: DurableRevalidationChange) {
+    for race in [
+        DurabilityRace::Database,
+        DurabilityRace::Journal,
+        DurabilityRace::Namespace,
+    ] {
+        for initial_layout in [ReverseLayout::Post, ReverseLayout::Pre] {
+            exercise_durable_revalidation_change(change, race, initial_layout);
+        }
+    }
+}
+
 #[test]
 fn reverse_durability_constructs_outcome_only_after_both_parent_barriers_for_every_operation() {
     for kind in EffectOperationKind::ALL {
@@ -187,6 +309,7 @@ fn reverse_durability_constructs_outcome_only_after_both_parent_barriers_for_eve
         let durable = complete_applied_usr_rollback_reverse_durability(&journal, authority).unwrap();
 
         assert_eq!(durable.outcome_for_test(), RollbackActionOutcome::Applied, "{kind:?}");
+        assert_durable_surface(&fixture, &journal, &durable, RollbackActionOutcome::Applied);
         assert_eq!(take_events(), success_events(&fixture), "{kind:?}");
         assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?}");
         fixture.assert_non_namespace_unchanged();
@@ -208,6 +331,7 @@ fn reverse_durability_constructs_outcome_only_after_both_parent_barriers_for_eve
             RollbackActionOutcome::AlreadySatisfied,
             "{kind:?}"
         );
+        assert_durable_surface(&fixture, &journal, &durable, RollbackActionOutcome::AlreadySatisfied);
         assert_eq!(take_events(), success_events(&fixture), "{kind:?}");
         assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?}");
         fixture.assert_non_namespace_unchanged();
@@ -239,6 +363,27 @@ fn reverse_durability_binding_is_the_first_check_for_both_provenances() {
 
     assert!(complete_already_satisfied_usr_rollback_reverse_durability(&second, authority).is_err());
     assert!(take_events().is_empty());
+    drop(second);
+    drop(reservation);
+
+    for initial_layout in [ReverseLayout::Post, ReverseLayout::Pre] {
+        let fixture = ReverseFixture::for_effect(EffectOperationKind::Archived, initial_layout);
+        let first = fixture.open_journal();
+        let reservation = ActiveStateReservation::acquire().unwrap();
+        reset_retained_exchange_syscall_count();
+        let durable = complete_durable(&fixture, &first, &reservation, initial_layout);
+        drop(first);
+        let second = fixture.open_journal();
+        reset_events();
+
+        assert!(durable.revalidate(&second).is_err());
+        assert!(take_events().is_empty());
+        assert_eq!(
+            retained_exchange_syscall_count(),
+            usize::from(initial_layout == ReverseLayout::Post),
+            "{initial_layout:?}"
+        );
+    }
 }
 
 #[test]
@@ -300,6 +445,7 @@ fn reverse_durability_faults_consume_authority_at_each_ordered_boundary() {
 #[test]
 fn reverse_durability_rejects_database_journal_and_namespace_changes_before_sync() {
     exercise_durability_race_matrix(DurabilityRaceBoundary::BeforeSync);
+    exercise_durable_revalidation_matrix(DurableRevalidationChange::BeforeRevalidation);
 }
 
 #[test]
@@ -310,4 +456,5 @@ fn reverse_durability_rejects_database_journal_and_namespace_changes_between_syn
 #[test]
 fn reverse_durability_rejects_database_journal_and_namespace_changes_after_parent_syncs() {
     exercise_durability_race_matrix(DurabilityRaceBoundary::AfterParentSyncs);
+    exercise_durable_revalidation_matrix(DurableRevalidationChange::DuringNamespaceCapture);
 }

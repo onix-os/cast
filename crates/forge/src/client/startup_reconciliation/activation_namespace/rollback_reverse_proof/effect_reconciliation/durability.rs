@@ -14,6 +14,7 @@ use crate::client::startup_reconciliation::activation_namespace::capture::{
 pub(in crate::client) use crate::client::startup_reconciliation::activation_namespace::capture::{
     ReverseExchangeDurabilityEvent as UsrRollbackReverseNamespaceDurabilityEvent,
     ReverseExchangeDurabilityFaultPoint as UsrRollbackReverseNamespaceDurabilityFaultPoint,
+    arm_before_reverse_exchange_durable_revalidation_capture as arm_before_usr_rollback_reverse_durable_namespace_capture,
     arm_before_reverse_exchange_final_pre_capture as arm_before_usr_rollback_reverse_namespace_final_pre_capture,
     arm_before_reverse_exchange_installation_root_sync as arm_before_usr_rollback_reverse_namespace_installation_root_sync,
     arm_reverse_exchange_durability_fault as arm_usr_rollback_reverse_namespace_durability_fault,
@@ -33,6 +34,22 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseDurableNa
 enum DurableReverseOrigin {
     Applied(DurableAppliedReverseExchangeReconciliation),
     AlreadySatisfied(DurableReverseExchangeNamespace),
+}
+
+impl UsrRollbackReverseDurableNamespace {
+    /// Borrow and freshly revalidate the exact durable PRE proof for the later
+    /// persistence boundary.
+    pub(in crate::client::startup_reconciliation) fn revalidate(
+        &self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<(), super::UsrRollbackReverseNamespaceError> {
+        match &self._origin {
+            DurableReverseOrigin::Applied(namespace) => namespace.revalidate(installation, record)?,
+            DurableReverseOrigin::AlreadySatisfied(namespace) => namespace.revalidate(installation, record)?,
+        }
+        Ok(())
+    }
 }
 
 impl UsrRollbackReverseAppliedNamespace {

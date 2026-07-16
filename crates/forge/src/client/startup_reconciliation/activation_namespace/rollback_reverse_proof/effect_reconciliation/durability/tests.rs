@@ -265,6 +265,28 @@ fn reverse_parent_durability_final_fresh_pre_race_rejects_completion_after_both_
     }
 }
 
+#[test]
+fn reverse_durable_namespace_revalidation_requires_fresh_exact_pre_for_both_sources() {
+    for source in [
+        ReconciliationSource::AppliedSuccess,
+        ReconciliationSource::AppliedReportedError,
+        ReconciliationSource::AlreadySatisfied,
+    ] {
+        let fixture = DurabilityFixture::new(source);
+        let durable = fixture.pending(source).complete(&fixture).unwrap();
+        let expected_calls = retained_exchange_syscall_count();
+
+        durable.revalidate(&fixture.installation, &fixture.record).unwrap();
+        assert_eq!(retained_exchange_syscall_count(), expected_calls, "{source:?}");
+
+        arm_before_usr_rollback_reverse_durable_namespace_capture(
+            fixture.namespace_change_hook("reverse-durable-revalidation-race"),
+        );
+        assert!(durable.revalidate(&fixture.installation, &fixture.record).is_err());
+        assert_eq!(retained_exchange_syscall_count(), expected_calls, "{source:?}");
+    }
+}
+
 fn reverse_intent_record(
     candidate_token: TreeToken,
     candidate_runtime: RuntimeTreeIdentity,

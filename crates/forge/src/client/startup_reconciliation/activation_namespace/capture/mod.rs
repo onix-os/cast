@@ -44,7 +44,8 @@ pub(super) use reverse_exchange::{
 #[cfg(test)]
 #[allow(unused_imports)] // exported for the later authority-level ambiguity contracts
 pub(in crate::client) use reverse_exchange::{
-    ReverseExchangeDurabilityEvent, ReverseExchangeDurabilityFaultPoint, arm_before_reverse_exchange_final_pre_capture,
+    ReverseExchangeDurabilityEvent, ReverseExchangeDurabilityFaultPoint,
+    arm_before_reverse_exchange_durable_revalidation_capture, arm_before_reverse_exchange_final_pre_capture,
     arm_before_reverse_exchange_installation_root_sync, arm_before_reverse_exchange_reconciliation_capture,
     arm_reverse_exchange_durability_fault, reset_reverse_exchange_durability_events,
     take_reverse_exchange_durability_events,

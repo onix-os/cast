@@ -7,7 +7,9 @@
 
 use crate::{
     Installation, db,
-    transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -48,6 +50,80 @@ struct DurableReverseEffect<'reservation> {
     journal_binding: TransitionJournalBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
+
+impl UsrRollbackReverseDurableEffectAuthority<'_> {
+    /// Revalidate the complete durable reverse authority without consuming it.
+    pub(in crate::client) fn revalidate(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<(), UsrRollbackReverseAuthorityError> {
+        // The per-open binding is the first retained evidence observation.
+        if !journal.has_binding(&self._effect.journal_binding) {
+            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
+        }
+
+        let effect = &self._effect;
+        require_pre_namespace_evidence(
+            &effect.installation,
+            &effect.state_db,
+            &effect.record,
+            &effect.database,
+            journal,
+        )?;
+        let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);
+        before_durable_trailing_evidence();
+        let trailing_evidence = require_post_namespace_evidence(
+            &effect.installation,
+            &effect.state_db,
+            &effect.record,
+            &effect.database,
+            journal,
+        );
+        namespace_result?;
+        trailing_evidence
+    }
+
+    /// Borrow the retained installation which owns this authority.
+    pub(in crate::client) fn installation(&self) -> &Installation {
+        &self._effect.installation
+    }
+
+    /// Borrow the exact `ReverseExchangeIntent` source record.
+    pub(in crate::client) fn record(&self) -> &TransitionRecord {
+        &self._effect.record
+    }
+
+    /// Derive the sole legal `UsrRestored` successor from the outcome fixed
+    /// by this authority's construction path.
+    pub(in crate::client) fn usr_restored_successor(&self) -> Result<TransitionRecord, CodecError> {
+        self._effect.record.rollback_successor(Some(self.outcome))
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static BEFORE_DURABLE_TRAILING_EVIDENCE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn arm_before_durable_trailing_evidence(hook: impl FnOnce() + 'static) {
+    BEFORE_DURABLE_TRAILING_EVIDENCE.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_durable_trailing_evidence() {
+    BEFORE_DURABLE_TRAILING_EVIDENCE.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_durable_trailing_evidence() {}
 
 impl<'reservation> UsrRollbackReverseAppliedEffectAuthority<'reservation> {
     /// Complete parent durability for an exchange applied by this invocation.

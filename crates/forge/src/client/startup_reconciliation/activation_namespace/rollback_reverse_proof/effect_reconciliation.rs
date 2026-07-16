@@ -25,6 +25,7 @@ pub(in crate::client::startup_reconciliation) use durability::UsrRollbackReverse
 #[cfg(test)]
 pub(in crate::client) use durability::{
     UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
+    arm_before_usr_rollback_reverse_durable_namespace_capture,
     arm_before_usr_rollback_reverse_namespace_final_pre_capture,
     arm_before_usr_rollback_reverse_namespace_installation_root_sync,
     arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,

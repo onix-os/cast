@@ -62,6 +62,18 @@ impl AppliedReverseExchangeReconciliation {
     }
 }
 
+impl DurableAppliedReverseExchangeReconciliation {
+    /// Borrow the durable namespace proof without consulting the retained raw
+    /// syscall diagnostic.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate(
+        &self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<(), ReverseExchangeDurabilityError> {
+        self._namespace.revalidate(installation, record)
+    }
+}
+
 /// Namespace-derived result of exactly one reverse exchange attempt.
 ///
 /// Failure variants are intentionally fieldless: neither can be retried with

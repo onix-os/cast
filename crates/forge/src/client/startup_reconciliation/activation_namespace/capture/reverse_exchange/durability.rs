@@ -25,6 +25,36 @@ pub(in crate::client::startup_reconciliation::activation_namespace) struct Durab
     _final_pre_projection: ProjectedReverseNamespace,
 }
 
+impl DurableReverseExchangeNamespace {
+    /// Revalidate the exact durable PRE namespace through one new authenticated
+    /// capture. This borrows the sealed proof and performs no sync or mutation.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate(
+        &self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<(), ReverseExchangeDurabilityError> {
+        require_exact_pre(
+            installation,
+            record,
+            &self._parents,
+            &self._final_pre,
+            &self._final_pre_projection,
+        )?;
+
+        run_before_durable_revalidation_capture();
+        let fresh_pre = capture_snapshot(installation, record)?;
+        fresh_pre.revalidate_retained()?;
+        if fresh_pre.fingerprint() != self._final_pre.fingerprint() {
+            return Err(ReverseExchangeDurabilityError::FinalNamespaceChanged);
+        }
+        let fresh_projection = ProjectedReverseNamespace::capture(&fresh_pre, record)?;
+        if fresh_projection != self._final_pre_projection || fresh_projection.layout() != UsrExchangeLayout::Pre {
+            return Err(ReverseExchangeDurabilityError::FinalProjectionChanged);
+        }
+        require_exact_pre(installation, record, &self._parents, &fresh_pre, &fresh_projection)
+    }
+}
+
 impl RetainedReverseExchangeParents {
     /// Consume exact PRE evidence through both parent barriers and one final
     /// recapture. Every error drops both retained descriptors with `self`.
@@ -242,6 +272,8 @@ std::thread_local! {
         std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     static BEFORE_REVERSE_EXCHANGE_INSTALLATION_ROOT_SYNC:
         std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_REVERSE_EXCHANGE_DURABLE_REVALIDATION_CAPTURE:
+        std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -279,6 +311,13 @@ pub(in crate::client) fn arm_before_reverse_exchange_installation_root_sync(hook
 }
 
 #[cfg(test)]
+pub(in crate::client) fn arm_before_reverse_exchange_durable_revalidation_capture(hook: impl FnOnce() + 'static) {
+    BEFORE_REVERSE_EXCHANGE_DURABLE_REVALIDATION_CAPTURE.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
 fn run_before_installation_root_sync() {
     BEFORE_REVERSE_EXCHANGE_INSTALLATION_ROOT_SYNC.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -301,6 +340,18 @@ fn run_before_final_pre_capture() {
 
 #[cfg(not(test))]
 fn run_before_final_pre_capture() {}
+
+#[cfg(test)]
+fn run_before_durable_revalidation_capture() {
+    BEFORE_REVERSE_EXCHANGE_DURABLE_REVALIDATION_CAPTURE.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_before_durable_revalidation_capture() {}
 
 #[cfg(test)]
 fn record_staging_parent_synced(file: &std::fs::File) {

@@ -47,6 +47,7 @@ pub(super) use rollback_reverse_proof::{
 #[cfg(test)]
 pub(in crate::client) use rollback_reverse_proof::{
     UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
+    arm_before_usr_rollback_reverse_durable_namespace_capture,
     arm_before_usr_rollback_reverse_effect_final_namespace_capture,
     arm_before_usr_rollback_reverse_fresh_namespace_capture,
     arm_before_usr_rollback_reverse_namespace_final_pre_capture,

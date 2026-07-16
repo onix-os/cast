@@ -31,7 +31,8 @@ pub(in crate::client::startup_reconciliation::activation_namespace) use durabili
 };
 #[cfg(test)]
 pub(in crate::client) use durability::{
-    ReverseExchangeDurabilityEvent, ReverseExchangeDurabilityFaultPoint, arm_before_reverse_exchange_final_pre_capture,
+    ReverseExchangeDurabilityEvent, ReverseExchangeDurabilityFaultPoint,
+    arm_before_reverse_exchange_durable_revalidation_capture, arm_before_reverse_exchange_final_pre_capture,
     arm_before_reverse_exchange_installation_root_sync, arm_reverse_exchange_durability_fault,
     reset_reverse_exchange_durability_events, take_reverse_exchange_durability_events,
 };
