@@ -247,17 +247,6 @@ impl StatefulTreeIdentity {
         }
     }
 
-    pub(super) fn park_active_previous_state_slot(
-        &self,
-        installation: &Installation,
-        state: state::Id,
-    ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
-        self.park_active_previous_state_slot_validated(installation, state, &|| {
-            self.require_no_journal()
-                .map_err(|source| identity("check journal while parking active previous-state slot", source))
-        })
-    }
-
     fn park_active_previous_state_slot_validated(
         &self,
         installation: &Installation,
