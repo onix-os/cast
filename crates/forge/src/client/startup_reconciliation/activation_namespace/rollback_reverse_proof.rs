@@ -11,7 +11,10 @@ use crate::{
 };
 
 use super::{
-    capture::{CaptureError, NamespaceSnapshot, capture_snapshot},
+    capture::{
+        CaptureError, NamespaceSnapshot, ProjectedReverseNamespace, RetainedReverseExchangeParents,
+        ReverseExchangeCaptureError, capture_snapshot,
+    },
     policy::{NamespacePolicyConflict, UsrExchangeLayout, assess_snapshot_layout},
 };
 
@@ -24,6 +27,19 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespace
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespaceProof {
     before: NamespaceSnapshot,
     after: NamespaceSnapshot,
+    projection: ProjectedReverseNamespace,
+    parents: RetainedReverseExchangeParents,
+    layout: UsrExchangeLayout,
+}
+
+/// Opaque normalized namespace evidence transferred into the future effect
+/// lease. The projection and retained parent descriptors deliberately have no
+/// accessor at this layer.
+#[allow(dead_code)] // consumed by the later reverse-effect checkpoint
+pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespaceEffectEvidence {
+    baseline: NamespaceSnapshot,
+    projection: ProjectedReverseNamespace,
+    parents: RetainedReverseExchangeParents,
     layout: UsrExchangeLayout,
 }
 
@@ -53,11 +69,20 @@ impl UsrRollbackReverseNamespaceInspection {
         if before_layout != after_layout {
             return Err(UsrRollbackReverseNamespaceError::LayoutChanged);
         }
+        let before_projection = ProjectedReverseNamespace::capture(&self.before, expected)?;
+        let projection = ProjectedReverseNamespace::capture(&after, expected)?;
+        if before_projection != projection {
+            return Err(UsrRollbackReverseNamespaceError::ProjectionChanged);
+        }
+        let parents = RetainedReverseExchangeParents::capture(&after, expected)?;
+        parents.revalidate_value_identity(installation)?;
         require_exact_journal(journal, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackReverseNamespaceProof {
             before: self.before,
             after,
+            projection,
+            parents,
             layout: after_layout,
         })
     }
@@ -78,6 +103,9 @@ impl UsrRollbackReverseNamespaceProof {
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         require_matching_fingerprints(&self.before, &self.after)?;
+        require_projection(expected, &self.before, &self.projection)?;
+        require_projection(expected, &self.after, &self.projection)?;
+        self.parents.revalidate_value_identity(installation)?;
         require_layout(expected, &self.before, self.layout)?;
         require_layout(expected, &self.after, self.layout)?;
         require_exact_journal(journal, expected)?;
@@ -86,13 +114,45 @@ impl UsrRollbackReverseNamespaceProof {
         let fresh = capture_snapshot(installation, expected)?;
         fresh.revalidate_retained()?;
         require_matching_fingerprints(&self.before, &fresh)?;
+        require_projection(expected, &fresh, &self.projection)?;
         require_layout(expected, &fresh, self.layout)?;
 
         require_exact_journal(journal, expected)?;
+        self.parents.revalidate_value_identity(installation)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
         Ok(())
+    }
+
+    /// Consume the exact proof after authority-level binding-first
+    /// revalidation. The final exact stable snapshot crosses privately as the
+    /// retained baseline; the duplicate first snapshot is dropped.
+    pub(in crate::client::startup_reconciliation) fn into_effect_evidence(
+        self,
+        expected_layout: UsrExchangeLayout,
+    ) -> Result<UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError> {
+        if self.layout != expected_layout || self.projection.layout() != expected_layout {
+            return Err(UsrRollbackReverseNamespaceError::LayoutChanged);
+        }
+        Ok(UsrRollbackReverseNamespaceEffectEvidence {
+            baseline: self.after,
+            projection: self.projection,
+            parents: self.parents,
+            layout: self.layout,
+        })
+    }
+}
+
+fn require_projection(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+    expected: &ProjectedReverseNamespace,
+) -> Result<(), UsrRollbackReverseNamespaceError> {
+    if ProjectedReverseNamespace::capture(snapshot, record)? == *expected {
+        Ok(())
+    } else {
+        Err(UsrRollbackReverseNamespaceError::ProjectionChanged)
     }
 }
 
@@ -150,12 +210,22 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackReverseNamespaceEr
     JournalChanged,
     #[error("the rollback-reverse activation namespace changed during proof")]
     NamespaceChanged,
+    #[error("capture the exact normalized rollback-reverse namespace")]
+    Projection(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("the normalized rollback-reverse namespace changed during proof")]
+    ProjectionChanged,
     #[error("the exact rollback-reverse layout is not a pre/post `/usr` exchange layout")]
     NotExchangeLayout,
     #[error("the exact pre/post `/usr` exchange layout changed during rollback-reverse proof")]
     LayoutChanged,
     #[error("revalidate the retained mutable installation namespace")]
     Installation(#[from] crate::installation::Error),
+}
+
+impl From<ReverseExchangeCaptureError> for UsrRollbackReverseNamespaceError {
+    fn from(source: ReverseExchangeCaptureError) -> Self {
+        Self::Projection(Box::new(source))
+    }
 }
 
 #[cfg(test)]

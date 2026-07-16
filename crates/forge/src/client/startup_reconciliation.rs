@@ -41,8 +41,9 @@ pub(in crate::client) use usr_rollback_resume_route_authority::{
 
 #[allow(unused_imports)] // intentionally unwired until the consuming reverse effect lands
 pub(in crate::client) use usr_rollback_reverse_authority::{
-    UsrRollbackReverseAdmission, UsrRollbackReverseApplyAuthority, UsrRollbackReverseAuthority,
-    UsrRollbackReverseAuthorityError, UsrRollbackReverseFinishAuthority,
+    UsrRollbackReverseAdmission, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyEffectLease,
+    UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError, UsrRollbackReverseFinishAuthority,
+    UsrRollbackReverseFinishEffectLease,
 };
 
 #[cfg(test)]
@@ -61,8 +62,8 @@ use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
     UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
-    UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
-    UsrRollbackReverseNamespaceProof,
+    UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
+    UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
 };
 #[cfg(test)]
 use database_evidence::{

@@ -1,7 +1,13 @@
 //! Focused POST/PRE reverse-admission contracts.
 
 use crate::{
-    client::{active_state_snapshot::ActiveStateReservation, startup_reconciliation::UsrRollbackReverseAdmission},
+    client::{
+        active_state_snapshot::ActiveStateReservation,
+        startup_reconciliation::{
+            UsrRollbackReverseAdmission, UsrRollbackReverseApplyEffectLease, UsrRollbackReverseFinishEffectLease,
+        },
+        startup_recovery::UsrRollbackReverseEffectSeal,
+    },
     transition_journal::{InitialRollbackAction, Phase, RollbackAction, RollbackObservations, TransitionJournalStore},
 };
 
@@ -19,12 +25,17 @@ fn startup_usr_rollback_reverse_admission_splits_post_apply_from_pre_finish() {
                 let before = fixture.evidence_snapshots();
                 let journal = fixture.open_journal();
                 let reservation = ActiveStateReservation::acquire().unwrap();
+                let effect_seal = UsrRollbackReverseEffectSeal::new_for_test();
                 match (layout, fixture.capture(&journal, &reservation)) {
                     (ReverseLayout::Post, UsrRollbackReverseAdmission::Apply(authority)) => {
-                        authority.revalidate(&journal).unwrap();
+                        let lease: UsrRollbackReverseApplyEffectLease<'_> =
+                            authority.into_effect_lease(&effect_seal, &journal).unwrap();
+                        drop(lease);
                     }
                     (ReverseLayout::Pre, UsrRollbackReverseAdmission::Finish(authority)) => {
-                        authority.revalidate(&journal).unwrap();
+                        let lease: UsrRollbackReverseFinishEffectLease<'_> =
+                            authority.into_effect_lease(&effect_seal, &journal).unwrap();
+                        drop(lease);
                     }
                     _ => panic!("exact {kind:?} {source:?} {layout:?} evidence selected the wrong reverse typestate"),
                 }

@@ -7,6 +7,7 @@ use crate::{
             UsrRollbackReverseAdmission, arm_before_usr_rollback_reverse_fresh_namespace_capture,
             arm_between_usr_rollback_reverse_database_captures,
         },
+        startup_recovery::UsrRollbackReverseEffectSeal,
     },
     transition_journal::RollbackActionOutcome,
 };
@@ -25,12 +26,13 @@ fn startup_usr_rollback_reverse_rejects_a_different_open_journal_binding() {
         let admission = fixture.capture(&first, &reservation);
         drop(first);
         let second = fixture.open_journal();
+        let effect_seal = UsrRollbackReverseEffectSeal::new_for_test();
         match admission {
             UsrRollbackReverseAdmission::Apply(authority) => {
-                assert!(authority.revalidate(&second).is_err());
+                assert!(authority.into_effect_lease(&effect_seal, &second).is_err());
             }
             UsrRollbackReverseAdmission::Finish(authority) => {
-                assert!(authority.revalidate(&second).is_err());
+                assert!(authority.into_effect_lease(&effect_seal, &second).is_err());
             }
             _ => panic!("exact {layout:?} evidence was not admitted"),
         }
@@ -158,15 +160,51 @@ fn startup_usr_rollback_reverse_fresh_namespace_race_fails_revalidation() {
         arm_before_usr_rollback_reverse_fresh_namespace_capture(move || {
             create_private_directory(&inserted);
         });
+        let effect_seal = UsrRollbackReverseEffectSeal::new_for_test();
         match admission {
             UsrRollbackReverseAdmission::Apply(authority) => {
-                assert!(authority.revalidate(&journal).is_err());
+                assert!(authority.into_effect_lease(&effect_seal, &journal).is_err());
             }
             UsrRollbackReverseAdmission::Finish(authority) => {
-                assert!(authority.revalidate(&journal).is_err());
+                assert!(authority.into_effect_lease(&effect_seal, &journal).is_err());
             }
             _ => panic!("exact {layout:?} evidence was not admitted"),
         }
         assert_eq!(fixture.fixture.canonical_bytes(), before);
     }
+}
+
+#[test]
+fn startup_usr_rollback_reverse_effect_handoff_rejects_stale_evidence() {
+    let fixture = ReverseFixture::new(OperationKind::Archived, ReverseLayout::Post);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackReverseAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
+        panic!("POST evidence did not admit apply authority");
+    };
+    let restored = fixture
+        .reverse_intent
+        .rollback_successor(Some(RollbackActionOutcome::Applied))
+        .unwrap();
+    journal.advance(&fixture.reverse_intent, &restored).unwrap();
+    let effect_seal = UsrRollbackReverseEffectSeal::new_for_test();
+    assert!(authority.into_effect_lease(&effect_seal, &journal).is_err());
+    drop(reservation);
+    drop(journal);
+
+    let fixture = ReverseFixture::new(OperationKind::Archived, ReverseLayout::Pre);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackReverseAdmission::Finish(authority) = fixture.capture(&journal, &reservation) else {
+        panic!("PRE evidence did not admit finish authority");
+    };
+    create_private_directory(
+        &fixture
+            .fixture
+            .installation
+            .state_quarantine_dir()
+            .join("rollback-reverse-stale-effect-handoff"),
+    );
+    let effect_seal = UsrRollbackReverseEffectSeal::new_for_test();
+    assert!(authority.into_effect_lease(&effect_seal, &journal).is_err());
 }

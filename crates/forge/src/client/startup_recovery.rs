@@ -9,6 +9,25 @@ mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
 mod usr_rollback_resume_route;
 
+/// Unforgeable permission to consume read-only rollback-reverse admission
+/// into mutable effect typestate. The production constructor is private to
+/// this module and its future phase-specific executor descendants.
+pub(in crate::client) struct UsrRollbackReverseEffectSeal {
+    _private: (),
+}
+
+impl UsrRollbackReverseEffectSeal {
+    #[allow(dead_code)] // constructed by the later rollback-reverse executor
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 pub(in crate::client) use usr_exchange_parent_durability::{
     UsrExchangeParentDurabilityCompletionSeal, UsrExchangeParentDurabilityError,
     normalize_usr_exchange_parent_durability,

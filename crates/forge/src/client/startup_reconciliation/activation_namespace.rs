@@ -37,7 +37,8 @@ pub(super) use resume_route_proof::{
 #[cfg(test)]
 pub(in crate::client) use rollback_reverse_proof::arm_before_usr_rollback_reverse_fresh_namespace_capture;
 pub(super) use rollback_reverse_proof::{
-    UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
+    UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
+    UsrRollbackReverseNamespaceProof,
 };
 
 /// Complete read-only evidence collected around one startup assessment.
