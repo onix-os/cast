@@ -150,6 +150,40 @@ fn assert_cargo_features_fixture(planned: &super::super::Planned, packages: &BTr
     }
 }
 
+fn assert_generated_config_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "generated-config";
+    const TARGET: &str = "share/cast/generated-config.conf";
+    const CONTENT: &[u8] = b"format = 1\nprofile = \"stone-native\"\nsource = \"gluon\"\n";
+
+    let [root_plan] = planned.plan.outputs.as_slice() else {
+        panic!("{FIXTURE}: source-less package must freeze exactly one output");
+    };
+    assert_eq!(root_plan.name, "out");
+    assert_eq!(root_plan.package_name, "cast-generated-config-fixture");
+    assert!(
+        root_plan.include_in_manifest,
+        "{FIXTURE}: generated configuration must participate in both build manifests"
+    );
+    assert_eq!(
+        root_plan.summary.as_deref(),
+        Some("Stone-native generated configuration fixture")
+    );
+    assert_eq!(root_plan.description, None);
+    assert!(root_plan.runtime_inputs.is_empty());
+    assert!(root_plan.conflicts.is_empty());
+
+    let root = &packages[&root_plan.package_name];
+    assert_leaf_paths(FIXTURE, "out", root, [TARGET]);
+    assert_no_directories(FIXTURE, "out", root);
+    assert_regular(FIXTURE, root, TARGET, 0o644, CONTENT.to_vec());
+    assert_exact_relations(
+        FIXTURE,
+        root,
+        BTreeSet::new(),
+        BTreeSet::from([root_plan.package_name.clone()]),
+    );
+}
+
 fn assert_daemon_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
     const FIXTURE: &str = "daemon-generated";
     let flags = planned

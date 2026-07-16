@@ -635,9 +635,21 @@ cast.profiles [
         // on that authoritative path so a contentful test never falls through
         // to the deliberately unreachable HTTPS fixture URL.
         let storage_dir = planned.runtime.paths.upstreams().host;
+        if planned.plan.package.name == "cast-generated-config-fixture" {
+            assert!(
+                planned.plan.sources.is_empty(),
+                "generated-config must enter execution without an upstream mapping"
+            );
+        } else {
+            assert_eq!(
+                planned.plan.sources.len(),
+                1,
+                "source-backed execution fixture archive cardinality drift"
+            );
+        }
         for source in &planned.plan.sources {
             let stone_recipe::derivation::LockedSource::Archive { url, .. } = source else {
-                panic!("execution fixtures must remain archive-only");
+                panic!("source-backed execution inputs must remain archive-only");
             };
             let source_url = Url::parse(url).unwrap();
             let filename = source_url

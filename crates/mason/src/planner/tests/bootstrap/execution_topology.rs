@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 12] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 13] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -8,6 +8,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 12] = [
     "custom",
     "daemon-generated",
     "factory-override",
+    "generated-config",
     "hooks-patch",
     "meson",
     "split",
@@ -253,6 +254,23 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Install", vec![run("cmake", "--install")]),
             phase("Check", vec![run("ctest", "--test-dir")]),
         ],
+        "generated-config" => vec![phase(
+            "Install",
+            vec![FrozenStepShape::Shell {
+                interpreter: "/usr/bin/bash".to_owned(),
+                declared_programs: vec!["/usr/bin/install".to_owned()],
+                script: r#"
+printf '%s\n' \
+    'format = 1' \
+    'profile = "stone-native"' \
+    'source = "gluon"' \
+    > generated-config.conf
+install -Dm644 generated-config.conf \
+    "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"
+"#
+                .to_owned(),
+            }],
+        )],
         "hooks-patch" => vec![
             prepare("cast-hooks-fixture"),
             phase_with_pre(

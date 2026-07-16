@@ -39,6 +39,8 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
 
     let mut admitted_archives = BTreeSet::new();
     let mut archive_format_counts = [0_usize; 4];
+    let mut sourceful_fixtures = 0_usize;
+    let mut source_less_fixtures = 0_usize;
     for name in EXECUTION_FIXTURES {
         let recipe_path = packages.join(name).join("stone.glu");
         let recipe = crate::Recipe::load_authored(&recipe_path)
@@ -99,6 +101,41 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             assert_eq!(features.as_slice(), ["fixture-protocol"]);
         }
         let lock_path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
+        if name == "generated-config" {
+            source_less_fixtures += 1;
+            assert!(
+                recipe.declaration.sources.is_empty(),
+                "generated-config: authored data must remain source-less"
+            );
+            assert!(
+                !lock_path.exists(),
+                "generated-config: a source-less fixture must not gain a source lock"
+            );
+            assert_eq!(
+                dependency_names(&recipe.declaration.builder.required_tools),
+                ["binary(bash)", "binary(install)"]
+            );
+            let [StepSpec::Shell {
+                interpreter,
+                declared_programs,
+                script,
+            }] = recipe.declaration.builder.phases.install.steps.as_slice()
+            else {
+                panic!("generated-config: expected one explicit install shell step");
+            };
+            assert_eq!(interpreter.path, "/usr/bin/bash");
+            assert_eq!(
+                declared_programs
+                    .iter()
+                    .map(|program| program.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["/usr/bin/install"]
+            );
+            assert!(script.contains("profile = \"stone-native\""));
+            assert!(script.contains("${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"));
+            continue;
+        }
+        sourceful_fixtures += 1;
         let lock_bytes = fs::read(&lock_path).unwrap();
         let lock = decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes)
             .unwrap_or_else(|error| panic!("{name}: decode source lock: {error:#}"));
@@ -245,4 +282,6 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         [9, 1, 1, 1],
         "execution fixtures must cover nine plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
+    assert_eq!(sourceful_fixtures, 12, "execution archive inventory drift");
+    assert_eq!(source_less_fixtures, 1, "source-less execution fixture inventory drift");
 }

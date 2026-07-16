@@ -12,7 +12,7 @@ EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 REQUIRE_EXECUTION ?= 0
 FIXTURE ?= all
-EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override hooks-patch meson split
+EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config hooks-patch meson split
 VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
 # Capture the literal command-line value once. A recursive make variable such
 # as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
@@ -671,7 +671,7 @@ execution-fixtures: fixture-sources-check
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
-	@echo "Resolving all twelve execution fixtures against the pinned real Stone index..."
+	@echo "Resolving all thirteen execution fixtures against the pinned real Stone index..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
@@ -892,9 +892,9 @@ help:
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"
 	@echo "  bootstrap-fixtures-prepare  Fetch and verify the pinned 107-package Stone closure"
 	@echo "  bootstrap-fixtures-offline  Build selected fixtures twice without downloading"
-	@echo "                    Set FIXTURE=all (default) or one of the twelve fixture names"
+	@echo "                    Set FIXTURE=all (default) or one of the thirteen fixture names"
 	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"
-	@echo "  fixtures-ci    Required-capability twelve-fixture execution and reproduction gate"
+	@echo "  fixtures-ci    Required-capability thirteen-fixture execution and reproduction gate"
 	@echo "  fixture-sources  Rebuild deterministic offline execution-source archives"
 	@echo "  check         Check all workspace targets"
 	@echo "  fix           Apply clippy, formatting, and typo fixes"

@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 12] = [
+const EXECUTION_FIXTURES: [&str; 13] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -146,6 +146,7 @@ const EXECUTION_FIXTURES: [&str; 12] = [
     "custom",
     "daemon-generated",
     "factory-override",
+    "generated-config",
     "hooks-patch",
     "meson",
     "split",

@@ -575,7 +575,7 @@ items below remain open until a non-skipped required-capability run provides
 that evidence.
 
 On 2026-07-14, `make examples` and `make execution-fixtures` passed for the
-complete checked-in corpus and all twelve locked real-source fixtures. The
+then-complete checked-in corpus and all twelve locked real-source fixtures. The
 production-format offline bootstrap root also materialized successfully. The
 ordinary delegated lane then reported its narrowly classified lack of a
 reachable systemd user manager, while the same run with
@@ -617,11 +617,15 @@ unit evidence still does not close the two required-execution items.
   pre-setup-hook, Meson, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
+- [x] Add a thirteenth, source-less generated-configuration fixture whose
+  declarative Gluon script authors the complete payload. Require only frozen
+  `bash` and `install` providers; admit no source lock, archive, network, host
+  shim, or mounted recipe input.
 - [x] Maintain a pinned, contentful Stone bootstrap closure for every real
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the twelve exact closure declarations and their aggregate bootstrap
+  each of the thirteen exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's
@@ -633,7 +637,9 @@ unit evidence still does not close the two required-execution items.
   at least one hermetic fixture for each standard builder: CMake, Meson, Cargo,
   and Autotools. Also execute one honest custom-step fixture and one native
   split-output fixture containing an executable, shared library, development
-  files, pkg-config metadata, documentation, and a man page.
+  files, pkg-config metadata, documentation, and a man page. Also execute the
+  source-less generated-configuration fixture and install its exact authored
+  bytes without introducing a source path.
 - [ ] Decode each emitted fixture bundle and prove the expected metadata,
   layout, index, content, output relations, modes, and manifest membership.
   Rebuild from the unchanged source and build locks and require byte-identical

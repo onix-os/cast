@@ -193,7 +193,7 @@ for fixture_directory in "$root/tests/fixtures/gluon/execution/packages"/*; do
     run_fixture "$fixture" 1 ready success
     grep -Fqx -- "--setenv=CAST_EXECUTION_FIXTURE=$fixture" "$state/systemd-run-args"
 done
-test "$fixture_count" -gt 0
+test "$fixture_count" -eq 13
 
 reset_state
 set +e

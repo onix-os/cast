@@ -28,6 +28,7 @@ pub(super) fn assert_fixture_bundle(
                 | "custom"
                 | "daemon-generated"
                 | "factory-override"
+                | "generated-config"
                 | "hooks-patch"
                 | "meson"
                 | "split"
@@ -92,7 +93,9 @@ pub(super) fn assert_fixture_bundle(
         .iter()
         .map(|output| output.name.as_str())
         .collect::<BTreeSet<_>>();
-    if name == "split" {
+    if name == "generated-config" {
+        assert_eq!(output_names, BTreeSet::from(["out"]));
+    } else if name == "split" {
         assert_eq!(
             output_names,
             BTreeSet::from(["out", "libs", "devel", "docs", "dbginfo"])
@@ -130,7 +133,9 @@ pub(super) fn assert_fixture_bundle(
 
     assert_global_layout_integrity(name, &packages);
     assert_manifests(name, planned, &artefacts, &packages);
-    if name == "split" {
+    if name == "generated-config" {
+        assert_generated_config_fixture(planned, &packages);
+    } else if name == "split" {
         assert_split_fixture(planned, &packages);
     } else if name == "daemon-generated" {
         assert_daemon_fixture(planned, &packages);

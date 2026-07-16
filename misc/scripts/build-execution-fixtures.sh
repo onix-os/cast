@@ -11,6 +11,7 @@ esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
+package_root="$fixture_root/packages"
 source_root="$fixture_root/source-trees"
 archive_root="$fixture_root/archives"
 temporary=
@@ -32,6 +33,75 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$archive_root"
+
+package_count=0
+source_less_count=0
+for entry in "$package_root"/*; do
+    test -d "$entry" && test ! -L "$entry" || {
+        printf 'unexpected non-directory execution fixture package entry: %s\n' "$entry" >&2
+        exit 1
+    }
+    fixture=$(basename "$entry")
+    case "$fixture" in
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|hooks-patch|meson|split) ;;
+        *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
+    esac
+    test -f "$entry/stone.glu" && test ! -L "$entry/stone.glu" || {
+        printf 'execution fixture recipe is not a regular authored file: %s\n' "$entry/stone.glu" >&2
+        exit 1
+    }
+    if [ "$fixture" = generated-config ]; then
+        test ! -e "$entry/sources.lock.glu" && test ! -L "$entry/sources.lock.glu" || {
+            printf 'source-less execution fixture must not have a source lock: %s\n' "$entry/sources.lock.glu" >&2
+            exit 1
+        }
+        source_less_count=$((source_less_count + 1))
+    else
+        test -f "$entry/sources.lock.glu" && test ! -L "$entry/sources.lock.glu" || {
+            printf 'source-backed execution fixture lock is not a regular file: %s\n' "$entry/sources.lock.glu" >&2
+            exit 1
+        }
+    fi
+    package_count=$((package_count + 1))
+done
+
+test "$package_count" -eq 13 || {
+    printf 'expected exactly thirteen execution fixture packages, found %s\n' "$package_count" >&2
+    exit 1
+}
+test "$source_less_count" -eq 1 || {
+    printf 'expected exactly one source-less execution fixture, found %s\n' "$source_less_count" >&2
+    exit 1
+}
+
+source_tree_count=0
+for entry in "$source_root"/*; do
+    test -d "$entry" && test ! -L "$entry" || {
+        printf 'unexpected non-directory execution source-tree entry: %s\n' "$entry" >&2
+        exit 1
+    }
+    case "$(basename "$entry")" in
+        cast-autotools-fixture-1.0.0|\
+        cast-autotools-options-fixture-1.0.0|\
+        cast-cargo-features-fixture-1.0.0|\
+        cast-cargo-vendored-fixture-1.0.0|\
+        cast-cargo-fixture-1.0.0|\
+        cast-cmake-fixture-1.0.0|\
+        cast-custom-fixture-1.0.0|\
+        cast-daemon-fixture-1.0.0|\
+        cast-factory-override-fixture-1.0.0|\
+        cast-hooks-fixture-1.0.0|\
+        cast-meson-fixture-1.0.0|\
+        cast-split-fixture-1.0.0) ;;
+        *) printf 'unexpected execution source tree: %s\n' "$entry" >&2; exit 1 ;;
+    esac
+    source_tree_count=$((source_tree_count + 1))
+done
+
+test "$source_tree_count" -eq 12 || {
+    printf 'expected exactly twelve source-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
+    exit 1
+}
 
 if [ "$mode" = check ]; then
     check_root=$(mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
@@ -160,6 +230,6 @@ for entry in "$archive_root"/*; do
 done
 
 test "$count" -eq 12 || {
-    printf 'expected exactly twelve execution fixture archives, found %s\n' "$count" >&2
+    printf 'expected exactly twelve source-backed execution fixture archives, found %s\n' "$count" >&2
     exit 1
 }

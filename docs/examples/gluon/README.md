@@ -91,12 +91,16 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Twelve separate fixtures contain small, real source trees for Autotools,
-configured Autotools with an intentionally disabled check phase, Cargo,
-feature-selected multi-binary Cargo, vendored/offline Cargo, CMake,
-custom-step, pre-setup patch hooks, Meson, generated daemon assets, Gluon
-factory/override composition, and native split-output package shapes. Run their
-proof lanes from the repository root:
+Thirteen separate fixtures cover representative package shapes. Twelve contain
+small, real source trees for Autotools, configured Autotools with an
+intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
+vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
+generated daemon assets, Gluon factory/override composition, and native
+split-output builds. The thirteenth, `generated-config`, is deliberately
+source-less: its Gluon declaration authors deterministic configuration bytes
+and installs them with only its frozen `bash` and `install` providers. It has no
+source lock, archive, network access, host shim, or mounted recipe input. Run
+the proof lanes from the repository root:
 
 The checked-in archive matrix keeps nine fixtures as plain USTAR and exercises
 all three supported compressed paths with vendored Cargo as deterministic
@@ -123,7 +127,7 @@ materializes the production-format root mirror, then attempts to build,
 package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `factory-override`,
-`hooks-patch`, `meson`, or `split`;
+`generated-config`, `hooks-patch`, `meson`, or `split`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
 works with `make bootstrap-fixtures-offline` when the package store has already
@@ -131,7 +135,15 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all twelve, and always requires execution.
+selection, runs all thirteen, and always requires execution.
+
+Every selected fixture, including the source-less one, goes through the same
+real execution, Stone package decoding, manifest decoding, and locked
+reproduction path. The generated configuration golden freezes its exact
+`/usr/share/cast/generated-config.conf` bytes, `0644` mode, package metadata,
+relations, and manifest membership. Replanning must reuse the unchanged build
+lock, and the repeated build must reproduce every emitted `.stone` and manifest
+byte-for-byte. An optional-capability `SKIP` remains explicitly non-success.
 
 The execution stage does not run under Rust's multithreaded test harness. Its
 runner first builds Mason's feature-gated `harness = false` test target outside
