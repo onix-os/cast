@@ -75,8 +75,20 @@ and instant rollback mechanism; it hardens their failure semantics.
   also run after the gate, and repository CLI construction can no longer bypass
   this ordering. Focused tests cover journal/orphan precedence, frozen-client
   separation, CLI notice timing, unsafe source metadata, and root, directory,
-  and source substitution. Startup reconciliation and the remaining mutable
-  recovery coordinator still keep this item open.
+  and source substitution. As of 2026-07-16, every mutable Installation clone
+  also retains the exact `.cast`, database directory, and global-lock
+  authority. Install, state, and layout SQLite handles open only through
+  authenticated `/proc/thread-self/fd` locations whose exact directory aliases
+  are proved before and after SQLite opens them and whose anchors outlive the
+  connections; the complete root/cast/lock/database chain is revalidated around
+  each open, including SQLite error paths. Startup opens the journal beneath
+  that retained `.cast` descriptor rather than resolving the public name again.
+  Five focused tests replace each authority boundary, prove detached anchored
+  operation, reject the substitution, and verify that every foreign replacement
+  remains untouched. This proof currently gates construction; post-build
+  lifecycle operations still require the coordinator-wide capability preflight
+  below. Startup reconciliation and the remaining mutable recovery coordinator
+  therefore keep this item open.
 - [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
   with one retained capability namespace. Resolve beneath authenticated
   directory descriptors without symlink, magic-link, or mount traversal. Give
@@ -310,7 +322,13 @@ and instant rollback mechanism; it hardens their failure semantics.
   allocation, candidate decoration, trigger execution, `/usr` exchange,
   previous-state archive, boot synchronization, commit cleanup, or rollback;
   persist completion only after the effect and its durability and identity
-  proofs succeed.
+  proofs succeed. Production-safe record constructors now derive the sole legal
+  forward successor, insert a fresh state ID only at allocation completion,
+  derive rollback requirements from exact observations, and advance every
+  recovery action only with an explicit outcome. Their focused contract covers
+  the complete fixed rollback order and the deliberately terminal unverified
+  boot result. No live activation path creates or advances the journal yet, so
+  this item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in

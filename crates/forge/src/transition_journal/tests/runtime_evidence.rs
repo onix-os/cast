@@ -12,9 +12,9 @@ fn runtime_epoch_capture_is_canonical_stable_and_current() {
 #[test]
 fn runtime_tree_identity_capture_binds_the_exact_directory_and_mount() {
     let temporary = tempfile::tempdir().unwrap();
-    let root = std::fs::File::open(temporary.path()).unwrap();
-    std::fs::create_dir(temporary.path().join("child")).unwrap();
-    let child = std::fs::File::open(temporary.path().join("child")).unwrap();
+    let root = fs::File::open(temporary.path()).unwrap();
+    fs::create_dir(temporary.path().join("child")).unwrap();
+    let child = fs::File::open(temporary.path().join("child")).unwrap();
 
     let root_identity = RuntimeTreeIdentity::capture_directory(&root).unwrap();
     let repeated = RuntimeTreeIdentity::capture_directory(&root).unwrap();
@@ -30,8 +30,8 @@ fn runtime_tree_identity_capture_binds_the_exact_directory_and_mount() {
 fn runtime_tree_identity_rejects_a_non_directory_descriptor() {
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("regular");
-    std::fs::write(&path, b"regular").unwrap();
-    let file = std::fs::File::open(path).unwrap();
+    fs::write(&path, b"regular").unwrap();
+    let file = fs::File::open(path).unwrap();
 
     assert!(matches!(
         RuntimeTreeIdentity::capture_directory(&file),
@@ -56,7 +56,7 @@ fn boot_id_and_mount_namespace_parsers_reject_untrusted_or_noncanonical_inputs()
     }
 
     let temporary = tempfile::tempdir().unwrap();
-    let ordinary = std::fs::File::open(temporary.path()).unwrap();
+    let ordinary = fs::File::open(temporary.path()).unwrap();
     assert!(matches!(
         runtime_evidence::mount_namespace_identity(&ordinary),
         Err(runtime_evidence::RuntimeEvidenceError::AuthenticateMountNamespace(_))
@@ -81,13 +81,13 @@ fn fdinfo_mount_id_parser_is_bounded_canonical_and_unique() {
     ] {
         assert_eq!(
             crate::linux_fs::parse_descriptor_mount_id(invalid).unwrap_err().kind(),
-            std::io::ErrorKind::InvalidData
+            io::ErrorKind::InvalidData
         );
     }
     assert_eq!(
         crate::linux_fs::parse_descriptor_mount_id(&vec![b'x'; 16 * 1024 + 1])
             .unwrap_err()
             .kind(),
-        std::io::ErrorKind::InvalidData
+        io::ErrorKind::InvalidData
     );
 }

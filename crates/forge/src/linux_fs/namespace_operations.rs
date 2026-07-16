@@ -347,6 +347,31 @@ fn authenticated_descriptor_name_with_deadline(
     Ok((descriptors, descriptor, expected))
 }
 
+/// Build one UTF-8 child path below an exact retained descriptor, but only
+/// after authenticating both the current-thread procfs mount and its numeric
+/// descriptor alias. Callers which hand the path to an external library must
+/// repeat this proof after the library opens the path.
+pub(crate) fn authenticated_procfs_descriptor_child_path(
+    file: &std::fs::File,
+    child: &CStr,
+) -> io::Result<String> {
+    let child_bytes = child.to_bytes();
+    if child_bytes.is_empty() || child_bytes == b"." || child_bytes == b".." || child_bytes.contains(&b'/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "procfs descriptor child must be one non-dot path component",
+        ));
+    }
+    let child = child
+        .to_str()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "procfs descriptor child must be UTF-8"))?;
+    let (_descriptors, descriptor, _expected) = authenticated_descriptor_name(file)?;
+    let descriptor = descriptor
+        .to_str()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "numeric descriptor name is not UTF-8"))?;
+    Ok(format!("/proc/thread-self/fd/{descriptor}/{child}"))
+}
+
 pub(crate) fn authenticated_procfs_root() -> io::Result<std::fs::File> {
     authenticated_procfs_root_with_deadline(None)
 }

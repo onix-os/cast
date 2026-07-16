@@ -6,6 +6,7 @@ use diesel::prelude::*;
 use diesel::{Connection as _, SqliteConnection};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use itertools::Itertools;
+use std::sync::Arc;
 
 use super::{Connection, Error, MAX_VARIABLE_NUMBER};
 use crate::State;
@@ -27,6 +28,9 @@ pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyStateError};
 #[derive(Debug, Clone)]
 pub struct Database {
     conn: Connection,
+    // Keeps a descriptor used by `/proc/self/fd/<n>/state` SQLite paths alive
+    // for the complete connection lifetime. In-memory databases leave it empty.
+    _directory_anchor: Option<Arc<std::fs::File>>,
 }
 
 /// Durable ownership evidence for an exact state/transition pair.
@@ -51,12 +55,21 @@ pub(crate) struct InFlightTransition {
 
 impl Database {
     pub fn new(url: &str) -> Result<Self, Error> {
+        Self::new_with_anchor(url, None)
+    }
+
+    pub(crate) fn new_anchored(url: &str, directory_anchor: Arc<std::fs::File>) -> Result<Self, Error> {
+        Self::new_with_anchor(url, Some(directory_anchor))
+    }
+
+    fn new_with_anchor(url: &str, directory_anchor: Option<Arc<std::fs::File>>) -> Result<Self, Error> {
         let mut conn = SqliteConnection::establish(url)?;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(Error::Migration)?;
 
         Ok(Database {
             conn: Connection::new(conn),
+            _directory_anchor: directory_anchor,
         })
     }
 

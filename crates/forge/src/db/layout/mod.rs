@@ -50,6 +50,9 @@ pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyLayoutError};
 pub struct Database {
     conn: Connection,
     bounded_conn: Arc<Mutex<RawLayoutConnection>>,
+    // Keeps a descriptor used by `/proc/self/fd/<n>/layout` SQLite paths alive
+    // until both the Diesel and bounded raw handles have closed.
+    _directory_anchor: Option<Arc<std::fs::File>>,
 }
 
 /// Hard bounds applied before a layout query allocates its result vector.
@@ -74,6 +77,14 @@ pub enum BoundedQueryOutcome {
 
 impl Database {
     pub fn new(url: &str) -> Result<Self, Error> {
+        Self::new_with_anchor(url, None)
+    }
+
+    pub(crate) fn new_anchored(url: &str, directory_anchor: Arc<std::fs::File>) -> Result<Self, Error> {
+        Self::new_with_anchor(url, Some(directory_anchor))
+    }
+
+    fn new_with_anchor(url: &str, directory_anchor: Option<Arc<std::fs::File>>) -> Result<Self, Error> {
         // A second, narrowly scoped SQLite handle is required because Diesel
         // does not expose the native handle needed by sqlite3_progress_handler.
         // Give `:memory:` a private shared-cache URI so both handles address
@@ -88,6 +99,7 @@ impl Database {
         Ok(Database {
             conn: Connection::new(conn),
             bounded_conn: Arc::new(Mutex::new(bounded_conn)),
+            _directory_anchor: directory_anchor,
         })
     }
 

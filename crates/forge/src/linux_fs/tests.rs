@@ -91,6 +91,28 @@ fn procfs_authentication_rejects_an_ordinary_filesystem() {
 }
 
 #[test]
+fn authenticated_procfs_descriptor_child_path_binds_the_retained_directory() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = std::fs::File::open(temporary.path()).unwrap();
+    let path = authenticated_procfs_descriptor_child_path(&directory, c"database").unwrap();
+    assert_eq!(path, format!("/proc/thread-self/fd/{}/database", directory.as_raw_fd()));
+    std::fs::write(&path, b"retained directory child").unwrap();
+    assert_eq!(
+        std::fs::read(temporary.path().join("database")).unwrap(),
+        b"retained directory child"
+    );
+
+    for invalid in [c"".as_ref(), c".".as_ref(), c"..".as_ref(), c"nested/name".as_ref()] {
+        assert_eq!(
+            authenticated_procfs_descriptor_child_path(&directory, invalid)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
 fn proc_pid_parser_accepts_only_bounded_canonical_decimal() {
     assert_eq!(parse_decimal_pid(b"1").unwrap(), 1);
     assert_eq!(parse_decimal_pid(b"4294967295").unwrap(), u32::MAX);

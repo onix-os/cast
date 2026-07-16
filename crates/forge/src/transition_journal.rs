@@ -31,6 +31,7 @@ mod codec;
 mod model;
 mod runtime_evidence;
 mod store;
+mod successors;
 mod validation;
 
 #[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
@@ -41,6 +42,8 @@ pub(crate) use read_only::{CleanReadOnlyJournal, ReadOnlyJournalError};
 pub(crate) use codec::{CodecError, MAX_CANONICAL_RECORD_BYTES, decode, encode};
 pub(crate) use model::*;
 pub(crate) use store::TransitionJournalStore;
+#[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
+pub(crate) use successors::{InitialRollbackAction, RollbackActionOutcome, RollbackObservations};
 
 #[cfg(test)]
 use codec::{

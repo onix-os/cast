@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Write as _,
+    io::{self, Write as _},
     os::unix::{
         ffi::OsStrExt as _,
         fs::{MetadataExt as _, PermissionsExt as _, symlink},
@@ -334,6 +334,7 @@ fn assert_no_journal_temporaries(root: &Path) {
 
 
 include!("record_contract.rs");
+include!("record_successors.rs");
 include!("runtime_evidence.rs");
 include!("transition_semantics.rs");
 include!("storage_transactions.rs");

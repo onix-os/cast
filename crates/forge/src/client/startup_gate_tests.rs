@@ -485,17 +485,25 @@ fn archived_state_prune_residue_audit_rejects_root_or_quarantine_substitution() 
             }
         });
 
-        let error = expect_startup_gate_error(Client::new(
+        let result = Client::new(
             format!("startup-gate-prune-audit-substitution-{replace_root}"),
             installation,
-        ));
-
-        assert!(matches!(
-            error.as_ref(),
-            startup_gate::Error::ArchivedStatePruneResidue(
-                ArchivedStatePruneResidueError::Namespace(_) | ArchivedStatePruneResidueError::Installation(_)
-            )
-        ));
+        );
+        if replace_root {
+            assert!(matches!(
+                result,
+                Err(Error::Installation(crate::installation::Error::ValidateRootDirectory { path, .. }))
+                    if path == root
+            ));
+        } else {
+            let error = expect_startup_gate_error(result);
+            assert!(matches!(
+                error.as_ref(),
+                startup_gate::Error::ArchivedStatePruneResidue(
+                    ArchivedStatePruneResidueError::Namespace(_) | ArchivedStatePruneResidueError::Installation(_)
+                )
+            ));
+        }
         if replace_root {
             assert!(detached.join(".cast/quarantine").is_dir());
             assert!(root.is_dir());
@@ -705,11 +713,20 @@ fn default_intent_root_and_directory_name_substitution_fail_closed() {
             }
         });
 
-        let error = expect_startup_gate_error(Client::new(
+        let result = Client::new(
             format!("startup-gate-default-substitution-{replace_root}"),
             installation,
-        ));
-        assert!(matches!(error.as_ref(), startup_gate::Error::DefaultSystemIntent(_)));
+        );
+        if replace_root {
+            assert!(matches!(
+                result,
+                Err(Error::Installation(crate::installation::Error::ValidateRootDirectory { path, .. }))
+                    if path == root
+            ));
+        } else {
+            let error = expect_startup_gate_error(result);
+            assert!(matches!(error.as_ref(), startup_gate::Error::DefaultSystemIntent(_)));
+        }
         assert!(fs::read_to_string(&injected).unwrap().contains("replacement-injected"));
         let retained_source = if replace_root {
             parent.path().join("detached-installation/etc/cast/system.glu")

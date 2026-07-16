@@ -55,7 +55,7 @@ pub(crate) enum DatabaseKind {
 }
 
 impl DatabaseKind {
-    fn name(self) -> &'static std::ffi::CStr {
+    pub(super) fn name(self) -> &'static std::ffi::CStr {
         match self {
             Self::Install => c"install",
             Self::State => c"state",

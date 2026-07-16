@@ -102,6 +102,8 @@ mod external_materialization;
 mod fetch;
 mod fixed_staging;
 mod install;
+#[cfg(test)]
+mod mutable_startup_namespace_tests;
 mod postblit;
 mod read_only;
 mod remove;

@@ -1,8 +1,10 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
+	forge-mutable-startup-namespace-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
-	forge-transition-runtime-evidence-test forge-transition-journal-test \
+	forge-transition-runtime-evidence-test forge-transition-journal-successor-test \
+	forge-transition-journal-test \
 	stone-recipe-derivation-provenance-test \
 	stone-recipe-derivation-validation-test stone-recipe-build-lock-test \
 	stone-recipe-package-validation-test \
@@ -24,7 +26,7 @@
 forge-read-only-installation-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		installation::snapshot::tests::two_readers_share_global_and_custom_cache_locks_until_the_last_reader_drops \
 		installation::snapshot::tests::writable_root_opened_explicitly_read_only_never_becomes_mutable_or_frozen \
@@ -55,18 +57,34 @@ forge-installation-test:
 	timeout 10s test "$$count" = 28; \
 	timeout 900s $(CARGO) test -p forge --lib "installation::tests::" -- --test-threads=1
 
+forge-mutable-startup-namespace-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	count="$$( timeout 10s grep -c '^client::mutable_startup_namespace_tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 5; \
+	for test in \
+		client::mutable_startup_namespace_tests::every_system_database_open_is_anchored_and_replacement_directories_remain_untouched \
+		client::mutable_startup_namespace_tests::namespace_revalidation_supersedes_a_simultaneous_sqlite_open_failure \
+		client::mutable_startup_namespace_tests::startup_journal_uses_retained_cast_and_never_mutates_its_replacement \
+		client::mutable_startup_namespace_tests::startup_namespace_substitution_supersedes_a_simultaneous_journal_open_failure \
+		client::mutable_startup_namespace_tests::replaced_global_lockfile_is_rejected_without_touching_the_foreign_inode; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
 forge-linux-fs-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^linux_fs::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 16; \
+	timeout 10s test "$$count" = 17; \
 	for test in \
 		linux_fs::tests::interrupted_retry_limit_accepts_n_and_rejects_n_plus_one \
 		linux_fs::tests::expired_retry_deadline_fails_before_another_syscall \
 		linux_fs::tests::expired_rename_deadline_preserves_both_namespaces \
 		linux_fs::tests::expired_sync_filesystem_deadline_fails_before_syncfs \
 		linux_fs::tests::procfs_authentication_rejects_an_ordinary_filesystem \
+		linux_fs::tests::authenticated_procfs_descriptor_child_path_binds_the_retained_directory \
 		linux_fs::tests::proc_pid_parser_accepts_only_bounded_canonical_decimal \
 		linux_fs::tests::thread_self_parser_requires_exact_current_process_and_thread \
 		linux_fs::tests::chmod_revalidates_the_exact_opath_inode_and_mode \
@@ -125,7 +143,7 @@ forge-database-adapter-test:
 forge-read-only-substrate-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		db::read_only::tests::deserialized_adapters_query_exact_state_meta_and_selected_layout_without_mutation \
 		db::read_only::tests::authorizer_denies_writes_and_functions_and_connection_remains_clean \
@@ -149,13 +167,13 @@ forge-read-only-client-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^client::read_only::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 12; \
+	timeout 10s test "$$count" = 12; \
 	timeout 600s $(CARGO) test -p forge --lib "client::read_only::tests::" -- --test-threads=1
 
 forge-transition-journal-contract-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		transition_journal::tests::canonical_round_trip_covers_every_phase \
 		transition_journal::tests::canonical_v1_full_frame_and_json_order_are_locked_by_golden_bytes \
@@ -185,7 +203,7 @@ forge-transition-journal-contract-test:
 forge-transition-runtime-evidence-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		transition_journal::tests::runtime_epoch_capture_is_canonical_stable_and_current \
 		transition_journal::tests::runtime_tree_identity_capture_binds_the_exact_directory_and_mount \
@@ -196,11 +214,24 @@ forge-transition-runtime-evidence-test:
 		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+forge-transition-journal-successor-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	for test in \
+		transition_journal::tests::production_forward_successor_inserts_a_state_id_only_at_allocation_completion \
+		transition_journal::tests::production_rollback_decision_derives_requirements_from_exact_observations \
+		transition_journal::tests::production_rollback_successor_requires_one_exact_action_outcome_and_persists_unverified_boot \
+		transition_journal::tests::production_rollback_successor_executes_every_pending_effect_in_fixed_order; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
 forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 56; \
+	timeout 10s test "$$count" = 60; \
 	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
 
 stone-read-test:
@@ -237,7 +268,7 @@ stone-read-test:
 stone-recipe-derivation-provenance-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		derivation::tests::identical_plans_have_identical_bytes_and_ids \
 		derivation::tests::complete_evaluation_fingerprint_is_part_of_canonical_identity \
@@ -257,7 +288,7 @@ stone-recipe-derivation-validation-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^derivation::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 66; \
+	timeout 10s test "$$count" = 66; \
 	timeout 900s $(CARGO) test -p stone_recipe --lib "derivation::tests::" -- --test-threads=1
 
 stone-recipe-build-lock-test:
@@ -271,14 +302,14 @@ stone-recipe-package-validation-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^package::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 25; \
+	timeout 10s test "$$count" = 25; \
 	timeout 900s $(CARGO) test -p stone_recipe --lib "package::tests::" -- --test-threads=1
 
 stone-recipe-build-policy-validation-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^build_policy::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 9; \
+	timeout 10s test "$$count" = 9; \
 	timeout 900s $(CARGO) test -p stone_recipe --lib "build_policy::tests::" -- --test-threads=1
 
 stone-recipe-build-policy-contract-test:
@@ -309,7 +340,7 @@ container-cgroup-test:
 	@set -eu; \
 	listed="$$( timeout 120s $(CARGO) test -p container --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^cgroup::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 41; \
+	timeout 10s test "$$count" = 41; \
 	timeout 300s $(CARGO) test -p container --lib "cgroup::tests::" -- --test-threads=1
 
 # Socket-diagnostic tests remain in the complete `make test` lane. The local
@@ -319,7 +350,7 @@ container-cgroup-test:
 container-process-runtime-test:
 	@set -eu; \
 	listed="$$( timeout 120s $(CARGO) test -p container --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		process_runtime::launch_support::tests::clone_stack_has_a_non_accessible_guard_and_read_write_usable_mapping \
 		process_runtime::launch_support::tests::error_transport_format_is_bounded_even_for_cyclic_and_huge_sources \
@@ -341,7 +372,7 @@ container-process-runtime-test:
 container-mount-boundary-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		tests::anchored_constructor_owns_a_cloexec_opath_directory_duplicate \
 		tests::anchored_constructor_rejects_every_non_opath_or_non_directory_descriptor \
@@ -413,7 +444,7 @@ mason-package-collect-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^package::collect::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 27; \
+	timeout 10s test "$$count" = 27; \
 	timeout 900s $(CARGO) test -p mason --lib "package::collect::tests::" -- --test-threads=1
 
 mason-package-collect-transaction-test:
@@ -568,7 +599,7 @@ config-gluon-store-test:
 gitwrap-repository-fs-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p gitwrap --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		tests::repository_limits_accept_exact_n_and_reject_n_plus_one \
 		tests::strict_entry_quota_rejects_n_plus_one_without_sampling_slack \
@@ -606,13 +637,13 @@ forge-repository-manager-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^repository::manager::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 19; \
+	timeout 10s test "$$count" = 19; \
 	timeout 900s $(CARGO) test -p forge --lib "repository::manager::tests::" -- --test-threads=1
 
 forge-security-fixture-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	test -n "$$listed"; \
+	timeout 10s test -n "$$listed"; \
 	for test in \
 		cli::repo::tests::authored_system_intent_rejects_imperative_repository_changes \
 		client::tests::state_creation_records_and_exports_the_generated_snapshot \

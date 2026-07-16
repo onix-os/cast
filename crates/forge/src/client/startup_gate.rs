@@ -19,27 +19,39 @@ pub(super) struct CleanSystemStartup {
 
 impl CleanSystemStartup {
     pub(super) fn enter(installation: &Installation, state_db: &db::state::Database) -> Result<Self, Error> {
-        let journal = transition_journal::TransitionJournalStore::open_retained(
-            installation.root_directory(),
-            &installation.root,
-        )?;
+        installation.revalidate_mutable_namespace()?;
+        let cast = installation.retained_mutable_cast_directory()?;
+        after_mutable_namespace_preflight();
+        let journal = transition_journal::TransitionJournalStore::open_in_retained_cast(cast, &installation.root);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        let journal = journal?;
 
-        if let Some(record) = journal.load()? {
+        let record = journal.load();
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        let record = record?;
+        if let Some(record) = record {
             return Err(Error::UnresolvedJournal {
                 transition: record.transition_id.as_str().to_owned(),
             });
         }
 
-        if let Some(orphan) = state_db.audit_in_flight_transition()? {
+        let orphan = state_db.audit_in_flight_transition();
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        let orphan = orphan?;
+        if let Some(orphan) = orphan {
             return Err(Error::OrphanTransitionRow {
                 state: i32::from(orphan.state_id),
                 transition: orphan.transition_id.as_str().to_owned(),
             });
         }
 
-        transition_identity::audit_archived_state_prune_residue(installation, &journal)?;
-
-        installation.revalidate_root_directory()?;
+        let residue = transition_identity::audit_archived_state_prune_residue(installation, &journal);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        residue?;
         Ok(Self { _journal: journal })
     }
 
@@ -55,6 +67,31 @@ impl CleanSystemStartup {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static AFTER_MUTABLE_NAMESPACE_PREFLIGHT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_after_mutable_namespace_preflight(hook: impl FnOnce() + 'static) {
+    AFTER_MUTABLE_NAMESPACE_PREFLIGHT.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_mutable_namespace_preflight() {
+    AFTER_MUTABLE_NAMESPACE_PREFLIGHT.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_mutable_namespace_preflight() {}
+
 #[derive(Debug, Error)]
 pub(super) enum Error {
     #[error("inspect retained state-transition journal")]
@@ -67,7 +104,7 @@ pub(super) enum Error {
     OrphanTransitionRow { state: i32, transition: String },
     #[error("audit interrupted archived-state prune evidence")]
     ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
-    #[error("revalidate installation root after startup discovery")]
+    #[error("revalidate retained mutable installation namespace during startup")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]
     DefaultSystemIntent(#[source] default_system_intent::Error),

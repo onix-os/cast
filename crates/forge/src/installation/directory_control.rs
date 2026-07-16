@@ -18,7 +18,10 @@ struct ControlledDirectory {
 
 /// Ensures Cast directories are created without allowing the cache and asset
 /// capability roots to inherit a permissive process-global umask.
-fn ensure_dirs_exist(root_directory: &std::fs::File, root: &Path) -> Result<ControlledDirectory, Error> {
+fn ensure_dirs_exist(
+    root_directory: &std::fs::File,
+    root: &Path,
+) -> Result<mutable_namespace::ProvisionedDirectories, Error> {
     let cast_path = root.join(".cast");
     let cast = ensure_controlled_child(root_directory, OsStr::new(".cast"), &cast_path).map_err(|source| {
         Error::PrepareDirectory {
@@ -52,11 +55,20 @@ fn ensure_dirs_exist(root_directory: &std::fs::File, root: &Path) -> Result<Cont
     // Build the remaining fixed directory topology through the same pinned,
     // durable creation boundary. Existing safe shared-readable modes are
     // preserved, while new entries and restrictive-umask residue become 0700.
-    for name in ["db", "repo"] {
-        let path = cast_path.join(name);
-        ensure_controlled_child(&cast.file, OsStr::new(name), &path)
-            .map_err(|source| Error::PrepareDirectory { path, source })?;
-    }
+    let database_path = cast_path.join("db");
+    let database = ensure_controlled_child(&cast.file, OsStr::new("db"), &database_path).map_err(|source| {
+        Error::PrepareDirectory {
+            path: database_path,
+            source,
+        }
+    })?;
+    let repo_path = cast_path.join("repo");
+    ensure_controlled_child(&cast.file, OsStr::new("repo"), &repo_path).map_err(|source| {
+        Error::PrepareDirectory {
+            path: repo_path,
+            source,
+        }
+    })?;
     let roots_path = cast_path.join("root");
     let roots = ensure_controlled_child(&cast.file, OsStr::new("root"), &roots_path).map_err(|source| {
         Error::PrepareDirectory {
@@ -74,7 +86,7 @@ fn ensure_dirs_exist(root_directory: &std::fs::File, root: &Path) -> Result<Cont
         path: cache_path.join("CACHEDIR.TAG"),
         source,
     })?;
-    Ok(cast)
+    Ok(mutable_namespace::ProvisionedDirectories { cast, database })
 }
 
 fn ensure_controlled_child(parent: &std::fs::File, name: &OsStr, path: &Path) -> io::Result<ControlledDirectory> {

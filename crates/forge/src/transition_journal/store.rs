@@ -130,6 +130,21 @@ impl TransitionJournalStore {
         Self::open_from_root(&root_directory, root)
     }
 
+    /// Open below the exact `.cast` descriptor retained by a writable
+    /// Installation. This constructor never resolves the public `.cast` name;
+    /// the surrounding startup stage separately proves that the descriptor is
+    /// still named before and after journal work.
+    pub(crate) fn open_in_retained_cast(cast_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let cast_path = root.join(".cast");
+        let cast = open_existing_directory(cast_directory, c".", &cast_path, DirectoryPolicy::Controlled).map_err(
+            |source| StorageError::OpenCastDirectory {
+                path: cast_path.clone(),
+                source,
+            },
+        )?;
+        Self::open_from_cast(&cast, cast_path)
+    }
+
     fn open_from_root(root_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
         let cast_path = root.join(".cast");
         let cast = open_existing_directory(root_directory, c".cast", &cast_path, DirectoryPolicy::Controlled).map_err(
@@ -138,12 +153,15 @@ impl TransitionJournalStore {
                 source,
             },
         )?;
+        Self::open_from_cast(&cast, cast_path)
+    }
+
+    fn open_from_cast(cast: &std::fs::File, cast_path: PathBuf) -> Result<Self, StorageError> {
         let path = cast_path.join("journal");
-        let directory =
-            ensure_journal_directory(&cast, &path).map_err(|source| StorageError::OpenJournalDirectory {
-                path: path.clone(),
-                source,
-            })?;
+        let directory = ensure_journal_directory(cast, &path).map_err(|source| StorageError::OpenJournalDirectory {
+            path: path.clone(),
+            source,
+        })?;
         let lock = open_and_lock(&directory, &path)?;
         let store = Self {
             directory,

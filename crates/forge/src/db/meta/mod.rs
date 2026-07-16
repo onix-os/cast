@@ -43,7 +43,8 @@ pub struct Database {
     conn: Connection,
     // Keeps a descriptor used by `/proc/self/fd/<n>/db` SQLite paths alive for
     // the complete connection lifetime. Ordinary databases leave this empty.
-    _directory_anchor: Option<Arc<fs_err::File>>,
+    _repository_directory_anchor: Option<Arc<fs_err::File>>,
+    _mutable_system_directory_anchor: Option<Arc<std::fs::File>>,
 }
 
 /// The exact repository index whose package rows are active in this database.
@@ -83,21 +84,30 @@ impl Snapshot {
 
 impl Database {
     pub fn new(url: &str) -> Result<Self, Error> {
-        Self::new_with_anchor(url, None)
+        Self::new_with_anchors(url, None, None)
     }
 
     pub(crate) fn new_anchored(url: &str, directory_anchor: Arc<fs_err::File>) -> Result<Self, Error> {
-        Self::new_with_anchor(url, Some(directory_anchor))
+        Self::new_with_anchors(url, Some(directory_anchor), None)
     }
 
-    fn new_with_anchor(url: &str, directory_anchor: Option<Arc<fs_err::File>>) -> Result<Self, Error> {
+    pub(crate) fn new_mutable_system_anchored(url: &str, directory_anchor: Arc<std::fs::File>) -> Result<Self, Error> {
+        Self::new_with_anchors(url, None, Some(directory_anchor))
+    }
+
+    fn new_with_anchors(
+        url: &str,
+        repository_directory_anchor: Option<Arc<fs_err::File>>,
+        mutable_system_directory_anchor: Option<Arc<std::fs::File>>,
+    ) -> Result<Self, Error> {
         let mut conn = SqliteConnection::establish(url)?;
 
         conn.run_pending_migrations(MIGRATIONS).map_err(Error::Migration)?;
 
         Ok(Database {
             conn: Connection::new(conn),
-            _directory_anchor: directory_anchor,
+            _repository_directory_anchor: repository_directory_anchor,
+            _mutable_system_directory_anchor: mutable_system_directory_anchor,
         })
     }
 

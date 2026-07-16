@@ -31,7 +31,9 @@ use crate::{
 };
 
 mod lockfile;
+mod mutable_namespace;
 mod snapshot;
+pub(crate) use mutable_namespace::DatabaseLocation as MutableDatabaseLocation;
 pub(crate) use snapshot::{DatabaseFile as ReadOnlyDatabaseFile, DatabaseKind};
 
 /// System mutability - do we have readwrite?
@@ -77,6 +79,10 @@ pub struct Installation {
     /// every clone. Stateful namespace mutations must be rooted here rather
     /// than reopening `root` as authority.
     root_directory: Arc<std::fs::File>,
+
+    /// Exact writable `.cast`, database-directory, and global-lock authority.
+    /// This is absent for naturally read-only and explicit snapshot opens.
+    mutable_namespace: Option<Arc<mutable_namespace::Authority>>,
 
     /// Acquired locks that guarantee exclusive access
     /// to the installation for mutable operations
@@ -154,6 +160,7 @@ impl Installation {
             cache_dir,
             system_model: None,
             root_directory: Arc::new(root_directory),
+            mutable_namespace: None,
             _locks: vec![],
             snapshot_authority: Some(Arc::new(authority)),
             access: Access::ReadOnlySnapshot,
@@ -221,13 +228,13 @@ impl Installation {
             root_metadata.mode() & 0o7777,
             Uid::effective().as_raw(),
         );
-        let cast_directory = matches!(mutability, Mutability::ReadWrite)
+        let provisioned_namespace = matches!(mutability, Mutability::ReadWrite)
             .then(|| ensure_dirs_exist(&root_directory, &root))
             .transpose()?;
         require_open_directories_still_named(
             &root,
             &root_directory,
-            cast_directory.as_ref(),
+            provisioned_namespace.as_ref().map(|directories| &directories.cast),
             custom_cache_directory.as_ref(),
         )?;
 
@@ -235,8 +242,8 @@ impl Installation {
         trace!("Root dir: {root:?}");
 
         // Get exclusive access to work within these directories
-        let _locks = match &cast_directory {
-            Some(cast_directory) => acquire_controlled_locks(cast_directory, custom_cache_directory.as_ref())?,
+        let _locks = match &provisioned_namespace {
+            Some(directories) => acquire_controlled_locks(&directories.cast, custom_cache_directory.as_ref())?,
             None => vec![],
         };
 
@@ -258,9 +265,20 @@ impl Installation {
         require_open_directories_still_named(
             &root,
             &root_directory,
-            cast_directory.as_ref(),
+            provisioned_namespace.as_ref().map(|directories| &directories.cast),
             custom_cache_directory.as_ref(),
         )?;
+
+        let mutable_namespace = provisioned_namespace.map(|directories| {
+            let global_lock = _locks
+                .first()
+                .expect("a provisioned Cast namespace has one global lock")
+                .clone();
+            Arc::new(mutable_namespace::Authority::new(directories, global_lock))
+        });
+        if let Some(authority) = &mutable_namespace {
+            authority.revalidate(&root, &root_directory)?;
+        }
 
         Ok(Self {
             root,
@@ -269,6 +287,7 @@ impl Installation {
             cache_dir,
             system_model: None,
             root_directory: Arc::new(root_directory),
+            mutable_namespace,
             _locks,
             snapshot_authority: None,
             access: match (discovery, mutability) {
@@ -311,6 +330,43 @@ impl Installation {
                 source,
             }
         })
+    }
+
+    /// Revalidate the exact mutable startup namespace retained by every clone.
+    pub(crate) fn revalidate_mutable_namespace(&self) -> Result<(), Error> {
+        if !self.is_mutable_system() {
+            return Err(Error::MutableSystemNamespaceRequired);
+        }
+        self.mutable_namespace
+            .as_deref()
+            .ok_or(Error::MutableSystemNamespaceRequired)?
+            .revalidate(&self.root, &self.root_directory)
+    }
+
+    /// Produce an anchored SQLite location below the retained database
+    /// directory. Callers must keep the returned anchor alive in the database
+    /// object and revalidate the namespace after SQLite has opened the URL.
+    pub(crate) fn mutable_database_location(&self, kind: DatabaseKind) -> Result<MutableDatabaseLocation, Error> {
+        self.revalidate_mutable_namespace()?;
+        let location = self
+            .mutable_namespace
+            .as_deref()
+            .ok_or(Error::MutableSystemNamespaceRequired)?
+            .database_location(kind);
+        self.revalidate_mutable_namespace()?;
+        location
+    }
+
+    /// Borrow the retained `.cast` descriptor used by startup journal work.
+    /// The public name is authenticated before the borrow and again by the
+    /// surrounding startup stage after the descriptor-relative work.
+    pub(crate) fn retained_mutable_cast_directory(&self) -> Result<&std::fs::File, Error> {
+        self.revalidate_mutable_namespace()?;
+        Ok(self
+            .mutable_namespace
+            .as_deref()
+            .ok_or(Error::MutableSystemNamespaceRequired)?
+            .cast_directory())
     }
 
     /// Revalidate every retained component that authorizes an explicit
@@ -519,6 +575,8 @@ pub enum Error {
     ReadOnlyDatabaseImageChanged { path: PathBuf },
     #[error("explicit read-only snapshot authority is required")]
     ReadOnlySnapshotAuthorityRequired,
+    #[error("retained mutable system namespace authority is required")]
+    MutableSystemNamespaceRequired,
 }
 
 #[cfg(test)]

@@ -1,7 +1,5 @@
 /// A Client is a connection to the underlying package management systems
 pub struct Client {
-    /// Root that we operate on
-    installation: Installation,
     /// Combined set of data sources for current state and potential packages
     registry: Registry,
     /// All installed packages across all states
@@ -16,6 +14,10 @@ pub struct Client {
     repositories: repository::Manager,
     /// Operational scope (real systems, ephemeral, etc)
     scope: Scope,
+    /// Root and namespace locks that we operate on. This field is deliberately
+    /// last so every SQLite connection and repository handle closes before the
+    /// retained mutable namespace and its global lock are released.
+    installation: Installation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -145,6 +145,8 @@ pub(crate) enum CodecError {
     IllegalPhaseAdvance { current: Phase, next: Phase },
     #[error("rollback plan changed outside one observed recovery action")]
     RollbackPlanChangedIllegally,
+    #[error("rollback successor requires exactly one outcome for its current recovery action")]
+    RollbackActionOutcomeMismatch,
     #[error("candidate state ID changed outside fresh allocation")]
     CandidateStateChangedIllegally,
 }

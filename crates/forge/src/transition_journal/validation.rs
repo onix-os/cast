@@ -519,7 +519,7 @@ fn ordinary_actions_resolved(plan: &RollbackPlan) -> bool {
         .all(|action| action == RollbackAction::NotRequired || action.resolved())
 }
 
-fn rollback_action_phase(phase: Phase) -> Option<(usize, bool)> {
+pub(super) fn rollback_action_phase(phase: Phase) -> Option<(usize, bool)> {
     Some(match phase {
         Phase::PreviousRestoreIntent => (0, false),
         Phase::PreviousRestoredToStaging => (0, true),
