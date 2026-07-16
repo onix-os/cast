@@ -34,10 +34,20 @@ pub(crate) struct RollbackObservations {
     pub(crate) fresh_db: Option<InitialRollbackAction>,
 }
 
-/// Result of reconciling one persisted rollback intent.
+/// Provenance for the reconciliation invocation which completes one persisted
+/// rollback intent.
+///
+/// This records what the completing invocation did, not which earlier
+/// invocation may have produced the namespace or database state it observes.
+/// `Applied` is valid if and only if this invocation performed the action.
+/// `AlreadySatisfied` is valid if and only if the desired state was exact at
+/// admission and this invocation performed no action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RollbackActionOutcome {
+    /// This reconciliation invocation performed the action.
     Applied,
+    /// The desired state was exact at admission, so this reconciliation
+    /// invocation performed no action.
     AlreadySatisfied,
 }
 

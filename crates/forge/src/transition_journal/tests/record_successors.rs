@@ -151,6 +151,32 @@ fn production_rollback_successor_requires_one_exact_action_outcome_and_persists_
         unverified.rollback_successor(None),
         Err(CodecError::TerminalPhaseAdvance)
     ));
+
+    // The reverse-exchange outcome describes this reconciliation invocation,
+    // not the historical origin of the exact PRE layout it completes. Both
+    // resolved outcomes are legal, and only the completed /usr action may
+    // differ between their exact successors.
+    let reverse_intent = valid_rollback_record(Phase::ReverseExchangeIntent);
+    assert_eq!(
+        reverse_intent.rollback.as_ref().unwrap().usr_exchange,
+        RollbackAction::Pending
+    );
+    for (outcome, resolved) in [
+        (RollbackActionOutcome::Applied, RollbackAction::Applied),
+        (
+            RollbackActionOutcome::AlreadySatisfied,
+            RollbackAction::AlreadySatisfied,
+        ),
+    ] {
+        let restored = reverse_intent.rollback_successor(Some(outcome)).unwrap();
+        let mut expected = reverse_intent.clone();
+        expected.generation += 1;
+        expected.phase = Phase::UsrRestored;
+        expected.rollback.as_mut().unwrap().usr_exchange = resolved;
+
+        assert_eq!(restored, expected, "outcome {outcome:?}");
+        validate_advance(&reverse_intent, &restored).unwrap();
+    }
 }
 
 #[test]
