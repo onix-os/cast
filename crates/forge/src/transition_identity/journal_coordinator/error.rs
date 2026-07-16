@@ -38,6 +38,8 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     },
     #[error("publish or revalidate exact candidate metadata under CandidatePrepareStarted authority")]
     CandidateMetadata(#[from] CandidateMetadataError),
+    #[error("bind exact generated-metadata provenance to coordinator-owned candidate preparation")]
+    MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("{action} requires operation {expected:?}, found {actual:?}")]
     UnexpectedOperation {
         action: &'static str,

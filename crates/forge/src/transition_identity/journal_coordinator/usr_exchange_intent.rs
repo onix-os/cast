@@ -15,7 +15,7 @@
 
 use thiserror::Error;
 
-use crate::{state::TransitionId, transition_journal::Phase};
+use crate::{db, state::TransitionId, transition_journal::Phase};
 
 use super::super::CandidateMetadataProof;
 use super::{
@@ -35,6 +35,7 @@ const BEGIN_USR_EXCHANGE_INTENT: &str = "begin /usr exchange intent";
 pub(crate) struct UsrExchangeIntentCoordinator {
     coordinator: StatefulTransitionCoordinator,
     metadata: CandidateMetadataProof,
+    provenance: db::state::MetadataProvenance,
 }
 
 /// Fail-stop result of publishing the `/usr` exchange intent.
@@ -67,8 +68,12 @@ impl TransactionTriggersCompleteCoordinator {
     /// Persist `/usr` exchange intent for a new state or active reblit without
     /// performing the exchange or exposing its retained authorities.
     pub(super) fn begin_usr_exchange_intent(self) -> Result<UsrExchangeIntentCoordinator, UsrExchangeIntentFailure> {
-        let Self { coordinator, metadata } = self;
-        begin_usr_exchange_intent(coordinator, metadata, Phase::TransactionTriggersComplete)
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+        } = self;
+        begin_usr_exchange_intent(coordinator, metadata, provenance, Phase::TransactionTriggersComplete)
     }
 }
 
@@ -77,14 +82,19 @@ impl PreparedArchivedTransitionCoordinator {
     /// `CandidatePrepared`; archived activation never runs transaction
     /// triggers.
     pub(super) fn begin_usr_exchange_intent(self) -> Result<UsrExchangeIntentCoordinator, UsrExchangeIntentFailure> {
-        let Self { coordinator, metadata } = self;
-        begin_usr_exchange_intent(coordinator, metadata, Phase::CandidatePrepared)
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+        } = self;
+        begin_usr_exchange_intent(coordinator, metadata, provenance, Phase::CandidatePrepared)
     }
 }
 
 fn begin_usr_exchange_intent(
     mut coordinator: StatefulTransitionCoordinator,
     metadata: CandidateMetadataProof,
+    provenance: db::state::MetadataProvenance,
     predecessor: Phase,
 ) -> Result<UsrExchangeIntentCoordinator, UsrExchangeIntentFailure> {
     let transition_id = coordinator.record.transition_id.clone();
@@ -117,7 +127,7 @@ fn begin_usr_exchange_intent(
     // sandwich immediately before the conditional journal update.
     coordinator.seal_prepared_candidate().map_err(preflight)?;
     coordinator
-        .require_prepared_metadata_sandwich(candidate, &metadata)
+        .require_prepared_metadata_sandwich(candidate, &metadata, &provenance)
         .map_err(preflight)?;
 
     if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &intent) {
@@ -128,7 +138,11 @@ fn begin_usr_exchange_intent(
         });
     }
     coordinator.record = intent;
-    Ok(UsrExchangeIntentCoordinator { coordinator, metadata })
+    Ok(UsrExchangeIntentCoordinator {
+        coordinator,
+        metadata,
+        provenance,
+    })
 }
 
 impl UsrExchangeIntentCoordinator {
@@ -137,6 +151,7 @@ impl UsrExchangeIntentCoordinator {
         // Borrowing the proof prevents this test-only accessor from becoming a
         // proof-free typestate shortcut.
         let _metadata = &self.metadata;
+        let _provenance = &self.provenance;
         &self.coordinator.record
     }
 }

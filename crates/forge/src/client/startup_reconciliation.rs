@@ -17,6 +17,10 @@ use crate::{
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
 };
 
+mod metadata_provenance;
+
+use metadata_provenance::metadata_provenance_evidence_compatible;
+
 const MAX_KNOWN_TREE_LOCATIONS: usize = 5;
 
 /// The installation/global-lock, journal, and state-database capabilities
@@ -56,15 +60,18 @@ pub(super) enum DatabaseEvidence {
     },
     AllocationCommittedBehindJournal {
         state: state::Id,
+        provenance: Option<db::state::MetadataProvenance>,
         previous: Option<ExistingStateEvidence>,
     },
     CandidateOwnership {
         state: state::Id,
         ownership: db::state::TransitionOwnership,
+        provenance: Option<db::state::MetadataProvenance>,
         previous: Option<ExistingStateEvidence>,
     },
     ExistingCandidate {
         candidate: ExistingStateEvidence,
+        provenance: Option<db::state::MetadataProvenance>,
         previous: Option<ExistingStateEvidence>,
     },
     Conflict(DatabaseConflict),
@@ -234,6 +241,7 @@ impl RuntimeEpochEvidence {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum RecoveryBlocker {
     DatabaseConflict,
+    MetadataProvenanceConflict,
     DatabaseChangedDuringInspection,
     RuntimeEpochUnavailable,
     RuntimeEpochChangedDuringInspection,
@@ -295,9 +303,12 @@ impl PendingSystemTransition {
             DatabaseInspectionStability::Changed { after: database_after }
         };
 
-        let mut blockers = Vec::with_capacity(12);
-        if !database_evidence_compatible(&record, &database) {
+        let mut blockers = Vec::with_capacity(13);
+        if !database_ownership_evidence_compatible(&record, &database) {
             blockers.push(RecoveryBlocker::DatabaseConflict);
+        }
+        if !metadata_provenance_evidence_compatible(&record, &database) {
+            blockers.push(RecoveryBlocker::MetadataProvenanceConflict);
         }
         if database_stability != DatabaseInspectionStability::Stable {
             blockers.push(RecoveryBlocker::DatabaseChangedDuringInspection);
@@ -441,8 +452,13 @@ fn inspect_database(
             state: candidate,
             ownership: state_db.transition_ownership(candidate, &record.transition_id)?,
         };
+        let provenance = state_db.metadata_provenance(candidate.state)?;
         let previous = inspect_previous_state(record, state_db, Some(candidate.state))?;
-        return Ok(DatabaseEvidence::ExistingCandidate { candidate, previous });
+        return Ok(DatabaseEvidence::ExistingCandidate {
+            candidate,
+            provenance,
+            previous,
+        });
     }
 
     let Some(candidate) = record.candidate.id.map(state::Id::from) else {
@@ -460,6 +476,7 @@ fn inspect_database(
             }
             Some(row) => DatabaseEvidence::AllocationCommittedBehindJournal {
                 state: row.state_id,
+                provenance: state_db.metadata_provenance(row.state_id)?,
                 previous,
             },
         });
@@ -500,9 +517,11 @@ fn inspect_database(
         ));
     }
     let previous = inspect_previous_state(record, state_db, Some(candidate))?;
+    let provenance = state_db.metadata_provenance(candidate)?;
     Ok(DatabaseEvidence::CandidateOwnership {
         state: candidate,
         ownership,
+        provenance,
         previous,
     })
 }
@@ -538,7 +557,13 @@ enum FreshDatabaseExpectation {
     Missing,
 }
 
+#[cfg(test)]
 fn database_evidence_compatible(record: &TransitionRecord, evidence: &DatabaseEvidence) -> bool {
+    database_ownership_evidence_compatible(record, evidence)
+        && metadata_provenance_evidence_compatible(record, evidence)
+}
+
+fn database_ownership_evidence_compatible(record: &TransitionRecord, evidence: &DatabaseEvidence) -> bool {
     match evidence {
         DatabaseEvidence::AllocationNotObserved { previous } => {
             previous_state_compatible(previous)
@@ -573,7 +598,9 @@ fn database_evidence_compatible(record: &TransitionRecord, evidence: &DatabaseEv
                     FreshDatabaseExpectation::Missing => *ownership == db::state::TransitionOwnership::Missing,
                 }
         }
-        DatabaseEvidence::ExistingCandidate { candidate, previous } => {
+        DatabaseEvidence::ExistingCandidate {
+            candidate, previous, ..
+        } => {
             candidate.ownership == db::state::TransitionOwnership::Cleared
                 && previous
                     .as_ref()
@@ -870,6 +897,8 @@ fn add_location(locations: &mut Vec<KnownTreeLocation>, path: PathBuf, role: Kno
 pub(super) enum InspectionError {
     #[error("inspect exact state-transition database ownership")]
     Database(#[from] db::state::TransitionEvidenceError),
+    #[error("inspect exact generated-metadata provenance")]
+    MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("revalidate retained mutable installation namespace around recovery evidence inspection")]
     Installation(#[from] crate::installation::Error),
 }

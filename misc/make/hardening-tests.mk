@@ -118,7 +118,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 42; \
+	timeout 10s test "$$count" = 48; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -156,6 +156,12 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_substitution_before_trigger_intent_runs_no_effect \
 		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_substitution_during_trigger_effect_stops_before_completion \
 		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_publication_failure_releases_authorities_while_error_lives \
+		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_provenance_commit_faults_precede_every_canonical_output \
+		transition_identity::journal_coordinator::tests::journal_coordinator_first_and_second_metadata_publication_faults_retain_provenance \
+		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepared_journal_faults_retain_complete_provenance_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_existing_candidates_require_exact_nonlegacy_provenance_before_publication \
+		transition_identity::journal_coordinator::tests::journal_coordinator_archived_verification_sandwich_detects_provenance_removal_without_mutation \
+		transition_identity::journal_coordinator::tests::journal_coordinator_provenance_is_revalidated_before_trigger_and_exchange_intents \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_has_exact_phase_and_generation_for_every_operation \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_performs_no_exchange_or_root_link_publication \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_revalidates_all_retained_evidence_before_advance \
@@ -214,6 +220,7 @@ forge-transition-journal-coordinator-test:
 	timeout 10s grep -Fqx 'pub(crate) struct PreparedTransactionTriggerCoordinator {' "$$prepare_contract"; \
 	timeout 10s grep -Fqx 'pub(crate) struct PreparedArchivedTransitionCoordinator {' "$$prepare_contract"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) metadata: CandidateMetadataProof,' "$$prepare_contract" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) provenance: db::state::MetadataProvenance,' "$$prepare_contract" )" = 3; \
 	timeout 10s grep -Fqx 'impl PreparedTransactionTriggerCoordinator {' "$$trigger_contract"; \
 	timeout 10s grep -Fqx '    pub(super) fn run_transaction_triggers<E, F>(' "$$trigger_contract"; \
 	if timeout 10s grep -nF 'Option<CandidateMetadataProof>' "$$prepare_contract" "$$trigger_contract"; then \
@@ -245,6 +252,7 @@ forge-transition-journal-coordinator-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) fn begin_usr_exchange_intent(' "$$usr_exchange_contract" )" = 2; \
 	timeout 10s grep -Fqx '    coordinator: StatefulTransitionCoordinator,' "$$usr_exchange_contract"; \
 	timeout 10s grep -Fqx '    metadata: CandidateMetadataProof,' "$$usr_exchange_contract"; \
+	timeout 10s grep -Fqx '    provenance: db::state::MetadataProvenance,' "$$usr_exchange_contract"; \
 	if timeout 10s grep -nF 'Option<CandidateMetadataProof>' "$$usr_exchange_contract"; then \
 		timeout 10s printf '%s\n' '/usr exchange-intent authority made its metadata proof optional' >&2; exit 1; \
 	else \
@@ -288,11 +296,12 @@ forge-startup-reconciliation-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::tests::startup_reconciliation_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 8; \
+	timeout 10s test "$$count" = 9; \
 	for test in \
 		client::startup_reconciliation::tests::startup_reconciliation_database_phase_matrix_is_exact \
 		client::startup_reconciliation::tests::startup_reconciliation_matching_allocation_behind_journal_is_retained \
 		client::startup_reconciliation::tests::startup_reconciliation_inconsistent_database_audit_is_blocked \
+		client::startup_reconciliation::tests::startup_reconciliation_metadata_provenance_phase_matrix_is_fail_closed_and_sandwiched \
 		client::startup_reconciliation::tests::startup_reconciliation_current_and_historical_runtime_epochs_are_distinguished \
 		client::startup_reconciliation::tests::startup_reconciliation_two_link_tree_marker_remains_unresolved \
 		client::startup_reconciliation::tests::startup_reconciliation_final_tree_name_substitution_is_not_retained \

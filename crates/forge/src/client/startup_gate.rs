@@ -45,6 +45,9 @@ impl CleanSystemStartup {
             )
             .map_err(|source| match source {
                 startup_reconciliation::InspectionError::Database(source) => Error::TransitionEvidence(source),
+                startup_reconciliation::InspectionError::MetadataProvenance(source) => {
+                    Error::MetadataProvenance(source)
+                }
                 startup_reconciliation::InspectionError::Installation(source) => Error::Installation(source),
             })?;
             return Err(Error::RecoveryPending(pending));
@@ -109,6 +112,8 @@ pub(super) enum Error {
     RecoveryPending(#[from] startup_reconciliation::PendingSystemTransition),
     #[error("audit in-flight state-transition rows")]
     TransitionEvidence(#[from] db::state::TransitionEvidenceError),
+    #[error("inspect immutable generated-metadata provenance during startup reconciliation")]
+    MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("state {state} retains orphan transition {transition} while the canonical journal is absent")]
     OrphanTransitionRow { state: i32, transition: String },
     #[error("audit interrupted archived-state prune evidence")]

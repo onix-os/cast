@@ -39,6 +39,23 @@ impl MetadataProvenance {
     pub(crate) fn matches_system_model(&self, bytes: &[u8]) -> bool {
         self.system_model_sha256 == MetadataDigest::hash(bytes)
     }
+
+    /// Require both labeled output buffers to match this independently loaded
+    /// immutable pair.
+    pub(crate) fn require_outputs(
+        &self,
+        state: Id,
+        os_release: &[u8],
+        system_model: &[u8],
+    ) -> Result<(), MetadataProvenanceError> {
+        if self.matches_os_release(os_release) && self.matches_system_model(system_model) {
+            Ok(())
+        } else {
+            Err(MetadataProvenanceError::Mismatch {
+                state_id: i32::from(state),
+            })
+        }
+    }
 }
 
 impl MetadataDigest {
@@ -105,7 +122,9 @@ impl Database {
     ///
     /// Existing rows are immutable, including an already-equal row. Crash
     /// reconciliation must read durable evidence rather than treating this
-    /// method as an upsert or an idempotent adoption surface.
+    /// method as an upsert or an idempotent adoption surface. An ordinary
+    /// SQLite commit error has uncertain durable outcome; callers must fail
+    /// stop and reopen rather than infer absence from the returned error.
     pub(crate) fn insert_fresh_metadata_provenance_if_transition_matches(
         &self,
         state: Id,
@@ -125,9 +144,76 @@ impl Database {
                     state_id: i32::from(state),
                 });
             }
-            insert_metadata_provenance_row(tx, state, provenance)
+            insert_metadata_provenance_row(tx, state, provenance)?;
+            metadata_provenance_fault(MetadataProvenanceFaultPoint::BeforeCommit)
+        })?;
+        metadata_provenance_fault(MetadataProvenanceFaultPoint::AfterCommit)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn delete_metadata_provenance_for_test(&self, state: Id) -> Result<(), Error> {
+        self.conn.exclusive_tx(|tx| {
+            diesel::delete(state_metadata_provenance::table.find(i32::from(state))).execute(tx)?;
+            Ok(())
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MetadataProvenanceFaultPoint {
+    BeforeCommit,
+    AfterCommit,
+}
+
+/// Exact outcome of the two deterministic test-only insertion boundaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
+pub(crate) enum MetadataProvenancePersistenceOutcome {
+    DefinitelyNotApplied,
+    AppliedButReportedError,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static METADATA_PROVENANCE_FAULT: std::cell::Cell<Option<MetadataProvenanceFaultPoint>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn arm_metadata_provenance_fault(point: MetadataProvenanceFaultPoint) {
+    METADATA_PROVENANCE_FAULT.with(|fault| {
+        assert!(
+            fault.replace(Some(point)).is_none(),
+            "a metadata-provenance fault is already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn assert_metadata_provenance_fault_consumed() {
+    METADATA_PROVENANCE_FAULT.with(|fault| {
+        assert!(fault.get().is_none(), "armed metadata-provenance fault was not reached");
+    });
+}
+
+#[cfg(test)]
+fn metadata_provenance_fault(point: MetadataProvenanceFaultPoint) -> Result<(), MetadataProvenanceError> {
+    let injected = METADATA_PROVENANCE_FAULT.with(|fault| fault.get() == Some(point));
+    if injected {
+        METADATA_PROVENANCE_FAULT.with(|fault| fault.set(None));
+        let outcome = match point {
+            MetadataProvenanceFaultPoint::BeforeCommit => MetadataProvenancePersistenceOutcome::DefinitelyNotApplied,
+            MetadataProvenanceFaultPoint::AfterCommit => MetadataProvenancePersistenceOutcome::AppliedButReportedError,
+        };
+        Err(MetadataProvenanceError::FaultInjected { point, outcome })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(test))]
+fn metadata_provenance_fault(_point: MetadataProvenanceFaultPoint) -> Result<(), MetadataProvenanceError> {
+    Ok(())
 }
 
 fn transition_ownership_impl(
@@ -238,6 +324,12 @@ pub(crate) enum MetadataProvenanceError {
         state_id: i32,
         field: &'static str,
         actual: usize,
+    },
+    #[cfg(test)]
+    #[error("injected generated-metadata provenance fault at {point:?} with {outcome:?}")]
+    FaultInjected {
+        point: MetadataProvenanceFaultPoint,
+        outcome: MetadataProvenancePersistenceOutcome,
     },
     #[error(transparent)]
     TransitionEvidence(#[from] TransitionEvidenceError),

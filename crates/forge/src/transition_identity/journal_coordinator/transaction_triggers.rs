@@ -12,6 +12,7 @@ use std::{error::Error as StdError, fs::File, path::Path};
 use thiserror::Error;
 
 use crate::{
+    db,
     state::{self, TransitionId},
     transition_journal::Phase,
 };
@@ -128,6 +129,7 @@ impl PreparedTransactionTriggerCoordinator {
         let Self {
             mut coordinator,
             metadata,
+            provenance,
         } = self;
         let transition_id = coordinator.record.transition_id.clone();
         if let Err(source) = coordinator.require_phase(Phase::CandidatePrepared, RUN_TRANSACTION_TRIGGERS) {
@@ -152,7 +154,7 @@ impl PreparedTransactionTriggerCoordinator {
         if let Err(source) = coordinator.seal_prepared_candidate() {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
-        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata) {
+        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata, &provenance) {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
 
@@ -177,7 +179,7 @@ impl PreparedTransactionTriggerCoordinator {
         if let Err(source) = coordinator.seal_prepared_candidate() {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
-        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata) {
+        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata, &provenance) {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
 
@@ -207,7 +209,11 @@ impl PreparedTransactionTriggerCoordinator {
             });
         }
         coordinator.record = complete;
-        Ok(TransactionTriggersCompleteCoordinator { coordinator, metadata })
+        Ok(TransactionTriggersCompleteCoordinator {
+            coordinator,
+            metadata,
+            provenance,
+        })
     }
 }
 
@@ -219,18 +225,29 @@ impl StatefulTransitionCoordinator {
         &self,
         candidate: state::Id,
         metadata: &CandidateMetadataProof,
+        provenance: &db::state::MetadataProvenance,
     ) -> Result<(), StatefulTransitionCoordinatorError> {
         self.require_prepared_candidate_evidence(candidate)?;
+        self.identity
+            .state_database
+            .require_exact_metadata_provenance(candidate, provenance)?;
         metadata.require_same_candidate(
             self.identity.candidate.store.retained_directory(),
             self.identity.candidate.store.display_path(),
         )?;
+        let (os_release, system_model) = metadata.policy_output_bytes();
+        provenance.require_outputs(candidate, os_release, system_model)?;
         self.require_prepared_candidate_evidence(candidate)?;
-        metadata
-            .require_same_candidate(
-                self.identity.candidate.store.retained_directory(),
-                self.identity.candidate.store.display_path(),
-            )
+        self.identity
+            .state_database
+            .require_exact_metadata_provenance(candidate, provenance)?;
+        metadata.require_same_candidate(
+            self.identity.candidate.store.retained_directory(),
+            self.identity.candidate.store.display_path(),
+        )?;
+        let (os_release, system_model) = metadata.policy_output_bytes();
+        provenance
+            .require_outputs(candidate, os_release, system_model)
             .map_err(Into::into)
     }
 

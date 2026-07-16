@@ -197,7 +197,6 @@ pub(crate) struct CandidateMetadataPublication {
     usr: File,
     usr_path: PathBuf,
     lib: RetainedDirectory,
-    snapshot_bytes: Vec<u8>,
 }
 
 /// Retains the exact generated files and their parent directories until the
@@ -213,6 +212,41 @@ pub(crate) struct CandidateMetadataProof {
     release_bytes: Vec<u8>,
     snapshot: PreparedFile,
     snapshot_bytes: Vec<u8>,
+}
+
+/// Labeled, size-bounded output of one semantic metadata policy evaluation.
+///
+/// The pair is constructed only after the caller has read `os-info.json`
+/// through a retained metadata input capability. Keeping the labels private
+/// prevents callers from accidentally swapping the two expected buffers.
+#[derive(Debug)]
+pub(crate) struct CandidateMetadataOutputs {
+    os_release: Vec<u8>,
+    system_model: Vec<u8>,
+}
+
+impl CandidateMetadataOutputs {
+    pub(crate) fn from_policy(
+        os_release: impl Into<Vec<u8>>,
+        system_model: impl Into<Vec<u8>>,
+    ) -> Result<Self, CandidateMetadataError> {
+        let os_release = os_release.into();
+        let system_model = system_model.into();
+        bounded_output("os-release", &os_release)?;
+        bounded_output("system-model.glu", &system_model)?;
+        Ok(Self {
+            os_release,
+            system_model,
+        })
+    }
+
+    pub(crate) fn os_release(&self) -> &[u8] {
+        &self.os_release
+    }
+
+    pub(crate) fn system_model(&self) -> &[u8] {
+        &self.system_model
+    }
 }
 
 impl RetainedCandidateUsr {
@@ -258,15 +292,16 @@ impl RetainedCandidateUsr {
 }
 
 impl CandidateMetadataPublication {
-    pub(crate) fn begin(usr: &File, usr_path: &Path, snapshot: &[u8]) -> Result<Self, CandidateMetadataError> {
+    /// Retain the exact policy input namespace before either generated output
+    /// has been derived. Both output buffers are supplied together only after
+    /// [`Self::read_optional_os_info`] has read through this retained `lib`.
+    pub(crate) fn begin(usr: &File, usr_path: &Path) -> Result<Self, CandidateMetadataError> {
         let usr = clone_candidate_usr(usr, usr_path)?;
-        let snapshot_bytes = bounded_output("system-model.glu", snapshot)?.to_vec();
         let lib = RetainedDirectory::retain_or_create(&usr, LIB_NAME, usr_path.join("lib"))?;
         Ok(Self {
             usr,
             usr_path: usr_path.to_owned(),
             lib,
-            snapshot_bytes,
         })
     }
 
@@ -278,14 +313,15 @@ impl CandidateMetadataPublication {
 
     /// Publish the exact client-derived `os-release` bytes and return the sole
     /// retained proof constructor for the two canonical metadata files.
-    pub(crate) fn publish(self, os_release: &[u8]) -> Result<CandidateMetadataProof, CandidateMetadataError> {
-        let os_release = bounded_output("os-release", os_release)?.to_vec();
-        let Self {
-            usr,
-            usr_path,
-            lib,
-            snapshot_bytes: snapshot,
-        } = self;
+    pub(crate) fn publish(
+        self,
+        outputs: CandidateMetadataOutputs,
+    ) -> Result<CandidateMetadataProof, CandidateMetadataError> {
+        let CandidateMetadataOutputs {
+            os_release,
+            system_model: snapshot,
+        } = outputs;
+        let Self { usr, usr_path, lib } = self;
 
         // Refuse every deterministic conflict before either canonical name is
         // published. A racing conflict after this point still cannot be
@@ -345,6 +381,13 @@ impl CandidateMetadataProof {
 
     pub(crate) fn diagnostic_path(&self) -> &Path {
         &self.usr_path
+    }
+
+    /// Return the labeled policy buffers owned by this descriptor proof.
+    /// Callers must revalidate the proof immediately around digest comparison;
+    /// these buffers never replace canonical descriptor reads.
+    pub(super) fn policy_output_bytes(&self) -> (&[u8], &[u8]) {
+        (&self.release_bytes, &self.snapshot_bytes)
     }
 
     /// Prove that another authenticated candidate capability names the exact

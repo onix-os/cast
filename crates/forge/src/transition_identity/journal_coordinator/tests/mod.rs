@@ -48,17 +48,16 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
     let temporary = private_installation_tempdir();
     let mut installation = Installation::open(temporary.path(), None).unwrap();
     let database = db::state::Database::new(":memory:").unwrap();
-    let previous_state = database.add(&[], Some("coordinator previous"), None).unwrap().id;
+    let previous_state = if candidate_kind == CandidateKind::ActiveReblit {
+        add_cleared_state_with_provenance(&database, "coordinator active reblit", 'd')
+    } else {
+        database.add(&[], Some("coordinator previous"), None).unwrap().id
+    };
     let candidate_state = match candidate_kind {
         // The row is intentionally absent. SQLite will allocate this exact
         // next ID only after FreshStateAllocating is durable.
         CandidateKind::NewState => previous_state.next(),
-        CandidateKind::Archived => {
-            database
-                .add(&[], Some("coordinator archived candidate"), None)
-                .unwrap()
-                .id
-        }
+        CandidateKind::Archived => add_cleared_state_with_provenance(&database, "coordinator archived candidate", 'e'),
         CandidateKind::ActiveReblit => previous_state,
     };
 
@@ -101,6 +100,19 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
         candidate_path,
     };
     (fixture, identity)
+}
+
+fn add_cleared_state_with_provenance(database: &db::state::Database, summary: &str, digit: char) -> state::Id {
+    let transition = TransitionId::parse(digit.to_string().repeat(TransitionId::TEXT_LENGTH)).unwrap();
+    let state = database
+        .add_with_transition(&transition, &[], Some(summary), None)
+        .unwrap();
+    let provenance = db::state::MetadataProvenance::from_outputs(COORDINATOR_OS_RELEASE, COORDINATOR_SYSTEM_SNAPSHOT);
+    database
+        .insert_fresh_metadata_provenance_if_transition_matches(state.id, &transition, &provenance)
+        .unwrap();
+    database.clear_transition_if_matches(state.id, &transition).unwrap();
+    state.id
 }
 
 fn prepare_previous_tree(installation: &Installation, previous_kind: PreviousKind, previous_state: state::Id) {
@@ -235,7 +247,12 @@ fn allocate_matching_state(fixture: &CoordinatorFixture, coordinator: &StatefulT
 fn finish_candidate_prepare(
     coordinator: StatefulTransitionCoordinator,
 ) -> Result<PreparedStatefulTransitionCoordinator, StatefulTransitionCoordinatorError> {
-    coordinator.finish_candidate_prepare(COORDINATOR_SYSTEM_SNAPSHOT, |_| COORDINATOR_OS_RELEASE.to_vec())
+    coordinator.finish_candidate_prepare(|_| {
+        crate::transition_identity::CandidateMetadataOutputs::from_policy(
+            COORDINATOR_OS_RELEASE,
+            COORDINATOR_SYSTEM_SNAPSHOT,
+        )
+    })
 }
 
 fn assert_candidate_metadata(fixture: &CoordinatorFixture) {
@@ -270,3 +287,4 @@ include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
 include!("metadata_proof.rs");
 include!("usr_exchange_intent.rs");
+include!("metadata_provenance.rs");

@@ -476,13 +476,21 @@ and instant rollback mechanism; it hardens their failure semantics.
   `CandidatePrepareStarted` is the only coordinator state which can construct
   the neutral metadata publication capability. The client-policy callback sees
   only the bounded optional `os-info.json` bytes read through that exact
-  capability and returns semantic `os-release` bytes; it never receives the
-  publication object or a proof token. The coordinator alone consumes the
-  publication, retains the resulting exact `os-release` and
-  `system-model.glu` proof, binds it to the coordinator's candidate descriptor,
-  publishes or verifies `.stateID`, and sandwiches runtime, canonical journal,
-  public-name, database, state-ID, and metadata evidence before recording
-  `CandidatePrepared`.
+  capability and returns both labeled, size-bounded semantic outputs together;
+  it never receives the publication object, archived canonical bytes, or a
+  proof token. The coordinator alone consumes those buffers and the publication
+  capability. For `NewState`, it hashes both independently derived buffers and
+  immutably inserts that pair under exact `Matching` transition ownership before
+  either canonical output is published. An interrupted provenance commit may
+  therefore leave no row or the exact row, while first/second publication and
+  final journal faults may leave provenance plus absent/partial/complete outputs
+  under `CandidatePrepareStarted`. `ActiveReblit` instead requires the existing
+  immutable pair to match the newly derived buffers before publication. The
+  resulting exact `os-release` and `system-model.glu` descriptor proof and the
+  independently loaded provenance pair travel together through private
+  operation typestates. Their database and descriptor evidence is sandwiched
+  before `.stateID`, trigger, exchange-intent, and `CandidatePrepared`
+  boundaries.
 
   `CandidatePrepared` returns one of two unforgeable operation-specific
   wrappers. `NewState` and `ActiveReblit` receive a wrapper which owns both the
@@ -532,21 +540,20 @@ and instant rollback mechanism; it hardens their failure semantics.
   executor exist, publishing `UsrExchangeIntent` from any live client remains
   forbidden by the focused static gate.
 
-  Archived activation now dispatches to a
-  separate read-only verifier because its candidate already contains canonical
-  metadata. That verifier clones the candidate first, opens existing `usr/lib`
-  without creating it, accepts independently supplied expected snapshot and
-  `os-release` bytes, retains both exact output inodes through read-only file
-  descriptors, and returns the same owned proof without chmod, synchronization,
-  replacement, or any other mutation. It never reads either canonical output
-  to manufacture its own expectation, and a same-byte output replacement
-  during proof construction is rejected with both inodes preserved. Live
-  archived activation still lacks independent expectation provenance: its
-  current API has neither the original `SystemModel` nor a durable metadata
-  manifest/digest. It must gain one of those sources before this verifier can be
-  wired; using the archived output bytes themselves remains forbidden.
+  Archived activation dispatches to a separate read-only verifier because its
+  candidate already contains canonical metadata. The coordinator first loads
+  the immutable digest pair from the exact state database, then derives both
+  expected buffers from retained policy input without opening either canonical
+  output. Only after their labeled hashes match that independent database row
+  does the verifier descriptor-read and retain both exact output inodes. It
+  repeats the database provenance read after proof construction and around every
+  later proof boundary. Verification performs no chmod, synchronization,
+  replacement, or other mutation; a same-byte output replacement or provenance
+  deletion inside either sandwich is rejected with candidate files preserved.
+  Legacy archived states without provenance fail closed rather than hashing
+  their archived bytes into a new expectation.
 
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 42
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 48
   exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
   runtime evidence, fixed quarantine naming, non-reinterpretable three-way
@@ -556,8 +563,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   `os-info.json` policy input, pre-intent and post-effect metadata replacement,
   fail-stop lock release, exact `/usr` exchange-intent generations for all
   three operations, prepared-candidate resealing, complete pre-intent evidence,
-  predecessor-or-intent persistence faults, and the absence of exchange or
-  root-link effects. Its static gates prove that metadata authority is
+  predecessor-or-intent persistence faults, provenance commit outcomes,
+  first/second output interruption, existing-state legacy/mismatch rejection,
+  archived provenance sandwiches, proof/provenance typestate retention, and the
+  absence of exchange or root-link effects. Its static gates prove that metadata authority is
   mandatory rather than optional, the runner accepts no proof parameter,
   archived activation cannot acquire trigger authority, no coordinator method
   has a callsite outside the contract module, and the callback authority and
@@ -585,7 +594,15 @@ and instant rollback mechanism; it hardens their failure semantics.
   boot repair; correlates the exact candidate and previous database rows with
   a before/after global transition audit; distinguishes allocation committed
   behind an older journal generation; and rejects phase-incompatible cleared,
-  missing, foreign, or changing ownership. Runtime tree witnesses are compared
+  missing, foreign, or changing ownership. It also reads candidate metadata
+  provenance in both database inspections. Fresh states require absence through
+  `FreshStateAllocated`, admit either exact commit outcome only at
+  `CandidatePrepareStarted`, and require the immutable pair afterward until
+  exact database invalidation removes it; rollback derives the same rule from
+  its recorded forward source. Existing-state operations require provenance
+  from `Preparing`, so legacy absence is a typed blocker. A stable missing pair
+  and a pair deleted between inspection reads are distinguished. Runtime tree
+  witnesses are compared
   only when two epoch captures match the journal's creation epoch. Every known
   live, staging, state-slot, and quarantine name is reopened through a final
   directory-and-marker identity sandwich, while an otherwise valid two-link
@@ -599,14 +616,15 @@ and instant rollback mechanism; it hardens their failure semantics.
   `RecoveryPending`; keeping that journal after the startup coordinator was
   released would permit a coordinator/journal ABBA deadlock. A retry must
   independently acquire locks in canonical order and reload the journal. The
-  focused `make forge-startup-reconciliation-test` lane proves eight exact
+  focused `make forge-startup-reconciliation-test` lane proves nine exact
   contracts, including the complete database phase matrix, pre-allocation
-  rollback, a database mutation between sandwich reads, current versus
-  historical epochs, unauthenticated `nlink=2`, final directory and marker
+  rollback, the independent 19-phase and rollback-source provenance matrix,
+  stable legacy absence, a database mutation between sandwich reads, current
+  versus historical epochs, unauthenticated `nlink=2`, final directory and marker
   substitution, exact database retention, and a bounded second startup while
-  the first diagnostic remains alive. Phase-specific namespace inventory and
-  all rollback/roll-forward effects remain unimplemented, so this item stays
-  open.
+  the first diagnostic remains alive. Provenance is diagnostic evidence, not
+  recovery authority: phase-specific namespace inventory and all
+  rollback/roll-forward effects remain unimplemented, so this item stays open.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

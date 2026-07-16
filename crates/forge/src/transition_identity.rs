@@ -57,8 +57,8 @@ mod tree_lifecycle;
 #[allow(unused_imports)] // Narrow race hook consumed only by exact verification tests.
 pub(crate) use candidate_metadata::arm_after_existing_release_retained as arm_after_existing_candidate_metadata_release_retained;
 pub(crate) use candidate_metadata::{
-    CandidateMetadataError, CandidateMetadataProof, CandidateMetadataPublication, CandidateMetadataVerification,
-    RetainedCandidateUsr,
+    CandidateMetadataError, CandidateMetadataOutputs, CandidateMetadataProof, CandidateMetadataPublication,
+    CandidateMetadataVerification, RetainedCandidateUsr,
 };
 #[cfg(test)]
 pub(crate) use candidate_metadata::{

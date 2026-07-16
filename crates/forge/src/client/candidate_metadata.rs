@@ -11,8 +11,9 @@ use super::Error;
 use crate::{
     SystemModel,
     transition_identity::{
-        ArchivedStateRepairIdentity, CandidateMetadataError, CandidateMetadataProof as CoreCandidateMetadataProof,
-        CandidateMetadataPublication, RetainedCandidateUsr, StatefulTreeIdentity,
+        ArchivedStateRepairIdentity, CandidateMetadataError, CandidateMetadataOutputs,
+        CandidateMetadataProof as CoreCandidateMetadataProof, CandidateMetadataPublication, RetainedCandidateUsr,
+        StatefulTreeIdentity,
     },
 };
 
@@ -122,11 +123,14 @@ fn decorate_retained(
     usr_path: &Path,
     snapshot: &SystemModel,
 ) -> Result<CandidateMetadataProof, Error> {
-    let publication = CandidateMetadataPublication::begin(usr, usr_path, snapshot.encoded().as_bytes())
-        .map_err(|source| metadata_error(context, source))?;
+    let publication =
+        CandidateMetadataPublication::begin(usr, usr_path).map_err(|source| metadata_error(context, source))?;
     let os_release = load_os_release(&publication).map_err(|source| metadata_error(context, source))?;
+    let outputs =
+        CandidateMetadataOutputs::from_policy(os_release.into_bytes(), snapshot.encoded().as_bytes().to_vec())
+            .map_err(|source| metadata_error(context, source))?;
     publication
-        .publish(os_release.as_bytes())
+        .publish(outputs)
         .map(|core| CandidateMetadataProof { context, core })
         .map_err(|source| metadata_error(context, source))
 }

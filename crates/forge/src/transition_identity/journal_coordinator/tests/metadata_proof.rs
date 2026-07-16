@@ -87,9 +87,12 @@ fn journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exac
         let existing_before =
             (candidate_kind == CandidateKind::Archived).then(|| candidate_metadata_evidence(&fixture));
         let prepared = coordinator
-            .finish_candidate_prepare(COORDINATOR_SYSTEM_SNAPSHOT, |actual| {
+            .finish_candidate_prepare(|actual| {
                 assert_eq!(actual, Some(COORDINATOR_OS_INFO));
-                COORDINATOR_OS_RELEASE.to_vec()
+                crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                    COORDINATOR_OS_RELEASE,
+                    COORDINATOR_SYSTEM_SNAPSHOT,
+                )
             })
             .unwrap();
 
@@ -116,13 +119,18 @@ fn journal_coordinator_archived_metadata_proof_rejects_independent_expectation_m
     let before = candidate_metadata_evidence(&fixture);
 
     let failure = coordinator
-        .finish_candidate_prepare(b"independently expected but incorrect snapshot\n", |_| {
-            COORDINATOR_OS_RELEASE.to_vec()
+        .finish_candidate_prepare(|_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                b"independently expected but incorrect snapshot\n".as_slice(),
+            )
         })
         .unwrap_err();
     assert!(matches!(
         failure,
-        StatefulTransitionCoordinatorError::CandidateMetadata(_)
+        StatefulTransitionCoordinatorError::MetadataProvenance(
+            db::state::MetadataProvenanceError::Mismatch { .. }
+        )
     ));
     assert_eq!(read_canonical(&fixture.installation.root), started);
     assert_eq!(candidate_metadata_evidence(&fixture), before);

@@ -111,6 +111,73 @@ const ROLLBACK_CASES: [(Phase, RollbackAction, FreshDatabaseExpectation); 13] = 
     ),
 ];
 
+const PROVENANCE_PHASE_CASES: [(Phase, ForwardPhase, bool, bool); 19] = [
+    (Phase::Preparing, ForwardPhase::Preparing, true, false),
+    (
+        Phase::FreshStateAllocating,
+        ForwardPhase::FreshStateAllocating,
+        true,
+        false,
+    ),
+    (
+        Phase::FreshStateAllocated,
+        ForwardPhase::FreshStateAllocated,
+        true,
+        false,
+    ),
+    (
+        Phase::CandidatePrepareStarted,
+        ForwardPhase::CandidatePrepareStarted,
+        true,
+        true,
+    ),
+    (Phase::CandidatePrepared, ForwardPhase::CandidatePrepared, false, true),
+    (
+        Phase::TransactionTriggersStarted,
+        ForwardPhase::TransactionTriggersStarted,
+        false,
+        true,
+    ),
+    (
+        Phase::TransactionTriggersComplete,
+        ForwardPhase::TransactionTriggersComplete,
+        false,
+        true,
+    ),
+    (Phase::UsrExchangeIntent, ForwardPhase::UsrExchangeIntent, false, true),
+    (Phase::UsrExchanged, ForwardPhase::UsrExchanged, false, true),
+    (Phase::RootLinksComplete, ForwardPhase::RootLinksComplete, false, true),
+    (
+        Phase::SystemTriggersStarted,
+        ForwardPhase::SystemTriggersStarted,
+        false,
+        true,
+    ),
+    (
+        Phase::SystemTriggersComplete,
+        ForwardPhase::SystemTriggersComplete,
+        false,
+        true,
+    ),
+    (
+        Phase::PreviousArchiveIntent,
+        ForwardPhase::PreviousArchiveIntent,
+        false,
+        true,
+    ),
+    (Phase::PreviousArchived, ForwardPhase::PreviousArchived, false, true),
+    (Phase::BootSyncStarted, ForwardPhase::BootSyncStarted, false, true),
+    (Phase::BootSyncComplete, ForwardPhase::BootSyncComplete, false, true),
+    (Phase::CommitDecided, ForwardPhase::CommitDecided, false, true),
+    (
+        Phase::CommitCleanupComplete,
+        ForwardPhase::CommitCleanupComplete,
+        false,
+        true,
+    ),
+    (Phase::Complete, ForwardPhase::Complete, false, true),
+];
+
 fn transition_id() -> TransitionId {
     TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap()
 }
@@ -182,10 +249,15 @@ fn rollback_record(phase: Phase, fresh_db: RollbackAction) -> TransitionRecord {
     record
 }
 
+fn startup_metadata_provenance() -> db::state::MetadataProvenance {
+    db::state::MetadataProvenance::from_outputs(b"NAME=startup\n", b"let startup = true\n")
+}
+
 fn candidate_evidence(ownership: db::state::TransitionOwnership) -> DatabaseEvidence {
     DatabaseEvidence::CandidateOwnership {
         state: state::Id::from(42),
         ownership,
+        provenance: None,
         previous: None,
     }
 }
@@ -242,7 +314,7 @@ fn startup_reconciliation_database_phase_matrix_is_exact() {
         assert_eq!(fresh_database_expectation(&record), expected, "{phase:?}");
         for ownership in ownerships {
             assert_eq!(
-                database_evidence_compatible(&record, &candidate_evidence(ownership)),
+                database_ownership_evidence_compatible(&record, &candidate_evidence(ownership)),
                 expectation_accepts(expected, ownership),
                 "{phase:?} {ownership:?}"
             );
@@ -263,6 +335,7 @@ fn startup_reconciliation_database_phase_matrix_is_exact() {
                 &before_allocation,
                 &DatabaseEvidence::AllocationCommittedBehindJournal {
                     state: state::Id::from(42),
+                    provenance: None,
                     previous: None,
                 }
             ),
@@ -276,7 +349,7 @@ fn startup_reconciliation_database_phase_matrix_is_exact() {
         assert_eq!(fresh_database_expectation(&record), expected, "{phase:?}");
         for ownership in ownerships {
             assert_eq!(
-                database_evidence_compatible(&record, &candidate_evidence(ownership)),
+                database_ownership_evidence_compatible(&record, &candidate_evidence(ownership)),
                 expectation_accepts(expected, ownership),
                 "{phase:?} {ownership:?}"
             );
@@ -311,6 +384,7 @@ fn startup_reconciliation_database_phase_matrix_is_exact() {
         let evidence = DatabaseEvidence::CandidateOwnership {
             state: state::Id::from(42),
             ownership: db::state::TransitionOwnership::Matching,
+            provenance: Some(startup_metadata_provenance()),
             previous: Some(ExistingStateEvidence {
                 state: state::Id::from(41),
                 ownership,
@@ -341,6 +415,7 @@ fn startup_reconciliation_matching_allocation_behind_journal_is_retained() {
         evidence,
         DatabaseEvidence::AllocationCommittedBehindJournal {
             state: candidate.id,
+            provenance: None,
             previous: Some(ExistingStateEvidence {
                 state: previous.id,
                 ownership: db::state::TransitionOwnership::Cleared,
@@ -400,6 +475,171 @@ fn startup_reconciliation_inconsistent_database_audit_is_blocked() {
                 ..
             }
         } if *state == candidate.id
+    ));
+    assert!(
+        pending
+            .blockers()
+            .contains(&RecoveryBlocker::DatabaseChangedDuringInspection)
+    );
+}
+
+#[test]
+fn startup_reconciliation_metadata_provenance_phase_matrix_is_fail_closed_and_sandwiched() {
+    let exact = Some(startup_metadata_provenance());
+    let evidence = |provenance| DatabaseEvidence::CandidateOwnership {
+        state: state::Id::from(42),
+        ownership: db::state::TransitionOwnership::Matching,
+        provenance,
+        previous: None,
+    };
+    let assert_admission = |record: &TransitionRecord, absent_allowed, present_allowed| {
+        assert_eq!(
+            metadata_provenance_evidence_compatible(record, &evidence(None)),
+            absent_allowed,
+            "absent provenance at {:?}",
+            record.phase
+        );
+        assert_eq!(
+            metadata_provenance_evidence_compatible(record, &evidence(exact)),
+            present_allowed,
+            "present provenance at {:?}",
+            record.phase
+        );
+    };
+
+    for (phase, source, absent_allowed, present_allowed) in PROVENANCE_PHASE_CASES {
+        let record = record_at(phase);
+        assert_admission(&record, absent_allowed, present_allowed);
+
+        for action in [RollbackAction::Pending, RollbackAction::NotRequired] {
+            let mut rollback = rollback_record(Phase::RollbackDecided, action);
+            rollback.rollback.as_mut().unwrap().source = source;
+            assert_admission(&rollback, absent_allowed, present_allowed);
+        }
+        for action in [RollbackAction::Applied, RollbackAction::AlreadySatisfied] {
+            let mut rollback = rollback_record(Phase::RollbackDecided, action);
+            rollback.rollback.as_mut().unwrap().source = source;
+            assert_admission(&rollback, true, false);
+        }
+    }
+
+    let mut active_reblit = record_at(Phase::Preparing);
+    active_reblit.operation = Operation::ActiveReblit;
+    let candidate = ExistingStateEvidence {
+        state: state::Id::from(42),
+        ownership: db::state::TransitionOwnership::Cleared,
+    };
+    assert!(!metadata_provenance_evidence_compatible(
+        &active_reblit,
+        &DatabaseEvidence::ExistingCandidate {
+            candidate,
+            provenance: None,
+            previous: None,
+        }
+    ));
+    assert!(metadata_provenance_evidence_compatible(
+        &active_reblit,
+        &DatabaseEvidence::ExistingCandidate {
+            candidate,
+            provenance: exact,
+            previous: None,
+        }
+    ));
+
+    let mut allocation_behind = record_at(Phase::FreshStateAllocating);
+    allocation_behind.candidate.id = None;
+    assert!(!metadata_provenance_evidence_compatible(
+        &allocation_behind,
+        &DatabaseEvidence::AllocationCommittedBehindJournal {
+            state: state::Id::from(42),
+            provenance: exact,
+            previous: None,
+        }
+    ));
+    assert!(!metadata_provenance_evidence_compatible(
+        &record_at(Phase::CandidatePrepareStarted),
+        &DatabaseEvidence::CandidateOwnership {
+            state: state::Id::from(42),
+            ownership: db::state::TransitionOwnership::Missing,
+            provenance: exact,
+            previous: None,
+        }
+    ));
+
+    let legacy_temporary = private_installation_tempdir();
+    let legacy_installation = Installation::open(legacy_temporary.path(), None).unwrap();
+    let legacy_database =
+        db::state::Database::new(legacy_installation.db_path("legacy-provenance").to_str().unwrap()).unwrap();
+    let legacy_candidate = legacy_database
+        .add_with_transition(&transition_id(), &[], Some("legacy candidate"), None)
+        .unwrap();
+    let mut legacy_record = record_at(Phase::CandidatePrepared);
+    legacy_record.candidate.id = Some(legacy_candidate.id.into());
+    legacy_record.creation_epoch = RuntimeEpoch::capture().unwrap();
+    let legacy_journal =
+        TransitionJournalStore::open_retained(legacy_installation.root_directory(), &legacy_installation.root).unwrap();
+    let legacy_audit = legacy_database.audit_in_flight_transition().unwrap();
+    let legacy_pending = PendingSystemTransition::inspect(
+        &legacy_installation,
+        &legacy_database,
+        legacy_journal,
+        legacy_record,
+        legacy_audit,
+    )
+    .unwrap();
+    assert!(matches!(
+        legacy_pending.database_evidence(),
+        DatabaseEvidence::CandidateOwnership { provenance: None, .. }
+    ));
+    assert!(
+        legacy_pending
+            .blockers()
+            .contains(&RecoveryBlocker::MetadataProvenanceConflict)
+    );
+    assert!(
+        !legacy_pending
+            .blockers()
+            .contains(&RecoveryBlocker::DatabaseChangedDuringInspection)
+    );
+
+    let temporary = private_installation_tempdir();
+    let installation = Installation::open(temporary.path(), None).unwrap();
+    let database = db::state::Database::new(installation.db_path("startup-provenance").to_str().unwrap()).unwrap();
+    let candidate = database
+        .add_with_transition(&transition_id(), &[], Some("startup provenance candidate"), None)
+        .unwrap();
+    database
+        .insert_fresh_metadata_provenance_if_transition_matches(
+            candidate.id,
+            &transition_id(),
+            &startup_metadata_provenance(),
+        )
+        .unwrap();
+    let mut record = record_at(Phase::CandidatePrepared);
+    record.candidate.id = Some(candidate.id.into());
+    record.creation_epoch = RuntimeEpoch::capture().unwrap();
+    let journal = TransitionJournalStore::open_retained(installation.root_directory(), &installation.root).unwrap();
+    let initial_audit = database.audit_in_flight_transition().unwrap();
+    let mutation_database = database.clone();
+    arm_between_database_inspections(move || {
+        mutation_database
+            .delete_metadata_provenance_for_test(candidate.id)
+            .unwrap();
+    });
+
+    let pending = PendingSystemTransition::inspect(&installation, &database, journal, record, initial_audit).unwrap();
+    assert!(matches!(
+        pending.database_evidence(),
+        DatabaseEvidence::CandidateOwnership {
+            provenance: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        pending.database_stability(),
+        DatabaseInspectionStability::Changed {
+            after: DatabaseEvidence::CandidateOwnership { provenance: None, .. }
+        }
     ));
     assert!(
         pending

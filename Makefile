@@ -215,7 +215,16 @@ forge-transition-identity-test:
 	else \
 		status="$$?"; timeout 10s test "$$status" = 1; \
 	fi; \
-	timeout 10s grep -Fqx '    pub(crate) fn prove(self, os_release: &[u8]) -> Result<CandidateMetadataProof, CandidateMetadataError> {' "$$verification"; \
+	prove_signature="$$( timeout 10s sed -n '/pub(crate) fn prove(/,/) -> Result<CandidateMetadataProof, CandidateMetadataError> {/p' "$$verification" )"; \
+	timeout 10s test -n "$$prove_signature"; \
+	for required in 'pub(crate) fn prove(' 'outputs: CandidateMetadataOutputs' 'Result<CandidateMetadataProof, CandidateMetadataError>'; do \
+		timeout 10s grep -Fq "$$required" <<<"$$prove_signature"; \
+	done; \
+	if timeout 10s grep -Eq 'os_release|system_model|&\[u8\]' <<<"$$prove_signature"; then \
+		timeout 10s printf '%s\n' 'existing metadata verifier accepts untyped caller-supplied output buffers' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	if timeout 10s grep -RInF 'CandidateMetadataVerification' crates/forge/src/client; then \
 		timeout 10s printf '%s\n' 'client bypasses coordinator-owned existing metadata verification' >&2; exit 1; \
 	else \
@@ -430,7 +439,7 @@ forge-stateful-candidate-metadata-test:
 		client::tests::stateful_candidate_metadata::owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution \
 		client::tests::stateful_candidate_metadata::candidate_usr_substitution_before_metadata_never_decorates_replacement \
 		client::tests::stateful_candidate_metadata::successful_stateful_metadata_is_sealed_and_rollback_capable; do \
-		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 

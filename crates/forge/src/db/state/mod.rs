@@ -15,7 +15,6 @@ use crate::state::{self, Id, Selection, TransitionId};
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/state/migrations");
 
 mod exact_archived_removal;
-#[allow(dead_code)] // durable substrate; coordinator integration follows in a separate slice
 mod metadata_provenance;
 #[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
 mod read_only;
@@ -24,8 +23,12 @@ mod schema;
 pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
 #[cfg(test)]
 use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
-#[allow(unused_imports)] // durable substrate; coordinator integration follows in a separate slice
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
+#[cfg(test)]
+pub(crate) use metadata_provenance::{
+    MetadataProvenanceFaultPoint, MetadataProvenancePersistenceOutcome, arm_metadata_provenance_fault,
+    assert_metadata_provenance_fault_consumed,
+};
 #[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
 pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyStateError};
 

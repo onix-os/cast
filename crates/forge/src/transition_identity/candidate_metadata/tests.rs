@@ -34,9 +34,9 @@ fn same_candidate_proof_accepts_exact_inode_and_rejects_same_layout_foreign_cand
     create_candidate_root(&foreign_path);
 
     let exact = File::open(&exact_path).unwrap();
-    let proof = CandidateMetadataPublication::begin(&exact, &exact_path, SNAPSHOT)
+    let proof = CandidateMetadataPublication::begin(&exact, &exact_path)
         .unwrap()
-        .publish(RELEASE)
+        .publish(CandidateMetadataOutputs::from_policy(RELEASE, SNAPSHOT).unwrap())
         .unwrap();
     mirror_logical_metadata(&foreign_path);
     assert_eq!(logical_layout(&exact_path), logical_layout(&foreign_path));
@@ -66,9 +66,11 @@ fn existing_metadata_verification_proves_independent_bytes_without_mutation() {
     let before = retained_evidence(&candidate_path);
 
     let candidate = File::open(&candidate_path).unwrap();
-    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
+    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path).unwrap();
     assert_eq!(verification.read_optional_os_info().unwrap(), None);
-    let proof = verification.prove(RELEASE).unwrap();
+    let proof = verification
+        .prove(CandidateMetadataOutputs::from_policy(RELEASE, SNAPSHOT).unwrap())
+        .unwrap();
     proof.require_same_candidate(&candidate, &candidate_path).unwrap();
 
     assert_eq!(retained_evidence(&candidate_path), before);
@@ -85,8 +87,10 @@ fn existing_metadata_verification_rejects_wrong_independent_bytes_without_mutati
     wrong_release[0] = b'X';
 
     let candidate = File::open(&candidate_path).unwrap();
-    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
-    let error = verification.prove(&wrong_release).unwrap_err();
+    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path).unwrap();
+    let error = verification
+        .prove(CandidateMetadataOutputs::from_policy(wrong_release, SNAPSHOT).unwrap())
+        .unwrap_err();
 
     assert!(matches!(error, CandidateMetadataError::FileChanged { .. }));
     assert_eq!(retained_evidence(&candidate_path), before);
@@ -111,8 +115,10 @@ fn existing_metadata_verification_rejects_same_byte_release_replacement_during_p
     });
 
     let candidate = File::open(&candidate_path).unwrap();
-    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
-    let error = verification.prove(RELEASE).unwrap_err();
+    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path).unwrap();
+    let error = verification
+        .prove(CandidateMetadataOutputs::from_policy(RELEASE, SNAPSHOT).unwrap())
+        .unwrap_err();
 
     assert!(matches!(error, CandidateMetadataError::FileChanged { .. }));
     let parked = fs::symlink_metadata(&parked_release).unwrap();
@@ -148,8 +154,10 @@ fn existing_metadata_verification_rejects_unsafe_canonical_outputs_without_repai
         let before = fs::symlink_metadata(&canonical_release).unwrap();
 
         let candidate = File::open(&candidate_path).unwrap();
-        let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
-        let error = verification.prove(RELEASE).unwrap_err();
+        let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path).unwrap();
+        let error = verification
+            .prove(CandidateMetadataOutputs::from_policy(RELEASE, SNAPSHOT).unwrap())
+            .unwrap_err();
 
         assert!(matches!(error, CandidateMetadataError::FileChanged { .. }));
         let after = fs::symlink_metadata(&canonical_release).unwrap();

@@ -39,22 +39,20 @@ pub(crate) struct CandidateMetadataVerification {
     usr: File,
     usr_path: PathBuf,
     lib: RetainedDirectory,
-    snapshot_bytes: Vec<u8>,
 }
 
 impl CandidateMetadataVerification {
-    /// Retain the exact candidate first, bind the independent expected
-    /// snapshot, and open an already-existing `usr/lib` without repair.
-    pub(crate) fn begin(usr: &File, usr_path: &Path, snapshot: &[u8]) -> Result<Self, CandidateMetadataError> {
+    /// Retain the exact candidate and policy input namespace before either
+    /// independent expected output is derived, then open an already-existing
+    /// `usr/lib` without repair.
+    pub(crate) fn begin(usr: &File, usr_path: &Path) -> Result<Self, CandidateMetadataError> {
         let usr = clone_candidate_usr(usr, usr_path)?;
-        let snapshot_bytes = bounded_output("system-model.glu", snapshot)?.to_vec();
         let lib = RetainedDirectory::open(&usr, LIB_NAME, usr_path.join("lib"))?;
         lib.require_named(&usr, LIB_NAME)?;
         Ok(Self {
             usr,
             usr_path: usr_path.to_owned(),
             lib,
-            snapshot_bytes,
         })
     }
 
@@ -66,14 +64,15 @@ impl CandidateMetadataVerification {
 
     /// Prove both existing canonical names against independent expected bytes
     /// and return the same descriptor-owning proof used after publication.
-    pub(crate) fn prove(self, os_release: &[u8]) -> Result<CandidateMetadataProof, CandidateMetadataError> {
-        let release_bytes = bounded_output("os-release", os_release)?.to_vec();
-        let Self {
-            usr,
-            usr_path,
-            lib,
-            snapshot_bytes,
-        } = self;
+    pub(crate) fn prove(
+        self,
+        outputs: CandidateMetadataOutputs,
+    ) -> Result<CandidateMetadataProof, CandidateMetadataError> {
+        let CandidateMetadataOutputs {
+            os_release: release_bytes,
+            system_model: snapshot_bytes,
+        } = outputs;
+        let Self { usr, usr_path, lib } = self;
 
         lib.require_named(&usr, LIB_NAME)?;
         let release = retain_existing_published(&lib, OS_RELEASE_NAME, &release_bytes, &lib.path.join("os-release"))?;
