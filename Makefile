@@ -885,7 +885,7 @@ help:
 	@echo "  forge-installation-test  Run all direct installation policy and filesystem tests"
 	@echo "  forge-mutable-startup-namespace-test  Run retained mutable startup namespace substitution tests"
 	@timeout 10s echo "  forge-candidate-pre-journal-durability-test  Run candidate durability, marker-link, and namespace tests"
-	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through /usr exchange intent"
+	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through /usr exchange completion"
 	@timeout 10s echo "  forge-transition-recovery-classifier-test  Run persisted-phase startup recovery direction tests"
 	@timeout 10s echo "  forge-startup-reconciliation-test  Run read-only startup recovery assessment tests"
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"

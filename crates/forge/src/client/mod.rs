@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! The core client implementation for Cast's package manager
 //!
 //! A [`Client`] needs to be constructed to handle the initialisation of various
@@ -102,6 +99,7 @@ mod external_materialization;
 mod fetch;
 mod fixed_staging;
 mod install;
+mod journal_usr_exchange_authority;
 #[cfg(test)]
 mod mutable_startup_namespace_tests;
 mod postblit;
@@ -116,6 +114,12 @@ mod startup_reconciliation;
 mod sync;
 mod transaction_root;
 mod verify;
+
+#[allow(unused_imports)] // contract-only until the journal coordinator is live-wired
+pub(crate) use journal_usr_exchange_authority::{
+    AppliedJournalUsrExchangeAuthority, JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityError,
+    JournalUsrExchangeAuthorityPreflight, JournalUsrExchangePreparationSeal,
+};
 
 pub mod extract;
 pub mod index;

@@ -1,6 +1,46 @@
 use super::candidate_state_authority::CandidateStatePreparation;
 use super::*;
 
+#[derive(Clone, Copy)]
+enum ExchangeJournalGuard<'authority> {
+    LegacyNoJournal,
+    Coordinator(&'authority journal_coordinator::UsrExchangeEffectSeal),
+}
+
+impl ExchangeJournalGuard<'_> {
+    fn require(self, identity: &StatefulTreeIdentity) -> Result<(), Error> {
+        match self {
+            Self::LegacyNoJournal => identity.require_no_journal(),
+            Self::Coordinator(seal) => {
+                let _seal = seal;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum JournalAcquisition<'authority> {
+    LegacyBlocking,
+    CoordinatorNonblocking(&'authority crate::client::JournalUsrExchangePreparationSeal),
+}
+
+impl JournalAcquisition<'_> {
+    fn open(
+        self,
+        cast: &std::fs::File,
+        root: &Path,
+    ) -> Result<TransitionJournalStore, crate::transition_journal::StorageError> {
+        match self {
+            Self::LegacyBlocking => TransitionJournalStore::open_in_retained_cast(cast, root),
+            Self::CoordinatorNonblocking(seal) => {
+                let _seal = seal;
+                TransitionJournalStore::try_open_in_retained_cast(cast, root)
+            }
+        }
+    }
+}
+
 impl StatefulTreeIdentity {
     /// Exact candidate `/usr` capability retained before metadata decoration.
     ///
@@ -27,6 +67,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::ExistingId(candidate_state),
+            JournalAcquisition::LegacyBlocking,
         )
     }
 
@@ -46,6 +87,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::UnknownIdAbsent,
+            JournalAcquisition::LegacyBlocking,
         )
     }
 
@@ -66,6 +108,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             None,
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
+            JournalAcquisition::LegacyBlocking,
         )
     }
 
@@ -85,6 +128,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::ExistingId(candidate_state),
+            JournalAcquisition::LegacyBlocking,
         )
     }
 
@@ -102,6 +146,7 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::UnknownIdAbsent,
+            JournalAcquisition::LegacyBlocking,
         )
     }
 
@@ -121,6 +166,64 @@ impl StatefulTreeIdentity {
             candidate_path,
             Some(candidate_usr),
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
+            JournalAcquisition::LegacyBlocking,
+        )
+    }
+
+    /// Coordinator-only archived-candidate preparation.  Writer authority is
+    /// already held, so journal acquisition must fail rather than wait if a
+    /// contender wins the handoff gap.
+    pub(crate) fn prepare_usr_exchange_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+        candidate_state: state::Id,
+        seal: &crate::client::JournalUsrExchangePreparationSeal,
+    ) -> Result<Self, Error> {
+        Self::prepare_candidate(
+            installation,
+            state_db,
+            candidate_path,
+            None,
+            CandidateStatePreparation::ExistingId(candidate_state),
+            JournalAcquisition::CoordinatorNonblocking(seal),
+        )
+    }
+
+    /// Coordinator-only fresh-state preparation with nonblocking journal
+    /// acquisition under writer-first authority.
+    pub(crate) fn prepare_usr_exchange_unallocated_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+        seal: &crate::client::JournalUsrExchangePreparationSeal,
+    ) -> Result<Self, Error> {
+        Self::prepare_candidate(
+            installation,
+            state_db,
+            candidate_path,
+            None,
+            CandidateStatePreparation::UnknownIdAbsent,
+            JournalAcquisition::CoordinatorNonblocking(seal),
+        )
+    }
+
+    /// Coordinator-only active-reblit preparation with nonblocking journal
+    /// acquisition under writer-first authority.
+    pub(crate) fn prepare_usr_exchange_active_reblit_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+        candidate_state: state::Id,
+        seal: &crate::client::JournalUsrExchangePreparationSeal,
+    ) -> Result<Self, Error> {
+        Self::prepare_candidate(
+            installation,
+            state_db,
+            candidate_path,
+            None,
+            CandidateStatePreparation::KnownIdAbsent(candidate_state),
+            JournalAcquisition::CoordinatorNonblocking(seal),
         )
     }
 
@@ -130,6 +233,7 @@ impl StatefulTreeIdentity {
         candidate_path: &Path,
         retained_candidate_usr: Option<&std::fs::File>,
         candidate_state: CandidateStatePreparation,
+        journal_acquisition: JournalAcquisition<'_>,
     ) -> Result<Self, Error> {
         let root = &installation.root;
         let previous_path = root.join("usr");
@@ -139,7 +243,7 @@ impl StatefulTreeIdentity {
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
         after_candidate_mutable_namespace_preflight();
-        let journal = TransitionJournalStore::open_in_retained_cast(cast, root);
+        let journal = journal_acquisition.open(cast, root);
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         let journal = journal?;
@@ -272,7 +376,12 @@ impl StatefulTreeIdentity {
     /// previous tree beneath retained parent descriptors.
     #[cfg(test)]
     pub(crate) fn exchange_forward(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward, &|| Ok(()))
+        self.exchange_live_and_staged(
+            installation,
+            RetainedExchangeDirection::Forward,
+            ExchangeJournalGuard::LegacyNoJournal,
+            &|| Ok(()),
+        )
     }
 
     /// Forward exchange with one final read-only validation executed inside
@@ -282,13 +391,40 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         validate: &impl Fn() -> Result<(), Error>,
     ) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Forward, validate)
+        self.exchange_live_and_staged(
+            installation,
+            RetainedExchangeDirection::Forward,
+            ExchangeJournalGuard::LegacyNoJournal,
+            validate,
+        )
+    }
+
+    /// Coordinator-only forward exchange.  The seal proves that the caller
+    /// owns the exact durable `UsrExchangeIntent`; every legacy entry point
+    /// continues to require journal absence.
+    pub(super) fn exchange_forward_with_journal(
+        &self,
+        installation: &Installation,
+        seal: &journal_coordinator::UsrExchangeEffectSeal,
+        validate: &impl Fn() -> Result<(), Error>,
+    ) -> Result<(), RetainedExchangeFailure> {
+        self.exchange_live_and_staged(
+            installation,
+            RetainedExchangeDirection::Forward,
+            ExchangeJournalGuard::Coordinator(seal),
+            validate,
+        )
     }
 
     /// Reverse an earlier forward exchange through the same retained
     /// capability namespace.
     pub(crate) fn exchange_reverse(&self, installation: &Installation) -> Result<(), RetainedExchangeFailure> {
-        self.exchange_live_and_staged(installation, RetainedExchangeDirection::Reverse, &|| Ok(()))
+        self.exchange_live_and_staged(
+            installation,
+            RetainedExchangeDirection::Reverse,
+            ExchangeJournalGuard::LegacyNoJournal,
+            &|| Ok(()),
+        )
     }
 
     /// Finish durability after a reverse exchange which is already proven to
@@ -298,7 +434,7 @@ impl StatefulTreeIdentity {
     /// an applied-but-not-yet-durable result would put the failed candidate
     /// back in the live namespace.
     pub(crate) fn finish_applied_reverse(&self, installation: &Installation) -> Result<(), Error> {
-        self.require_no_journal()?;
+        ExchangeJournalGuard::LegacyNoJournal.require(self)?;
         installation.revalidate_root_directory()?;
         let staging = self.open_exchange_staging(installation)?;
         staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
@@ -308,13 +444,19 @@ impl StatefulTreeIdentity {
             &staging,
             RetainedExchangeDirection::Reverse.after(),
         )?;
-        self.finish_exchange(installation, &staging, RetainedExchangeDirection::Reverse.after())
+        self.finish_exchange(
+            installation,
+            &staging,
+            RetainedExchangeDirection::Reverse.after(),
+            ExchangeJournalGuard::LegacyNoJournal,
+        )
     }
 
     fn exchange_live_and_staged(
         &self,
         installation: &Installation,
         direction: RetainedExchangeDirection,
+        journal: ExchangeJournalGuard<'_>,
         validate: &impl Fn() -> Result<(), Error>,
     ) -> Result<(), RetainedExchangeFailure> {
         let not_applied = |source| RetainedExchangeFailure {
@@ -330,7 +472,7 @@ impl StatefulTreeIdentity {
             source,
         };
 
-        self.require_no_journal().map_err(not_applied)?;
+        journal.require(self).map_err(not_applied)?;
         installation
             .revalidate_root_directory()
             .map_err(Error::from)
@@ -350,7 +492,7 @@ impl StatefulTreeIdentity {
         .map_err(not_applied)?;
 
         before_retained_exchange_rename();
-        self.require_no_journal().map_err(not_applied)?;
+        journal.require(self).map_err(not_applied)?;
         installation
             .revalidate_root_directory()
             .map_err(Error::from)
@@ -371,14 +513,49 @@ impl StatefulTreeIdentity {
         // Never retry this syscall: an EINTR or injected error may describe an
         // exchange which the kernel already completed.  Both retained parent
         // namespaces are reconciled below before the result is interpreted.
-        let syscall_result = renameat2_exchange_once(
-            &staging.file,
-            LIVE_USR_NAME,
-            installation.root_directory(),
-            LIVE_USR_NAME,
-        )
-        .map_err(|source| retained_exchange_io("exchange staged and live /usr", &installation.root.join("usr"), source))
-        .and_then(|()| retained_exchange_checkpoint(RetainedExchangeFaultPoint::AfterRename));
+        #[cfg(test)]
+        let injected = begin_retained_exchange_syscall_attempt();
+        #[cfg(not(test))]
+        let _injected = begin_retained_exchange_syscall_attempt();
+        #[cfg(test)]
+        let apply = !matches!(
+            injected,
+            Some(RetainedExchangeSyscallFault::ErrorWithoutApply | RetainedExchangeSyscallFault::SuccessWithoutApply)
+        );
+        #[cfg(not(test))]
+        let apply = true;
+        let kernel_result = apply.then(|| {
+            renameat2_exchange_once(
+                &staging.file,
+                LIVE_USR_NAME,
+                installation.root_directory(),
+                LIVE_USR_NAME,
+            )
+            .map_err(|source| {
+                retained_exchange_io("exchange staged and live /usr", &installation.root.join("usr"), source)
+            })
+        });
+        #[cfg(test)]
+        let syscall_result = match (injected, kernel_result) {
+            (Some(RetainedExchangeSyscallFault::ErrorWithoutApply), None) => Err(retained_exchange_io(
+                "injected /usr exchange error without application",
+                &installation.root.join("usr"),
+                io::Error::from_raw_os_error(nix::libc::EIO),
+            )),
+            (Some(RetainedExchangeSyscallFault::SuccessWithoutApply), None) => Ok(()),
+            (Some(RetainedExchangeSyscallFault::ErrorAfterApply), Some(Ok(()))) => Err(retained_exchange_io(
+                "injected /usr exchange error after application",
+                &installation.root.join("usr"),
+                io::Error::from_raw_os_error(nix::libc::EINTR),
+            )),
+            (_, Some(result)) => result,
+            _ => unreachable!("test exchange injection has a complete result matrix"),
+        };
+        #[cfg(not(test))]
+        let syscall_result = kernel_result.expect("production always invokes the one-shot exchange");
+        after_retained_exchange_rename();
+        let syscall_result =
+            syscall_result.and_then(|()| retained_exchange_checkpoint(RetainedExchangeFaultPoint::AfterRename));
 
         let observed = self
             .exchange_layout(installation.root_directory(), &installation.root, &staging)
@@ -403,7 +580,7 @@ impl StatefulTreeIdentity {
         // Once both exact trees prove the post-exchange layout, a raw syscall
         // error is merely an error-after-apply report.  Complete durability
         // through both retained parents instead of exchanging a second time.
-        self.finish_exchange(installation, &staging, direction.after())
+        self.finish_exchange(installation, &staging, direction.after(), journal)
             .map_err(applied)
     }
 
@@ -430,6 +607,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         staging: &RetainedDirectory,
         expected: RetainedExchangeLayout,
+        journal: ExchangeJournalGuard<'_>,
     ) -> Result<(), Error> {
         retained_exchange_checkpoint(RetainedExchangeFaultPoint::StagingParentSync)?;
         staging.sync("sync retained staging parent after /usr exchange")?;
@@ -442,7 +620,7 @@ impl StatefulTreeIdentity {
             )
         })?;
         retained_exchange_checkpoint(RetainedExchangeFaultPoint::FinalRevalidation)?;
-        self.require_no_journal()?;
+        journal.require(self)?;
         installation.revalidate_root_directory()?;
         staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
         self.require_exchange_layout(installation.root_directory(), &installation.root, staging, expected)

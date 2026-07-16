@@ -247,6 +247,14 @@ fn temporary_name() -> CString {
 }
 
 fn open_and_lock(directory: &std::fs::File, path: &Path) -> Result<std::fs::File, StorageError> {
+    open_and_lock_with_wait(directory, path, true)
+}
+
+fn try_open_and_lock(directory: &std::fs::File, path: &Path) -> Result<std::fs::File, StorageError> {
+    open_and_lock_with_wait(directory, path, false)
+}
+
+fn open_and_lock_with_wait(directory: &std::fs::File, path: &Path, wait: bool) -> Result<std::fs::File, StorageError> {
     let create_flags = nix::libc::O_RDWR
         | nix::libc::O_CLOEXEC
         | nix::libc::O_NOFOLLOW
@@ -303,7 +311,7 @@ fn open_and_lock(directory: &std::fs::File, path: &Path) -> Result<std::fs::File
     };
     require_safe_regular_file(&file, &path.join("state-transition.lock"))
         .map_err(|source| StorageError::ValidateLock { source })?;
-    flock_exclusive(&file).map_err(|source| StorageError::AcquireLock { source })?;
+    flock_exclusive(&file, wait).map_err(|source| StorageError::AcquireLock { source })?;
 
     let named = openat2_file(
         directory.as_raw_fd(),
@@ -350,14 +358,22 @@ fn recoverable_private_lock_mode(file: &std::fs::File, path: &Path) -> io::Resul
     Ok(mode)
 }
 
-fn flock_exclusive(file: &std::fs::File) -> io::Result<()> {
+fn flock_exclusive(file: &std::fs::File, wait: bool) -> io::Result<()> {
     loop {
+        let operation = if wait {
+            nix::libc::LOCK_EX
+        } else {
+            nix::libc::LOCK_EX | nix::libc::LOCK_NB
+        };
         // SAFETY: flock operates on the live lock-file descriptor.
-        if unsafe { nix::libc::flock(file.as_raw_fd(), nix::libc::LOCK_EX) } == 0 {
+        if unsafe { nix::libc::flock(file.as_raw_fd(), operation) } == 0 {
             return Ok(());
         }
         let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
+        // A nonblocking inspection must remain finitely nonwaiting even under
+        // repeated signal delivery.  Its caller can restart the complete,
+        // writer-first proof instead of spinning inside this lock attempt.
+        if source.kind() != io::ErrorKind::Interrupted || !wait {
             return Err(source);
         }
     }

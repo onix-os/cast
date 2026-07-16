@@ -40,6 +40,7 @@ mod candidate_quarantine;
 mod candidate_state_authority;
 mod error;
 mod fault_injection;
+mod journal_active_reblit;
 #[allow(dead_code)] // contract-only until startup reconciliation can consume its records
 mod journal_coordinator;
 mod namespace_helpers;
@@ -69,9 +70,10 @@ pub(crate) use candidate_metadata::{
 };
 pub(crate) use error::Error;
 use fault_injection::{
-    before_live_usr_mkdir, before_previous_archive_slot_reopen, before_previous_slot_retirement_rename,
-    before_quarantine_slot_reopen, before_retained_exchange_rename, before_retained_previous_move_rename,
-    quarantine_checkpoint, retained_exchange_checkpoint, retained_previous_move_checkpoint,
+    after_retained_exchange_rename, before_live_usr_mkdir, before_previous_archive_slot_reopen,
+    before_previous_slot_retirement_rename, before_quarantine_slot_reopen, before_retained_exchange_rename,
+    before_retained_previous_move_rename, begin_retained_exchange_syscall_attempt, quarantine_checkpoint,
+    retained_exchange_checkpoint, retained_previous_move_checkpoint,
 };
 #[allow(unused_imports)] // contract-only surface for the later live coordinator integration
 pub(crate) use journal_coordinator::{
@@ -122,11 +124,13 @@ pub(crate) use archived_state_repair::{
     arm_between_archived_state_repair_layout_reads,
 };
 #[cfg(test)]
+#[allow(unused_imports)] // focused descendant tests import this private fault surface
 pub(crate) use fault_injection::{
-    arm_before_live_usr_mkdir, arm_before_previous_archive_slot_reopen, arm_before_previous_slot_retirement_rename,
-    arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename, arm_before_retained_previous_move_rename,
-    arm_quarantine_fault, arm_quarantine_faults, arm_retained_exchange_fault, arm_retained_previous_move_fault,
-    arm_retained_previous_move_faults,
+    arm_after_retained_exchange_rename, arm_before_live_usr_mkdir, arm_before_previous_archive_slot_reopen,
+    arm_before_previous_slot_retirement_rename, arm_before_quarantine_slot_reopen, arm_before_retained_exchange_rename,
+    arm_before_retained_previous_move_rename, arm_quarantine_fault, arm_quarantine_faults, arm_retained_exchange_fault,
+    arm_retained_exchange_syscall_fault, arm_retained_previous_move_fault, arm_retained_previous_move_faults,
+    reset_retained_exchange_syscall_count, retained_exchange_syscall_count,
 };
 #[cfg(test)]
 pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;
@@ -244,6 +248,14 @@ pub(crate) enum RetainedExchangeFaultPoint {
     StagingParentSync,
     InstallationRootSync,
     FinalRevalidation,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RetainedExchangeSyscallFault {
+    ErrorWithoutApply,
+    ErrorAfterApply,
+    SuccessWithoutApply,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -452,7 +464,12 @@ std::thread_local! {
         const { std::cell::RefCell::new(None) };
     static RETAINED_EXCHANGE_FAULT: std::cell::RefCell<Option<RetainedExchangeFaultPoint>> =
         const { std::cell::RefCell::new(None) };
+    static RETAINED_EXCHANGE_SYSCALL_FAULT: std::cell::Cell<Option<RetainedExchangeSyscallFault>> =
+        const { std::cell::Cell::new(None) };
+    static RETAINED_EXCHANGE_SYSCALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BEFORE_RETAINED_EXCHANGE_RENAME: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_RETAINED_EXCHANGE_RENAME: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static RETAINED_PREVIOUS_MOVE_FAULT: std::cell::RefCell<Vec<RetainedPreviousMoveFaultPoint>> =
         const { std::cell::RefCell::new(Vec::new()) };

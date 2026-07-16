@@ -10,8 +10,8 @@ use super::{
     CANONICAL_NAME, DirectoryPolicy, InodeIdentity, JOURNAL_FILE_MODE, MAX_STALE_TEMPORARIES, Phase, StorageError,
     TransitionRecord, controlled_resolution, decode, directory_entries, encode, ensure_journal_directory,
     inode_identity, open_and_lock, open_directory_path, open_existing_directory, openat2_file, read_bounded, renameat2,
-    require_safe_regular_file, require_safe_stale_temporary, require_same_inode, temporary_name, unlinkat,
-    valid_temporary_name, validation::validate_advance,
+    require_safe_regular_file, require_safe_stale_temporary, require_same_inode, temporary_name, try_open_and_lock,
+    unlinkat, valid_temporary_name, validation::validate_advance,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,7 +142,21 @@ impl TransitionJournalStore {
                 source,
             },
         )?;
-        Self::open_from_cast(&cast, cast_path)
+        Self::open_from_cast(&cast, cast_path, true)
+    }
+
+    /// Nonblocking pre-journal inspection under the canonical writer-first
+    /// lock order.  A held journal lock is returned as `AcquireLock` rather
+    /// than waiting behind an owner which may itself need the writer lease.
+    pub(crate) fn try_open_in_retained_cast(cast_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let cast_path = root.join(".cast");
+        let cast = open_existing_directory(cast_directory, c".", &cast_path, DirectoryPolicy::Controlled).map_err(
+            |source| StorageError::OpenCastDirectory {
+                path: cast_path.clone(),
+                source,
+            },
+        )?;
+        Self::open_from_cast(&cast, cast_path, false)
     }
 
     fn open_from_root(root_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
@@ -153,16 +167,20 @@ impl TransitionJournalStore {
                 source,
             },
         )?;
-        Self::open_from_cast(&cast, cast_path)
+        Self::open_from_cast(&cast, cast_path, true)
     }
 
-    fn open_from_cast(cast: &std::fs::File, cast_path: PathBuf) -> Result<Self, StorageError> {
+    fn open_from_cast(cast: &std::fs::File, cast_path: PathBuf, wait: bool) -> Result<Self, StorageError> {
         let path = cast_path.join("journal");
         let directory = ensure_journal_directory(cast, &path).map_err(|source| StorageError::OpenJournalDirectory {
             path: path.clone(),
             source,
         })?;
-        let lock = open_and_lock(&directory, &path)?;
+        let lock = if wait {
+            open_and_lock(&directory, &path)?
+        } else {
+            try_open_and_lock(&directory, &path)?
+        };
         let store = Self {
             directory,
             _lock: lock,

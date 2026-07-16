@@ -33,9 +33,9 @@ const BEGIN_USR_EXCHANGE_INTENT: &str = "begin /usr exchange intent";
 /// mutate either public `/usr` name.
 #[derive(Debug)]
 pub(crate) struct UsrExchangeIntentCoordinator {
-    coordinator: StatefulTransitionCoordinator,
-    metadata: CandidateMetadataProof,
-    provenance: db::state::MetadataProvenance,
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
 }
 
 /// Fail-stop result of publishing the `/usr` exchange intent.

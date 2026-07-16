@@ -12,6 +12,15 @@ use super::active_state_snapshot::{ActiveStateLease, ActiveStateSnapshot};
 /// Non-cloneable strict authority retained across one stateful operation.
 pub(super) struct ActiveStateAuthority(ActiveStateLease);
 
+/// Opaque continuation of the cooperating-writer lease after an intentional
+/// `/usr` exchange invalidates the old-live namespace proof.
+///
+/// This type deliberately exposes no revalidation or refresh operation.  It
+/// keeps the writer mutex held for the next coordinator phase without letting
+/// post-effect code accidentally treat the displaced live-tree proof as
+/// current authority.
+pub(super) struct AppliedActiveStateWriterAuthority(ActiveStateLease);
+
 /// Exact authority snapshot which can cross an async cache operation without
 /// retaining the process-local writer coordinator.
 pub(super) struct SuspendedActiveStateAuthority(ActiveStateSnapshot);
@@ -38,6 +47,17 @@ impl ActiveStateAuthority {
 
     pub(super) fn suspend(self, installation: &Installation) -> Result<SuspendedActiveStateAuthority, super::Error> {
         self.0.suspend(installation).map(SuspendedActiveStateAuthority)
+    }
+
+    pub(super) fn into_applied_writer_authority(self) -> AppliedActiveStateWriterAuthority {
+        AppliedActiveStateWriterAuthority(self.0)
+    }
+}
+
+impl std::fmt::Debug for AppliedActiveStateWriterAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _lease = &self.0;
+        formatter.write_str("AppliedActiveStateWriterAuthority")
     }
 }
 

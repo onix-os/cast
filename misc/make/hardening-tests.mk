@@ -118,7 +118,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 48; \
+	timeout 10s test "$$count" = 61; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -167,11 +167,26 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_revalidates_all_retained_evidence_before_advance \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_reseals_candidate_before_advance \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_faults_leave_exact_predecessor_or_intent \
-		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_failure_releases_journal_while_error_lives; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_intent_failure_releases_journal_while_error_lives \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_applies_once_for_every_operation_without_root_links \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_exchange_preserves_exact_two_link_slot_without_rotation_or_parking \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_slot_and_state_substitution_stop_before_exchange \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_raw_result_matrix_never_retries \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_reconciles_foreign_post_syscall_layout_as_ambiguous \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_repeats_full_proof_immediately_before_syscall \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_post_apply_metadata_substitution_is_fail_stop \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_post_apply_authority_failures_remain_at_intent \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_completion_faults_leave_intent_or_exchanged_after_one_call \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_authority_is_writer_first_and_never_waits_behind_journal \
+		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_synthesized_empty_exchange_applies_once_and_retains_empty_previous \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_identity_handoff_fails_bounded_when_contender_wins_journal_gap; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
 	usr_exchange_contract="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_intent.rs"; \
+	usr_exchange_effect="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_effect.rs"; \
+	usr_exchange_authority="crates/forge/src/client/journal_usr_exchange_authority.rs"; \
 	prepare_contract="crates/forge/src/transition_identity/journal_coordinator/candidate_preparation.rs"; \
 	coordinator_contract="crates/forge/src/transition_identity/journal_coordinator/mod.rs"; \
 	authority_contract="crates/forge/src/transition_identity/candidate_state_authority.rs"; \
@@ -250,9 +265,9 @@ forge-transition-journal-coordinator-test:
 	timeout 10s grep -Fqx 'pub(crate) struct UsrExchangeIntentCoordinator {' "$$usr_exchange_contract"; \
 	timeout 10s grep -Fqx 'pub(super) enum UsrExchangeIntentFailure {' "$$usr_exchange_contract"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) fn begin_usr_exchange_intent(' "$$usr_exchange_contract" )" = 2; \
-	timeout 10s grep -Fqx '    coordinator: StatefulTransitionCoordinator,' "$$usr_exchange_contract"; \
-	timeout 10s grep -Fqx '    metadata: CandidateMetadataProof,' "$$usr_exchange_contract"; \
-	timeout 10s grep -Fqx '    provenance: db::state::MetadataProvenance,' "$$usr_exchange_contract"; \
+	timeout 10s grep -Fqx '    pub(super) coordinator: StatefulTransitionCoordinator,' "$$usr_exchange_contract"; \
+	timeout 10s grep -Fqx '    pub(super) metadata: CandidateMetadataProof,' "$$usr_exchange_contract"; \
+	timeout 10s grep -Fqx '    pub(super) provenance: db::state::MetadataProvenance,' "$$usr_exchange_contract"; \
 	if timeout 10s grep -nF 'Option<CandidateMetadataProof>' "$$usr_exchange_contract"; then \
 		timeout 10s printf '%s\n' '/usr exchange-intent authority made its metadata proof optional' >&2; exit 1; \
 	else \
@@ -268,8 +283,47 @@ forge-transition-journal-coordinator-test:
 	else \
 		status="$$?"; timeout 10s test "$$status" = 1; \
 	fi; \
+	timeout 10s grep -Fqx 'mod usr_exchange_effect;' "$$coordinator_contract"; \
+	timeout 10s grep -Fqx 'pub(crate) struct UsrExchangedCoordinator {' "$$usr_exchange_effect"; \
+	timeout 10s grep -Fqx '    coordinator: StatefulTransitionCoordinator,' "$$usr_exchange_effect"; \
+	timeout 10s grep -Fqx '    metadata: CandidateMetadataProof,' "$$usr_exchange_effect"; \
+	timeout 10s grep -Fqx '    provenance: db::state::MetadataProvenance,' "$$usr_exchange_effect"; \
+	timeout 10s grep -Fqx '    authority: AppliedJournalUsrExchangeAuthority,' "$$usr_exchange_effect"; \
+	timeout 10s grep -Fqx '    pub(super) fn execute_usr_exchange(' "$$usr_exchange_effect"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.exchange_forward_with_journal(installation, &seal, &|| {' "$$usr_exchange_effect" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'renameat2_exchange_once(' "$$tree_lifecycle" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'ExchangeJournalGuard::LegacyNoJournal' "$$tree_lifecycle" )" -ge 4; \
+	if timeout 10s grep -nE 'Option<(CandidateMetadataProof|db::state::MetadataProvenance|AppliedJournalUsrExchangeAuthority|RootAbiPreflight)>' \
+		"$$usr_exchange_effect" "$$usr_exchange_authority"; then \
+		timeout 10s printf '%s\n' '/usr exchange completion made mandatory proof authority optional' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	if timeout 10s grep -nE 'renameat2|exchange_reverse|create_root_links|symlinkat|unlinkat|remove_(dir|file)' "$$usr_exchange_effect"; then \
+		timeout 10s printf '%s\n' 'coordinator exchange effect acquired retry, reverse, cleanup, or root-link primitives' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	effect_failure="$$( timeout 10s sed -n '/enum UsrExchangeEffectFailure/,/^}/p' "$$usr_exchange_effect" )"; \
+	if timeout 10s grep -E '^[[:space:]]*(coordinator|authority|metadata|provenance):' <<<"$$effect_failure"; then \
+		timeout 10s printf '%s\n' '/usr exchange failure retained a reusable coordinator or authority' >&2; exit 1; \
+	fi; \
+	timeout 10s grep -Fqx 'pub(crate) struct JournalUsrExchangeAuthorityPreflight {' "$$usr_exchange_authority"; \
+	timeout 10s grep -Fqx 'pub(crate) struct JournalUsrExchangePreparationSeal {' "$$usr_exchange_authority"; \
+	timeout 10s grep -Fqx 'pub(crate) struct JournalUsrExchangeAuthority {' "$$usr_exchange_authority"; \
+	timeout 10s grep -Fqx 'pub(crate) struct AppliedJournalUsrExchangeAuthority {' "$$usr_exchange_authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    root_abi: RootAbiPreflight,' "$$usr_exchange_authority" )" = 3; \
+	timeout 10s grep -Fq 'TransitionJournalStore::try_open_in_retained_cast' "$$usr_exchange_authority"; \
+	timeout 10s grep -Fq 'JournalAcquisition::CoordinatorNonblocking' "$$tree_lifecycle"; \
+	timeout 10s grep -Fq 'Self::LegacyBlocking => TransitionJournalStore::open_in_retained_cast' "$$tree_lifecycle"; \
+	timeout 10s grep -Fq 'Self::CoordinatorNonblocking(seal)' "$$tree_lifecycle"; \
+	if timeout 10s grep -nE 'exchange_reverse|create_root_links|renameat2|symlinkat|unlinkat' "$$usr_exchange_authority"; then \
+		timeout 10s printf '%s\n' 'client exchange authority acquired namespace mutation primitives' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	if callsites="$$( timeout 10s grep -RInE \
-		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare|run_transaction_triggers|begin_usr_exchange_intent' \
+		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare|run_transaction_triggers|begin_usr_exchange_intent|execute_usr_exchange' \
 		--include='*.rs' --exclude-dir=journal_coordinator crates/forge/src )"; then \
 		timeout 10s printf '%s\n' 'journal coordinator has a live callsite outside its contract module:' "$$callsites" >&2; \
 		exit 1; \

@@ -318,6 +318,43 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), ActivePreviousSlotParkingError> {
+        self.require_no_journal()
+            .map_err(|source| identity("check journal while proving parked active previous-state slot", source))?;
+        self.require_active_previous_slot_parked_core(installation, state)
+    }
+
+    /// Read-only proof of an authorized second marker link while a durable
+    /// coordinator journal is active.  It preserves the exact recovered
+    /// canonical-or-parked location and performs no reservation or move.
+    pub(super) fn require_active_previous_slot_unchanged_with_journal(
+        &self,
+        _seal: &super::journal_coordinator::UsrExchangeEffectSeal,
+        installation: &Installation,
+        state: state::Id,
+    ) -> Result<(), ActivePreviousSlotParkingError> {
+        let retained = self
+            .active_previous_slot_parking
+            .lock()
+            .map_err(|_| ActivePreviousSlotParkingError::AttemptLockPoisoned)?;
+        let Some(attempt) = retained.as_ref() else {
+            return Ok(());
+        };
+        attempt.require_state(state)?;
+        self.revalidate_active_previous_slot_base(installation, attempt)?;
+        if attempt.parking_name.is_some() {
+            self.require_active_previous_slot_location(attempt, SlotLocation::Parked)
+        } else if self.named_active_previous_slot_wrapper(attempt, true)? == NamedWrapper::Exact {
+            Ok(())
+        } else {
+            Err(self.active_previous_slot_namespace_mismatch_without_parking(attempt)?)
+        }
+    }
+
+    fn require_active_previous_slot_parked_core(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+    ) -> Result<(), ActivePreviousSlotParkingError> {
         let retained = self
             .active_previous_slot_parking
             .lock()
@@ -331,8 +368,6 @@ impl StatefulTreeIdentity {
                 state: i32::from(state),
             });
         }
-        self.require_no_journal()
-            .map_err(|source| identity("check journal while proving parked active previous-state slot", source))?;
         self.revalidate_active_previous_slot_base(installation, attempt)?;
         self.require_active_previous_slot_location(attempt, SlotLocation::Parked)
     }
@@ -500,6 +535,19 @@ impl StatefulTreeIdentity {
             canonical: canonical.as_str(),
             parking_path: attempt.parking_path(),
             parking: parking.as_str(),
+        })
+    }
+
+    fn active_previous_slot_namespace_mismatch_without_parking(
+        &self,
+        attempt: &RetainedActivePreviousSlotParking,
+    ) -> Result<ActivePreviousSlotParkingError, ActivePreviousSlotParkingError> {
+        let canonical = self.named_active_previous_slot_wrapper(attempt, true)?;
+        Ok(ActivePreviousSlotParkingError::NamespaceMismatch {
+            canonical_path: attempt.canonical_path(),
+            canonical: canonical.as_str(),
+            parking_path: attempt.canonical_path(),
+            parking: NamedWrapper::Absent.as_str(),
         })
     }
 

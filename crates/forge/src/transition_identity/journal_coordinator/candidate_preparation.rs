@@ -217,7 +217,7 @@ impl StatefulTransitionCoordinator {
         self.require_canonical_record()
     }
 
-    fn require_canonical_record(&self) -> Result<(), StatefulTransitionCoordinatorError> {
+    pub(super) fn require_canonical_record(&self) -> Result<(), StatefulTransitionCoordinatorError> {
         let actual = self.identity.journal.load()?;
         if actual.as_ref() == Some(&self.record) {
             Ok(())
@@ -269,7 +269,7 @@ impl StatefulTransitionCoordinator {
         }
     }
 
-    fn require_candidate_database_evidence(
+    pub(super) fn require_candidate_database_evidence(
         &self,
         candidate: state::Id,
     ) -> Result<(), StatefulTransitionCoordinatorError> {

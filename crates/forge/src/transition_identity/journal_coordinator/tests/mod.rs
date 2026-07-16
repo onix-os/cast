@@ -5,18 +5,26 @@ use std::{
 };
 
 use crate::{
-    Installation, db,
+    Installation,
+    client::{JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight},
+    db,
     state::{self, TransitionId},
     test_support::private_installation_tempdir,
     transition_journal::{
         CandidateOrigin, Operation, Phase, PreviousOrigin, RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalStore,
         TransitionRecord, decode,
     },
+    tree_marker::TreeMarkerStore,
 };
 
 use super::*;
 use crate::db::state::TransitionOwnership;
 use crate::transition_identity::StatefulTreeIdentity;
+use crate::transition_identity::{
+    RetainedExchangeFaultPoint, RetainedExchangeOutcome, RetainedExchangeSyscallFault,
+    arm_after_retained_exchange_rename, arm_before_retained_exchange_rename, arm_retained_exchange_fault,
+    arm_retained_exchange_syscall_fault, reset_retained_exchange_syscall_count, retained_exchange_syscall_count,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CandidateKind {
@@ -45,6 +53,43 @@ struct CoordinatorFixture {
 }
 
 fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (CoordinatorFixture, StatefulTreeIdentity) {
+    let (fixture, identity, authority) = fixture_parts(candidate_kind, previous_kind, false, false);
+    assert!(authority.is_none());
+    (fixture, identity)
+}
+
+fn fixture_with_exchange_authority(
+    candidate_kind: CandidateKind,
+    previous_kind: PreviousKind,
+) -> (CoordinatorFixture, StatefulTreeIdentity, JournalUsrExchangeAuthority) {
+    let (fixture, identity, authority) = fixture_parts(candidate_kind, previous_kind, true, false);
+    (
+        fixture,
+        identity,
+        authority.expect("exchange fixture requested pre-journal client authority"),
+    )
+}
+
+fn fixture_with_exchange_authority_and_previous_slot()
+-> (CoordinatorFixture, StatefulTreeIdentity, JournalUsrExchangeAuthority) {
+    let (fixture, identity, authority) = fixture_parts(CandidateKind::ActiveReblit, PreviousKind::Active, true, true);
+    (
+        fixture,
+        identity,
+        authority.expect("two-link exchange fixture requested pre-journal client authority"),
+    )
+}
+
+fn fixture_parts(
+    candidate_kind: CandidateKind,
+    previous_kind: PreviousKind,
+    retain_exchange_authority: bool,
+    retain_previous_slot: bool,
+) -> (
+    CoordinatorFixture,
+    StatefulTreeIdentity,
+    Option<JournalUsrExchangeAuthority>,
+) {
     let temporary = private_installation_tempdir();
     let mut installation = Installation::open(temporary.path(), None).unwrap();
     let database = db::state::Database::new(":memory:").unwrap();
@@ -64,6 +109,30 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
     prepare_previous_tree(&installation, previous_kind, previous_state);
     installation.active_state = (previous_kind == PreviousKind::Active).then_some(previous_state);
 
+    if retain_previous_slot {
+        assert_eq!(candidate_kind, CandidateKind::ActiveReblit);
+        let live_usr = installation.root.join("usr");
+        let marker_store = TreeMarkerStore::open_path(&live_usr).unwrap();
+        let marker = marker_store.adopt_or_create_before_journal().unwrap();
+        let wrapper = installation.root_path(previous_state.to_string());
+        fs::create_dir(&wrapper).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::hard_link(
+            live_usr.join(".cast-tree-id"),
+            wrapper.join(format!(
+                ".cast-state-slot-{}-{}",
+                previous_state,
+                marker.token().as_str()
+            )),
+        )
+        .unwrap();
+    }
+
+    let active_reblit = (candidate_kind == CandidateKind::ActiveReblit).then(|| database.get(candidate_state).unwrap());
+    let exchange_preflight = retain_exchange_authority.then(|| {
+        JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(&installation, active_reblit.clone()).unwrap()
+    });
+
     let candidate_path = installation.staging_path("usr");
     create_canonical_directory(&candidate_path);
     if candidate_kind == CandidateKind::Archived {
@@ -74,22 +143,55 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
             COORDINATOR_SYSTEM_SNAPSHOT,
         );
     }
-    let identity = match candidate_kind {
-        CandidateKind::NewState => {
+    let (identity, exchange_authority) = match (candidate_kind, exchange_preflight) {
+        (CandidateKind::NewState, preflight) => {
             write_canonical_file(&candidate_path.join("payload-sentinel"), NEW_STATE_PAYLOAD_SENTINEL);
-            StatefulTreeIdentity::prepare_unallocated_candidate(&installation, &database, &candidate_path).unwrap()
+            if let Some(preflight) = preflight {
+                let (identity, authority) = preflight
+                    .prepare_unallocated_candidate(&database, &candidate_path)
+                    .unwrap();
+                (identity, Some(authority))
+            } else {
+                (
+                    StatefulTreeIdentity::prepare_unallocated_candidate(&installation, &database, &candidate_path)
+                        .unwrap(),
+                    None,
+                )
+            }
         }
-        CandidateKind::Archived => {
+        (CandidateKind::Archived, preflight) => {
             write_canonical_file(&candidate_path.join(".stateID"), candidate_state.to_string().as_bytes());
-            StatefulTreeIdentity::prepare(&installation, &database, &candidate_path, candidate_state).unwrap()
+            if let Some(preflight) = preflight {
+                let (identity, authority) = preflight
+                    .prepare_candidate(&database, &candidate_path, candidate_state)
+                    .unwrap();
+                (identity, Some(authority))
+            } else {
+                (
+                    StatefulTreeIdentity::prepare(&installation, &database, &candidate_path, candidate_state).unwrap(),
+                    None,
+                )
+            }
         }
-        CandidateKind::ActiveReblit => StatefulTreeIdentity::prepare_active_reblit_candidate(
-            &installation,
-            &database,
-            &candidate_path,
-            candidate_state,
-        )
-        .unwrap(),
+        (CandidateKind::ActiveReblit, preflight) => {
+            if let Some(preflight) = preflight {
+                let (identity, authority) = preflight
+                    .prepare_active_reblit_identity(&database, &candidate_path, candidate_state)
+                    .unwrap();
+                (identity, Some(authority))
+            } else {
+                (
+                    StatefulTreeIdentity::prepare_active_reblit_candidate(
+                        &installation,
+                        &database,
+                        &candidate_path,
+                        candidate_state,
+                    )
+                    .unwrap(),
+                    None,
+                )
+            }
+        }
     };
     let fixture = CoordinatorFixture {
         _temporary: temporary,
@@ -99,7 +201,7 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
         candidate_state,
         candidate_path,
     };
-    (fixture, identity)
+    (fixture, identity, exchange_authority)
 }
 
 fn add_cleared_state_with_provenance(database: &db::state::Database, summary: &str, digit: char) -> state::Id {
@@ -190,7 +292,11 @@ fn request(
 ) -> StatefulTransitionRequest {
     match candidate_kind {
         CandidateKind::NewState => StatefulTransitionRequest::NewState {
-            previous: NewStatePrevious::Active(fixture.previous_state),
+            previous: fixture
+                .installation
+                .active_state
+                .map(NewStatePrevious::Active)
+                .unwrap_or(NewStatePrevious::SynthesizedEmpty),
             run_system_triggers,
             run_boot_sync,
         },
@@ -287,4 +393,5 @@ include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
 include!("metadata_proof.rs");
 include!("usr_exchange_intent.rs");
+include!("usr_exchange_effect.rs");
 include!("metadata_provenance.rs");

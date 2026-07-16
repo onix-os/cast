@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::super::{CandidateInventoryError, CandidateMetadataError};
+use crate::client::JournalUsrExchangeAuthorityError;
 
 #[derive(Debug, Error)]
 pub(crate) enum StatefulTransitionCoordinatorError {
@@ -40,6 +41,8 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     CandidateMetadata(#[from] CandidateMetadataError),
     #[error("bind exact generated-metadata provenance to coordinator-owned candidate preparation")]
     MetadataProvenance(#[from] db::state::MetadataProvenanceError),
+    #[error("revalidate the client-owned /usr exchange authority")]
+    UsrExchangeAuthority(#[from] JournalUsrExchangeAuthorityError),
     #[error("{action} requires operation {expected:?}, found {actual:?}")]
     UnexpectedOperation {
         action: &'static str,

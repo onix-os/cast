@@ -18,6 +18,7 @@ mod candidate_preparation;
 mod error;
 mod request;
 mod transaction_triggers;
+mod usr_exchange_effect;
 mod usr_exchange_intent;
 
 #[cfg(test)]
@@ -32,6 +33,11 @@ pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[cfg(test)]
 use transaction_triggers::StatefulTransactionTriggerFailure;
+#[cfg(test)]
+#[allow(unused_imports)] // imported into the descendant contract tests
+use usr_exchange_effect::UsrExchangeEffectFailure;
+#[allow(unused_imports)] // contract-only until live recovery executes this phase
+pub(crate) use usr_exchange_effect::UsrExchangedCoordinator;
 #[allow(unused_imports)] // contract-only typestate until the exchange effect exists
 pub(crate) use usr_exchange_intent::UsrExchangeIntentCoordinator;
 #[cfg(test)]
@@ -48,6 +54,14 @@ use crate::{
 use super::{
     RetainedPreviousClassification, StatefulTreeIdentity, candidate_state_authority::RetainedCandidateStateId,
 };
+
+/// Unforgeable token accepted only by the coordinator-aware one-shot exchange
+/// core.  Its private field can be constructed only inside this module and its
+/// descendants; legacy callers cannot use it to bypass journal-absence guards.
+#[derive(Debug)]
+pub(super) struct UsrExchangeEffectSeal {
+    _private: (),
+}
 
 const BEGIN_FRESH_ALLOCATION: &str = "begin fresh-state allocation";
 const FINISH_FRESH_ALLOCATION: &str = "finish fresh-state allocation";

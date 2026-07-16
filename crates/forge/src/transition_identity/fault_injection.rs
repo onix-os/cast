@@ -85,6 +85,48 @@ pub(crate) fn arm_before_retained_exchange_rename(hook: impl FnOnce() + 'static)
 }
 
 #[cfg(test)]
+pub(crate) fn arm_after_retained_exchange_rename(hook: impl FnOnce() + 'static) {
+    AFTER_RETAINED_EXCHANGE_RENAME.with(|slot| {
+        assert!(
+            slot.replace(Some(Box::new(hook))).is_none(),
+            "after retained exchange hook already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn arm_retained_exchange_syscall_fault(fault: RetainedExchangeSyscallFault) {
+    RETAINED_EXCHANGE_SYSCALL_FAULT.with(|slot| {
+        assert!(
+            slot.replace(Some(fault)).is_none(),
+            "exchange syscall fault already armed"
+        );
+    });
+    reset_retained_exchange_syscall_count();
+}
+
+#[cfg(test)]
+pub(crate) fn reset_retained_exchange_syscall_count() {
+    RETAINED_EXCHANGE_SYSCALL_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn retained_exchange_syscall_count() -> usize {
+    RETAINED_EXCHANGE_SYSCALL_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn begin_retained_exchange_syscall_attempt() -> Option<RetainedExchangeSyscallFault> {
+    RETAINED_EXCHANGE_SYSCALL_COUNT.with(|count| count.set(count.get() + 1));
+    RETAINED_EXCHANGE_SYSCALL_FAULT.with(std::cell::Cell::take)
+}
+
+#[cfg(not(test))]
+pub(super) fn begin_retained_exchange_syscall_attempt() -> Option<()> {
+    None
+}
+
+#[cfg(test)]
 pub(super) fn quarantine_checkpoint(point: QuarantineFaultPoint) -> Result<(), Error> {
     QUARANTINE_FAULT.with(|slot| {
         let mut armed = slot.borrow_mut();
@@ -174,6 +216,15 @@ pub(super) fn before_retained_exchange_rename() {
 }
 
 #[cfg(test)]
+pub(super) fn after_retained_exchange_rename() {
+    AFTER_RETAINED_EXCHANGE_RENAME.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(test)]
 pub(super) fn before_retained_previous_move_rename() {
     BEFORE_RETAINED_PREVIOUS_MOVE_RENAME.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -199,6 +250,9 @@ pub(super) fn before_retained_previous_move_rename() {}
 
 #[cfg(not(test))]
 pub(super) fn before_retained_exchange_rename() {}
+
+#[cfg(not(test))]
+pub(super) fn after_retained_exchange_rename() {}
 
 #[cfg(test)]
 pub(super) fn before_live_usr_mkdir() {
