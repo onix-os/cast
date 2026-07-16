@@ -7,6 +7,7 @@
 
 mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
+mod usr_rollback_resume_route;
 
 pub(in crate::client) use usr_exchange_parent_durability::{
     UsrExchangeParentDurabilityCompletionSeal, UsrExchangeParentDurabilityError,
@@ -30,3 +31,12 @@ pub(super) use usr_rollback_decision::{
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by focused startup recovery race tests
 pub(crate) use usr_rollback_decision::arm_before_usr_rollback_decision_final_revalidation;
+
+#[allow(unused_imports)] // error details are retained for focused persistence contracts
+pub(super) use usr_rollback_resume_route::{
+    DurableUsrRollbackResumeRouteRecord, UsrRollbackResumeRoutePersistenceError, UsrRollbackResumeRouteReopenError,
+    persist_usr_rollback_resume_route_and_reopen,
+};
+
+#[cfg(test)]
+pub(crate) use usr_rollback_resume_route::arm_before_usr_rollback_resume_route_final_revalidation;

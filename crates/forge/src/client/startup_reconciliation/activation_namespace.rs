@@ -1,13 +1,14 @@
 //! Descriptor-rooted, bounded startup inventory of the activation namespace.
 //!
 //! This module is intentionally read-only. The diagnostic inventory and the
-//! independent rollback-decision proof expose no rename, link, unlink,
-//! creation, repair, or journal-advance operation.
+//! independent rollback-decision and rollback-routing proofs expose no rename,
+//! link, unlink, creation, repair, or journal-advance operation.
 
 mod capture;
 mod decision_proof;
 mod parent_durability;
 mod policy;
+mod resume_route_proof;
 
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,12 @@ pub(super) use decision_proof::{
 };
 pub(super) use policy::UsrExchangeLayout;
 use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};
+#[cfg(test)]
+pub(in crate::client) use resume_route_proof::arm_before_usr_rollback_resume_route_fresh_namespace_capture;
+pub(super) use resume_route_proof::{
+    UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
+    UsrRollbackResumeRouteNamespaceProof,
+};
 
 /// Complete read-only evidence collected around one startup assessment.
 ///

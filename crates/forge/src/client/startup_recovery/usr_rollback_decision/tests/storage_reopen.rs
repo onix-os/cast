@@ -91,7 +91,7 @@ fn startup_usr_rollback_decision_consumes_journal_before_reopen() {
 }
 
 #[test]
-fn startup_usr_rollback_decision_retry_stops_at_rollback_decided() {
+fn startup_usr_rollback_decision_next_startup_routes_exact_decision() {
     let fixture = Fixture::new(OperationKind::NewState, SourceCase::ExchangedPost);
     let first = fixture.enter();
     assert_eq!(pending(&first).phase(), Phase::RollbackDecided);
@@ -100,6 +100,7 @@ fn startup_usr_rollback_decision_retry_stops_at_rollback_decided() {
     fixture.assert_exact_decision(&decision);
 
     let second = fixture.enter();
-    assert_eq!(pending(&second).phase(), Phase::RollbackDecided);
-    assert_eq!(fixture.canonical_record(), decision);
+    let expected_route = decision.rollback_successor(None).unwrap();
+    assert_eq!(pending(&second).phase(), Phase::ReverseExchangeIntent);
+    assert_eq!(fixture.canonical_record(), expected_route);
 }

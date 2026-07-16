@@ -49,6 +49,23 @@ impl UsrRollbackDecisionSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting rollback-resume routing authority
+/// capture to this writer-first startup gate.
+pub(in crate::client) struct UsrRollbackResumeRouteSeal {
+    _private: (),
+}
+
+impl UsrRollbackResumeRouteSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
 impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,
@@ -108,6 +125,31 @@ impl CleanSystemStartup {
             if let Some(authority) = authority {
                 let (journal, record) =
                     super::startup_recovery::persist_usr_rollback_decision_and_reopen(journal, authority)?;
+                let in_flight = state_db.audit_in_flight_transition()?;
+                let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                    installation,
+                    state_db,
+                    journal,
+                    record,
+                    in_flight,
+                )
+                .map_err(map_reconciliation_error)?;
+                return Err(Error::RecoveryPending(pending));
+            }
+
+            let route_seal = UsrRollbackResumeRouteSeal::new();
+            let route = startup_reconciliation::UsrRollbackResumeRouteAuthority::capture(
+                &route_seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+                in_flight.clone(),
+            )?;
+            if let startup_reconciliation::UsrRollbackResumeRouteAdmission::Ready(authority) = route {
+                let (journal, record) =
+                    super::startup_recovery::persist_usr_rollback_resume_route_and_reopen(journal, authority)?;
                 let in_flight = state_db.audit_in_flight_transition()?;
                 let pending = startup_reconciliation::PendingSystemTransition::inspect(
                     installation,
@@ -211,6 +253,10 @@ pub(super) enum Error {
     UsrExchangeParentDurability(#[from] super::startup_recovery::UsrExchangeParentDurabilityError),
     #[error("persist and reconcile the exact startup /usr rollback decision")]
     UsrRollbackDecisionPersistence(#[from] super::startup_recovery::UsrRollbackDecisionPersistenceError),
+    #[error("capture exact startup /usr rollback-resume routing authority")]
+    UsrRollbackResumeRouteAuthority(#[from] startup_reconciliation::UsrRollbackResumeRouteAuthorityError),
+    #[error("persist and reconcile the exact startup /usr rollback-resume route")]
+    UsrRollbackResumeRoutePersistence(#[from] super::startup_recovery::UsrRollbackResumeRoutePersistenceError),
     #[error("revalidate retained mutable installation namespace during startup")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]

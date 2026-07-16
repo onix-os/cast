@@ -118,7 +118,8 @@ mod startup_recovery_forward_origin_test_support;
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
 #[cfg(test)]
 pub(crate) use startup_recovery_forward_origin_test_support::{
-    assert_usr_exchange_intent_post_recovers_to_pending_reverse, snapshot_startup_recovery_namespace,
+    assert_usr_exchange_intent_post_recovers_to_pending_reverse,
+    assert_usr_rollback_decision_routes_to_reverse_exchange_intent, snapshot_startup_recovery_namespace,
 };
 mod sync;
 mod transaction_root;

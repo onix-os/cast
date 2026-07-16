@@ -382,9 +382,32 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without
             );
 
             assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {point:?}");
-            assert_exact_pending_reverse_decision(
-                &intent_record,
-                &read_canonical(&fixture.installation.root),
+            let decision = read_canonical(&fixture.installation.root);
+            assert_exact_pending_reverse_decision(&intent_record, &decision);
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                namespace_before,
+                "{candidate_kind:?} {point:?}"
+            );
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {point:?}"
+            );
+
+            assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
+                &fixture.installation,
+                &fixture.database,
+            );
+
+            assert!(
+                retained_exchange_syscall_count() == 1,
+                "routing retried the forward exchange for {candidate_kind:?} {point:?}"
+            );
+            assert_eq!(
+                read_canonical(&fixture.installation.root),
+                decision.rollback_successor(None).unwrap(),
+                "{candidate_kind:?} {point:?}"
             );
             assert_eq!(
                 snapshot_startup_recovery_namespace(&fixture.installation.root),

@@ -87,13 +87,14 @@ fn startup_usr_exchange_parent_durability_retry_is_idempotent_and_never_reexchan
     fixture.assert_exact_pending_reverse_decision(&fixture.canonical_record());
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_success_events(&fixture);
-    let decision = fixture.canonical_bytes();
+    let decision = fixture.canonical_record();
 
     reset_events();
     reset_retained_exchange_syscall_count();
     let third = fixture.enter();
-    assert_eq!(pending(&third).phase(), Phase::RollbackDecided);
-    assert_eq!(fixture.canonical_bytes(), decision);
+    let expected_route = decision.rollback_successor(None).unwrap();
+    assert_eq!(pending(&third).phase(), Phase::ReverseExchangeIntent);
+    assert_eq!(fixture.canonical_record(), expected_route);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert!(take_events().is_empty());
 }

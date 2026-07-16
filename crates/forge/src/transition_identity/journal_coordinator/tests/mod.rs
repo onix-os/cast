@@ -8,7 +8,8 @@ use crate::{
     Installation,
     client::{
         JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight,
-        assert_usr_exchange_intent_post_recovers_to_pending_reverse, snapshot_startup_recovery_namespace,
+        assert_usr_exchange_intent_post_recovers_to_pending_reverse,
+        assert_usr_rollback_decision_routes_to_reverse_exchange_intent, snapshot_startup_recovery_namespace,
     },
     db,
     state::{self, TransitionId},

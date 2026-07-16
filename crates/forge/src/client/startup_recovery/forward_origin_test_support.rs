@@ -35,6 +35,29 @@ pub(crate) fn assert_usr_exchange_intent_post_recovers_to_pending_reverse(
     );
 }
 
+/// Re-enter the real mutable startup gate at the exact decision produced by
+/// the helper above and require its journal-only route to the reverse intent.
+pub(crate) fn assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
+    installation: &Installation,
+    state_db: &db::state::Database,
+) {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let error = match CleanSystemStartup::enter(installation, state_db, &reservation) {
+        Ok(_) => panic!("startup unexpectedly admitted a decided /usr rollback"),
+        Err(error) => error,
+    };
+    let pending = match error {
+        startup_gate::Error::RecoveryPending(pending) => pending,
+        other => panic!("expected routed recovery-pending startup result, got {other:?}"),
+    };
+    assert_eq!(pending.phase(), Phase::ReverseExchangeIntent);
+    assert!(
+        pending.blockers().is_empty(),
+        "unexpected routed startup blockers: {:?}",
+        pending.blockers()
+    );
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct StartupRecoveryNamespaceEntry {
     relative: PathBuf,

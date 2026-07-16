@@ -17,7 +17,7 @@ forge-startup-usr-rollback-decision-test:
 		client::startup_recovery::usr_rollback_decision::tests::evidence_races::startup_usr_rollback_decision_active_reblit_uses_one_state_row_and_retains_reservation \
 		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_storage_faults_reopen_to_exact_source_or_decision \
 		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_consumes_journal_before_reopen \
-		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_retry_stops_at_rollback_decided; do \
+		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_next_startup_routes_exact_decision; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_decision.rs; \
@@ -45,8 +45,8 @@ forge-startup-usr-rollback-decision-test:
 	timeout 10s test "$$capture_call_count" = 1; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackDecisionSeal,' "$$authority"; \
 	bypass_count="$$( timeout 10s rg -n 'fn new_for_test\(' "$$startup_gate" "$$authority" | timeout 10s wc -l )"; \
-	timeout 10s test "$$bypass_count" = 1; \
-	timeout 10s awk '$$0 == "    #[cfg(test)]" { gated = 1; next } $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { if (!gated) exit 1; found += 1 } { gated = 0 } END { exit found != 1 }' "$$startup_gate"; \
+	timeout 10s test "$$bypass_count" = 2; \
+	timeout 10s awk '$$0 == "    #[cfg(test)]" { gated = 1; next } $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { if (!gated) exit 1; found += 1 } { gated = 0 } END { exit found != 2 }' "$$startup_gate"; \
 	timeout 10s grep -Fqx '    journal_binding: TransitionJournalBinding,' "$$authority"; \
 	binding_capture_count="$$( timeout 10s rg -n 'let journal_binding = journal\.binding\(\);' "$$authority" | timeout 10s wc -l )"; \
 	timeout 10s test "$$binding_capture_count" = 1; \
