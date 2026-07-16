@@ -1,0 +1,29 @@
+let arrays = import! std.array.prim
+
+// Each role is a pure function over the same explicit package set. The final
+// closure is ordinary Gluon composition rather than a sidecar merge format.
+let foundation = \packages -> [
+    packages.shell,
+    packages.core_commands,
+    packages.file_discovery,
+]
+
+let network_trust = \packages -> [
+    packages.trust_store,
+]
+
+let operator_tools = \packages -> [
+    packages.archive_tools,
+]
+
+let complete = \packages ->
+    arrays.append
+        (foundation packages)
+        (arrays.append (network_trust packages) (operator_tools packages))
+
+{
+    foundation,
+    network_trust,
+    operator_tools,
+    complete,
+}

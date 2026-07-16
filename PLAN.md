@@ -621,6 +621,15 @@ unit evidence still does not close the two required-execution items.
   declarative Gluon script authors the complete payload. Require only frozen
   `bash` and `install` providers; admit no source lock, archive, network, host
   shim, or mounted recipe input.
+- [x] Add a source-less userspace-profile declaration which composes shell,
+  core-command, discovery, trust-store, and archive roles as pure Gluon
+  functions over one explicit package set. Its dedicated Make gate runs the
+  public checker and two byte-identical evaluations, proves five empty phases
+  and five exact runtime relations, and does not pretend that evaluation built
+  a Stone archive.
+- [ ] Admit that userspace profile to the contentful delegated fixture matrix,
+  emit and decode its empty-root `out` Stone, prove its exact five-package
+  runtime closure, and require byte-identical locked replans and rebuilds.
 - [x] Maintain a pinned, contentful Stone bootstrap closure for every real
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix

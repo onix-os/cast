@@ -1,0 +1,26 @@
+let b = import! cast.package.v3
+let packages = import! "./package_set.glu"
+let roles = import! "./roles.glu"
+
+let base = b.mk_package (b.meta {
+    pname = "cast-userspace-profile-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-userspace-profile-fixture",
+    license = ["MPL-2.0"],
+})
+
+// This package has no sources and no imperative phases. Its empty root output
+// is a versioned .stone whose runtime relations are the complete userspace.
+{
+    outputs = [
+        b.output_with {
+            summary = b.optional.set "Declarative userspace profile fixture",
+            description = b.optional.set "Shell, core commands, discovery, trust, and archive roles composed as one explicit closure.",
+            runtime_inputs = roles.complete packages,
+            .. b.output "out"
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

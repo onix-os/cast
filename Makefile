@@ -27,6 +27,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 include misc/make/hardening-tests.mk
 include misc/make/activation-namespace-tests.mk
+include misc/make/userspace-profile-fixture.mk
 
 .PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
@@ -881,6 +882,7 @@ help:
 	@echo "  cast          Build Cast with MODE=$(MODE) (default)"
 	@echo "  get-started   Build and install Cast and its data"
 	@echo "  test          Run lints and all workspace tests"
+	@timeout 10s echo "  userspace-profile-declaration-test  Check deterministic source-less userspace composition"
 	@echo "  config-rooted-gluon-test  Run descriptor-rooted Gluon substitution-race tests"
 	@echo "  forge-read-only-installation-test  Run retained read-only snapshot and mutable-client rejection tests"
 	@echo "  forge-installation-test  Run all direct installation policy and filesystem tests"
