@@ -6,7 +6,7 @@
 
 use std::{
     ffi::{CStr, CString},
-    io,
+    io::{self, Read as _},
     mem::{size_of, zeroed},
     os::{
         fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},

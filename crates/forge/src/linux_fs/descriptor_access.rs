@@ -118,8 +118,7 @@ fn parse_decimal_pid(bytes: &[u8]) -> io::Result<u32> {
     Ok(value)
 }
 
-#[cfg(test)]
-fn require_procfs(file: &std::fs::File, path: &Path) -> io::Result<()> {
+pub(crate) fn require_procfs(file: &std::fs::File, path: &Path) -> io::Result<()> {
     require_procfs_with_deadline(file, path, None)
 }
 
@@ -138,13 +137,102 @@ fn require_procfs_with_deadline(file: &std::fs::File, path: &Path, deadline: Opt
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "refusing unauthenticated descriptor chmod through {}: expected procfs magic {PROC_SUPER_MAGIC:#x}, found {:#x}",
+                "refusing unauthenticated procfs capability {}: expected filesystem magic {PROC_SUPER_MAGIC:#x}, found {:#x}",
                 path.display(),
                 stat.f_type
             ),
         ));
     }
     Ok(())
+}
+
+const MAX_PROC_FDINFO_BYTES: usize = 16 * 1024;
+
+/// Read the mount ID for one retained descriptor from this thread's
+/// authenticated procfs `fdinfo` entry.
+///
+/// Linux 5.6 does not expose `STATX_MNT_ID`. The numeric descriptor name is
+/// therefore opened below the exact current-thread procfs directory, while
+/// authenticated `/proc/<pid>/task/<tid>/fd` aliases sandwich the read so a
+/// recycled or substituted descriptor can never be accepted.
+pub(crate) fn descriptor_mount_id(file: &std::fs::File) -> io::Result<u64> {
+    let (_descriptors, _descriptor, before) = authenticated_descriptor_name(file)?;
+    let thread = authenticated_current_thread_procfs()?;
+    let fdinfo_directory = openat2_file(
+        thread.as_raw_fd(),
+        c"fdinfo",
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        0,
+        controlled_resolution(),
+    )?;
+    require_procfs(&fdinfo_directory, Path::new("/proc/<pid>/task/<tid>/fdinfo"))?;
+
+    let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
+    let mut fdinfo = openat2_file(
+        fdinfo_directory.as_raw_fd(),
+        &descriptor,
+        nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+        0,
+        controlled_resolution(),
+    )?;
+    require_procfs(&fdinfo, Path::new("/proc/<pid>/task/<tid>/fdinfo/<fd>"))?;
+    let mut bytes = Vec::with_capacity(512);
+    fdinfo
+        .by_ref()
+        .take((MAX_PROC_FDINFO_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    let mount_id = parse_descriptor_mount_id(&bytes)?;
+
+    let (_descriptors, _descriptor, after) = authenticated_descriptor_name(file)?;
+    require_same_inode(before, after)?;
+    Ok(mount_id)
+}
+
+pub(crate) fn parse_descriptor_mount_id(bytes: &[u8]) -> io::Result<u64> {
+    if bytes.is_empty() || bytes.len() > MAX_PROC_FDINFO_BYTES || bytes.last() != Some(&b'\n') || bytes.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "procfs fdinfo is empty, oversized, unterminated, or contains NUL",
+        ));
+    }
+
+    let mut found = None;
+    for line in bytes.split(|byte| *byte == b'\n') {
+        if !line.starts_with(b"mnt_id:") {
+            continue;
+        }
+        let digits = line.strip_prefix(b"mnt_id:\t").ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "procfs fdinfo mount ID has noncanonical spacing")
+        })?;
+        if digits.is_empty()
+            || digits.len() > 20
+            || !digits.iter().all(u8::is_ascii_digit)
+            || digits[0] == b'0'
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "procfs fdinfo mount ID is not one canonical nonzero decimal u64",
+            ));
+        }
+        let value = digits.iter().try_fold(0_u64, |value, digit| {
+            value
+                .checked_mul(10)
+                .and_then(|value| value.checked_add(u64::from(*digit - b'0')))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "procfs fdinfo mount ID exceeds u64"))
+        })?;
+        if found.replace(value).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "procfs fdinfo contains duplicate mount IDs",
+            ));
+        }
+    }
+
+    found.ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "procfs fdinfo does not contain a mount ID"))
 }
 
 /// Open one path through Linux 5.6 `openat2(2)` and return ownership of the

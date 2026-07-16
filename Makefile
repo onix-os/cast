@@ -833,6 +833,7 @@ help:
 	@echo "  forge-read-only-substrate-test  Run immutable database-image and clean-journal substrate tests"
 	@echo "  forge-read-only-client-test  Run public retained read-only query-client tests"
 	@echo "  forge-transition-journal-contract-test  Run durable journal model, codec, and phase tests"
+	@echo "  forge-transition-runtime-evidence-test  Run authenticated boot, namespace, and tree witness tests"
 	@echo "  forge-transition-journal-test  Run every direct transition-journal contract and storage test"
 	@echo "  stone-read-test  Run the exact bounded Stone reader and content-stream tests"
 	@echo "  stone-recipe-derivation-provenance-test  Run exact derivation provenance identity and validation tests"

@@ -2,7 +2,7 @@
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
-	forge-transition-journal-test \
+	forge-transition-runtime-evidence-test forge-transition-journal-test \
 	stone-recipe-derivation-provenance-test \
 	stone-recipe-derivation-validation-test stone-recipe-build-lock-test \
 	stone-recipe-package-validation-test \
@@ -182,11 +182,25 @@ forge-transition-journal-contract-test:
 		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+forge-transition-runtime-evidence-test:
+	@set -eu; \
+	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
+	test -n "$$listed"; \
+	for test in \
+		transition_journal::tests::runtime_epoch_capture_is_canonical_stable_and_current \
+		transition_journal::tests::runtime_tree_identity_capture_binds_the_exact_directory_and_mount \
+		transition_journal::tests::runtime_tree_identity_rejects_a_non_directory_descriptor \
+		transition_journal::tests::boot_id_and_mount_namespace_parsers_reject_untrusted_or_noncanonical_inputs \
+		transition_journal::tests::fdinfo_mount_id_parser_is_bounded_canonical_and_unique; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
+
 forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 51; \
+	timeout 10s test "$$count" = 56; \
 	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
 
 stone-read-test:

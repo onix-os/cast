@@ -334,6 +334,7 @@ fn assert_no_journal_temporaries(root: &Path) {
 
 
 include!("record_contract.rs");
+include!("runtime_evidence.rs");
 include!("transition_semantics.rs");
 include!("storage_transactions.rs");
 include!("storage_resilience.rs");

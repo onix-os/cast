@@ -326,6 +326,32 @@ fn authenticated_descriptor_name_with_deadline(
     deadline: Option<Instant>,
 ) -> io::Result<(std::fs::File, CString, InodeIdentity)> {
     let expected = inode_identity(&file.metadata()?);
+    let thread = authenticated_current_thread_procfs_with_deadline(deadline)?;
+    let descriptors = openat2_file_with_deadline(
+        thread.as_raw_fd(),
+        c"fd",
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        0,
+        controlled_resolution(),
+        deadline,
+    )?;
+    require_procfs_with_deadline(&descriptors, Path::new("/proc/thread-self/fd"), deadline)?;
+
+    let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
+    let alias = open_descriptor_alias_with_deadline(&descriptors, &descriptor, deadline)?;
+    require_same_inode(expected, inode_identity(&alias.metadata()?))?;
+    Ok((descriptors, descriptor, expected))
+}
+
+pub(crate) fn authenticated_procfs_root() -> io::Result<std::fs::File> {
+    authenticated_procfs_root_with_deadline(None)
+}
+
+fn authenticated_procfs_root_with_deadline(deadline: Option<Instant>) -> io::Result<std::fs::File> {
     let proc = openat2_file_with_deadline(
         nix::libc::AT_FDCWD,
         c"/proc",
@@ -335,6 +361,15 @@ fn authenticated_descriptor_name_with_deadline(
         deadline,
     )?;
     require_procfs_with_deadline(&proc, Path::new("/proc"), deadline)?;
+    Ok(proc)
+}
+
+pub(crate) fn authenticated_current_thread_procfs() -> io::Result<std::fs::File> {
+    authenticated_current_thread_procfs_with_deadline(None)
+}
+
+fn authenticated_current_thread_procfs_with_deadline(deadline: Option<Instant>) -> io::Result<std::fs::File> {
+    let proc = authenticated_procfs_root_with_deadline(deadline)?;
 
     let (process_name, thread_name) = proc_thread_self_components_with_deadline(&proc, deadline)?;
     let process = openat2_file_with_deadline(
@@ -365,23 +400,5 @@ fn authenticated_descriptor_name_with_deadline(
         deadline,
     )?;
     require_procfs_with_deadline(&thread, Path::new("/proc/<pid>/task/<tid>"), deadline)?;
-
-    let descriptors = openat2_file_with_deadline(
-        thread.as_raw_fd(),
-        c"fd",
-        nix::libc::O_RDONLY
-            | nix::libc::O_DIRECTORY
-            | nix::libc::O_CLOEXEC
-            | nix::libc::O_NOFOLLOW
-            | nix::libc::O_NONBLOCK,
-        0,
-        controlled_resolution(),
-        deadline,
-    )?;
-    require_procfs_with_deadline(&descriptors, Path::new("/proc/thread-self/fd"), deadline)?;
-
-    let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
-    let alias = open_descriptor_alias_with_deadline(&descriptors, &descriptor, deadline)?;
-    require_same_inode(expected, inode_identity(&alias.metadata()?))?;
-    Ok((descriptors, descriptor, expected))
+    Ok(thread)
 }

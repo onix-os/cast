@@ -29,6 +29,7 @@ use crate::state::TransitionId;
 
 mod codec;
 mod model;
+mod runtime_evidence;
 mod store;
 mod validation;
 
