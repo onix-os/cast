@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 #![allow(dead_code)]
 
 use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom, Write};
@@ -12,10 +10,15 @@ use crate::{
     StonePayloadLayoutRecord, StonePayloadMetaRecord, payload,
 };
 
+use self::content_reader::{ExactPlainReader, PayloadReader, drain_raw};
 use self::zstd::Zstd;
 
+mod content_reader;
 mod digest;
 mod zstd;
+
+#[cfg(feature = "ffi")]
+pub use self::content_reader::StonePayloadContentReader;
 
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
@@ -395,7 +398,6 @@ impl<R: Read + Seek> StoneReader<R> {
     }
 }
 
-include!("content_reader.rs");
 #[derive(Debug, Default)]
 struct DecodeState {
     records: u64,

@@ -1,8 +1,10 @@
+use super::*;
+
 #[cfg(feature = "ffi")]
 pub struct StonePayloadContentReader<'a, R: Read> {
-    reader: Option<ExactPlainReader<PayloadReader<digest::Reader<'a, io::Take<&'a mut R>>>>>,
-    header_checksum: u64,
-    stored_size: u64,
+    pub(super) reader: Option<ExactPlainReader<PayloadReader<digest::Reader<'a, io::Take<&'a mut R>>>>>,
+    pub(super) header_checksum: u64,
+    pub(super) stored_size: u64,
     pub is_checksum_valid: bool,
     pub buf_hint: Option<usize>,
 }
@@ -47,13 +49,17 @@ impl<R: Read> Read for StonePayloadContentReader<'_, R> {
     }
 }
 
-enum PayloadReader<R: Read> {
+pub(super) enum PayloadReader<R: Read> {
     Plain(R),
     Zstd(Zstd<R>),
 }
 
 impl<R: Read> PayloadReader<R> {
-    fn new(reader: R, compression: StonePayloadCompression, max_zstd_window_log: u32) -> Result<Self, StoneReadError> {
+    pub(super) fn new(
+        reader: R,
+        compression: StonePayloadCompression,
+        max_zstd_window_log: u32,
+    ) -> Result<Self, StoneReadError> {
         Ok(match compression {
             StonePayloadCompression::None => PayloadReader::Plain(reader),
             StonePayloadCompression::Zstd => PayloadReader::Zstd(Zstd::new(reader, max_zstd_window_log)?),
@@ -61,14 +67,14 @@ impl<R: Read> PayloadReader<R> {
         })
     }
 
-    fn into_raw(self) -> RawReader<R> {
+    pub(super) fn into_raw(self) -> RawReader<R> {
         match self {
             PayloadReader::Plain(reader) => RawReader::Plain(reader),
             PayloadReader::Zstd(reader) => RawReader::Zstd(reader.finish()),
         }
     }
 
-    fn buf_hint(&self) -> Option<usize> {
+    pub(super) fn buf_hint(&self) -> Option<usize> {
         match self {
             PayloadReader::Plain(_) => None,
             PayloadReader::Zstd(zstd) => Some(zstd.capacity()),
@@ -85,12 +91,12 @@ impl<R: Read> Read for PayloadReader<R> {
     }
 }
 
-enum RawReader<R: Read> {
+pub(super) enum RawReader<R: Read> {
     Plain(R),
     Zstd(BufReader<R>),
 }
 
-fn drain_raw<R: Read>(raw: RawReader<digest::Reader<'_, io::Take<&mut R>>>) -> io::Result<(u64, u64)> {
+pub(super) fn drain_raw<R: Read>(raw: RawReader<digest::Reader<'_, io::Take<&mut R>>>) -> io::Result<(u64, u64)> {
     let framed = match raw {
         RawReader::Plain(mut framed) => {
             io::copy(&mut framed, &mut io::sink())?;
@@ -107,7 +113,7 @@ fn drain_raw<R: Read>(raw: RawReader<digest::Reader<'_, io::Take<&mut R>>>) -> i
     Ok((remaining, got))
 }
 
-struct ExactPlainReader<R> {
+pub(super) struct ExactPlainReader<R> {
     inner: R,
     declared: u64,
     emitted: u64,
@@ -116,7 +122,7 @@ struct ExactPlainReader<R> {
 }
 
 impl<R: Read> ExactPlainReader<R> {
-    fn new(inner: R, declared: u64) -> Self {
+    pub(super) fn new(inner: R, declared: u64) -> Self {
         Self {
             inner,
             declared,
@@ -126,7 +132,7 @@ impl<R: Read> ExactPlainReader<R> {
         }
     }
 
-    fn finish_exact(&mut self) -> Result<(), StoneReadError> {
+    pub(super) fn finish_exact(&mut self) -> Result<(), StoneReadError> {
         let consumed = self.emitted;
         let mut probe = [0u8; 1];
         match self.read(&mut probe) {
@@ -139,7 +145,7 @@ impl<R: Read> ExactPlainReader<R> {
         }
     }
 
-    fn size_error(&self) -> Option<StoneReadError> {
+    pub(super) fn size_error(&self) -> Option<StoneReadError> {
         if self.too_large {
             Some(StoneReadError::PlainPayloadTooLarge {
                 declared: self.declared,
@@ -154,7 +160,7 @@ impl<R: Read> ExactPlainReader<R> {
         }
     }
 
-    fn into_inner(self) -> R {
+    pub(super) fn into_inner(self) -> R {
         self.inner
     }
 }
@@ -200,4 +206,3 @@ impl<R: Read> Read for ExactPlainReader<R> {
         Ok(read)
     }
 }
-
