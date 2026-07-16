@@ -511,49 +511,11 @@ impl StatefulTreeIdentity {
         retained_exchange_checkpoint(RetainedExchangeFaultPoint::BeforeRename).map_err(not_applied)?;
         validate().map_err(not_applied)?;
 
-        // Never retry this syscall: an EINTR or injected error may describe an
-        // exchange which the kernel already completed.  Both retained parent
-        // namespaces are reconciled below before the result is interpreted.
-        #[cfg(test)]
-        let injected = begin_retained_exchange_syscall_attempt();
-        #[cfg(not(test))]
-        let _injected = begin_retained_exchange_syscall_attempt();
-        #[cfg(test)]
-        let apply = !matches!(
-            injected,
-            Some(RetainedExchangeSyscallFault::ErrorWithoutApply | RetainedExchangeSyscallFault::SuccessWithoutApply)
+        let syscall_result = exchange_retained_usr_once(
+            &staging.file,
+            installation.root_directory(),
+            &installation.root.join("usr"),
         );
-        #[cfg(not(test))]
-        let apply = true;
-        let kernel_result = apply.then(|| {
-            renameat2_exchange_once(
-                &staging.file,
-                LIVE_USR_NAME,
-                installation.root_directory(),
-                LIVE_USR_NAME,
-            )
-            .map_err(|source| {
-                retained_exchange_io("exchange staged and live /usr", &installation.root.join("usr"), source)
-            })
-        });
-        #[cfg(test)]
-        let syscall_result = match (injected, kernel_result) {
-            (Some(RetainedExchangeSyscallFault::ErrorWithoutApply), None) => Err(retained_exchange_io(
-                "injected /usr exchange error without application",
-                &installation.root.join("usr"),
-                io::Error::from_raw_os_error(nix::libc::EIO),
-            )),
-            (Some(RetainedExchangeSyscallFault::SuccessWithoutApply), None) => Ok(()),
-            (Some(RetainedExchangeSyscallFault::ErrorAfterApply), Some(Ok(()))) => Err(retained_exchange_io(
-                "injected /usr exchange error after application",
-                &installation.root.join("usr"),
-                io::Error::from_raw_os_error(nix::libc::EINTR),
-            )),
-            (_, Some(result)) => result,
-            _ => unreachable!("test exchange injection has a complete result matrix"),
-        };
-        #[cfg(not(test))]
-        let syscall_result = kernel_result.expect("production always invokes the one-shot exchange");
         after_retained_exchange_rename();
         let syscall_result =
             syscall_result.and_then(|()| retained_exchange_checkpoint(RetainedExchangeFaultPoint::AfterRename));

@@ -98,6 +98,7 @@ forge-transition-journal-coordinator-test:
 	coordinator_contract="crates/forge/src/transition_identity/journal_coordinator/mod.rs"; \
 	authority_contract="crates/forge/src/transition_identity/candidate_state_authority.rs"; \
 	tree_lifecycle="crates/forge/src/transition_identity/tree_lifecycle.rs"; \
+	raw_exchange="crates/forge/src/transition_identity/retained_usr_exchange_syscall.rs"; \
 	timeout 10s grep -Fqx 'mod candidate_state_authority;' crates/forge/src/transition_identity.rs; \
 	if timeout 10s grep -Fqx 'pub(crate) mod candidate_state_authority;' crates/forge/src/transition_identity.rs; then \
 		timeout 10s printf '%s\n' 'candidate state authority module visibility widened' >&2; exit 1; \
@@ -260,7 +261,23 @@ forge-transition-journal-coordinator-test:
 	timeout 10s grep -Fqx '    authority: AppliedJournalUsrExchangeAuthority,' "$$usr_exchange_effect"; \
 	timeout 10s grep -Fqx '    pub(super) fn execute_usr_exchange(' "$$usr_exchange_effect"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.exchange_forward_with_journal(installation, &seal, &|| {' "$$usr_exchange_effect" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'renameat2_exchange_once(' "$$tree_lifecycle" )" = 1; \
+	timeout 10s grep -Fqx 'mod retained_usr_exchange_syscall;' crates/forge/src/transition_identity.rs; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'exchange_retained_usr_once(' "$$tree_lifecycle" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'renameat2_exchange_once(' "$$tree_lifecycle" )" = 0; \
+	timeout 10s grep -Fqx 'use crate::linux_fs::renameat2_exchange_once;' "$$raw_exchange"; \
+	timeout 10s test "$$( timeout 10s grep -Ec '^[[:space:]]*renameat2_exchange_once\(' "$$raw_exchange" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'begin_retained_exchange_syscall_attempt()' "$$raw_exchange" )" = 2; \
+	timeout 10s test "$$( timeout 10s rg -n 'exchange_retained_usr_once\(' crates/forge/src --glob '*.rs' | timeout 10s wc -l )" = 2; \
+	if timeout 10s grep -nE 'RetainedExchange(Direction|Layout)|ExchangeJournalGuard|finish_exchange|sync_all|revalidate' "$$raw_exchange"; then \
+		timeout 10s printf '%s\n' 'raw retained /usr syscall adapter absorbed authorization, reconciliation, or durability policy' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	if timeout 10s grep -nE '(^|[^[:alnum:]_])(loop|while|for)[[:space:]]' "$$raw_exchange"; then \
+		timeout 10s printf '%s\n' 'raw retained /usr exchange adapter acquired a retry construct' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ExchangeJournalGuard::LegacyNoJournal' "$$tree_lifecycle" )" -ge 4; \
 	if timeout 10s grep -nE 'Option<(CandidateMetadataProof|db::state::MetadataProvenance|AppliedJournalUsrExchangeAuthority|RootAbiPreflight)>' \
 		"$$usr_exchange_effect" "$$usr_exchange_authority"; then \

@@ -23,8 +23,8 @@ use thiserror::Error;
 use crate::{
     Installation, db,
     linux_fs::{
-        chmod_path_descriptor, controlled_resolution, openat2_file, renameat2_exchange_once, renameat2_noreplace,
-        renameat2_noreplace_once, require_no_access_acl, require_no_default_acl,
+        chmod_path_descriptor, controlled_resolution, openat2_file, renameat2_noreplace, renameat2_noreplace_once,
+        require_no_access_acl, require_no_default_acl,
     },
     state,
     transition_journal::{QuarantineName, TransitionJournalStore},
@@ -48,6 +48,7 @@ mod namespace_helpers;
 mod prejournal_inventory;
 mod previous_tree_move;
 mod prune_residue;
+mod retained_usr_exchange_syscall;
 mod reusable_previous_slot;
 mod slot_link_recovery;
 mod staging_wrapper_rotation;
@@ -82,8 +83,8 @@ pub(crate) use error::Error;
 use fault_injection::{
     after_retained_exchange_rename, before_live_usr_mkdir, before_previous_archive_slot_reopen,
     before_previous_slot_retirement_rename, before_quarantine_slot_reopen, before_retained_exchange_rename,
-    before_retained_previous_move_rename, begin_retained_exchange_syscall_attempt, quarantine_checkpoint,
-    retained_exchange_checkpoint, retained_previous_move_checkpoint,
+    before_retained_previous_move_rename, quarantine_checkpoint, retained_exchange_checkpoint,
+    retained_previous_move_checkpoint,
 };
 #[allow(unused_imports)] // contract-only surface for the later live coordinator integration
 pub(crate) use journal_coordinator::{
@@ -147,6 +148,7 @@ pub(crate) use prune_residue::arm_after_archived_state_prune_residue_first_scan;
 pub(crate) use prune_residue::{
     ArchivedStatePruneResidueError, audit_archived_state_prune_residue, audit_archived_state_prune_residue_read_only,
 };
+pub(crate) use retained_usr_exchange_syscall::exchange_retained_usr_once;
 pub(crate) use staging_wrapper_rotation::{
     RetainedStagingWrapperRotationFailure, RetainedStagingWrapperRotationOutcome,
 };
