@@ -367,10 +367,13 @@ forge-database-adapter-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	layout_count="$$( timeout 10s grep -c '^db::layout::test::.*: test$$' <<<"$$listed" )"; \
 	meta_count="$$( timeout 10s grep -c '^db::meta::test::.*: test$$' <<<"$$listed" )"; \
+	state_provenance_count="$$( timeout 10s grep -c '^db::state::metadata_provenance::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$layout_count" = 11; \
 	timeout 10s test "$$meta_count" = 10; \
+	timeout 10s test "$$state_provenance_count" = 8; \
 	timeout 900s $(CARGO) test -p forge --lib "db::layout::test::" -- --test-threads=1; \
-	timeout 900s $(CARGO) test -p forge --lib "db::meta::test::" -- --test-threads=1
+	timeout 900s $(CARGO) test -p forge --lib "db::meta::test::" -- --test-threads=1; \
+	timeout 900s $(CARGO) test -p forge --lib "db::state::metadata_provenance::tests::" -- --test-threads=1
 
 forge-read-only-substrate-test:
 	@set -eu; \
