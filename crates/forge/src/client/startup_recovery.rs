@@ -5,6 +5,7 @@
 //! freshly reopened lock-bearing journal store for uninterrupted diagnostic
 //! inspection; failure returns neither a store nor reusable authority.
 
+mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
 mod usr_rollback_resume_route;

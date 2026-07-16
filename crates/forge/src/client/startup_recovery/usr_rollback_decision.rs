@@ -10,11 +10,12 @@
 use thiserror::Error;
 
 use crate::{
-    Installation, installation,
+    installation,
     transition_journal::{CodecError, StorageError, TransitionJournalStore, TransitionRecord},
 };
 
 use super::super::startup_reconciliation::{UsrRollbackDecisionAuthority, UsrRollbackDecisionAuthorityError};
+use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
 #[cfg(test)]
 mod tests;
@@ -61,7 +62,7 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
     drop(authority);
     drop(journal);
 
-    let reopened = reopen_canonical_journal(&installation);
+    let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackDecisionReopenError::from);
     match advance {
         Ok(()) => match reopened {
             Ok((reopened, Some(actual))) if actual == decision => Ok((reopened, decision)),
@@ -101,18 +102,6 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
             }),
         },
     }
-}
-
-fn reopen_canonical_journal(
-    installation: &Installation,
-) -> Result<(TransitionJournalStore, Option<TransitionRecord>), UsrRollbackDecisionReopenError> {
-    installation.revalidate_mutable_namespace()?;
-    let cast = installation.retained_mutable_cast_directory()?;
-    let journal = TransitionJournalStore::open_in_retained_cast(cast, &installation.root)?;
-    installation.revalidate_mutable_namespace()?;
-    let record = journal.load()?;
-    installation.revalidate_mutable_namespace()?;
-    Ok((journal, record))
 }
 
 fn unexpected_record(
@@ -195,4 +184,13 @@ pub(in crate::client) enum UsrRollbackDecisionReopenError {
         expected_decision: Box<TransitionRecord>,
         actual: Option<Box<TransitionRecord>>,
     },
+}
+
+impl From<CanonicalJournalReopenError> for UsrRollbackDecisionReopenError {
+    fn from(source: CanonicalJournalReopenError) -> Self {
+        match source {
+            CanonicalJournalReopenError::Installation(source) => Self::Installation(source),
+            CanonicalJournalReopenError::Journal(source) => Self::Journal(source),
+        }
+    }
 }

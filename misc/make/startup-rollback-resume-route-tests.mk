@@ -22,6 +22,7 @@ forge-startup-usr-rollback-resume-route-test:
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_resume_route.rs; \
+	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_resume_route_authority.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/resume_route_proof.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
@@ -31,10 +32,39 @@ forge-startup-usr-rollback-resume-route-test:
 	successor_count="$$( timeout 10s rg -n '\.rollback_successor\(' "$$executor" "$$authority" "$$proof" | timeout 10s wc -l )"; \
 	timeout 10s test "$$successor_count" = 1; \
 	timeout 10s grep -Fqx '    let successor = match source_record.rollback_successor(None) {' "$$executor"; \
-	advance_count="$$( timeout 10s rg -n '\.advance\(' "$$executor" "$$authority" "$$proof" | timeout 10s wc -l )"; \
+	advance_count="$$( timeout 10s rg -n '\.advance\(' "$$executor" "$$authority" "$$proof" "$$reopen" | timeout 10s wc -l )"; \
 	timeout 10s test "$$advance_count" = 1; \
 	timeout 10s grep -Fqx '    let advance = journal.advance(&source_record, &successor);' "$$executor"; \
-	if timeout 10s rg -n 'forward_successor|RollbackActionOutcome|transition_identity|linux_fs|std::fs|nix::|renameat|unlinkat|linkat|sync_all|sync_data|write_all|set_permissions|create_dir|remove_dir|remove_file|hard_link|symlink|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|exchange_forward|exchange_reverse|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$executor" "$$authority" "$$proof"; then exit 1; fi; \
+	timeout 10s grep -Fqx 'mod canonical_journal_reopen;' crates/forge/src/client/startup_recovery.rs; \
+	timeout 10s test "$$( timeout 10s rg -n 'canonical_journal_reopen' crates/forge/src/client/startup_recovery.rs | timeout 10s wc -l )" = 1; \
+	timeout 10s test "$$( timeout 10s rg -n '^pub\(super\) fn reopen_canonical_journal\(' "$$reopen" | timeout 10s wc -l )" = 1; \
+	timeout 10s grep -Fqx 'pub(super) enum CanonicalJournalReopenError {' "$$reopen"; \
+	timeout 10s rg -U -q '^pub\(super\) fn reopen_canonical_journal\(\n    installation: &Installation,\n\) -> Result<\(TransitionJournalStore, Option<TransitionRecord>\), CanonicalJournalReopenError> \{' "$$reopen"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' "$$executor" )" = 1; \
+	timeout 10s grep -Fqx '    let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackResumeRouteReopenError::from);' "$$executor"; \
+	clone_line="$$( timeout 10s grep -nF '    let installation = authority.installation().clone();' "$$executor" | timeout 10s cut -d: -f1 )"; \
+	advance_line="$$( timeout 10s grep -nF '    let advance = journal.advance(&source_record, &successor);' "$$executor" | timeout 10s cut -d: -f1 )"; \
+	drop_authority_line="$$( timeout 10s grep -nF '    drop(authority);' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	drop_journal_line="$$( timeout 10s grep -nF '    drop(journal);' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	reopen_line="$$( timeout 10s grep -nF '    let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackResumeRouteReopenError::from);' "$$executor" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$clone_line" -lt "$$advance_line"; \
+	timeout 10s test "$$advance_line" -lt "$$drop_authority_line"; \
+	timeout 10s test "$$drop_authority_line" -lt "$$drop_journal_line"; \
+	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
+	suffix="$$( timeout 10s sed -n '/    let advance = journal.advance(&source_record, &successor);/,/    let reopened = reopen_canonical_journal/p' "$$executor" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    drop(authority);' <<<"$$suffix" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    drop(journal);' <<<"$$suffix" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' <<<"$$suffix" )" = 1; \
+	if timeout 10s rg -n 'retained_mutable_cast_directory|open_in_retained_cast|journal\.load\(' "$$executor"; then exit 1; fi; \
+	timeout 10s rg -U -q 'installation\.revalidate_mutable_namespace\(\)\?;\n    let cast = installation\.retained_mutable_cast_directory\(\)\?;\n    let journal = TransitionJournalStore::open_in_retained_cast\(cast, &installation\.root\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;\n    let record = journal\.load\(\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;' "$$reopen"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    installation.revalidate_mutable_namespace()?;' "$$reopen" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'installation.retained_mutable_cast_directory()?' "$$reopen" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'TransitionJournalStore::open_in_retained_cast(' "$$reopen" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal.load()?' "$$reopen" )" = 1; \
+	timeout 10s grep -Fqx '            CanonicalJournalReopenError::Installation(source) => Self::Installation(source),' "$$executor"; \
+	timeout 10s grep -Fqx '            CanonicalJournalReopenError::Journal(source) => Self::Journal(source),' "$$executor"; \
+	if timeout 10s rg -n 'Phase|rollback_decision|rollback_successor|forward_successor|TransitionJournalStore::(open|open_retained|try_open_in_retained_cast)\(|std::fs|fs::|File::open|OpenOptions|openat|AsRawFd|IntoRawFd|FromRawFd|AsFd|RawFd|BorrowedFd|OwnedFd|unsafe[[:space:]]*\{' "$$reopen"; then exit 1; fi; \
+	if timeout 10s rg -n 'forward_successor|RollbackActionOutcome|transition_identity|linux_fs|std::fs|nix::|renameat|unlinkat|linkat|sync_all|sync_data|write_all|set_permissions|create_dir|remove_dir|remove_file|hard_link|symlink|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|exchange_forward|exchange_reverse|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$executor" "$$authority" "$$proof" "$$reopen"; then exit 1; fi; \
 	if timeout 10s rg -n 'PendingSystemTransition|ActivationNamespaceEvidence' "$$executor" "$$authority" "$$proof"; then exit 1; fi; \
 	timeout 10s awk '$$0 == "pub(in crate::client) fn persist_usr_rollback_resume_route_and_reopen(" { state = 1; next } state == 1 && $$0 == "    journal: TransitionJournalStore," { state = 2; next } state == 2 && $$0 ~ /authority: UsrRollbackResumeRouteAuthority/ { found = 1 } END { exit !found }' "$$executor"; \
 	if timeout 10s rg -n 'journal: &[[:space:]]*TransitionJournalStore' "$$executor"; then exit 1; fi; \
@@ -61,6 +91,9 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s grep -Fq 'decision.rollback_successor(None).unwrap()' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'retained_exchange_syscall_count() == 1' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'assert_eq!(pending.phase(), Phase::ReverseExchangeIntent);' "$$forward_support"; \
+	for file in "$$executor" "$$authority" "$$proof" "$$reopen" misc/make/startup-rollback-resume-route-tests.mk; do \
+		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
+	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \
 		'client::startup_recovery::usr_rollback_resume_route::tests::' \
 		-- --test-threads=1; \
