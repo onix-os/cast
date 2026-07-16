@@ -7,7 +7,8 @@
 	stone-recipe-derivation-validation-test stone-recipe-build-lock-test \
 	stone-recipe-package-validation-test \
 	stone-recipe-build-policy-validation-test stone-recipe-build-policy-contract-test \
-	tools-buildinfo-semantic-fingerprint-test container-cgroup-test \
+	stone-recipe-build-policy-patch-test tools-buildinfo-semantic-fingerprint-test \
+	container-cgroup-test \
 	container-process-runtime-test container-mount-boundary-test \
 	container-root-host-safe-test mason-package-collect-test \
 	mason-package-collect-transaction-test mason-analysis-handler-test mason-emit-test \
@@ -15,7 +16,7 @@
 	mason-git-materialization-test mason-paths-test mason-executor-test \
 	mason-build-context-test mason-recipe-explanation-test \
 	mason-upstream-git-cache-test mason-build-root-test mason-profile-test \
-	mason-planner-bootstrap-test \
+	mason-planner-bootstrap-test mason-policy-test \
 	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
@@ -271,8 +272,16 @@ stone-recipe-build-policy-contract-test:
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --test build_policy -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^[^:][^:]*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 31; \
+	timeout 10s test "$$count" = 32; \
 	timeout 900s $(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
+
+stone-recipe-build-policy-patch-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --test build_policy_patch -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^[^:][^:]*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 7; \
+	timeout 900s $(CARGO) test -p stone_recipe --test build_policy_patch -- --test-threads=1
 
 tools-buildinfo-semantic-fingerprint-test:
 	@set -eu; \
@@ -526,6 +535,14 @@ mason-planner-bootstrap-test:
 	count="$$( timeout 10s grep -c '^planner::hermetic_tests::bootstrap::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 11; \
 	timeout 1200s $(CARGO) test -p mason --lib "planner::hermetic_tests::bootstrap::" -- --test-threads=1
+
+mason-policy-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^policy::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 11; \
+	timeout 900s $(CARGO) test -p mason --lib "policy::tests::" -- --test-threads=1
 
 config-gluon-store-test:
 	@set -eu; \

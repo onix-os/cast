@@ -1,19 +1,17 @@
-use gluon_config::{Evaluator, Source};
+use gluon_config::{Evaluator, Source, SourceRoot};
 use stone_recipe::build_policy::{
     AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, EnvironmentBindingSpec,
-    EnvironmentCondition, RetiredTargetPolicySpec, TextSpec, ValuePatch, evaluate_gluon, evaluate_patch_gluon,
+    EnvironmentCondition, RetiredTargetPolicySpec, TextSpec, ValuePatch, evaluate_gluon_with, evaluate_patch_gluon,
     evaluate_patch_gluon_with, evaluate_patch_gluon_with_inputs,
 };
 
-fn repository_policy_source() -> Source {
-    Source::new(
-        "crates/mason/data/policy/default.glu",
-        include_str!("../../mason/data/policy/default.glu"),
-    )
-}
-
 fn repository_policy() -> stone_recipe::build_policy::BuildPolicySpec {
-    evaluate_gluon(&repository_policy_source()).unwrap().policy
+    let source_root = SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
+    let evaluator = Evaluator::default().with_source_root(source_root.clone());
+    let source = source_root
+        .load("default.glu", evaluator.limits().max_source_bytes)
+        .unwrap();
+    evaluate_gluon_with(&evaluator, &source).unwrap().policy
 }
 
 fn authored_patch(body: &str) -> Source {

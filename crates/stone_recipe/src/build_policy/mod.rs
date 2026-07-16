@@ -781,8 +781,6 @@ impl BuildPolicyPatchSpec {
 
 #[cfg(test)]
 mod tests {
-    use gluon_config::Source;
-
     use super::validation::ResourceValidator;
     use super::*;
 

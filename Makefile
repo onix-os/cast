@@ -27,7 +27,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 include misc/make/hardening-tests.mk
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone help
 
@@ -95,6 +95,12 @@ binary-layout:
 
 product-names:
 	@"$(TOP_DIR)/misc/scripts/check-product-names.sh"
+
+source-loc:
+	@timeout 120s bash "$(TOP_DIR)/misc/scripts/check-source-loc.sh"
+
+source-loc-test:
+	@timeout 120s bash "$(TOP_DIR)/misc/scripts/test-check-source-loc.sh"
 
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
@@ -835,6 +841,7 @@ help:
 	@echo "  stone-recipe-package-validation-test  Run extracted package validation and limit tests"
 	@echo "  stone-recipe-build-policy-validation-test  Run extracted policy validation and budget tests"
 	@echo "  stone-recipe-build-policy-contract-test  Run repository policy ABI and validation tests"
+	@echo "  stone-recipe-build-policy-patch-test  Run total policy-patch composition tests"
 	@echo "  tools-buildinfo-semantic-fingerprint-test  Run semantic source-fingerprint tests"
 	@echo "  container-cgroup-test  Run all extracted cgroup lifecycle and parser tests"
 	@echo "  container-process-runtime-test  Run host-safe process-runtime, pidfd, and signal tests"
@@ -855,6 +862,7 @@ help:
 	@echo "  mason-build-root-test  Run exact frozen-root input and binding tests"
 	@echo "  mason-profile-test  Run typed Gluon profile loading and persistence tests"
 	@echo "  mason-planner-bootstrap-test  Run pinned execution-closure planner tests"
+	@echo "  mason-policy-test  Run rooted policy composition and provenance tests"
 	@echo "  config-gluon-store-test  Run all descriptor-rooted Gluon fragment store tests"
 	@echo "  gitwrap-repository-fs-test  Run repository filesystem identity, quota, and mirror tests"
 	@echo "  gitwrap-all-test  Run every direct Gitwrap runtime and repository test"
@@ -889,6 +897,8 @@ help:
 	@echo "  product-names  Reject active references to retired product names"
 	@echo "  config-formats  Reject YAML/KDL outside external-service interfaces"
 	@echo "  config-formats-test  Test the configuration-format gate"
+	@echo "  source-loc    Enforce the 1000-line limit on tracked repo-owned text"
+	@echo "  source-loc-test  Test tracked-path classification and LOC boundaries"
 	@echo "  migrate       Apply all Forge database migrations"
 	@echo "  migrate-redo  Reapply all Forge database migrations"
 	@echo "  libstone      Build and run the C libstone example"

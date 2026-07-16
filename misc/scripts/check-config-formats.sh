@@ -95,8 +95,10 @@ is_allowed_runtime_reference() {
     local in_test_module=$3
 
     case "${path}" in
-        'crates/config/src/gluon.rs')
-            [[ "${in_test_module}" == true ]] || return 1
+        'crates/config/src/gluon/tests.rs')
+            # This whole file is the cfg(test)-only external test module for
+            # the Gluon loader. Keep the exception bound to its canonical
+            # path and to the exact negative-test statements below.
             case "${line}" in
                 'fn load_gluon_never_falls_back_to_yaml_or_kdl() {' \
                     | 'write(temporary.path().join("dummy.yaml"), "not: valid: yaml");' \

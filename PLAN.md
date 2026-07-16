@@ -753,7 +753,7 @@ macro compatibility path remains.
   the Makefile, then delete every merged branch locally and remotely. Leave
   exactly `develop` and `main`; `main` must remain untouched throughout this
   work (no merge, rebase, reset, or direct commit).
-- [ ] Enforce a hard maximum of 1,000 lines for every repository-owned source,
+- [x] Enforce a hard maximum of 1,000 lines for every repository-owned source,
   test, script, configuration, and documentation file before repository
   closure, regardless of whether it is fork-authored or inherited. Add a
   Makefile gate that inventories tracked files and fails above the limit; split

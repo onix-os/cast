@@ -486,22 +486,11 @@ impl BootstrapPlanningMatrix {
             .join(history)
             .join(&closure.repository.architecture);
 
-        fs::create_dir_all(data_dir.join("policy")).unwrap();
+        super::write_repository_policy_fixture(&data_dir);
         fs::create_dir_all(config_dir.join("profile.d")).unwrap();
         fs::create_dir_all(&recipes_dir).unwrap();
         fs::create_dir_all(&history_dir).unwrap();
         fs::create_dir_all(&output_dir).unwrap();
-        fs::write(
-            data_dir.join("policy/policy.glu"),
-            include_str!("../../../data/policy/policy.glu"),
-        )
-        .unwrap();
-        fs::write(
-            data_dir.join("policy/default.glu"),
-            include_str!("../../../data/policy/default.glu"),
-        )
-        .unwrap();
-
         let index_path = history_dir.join("stone.index");
         fs::copy(bootstrap_root().join("stone.index"), &index_path).unwrap();
         fs::write(

@@ -204,8 +204,8 @@ pass_content_case \
 
 pass_content_case \
     'exact no-fallback negative-test strings' \
-    'crates/config/src/gluon.rs' \
-    $'#[cfg(test)]\nmod tests {\nfn load_gluon_never_falls_back_to_yaml_or_kdl() {\nwrite(temporary.path().join("dummy.yaml"), "not: valid: yaml");\nwrite(temporary.path().join("dummy.kdl"), "not valid kdl {");\nwrite(path.with_extension("yaml"), "legacy: true");\nassert!(path.with_extension("kdl").exists());\n}\n}'
+    'crates/config/src/gluon/tests.rs' \
+    $'fn load_gluon_never_falls_back_to_yaml_or_kdl() {\nwrite(temporary.path().join("dummy.yaml"), "not: valid: yaml");\nwrite(temporary.path().join("dummy.kdl"), "not valid kdl {");\nwrite(path.with_extension("yaml"), "legacy: true");\nassert!(path.with_extension("kdl").exists());\n}'
 
 fail_content_case \
     'negative-test line is allowed only inside the test module' \
@@ -216,7 +216,7 @@ fail_content_case \
 fail_content_case \
     'negative-test source path is not a blanket exception' \
     'serde_yaml::from_str' \
-    'crates/config/src/gluon.rs' \
+    'crates/config/src/gluon/tests.rs' \
     'let legacy = serde_yaml::from_str(source)?;'
 
 pass_content_case \

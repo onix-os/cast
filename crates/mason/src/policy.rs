@@ -341,11 +341,16 @@ mod tests {
 
     const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.glu");
     const REPOSITORY_DEFAULT: &str = include_str!("../data/policy/default.glu");
+    const REPOSITORY_TUNING_FLAGS: &str = include_str!("../data/policy/tuning/flags.glu");
+    const REPOSITORY_TUNING_GROUPS: &str = include_str!("../data/policy/tuning/groups.glu");
 
     fn fixture(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("tuning")).unwrap();
         fs::write(root.path().join("policy.glu"), manifest).unwrap();
         fs::write(root.path().join("default.glu"), REPOSITORY_DEFAULT).unwrap();
+        fs::write(root.path().join("tuning/flags.glu"), REPOSITORY_TUNING_FLAGS).unwrap();
+        fs::write(root.path().join("tuning/groups.glu"), REPOSITORY_TUNING_GROUPS).unwrap();
         root
     }
 
@@ -443,6 +448,16 @@ mod tests {
                 .iter()
                 .any(|module| module.logical_name == "cast.build_policy.v5")
         );
+        for expected in ["tuning/flags.glu", "tuning/groups.glu"] {
+            assert!(
+                transition
+                    .evaluation
+                    .imported_modules
+                    .iter()
+                    .any(|module| module.logical_name == expected),
+                "missing repository policy module {expected} from evaluation provenance"
+            );
+        }
     }
 
     #[test]
@@ -636,6 +651,42 @@ b.policy_patch {
             first.provenance.root.explicit_inputs_sha256,
             composition_digest(&first.provenance)
         );
+    }
+
+    #[test]
+    fn tuning_module_bytes_participate_in_transition_and_composed_identity() {
+        for (logical_name, source) in [
+            ("tuning/flags.glu", REPOSITORY_TUNING_FLAGS),
+            ("tuning/groups.glu", REPOSITORY_TUNING_GROUPS),
+        ] {
+            let baseline_root = fixture(REPOSITORY_MANIFEST);
+            let changed_root = fixture(REPOSITORY_MANIFEST);
+            fs::write(
+                changed_root.path().join(logical_name),
+                format!("{source}\n// identity-only module change\n"),
+            )
+            .unwrap();
+
+            let baseline = BuildPolicy::load_from(baseline_root.path()).unwrap();
+            let changed = BuildPolicy::load_from(changed_root.path()).unwrap();
+            let baseline_transition = &baseline.provenance.layers[0].transitions[0].evaluation;
+            let changed_transition = &changed.provenance.layers[0].transitions[0].evaluation;
+            let baseline_module = baseline_transition
+                .imported_modules
+                .iter()
+                .find(|module| module.logical_name == logical_name)
+                .unwrap();
+            let changed_module = changed_transition
+                .imported_modules
+                .iter()
+                .find(|module| module.logical_name == logical_name)
+                .unwrap();
+
+            assert_eq!(baseline.spec, changed.spec);
+            assert_ne!(baseline_module.sha256, changed_module.sha256);
+            assert_ne!(baseline_transition.sha256, changed_transition.sha256);
+            assert_ne!(baseline.provenance.root.sha256, changed.provenance.root.sha256);
+        }
     }
 
     #[test]

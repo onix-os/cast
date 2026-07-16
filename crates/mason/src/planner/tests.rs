@@ -111,6 +111,31 @@ const PACKAGE_EXAMPLES: [&str; 57] = [
     "variant-matrix-factory",
     "zig-project",
 ];
+
+fn write_repository_policy_fixture(data_dir: &Path) {
+    let policy_dir = data_dir.join("policy");
+    fs::create_dir_all(policy_dir.join("tuning")).unwrap();
+    fs::write(
+        policy_dir.join("policy.glu"),
+        include_str!("../../data/policy/policy.glu"),
+    )
+    .unwrap();
+    fs::write(
+        policy_dir.join("default.glu"),
+        include_str!("../../data/policy/default.glu"),
+    )
+    .unwrap();
+    fs::write(
+        policy_dir.join("tuning/flags.glu"),
+        include_str!("../../data/policy/tuning/flags.glu"),
+    )
+    .unwrap();
+    fs::write(
+        policy_dir.join("tuning/groups.glu"),
+        include_str!("../../data/policy/tuning/groups.glu"),
+    )
+    .unwrap();
+}
 const EXECUTION_FIXTURES: [&str; 12] = [
     "autotools",
     "autotools-options",
@@ -214,22 +239,12 @@ impl Fixture {
         let recipe_path = recipe_dir.join("stone.glu");
         let repository_index = repository_dir.join("stone.index");
 
-        fs::create_dir_all(data_dir.join("policy")).unwrap();
+        write_repository_policy_fixture(&data_dir);
         fs::create_dir_all(config_dir.join("profile.d")).unwrap();
         fs::create_dir_all(&recipe_dir).unwrap();
         fs::create_dir_all(&repository_dir).unwrap();
         fs::create_dir_all(&output_dir).unwrap();
 
-        fs::write(
-            data_dir.join("policy/policy.glu"),
-            include_str!("../../data/policy/policy.glu"),
-        )
-        .unwrap();
-        fs::write(
-            data_dir.join("policy/default.glu"),
-            include_str!("../../data/policy/default.glu"),
-        )
-        .unwrap();
         fs::write(&recipe_path, RECIPE).unwrap();
 
         let index_uri = Url::from_file_path(&repository_index).unwrap();
@@ -348,22 +363,11 @@ impl PackageExampleMatrix {
         let repository_dir = root.path().join("repository");
         let repository_index = repository_dir.join("stone.index");
 
-        fs::create_dir_all(data_dir.join("policy")).unwrap();
+        write_repository_policy_fixture(&data_dir);
         fs::create_dir_all(config_dir.join("profile.d")).unwrap();
         fs::create_dir_all(&recipes_dir).unwrap();
         fs::create_dir_all(&repository_dir).unwrap();
         fs::create_dir_all(&output_dir).unwrap();
-        fs::write(
-            data_dir.join("policy/policy.glu"),
-            include_str!("../../data/policy/policy.glu"),
-        )
-        .unwrap();
-        fs::write(
-            data_dir.join("policy/default.glu"),
-            include_str!("../../data/policy/default.glu"),
-        )
-        .unwrap();
-
         let index_uri = Url::from_file_path(&repository_index).unwrap();
         fs::write(
             config_dir.join("profile.d/planner-example-matrix.glu"),

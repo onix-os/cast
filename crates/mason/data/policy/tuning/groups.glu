@@ -1,0 +1,862 @@
+let p = import! cast.build_policy.v5
+
+let tuning_groups = [
+        p.tuning.group {
+            name = "architecture",
+            value = {
+                base = {
+                    enabled = [
+                        "architecture",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "base",
+            value = {
+                base = {
+                    enabled = [
+                        "base",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "debug",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "std",
+                choices = [
+                    p.tuning.choice {
+                        name = "lines",
+                        value = {
+                            enabled = [
+                                "debug-lines",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "std",
+                        value = {
+                            enabled = [
+                                "debug-std",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "compress-debug",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "zstd",
+                choices = [
+                    p.tuning.choice {
+                        name = "none",
+                        value = {
+                            enabled = [
+                                "compress-debug-none",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "zlib",
+                        value = {
+                            enabled = [
+                                "compress-debug-zlib",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "zstd",
+                        value = {
+                            enabled = [
+                                "compress-debug-zstd",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "frame-pointer",
+            value = {
+                base = {
+                    enabled = [
+                        "no-omit-frame-pointer",
+                    ],
+                    disabled = [
+                        "omit-frame-pointer",
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "build-id",
+            value = {
+                base = {
+                    enabled = [
+                        "build-id",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "bindnow",
+            value = {
+                base = {
+                    enabled = [
+                        "bindnow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "symbolic",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "functions",
+                choices = [
+                    p.tuning.choice {
+                        name = "all",
+                        value = {
+                            enabled = [
+                                "symbolic-all",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "functions",
+                        value = {
+                            enabled = [
+                                "symbolic-functions",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "nonweak",
+                        value = {
+                            enabled = [
+                                "symbolic-nonweak",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "fortify",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "lvl3",
+                choices = [
+                    p.tuning.choice {
+                        name = "lvl1",
+                        value = {
+                            enabled = [
+                                "fortify-lvl1",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl2",
+                        value = {
+                            enabled = [
+                                "fortify-lvl2",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl3",
+                        value = {
+                            enabled = [
+                                "fortify-lvl3",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "harden",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                        "harden-none",
+                    ],
+                },
+                default = p.tuning.default_choice "lvl1",
+                choices = [
+                    p.tuning.choice {
+                        name = "none",
+                        value = {
+                            enabled = [
+                                "harden-none",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl1",
+                        value = {
+                            enabled = [
+                                "harden-lvl1",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "lvl2",
+                        value = {
+                            enabled = [
+                                "harden-lvl2",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "control-flow",
+            value = {
+                base = {
+                    enabled = [
+                        "control-flow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "libstdc-assertions",
+            value = {
+                base = {
+                    enabled = [
+                        "libstdc-assertions",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "thread-exceptions",
+            value = {
+                base = {
+                    enabled = [
+                        "thread-exceptions",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "optimize",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "generic",
+                choices = [
+                    p.tuning.choice {
+                        name = "fast",
+                        value = {
+                            enabled = [
+                                "optimize-fast",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "generic",
+                        value = {
+                            enabled = [
+                                "optimize-generic",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "size",
+                        value = {
+                            enabled = [
+                                "optimize-size",
+                                "sections",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "speed",
+                        value = {
+                            enabled = [
+                                "optimize-speed",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "lto",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "thin",
+                choices = [
+                    p.tuning.choice {
+                        name = "full",
+                        value = {
+                            enabled = [
+                                "lto-full",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "thin",
+                        value = {
+                            enabled = [
+                                "lto-thin",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "ltoextra",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "thin",
+                choices = [
+                    p.tuning.choice {
+                        name = "full",
+                        value = {
+                            enabled = [
+                                "ltoextra-full",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "thin",
+                        value = {
+                            enabled = [
+                                "ltoextra-thin",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "lto-errors",
+            value = {
+                base = {
+                    enabled = [
+                        "lto-errors",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "fat-lto",
+            value = {
+                base = {
+                    enabled = [
+                        "fat-lto",
+                    ],
+                    disabled = [
+                        "fat-lto-none",
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "icf",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "safe",
+                choices = [
+                    p.tuning.choice {
+                        name = "safe",
+                        value = {
+                            enabled = [
+                                "icf-safe",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "all",
+                        value = {
+                            enabled = [
+                                "icf-all",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "idae",
+            value = {
+                base = {
+                    enabled = [
+                        "idae",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "polly",
+            value = {
+                base = {
+                    enabled = [
+                        "polly",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "sections",
+            value = {
+                base = {
+                    enabled = [
+                        "sections",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "common",
+            value = {
+                base = {
+                    enabled = [
+                        "common",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "math",
+            value = {
+                base = {
+                    enabled = [
+                        "math",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "noplt",
+            value = {
+                base = {
+                    enabled = [
+                        "noplt",
+                        "bindnow",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "nosemantic",
+            value = {
+                base = {
+                    enabled = [
+                        "nosemantic",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "nodaed",
+            value = {
+                base = {
+                    enabled = [
+                        "nodaed",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "asneeded",
+            value = {
+                base = {
+                    enabled = [
+                        "asneeded",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "avxwidth",
+            value = {
+                base = {
+                    enabled = [
+                        "avxwidth-128",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "bolt",
+            value = {
+                base = {
+                    enabled = [
+                        "bolt",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "runpath",
+            value = {
+                base = {
+                    enabled = [
+                        "runpath",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "sse2avx",
+            value = {
+                base = {
+                    enabled = [
+                        "sse2avx",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "pch-instantiate",
+            value = {
+                base = {
+                    enabled = [
+                        "pch-instantiate",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "visibility",
+            value = {
+                base = {
+                    enabled = [
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.default_choice "inline",
+                choices = [
+                    p.tuning.choice {
+                        name = "inline",
+                        value = {
+                            enabled = [
+                                "visibility-inline",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                    p.tuning.choice {
+                        name = "hidden",
+                        value = {
+                            enabled = [
+                                "visibility-hidden",
+                            ],
+                            disabled = [
+                            ],
+                        },
+                    },
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "relative-vtables",
+            value = {
+                base = {
+                    enabled = [
+                        "relative-vtables",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "relr",
+            value = {
+                base = {
+                    enabled = [
+                        "relr",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "tls-gnu",
+            value = {
+                base = {
+                    enabled = [
+                        "tls-gnu",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "version-allow-undefined",
+            value = {
+                base = {
+                    enabled = [
+                        "version-allow-undefined",
+                    ],
+                    disabled = [
+                        "version-no-undefined",
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "golang-ldflags",
+            value = {
+                base = {
+                    enabled = [
+                        "golang-ldflags",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+        p.tuning.group {
+            name = "golang-modflags",
+            value = {
+                base = {
+                    enabled = [
+                        "golang-modflags",
+                    ],
+                    disabled = [
+                    ],
+                },
+                default = p.tuning.no_choice,
+                choices = [
+                ],
+            },
+        },
+]
+
+tuning_groups

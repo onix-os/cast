@@ -1,10 +1,11 @@
 fn repository_policy() -> BuildPolicySpec {
-    evaluate_gluon(&Source::new(
-        "crates/mason/data/policy/default.glu",
-        include_str!("../../../../../mason/data/policy/default.glu"),
-    ))
-    .unwrap()
-    .policy
+    let source_root =
+        gluon_config::SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
+    let evaluator = gluon_config::Evaluator::default().with_source_root(source_root.clone());
+    let source = source_root
+        .load("default.glu", evaluator.limits().max_source_bytes)
+        .unwrap();
+    evaluate_gluon_with(&evaluator, &source).unwrap().policy
 }
 
 #[test]
