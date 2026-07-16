@@ -5,6 +5,8 @@
 //! into one raw attempt and classifies only a fresh capture. Finishing consumes
 //! exact PRE evidence without making an exchange attempt.
 
+mod durability;
+
 use crate::{Installation, transition_journal::TransitionRecord};
 
 use super::{
@@ -19,19 +21,30 @@ use crate::client::startup_reconciliation::activation_namespace::{
     policy::UsrExchangeLayout,
 };
 
+pub(in crate::client::startup_reconciliation) use durability::UsrRollbackReverseDurableNamespace;
+#[cfg(test)]
+pub(in crate::client) use durability::{
+    UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
+    arm_before_usr_rollback_reverse_namespace_final_pre_capture,
+    arm_before_usr_rollback_reverse_namespace_installation_root_sync,
+    arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,
+    take_usr_rollback_reverse_namespace_durability_events,
+};
+
 /// Opaque POST-to-PRE namespace authority retained after fresh reconciliation.
 #[must_use = "an applied reverse exchange still requires parent durability"]
-#[allow(dead_code)] // consumed by the later reverse-parent durability checkpoint
+#[allow(dead_code)] // retained behind the unwired reverse durability executor
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseAppliedNamespace {
-    _reconciliation: AppliedReverseExchangeReconciliation,
+    reconciliation: AppliedReverseExchangeReconciliation,
 }
 
 /// Opaque exact-PRE namespace authority produced without an exchange attempt.
 #[must_use = "an already-satisfied reverse exchange still requires parent durability"]
-#[allow(dead_code)] // consumed by the later reverse-parent durability checkpoint
+#[allow(dead_code)] // retained behind the unwired reverse durability executor
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseAlreadySatisfiedNamespace {
-    _parents: RetainedReverseExchangeParents,
-    _fresh_pre: NamespaceSnapshot,
+    parents: RetainedReverseExchangeParents,
+    fresh_pre: NamespaceSnapshot,
+    fresh_pre_projection: ProjectedReverseNamespace,
 }
 
 /// Semantic result of consuming one exact POST namespace effect capability.
@@ -68,7 +81,7 @@ impl UsrRollbackReverseNamespaceEffectEvidence {
         Ok(match pending.reconcile(installation, record, baseline, projection) {
             ReverseExchangeReconciliation::Applied(reconciliation) => {
                 UsrRollbackReverseNamespaceApplyReconciliation::Applied(UsrRollbackReverseAppliedNamespace {
-                    _reconciliation: reconciliation,
+                    reconciliation,
                 })
             }
             ReverseExchangeReconciliation::NotApplied => UsrRollbackReverseNamespaceApplyReconciliation::NotApplied,
@@ -84,12 +97,13 @@ impl UsrRollbackReverseNamespaceEffectEvidence {
     ) -> Result<UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseNamespaceError> {
         let FinalReverseNamespace {
             baseline,
-            projection: _projection,
+            projection,
             parents,
         } = self.final_exact_namespace(installation, record, UsrExchangeLayout::Pre)?;
         Ok(UsrRollbackReverseAlreadySatisfiedNamespace {
-            _parents: parents,
-            _fresh_pre: baseline,
+            parents,
+            fresh_pre: baseline,
+            fresh_pre_projection: projection,
         })
     }
 

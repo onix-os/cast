@@ -1,0 +1,164 @@
+//! Authority-level completion of reverse `/usr` parent durability.
+//!
+//! Distinct Applied and AlreadySatisfied reconciliation typestates converge
+//! only after the namespace layer has synced both retained parents and proved
+//! a final exact durable PRE layout. The rollback outcome is constructed here,
+//! after that proof, and is never accepted from a caller.
+
+use crate::{
+    Installation, db,
+    transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+};
+
+use super::{
+    ReconciledReverseEffect, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
+    UsrRollbackReverseAppliedEffectAuthority, require_post_namespace_evidence, require_pre_namespace_evidence,
+};
+use crate::client::{
+    active_state_snapshot::ActiveStateReservation,
+    startup_reconciliation::{
+        DatabaseEvidence, UsrRollbackReverseAuthorityError,
+        activation_namespace::{
+            UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,
+            UsrRollbackReverseDurableNamespace,
+        },
+        usr_rollback_reverse_authority::UsrRollbackReverseAuthorityErrorKind,
+    },
+    startup_recovery::UsrRollbackReverseDurabilitySeal,
+};
+
+/// Opaque post-durability authority for the later exact journal successor.
+///
+/// This type can exist only after staging-parent sync, installation-root sync,
+/// and the low-level final durable PRE proof all succeeded.
+#[must_use = "durable rollback-reverse evidence still requires exact journal persistence"]
+#[allow(dead_code)] // consumed by the later rollback-reverse persistence checkpoint
+pub(in crate::client) struct UsrRollbackReverseDurableEffectAuthority<'reservation> {
+    _effect: DurableReverseEffect<'reservation>,
+    outcome: RollbackActionOutcome,
+}
+
+#[allow(dead_code)] // consumed by the later rollback-reverse persistence checkpoint
+struct DurableReverseEffect<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: UsrRollbackReverseDurableNamespace,
+    journal_binding: TransitionJournalBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+impl<'reservation> UsrRollbackReverseAppliedEffectAuthority<'reservation> {
+    /// Complete parent durability for an exchange applied by this invocation.
+    pub(in crate::client) fn complete_parent_durability(
+        self,
+        _seal: &UsrRollbackReverseDurabilitySeal,
+        journal: &TransitionJournalStore,
+    ) -> Result<UsrRollbackReverseDurableEffectAuthority<'reservation>, UsrRollbackReverseAuthorityError> {
+        // The per-open binding is the first retained evidence observation.
+        if !journal.has_binding(&self._effect.journal_binding) {
+            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
+        }
+        let effect = self._effect.complete_parent_durability_after_binding(journal)?;
+        Ok(UsrRollbackReverseDurableEffectAuthority {
+            _effect: effect,
+            outcome: RollbackActionOutcome::Applied,
+        })
+    }
+}
+
+impl<'reservation> UsrRollbackReverseAlreadySatisfiedEffectAuthority<'reservation> {
+    /// Complete parent durability for exact PRE evidence without an exchange.
+    pub(in crate::client) fn complete_parent_durability(
+        self,
+        _seal: &UsrRollbackReverseDurabilitySeal,
+        journal: &TransitionJournalStore,
+    ) -> Result<UsrRollbackReverseDurableEffectAuthority<'reservation>, UsrRollbackReverseAuthorityError> {
+        // The per-open binding is the first retained evidence observation.
+        if !journal.has_binding(&self._effect.journal_binding) {
+            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
+        }
+        let effect = self._effect.complete_parent_durability_after_binding(journal)?;
+        Ok(UsrRollbackReverseDurableEffectAuthority {
+            _effect: effect,
+            outcome: RollbackActionOutcome::AlreadySatisfied,
+        })
+    }
+}
+
+impl<'reservation> ReconciledReverseEffect<'reservation, UsrRollbackReverseAppliedNamespace> {
+    fn complete_parent_durability_after_binding(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<DurableReverseEffect<'reservation>, UsrRollbackReverseAuthorityError> {
+        let Self {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_binding,
+            _active_state_reservation,
+        } = self;
+
+        require_pre_namespace_evidence(&installation, &state_db, &record, &database, journal)?;
+        let namespace_result = namespace.complete_parent_durability(&installation, &record);
+        let trailing_evidence = require_post_namespace_evidence(&installation, &state_db, &record, &database, journal);
+        let namespace = namespace_result?;
+        trailing_evidence?;
+
+        Ok(DurableReverseEffect {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_binding,
+            _active_state_reservation,
+        })
+    }
+}
+
+impl<'reservation> ReconciledReverseEffect<'reservation, UsrRollbackReverseAlreadySatisfiedNamespace> {
+    fn complete_parent_durability_after_binding(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<DurableReverseEffect<'reservation>, UsrRollbackReverseAuthorityError> {
+        let Self {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_binding,
+            _active_state_reservation,
+        } = self;
+
+        require_pre_namespace_evidence(&installation, &state_db, &record, &database, journal)?;
+        let namespace_result = namespace.complete_parent_durability(&installation, &record);
+        let trailing_evidence = require_post_namespace_evidence(&installation, &state_db, &record, &database, journal);
+        let namespace = namespace_result?;
+        trailing_evidence?;
+
+        Ok(DurableReverseEffect {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_binding,
+            _active_state_reservation,
+        })
+    }
+}
+
+#[cfg(test)]
+impl UsrRollbackReverseDurableEffectAuthority<'_> {
+    pub(in crate::client) fn outcome_for_test(&self) -> RollbackActionOutcome {
+        self.outcome
+    }
+}
+
+#[cfg(test)]
+mod tests;

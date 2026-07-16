@@ -1,9 +1,9 @@
 //! Classification and sealed semantic reconciliation of one durable startup
 //! transition.
 //!
-//! Admission remains read-only. Only a consumed rollback-reverse effect lease
-//! plus the startup-recovery seal can cross the private one-shot exchange
-//! boundary; this module still performs no parent sync, journal advance,
+//! Admission remains read-only. Only consumed rollback-reverse typestates plus
+//! startup-recovery seals can cross the private one-shot exchange and ordered
+//! parent-durability boundaries. This module still performs no journal advance,
 //! database mutation, cleanup, trigger, or broader recovery dispatch.
 
 use std::{fmt, path::PathBuf};
@@ -45,7 +45,7 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
     UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyEffectLease,
     UsrRollbackReverseApplyReconciliation, UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError,
-    UsrRollbackReverseFinishAuthority, UsrRollbackReverseFinishEffectLease,
+    UsrRollbackReverseDurableEffectAuthority, UsrRollbackReverseFinishAuthority, UsrRollbackReverseFinishEffectLease,
 };
 
 #[cfg(test)]

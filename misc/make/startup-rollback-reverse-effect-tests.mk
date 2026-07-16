@@ -23,9 +23,7 @@ forge-startup-usr-rollback-reverse-effect-test:
 	timeout 10s grep -Fqx '    Applied(UsrRollbackReverseAppliedEffectAuthority<'\''reservation>),' "$$authority"; \
 	timeout 10s grep -Fqx '    NotApplied,' "$$authority"; \
 	timeout 10s grep -Fqx '    Ambiguous,' "$$authority"; \
-	timeout 10s grep -Fqx '    outcome: RollbackActionOutcome,' "$$authority"; \
-	timeout 10s grep -Fq 'outcome: RollbackActionOutcome::Applied,' "$$authority"; \
-	timeout 10s grep -Fq 'outcome: RollbackActionOutcome::AlreadySatisfied,' "$$authority"; \
+	if timeout 10s rg -n 'RollbackActionOutcome|outcome:' "$$authority"; then exit 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        _effect_seal: &UsrRollbackReverseEffectSeal,' "$$authority" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        self,' "$$authority" )" -ge 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'if !journal.has_binding(&self.lease.journal_binding) {' "$$authority" )" = 2; \

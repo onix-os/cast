@@ -1,11 +1,12 @@
 //! Sealed admission and semantic reconciliation for one `/usr` reverse effect.
 //!
 //! Read-only POST/PRE evidence becomes disjoint opaque effect leases. A private
-//! child can consume either lease only with the startup-recovery seal: POST may
-//! make one exchange attempt and PRE makes none. This module deliberately stops
-//! before parent sync, journal advance, database mutation, cleanup, triggers,
-//! or production dispatch, and never exposes a namespace snapshot or raw
-//! retained descriptor.
+//! child can consume either lease only with startup-recovery seals: POST may
+//! make one exchange attempt and PRE makes none, then both paths converge only
+//! after ordered parent durability and a final exact PRE proof. This module
+//! deliberately stops before journal advance, database mutation, cleanup,
+//! triggers, or production dispatch, and never exposes a namespace snapshot or
+//! raw retained descriptor.
 
 mod effect_reconciliation;
 
@@ -29,7 +30,7 @@ use super::{
 
 pub(in crate::client) use effect_reconciliation::{
     UsrRollbackReverseAlreadySatisfiedEffectAuthority, UsrRollbackReverseAppliedEffectAuthority,
-    UsrRollbackReverseApplyReconciliation,
+    UsrRollbackReverseApplyReconciliation, UsrRollbackReverseDurableEffectAuthority,
 };
 
 /// Exact result of read-only reverse-effect admission.

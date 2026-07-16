@@ -10,7 +10,8 @@ use crate::{Installation, transition_identity::Error, transition_journal::Transi
 use super::PendingReverseExchangeReconciliation;
 use crate::client::startup_reconciliation::activation_namespace::{
     capture::{
-        CaptureError, NamespaceSnapshot, ProjectedReverseNamespace, RetainedReverseExchangeParents, capture_snapshot,
+        CaptureError, DurableReverseExchangeNamespace, NamespaceSnapshot, ProjectedReverseNamespace,
+        RetainedReverseExchangeParents, ReverseExchangeDurabilityError, capture_snapshot,
     },
     policy::UsrExchangeLayout,
 };
@@ -20,12 +21,45 @@ use crate::client::startup_reconciliation::activation_namespace::{
 /// The fields remain private to this functional module. Later durability work
 /// may consume this type here without exposing a descriptor or snapshot getter.
 #[must_use = "an applied reverse exchange still requires parent durability"]
-#[allow(dead_code)] // consumed by the later reverse durability checkpoint
+#[allow(dead_code)] // retained behind the unwired reverse durability executor
 pub(in crate::client::startup_reconciliation::activation_namespace) struct AppliedReverseExchangeReconciliation {
     parents: RetainedReverseExchangeParents,
     fresh_pre: NamespaceSnapshot,
     fresh_pre_projection: ProjectedReverseNamespace,
     raw_report: Result<(), Error>,
+}
+
+/// Opaque durable descendant of an applied reverse exchange. The raw syscall
+/// report remains retained as diagnostic evidence and is never interpreted as
+/// the semantic outcome.
+#[must_use = "durable applied reverse-exchange evidence must be consumed by persistence"]
+#[allow(dead_code)] // consumed by the later journal-persistence checkpoint
+pub(in crate::client::startup_reconciliation::activation_namespace) struct DurableAppliedReverseExchangeReconciliation {
+    _namespace: DurableReverseExchangeNamespace,
+    _raw_report: Result<(), Error>,
+}
+
+impl AppliedReverseExchangeReconciliation {
+    /// Consume applied reconciliation through the exact two-parent durability
+    /// sequence. `raw_report` is only transferred to the opaque completion;
+    /// it is not inspected before, during, or after the barriers.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn complete_parent_durability(
+        self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<DurableAppliedReverseExchangeReconciliation, ReverseExchangeDurabilityError> {
+        let Self {
+            parents,
+            fresh_pre,
+            fresh_pre_projection,
+            raw_report,
+        } = self;
+        let namespace = parents.complete_parent_durability(installation, record, fresh_pre, fresh_pre_projection)?;
+        Ok(DurableAppliedReverseExchangeReconciliation {
+            _namespace: namespace,
+            _raw_report: raw_report,
+        })
+    }
 }
 
 /// Namespace-derived result of exactly one reverse exchange attempt.

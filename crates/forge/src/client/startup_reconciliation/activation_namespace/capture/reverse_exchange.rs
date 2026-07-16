@@ -2,11 +2,13 @@
 //!
 //! The projection in this module remains mutation-free: it maps candidate and
 //! previous trees by permanent token, defines the sole metadata delta allowed
-//! by a POST-to-PRE exchange, and retains opaque parent descriptors for later
-//! value-only identity checks. The private [`effect`] child owns the single
-//! consuming syscall boundary without exposing descriptors or interpreting a
-//! raw syscall report as the namespace outcome.
+//! by a POST-to-PRE exchange, and retains opaque parent descriptors for both
+//! value-only identity checks and the exact ordered durability suffix. The
+//! private [`effect`] child owns the single consuming syscall boundary without
+//! exposing descriptors or interpreting a raw syscall report as the namespace
+//! outcome.
 
+mod durability;
 mod effect;
 
 use std::{fs::File, path::PathBuf};
@@ -24,10 +26,20 @@ use super::{
     StateIdFingerprint, TreeLocation, UsrFingerprint, WrapperFingerprint, controlled_directory_witness, open_directory,
 };
 
+pub(in crate::client::startup_reconciliation::activation_namespace) use durability::{
+    DurableReverseExchangeNamespace, ReverseExchangeDurabilityError,
+};
+#[cfg(test)]
+pub(in crate::client) use durability::{
+    ReverseExchangeDurabilityEvent, ReverseExchangeDurabilityFaultPoint, arm_before_reverse_exchange_final_pre_capture,
+    arm_before_reverse_exchange_installation_root_sync, arm_reverse_exchange_durability_fault,
+    reset_reverse_exchange_durability_events, take_reverse_exchange_durability_events,
+};
 #[cfg(test)]
 pub(in crate::client) use effect::arm_before_reverse_exchange_reconciliation_capture;
 pub(in crate::client::startup_reconciliation::activation_namespace) use effect::{
-    AppliedReverseExchangeReconciliation, PendingReverseExchangeReconciliation, ReverseExchangeReconciliation,
+    AppliedReverseExchangeReconciliation, DurableAppliedReverseExchangeReconciliation,
+    PendingReverseExchangeReconciliation, ReverseExchangeReconciliation,
 };
 
 /// Stable inode fields which a retained exchange must never change.

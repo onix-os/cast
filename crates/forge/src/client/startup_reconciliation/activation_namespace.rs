@@ -2,9 +2,10 @@
 //!
 //! Diagnostic inventory and admission are read-only. The independent
 //! rollback-decision and rollback-routing proofs expose no effects. A private
-//! rollback-reverse child may consume already sealed effect evidence into one
-//! exchange attempt, but exposes no descriptor, sync, persistence, cleanup,
-//! trigger, or general namespace-mutation API.
+//! rollback-reverse child may consume already sealed effect evidence through
+//! one exchange attempt and the exact ordered parent-durability suffix. It
+//! exposes no descriptor, persistence, cleanup, trigger, or general
+//! namespace-mutation API.
 
 mod capture;
 mod decision_proof;
@@ -37,14 +38,21 @@ pub(super) use resume_route_proof::{
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof,
 };
-#[cfg(test)]
-pub(in crate::client) use rollback_reverse_proof::arm_before_usr_rollback_reverse_effect_final_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use rollback_reverse_proof::arm_before_usr_rollback_reverse_fresh_namespace_capture;
 pub(super) use rollback_reverse_proof::{
     UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,
-    UsrRollbackReverseNamespaceApplyReconciliation, UsrRollbackReverseNamespaceEffectEvidence,
-    UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
+    UsrRollbackReverseDurableNamespace, UsrRollbackReverseNamespaceApplyReconciliation,
+    UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
+    UsrRollbackReverseNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use rollback_reverse_proof::{
+    UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
+    arm_before_usr_rollback_reverse_effect_final_namespace_capture,
+    arm_before_usr_rollback_reverse_fresh_namespace_capture,
+    arm_before_usr_rollback_reverse_namespace_final_pre_capture,
+    arm_before_usr_rollback_reverse_namespace_installation_root_sync,
+    arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,
+    take_usr_rollback_reverse_namespace_durability_events,
 };
 
 /// Complete read-only evidence collected around one startup assessment.

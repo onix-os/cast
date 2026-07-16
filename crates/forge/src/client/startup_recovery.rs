@@ -8,6 +8,7 @@
 mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
 mod usr_rollback_resume_route;
+mod usr_rollback_reverse_durability;
 
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
@@ -31,6 +32,11 @@ impl UsrRollbackReverseEffectSeal {
 pub(in crate::client) use usr_exchange_parent_durability::{
     UsrExchangeParentDurabilityCompletionSeal, UsrExchangeParentDurabilityError,
     normalize_usr_exchange_parent_durability,
+};
+#[allow(unused_imports)] // unwired until the reverse startup dispatcher lands
+pub(in crate::client) use usr_rollback_reverse_durability::{
+    UsrRollbackReverseDurabilityError, UsrRollbackReverseDurabilitySeal,
+    complete_already_satisfied_usr_rollback_reverse_durability, complete_applied_usr_rollback_reverse_durability,
 };
 
 #[cfg(test)]

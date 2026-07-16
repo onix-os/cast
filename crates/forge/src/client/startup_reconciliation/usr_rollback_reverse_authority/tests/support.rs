@@ -8,7 +8,7 @@ use crate::{
     },
     transition_journal::{
         InitialRollbackAction, Phase, RollbackActionOutcome, RollbackObservations, TransitionJournalStore,
-        TransitionRecord,
+        TransitionRecord, encode,
     },
 };
 
@@ -169,6 +169,20 @@ impl ReverseFixture {
         move || {
             database.clear_transition_if_matches(candidate, &transition).unwrap();
         }
+    }
+
+    pub(super) fn journal_change_hook(&self) -> impl FnOnce() + 'static {
+        let canonical = super::test_fixture::canonical_journal(&self.fixture.installation.root);
+        let changed = self
+            .record
+            .rollback_successor(Some(RollbackActionOutcome::Applied))
+            .unwrap();
+        let bytes = encode(&changed).unwrap();
+        move || fs::write(canonical, bytes).unwrap()
+    }
+
+    pub(super) fn durability_parent_identities(&self) -> ((u64, u64), (u64, u64)) {
+        self.fixture.durability_parent_identities()
     }
 }
 

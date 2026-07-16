@@ -14,7 +14,6 @@ use crate::{
         RetainedExchangeSyscallFault, arm_retained_exchange_syscall_fault, reset_retained_exchange_syscall_count,
         retained_exchange_syscall_count,
     },
-    transition_journal::RollbackActionOutcome,
 };
 
 use super::super::test_support::{EffectOperationKind, ReverseFixture, ReverseLayout};
@@ -48,7 +47,7 @@ fn startup_usr_rollback_reverse_apply_reconciles_every_raw_result_for_every_oper
             assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {fault:?}");
             match (expected_applied, reconciliation) {
                 (true, UsrRollbackReverseApplyReconciliation::Applied(authority)) => {
-                    assert_eq!(authority.outcome_for_test(), RollbackActionOutcome::Applied);
+                    drop(authority);
                     assert!(matches!(
                         fixture.capture(&journal, &reservation),
                         UsrRollbackReverseAdmission::Finish(_)
@@ -135,7 +134,7 @@ fn startup_usr_rollback_reverse_finish_is_zero_call_for_every_operation() {
         let authority = lease.reconcile(&seal, &journal).unwrap();
 
         assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?}");
-        assert_eq!(authority.outcome_for_test(), RollbackActionOutcome::AlreadySatisfied);
+        drop(authority);
         fixture.assert_non_namespace_unchanged();
         assert!(matches!(
             fixture.capture(&journal, &reservation),

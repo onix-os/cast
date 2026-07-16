@@ -5,9 +5,11 @@
 //! exact installation, database, and journal checks. No descriptor or retry
 //! capability escapes a non-applied result.
 
+mod durability;
+
 use crate::{
     Installation, db,
-    transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -24,12 +26,14 @@ use crate::client::{
     startup_recovery::UsrRollbackReverseEffectSeal,
 };
 
+pub(in crate::client) use durability::UsrRollbackReverseDurableEffectAuthority;
+
 /// Result of consuming one POST effect lease.
 ///
 /// Only `Applied` retains capability. The other variants are fieldless so a
 /// caller cannot retry an uncertain or known-unapplied one-shot attempt.
 #[must_use = "a consumed rollback-reverse apply lease must be handled"]
-#[allow(dead_code)] // consumed by the later durability/persistence executor
+#[allow(dead_code)] // consumed only through the unwired durability executor
 pub(in crate::client) enum UsrRollbackReverseApplyReconciliation<'reservation> {
     Applied(UsrRollbackReverseAppliedEffectAuthority<'reservation>),
     NotApplied,
@@ -39,7 +43,7 @@ pub(in crate::client) enum UsrRollbackReverseApplyReconciliation<'reservation> {
 /// Opaque authority for the durability suffix after this invocation applied
 /// the exact POST-to-PRE exchange.
 #[must_use = "an applied rollback-reverse effect still requires durability"]
-#[allow(dead_code)] // consumed by the later durability/persistence executor
+#[allow(dead_code)] // consumed only through the unwired durability executor
 pub(in crate::client) struct UsrRollbackReverseAppliedEffectAuthority<'reservation> {
     _effect: ReconciledReverseEffect<'reservation, UsrRollbackReverseAppliedNamespace>,
 }
@@ -47,14 +51,14 @@ pub(in crate::client) struct UsrRollbackReverseAppliedEffectAuthority<'reservati
 /// Opaque authority for the durability suffix after this invocation found an
 /// exact PRE namespace and made no exchange attempt.
 #[must_use = "an already-satisfied rollback-reverse effect still requires durability"]
-#[allow(dead_code)] // consumed by the later durability/persistence executor
+#[allow(dead_code)] // consumed only through the unwired durability executor
 pub(in crate::client) struct UsrRollbackReverseAlreadySatisfiedEffectAuthority<'reservation> {
     _effect: ReconciledReverseEffect<'reservation, UsrRollbackReverseAlreadySatisfiedNamespace>,
 }
 
 /// Evidence retained for the later parent-durability and persistence suffix.
 /// The namespace parameter keeps Applied and AlreadySatisfied disjoint.
-#[allow(dead_code)] // consumed by the later durability/persistence executor
+#[allow(dead_code)] // retained behind the unwired durability executor
 struct ReconciledReverseEffect<'reservation, Namespace> {
     installation: Installation,
     state_db: db::state::Database,
@@ -62,22 +66,7 @@ struct ReconciledReverseEffect<'reservation, Namespace> {
     database: DatabaseEvidence,
     namespace: Namespace,
     journal_binding: TransitionJournalBinding,
-    outcome: RollbackActionOutcome,
     _active_state_reservation: &'reservation ActiveStateReservation,
-}
-
-#[cfg(test)]
-impl UsrRollbackReverseAppliedEffectAuthority<'_> {
-    pub(in crate::client) fn outcome_for_test(&self) -> RollbackActionOutcome {
-        self._effect.outcome
-    }
-}
-
-#[cfg(test)]
-impl UsrRollbackReverseAlreadySatisfiedEffectAuthority<'_> {
-    pub(in crate::client) fn outcome_for_test(&self) -> RollbackActionOutcome {
-        self._effect.outcome
-    }
 }
 
 impl<'reservation> UsrRollbackReverseApplyEffectLease<'reservation> {
@@ -143,7 +132,6 @@ impl<'reservation> UsrRollbackReverseEffectLease<'reservation> {
                         database,
                         namespace,
                         journal_binding,
-                        outcome: RollbackActionOutcome::Applied,
                         _active_state_reservation,
                     },
                 })
@@ -185,7 +173,6 @@ impl<'reservation> UsrRollbackReverseEffectLease<'reservation> {
                 database,
                 namespace,
                 journal_binding,
-                outcome: RollbackActionOutcome::AlreadySatisfied,
                 _active_state_reservation,
             },
         })

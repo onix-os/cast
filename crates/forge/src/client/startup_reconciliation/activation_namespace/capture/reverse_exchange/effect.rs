@@ -16,7 +16,7 @@ use super::RetainedReverseExchangeParents;
 #[cfg(test)]
 pub(in crate::client) use reconciliation::arm_before_reverse_exchange_reconciliation_capture;
 pub(in crate::client::startup_reconciliation::activation_namespace) use reconciliation::{
-    AppliedReverseExchangeReconciliation, ReverseExchangeReconciliation,
+    AppliedReverseExchangeReconciliation, DurableAppliedReverseExchangeReconciliation, ReverseExchangeReconciliation,
 };
 
 /// Consumed parent capabilities plus an uninterpreted raw syscall report.

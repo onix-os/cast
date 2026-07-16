@@ -34,14 +34,20 @@ use crate::{
 
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
-#[cfg(test)]
-#[allow(unused_imports)] // exported for the later authority-level ambiguity contracts
-pub(in crate::client) use reverse_exchange::arm_before_reverse_exchange_reconciliation_capture;
 #[allow(unused_imports)] // consumed when the reverse-effect executor is wired
 pub(super) use reverse_exchange::{
-    AppliedReverseExchangeReconciliation, PendingReverseExchangeReconciliation, ProjectedReverseNamespace,
-    RetainedReverseExchangeParents, ReverseExchangeCaptureError, ReverseExchangeParentIdentity,
+    AppliedReverseExchangeReconciliation, DurableAppliedReverseExchangeReconciliation, DurableReverseExchangeNamespace,
+    PendingReverseExchangeReconciliation, ProjectedReverseNamespace, RetainedReverseExchangeParents,
+    ReverseExchangeCaptureError, ReverseExchangeDurabilityError, ReverseExchangeParentIdentity,
     ReverseExchangeReconciliation,
+};
+#[cfg(test)]
+#[allow(unused_imports)] // exported for the later authority-level ambiguity contracts
+pub(in crate::client) use reverse_exchange::{
+    ReverseExchangeDurabilityEvent, ReverseExchangeDurabilityFaultPoint, arm_before_reverse_exchange_final_pre_capture,
+    arm_before_reverse_exchange_installation_root_sync, arm_before_reverse_exchange_reconciliation_capture,
+    arm_reverse_exchange_durability_fault, reset_reverse_exchange_durability_events,
+    take_reverse_exchange_durability_events,
 };
 use wrappers::*;
 

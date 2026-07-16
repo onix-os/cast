@@ -2,10 +2,10 @@
 //!
 //! Admission through this proof is read-only. It authenticates an exact
 //! `ReverseExchangeIntent` namespace as either POST (the reverse still needs
-//! applying) or PRE (only the future durability suffix remains). Only its
-//! private child can consume the resulting opaque effect evidence into the
-//! one-shot exchange boundary; no descriptor, sync, or persistence operation
-//! is exposed.
+//! applying) or PRE (only the durability suffix remains). Only its private
+//! child can consume the resulting opaque effect evidence through the one-shot
+//! exchange and exact two-parent durability boundaries; no descriptor or
+//! persistence operation is exposed.
 
 mod effect_reconciliation;
 
@@ -26,7 +26,15 @@ use super::{
 pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_reverse_effect_final_namespace_capture;
 pub(in crate::client::startup_reconciliation) use effect_reconciliation::{
     UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,
-    UsrRollbackReverseNamespaceApplyReconciliation,
+    UsrRollbackReverseDurableNamespace, UsrRollbackReverseNamespaceApplyReconciliation,
+};
+#[cfg(test)]
+pub(in crate::client) use effect_reconciliation::{
+    UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
+    arm_before_usr_rollback_reverse_namespace_final_pre_capture,
+    arm_before_usr_rollback_reverse_namespace_installation_root_sync,
+    arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,
+    take_usr_rollback_reverse_namespace_durability_events,
 };
 
 #[derive(Debug)]
@@ -229,6 +237,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackReverseNamespaceEr
     NotExchangeLayout,
     #[error("the exact pre/post `/usr` exchange layout changed during rollback-reverse proof")]
     LayoutChanged,
+    #[error("complete exact reverse-exchange parent durability")]
+    Durability(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("revalidate the retained mutable installation namespace")]
     Installation(#[from] crate::installation::Error),
 }
@@ -236,6 +246,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackReverseNamespaceEr
 impl From<ReverseExchangeCaptureError> for UsrRollbackReverseNamespaceError {
     fn from(source: ReverseExchangeCaptureError) -> Self {
         Self::Projection(Box::new(source))
+    }
+}
+
+impl From<super::capture::ReverseExchangeDurabilityError> for UsrRollbackReverseNamespaceError {
+    fn from(source: super::capture::ReverseExchangeDurabilityError) -> Self {
+        Self::Durability(Box::new(source))
     }
 }
 
