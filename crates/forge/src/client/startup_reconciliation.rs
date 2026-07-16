@@ -17,8 +17,10 @@ use crate::{
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
 };
 
+mod activation_namespace;
 mod metadata_provenance;
 
+use activation_namespace::{ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability};
 use metadata_provenance::metadata_provenance_evidence_compatible;
 
 const MAX_KNOWN_TREE_LOCATIONS: usize = 5;
@@ -250,6 +252,10 @@ pub(super) enum RecoveryBlocker {
     TreeEvidenceRejected,
     DurableTreeIdentityConflict,
     UnresolvedStateSlotLink,
+    ActivationNamespaceRejected,
+    ActivationNamespaceChangedDuringInspection,
+    JournalChangedDuringInspection,
+    PhaseNamespaceConflict,
     ExactNamespaceInventoryRequired,
     ManualBootRepair,
 }
@@ -272,6 +278,7 @@ pub(super) struct PendingSystemTransition {
     database_stability: DatabaseInspectionStability,
     epoch: RuntimeEpochEvidence,
     trees: Vec<KnownTreeEvidence>,
+    namespace: ActivationNamespaceEvidence,
     blockers: Vec<RecoveryBlocker>,
 }
 
@@ -288,6 +295,7 @@ impl PendingSystemTransition {
         let database = inspect_database(&record, authority.state_db(), in_flight)?;
 
         installation.revalidate_mutable_namespace()?;
+        let namespace = ActivationNamespaceInspection::begin(installation, authority.journal(), &record);
         let before = RuntimeEpoch::capture();
         let trees = inspect_known_trees(installation, &record);
         let after = RuntimeEpoch::capture();
@@ -296,6 +304,8 @@ impl PendingSystemTransition {
         run_between_database_inspections();
         let in_flight_after = authority.state_db().audit_in_flight_transition()?;
         let database_after = inspect_database(&record, authority.state_db(), in_flight_after)?;
+        installation.revalidate_mutable_namespace()?;
+        let namespace = namespace.finish(installation, authority.journal(), &record);
         installation.revalidate_mutable_namespace()?;
         let database_stability = if database == database_after {
             DatabaseInspectionStability::Stable
@@ -313,39 +323,60 @@ impl PendingSystemTransition {
         if database_stability != DatabaseInspectionStability::Stable {
             blockers.push(RecoveryBlocker::DatabaseChangedDuringInspection);
         }
-        match epoch.comparability(&record) {
-            RuntimeEpochComparability::Unavailable => blockers.push(RecoveryBlocker::RuntimeEpochUnavailable),
-            RuntimeEpochComparability::ChangedDuringInspection => {
-                blockers.push(RecoveryBlocker::RuntimeEpochChangedDuringInspection);
+        // The legacy fixed-name lane intentionally cannot authorize nlink=2
+        // state-slot markers and may observe a transient name before the
+        // final database/namespace sandwich.  Once the bounded inventory is
+        // exact, its retained descriptor proof supersedes those diagnostic
+        // limitations; otherwise retain every legacy blocker as additional
+        // fail-closed evidence.
+        if !namespace.phase_layout_is_exact() {
+            match epoch.comparability(&record) {
+                RuntimeEpochComparability::Unavailable => blockers.push(RecoveryBlocker::RuntimeEpochUnavailable),
+                RuntimeEpochComparability::ChangedDuringInspection => {
+                    blockers.push(RecoveryBlocker::RuntimeEpochChangedDuringInspection);
+                }
+                RuntimeEpochComparability::Current | RuntimeEpochComparability::RecordedEpochChanged => {}
             }
-            RuntimeEpochComparability::Current | RuntimeEpochComparability::RecordedEpochChanged => {}
+            if trees.iter().any(|tree| {
+                matches!(
+                    tree,
+                    KnownTreeEvidence::Unresolved {
+                        reason: UnresolvedTreeReason::Rejected(_),
+                        ..
+                    }
+                )
+            }) {
+                blockers.push(RecoveryBlocker::TreeEvidenceRejected);
+            }
+            if trees.iter().any(|tree| {
+                matches!(
+                    tree,
+                    KnownTreeEvidence::Unresolved {
+                        reason: UnresolvedTreeReason::StateSlotLinkUnauthenticated,
+                        ..
+                    }
+                )
+            }) {
+                blockers.push(RecoveryBlocker::UnresolvedStateSlotLink);
+            }
+            assess_tree_roles(&record, &epoch, &trees, &mut blockers);
         }
-        if trees.iter().any(|tree| {
-            matches!(
-                tree,
-                KnownTreeEvidence::Unresolved {
-                    reason: UnresolvedTreeReason::Rejected(_),
-                    ..
-                }
-            )
-        }) {
-            blockers.push(RecoveryBlocker::TreeEvidenceRejected);
+        match namespace.stability() {
+            ActivationNamespaceStability::Stable => {}
+            ActivationNamespaceStability::Changed => {
+                blockers.push(RecoveryBlocker::ActivationNamespaceChangedDuringInspection);
+            }
+            ActivationNamespaceStability::Rejected => blockers.push(RecoveryBlocker::ActivationNamespaceRejected),
         }
-        if trees.iter().any(|tree| {
-            matches!(
-                tree,
-                KnownTreeEvidence::Unresolved {
-                    reason: UnresolvedTreeReason::StateSlotLinkUnauthenticated,
-                    ..
-                }
-            )
-        }) {
-            blockers.push(RecoveryBlocker::UnresolvedStateSlotLink);
+        if !namespace.journal_is_exact() {
+            blockers.push(RecoveryBlocker::JournalChangedDuringInspection);
         }
-        assess_tree_roles(&record, &epoch, &trees, &mut blockers);
-        // These fixed names do not prove absence of previous-slot parking or
-        // copied markers elsewhere in the bounded activation namespace.
-        blockers.push(RecoveryBlocker::ExactNamespaceInventoryRequired);
+        if !namespace.phase_layout_is_exact() {
+            blockers.push(RecoveryBlocker::PhaseNamespaceConflict);
+        }
+        if namespace.stability() != ActivationNamespaceStability::Stable || !namespace.journal_is_exact() {
+            blockers.push(RecoveryBlocker::ExactNamespaceInventoryRequired);
+        }
         if disposition == RecoveryDisposition::ManualBootRepair {
             blockers.push(RecoveryBlocker::ManualBootRepair);
         }
@@ -369,6 +400,7 @@ impl PendingSystemTransition {
             database_stability,
             epoch,
             trees,
+            namespace,
             blockers,
         })
     }

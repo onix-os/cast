@@ -26,6 +26,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 .DEFAULT_GOAL := cast
 
 include misc/make/hardening-tests.mk
+include misc/make/activation-namespace-tests.mk
 
 .PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
@@ -888,6 +889,7 @@ help:
 	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through /usr exchange completion"
 	@timeout 10s echo "  forge-transition-recovery-classifier-test  Run persisted-phase startup recovery direction tests"
 	@timeout 10s echo "  forge-startup-reconciliation-test  Run read-only startup recovery assessment tests"
+	@timeout 10s echo "  forge-startup-activation-namespace-test  Run authenticated startup activation-namespace inventory tests"
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
 	@echo "  forge-cache-test  Run the exact descriptor-rooted download and asset cache tests"
 	@echo "  forge-client-direct-test  Run all direct frozen and state-transition client tests"

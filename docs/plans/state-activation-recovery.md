@@ -635,23 +635,36 @@ and instant rollback mechanism; it hardens their failure semantics.
   directory-and-marker identity sandwich, while an otherwise valid two-link
   state-slot marker remains typed but unauthorized.
 
-  This snapshot is not recovery authority. It always records that a complete
-  descriptor-rooted activation-namespace inventory is still required and
-  exposes no mutation API. Inspection retains the installation, journal, and
-  exact database capabilities through its final revalidation, then releases
-  the mutable installation/global locks and exclusive journal before returning
+  The snapshot now includes a complete diagnostic activation-namespace
+  inventory. Before and after the remaining startup evidence, it walks retained
+  descriptors for `/usr`, `.cast/root`, and `.cast/quarantine` under aggregate
+  entry, raw-name, operation, and deadline bounds, then reopens the public names
+  and journal. It rejects foreign root/isolation ABI entries, access/default
+  ACLs, noncanonical or changing wrappers, and orphan or multiply owned slot
+  links. State-ID absence, canonical bytes, and corruption remain typed rather
+  than collapsed. Every accepted link is bound to its exact tree inode, token,
+  state, wrapper location, and transition role. The phase policy covers forward
+  and rollback layouts, persisted action outcomes, archived rearchive versus
+  quarantine, synthesized-empty absence, trigger-dependent isolation ABI,
+  root-ABI completion, ambient archived states, and the phase-aware
+  ActiveReblit replacement reservation.
+
+  This inventory is still not recovery authority and exposes no mutation API.
+  Inspection retains the installation, journal, and exact database
+  capabilities through its final revalidation, then releases the mutable
+  installation/global locks and exclusive journal before returning
   `RecoveryPending`; keeping that journal after the startup coordinator was
   released would permit a coordinator/journal ABBA deadlock. A retry must
   independently acquire locks in canonical order and reload the journal. The
-  focused `make forge-startup-reconciliation-test` lane proves nine exact
-  contracts, including the complete database phase matrix, pre-allocation
-  rollback, the independent 19-phase and rollback-source provenance matrix,
-  stable legacy absence, a database mutation between sandwich reads, current
-  versus historical epochs, unauthenticated `nlink=2`, final directory and marker
-  substitution, exact database retention, and a bounded second startup while
-  the first diagnostic remains alive. Provenance is diagnostic evidence, not
-  recovery authority: phase-specific namespace inventory and all
-  rollback/roll-forward effects remain unimplemented, so this item stays open.
+  focused `make forge-startup-activation-namespace-test` lane proves nine exact
+  namespace contracts, while `make forge-startup-reconciliation-test` proves
+  nine database, provenance, epoch, substitution, retention, and lock-release
+  contracts. The next coordinator effect must reserve and retain the exact
+  empty ActiveReblit replacement wrapper at `CandidatePrepared`, before
+  `TransactionTriggersStarted`; once trigger intent is durable, startup rejects
+  a generic quarantine fallback. Phase-specific rollback/roll-forward effects
+  and the startup mutation executor remain unimplemented, so this item stays
+  open.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not
