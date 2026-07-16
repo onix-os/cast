@@ -13,7 +13,7 @@
 	mason-archive-test mason-package-publication-test \
 	mason-git-materialization-test mason-paths-test mason-executor-test \
 	mason-build-context-test mason-recipe-explanation-test \
-	mason-upstream-git-cache-test \
+	mason-upstream-git-cache-test mason-build-root-test mason-profile-test \
 	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
@@ -482,8 +482,24 @@ mason-upstream-git-cache-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^upstream::git::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 8; \
+	timeout 10s test "$$count" = 13; \
 	timeout 900s $(CARGO) test -p mason --lib "upstream::git::tests::" -- --test-threads=1
+
+mason-build-root-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^build::root::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 12; \
+	timeout 900s $(CARGO) test -p mason --lib "build::root::tests::" -- --test-threads=1
+
+mason-profile-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^profile::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 9; \
+	timeout 900s $(CARGO) test -p mason --lib "profile::tests::" -- --test-threads=1
 
 config-gluon-store-test:
 	@set -eu; \

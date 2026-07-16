@@ -850,6 +850,8 @@ help:
 	@echo "  mason-build-context-test  Run all frozen build-context resolution tests"
 	@echo "  mason-recipe-explanation-test  Run recipe explanation determinism tests"
 	@echo "  mason-upstream-git-cache-test  Run authenticated Git cache lifecycle tests"
+	@echo "  mason-build-root-test  Run exact frozen-root input and binding tests"
+	@echo "  mason-profile-test  Run typed Gluon profile loading and persistence tests"
 	@echo "  config-gluon-store-test  Run all descriptor-rooted Gluon fragment store tests"
 	@echo "  gitwrap-repository-fs-test  Run repository filesystem identity, quota, and mirror tests"
 	@echo "  gitwrap-all-test  Run every direct Gitwrap runtime and repository test"
