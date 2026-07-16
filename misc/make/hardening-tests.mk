@@ -12,6 +12,8 @@
 	mason-package-collect-transaction-test mason-analysis-handler-test mason-emit-test \
 	mason-archive-test mason-package-publication-test \
 	mason-git-materialization-test mason-paths-test mason-executor-test \
+	mason-build-context-test mason-recipe-explanation-test \
+	mason-upstream-git-cache-test \
 	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
@@ -458,6 +460,30 @@ mason-executor-test:
 	count="$$( timeout 10s grep -c '^executor::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 25; \
 	timeout 900s $(CARGO) test -p mason --lib "executor::tests::" -- --test-threads=1
+
+mason-build-context-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^build::context::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 19; \
+	timeout 900s $(CARGO) test -p mason --lib "build::context::tests::" -- --test-threads=1
+
+mason-recipe-explanation-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^cli::recipe::explanation::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 2; \
+	timeout 900s $(CARGO) test -p mason --lib "cli::recipe::explanation::tests::" -- --test-threads=1
+
+mason-upstream-git-cache-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^upstream::git::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 8; \
+	timeout 900s $(CARGO) test -p mason --lib "upstream::git::tests::" -- --test-threads=1
 
 config-gluon-store-test:
 	@set -eu; \
