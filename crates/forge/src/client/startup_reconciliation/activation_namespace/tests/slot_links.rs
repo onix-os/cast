@@ -3,6 +3,9 @@ use super::*;
 pub(super) fn run() {
     exact_transition_slots_are_bound();
     archived_candidate_parking_is_role_and_token_exact();
+    active_reblit_slot_location_tracks_the_reservation_phase();
+    active_reblit_never_accepts_previous_parking();
+    active_reblit_parking_wrapper_inventory_is_exact();
     ambient_state_slots_are_read_only_and_exact();
     exact_inventory_supersedes_the_legacy_two_link_blocker();
 }
@@ -43,7 +46,8 @@ fn exact_transition_slots_are_bound() {
 }
 
 fn archived_candidate_parking_is_role_and_token_exact() {
-    let reblit = Fixture::active_reblit();
+    let mut reblit = Fixture::active_reblit();
+    reblit.record.phase = Phase::CandidatePrepared;
     let parking = archived_candidate_parking(&reblit, 42, reblit.record.previous.tree_token.as_str());
     link_slot(
         &reblit.installation.root.join("usr/.cast-tree-id"),
@@ -51,6 +55,7 @@ fn archived_candidate_parking_is_role_and_token_exact() {
         42,
         reblit.record.previous.tree_token.as_str(),
     );
+    install_active_reblit_reservation(&reblit);
     assert_eq!(reblit.assess(), Ok(()));
 
     let previous = Fixture::new_state(Some(41), PreviousOrigin::ActiveState);
@@ -119,6 +124,191 @@ fn archived_candidate_parking_is_role_and_token_exact() {
             ..
         })
     ));
+}
+
+fn active_reblit_slot_location_tracks_the_reservation_phase() {
+    let mut early_single_link = Fixture::active_reblit();
+    early_single_link.record.phase = Phase::CandidatePrepareStarted;
+    assert_eq!(early_single_link.assess(), Ok(()));
+
+    let mut early_canonical = Fixture::active_reblit();
+    early_canonical.record.phase = Phase::CandidatePrepareStarted;
+    link_active_reblit_canonical_slot(&early_canonical);
+    assert_eq!(early_canonical.assess(), Ok(()));
+
+    let mut early_parked = Fixture::active_reblit();
+    early_parked.record.phase = Phase::CandidatePrepareStarted;
+    link_active_reblit_parked_slot(&early_parked, 0);
+    assert_eq!(
+        early_parked.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
+
+    let mut prepared_canonical = Fixture::active_reblit();
+    prepared_canonical.record.phase = Phase::CandidatePrepared;
+    link_active_reblit_canonical_slot(&prepared_canonical);
+    assert_eq!(prepared_canonical.assess(), Ok(()));
+
+    let mut prepared_canonical_with_replacement = Fixture::active_reblit();
+    prepared_canonical_with_replacement.record.phase = Phase::CandidatePrepared;
+    link_active_reblit_canonical_slot(&prepared_canonical_with_replacement);
+    install_active_reblit_reservation(&prepared_canonical_with_replacement);
+    assert_eq!(prepared_canonical_with_replacement.assess(), Ok(()));
+
+    let mut prepared_parked_without_replacement = Fixture::active_reblit();
+    prepared_parked_without_replacement.record.phase = Phase::CandidatePrepared;
+    link_active_reblit_parked_slot(&prepared_parked_without_replacement, 0);
+    assert_eq!(
+        prepared_parked_without_replacement.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
+
+    let mut prepared_parked = Fixture::active_reblit();
+    prepared_parked.record.phase = Phase::CandidatePrepared;
+    link_active_reblit_parked_slot(&prepared_parked, 0);
+    install_active_reblit_reservation(&prepared_parked);
+    assert_eq!(prepared_parked.assess(), Ok(()));
+
+    let mut prepared_single_link = Fixture::active_reblit();
+    prepared_single_link.record.phase = Phase::CandidatePrepared;
+    assert_eq!(prepared_single_link.assess(), Ok(()));
+
+    let mut started_canonical = Fixture::active_reblit();
+    started_canonical.record.phase = Phase::TransactionTriggersStarted;
+    link_active_reblit_canonical_slot(&started_canonical);
+    install_active_reblit_reservation(&started_canonical);
+    install_root_abi(&started_canonical);
+    assert_eq!(
+        started_canonical.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
+
+    let mut started_parked = Fixture::active_reblit();
+    started_parked.record.phase = Phase::TransactionTriggersStarted;
+    link_active_reblit_parked_slot(&started_parked, 0);
+    install_active_reblit_reservation(&started_parked);
+    install_root_abi(&started_parked);
+    assert_eq!(started_parked.assess(), Ok(()));
+
+    let mut started_single_link = Fixture::active_reblit();
+    started_single_link.record.phase = Phase::TransactionTriggersStarted;
+    install_active_reblit_reservation(&started_single_link);
+    install_root_abi(&started_single_link);
+    assert_eq!(started_single_link.assess(), Ok(()));
+
+    let mut rollback_canonical = Fixture::active_reblit();
+    rollback_canonical.record.phase = Phase::RollbackDecided;
+    rollback_canonical.record.rollback = Some(rollback_plan(
+        ForwardPhase::TransactionTriggersStarted,
+        RollbackAction::NotRequired,
+        RollbackAction::NotRequired,
+        RollbackAction::Pending,
+    ));
+    link_active_reblit_canonical_slot(&rollback_canonical);
+    install_active_reblit_reservation(&rollback_canonical);
+    install_root_abi(&rollback_canonical);
+    assert_eq!(
+        rollback_canonical.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
+
+    let mut rollback_parked = Fixture::active_reblit();
+    rollback_parked.record.phase = Phase::RollbackDecided;
+    rollback_parked.record.rollback = Some(rollback_plan(
+        ForwardPhase::TransactionTriggersStarted,
+        RollbackAction::NotRequired,
+        RollbackAction::NotRequired,
+        RollbackAction::Pending,
+    ));
+    link_active_reblit_parked_slot(&rollback_parked, 0);
+    install_active_reblit_reservation(&rollback_parked);
+    install_root_abi(&rollback_parked);
+    assert_eq!(rollback_parked.assess(), Ok(()));
+
+    let mut prepared_rollback_without_replacement = Fixture::active_reblit();
+    prepared_rollback_without_replacement.record.phase = Phase::RollbackDecided;
+    prepared_rollback_without_replacement.record.rollback = Some(rollback_plan(
+        ForwardPhase::CandidatePrepared,
+        RollbackAction::NotRequired,
+        RollbackAction::NotRequired,
+        RollbackAction::Pending,
+    ));
+    link_active_reblit_parked_slot(&prepared_rollback_without_replacement, 0);
+    assert_eq!(
+        prepared_rollback_without_replacement.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
+
+    let mut prepared_rollback_with_replacement = Fixture::active_reblit();
+    prepared_rollback_with_replacement.record.phase = Phase::RollbackDecided;
+    prepared_rollback_with_replacement.record.rollback = Some(rollback_plan(
+        ForwardPhase::CandidatePrepared,
+        RollbackAction::NotRequired,
+        RollbackAction::NotRequired,
+        RollbackAction::Pending,
+    ));
+    link_active_reblit_parked_slot(&prepared_rollback_with_replacement, 0);
+    install_active_reblit_reservation(&prepared_rollback_with_replacement);
+    assert_eq!(prepared_rollback_with_replacement.assess(), Ok(()));
+}
+
+fn active_reblit_never_accepts_previous_parking() {
+    let mut fixture = Fixture::active_reblit();
+    fixture.record.phase = Phase::CandidatePrepared;
+    let state = fixture.record.previous.id.unwrap();
+    let token = fixture.record.previous.tree_token.as_str();
+    let parking = fixture
+        .installation
+        .root_path(format!(".previous-slot-{state}-{token}-0"));
+    create_private_directory(&parking);
+    link_slot(
+        &fixture.installation.root.join("usr/.cast-tree-id"),
+        &parking,
+        state,
+        token,
+    );
+    assert!(matches!(
+        fixture.snapshot(),
+        Err(CaptureError::SlotWrongTransitionState { .. })
+    ));
+}
+
+fn active_reblit_parking_wrapper_inventory_is_exact() {
+    let mut empty = Fixture::active_reblit();
+    empty.record.phase = Phase::CandidatePrepared;
+    archived_candidate_parking_at(&empty, 42, empty.record.previous.tree_token.as_str(), 0);
+    assert_eq!(empty.assess(), Err(NamespacePolicyConflict::ActiveReblitPreviousSlot));
+
+    let mut extra = Fixture::active_reblit();
+    extra.record.phase = Phase::CandidatePrepared;
+    link_active_reblit_parked_slot(&extra, 0);
+    archived_candidate_parking_at(&extra, 42, extra.record.previous.tree_token.as_str(), 1);
+    assert_eq!(extra.assess(), Err(NamespacePolicyConflict::ActiveReblitPreviousSlot));
+
+    let mut exhausted = Fixture::active_reblit();
+    exhausted.record.phase = Phase::CandidatePrepared;
+    link_active_reblit_canonical_slot(&exhausted);
+    for index in 0..256 {
+        archived_candidate_parking_at(&exhausted, 42, exhausted.record.previous.tree_token.as_str(), index);
+    }
+    assert_eq!(
+        exhausted.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
+
+    let mut previous_empty = Fixture::active_reblit();
+    previous_empty.record.phase = Phase::CandidatePrepared;
+    let state = previous_empty.record.previous.id.unwrap();
+    let token = previous_empty.record.previous.tree_token.as_str();
+    create_private_directory(
+        &previous_empty
+            .installation
+            .root_path(format!(".previous-slot-{state}-{token}-0")),
+    );
+    assert_eq!(
+        previous_empty.assess(),
+        Err(NamespacePolicyConflict::ActiveReblitPreviousSlot)
+    );
 }
 
 fn ambient_state_slots_are_read_only_and_exact() {
@@ -214,11 +404,44 @@ fn exact_inventory_supersedes_the_legacy_two_link_blocker() {
 }
 
 fn archived_candidate_parking(fixture: &Fixture, state: i32, token: &str) -> PathBuf {
+    archived_candidate_parking_at(fixture, state, token, 0)
+}
+
+fn archived_candidate_parking_at(fixture: &Fixture, state: i32, token: &str, index: usize) -> PathBuf {
     let parking = fixture
         .installation
-        .root_path(format!(".archived-candidate-slot-{state}-{token}-0"));
+        .root_path(format!(".archived-candidate-slot-{state}-{token}-{index}"));
     create_private_directory(&parking);
     parking
+}
+
+fn link_active_reblit_canonical_slot(fixture: &Fixture) {
+    let state = fixture.record.previous.id.unwrap();
+    let token = fixture.record.previous.tree_token.as_str();
+    let wrapper = fixture.installation.root_path(state.to_string());
+    create_private_directory(&wrapper);
+    link_slot(
+        &fixture.installation.root.join("usr/.cast-tree-id"),
+        &wrapper,
+        state,
+        token,
+    );
+}
+
+fn link_active_reblit_parked_slot(fixture: &Fixture, index: usize) {
+    let state = fixture.record.previous.id.unwrap();
+    let token = fixture.record.previous.tree_token.as_str();
+    let wrapper = archived_candidate_parking_at(fixture, state, token, index);
+    link_slot(
+        &fixture.installation.root.join("usr/.cast-tree-id"),
+        &wrapper,
+        state,
+        token,
+    );
+}
+
+fn install_active_reblit_reservation(fixture: &Fixture) {
+    create_private_directory(&active_reblit_wrapper_path(&fixture.installation, &fixture.record));
 }
 
 fn link_slot(marker: &Path, wrapper: &Path, state: i32, token: &str) {

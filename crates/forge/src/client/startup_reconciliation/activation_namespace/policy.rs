@@ -24,6 +24,8 @@ pub(super) enum NamespacePolicyConflict {
     TransitionQuarantine,
     #[error("active-reblit reserved wrapper evidence is not exact")]
     ActiveReblitWrapper,
+    #[error("active-reblit previous-slot evidence is not exact for the journal phase")]
+    ActiveReblitPreviousSlot,
     #[error("candidate state-ID evidence is incompatible: expected {expected:?}, found {actual:?}")]
     CandidateStateId {
         expected: StateIdExpectation,
@@ -407,12 +409,79 @@ fn require_fixed_wrapper_layout(
         if !shape_matches {
             return Err(NamespacePolicyConflict::ActiveReblitWrapper);
         }
+        require_active_reblit_previous_slot_layout(record, snapshot, !wrappers.is_empty())?;
     }
 
     // The selected pair has already bound both durable tokens.  Keep these
     // borrows explicit so a future layout variant cannot silently skip the
     // fixed-wrapper relationship above.
     let _ = (candidate, previous);
+    Ok(())
+}
+
+fn require_active_reblit_previous_slot_layout(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+    replacement_present: bool,
+) -> Result<(), NamespacePolicyConflict> {
+    let previous_state = record.previous.id.expect("validated active-reblit previous state ID");
+    let previous_token = record.previous.tree_token.as_str();
+    let previous_slots = snapshot
+        .wrappers()
+        .filter(|wrapper| {
+            wrapper
+                .slot_identity()
+                .is_some_and(|(state, token)| state == previous_state && token == previous_token)
+        })
+        .collect::<Vec<_>>();
+    if previous_slots.len() > 1 {
+        return Err(NamespacePolicyConflict::ActiveReblitPreviousSlot);
+    }
+
+    let slot = previous_slots.first().copied();
+    let parked = slot.is_some_and(|wrapper| {
+        matches!(
+            &wrapper.role,
+            TreeLocation::ArchivedCandidateParking { state, token, .. }
+                if *state == previous_state && token == previous_token
+        )
+    });
+    let canonical =
+        slot.is_some_and(|wrapper| matches!(&wrapper.role, TreeLocation::State(state) if *state == previous_state));
+    if slot.is_some() && !canonical && !parked {
+        return Err(NamespacePolicyConflict::ActiveReblitPreviousSlot);
+    }
+
+    let parking_wrappers = snapshot
+        .wrappers()
+        .filter(|wrapper| {
+            matches!(
+                wrapper.role,
+                TreeLocation::ArchivedCandidateParking { .. } | TreeLocation::PreviousParking { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let parking_shape_is_exact = if parked {
+        parking_wrappers.len() == 1 && slot == parking_wrappers.first().copied()
+    } else {
+        parking_wrappers.is_empty()
+    };
+    if !parking_shape_is_exact {
+        return Err(NamespacePolicyConflict::ActiveReblitPreviousSlot);
+    }
+
+    match active_reblit_reservation(record) {
+        ActiveReblitReservation::Absent if parked => {
+            return Err(NamespacePolicyConflict::ActiveReblitPreviousSlot);
+        }
+        ActiveReblitReservation::Optional if parked && !replacement_present => {
+            return Err(NamespacePolicyConflict::ActiveReblitPreviousSlot);
+        }
+        ActiveReblitReservation::Required if canonical => {
+            return Err(NamespacePolicyConflict::ActiveReblitPreviousSlot);
+        }
+        ActiveReblitReservation::Absent | ActiveReblitReservation::Optional | ActiveReblitReservation::Required => {}
+    }
     Ok(())
 }
 

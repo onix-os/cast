@@ -176,6 +176,12 @@ pub(crate) struct WrapperFingerprint {
     pub(super) slot: Option<SlotFingerprint>,
 }
 
+impl WrapperFingerprint {
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn slot_identity(&self) -> Option<(i32, &str)> {
+        self.slot.as_ref().map(|slot| (slot.state, slot.token.as_str()))
+    }
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(super) struct RetainedWrapper {

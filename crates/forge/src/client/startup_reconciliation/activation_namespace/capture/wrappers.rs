@@ -396,7 +396,8 @@ fn role_owns_transition_slot(
         }
         TransitionTreeRole::Previous => {
             matches!(location, TreeLocation::State(actual) if *actual == state)
-                || matches!(location, TreeLocation::PreviousParking { state: actual, .. } if *actual == state)
+                || (record.operation != Operation::ActiveReblit
+                    && matches!(location, TreeLocation::PreviousParking { state: actual, .. } if *actual == state))
                 || matches!(
                     location,
                     TreeLocation::ArchivedCandidateParking { state: actual, token, .. }
