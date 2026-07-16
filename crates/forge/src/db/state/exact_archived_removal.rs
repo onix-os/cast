@@ -4,7 +4,9 @@ use std::collections::BTreeSet;
 
 use diesel::prelude::*;
 
-use super::{Database, Error, load_selected_state, model};
+#[cfg(test)]
+use super::metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
+use super::{Database, Error, load_selected_state, metadata_provenance, model};
 use crate::State;
 
 #[cfg(test)]
@@ -55,6 +57,8 @@ impl Database {
                 });
             }
         }
+        #[cfg(test)]
+        let restored_provenance = self.metadata_provenance(expected[0].id)?;
         let remove = || {
             self.conn.exclusive_tx(|tx| {
                 for expected in expected {
@@ -90,6 +94,7 @@ impl Database {
                             state_id: i32::from(expected.id),
                         });
                     }
+                    metadata_provenance::delete_metadata_provenance(tx, &[i32::from(expected.id)])?;
                 }
                 Ok(())
             })
@@ -115,7 +120,7 @@ impl Database {
             )
         {
             if injected == Some(ExactArchivedRemovalFault::ReportAfterCommitAndRestoreFirst) {
-                self.restore_exact_archived_for_test(&expected[0])?;
+                self.restore_exact_archived_for_test(&expected[0], restored_provenance.as_ref())?;
             }
             attempt = Err(synthetic_exact_archived_removal_error());
         }
@@ -202,7 +207,11 @@ impl Database {
     }
 
     #[cfg(test)]
-    fn restore_exact_archived_for_test(&self, expected: &State) -> Result<(), ExactArchivedRemovalError> {
+    fn restore_exact_archived_for_test(
+        &self,
+        expected: &State,
+        provenance: Option<&MetadataProvenance>,
+    ) -> Result<(), ExactArchivedRemovalError> {
         self.conn.exec(|conn| {
             diesel::insert_into(model::state::table)
                 .values((
@@ -229,7 +238,10 @@ impl Database {
                     .values(&selections)
                     .execute(conn)?;
             }
-            Ok::<(), Error>(())
+            if let Some(provenance) = provenance {
+                metadata_provenance::insert_metadata_provenance_row(conn, expected.id, provenance)?;
+            }
+            Ok::<(), ExactArchivedRemovalError>(())
         })?;
         Ok(())
     }
@@ -278,6 +290,9 @@ pub(crate) enum ExactArchivedRemovalError {
     },
     #[error(transparent)]
     Database(#[from] Error),
+    #[cfg(test)]
+    #[error(transparent)]
+    MetadataProvenance(#[from] MetadataProvenanceError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -309,6 +324,8 @@ impl ExactArchivedRemovalError {
             Self::Ambiguous { .. } | Self::AmbiguousBatch { .. } | Self::Reconciliation { .. } => {
                 ExactArchivedRemovalOutcome::Ambiguous
             }
+            #[cfg(test)]
+            Self::MetadataProvenance(_) => ExactArchivedRemovalOutcome::Ambiguous,
         }
     }
 }

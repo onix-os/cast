@@ -15,6 +15,8 @@ use crate::state::{self, Id, Selection, TransitionId};
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/state/migrations");
 
 mod exact_archived_removal;
+#[allow(dead_code)] // durable substrate; coordinator integration follows in a separate slice
+mod metadata_provenance;
 #[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
 mod read_only;
 mod schema;
@@ -22,6 +24,8 @@ mod schema;
 pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
 #[cfg(test)]
 use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
+#[allow(unused_imports)] // durable substrate; coordinator integration follows in a separate slice
+pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[allow(unused_imports)] // deliberate internal surface for the next read-only-client slice
 pub(crate) use read_only::{ReadOnlyDatabase, ReadOnlyStateError};
 
@@ -321,13 +325,17 @@ impl Database {
         transition_id: &TransitionId,
     ) -> Result<(), TransitionMutationError> {
         let changed = self.conn.exclusive_tx(|tx| {
-            diesel::delete(
+            let changed = diesel::delete(
                 model::state::table
                     .filter(model::state::id.eq(i32::from(state)))
                     .filter(model::state::transition_id.eq(transition_id.as_str())),
             )
             .execute(tx)
-            .map_err(Error::from)
+            .map_err(Error::from)?;
+            if changed == 1 {
+                metadata_provenance::delete_metadata_provenance(tx, &[i32::from(state)])?;
+            }
+            Ok::<_, Error>(changed)
         })?;
         require_one_transition_row(changed, state)
     }
@@ -343,6 +351,9 @@ impl Database {
             for chunk in states.chunks(MAX_VARIABLE_NUMBER) {
                 // Cascading wipes other tables
                 diesel::delete(model::state::table.filter(model::state::id.eq_any(chunk))).execute(tx)?;
+                // Keep deletion explicit even on SQLite connections whose
+                // foreign-key pragma is not enabled.
+                metadata_provenance::delete_metadata_provenance(tx, chunk)?;
             }
 
             Ok(())
