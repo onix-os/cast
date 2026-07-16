@@ -32,6 +32,23 @@ impl ActiveReblitReplacementMutationSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting rollback-decision authority capture
+/// to this writer-first startup gate.
+pub(in crate::client) struct UsrRollbackDecisionSeal {
+    _private: (),
+}
+
+impl UsrRollbackDecisionSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
 impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,
@@ -55,17 +72,45 @@ impl CleanSystemStartup {
         namespace?;
         let in_flight = in_flight?;
         if let Some(record) = record {
-            let mutation_seal = ActiveReblitReplacementMutationSeal::new();
-            let mut mutation_authority = startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider::new(
-                &mutation_seal,
+            {
+                let mutation_seal = ActiveReblitReplacementMutationSeal::new();
+                let mut mutation_authority =
+                    startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider::new(
+                        &mutation_seal,
+                        installation,
+                        &journal,
+                        state_db,
+                        active_state_reservation,
+                        &record,
+                        in_flight.clone(),
+                    );
+                transition_identity::recover_active_reblit_replacement_residue(&mut mutation_authority)?;
+            }
+
+            let decision_seal = UsrRollbackDecisionSeal::new();
+            let decision = startup_reconciliation::UsrRollbackDecisionAuthority::capture(
+                &decision_seal,
                 installation,
                 &journal,
                 state_db,
                 active_state_reservation,
                 &record,
                 in_flight.clone(),
-            );
-            transition_identity::recover_active_reblit_replacement_residue(&mut mutation_authority)?;
+            )?;
+            if let startup_reconciliation::UsrRollbackDecisionAdmission::Ready(authority) = decision {
+                let (journal, record) =
+                    super::startup_recovery::persist_usr_rollback_decision_and_reopen(journal, authority)?;
+                let in_flight = state_db.audit_in_flight_transition()?;
+                let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                    installation,
+                    state_db,
+                    journal,
+                    record,
+                    in_flight,
+                )
+                .map_err(map_reconciliation_error)?;
+                return Err(Error::RecoveryPending(pending));
+            }
             let pending = startup_reconciliation::PendingSystemTransition::inspect(
                 installation,
                 state_db,
@@ -73,13 +118,7 @@ impl CleanSystemStartup {
                 record,
                 in_flight,
             )
-            .map_err(|source| match source {
-                startup_reconciliation::InspectionError::Database(source) => Error::TransitionEvidence(source),
-                startup_reconciliation::InspectionError::MetadataProvenance(source) => {
-                    Error::MetadataProvenance(source)
-                }
-                startup_reconciliation::InspectionError::Installation(source) => Error::Installation(source),
-            })?;
+            .map_err(map_reconciliation_error)?;
             return Err(Error::RecoveryPending(pending));
         }
         if let Some(orphan) = in_flight {
@@ -106,6 +145,14 @@ impl CleanSystemStartup {
         _active_state: &ActiveStateLease,
     ) -> Result<Option<crate::system_model::LoadedSystemModel>, Error> {
         default_system_intent::load(installation).map_err(Error::DefaultSystemIntent)
+    }
+}
+
+fn map_reconciliation_error(source: startup_reconciliation::InspectionError) -> Error {
+    match source {
+        startup_reconciliation::InspectionError::Database(source) => Error::TransitionEvidence(source),
+        startup_reconciliation::InspectionError::MetadataProvenance(source) => Error::MetadataProvenance(source),
+        startup_reconciliation::InspectionError::Installation(source) => Error::Installation(source),
     }
 }
 
@@ -150,6 +197,10 @@ pub(super) enum Error {
     ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
     #[error("recover CandidatePrepared active-reblit replacement residue")]
     ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
+    #[error("capture exact startup /usr rollback-decision authority")]
+    UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
+    #[error("persist and reconcile the exact startup /usr rollback decision")]
+    UsrRollbackDecisionPersistence(#[from] super::startup_recovery::UsrRollbackDecisionPersistenceError),
     #[error("revalidate retained mutable installation namespace during startup")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]

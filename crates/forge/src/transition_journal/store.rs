@@ -3,7 +3,7 @@ use std::{
     io::{self, Write as _},
     os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use super::{
@@ -89,7 +89,15 @@ pub(crate) struct TransitionJournalStore {
     _lock: std::fs::File,
     pub(super) operation_lock: Mutex<()>,
     path: PathBuf,
+    binding: Arc<()>,
 }
+
+/// Opaque identity of one exact open lock-bearing journal store.
+///
+/// Clones preserve pointer identity but expose no filesystem path, record, or
+/// forgeable scalar which could be confused across equal-looking journals.
+#[derive(Clone, Debug)]
+pub(crate) struct TransitionJournalBinding(Arc<()>);
 
 #[derive(Debug)]
 struct LoadedRecord {
@@ -186,6 +194,7 @@ impl TransitionJournalStore {
             _lock: lock,
             operation_lock: Mutex::new(()),
             path,
+            binding: Arc::new(()),
         };
         store.cleanup_stale_temporaries()?;
         Ok(store)
@@ -196,6 +205,19 @@ impl TransitionJournalStore {
     pub(crate) fn load(&self) -> Result<Option<TransitionRecord>, StorageError> {
         let _operation = self.lock_operation()?;
         Ok(self.load_pinned()?.map(|loaded| loaded.record))
+    }
+
+    /// Capture an unforgeable token for this exact open store. A separately
+    /// opened journal receives a different token even when its canonical
+    /// record and display path are byte-for-byte equal.
+    pub(crate) fn binding(&self) -> TransitionJournalBinding {
+        TransitionJournalBinding(Arc::clone(&self.binding))
+    }
+
+    /// Compare only per-open pointer identity; record/path equality is never a
+    /// substitute for the store captured by mutation authority.
+    pub(crate) fn has_binding(&self, expected: &TransitionJournalBinding) -> bool {
+        Arc::ptr_eq(&self.binding, &expected.0)
     }
 
     /// Durably create the first `preparing` record for one transaction.

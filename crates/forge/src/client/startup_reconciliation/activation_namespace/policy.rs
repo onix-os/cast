@@ -6,7 +6,7 @@ use crate::transition_journal::{
 use super::capture::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint};
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub(super) enum NamespacePolicyConflict {
+pub(in crate::client::startup_reconciliation) enum NamespacePolicyConflict {
     #[error("candidate token occurs at {actual} activation-tree locations")]
     CandidateCount { actual: usize },
     #[error("previous token occurs at {actual} activation-tree locations")]
@@ -47,7 +47,7 @@ pub(super) enum NamespacePolicyConflict {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StateIdExpectation {
+pub(in crate::client::startup_reconciliation) enum StateIdExpectation {
     Absent,
     Optional(i32),
     Present(i32),
@@ -55,7 +55,7 @@ pub(super) enum StateIdExpectation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PreviousStateIdExpectation {
+pub(in crate::client::startup_reconciliation) enum PreviousStateIdExpectation {
     Exact(Option<i32>),
     ActiveReblitCorrupt(i32),
 }
@@ -90,6 +90,24 @@ pub(super) struct LayoutAlternative {
     pub(super) previous: PreviousPlace,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::client::startup_reconciliation) enum UsrExchangeLayout {
+    Pre,
+    Post,
+}
+
+impl LayoutAlternative {
+    pub(super) fn usr_exchange_layout(self) -> Option<UsrExchangeLayout> {
+        if self == PRE_EXCHANGE {
+            Some(UsrExchangeLayout::Pre)
+        } else if self == POST_EXCHANGE {
+            Some(UsrExchangeLayout::Post)
+        } else {
+            None
+        }
+    }
+}
+
 const PRE_EXCHANGE: LayoutAlternative = LayoutAlternative {
     candidate: CandidatePlace::Staging,
     previous: PreviousPlace::Live,
@@ -103,10 +121,18 @@ const PREVIOUS_ARCHIVED: LayoutAlternative = LayoutAlternative {
     previous: PreviousPlace::Archived,
 };
 
+#[cfg(test)]
 pub(super) fn assess_snapshot(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<(), NamespacePolicyConflict> {
+    assess_snapshot_layout(record, snapshot).map(|_| ())
+}
+
+pub(super) fn assess_snapshot_layout(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<LayoutAlternative, NamespacePolicyConflict> {
     let candidate = trees_for_token(snapshot, record.candidate.tree_token.as_str());
     if candidate.len() != 1 {
         return Err(NamespacePolicyConflict::CandidateCount {
@@ -174,7 +200,7 @@ pub(super) fn assess_snapshot(
     if isolation_abi_must_be_complete(record) && !snapshot.isolation_abi().is_complete() {
         return Err(NamespacePolicyConflict::IsolationAbiIncomplete);
     }
-    Ok(())
+    Ok(selected)
 }
 
 fn trees_for_token<'a>(snapshot: &'a NamespaceSnapshot, token: &str) -> Vec<&'a UsrFingerprint> {

@@ -21,10 +21,25 @@ mod activation_namespace;
 mod database_evidence;
 mod metadata_provenance;
 mod replacement_mutation_authority;
+mod usr_rollback_decision_authority;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
+#[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
+pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
+#[cfg(test)]
+#[allow(unused_imports)] // exported for focused rollback-decision race contracts
+pub(in crate::client) use usr_rollback_decision_authority::arm_between_usr_rollback_decision_database_captures;
+pub(in crate::client) use usr_rollback_decision_authority::{
+    UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority, UsrRollbackDecisionAuthorityError,
+};
 
-use activation_namespace::{ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability};
+#[cfg(test)]
+#[allow(unused_imports)] // exported for focused rollback-decision race contracts
+pub(in crate::client) use activation_namespace::arm_before_usr_rollback_decision_fresh_namespace_capture;
+use activation_namespace::{
+    ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
+    UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
+};
 #[cfg(test)]
 use database_evidence::{
     DatabaseConflict, ExistingStateEvidence, FreshDatabaseExpectation, database_evidence_compatible,
@@ -207,6 +222,7 @@ pub(super) enum RecoveryBlocker {
     ActivationNamespaceChangedDuringInspection,
     JournalChangedDuringInspection,
     PhaseNamespaceConflict,
+    ForwardExchangeDurabilityUnproven,
     ExactNamespaceInventoryRequired,
     ManualBootRepair,
 }
@@ -264,7 +280,7 @@ impl PendingSystemTransition {
             DatabaseInspectionStability::Changed { after: database_after }
         };
 
-        let mut blockers = Vec::with_capacity(13);
+        let mut blockers = Vec::with_capacity(14);
         if !database_ownership_evidence_compatible(&record, &database) {
             blockers.push(RecoveryBlocker::DatabaseConflict);
         }
@@ -324,6 +340,10 @@ impl PendingSystemTransition {
         }
         if !namespace.phase_layout_is_exact() {
             blockers.push(RecoveryBlocker::PhaseNamespaceConflict);
+        }
+        if record.phase == Phase::UsrExchangeIntent && namespace.usr_exchange_layout() == Some(UsrExchangeLayout::Post)
+        {
+            blockers.push(RecoveryBlocker::ForwardExchangeDurabilityUnproven);
         }
         if namespace.stability() != ActivationNamespaceStability::Stable || !namespace.journal_is_exact() {
             blockers.push(RecoveryBlocker::ExactNamespaceInventoryRequired);

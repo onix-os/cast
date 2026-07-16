@@ -1,10 +1,11 @@
 //! Descriptor-rooted, bounded startup inventory of the activation namespace.
 //!
-//! This module is intentionally diagnostic-only.  It retains the exact
-//! namespace evidence a later recovery executor will need, but exposes no
-//! rename, link, unlink, creation, repair, or journal-advance operation.
+//! This module is intentionally read-only. The diagnostic inventory and the
+//! independent rollback-decision proof expose no rename, link, unlink,
+//! creation, repair, or journal-advance operation.
 
 mod capture;
+mod decision_proof;
 mod policy;
 
 #[cfg(test)]
@@ -16,7 +17,13 @@ use crate::{
 };
 
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
-use policy::{NamespacePolicyConflict, assess_snapshot};
+#[cfg(test)]
+pub(in crate::client) use decision_proof::arm_before_usr_rollback_decision_fresh_namespace_capture;
+pub(super) use decision_proof::{
+    UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
+};
+pub(super) use policy::UsrExchangeLayout;
+use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};
 
 /// Complete read-only evidence collected around one startup assessment.
 ///
@@ -66,7 +73,7 @@ enum JournalObservation {
 #[derive(Debug)]
 #[allow(dead_code)] // retains exact conflict/unavailability for structured diagnostics
 enum NamespacePolicyAssessment {
-    Exact,
+    Exact(LayoutAlternative),
     Conflict(NamespacePolicyConflict),
     Unavailable(ActivationNamespaceStability),
 }
@@ -106,8 +113,8 @@ impl ActivationNamespaceInspection {
             (Err(_), _, _) | (_, Err(_), _) => ActivationNamespaceStability::Rejected,
         };
         let policy = match (&after, stability) {
-            (Ok(snapshot), ActivationNamespaceStability::Stable) => match assess_snapshot(expected, snapshot) {
-                Ok(()) => NamespacePolicyAssessment::Exact,
+            (Ok(snapshot), ActivationNamespaceStability::Stable) => match assess_snapshot_layout(expected, snapshot) {
+                Ok(layout) => NamespacePolicyAssessment::Exact(layout),
                 Err(conflict) => NamespacePolicyAssessment::Conflict(conflict),
             },
             (_, unavailable) => NamespacePolicyAssessment::Unavailable(unavailable),
@@ -138,7 +145,17 @@ impl ActivationNamespaceEvidence {
     pub(super) fn phase_layout_is_exact(&self) -> bool {
         self.stability == ActivationNamespaceStability::Stable
             && self.journal_is_exact()
-            && matches!(self.policy, NamespacePolicyAssessment::Exact)
+            && matches!(self.policy, NamespacePolicyAssessment::Exact(_))
+    }
+
+    pub(super) fn usr_exchange_layout(&self) -> Option<UsrExchangeLayout> {
+        if self.stability != ActivationNamespaceStability::Stable || !self.journal_is_exact() {
+            return None;
+        }
+        match self.policy {
+            NamespacePolicyAssessment::Exact(layout) => layout.usr_exchange_layout(),
+            NamespacePolicyAssessment::Conflict(_) | NamespacePolicyAssessment::Unavailable(_) => None,
+        }
     }
 
     #[cfg(test)]

@@ -111,6 +111,7 @@ mod startup_gate;
 #[cfg(test)]
 mod startup_gate_tests;
 mod startup_reconciliation;
+mod startup_recovery;
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
 mod sync;
 mod transaction_root;

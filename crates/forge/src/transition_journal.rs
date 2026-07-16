@@ -45,7 +45,7 @@ pub(crate) use model::*;
 #[allow(unused_imports)] // consumed by startup reconciliation in the next saved increment
 pub(crate) use recovery::RecoveryDisposition;
 pub(crate) use runtime_evidence::RuntimeEvidenceError;
-pub(crate) use store::TransitionJournalStore;
+pub(crate) use store::{TransitionJournalBinding, TransitionJournalStore};
 #[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
 pub(crate) use successors::{InitialRollbackAction, RollbackActionOutcome, RollbackObservations};
 
@@ -73,6 +73,19 @@ pub(crate) fn assert_temporary_sync_fault_consumed() {
     assert_storage_fault_consumed();
 }
 
+/// Arm the atomic canonical/temporary exchange in the next journal update.
+#[cfg(test)]
+#[allow(dead_code)] // consumed by the focused startup rollback-decision fault matrix
+pub(crate) fn arm_next_update_exchange_fault() {
+    arm_storage_fault(StorageFaultPoint::UpdateExchange);
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // consumed by the focused startup rollback-decision fault matrix
+pub(crate) fn assert_update_exchange_fault_consumed() {
+    assert_storage_fault_consumed();
+}
+
 /// Arm the first journal-directory sync after the next update exchange. The
 /// new canonical record is already visible when this fault is reported, so a
 /// consuming coordinator must fail stop without invoking or retrying an effect.
@@ -83,6 +96,34 @@ pub(crate) fn arm_next_update_first_directory_sync_fault() {
 
 #[cfg(test)]
 pub(crate) fn assert_update_first_directory_sync_fault_consumed() {
+    assert_storage_fault_consumed();
+}
+
+/// Arm deletion of the displaced source record after the next journal update
+/// has made its decision record canonical.
+#[cfg(test)]
+#[allow(dead_code)] // consumed by the focused startup rollback-decision fault matrix
+pub(crate) fn arm_next_displaced_unlink_fault() {
+    arm_storage_fault(StorageFaultPoint::DisplacedUnlink);
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // consumed by the focused startup rollback-decision fault matrix
+pub(crate) fn assert_displaced_unlink_fault_consumed() {
+    assert_storage_fault_consumed();
+}
+
+/// Arm the final journal-directory sync after the next update has made its
+/// decision record canonical and removed the displaced source.
+#[cfg(test)]
+#[allow(dead_code)] // consumed by the focused startup rollback-decision fault matrix
+pub(crate) fn arm_next_update_final_directory_sync_fault() {
+    arm_storage_fault(StorageFaultPoint::UpdateFinalDirectorySync);
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // consumed by the focused startup rollback-decision fault matrix
+pub(crate) fn assert_update_final_directory_sync_fault_consumed() {
     assert_storage_fault_consumed();
 }
 #[cfg(test)]
