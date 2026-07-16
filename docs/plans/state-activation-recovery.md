@@ -60,7 +60,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   journal. The focused `make forge-client-startup-gate-test` lane lists 21
   contracts, including 5 which prove compatible repair and zero chmod for
   incompatible database, active-selection, record, or installation authority.
-  General phase recovery execution is not implemented. The public
+  Apart from this chmod and the journal-only rollback-decision slice documented
+  below, general phase recovery execution is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -638,9 +639,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   Startup classifies ActiveReblit `Preparing` as strictly state-ID-absent and
   treats `CandidatePrepareStarted` as the only state-ID
   publication-ambiguity boundary. There is still no general phase-advancing
-  recovery executor: the narrow restrictive replacement-mode normalizer never
-  changes the record, and the read-only startup assessment below cannot advance
-  it. This item remains open.
+  recovery executor. Commit `3e1ba34` can advance only the two exact `/usr`
+  exchange evidence cases documented below to `RollbackDecided`; it executes no
+  rollback action. The restrictive replacement-mode normalizer never changes
+  the record, and the diagnostic startup assessment remains non-mutating. This
+  item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in
@@ -649,11 +652,37 @@ and instant rollback mechanism; it hardens their failure semantics.
   undeletable `BootRepairUnverified` record when boot side effects cannot be
   proved repaired.
   As of 2026-07-16, startup's diagnostic checkpoint remains deliberately
-  read-only and fail closed. Immediately before it, the mutable startup gate may
-  run only the sealed ActiveReblit restrictive replacement-mode normalizer
-  described above; it neither converts the diagnostic inventory into mutation
-  authority nor advances the record. The assessment classifies every validated persisted phase as
-  begin rollback, resume rollback, roll forward, finalize rollback, or manual
+  read-only and fail closed. Immediately before it, the mutable startup gate has
+  only two sealed, narrow slices: the ActiveReblit restrictive replacement-mode
+  normalizer described above and the journal-only rollback-decision executor
+  added by commit `3e1ba34`. Neither converts the diagnostic inventory into
+  mutation authority.
+
+  The new executor applies to NewState, ActivateArchived, and ActiveReblit, but
+  admission is restricted to an exact `UsrExchangeIntent` + `PRE` layout or an
+  exact `UsrExchanged` + `POST` layout. The former records the `/usr` rollback
+  action as already satisfied; the latter records it as pending.
+  `UsrExchangeIntent` + `POST` is explicitly deferred with forward-exchange
+  parent durability unproven, and every other phase/layout or incompatible
+  evidence combination remains non-mutating. A private startup seal admits a
+  separately captured authority which retains exact before/after/fresh
+  descriptor-rooted namespace fingerprints and layout, stable database
+  ownership and immutable metadata provenance, the cooperating-writer
+  reservation, installation authority, and the complete source record. An
+  opaque per-open binding also prevents equal-looking or byte-identical journals
+  from another root from consuming that authority.
+
+  After final database/namespace/database and journal revalidation, the executor
+  derives exactly one successor with `rollback_decision` and attempts exactly
+  one conditional `advance`. It performs no namespace or database mutation,
+  retries no uncertain write, and executes no rollback, roll-forward, cleanup,
+  or trigger effect. The old authority and lock-bearing store are dropped before
+  a descriptor-rooted reopen; the complete canonical record must reconcile to
+  the exact source or exact decision, including all error-after-application
+  outcomes, before startup reports the result.
+
+  The assessment then classifies every validated persisted phase as begin
+  rollback, resume rollback, roll forward, finalize rollback, or manual
   boot repair; correlates the exact candidate and previous database rows with
   a before/after global transition audit; distinguishes allocation committed
   behind an older journal generation; and rejects phase-incompatible cleared,
@@ -685,8 +714,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   root-ABI completion, ambient archived states, and the phase-aware
   ActiveReblit replacement reservation.
 
-  This inventory is still not recovery authority and exposes no mutation API.
-  Inspection retains the installation, journal, and exact database
+  This diagnostic inventory is still not recovery authority, is not reused by
+  the journal-only executor, and exposes no mutation API. Inspection retains the
+  installation, journal, and exact database
   capabilities through its final revalidation, then releases the mutable
   installation/global locks and exclusive journal before returning
   `RecoveryPending`; keeping that journal after the startup coordinator was
@@ -701,9 +731,15 @@ and instant rollback mechanism; it hardens their failure semantics.
   `CandidatePrepared` and mandatory from `TransactionTriggersStarted`; the
   complete isolation ABI is likewise mandatory once trigger intent is durable.
   Startup may normalize only the authenticated restrictive reservation prefix,
-  and it still rejects a generic quarantine fallback after trigger intent.
-  General phase-specific rollback, roll-forward, and journal-advancing startup
-  effects remain unimplemented, so this item stays open.
+  and it still rejects a generic quarantine fallback after trigger intent. The
+  focused `make forge-startup-usr-rollback-decision-test` lane passes 11/11
+  contracts across the three operations and both admitted layouts, including
+  all five journal-update fault points, mixed-root same-record rejection,
+  database/provenance/namespace races, historical runtime epochs, and retained
+  ActiveReblit reservation exclusion. This is only the decision boundary:
+  general phase-specific rollback, roll-forward, cleanup, and effect execution
+  remain unimplemented, so this item and all six broad Phase 11 work items stay
+  open.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

@@ -707,22 +707,33 @@ and an unwired one-shot coordinator effect which reaches durable
 `CandidatePrepared`, its ActiveReblit path seals the exact replacement-wrapper
 reservation and authenticated previous-marker parking. Both trigger-capable
 operations then publish and retain the exact transaction-isolation ABI required
-for trigger intent. Mutable startup has one deliberately narrow
-pre-assessment recovery effect: under exact journal, installation, database,
-provenance, and active-selection authority, it may normalize only an
-authenticated restrictive ActiveReblit replacement wrapper to mode `0700`.
-It never advances the journal, and absent, canonical, or inapplicable evidence
-is non-mutating. The subsequent diagnostic-only startup assessment sandwiches
-a complete bounded, descriptor-rooted activation-namespace inventory around
-the remaining startup evidence. That inventory authenticates exact raw names,
-tree and slot roles, state IDs, root/isolation ABI, rollback action outcomes,
-and phase layouts without exposing a mutation API; it releases mutation
-authority before returning and cannot execute stale evidence. The remaining
-closure is to finish recovery-ordered mutable client construction, replace
-residual path-based lifecycle authority, establish the durable pre-journal
-baseline, route every state transition through one durable coordinator,
-execute every persisted phase on startup, and prove convergence with
-deterministic interruption coverage.
+for trigger intent. Mutable startup has two deliberately narrow pre-assessment
+recovery actions. Under exact journal, installation, database, provenance, and
+active-selection authority, the first may normalize only an authenticated
+restrictive ActiveReblit replacement wrapper to mode `0700`; it never advances
+the journal. Commit `3e1ba34` adds a separate journal-only rollback-decision
+executor for all three operations. A sealed independent namespace, database,
+provenance, and cooperating-writer-reservation authority admits it only for
+exact `UsrExchangeIntent` + `PRE` or `UsrExchanged` + `POST` evidence and binds
+that evidence to the exact per-open journal. `UsrExchangeIntent` + `POST`
+remains deferred because forward-exchange parent durability is unproven. The
+executor constructs exactly one `rollback_decision` and performs exactly one
+conditional journal `advance`; it mutates no namespace or database, executes no
+rollback effect, and never retries. It drops the old store and authority,
+descriptor-rootedly reopens the journal, and reconciles the complete canonical
+record. Its focused Make lane passes 11/11 contracts, including all five journal
+update faults, mixed-root rejection, and evidence races. The subsequent
+diagnostic-only startup assessment sandwiches a complete bounded,
+descriptor-rooted activation-namespace inventory around the remaining startup
+evidence. That inventory authenticates exact raw names, tree and slot roles,
+state IDs, root/isolation ABI, rollback action outcomes, and phase layouts
+without exposing a mutation API; it releases mutation authority before
+returning and cannot execute stale evidence. These slices are not general
+recovery. The remaining closure is to finish recovery-ordered mutable client
+construction, replace residual path-based lifecycle authority, establish the
+durable pre-journal baseline, route every state transition through one durable
+coordinator, execute every persisted phase on startup, and prove convergence
+with deterministic interruption coverage.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,
