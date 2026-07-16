@@ -1,4 +1,4 @@
-//! Journal-authorized, no-replace publication of a fresh `.stateID`.
+//! Journal-authorized, no-replace publication of an absent `.stateID`.
 
 use std::{
     io,
@@ -39,7 +39,7 @@ pub(in crate::transition_identity) enum StateIdPublicationOutcome {
 }
 
 #[derive(Debug, Error)]
-#[error("fresh state-ID publication outcome is {outcome:?}")]
+#[error("candidate state-ID publication outcome is {outcome:?}")]
 pub(crate) struct StateIdPublicationFailure {
     outcome: StateIdPublicationOutcome,
     #[source]
@@ -59,7 +59,7 @@ impl StateIdPublicationFailure {
 
 #[derive(Debug, Error)]
 enum PublicationError {
-    #[error("authenticate fresh state-ID publication")]
+    #[error("authenticate candidate state-ID publication")]
     Identity(#[source] Box<super::super::Error>),
     #[error("{operation} at `{}`", path.display())]
     Io {
@@ -238,11 +238,15 @@ impl RetainedTreeStateId {
         ] {
             let path = store.display_path().join(display);
             let found = probe_name(store, name, None).map_err(|source| {
-                super::super::live_usr_io("probe fresh state-ID name", &path, io::Error::other(source.to_string()))
+                super::super::live_usr_io(
+                    "probe candidate state-ID name",
+                    &path,
+                    io::Error::other(source.to_string()),
+                )
             })?;
             if found != NameState::Absent {
                 return Err(super::super::live_usr_io(
-                    "require absent fresh state-ID name",
+                    "require absent candidate state-ID name",
                     &path,
                     io::Error::new(io::ErrorKind::AlreadyExists, format!("{display} already exists")),
                 ));
@@ -252,10 +256,11 @@ impl RetainedTreeStateId {
         Ok(())
     }
 
-    /// Publish a new state ID only after the journal authorizes candidate
-    /// decoration. The temporary is exclusive, every rename is one-shot, and
-    /// every error is reconciled before its outcome is reported.
-    pub(in crate::transition_identity) fn publish_new(
+    /// Publish an absent state ID only after the journal authorizes candidate
+    /// decoration. This is shared by fresh allocation and active reblit; the
+    /// temporary is exclusive, every rename is one-shot, and every error is
+    /// reconciled before its outcome is reported.
+    pub(in crate::transition_identity) fn publish_absent(
         store: &TreeMarkerStore,
         state: state::Id,
     ) -> Result<Self, StateIdPublicationFailure> {

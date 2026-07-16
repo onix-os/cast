@@ -413,9 +413,17 @@ and instant rollback mechanism; it hardens their failure semantics.
   fails before publication, the matching row and older durable journal phase
   are deliberately preserved for later reconciliation rather than compensated
   or hidden; a post-publication error may instead leave the exact successor
-  durable. A new-state candidate is state-ID-unallocated before journal
-  creation: its payload and exact marker are retained while both `.stateID` and
-  fixed `.cast-state-id.tmp` are descriptor-proved absent through
+  durable. Candidate identity is a private three-way retained authority rather
+  than `Option<state::Id>`: `NewState` begins as unknown-ID/absent and becomes
+  known-ID/absent only after correlated allocation is durably recorded;
+  `ActiveReblit` begins as known-ID/absent because its newly materialized tree
+  reuses the active database row; and `ActivateArchived` begins with an exact
+  retained existing `.stateID`. Operation-specific constructors bind that
+  distinction before a request can create the journal, so an absent candidate
+  cannot be reinterpreted between NewState and ActiveReblit and neither can be
+  passed off as an archived tree. For both newly decorated operations, the
+  payload and exact marker are retained while `.stateID` and the fixed
+  `.cast-state-id.tmp` are descriptor-proved absent through
   `CandidatePrepareStarted`. Only that durable phase authorizes publication.
   The coordinator creates one exclusive owner-private temporary, writes and
   syncs the canonical decimal state ID, normalizes and syncs mode `0644`, then
@@ -424,10 +432,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   candidate directory after an applied move, and retains the published inode
   before recording `CandidatePrepared`. Certain pre-rename failures remove
   only the exact temporary and sync that cleanup; published or ambiguous
-  failures remain at generation 4 as recovery evidence without overwriting or
-  adopting a foreign final or temporary. Existing-state operations may only
-  revalidate the state-ID inode retained during preparation and cannot enter
-  this publication path. Candidate preparation therefore preserves its exact
+  failures remain at the operation's `CandidatePrepareStarted` generation as
+  recovery evidence without overwriting or adopting a foreign final or
+  temporary. NewState and ActiveReblit both enter this publication path;
+  archived activation may only revalidate the state-ID inode retained during
+  preparation and cannot enter it. Candidate preparation therefore preserves its exact
   durable predecessor-or-successor evidence when publication, identity proof,
   or final journal persistence fails. Every state-changing
   coordinator method consumes its
@@ -501,10 +510,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   manifest/digest. It must gain one of those sources before this verifier can be
   wired; using the archived output bytes themselves remains forbidden.
 
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 32
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 36
   exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
-  runtime evidence, fixed quarantine naming, exact database correlation,
+  runtime evidence, fixed quarantine naming, non-reinterpretable three-way
+  candidate state authority, ActiveReblit state-ID publication failures, exact database correlation,
   transaction-trigger ordering, predecessor-or-successor persistence faults,
   substitution rejection, proof-bearing operation dispatch, exact
   `os-info.json` policy input, pre-intent and post-effect metadata replacement,
@@ -515,9 +525,14 @@ and instant rollback mechanism; it hardens their failure semantics.
   failure type remain private. The transition-identity gate additionally
   rejects mutation primitives in the existing-metadata verifier and any client
   bypass around coordinator-owned verification. No live
-  activation path creates or advances this coordinator, and there is still no
-  phase-specific recovery executor; the read-only startup assessment below cannot
-  advance it. This item remains open.
+  activation path creates or advances this coordinator. In particular, the
+  legacy ActiveReblit wrapper rotation still requires journal absence and an
+  already published `.stateID`; it must be replaced by phase-authorized
+  coordinator authority rather than reused or weakened. Startup must also
+  classify ActiveReblit `Preparing` as strictly state-ID-absent and treat
+  `CandidatePrepareStarted` as the only publication-ambiguity boundary. There
+  is still no phase-specific recovery executor; the read-only startup
+  assessment below cannot advance the record. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in

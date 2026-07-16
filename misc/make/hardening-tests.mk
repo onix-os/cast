@@ -118,7 +118,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 32; \
+	timeout 10s test "$$count" = 36; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -126,12 +126,16 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocation_phases \
 		transition_identity::journal_coordinator::tests::journal_coordinator_creation_captures_exact_epoch_tokens_and_runtime_tree_witnesses \
 		transition_identity::journal_coordinator::tests::journal_coordinator_quarantine_name_is_fixed_transition_token_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_state_authority_cannot_be_reinterpreted_between_operations \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_prejournal_authority_preserves_residue_and_name_substitution \
 		transition_identity::journal_coordinator::tests::journal_coordinator_wrong_operation_or_phase_is_rejected_without_record_change \
 		transition_identity::journal_coordinator::tests::journal_coordinator_fresh_allocation_effect_observes_durable_intent_before_database_commit \
 		transition_identity::journal_coordinator::tests::journal_coordinator_allocation_finish_rejects_missing_cleared_foreign_and_wrong_state_evidence \
 		transition_identity::journal_coordinator::tests::journal_coordinator_database_commit_and_completion_share_exact_transition_correlation \
 		transition_identity::journal_coordinator::tests::journal_coordinator_post_commit_journal_failure_preserves_matching_database_evidence \
 		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_state_id_publication_failures_preserve_started_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_state_id_appearance_before_prepare_intent_blocks_advance \
 		transition_identity::journal_coordinator::tests::journal_coordinator_existing_candidate_database_removal_blocks_journal_creation \
 		transition_identity::journal_coordinator::tests::journal_coordinator_distinct_previous_database_removal_blocks_journal_creation \
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_triggers_complete_exact_new_state_and_active_reblit_generations \
@@ -156,6 +160,47 @@ forge-transition-journal-coordinator-test:
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
 	prepare_contract="crates/forge/src/transition_identity/journal_coordinator/candidate_preparation.rs"; \
+	coordinator_contract="crates/forge/src/transition_identity/journal_coordinator/mod.rs"; \
+	authority_contract="crates/forge/src/transition_identity/candidate_state_authority.rs"; \
+	tree_lifecycle="crates/forge/src/transition_identity/tree_lifecycle.rs"; \
+	timeout 10s grep -Fqx 'mod candidate_state_authority;' crates/forge/src/transition_identity.rs; \
+	if timeout 10s grep -Fqx 'pub(crate) mod candidate_state_authority;' crates/forge/src/transition_identity.rs; then \
+		timeout 10s printf '%s\n' 'candidate state authority module visibility widened' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	for variant in '    UnknownIdAbsent,' '    KnownIdAbsent(state::Id),' '    ExistingId(state_tree_metadata::RetainedTreeStateId),'; do \
+		timeout 10s grep -Fqx "$$variant" "$$authority_contract"; \
+	done; \
+	timeout 10s grep -Fq 'pub(crate) fn prepare_active_reblit_candidate(' "$$tree_lifecycle"; \
+	timeout 10s grep -Fq 'pub(crate) fn prepare_retained_active_reblit_candidate(' "$$tree_lifecycle"; \
+	if timeout 10s grep -nF 'candidate_state: Option<state::Id>' "$$tree_lifecycle"; then \
+		timeout 10s printf '%s\n' 'candidate preparation collapsed three-way state authority back into Option' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	if timeout 10s grep -nF 'match parts.candidate_id' "$$coordinator_contract"; then \
+		timeout 10s printf '%s\n' 'coordinator again treats logical candidate ID presence as filesystem publication' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	if timeout 10s grep -nF 'self.record.operation != Operation::NewState' "$$prepare_contract"; then \
+		timeout 10s printf '%s\n' 'candidate proof again conflates ActiveReblit with existing archived state ID' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	if timeout 10s grep -RInF 'publish_new' crates/forge/src/transition_identity; then \
+		timeout 10s printf '%s\n' 'state-ID publisher regained NewState-only semantics' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	timeout 10s grep -Fqx '            Operation::NewState | Operation::ActiveReblit => {' "$$prepare_contract"; \
+	timeout 10s grep -Fq 'RetainedTreeStateId::publish_absent' "$$prepare_contract"; \
+	if timeout 10s grep -RInE 'prepare_(retained_)?active_reblit_candidate' crates/forge/src/client; then \
+		timeout 10s printf '%s\n' 'known-ID/absent candidate authority gained a live callsite before startup recovery exists' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	timeout 10s grep -Fqx "pub(super) struct StatefulTransactionTriggerAuthority<'authority> {" "$$trigger_contract"; \
 	timeout 10s grep -Fqx 'pub(super) enum StatefulTransactionTriggerFailure<E>' "$$trigger_contract"; \
 	timeout 10s grep -Fqx 'pub(crate) enum PreparedStatefulTransitionCoordinator {' "$$prepare_contract"; \

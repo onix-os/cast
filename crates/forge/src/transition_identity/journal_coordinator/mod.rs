@@ -39,7 +39,9 @@ use crate::{
     },
 };
 
-use super::{RetainedPreviousClassification, StatefulTreeIdentity, state_tree_metadata::RetainedTreeStateId};
+use super::{
+    RetainedPreviousClassification, StatefulTreeIdentity, candidate_state_authority::RetainedCandidateStateId,
+};
 
 const BEGIN_FRESH_ALLOCATION: &str = "begin fresh-state allocation";
 const FINISH_FRESH_ALLOCATION: &str = "finish fresh-state allocation";
@@ -77,10 +79,7 @@ impl StatefulTreeIdentity {
 
         let parts = request.parts();
         self.require_request_previous(parts)?;
-        match parts.candidate_id {
-            Some(candidate) => self.require_existing_candidate_state(candidate)?,
-            None => self.require_unallocated_candidate()?,
-        }
+        self.require_request_candidate(parts)?;
 
         let runtime = capture_runtime_evidence(&self)?;
         let transition_id =
@@ -118,10 +117,7 @@ impl StatefulTreeIdentity {
         // is not treated as instantaneous. Repeat every retained witness and
         // the journal-absence proof immediately before durable creation.
         require_record_runtime_evidence(&self, &record)?;
-        match parts.candidate_id {
-            Some(candidate) => self.require_existing_candidate_state(candidate)?,
-            None => self.require_unallocated_candidate()?,
-        }
+        self.require_request_candidate(parts)?;
         if let Some(candidate) = parts.candidate_id {
             self.require_existing_candidate_database_ownership(parts.operation, candidate, &record.transition_id)?;
         }
@@ -138,30 +134,78 @@ impl StatefulTreeIdentity {
         Ok(StatefulTransitionCoordinator { identity: self, record })
     }
 
-    fn require_existing_candidate_state(&self, expected: state::Id) -> Result<(), StatefulTransitionCoordinatorError> {
-        let actual = self.candidate.state_id.as_ref().map(RetainedTreeStateId::state);
-        if actual != Some(expected) {
-            return Err(StatefulTransitionCoordinatorError::CandidateStateMismatch {
-                expected: i32::from(expected),
-                actual: actual.map(i32::from),
-            });
+    fn require_request_candidate(
+        &self,
+        parts: request::RequestParts,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        match (parts.operation, parts.candidate_id) {
+            (Operation::NewState, None) => self.require_unknown_id_absent(Operation::NewState),
+            (Operation::ActivateArchived, Some(candidate)) => {
+                self.require_existing_candidate_id(Operation::ActivateArchived, candidate)
+            }
+            (Operation::ActiveReblit, Some(candidate)) => {
+                self.require_known_id_absent(Operation::ActiveReblit, candidate)
+            }
+            (operation, candidate) => {
+                Err(self.candidate_authority_mismatch(operation, "operation-specific", candidate))
+            }
         }
-        self.candidate
-            .verify_store_with_state_id(&self.candidate.store)
+    }
+
+    fn require_unknown_id_absent(&self, operation: Operation) -> Result<(), StatefulTransitionCoordinatorError> {
+        if !matches!(self.candidate_state_id, RetainedCandidateStateId::UnknownIdAbsent) {
+            return Err(self.candidate_authority_mismatch(operation, "unknown-ID/absent", None));
+        }
+        self.candidate_state_id
+            .verify_initial(&self.candidate)
             .map_err(StatefulTransitionCoordinatorError::Identity)
     }
 
-    fn require_unallocated_candidate(&self) -> Result<(), StatefulTransitionCoordinatorError> {
-        let actual = self.candidate.state_id.as_ref().map(RetainedTreeStateId::state);
-        if actual.is_some() {
-            return Err(StatefulTransitionCoordinatorError::NewStateCandidateAlreadyDecorated {
-                actual: actual.map(i32::from),
-            });
+    fn require_known_id_absent(
+        &self,
+        operation: Operation,
+        expected: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        if !matches!(
+            self.candidate_state_id,
+            RetainedCandidateStateId::KnownIdAbsent(actual) if actual == expected
+        ) {
+            return Err(self.candidate_authority_mismatch(operation, "known-ID/absent", Some(expected)));
         }
-        self.candidate
-            .verify_store_read_only(&self.candidate.store)
-            .map_err(StatefulTransitionCoordinatorError::Identity)?;
-        RetainedTreeStateId::require_absent(&self.candidate.store).map_err(StatefulTransitionCoordinatorError::Identity)
+        self.candidate_state_id
+            .verify_initial(&self.candidate)
+            .map_err(StatefulTransitionCoordinatorError::Identity)
+    }
+
+    fn require_existing_candidate_id(
+        &self,
+        operation: Operation,
+        expected: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        if !matches!(
+            &self.candidate_state_id,
+            RetainedCandidateStateId::ExistingId(actual) if actual.state() == expected
+        ) {
+            return Err(self.candidate_authority_mismatch(operation, "existing-ID", Some(expected)));
+        }
+        self.verify_candidate_store_with_state_id()
+            .map_err(StatefulTransitionCoordinatorError::Identity)
+    }
+
+    fn candidate_authority_mismatch(
+        &self,
+        operation: Operation,
+        expected_kind: &'static str,
+        expected_state: Option<state::Id>,
+    ) -> StatefulTransitionCoordinatorError {
+        let (retained_kind, retained_state) = self.candidate_state_id.kind_and_state();
+        StatefulTransitionCoordinatorError::CandidateAuthorityMismatch {
+            operation,
+            expected_kind,
+            expected_state: expected_state.map(i32::from),
+            retained_kind,
+            retained_state: retained_state.map(i32::from),
+        }
     }
 
     fn require_existing_candidate_database_ownership(
@@ -280,9 +324,9 @@ impl StatefulTransitionCoordinator {
     pub(crate) fn begin_fresh_allocation(mut self) -> Result<Self, StatefulTransitionCoordinatorError> {
         self.require_operation(Operation::NewState, BEGIN_FRESH_ALLOCATION)?;
         self.require_phase(Phase::Preparing, BEGIN_FRESH_ALLOCATION)?;
-        self.identity.require_unallocated_candidate()?;
+        self.identity.require_unknown_id_absent(Operation::NewState)?;
         self.require_record_runtime_evidence()?;
-        self.identity.require_unallocated_candidate()?;
+        self.identity.require_unknown_id_absent(Operation::NewState)?;
         self.advance(None)?;
         Ok(self)
     }
@@ -307,7 +351,7 @@ impl StatefulTransitionCoordinator {
         if !self.identity.state_database.same_instance(database) {
             return Err(StatefulTransitionCoordinatorError::StateDatabaseCapabilityMismatch);
         }
-        self.identity.require_unallocated_candidate()?;
+        self.identity.require_unknown_id_absent(Operation::NewState)?;
         self.require_record_runtime_evidence()?;
 
         let ownership = self
@@ -325,9 +369,10 @@ impl StatefulTransitionCoordinator {
         // The installation-wide cooperating-writer lock supplies the mutation
         // exclusion; this second proof rejects an identity/epoch change.
         self.require_record_runtime_evidence()?;
-        self.identity.require_unallocated_candidate()?;
+        self.identity.require_unknown_id_absent(Operation::NewState)?;
         self.require_fresh_allocation_ownership(state)?;
         self.advance(Some(i32::from(state)))?;
+        self.identity.candidate_state_id = RetainedCandidateStateId::KnownIdAbsent(state);
         Ok(self)
     }
 
@@ -339,29 +384,42 @@ impl StatefulTransitionCoordinator {
             Operation::ActivateArchived | Operation::ActiveReblit => Phase::Preparing,
         };
         self.require_phase(expected, BEGIN_CANDIDATE_PREPARE)?;
-        if self.record.operation == Operation::NewState {
-            self.identity.require_unallocated_candidate()?;
-        }
+        let candidate = self.candidate_state()?;
+        self.require_candidate_before_publication(candidate)?;
         self.require_record_runtime_evidence()?;
-        if self.record.operation == Operation::NewState {
-            let candidate = self.fresh_candidate_state()?;
-            self.require_fresh_allocation_ownership(candidate)?;
-            self.require_record_runtime_evidence()?;
-            self.identity.require_unallocated_candidate()?;
-            self.require_fresh_allocation_ownership(candidate)?;
+        self.require_candidate_before_publication(candidate)?;
+        match self.record.operation {
+            Operation::NewState => {
+                self.require_fresh_allocation_ownership(candidate)?;
+                self.require_record_runtime_evidence()?;
+                self.identity.require_known_id_absent(Operation::NewState, candidate)?;
+                self.require_fresh_allocation_ownership(candidate)?;
+            }
+            Operation::ActivateArchived | Operation::ActiveReblit => {
+                self.identity.require_existing_candidate_database_ownership(
+                    self.record.operation,
+                    candidate,
+                    &self.record.transition_id,
+                )?;
+            }
         }
         self.advance(None)?;
         Ok(self)
     }
 
-    fn fresh_candidate_state(&self) -> Result<state::Id, StatefulTransitionCoordinatorError> {
-        self.record
-            .candidate
-            .id
-            .map(state::Id::from)
-            .ok_or(StatefulTransitionCoordinatorError::CandidateStateMissing {
-                phase: self.record.phase,
-            })
+    fn require_candidate_before_publication(
+        &self,
+        candidate: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        match self.record.operation {
+            Operation::NewState => self.identity.require_known_id_absent(Operation::NewState, candidate),
+            Operation::ActivateArchived => self
+                .identity
+                .require_existing_candidate_id(Operation::ActivateArchived, candidate),
+            Operation::ActiveReblit => self
+                .identity
+                .require_known_id_absent(Operation::ActiveReblit, candidate),
+        }
     }
 
     fn require_fresh_allocation_ownership(&self, state: state::Id) -> Result<(), StatefulTransitionCoordinatorError> {

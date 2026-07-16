@@ -75,12 +75,22 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
             COORDINATOR_SYSTEM_SNAPSHOT,
         );
     }
-    let identity = if candidate_kind == CandidateKind::NewState {
-        write_canonical_file(&candidate_path.join("payload-sentinel"), NEW_STATE_PAYLOAD_SENTINEL);
-        StatefulTreeIdentity::prepare_unallocated_candidate(&installation, &database, &candidate_path).unwrap()
-    } else {
-        write_canonical_file(&candidate_path.join(".stateID"), candidate_state.to_string().as_bytes());
-        StatefulTreeIdentity::prepare(&installation, &database, &candidate_path, candidate_state).unwrap()
+    let identity = match candidate_kind {
+        CandidateKind::NewState => {
+            write_canonical_file(&candidate_path.join("payload-sentinel"), NEW_STATE_PAYLOAD_SENTINEL);
+            StatefulTreeIdentity::prepare_unallocated_candidate(&installation, &database, &candidate_path).unwrap()
+        }
+        CandidateKind::Archived => {
+            write_canonical_file(&candidate_path.join(".stateID"), candidate_state.to_string().as_bytes());
+            StatefulTreeIdentity::prepare(&installation, &database, &candidate_path, candidate_state).unwrap()
+        }
+        CandidateKind::ActiveReblit => StatefulTreeIdentity::prepare_active_reblit_candidate(
+            &installation,
+            &database,
+            &candidate_path,
+            candidate_state,
+        )
+        .unwrap(),
     };
     let fixture = CoordinatorFixture {
         _temporary: temporary,

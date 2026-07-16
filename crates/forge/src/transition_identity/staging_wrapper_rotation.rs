@@ -893,7 +893,7 @@ impl StatefulTreeIdentity {
             .map_err(|source| super::Error::ActivePreviousSlotParking {
                 source: Box::new(source),
             })?;
-        self.candidate.verify_named_with_state_id(&path)?;
+        self.verify_candidate_named_with_state_id(&path)?;
         self.require_active_previous_slot_parked(installation, expected.id)
             .map_err(|source| super::Error::ActivePreviousSlotParking {
                 source: Box::new(source),

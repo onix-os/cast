@@ -37,6 +37,7 @@ mod archived_state_prune;
 mod archived_state_repair;
 mod candidate_metadata;
 mod candidate_quarantine;
+mod candidate_state_authority;
 mod error;
 mod fault_injection;
 #[allow(dead_code)] // contract-only until startup reconciliation can consume its records
@@ -473,6 +474,7 @@ pub(crate) struct StatefulTreeIdentity {
     journal: TransitionJournalStore,
     state_database: db::state::Database,
     candidate: RetainedIdentity,
+    candidate_state_id: candidate_state_authority::RetainedCandidateStateId,
     previous: RetainedIdentity,
     previous_classification: RetainedPreviousClassification,
     quarantine_attempt: Mutex<Option<RetainedQuarantineAttempt>>,
@@ -864,16 +866,6 @@ impl RetainedIdentity {
         self.revalidate_retained()?;
         self.store.require_same_directory(named_store)?;
         self.marker.require_same_marker(&named).map_err(Error::from)
-    }
-
-    /// Strict candidate-only proof. Recovery movement deliberately continues
-    /// to use marker-only verification so a trigger-corrupted `.stateID` can
-    /// still be reversed and quarantined rather than stranding the bad tree
-    /// live.
-    fn verify_named_with_state_id(&self, path: &Path) -> Result<(), Error> {
-        self.verify_named_read_only(path)?;
-        let named_store = TreeMarkerStore::open_path(path)?;
-        self.verify_store_with_state_id(&named_store)
     }
 
     /// Strict descriptor-bound candidate proof. Unlike the path convenience

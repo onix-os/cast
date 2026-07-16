@@ -269,11 +269,12 @@ fn journal_coordinator_post_commit_journal_failure_preserves_matching_database_e
         assert_candidate_state_id_absent(&fixture);
     }
 
-    // The state ID is already durably published when the final journal
-    // advance fails. Recovery therefore sees exact DB + namespace evidence
-    // correlated with the still-durable CandidatePrepareStarted record.
-    {
-        let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::NewState);
+    // The state ID is already durably published for either newly decorated
+    // candidate when the final journal advance fails. Recovery therefore sees
+    // exact DB + namespace evidence correlated with the still-durable
+    // CandidatePrepareStarted record.
+    for candidate_kind in [CandidateKind::NewState, CandidateKind::ActiveReblit] {
+        let (fixture, coordinator) = coordinator_at_candidate_prepare_started(candidate_kind);
         let started = coordinator.record().clone();
         let allocated = state::Id::from(started.candidate.id.unwrap());
         assert_candidate_state_id_absent(&fixture);
@@ -286,13 +287,17 @@ fn journal_coordinator_post_commit_journal_failure_preserves_matching_database_e
 
         assert_eq!(reopen_record(&fixture.installation.root), started);
         assert_candidate_state_id(&fixture, allocated);
-        assert_eq!(
-            fixture
-                .database
-                .transition_ownership(allocated, &started.transition_id)
-                .unwrap(),
-            TransitionOwnership::Matching
-        );
+        if candidate_kind == CandidateKind::NewState {
+            assert_eq!(
+                fixture
+                    .database
+                    .transition_ownership(allocated, &started.transition_id)
+                    .unwrap(),
+                TransitionOwnership::Matching
+            );
+        } else {
+            assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+        }
         assert_eq!(
             journal_names(&fixture.installation.root),
             ["state-transition", "state-transition.lock"]
@@ -332,6 +337,12 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
         let expected_generation = if candidate_kind == CandidateKind::NewState { 4 } else { 2 };
         assert_eq!(started.phase, Phase::CandidatePrepareStarted);
         assert_eq!(started.generation, expected_generation);
+        match candidate_kind {
+            CandidateKind::NewState | CandidateKind::ActiveReblit => {
+                assert_candidate_state_id_absent(&fixture)
+            }
+            CandidateKind::Archived => assert_candidate_state_id(&fixture, fixture.candidate_state),
+        }
 
         // The explicit test effect sees the durable intent. This demonstrates
         // interleaving; it does not claim a generic callback API.
@@ -355,11 +366,12 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
         assert_eq!(coordinator.record().phase, Phase::CandidatePrepared);
         assert_eq!(coordinator.record().generation, expected_generation + 1);
         assert_eq!(read_canonical(&fixture.installation.root), *coordinator.record());
-        if candidate_kind == CandidateKind::NewState {
-            assert_candidate_state_id(
+        match candidate_kind {
+            CandidateKind::NewState | CandidateKind::ActiveReblit => assert_candidate_state_id(
                 &fixture,
                 state::Id::from(coordinator.record().candidate.id.unwrap()),
-            );
+            ),
+            CandidateKind::Archived => assert_candidate_state_id(&fixture, fixture.candidate_state),
         }
     }
 
@@ -374,17 +386,25 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
         assert!(candidate_effect().is_err());
         drop(coordinator);
         assert_eq!(reopen_record(&fixture.installation.root), started);
-        if candidate_kind == CandidateKind::NewState {
-            assert_candidate_state_id_absent(&fixture);
-            assert_eq!(
-                fixture
-                    .database
-                    .transition_ownership(fixture.candidate_state, &started.transition_id)
-                    .unwrap(),
-                TransitionOwnership::Matching
-            );
-        } else {
-            assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+        match candidate_kind {
+            CandidateKind::NewState => {
+                assert_candidate_state_id_absent(&fixture);
+                assert_eq!(
+                    fixture
+                        .database
+                        .transition_ownership(fixture.candidate_state, &started.transition_id)
+                        .unwrap(),
+                    TransitionOwnership::Matching
+                );
+            }
+            CandidateKind::ActiveReblit => {
+                assert_candidate_state_id_absent(&fixture);
+                assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+            }
+            CandidateKind::Archived => {
+                assert_candidate_state_id(&fixture, fixture.candidate_state);
+                assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+            }
         }
     }
 
@@ -576,5 +596,117 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
                 .unwrap(),
             TransitionOwnership::Cleared
         );
+    }
+}
+
+#[test]
+fn journal_coordinator_active_reblit_state_id_publication_failures_preserve_started_evidence() {
+    // A foreign canonical occupant introduced after CandidatePrepareStarted is
+    // never overwritten or adopted for the known-ID/absent candidate.
+    {
+        let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::ActiveReblit);
+        let started = coordinator.record().clone();
+        assert_candidate_state_id_absent(&fixture);
+        let collision = state_id_path(&fixture);
+        super::super::state_tree_metadata::arm_before_state_id_publish(move || {
+            write_canonical_file(&collision, b"foreign-reblit-state");
+        });
+        assert!(matches!(
+            finish_candidate_prepare(coordinator),
+            Err(StatefulTransitionCoordinatorError::StateIdPublication(failure))
+                if failure.outcome()
+                    == super::super::state_tree_metadata::StateIdPublicationOutcome::NotPublished
+        ));
+        assert_eq!(reopen_record(&fixture.installation.root), started);
+        assert_eq!(fs::read(state_id_path(&fixture)).unwrap(), b"foreign-reblit-state");
+        assert_candidate_state_id_temporary_absent(&fixture);
+        assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+    }
+
+    // Once the no-replace rename applied, a durability fault must leave the
+    // exact published inode as recovery evidence without claiming
+    // CandidatePrepared.
+    {
+        let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::ActiveReblit);
+        let started = coordinator.record().clone();
+        super::super::state_tree_metadata::arm_state_id_publication_fault(
+            super::super::state_tree_metadata::StateIdPublicationFaultPoint::DirectorySync,
+        );
+        assert!(matches!(
+            finish_candidate_prepare(coordinator),
+            Err(StatefulTransitionCoordinatorError::StateIdPublication(failure))
+                if failure.outcome()
+                    == super::super::state_tree_metadata::StateIdPublicationOutcome::Published
+        ));
+        super::super::state_tree_metadata::assert_state_id_publication_fault_consumed();
+        assert_eq!(reopen_record(&fixture.installation.root), started);
+        assert_candidate_state_id(&fixture, fixture.candidate_state);
+        assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+    }
+
+    // Removing the reused database row immediately before publication is
+    // caught by the post-publication evidence sandwich. The exact state-ID
+    // inode and CandidatePrepareStarted record remain for recovery.
+    {
+        let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::ActiveReblit);
+        let started = coordinator.record().clone();
+        let database = fixture.database.clone();
+        let candidate = fixture.candidate_state;
+        super::super::state_tree_metadata::arm_before_state_id_publish(move || {
+            database.remove(&candidate).unwrap();
+        });
+        assert!(matches!(
+            finish_candidate_prepare(coordinator),
+            Err(StatefulTransitionCoordinatorError::ExistingCandidateOwnershipMismatch {
+                operation: Operation::ActiveReblit,
+                state,
+                ownership: TransitionOwnership::Missing,
+            }) if state == i32::from(candidate)
+        ));
+        assert_eq!(reopen_record(&fixture.installation.root), started);
+        assert_candidate_state_id(&fixture, candidate);
+        assert_eq!(
+            fixture
+                .database
+                .transition_ownership(candidate, &started.transition_id)
+                .unwrap(),
+            TransitionOwnership::Missing
+        );
+    }
+}
+
+#[test]
+fn journal_coordinator_active_reblit_state_id_appearance_before_prepare_intent_blocks_advance() {
+    for name in [".stateID", ".cast-state-id.tmp"] {
+        let (fixture, identity) = fixture(CandidateKind::ActiveReblit, PreviousKind::Active);
+        let coordinator = identity
+            .begin_transition(request(CandidateKind::ActiveReblit, &fixture, false, false))
+            .unwrap();
+        let preparing = coordinator.record().clone();
+        assert_candidate_state_id_absent(&fixture);
+        let occupant = fixture.candidate_path.join(name);
+        let contents = if name == ".stateID" {
+            fixture.candidate_state.to_string().into_bytes()
+        } else {
+            b"foreign-temporary-residue".to_vec()
+        };
+        write_canonical_file(&occupant, &contents);
+        let before = fs::symlink_metadata(&occupant).unwrap();
+
+        assert!(coordinator.begin_candidate_prepare().is_err());
+
+        let after = fs::symlink_metadata(&occupant).unwrap();
+        assert_eq!(reopen_record(&fixture.installation.root), preparing);
+        assert_eq!(fs::read(&occupant).unwrap(), contents);
+        assert_eq!(
+            (after.dev(), after.ino(), after.mode(), after.nlink(), after.len()),
+            (before.dev(), before.ino(), before.mode(), before.nlink(), before.len())
+        );
+        if name == ".stateID" {
+            assert_candidate_state_id_temporary_absent(&fixture);
+        } else {
+            assert_state_metadata_name_absent(&state_id_path(&fixture));
+        }
+        assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
     }
 }

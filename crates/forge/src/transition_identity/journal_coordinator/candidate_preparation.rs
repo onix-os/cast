@@ -17,6 +17,7 @@ use super::{
     FINISH_CANDIDATE_PREPARE, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
     before_finish_candidate_runtime_proof,
 };
+use crate::transition_identity::candidate_state_authority::RetainedCandidateStateId;
 use crate::transition_identity::state_tree_metadata::RetainedTreeStateId;
 use crate::transition_identity::{CandidateMetadataProof, CandidateMetadataPublication, CandidateMetadataVerification};
 
@@ -55,8 +56,8 @@ pub(crate) struct TransactionTriggersCompleteCoordinator {
 
 impl StatefulTransitionCoordinator {
     /// Publish fresh metadata or verify archived metadata, publish the exact
-    /// new-state `.stateID`, then durably advance to `CandidatePrepared` while
-    /// retaining the sole metadata proof.
+    /// absent `.stateID` for a newly decorated candidate, then durably advance
+    /// to `CandidatePrepared` while retaining the sole metadata proof.
     ///
     /// `derive_os_release` sees only the optional bytes read through the
     /// publication's retained `usr/lib` descriptor. It supplies semantic
@@ -96,19 +97,17 @@ impl StatefulTransitionCoordinator {
         };
 
         // Metadata proof must bind to the coordinator's exact candidate before
-        // NewState is allowed to publish even its state ID.
+        // NewState or ActiveReblit may publish even the state ID.
         metadata.require_same_candidate(candidate_usr, candidate_path)?;
         self.require_candidate_prepare_started_evidence(candidate)?;
         metadata.require_same_candidate(candidate_usr, candidate_path)?;
 
         match self.record.operation {
-            Operation::NewState => {
-                self.identity.candidate.state_id = Some(RetainedTreeStateId::publish_new(
-                    &self.identity.candidate.store,
-                    candidate,
-                )?);
+            Operation::NewState | Operation::ActiveReblit => {
+                let state_id = RetainedTreeStateId::publish_absent(&self.identity.candidate.store, candidate)?;
+                self.identity.candidate_state_id = RetainedCandidateStateId::ExistingId(state_id);
             }
-            Operation::ActivateArchived | Operation::ActiveReblit => {}
+            Operation::ActivateArchived => {}
         }
 
         // Sandwich the owned proof between complete journal, runtime, public
@@ -194,14 +193,15 @@ impl StatefulTransitionCoordinator {
     ) -> Result<(), StatefulTransitionCoordinatorError> {
         let candidate_path = self.identity.candidate.store.display_path();
         let previous_path = self.identity.previous.store.display_path();
-        if state_id_published || self.record.operation != Operation::NewState {
-            self.identity.require_existing_candidate_state(candidate)?;
+        if state_id_published || self.record.operation == Operation::ActivateArchived {
             self.identity
-                .candidate
-                .verify_named_with_state_id(candidate_path)
+                .require_existing_candidate_id(self.record.operation, candidate)?;
+            self.identity
+                .verify_candidate_named_with_state_id(candidate_path)
                 .map_err(StatefulTransitionCoordinatorError::Identity)?;
         } else {
-            self.identity.require_unallocated_candidate()?;
+            self.identity
+                .require_known_id_absent(self.record.operation, candidate)?;
             self.identity
                 .candidate
                 .verify_named_read_only(candidate_path)
@@ -213,10 +213,9 @@ impl StatefulTransitionCoordinator {
             .previous
             .verify_named_read_only(previous_path)
             .map_err(StatefulTransitionCoordinatorError::Identity)?;
-        if state_id_published || self.record.operation != Operation::NewState {
+        if state_id_published || self.record.operation == Operation::ActivateArchived {
             self.identity
-                .candidate
-                .verify_named_with_state_id(candidate_path)
+                .verify_candidate_named_with_state_id(candidate_path)
                 .map_err(StatefulTransitionCoordinatorError::Identity)
         } else {
             self.identity

@@ -161,6 +161,7 @@ fn journal_coordinator_archived_activation_reaches_candidate_prepared_without_al
 #[test]
 fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocation_phases() {
     let (fixture, identity) = fixture(CandidateKind::ActiveReblit, PreviousKind::Active);
+    assert_candidate_state_id_absent(&fixture);
     let coordinator = identity
         .begin_transition(request(CandidateKind::ActiveReblit, &fixture, true, false))
         .unwrap();
@@ -185,6 +186,7 @@ fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocati
         preparing.candidate.usr_runtime_identity,
         preparing.previous.usr_runtime_identity
     );
+    assert_candidate_state_id_absent(&fixture);
 
     let coordinator = coordinator.begin_candidate_prepare().unwrap();
     assert_record_prefix(
@@ -193,6 +195,7 @@ fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocati
         Phase::CandidatePrepareStarted,
         2,
     );
+    assert_candidate_state_id_absent(&fixture);
     let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
@@ -202,6 +205,7 @@ fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocati
     );
     assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
     assert_candidate_metadata(&fixture);
+    assert_candidate_state_id(&fixture, fixture.candidate_state);
 }
 
 #[test]
@@ -264,6 +268,177 @@ fn journal_coordinator_quarantine_name_is_fixed_transition_token_evidence() {
             assert_eq!(coordinator.record().quarantine_name.as_str(), expected);
             assert_eq!(coordinator.record().candidate.id, Some(i32::from(allocated)));
         }
+    }
+}
+
+#[test]
+fn journal_coordinator_candidate_state_authority_cannot_be_reinterpreted_between_operations() {
+    // An unknown-ID/absent NewState authority is not a known-ID/absent
+    // ActiveReblit authority merely because the request supplies the active
+    // state's numeric ID.
+    {
+        let (fixture, identity) = fixture(CandidateKind::NewState, PreviousKind::Active);
+        assert_candidate_state_id_absent(&fixture);
+        assert!(matches!(
+            identity.begin_transition(StatefulTransitionRequest::ActiveReblit {
+                state: fixture.previous_state,
+                run_system_triggers: false,
+                run_boot_sync: false,
+            }),
+            Err(StatefulTransitionCoordinatorError::CandidateAuthorityMismatch {
+                operation: Operation::ActiveReblit,
+                expected_kind: "known-ID/absent",
+                expected_state: Some(expected),
+                retained_kind: "unknown-ID/absent",
+                retained_state: None,
+            }) if expected == i32::from(fixture.previous_state)
+        ));
+        assert_canonical_journal_absent(&fixture.installation.root);
+        assert_candidate_state_id_absent(&fixture);
+    }
+
+    // A known-ID/absent ActiveReblit authority cannot be reinterpreted as an
+    // unknown fresh allocation or as an already decorated archived tree.
+    {
+        let (fixture, identity) = fixture(CandidateKind::ActiveReblit, PreviousKind::Active);
+        assert_candidate_state_id_absent(&fixture);
+        assert!(matches!(
+            identity.begin_transition(StatefulTransitionRequest::NewState {
+                previous: NewStatePrevious::Active(fixture.previous_state),
+                run_system_triggers: false,
+                run_boot_sync: false,
+            }),
+            Err(StatefulTransitionCoordinatorError::CandidateAuthorityMismatch {
+                operation: Operation::NewState,
+                expected_kind: "unknown-ID/absent",
+                expected_state: None,
+                retained_kind: "known-ID/absent",
+                retained_state: Some(retained),
+            }) if retained == i32::from(fixture.candidate_state)
+        ));
+        assert_canonical_journal_absent(&fixture.installation.root);
+        assert_candidate_state_id_absent(&fixture);
+    }
+    {
+        let (fixture, identity) = fixture(CandidateKind::ActiveReblit, PreviousKind::Active);
+        assert_candidate_state_id_absent(&fixture);
+        assert!(matches!(
+            identity.begin_transition(StatefulTransitionRequest::ActivateArchived {
+                candidate: fixture.candidate_state,
+                previous: fixture.previous_state,
+                run_system_triggers: false,
+                run_boot_sync: false,
+            }),
+            Err(StatefulTransitionCoordinatorError::CandidateAuthorityMismatch {
+                operation: Operation::ActivateArchived,
+                expected_kind: "existing-ID",
+                expected_state: Some(expected),
+                retained_kind: "known-ID/absent",
+                retained_state: Some(retained),
+            }) if expected == i32::from(fixture.candidate_state)
+                && retained == i32::from(fixture.candidate_state)
+        ));
+        assert_canonical_journal_absent(&fixture.installation.root);
+        assert_candidate_state_id_absent(&fixture);
+    }
+
+    // Conversely, retaining an archived `.stateID` cannot authorize a reblit
+    // of the active state.
+    {
+        let (fixture, identity) = fixture(CandidateKind::Archived, PreviousKind::Active);
+        assert_candidate_state_id(&fixture, fixture.candidate_state);
+        assert!(matches!(
+            identity.begin_transition(StatefulTransitionRequest::ActiveReblit {
+                state: fixture.previous_state,
+                run_system_triggers: false,
+                run_boot_sync: false,
+            }),
+            Err(StatefulTransitionCoordinatorError::CandidateAuthorityMismatch {
+                operation: Operation::ActiveReblit,
+                expected_kind: "known-ID/absent",
+                expected_state: Some(expected),
+                retained_kind: "existing-ID",
+                retained_state: Some(retained),
+            }) if expected == i32::from(fixture.previous_state)
+                && retained == i32::from(fixture.candidate_state)
+        ));
+        assert_canonical_journal_absent(&fixture.installation.root);
+        assert_candidate_state_id(&fixture, fixture.candidate_state);
+    }
+}
+
+#[test]
+fn journal_coordinator_active_reblit_prejournal_authority_preserves_residue_and_name_substitution() {
+    // Both reserved state-ID names must be absent before the marker or journal
+    // can be published. A hostile occupant remains byte-for-byte and
+    // inode-for-inode unchanged.
+    for (name, contents) in [
+        (".stateID", b"foreign-final".as_slice()),
+        (".cast-state-id.tmp", b"foreign-temporary".as_slice()),
+    ] {
+        let temporary = private_installation_tempdir();
+        let mut installation = Installation::open(temporary.path(), None).unwrap();
+        let database = db::state::Database::new(":memory:").unwrap();
+        let active = database.add(&[], Some("active reblit row"), None).unwrap().id;
+        installation.active_state = Some(active);
+        prepare_previous_tree(&installation, PreviousKind::Active, active);
+        let candidate = installation.staging_path("usr");
+        create_canonical_directory(&candidate);
+        let occupant = candidate.join(name);
+        write_canonical_file(&occupant, contents);
+        let before = fs::symlink_metadata(&occupant).unwrap();
+
+        assert!(
+            StatefulTreeIdentity::prepare_active_reblit_candidate(
+                &installation,
+                &database,
+                &candidate,
+                active,
+            )
+            .is_err()
+        );
+
+        let after = fs::symlink_metadata(&occupant).unwrap();
+        assert_eq!(fs::read(&occupant).unwrap(), contents);
+        assert_eq!(
+            (after.dev(), after.ino(), after.mode(), after.nlink(), after.len()),
+            (before.dev(), before.ino(), before.mode(), before.nlink(), before.len())
+        );
+        assert!(!candidate.join(".cast-tree-id").exists());
+        assert_canonical_journal_absent(&installation.root);
+    }
+
+    // The retained-descriptor constructor must reject replacement of the
+    // public candidate name rather than attaching authority to either tree.
+    {
+        let temporary = private_installation_tempdir();
+        let mut installation = Installation::open(temporary.path(), None).unwrap();
+        let database = db::state::Database::new(":memory:").unwrap();
+        let active = database.add(&[], Some("active retained reblit row"), None).unwrap().id;
+        installation.active_state = Some(active);
+        prepare_previous_tree(&installation, PreviousKind::Active, active);
+        let candidate = installation.staging_path("usr");
+        let displaced = installation.staging_path("usr-retained-displaced");
+        create_canonical_directory(&candidate);
+        let retained = fs::File::open(&candidate).unwrap();
+        fs::rename(&candidate, &displaced).unwrap();
+        create_canonical_directory(&candidate);
+
+        assert!(
+            StatefulTreeIdentity::prepare_retained_active_reblit_candidate(
+                &installation,
+                &database,
+                &candidate,
+                &retained,
+                active,
+            )
+            .is_err()
+        );
+        assert!(!candidate.join(".cast-tree-id").exists());
+        assert!(!displaced.join(".cast-tree-id").exists());
+        assert!(!candidate.join(".stateID").exists());
+        assert!(!displaced.join(".stateID").exists());
+        assert_canonical_journal_absent(&installation.root);
     }
 }
 

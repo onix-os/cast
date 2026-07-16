@@ -50,10 +50,16 @@ pub(crate) enum StatefulTransitionCoordinatorError {
         expected: Phase,
         actual: Phase,
     },
-    #[error("candidate state identity mismatch: expected {expected}, found {actual:?}")]
-    CandidateStateMismatch { expected: i32, actual: Option<i32> },
-    #[error("NewState requires a state-ID-unallocated candidate, found retained state ID {actual:?}")]
-    NewStateCandidateAlreadyDecorated { actual: Option<i32> },
+    #[error(
+        "{operation:?} requires candidate authority {expected_kind} state={expected_state:?}, retained {retained_kind} state={retained_state:?}"
+    )]
+    CandidateAuthorityMismatch {
+        operation: Operation,
+        expected_kind: &'static str,
+        expected_state: Option<i32>,
+        retained_kind: &'static str,
+        retained_state: Option<i32>,
+    },
     #[error("the {phase:?} journal record does not contain a candidate state ID")]
     CandidateStateMissing { phase: Phase },
     #[error(
@@ -102,6 +108,6 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     },
     #[error("durably seal the exact existing marked candidate around transaction triggers")]
     TransactionCandidateDurability(#[source] CandidateInventoryError),
-    #[error("publish the exact fresh-state ID under CandidatePrepareStarted authority")]
+    #[error("publish the exact absent candidate state ID under CandidatePrepareStarted authority")]
     StateIdPublication(#[from] super::super::state_tree_metadata::StateIdPublicationFailure),
 }
