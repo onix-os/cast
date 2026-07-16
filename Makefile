@@ -33,6 +33,7 @@ include misc/make/startup-recovery-tests.mk
 include misc/make/startup-exchange-durability-tests.mk
 include misc/make/startup-rollback-resume-route-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk
+include misc/make/startup-rollback-reverse-projection-tests.mk
 include misc/make/userspace-profile-fixture.mk
 
 .PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
@@ -877,6 +878,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-exchange-parent-durability-test  Run exact descriptor-bound parent-durability contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-resume-route-test  Run exact journal-only rollback-resume routing contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-admission-test  Run sealed read-only reverse-admission contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-reverse-projection-test  Run normalized reverse-exchange projection contracts"
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
 	@echo "  forge-cache-test  Run the exact descriptor-rooted download and asset cache tests"
 	@echo "  forge-client-direct-test  Run all direct frozen and state-transition client tests"
