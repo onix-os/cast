@@ -47,8 +47,20 @@ and instant rollback mechanism; it hardens their failure semantics.
   remains held through repository and active-registry construction. The strict
   result is checked against the preliminary Installation observation, which
   remains only a stale-clone witness; a mismatch is rejected rather than
-  refreshed. Focused tests prove unresolved journal and orphan evidence precede
-  malformed live state. Startup recovery execution is not implemented. The public
+  refreshed. Mutable startup now also has one narrow phase-authorized recovery
+  effect before diagnostic inspection: direct ActiveReblit
+  `CandidatePrepared`, or rollback whose recorded source is
+  `CandidatePrepared`, may normalize one exact same-owner restrictive
+  replacement wrapper to mode `0700`. The sealed authority retains the exact
+  installation, journal, database, active-state reservation, record, and
+  initial in-flight evidence; it requires stable database ownership, immutable
+  metadata provenance, and live active selection before and around the
+  descriptor-bound chmod. Absent, canonical, inapplicable, ambiguous, foreign,
+  or changing evidence is not mutated, and this effect never advances the
+  journal. The focused `make forge-client-startup-gate-test` lane lists 21
+  contracts, including 5 which prove compatible repair and zero chmod for
+  incompatible database, active-selection, record, or installation authority.
+  General phase recovery execution is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -363,11 +375,16 @@ and instant rollback mechanism; it hardens their failure semantics.
   boot result.
 
   As of 2026-07-16, one intentionally unwired coordinator contract owns the
-  durable prefix through `CandidatePrepared` for all three operations, the
-  internal transaction-trigger sequence through `TransactionTriggersComplete`
-  for new states and active reblits, and the common intent-only boundary
-  through `UsrExchangeIntent`. A typed request makes the legal state
-  relationships explicit: a new state has no
+  durable prefix through `CandidatePrepared` for all three operations. While
+  that phase remains canonical, ActiveReblit must consume a sealed,
+  non-trigger-ready typestate to reserve the exact replacement wrapper and
+  park the authenticated previous-marker link. Both NewState and the reserved
+  ActiveReblit path must then publish and retain the exact transaction-isolation
+  ABI before acquiring trigger authority. The coordinator owns the internal
+  transaction-trigger sequence through `TransactionTriggersComplete`, the
+  common intent-only boundary through `UsrExchangeIntent`, and the one-shot
+  exchange effect through durable `UsrExchanged`. A typed request makes the
+  legal state relationships explicit: a new state has no
   candidate ID and classifies its previous tree as an active state,
   synthesized empty tree, or unmanaged tree; archived activation has distinct
   candidate and previous active-state IDs; and an active reblit binds the same
@@ -450,8 +467,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   The internal transaction-trigger runner derives its started and completed
   records through the journal's sole forward-successor constructor. It proves
   both retained runtime identities, both exact public tree names and markers,
-  the candidate's retained `.stateID`, and operation-specific database
-  ownership before intent and after the callback. New states require the exact
+  the candidate's retained `.stateID`, operation-specific database ownership,
+  mandatory operation readiness, and the exact descriptor-pinned isolation
+  ABI before intent, immediately before the callback, after the callback, and
+  at later readiness boundaries. New states require the exact
   `Matching` transition token; active reblits and every existing-state journal
   creation require an existing candidate row with `Cleared` ownership. Every
   distinct recorded previous state also requires a `Cleared` row, while a
@@ -492,14 +511,19 @@ and instant rollback mechanism; it hardens their failure semantics.
   before `.stateID`, trigger, exchange-intent, and `CandidatePrepared`
   boundaries.
 
-  `CandidatePrepared` returns one of two unforgeable operation-specific
-  wrappers. `NewState` and `ActiveReblit` receive a wrapper which owns both the
-  coordinator and metadata proof; `ActivateArchived` receives a distinct
-  wrapper with no transaction-trigger method. The trigger runner exists only
-  on the former wrapper and accepts no caller-supplied proof. It seals the
-  candidate and performs evidence -> metadata -> evidence -> metadata checks
-  immediately before durable trigger intent and again after the effect before
-  completion. Thus replacing either canonical metadata inode with an
+  `CandidatePrepared` returns one of three unforgeable operation-specific
+  variants. `NewState` receives isolation-preparation authority;
+  `ActiveReblit` receives a distinct non-trigger-ready reservation authority
+  and reaches isolation preparation only after exact replacement and
+  previous-marker parking durability; `ActivateArchived` receives a distinct
+  wrapper with no transaction-trigger method. The two trigger-capable paths
+  obtain the common trigger runner only after isolation preparation publishes
+  and retains the exact ABI. That runner accepts no caller-supplied proof and
+  carries the metadata, provenance, operation-readiness, and isolation
+  authorities together. It repeats the candidate, evidence, metadata, and
+  readiness sandwiches immediately before durable trigger intent and again
+  after the effect before completion. Thus replacing either
+  canonical metadata inode with an
   identical-byte inode before intent invokes no effect and leaves
   `CandidatePrepared`; doing so inside the effect invokes it once and leaves
   `TransactionTriggersStarted`. Every returned failure owns neither the
@@ -554,14 +578,17 @@ and instant rollback mechanism; it hardens their failure semantics.
   coordinator or authority and leaves only `UsrExchangeIntent` or its legal
   `UsrExchanged` successor durable.
 
-  ActiveReblit deliberately does not call the legacy unjournaled wrapper
-  rotation or slot-parking helpers. It retains and proves the exact
-  canonical-or-parked two-link marker arrangement unchanged; a later sealed
-  coordinator phase must own that monotonic namespace effect. Positive first
-  installation coverage proves a synthesized empty previous `/usr` exchanges
-  once and remains staged without a `.stateID`. The effect still has no live
-  client callsite. Publishing its intent remains forbidden until the startup
-  executor can resume or reverse every corresponding durable phase.
+  ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
+  While `CandidatePrepared` is canonical, a sealed coordinator-only effect
+  reserves the exact empty replacement wrapper and parks an authenticated
+  second previous-marker link through the journal-authorized namespace API.
+  The resulting retained reservation is mandatory before trigger authority and
+  is revalidated through triggers, exchange intent, and the post-exchange
+  direction flip. Positive first-installation coverage proves a synthesized
+  empty previous `/usr` exchanges once and remains staged without a `.stateID`.
+  The coordinator still has no live client callsite. Publishing its intent
+  remains forbidden until the general startup executor can resume or reverse
+  every corresponding durable phase.
 
   Archived activation dispatches to a separate read-only verifier because its
   candidate already contains canonical metadata. The coordinator first loads
@@ -576,7 +603,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   Legacy archived states without provenance fail closed rather than hashing
   their archived bytes into a new expectation.
 
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 61
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 82
   exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
   runtime evidence, fixed quarantine naming, non-reinterpretable three-way
@@ -592,22 +619,28 @@ and instant rollback mechanism; it hardens their failure semantics.
   archived provenance sandwiches, proof/provenance typestate retention,
   one-shot raw-result reconciliation, applied durability faults, post-syscall
   metadata and namespace substitution, a bounded writer/journal handoff,
-  synthesized-empty first installation, and the absence of root-link,
-  reverse, retry, or cleanup effects. Its static gates prove that metadata authority is
-  mandatory rather than optional, the runner accepts no proof parameter,
-  archived activation cannot acquire trigger authority, no coordinator method
-  has a callsite outside the contract module, and the callback authority and
-  failure type remain private. The transition-identity gate additionally
+  synthesized-empty first installation, sealed ActiveReblit replacement and
+  previous-slot reservation faults, typed readiness retention, mandatory
+  isolation-ABI publication, tamper rejection, and reopenable crash prefixes,
+  plus the absence of root-link, reverse, retry, or cleanup effects. Its static
+  gates prove that metadata authority is mandatory rather than optional, the
+  runner accepts no proof parameter, archived activation cannot acquire trigger
+  authority, ActiveReblit cannot reach triggers without the reservation, and
+  neither trigger operation can reach them without retained isolation
+  readiness. No coordinator method has a callsite outside the contract module,
+  and the callback authority and failure type remain private. The
+  transition-identity gate additionally
   rejects mutation primitives in the existing-metadata verifier and any client
   bypass around coordinator-owned verification. No live
-  activation path creates or advances this coordinator. In particular, the
-  legacy ActiveReblit wrapper rotation still requires journal absence and an
-  already published `.stateID`; it must be replaced by a later
-  phase-authorized coordinator effect rather than reused or weakened. Startup must also
-  classify ActiveReblit `Preparing` as strictly state-ID-absent and treat
-  `CandidatePrepareStarted` as the only publication-ambiguity boundary. There
-  is still no phase-specific recovery executor; the read-only startup
-  assessment below cannot advance the record. This item remains open.
+  activation path creates or advances this coordinator. The legacy
+  ActiveReblit wrapper rotation still requires journal absence, while the
+  coordinator uses a separate sealed journal-authorized reservation boundary.
+  Startup classifies ActiveReblit `Preparing` as strictly state-ID-absent and
+  treats `CandidatePrepareStarted` as the only state-ID
+  publication-ambiguity boundary. There is still no general phase-advancing
+  recovery executor: the narrow restrictive replacement-mode normalizer never
+  changes the record, and the read-only startup assessment below cannot advance
+  it. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in
@@ -615,8 +648,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   candidate, never guess through a foreign occupant, and retain an
   undeletable `BootRepairUnverified` record when boot side effects cannot be
   proved repaired.
-  As of 2026-07-16, startup has a deliberately read-only, fail-closed
-  assessment checkpoint. It classifies every validated persisted phase as
+  As of 2026-07-16, startup's diagnostic checkpoint remains deliberately
+  read-only and fail closed. Immediately before it, the mutable startup gate may
+  run only the sealed ActiveReblit restrictive replacement-mode normalizer
+  described above; it neither converts the diagnostic inventory into mutation
+  authority nor advances the record. The assessment classifies every validated persisted phase as
   begin rollback, resume rollback, roll forward, finalize rollback, or manual
   boot repair; correlates the exact candidate and previous database rows with
   a before/after global transition audit; distinguishes allocation committed
@@ -656,15 +692,18 @@ and instant rollback mechanism; it hardens their failure semantics.
   `RecoveryPending`; keeping that journal after the startup coordinator was
   released would permit a coordinator/journal ABBA deadlock. A retry must
   independently acquire locks in canonical order and reload the journal. The
-  focused `make forge-startup-activation-namespace-test` lane proves nine exact
-  namespace contracts, while `make forge-startup-reconciliation-test` proves
-  nine database, provenance, epoch, substitution, retention, and lock-release
-  contracts. The next coordinator effect must reserve and retain the exact
-  empty ActiveReblit replacement wrapper at `CandidatePrepared`, before
-  `TransactionTriggersStarted`; once trigger intent is durable, startup rejects
-  a generic quarantine fallback. Phase-specific rollback/roll-forward effects
-  and the startup mutation executor remain unimplemented, so this item stays
-  open.
+  focused `make forge-startup-activation-namespace-test` lane proves 20 exact
+  namespace contracts: 9 original inventory and policy contracts, 1
+  isolation-ABI crash-prefix contract, and 10 partial-replacement contracts.
+  `make forge-startup-reconciliation-test` continues to prove 9 database,
+  provenance, epoch, substitution, retention, and lock-release contracts. The
+  sealed coordinator reservation now makes replacement evidence optional at
+  `CandidatePrepared` and mandatory from `TransactionTriggersStarted`; the
+  complete isolation ABI is likewise mandatory once trigger intent is durable.
+  Startup may normalize only the authenticated restrictive reservation prefix,
+  and it still rejects a generic quarantine fallback after trigger intent.
+  General phase-specific rollback, roll-forward, and journal-advancing startup
+  effects remain unimplemented, so this item stays open.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

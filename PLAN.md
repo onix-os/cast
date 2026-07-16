@@ -701,22 +701,28 @@ appendix.
 Completed foundations include canonical transition IDs, no-replace merged-/usr
 link publication, the bounded checksummed journal, retained tree identity and
 marker primitives, strict startup evidence gates, and database ownership
-probes. They now also include the persisted-phase recovery-direction classifier,
-an unwired one-shot coordinator effect which reaches durable `UsrExchanged`
-without retry, reversal, cleanup, or root-link publication, and a
-diagnostic-only startup assessment which sandwiches a complete bounded,
-descriptor-rooted activation-namespace inventory around the remaining
-startup evidence. That inventory authenticates exact raw names, tree and slot
-roles, state IDs, root/isolation ABI, rollback action outcomes, and phase
-layouts without exposing a mutation API; it releases mutation authority before
-returning and cannot execute stale evidence. The next required coordinator
-effect is a sealed ActiveReblit replacement-wrapper reservation before
-`TransactionTriggersStarted`. The remaining closure is to finish
-recovery-ordered mutable client construction, replace residual path-based
-lifecycle authority, establish the durable pre-journal baseline, route every
-state transition through one durable coordinator, execute every persisted
-phase on startup, and prove convergence with deterministic interruption
-coverage.
+probes. They now also include the persisted-phase recovery-direction classifier
+and an unwired one-shot coordinator effect which reaches durable
+`UsrExchanged` without retry, reversal, cleanup, or root-link publication. At
+`CandidatePrepared`, its ActiveReblit path seals the exact replacement-wrapper
+reservation and authenticated previous-marker parking. Both trigger-capable
+operations then publish and retain the exact transaction-isolation ABI required
+for trigger intent. Mutable startup has one deliberately narrow
+pre-assessment recovery effect: under exact journal, installation, database,
+provenance, and active-selection authority, it may normalize only an
+authenticated restrictive ActiveReblit replacement wrapper to mode `0700`.
+It never advances the journal, and absent, canonical, or inapplicable evidence
+is non-mutating. The subsequent diagnostic-only startup assessment sandwiches
+a complete bounded, descriptor-rooted activation-namespace inventory around
+the remaining startup evidence. That inventory authenticates exact raw names,
+tree and slot roles, state IDs, root/isolation ABI, rollback action outcomes,
+and phase layouts without exposing a mutation API; it releases mutation
+authority before returning and cannot execute stale evidence. The remaining
+closure is to finish recovery-ordered mutable client construction, replace
+residual path-based lifecycle authority, establish the durable pre-journal
+baseline, route every state transition through one durable coordinator,
+execute every persisted phase on startup, and prove convergence with
+deterministic interruption coverage.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,
