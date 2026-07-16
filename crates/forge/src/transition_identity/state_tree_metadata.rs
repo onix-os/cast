@@ -15,6 +15,17 @@ use crate::{
     tree_marker::TreeMarkerStore,
 };
 
+mod publication;
+
+pub(crate) use publication::StateIdPublicationFailure;
+#[cfg(test)]
+pub(super) use publication::StateIdPublicationOutcome;
+#[cfg(test)]
+pub(super) use publication::{
+    StateIdPublicationFaultPoint, arm_after_state_id_rename, arm_before_state_id_publish,
+    arm_state_id_publication_fault, assert_state_id_publication_fault_consumed,
+};
+
 const STATE_ID_NAME: &std::ffi::CStr = c".stateID";
 const STATE_ID_TEMPORARY_NAME: &std::ffi::CStr = c".cast-state-id.tmp";
 const STATE_ID_MODE: u32 = 0o644;
@@ -45,6 +56,11 @@ pub(super) struct RetainedTreeStateId {
 }
 
 impl RetainedTreeStateId {
+    #[allow(dead_code)] // consumed by the intentionally unwired journal coordinator
+    pub(super) fn state(&self) -> state::Id {
+        self.state
+    }
+
     pub(super) fn retain(store: &TreeMarkerStore, state: state::Id) -> Result<Self, super::Error> {
         canonical_state_name(state)?;
         store.revalidate_directory()?;

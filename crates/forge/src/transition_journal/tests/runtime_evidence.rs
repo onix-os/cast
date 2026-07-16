@@ -35,7 +35,7 @@ fn runtime_tree_identity_rejects_a_non_directory_descriptor() {
 
     assert!(matches!(
         RuntimeTreeIdentity::capture_directory(&file),
-        Err(runtime_evidence::RuntimeEvidenceError::TreeIsNotDirectory)
+        Err(RuntimeEvidenceError::TreeIsNotDirectory)
     ));
 }
 
@@ -59,7 +59,7 @@ fn boot_id_and_mount_namespace_parsers_reject_untrusted_or_noncanonical_inputs()
     let ordinary = fs::File::open(temporary.path()).unwrap();
     assert!(matches!(
         runtime_evidence::mount_namespace_identity(&ordinary),
-        Err(runtime_evidence::RuntimeEvidenceError::AuthenticateMountNamespace(_))
+        Err(RuntimeEvidenceError::AuthenticateMountNamespace(_))
     ));
 }
 

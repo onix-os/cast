@@ -38,6 +38,8 @@ mod archived_state_repair;
 mod candidate_quarantine;
 mod error;
 mod fault_injection;
+#[allow(dead_code)] // contract-only until startup reconciliation can consume its records
+mod journal_coordinator;
 mod namespace_helpers;
 mod prejournal_inventory;
 mod previous_tree_move;
@@ -54,6 +56,10 @@ use fault_injection::{
     before_live_usr_mkdir, before_previous_archive_slot_reopen, before_previous_slot_retirement_rename,
     before_quarantine_slot_reopen, before_retained_exchange_rename, before_retained_previous_move_rename,
     quarantine_checkpoint, retained_exchange_checkpoint, retained_previous_move_checkpoint,
+};
+#[allow(unused_imports)] // contract-only surface for the later live coordinator integration
+pub(crate) use journal_coordinator::{
+    NewStatePrevious, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError, StatefulTransitionRequest,
 };
 use namespace_helpers::*;
 
@@ -445,18 +451,30 @@ std::thread_local! {
 /// Retained identities for the candidate and previous `/usr` trees.
 ///
 /// Keeping the journal store in this value keeps its exclusive lock alive for
-/// the entire in-process activation and compensating recovery. The journal is
-/// not created by this slice.
+/// the entire in-process activation and compensating recovery. The unwired
+/// durable-prefix coordinator consumes this guard when it creates a journal.
 #[derive(Debug)]
 pub(crate) struct StatefulTreeIdentity {
     journal: TransitionJournalStore,
+    state_database: db::state::Database,
     candidate: RetainedIdentity,
     previous: RetainedIdentity,
+    previous_classification: RetainedPreviousClassification,
     quarantine_attempt: Mutex<Option<RetainedQuarantineAttempt>>,
     previous_archive_attempt: Mutex<Option<RetainedPreviousArchiveAttempt>>,
     archived_candidate_attempt: Mutex<Option<archived_candidate::RetainedArchivedCandidateAttempt>>,
     active_reblit_rotation: Mutex<Option<staging_wrapper_rotation::RetainedStagingWrapperRotation>>,
     active_previous_slot_parking: Mutex<Option<active_previous_slot_parking::RetainedActivePreviousSlotParking>>,
+}
+
+/// Previous-tree facts retained while its exact `/usr` descriptor and the
+/// installation-wide cooperating-writer authority are held. Unmanaged trees
+/// are not representable because current preparation rejects them rather than
+/// authenticating them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetainedPreviousClassification {
+    Active(state::Id),
+    SynthesizedEmpty,
 }
 
 #[derive(Debug)]
@@ -783,6 +801,14 @@ impl RetainedIdentity {
     fn prepare(store: TreeMarkerStore, state: Option<state::Id>) -> Result<Self, Error> {
         let marker = store.adopt_or_create_before_journal_for_transition()?;
         Self::with_marker(store, marker, state)
+    }
+
+    /// Marker-only preparation for a fresh state whose database identity does
+    /// not exist yet. The strict one-link marker path refuses archived-slot
+    /// recovery evidence because no state ID can authorize such a link.
+    fn prepare_unallocated(store: TreeMarkerStore) -> Result<Self, Error> {
+        let marker = store.adopt_or_create_before_journal()?;
+        Self::with_marker(store, marker, None)
     }
 
     /// Strict preparation for a newly materialized tree which cannot already

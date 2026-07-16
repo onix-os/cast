@@ -360,8 +360,85 @@ and instant rollback mechanism; it hardens their failure semantics.
   derive rollback requirements from exact observations, and advance every
   recovery action only with an explicit outcome. Their focused contract covers
   the complete fixed rollback order and the deliberately terminal unverified
-  boot result. No live activation path creates or advances the journal yet, so
-  this item remains open.
+  boot result.
+
+  As of 2026-07-16, one intentionally unwired coordinator contract owns the
+  durable prefix through `CandidatePrepared` for all three operations. A typed
+  request makes the legal state relationships explicit: a new state has no
+  candidate ID and classifies its previous tree as an active state,
+  synthesized empty tree, or unmanaged tree; archived activation has distinct
+  candidate and previous active-state IDs; and an active reblit binds the same
+  state ID to the active-reblit candidate and corrupt previous-tree roles.
+  Identity preparation retains an exact previous classification under the
+  installation authority, and transition creation compares the request with
+  that retained fact before runtime capture or journal creation. An
+  `Unmanaged` request remains representable for a future authenticated path but
+  is currently rejected: preparation can authenticate only the exact active
+  state or a genuinely empty synthesized live `/usr`, never bless an arbitrary
+  nonempty unowned tree.
+  Transition creation generates one kernel-random 32-character lowercase
+  hexadecimal transition ID and derives the exact state-ID-independent
+  `failed-transition-<transition-id>` quarantine component from it. It captures
+  the boot/mount-namespace epoch plus exact candidate and previous
+  runtime tree witnesses and durable tree tokens, revalidates the retained
+  identities, and persists `Preparing` at generation 1 before returning.
+  `archive_previous` is derived only from the authenticated previous origin;
+  system-trigger and boot-sync selections remain explicit request data.
+
+  The new-state prefix is exactly `Preparing(1)` ->
+  `FreshStateAllocating(2)` -> `FreshStateAllocated(3)` ->
+  `CandidatePrepareStarted(4)` -> `CandidatePrepared(5)`. Archived activation
+  and active reblit skip the inapplicable allocation states and follow exactly
+  `Preparing(1)` -> `CandidatePrepareStarted(2)` -> `CandidatePrepared(3)`.
+  Every transition uses the journal's conditional create/advance operations.
+  A wrong operation or phase fails before storage, and an exact-record compare
+  prevents a stale generation from overwriting newer evidence. A persistence
+  error is deliberately fail-stop rather than assumed not applied: depending
+  on the durable storage boundary, reopening may find the exact predecessor or
+  its sole legal successor. Fresh allocation uses the transition ID as the
+  sole database correlation token. Identity preparation also retains the exact
+  in-process state-database capability; completion rejects a different handle
+  before any ownership query and consults only the retained database.
+  Completion accepts only the exact newly allocated state row with `Matching`
+  ownership, and
+  rejects missing, cleared, foreign-token, or wrong-state evidence without
+  advancing. If the database commit succeeds but the following journal advance
+  fails before publication, the matching row and older durable journal phase
+  are deliberately preserved for later reconciliation rather than compensated
+  or hidden; a post-publication error may instead leave the exact successor
+  durable. A new-state candidate is state-ID-unallocated before journal
+  creation: its payload and exact marker are retained while both `.stateID` and
+  fixed `.cast-state-id.tmp` are descriptor-proved absent through
+  `CandidatePrepareStarted`. Only that durable phase authorizes publication.
+  The coordinator creates one exclusive owner-private temporary, writes and
+  syncs the canonical decimal state ID, normalizes and syncs mode `0644`, then
+  makes one descriptor-relative `RENAME_NOREPLACE` attempt. It reconciles both
+  names after every result, never retries an ambiguous rename, syncs the exact
+  candidate directory after an applied move, and retains the published inode
+  before recording `CandidatePrepared`. Certain pre-rename failures remove
+  only the exact temporary and sync that cleanup; published or ambiguous
+  failures remain at generation 4 as recovery evidence without overwriting or
+  adopting a foreign final or temporary. Existing-state operations may only
+  revalidate the state-ID inode retained during preparation and cannot enter
+  this publication path. Candidate preparation therefore preserves its exact
+  durable predecessor-or-successor evidence when publication, identity proof,
+  or final journal persistence fails. Every state-changing
+  coordinator method consumes its
+  coordinator; an error returns no reusable coordinator or stale in-memory
+  record, so an uncertain persistence result fails stop instead of permitting
+  an in-process continuation.
+
+  The focused `make forge-transition-journal-coordinator-test` lane freezes
+  those three phase/generation sequences, request-derived origins and options,
+  runtime evidence, fixed quarantine naming, exact database correlation, and
+  fail-stop evidence. It also executes a static gate proving that none of the
+  coordinator's prefix methods is called outside its own contract module.
+  The tests manually interleave representative allocation and preparation
+  effects to observe the intended durable ordering; the production API has no
+  effect callbacks or authorization wrappers and therefore does not yet
+  structurally enforce arbitrary external-effect sequencing. No live
+  activation path creates or advances this coordinator, and there is still no
+  startup reconciliation or recovery implementation. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in

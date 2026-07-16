@@ -54,6 +54,13 @@ pub(crate) struct InFlightTransition {
 }
 
 impl Database {
+    /// Prove that two handles share the exact in-process SQLite capability.
+    /// Reopening the same pathname is deliberately not equivalent: transition
+    /// completion must use the connection retained during identity setup.
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.conn.0, &other.conn.0)
+    }
+
     pub fn new(url: &str) -> Result<Self, Error> {
         Self::new_with_anchor(url, None)
     }

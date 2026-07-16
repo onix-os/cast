@@ -1,5 +1,6 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
 	forge-mutable-startup-namespace-test forge-candidate-pre-journal-durability-test \
+	forge-transition-journal-coordinator-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
@@ -110,6 +111,40 @@ forge-candidate-pre-journal-durability-test:
 	timeout 300s $(CARGO) test -p forge --lib \
 		"client::tests::exact_parked_tree_marker_hardlink_is_reauthorized_after_reopen" \
 		-- --exact --test-threads=1
+
+forge-transition-journal-coordinator-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 12; \
+	for test in \
+		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
+		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
+		transition_identity::journal_coordinator::tests::journal_coordinator_archived_activation_reaches_candidate_prepared_without_allocation_phases \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocation_phases \
+		transition_identity::journal_coordinator::tests::journal_coordinator_creation_captures_exact_epoch_tokens_and_runtime_tree_witnesses \
+		transition_identity::journal_coordinator::tests::journal_coordinator_quarantine_name_is_fixed_transition_token_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_wrong_operation_or_phase_is_rejected_without_record_change \
+		transition_identity::journal_coordinator::tests::journal_coordinator_fresh_allocation_effect_observes_durable_intent_before_database_commit \
+		transition_identity::journal_coordinator::tests::journal_coordinator_allocation_finish_rejects_missing_cleared_foreign_and_wrong_state_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_database_commit_and_completion_share_exact_transition_correlation \
+		transition_identity::journal_coordinator::tests::journal_coordinator_post_commit_journal_failure_preserves_matching_database_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact_evidence; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	if callsites="$$( timeout 10s grep -RInE \
+		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare' \
+		--include='*.rs' --exclude-dir=journal_coordinator crates/forge/src )"; then \
+		timeout 10s printf '%s\n' 'journal coordinator has a live callsite outside its contract module:' "$$callsites" >&2; \
+		exit 1; \
+	else \
+		status=$$?; \
+		timeout 10s test "$$status" = 1; \
+	fi; \
+	timeout 900s $(CARGO) test -p forge --lib \
+		"transition_identity::journal_coordinator::tests::journal_coordinator_" \
+		-- --test-threads=1
 
 forge-linux-fs-test:
 	@set -eu; \

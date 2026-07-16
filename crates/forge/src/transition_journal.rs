@@ -41,6 +41,7 @@ pub(crate) use read_only::{CleanReadOnlyJournal, ReadOnlyJournalError};
 
 pub(crate) use codec::{CodecError, MAX_CANONICAL_RECORD_BYTES, decode, encode};
 pub(crate) use model::*;
+pub(crate) use runtime_evidence::RuntimeEvidenceError;
 pub(crate) use store::TransitionJournalStore;
 #[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
 pub(crate) use successors::{InitialRollbackAction, RollbackActionOutcome, RollbackObservations};
@@ -55,6 +56,19 @@ use store::{
     DurabilityCheckpoint, StorageFaultPoint, arm_storage_fault, assert_storage_fault_consumed,
     take_durability_checkpoints,
 };
+
+/// Arm the first temporary-file sync in the next journal update. Exposed only
+/// to sibling contract tests so they can prove a consuming coordinator cannot
+/// continue after a storage failure.
+#[cfg(test)]
+pub(crate) fn arm_next_temporary_sync_fault() {
+    arm_storage_fault(StorageFaultPoint::TemporarySync);
+}
+
+#[cfg(test)]
+pub(crate) fn assert_temporary_sync_fault_consumed() {
+    assert_storage_fault_consumed();
+}
 #[cfg(test)]
 use validation::{next_forward_phase, next_rollback_phase, rollback_allowed, validate_advance};
 

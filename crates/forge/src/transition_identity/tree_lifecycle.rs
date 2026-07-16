@@ -20,7 +20,20 @@ impl StatefulTreeIdentity {
         candidate_path: &Path,
         candidate_state: state::Id,
     ) -> Result<Self, Error> {
-        Self::prepare_candidate(installation, state_db, candidate_path, None, candidate_state)
+        Self::prepare_candidate(installation, state_db, candidate_path, None, Some(candidate_state))
+    }
+
+    /// Prepare the state-ID-unallocated candidate required by a fresh durable
+    /// transition. Its payload and exact marker are retained, while both the
+    /// canonical `.stateID` and fixed temporary remain absent until
+    /// `CandidatePrepareStarted` authorizes publication.
+    #[allow(dead_code)] // consumed only after the unwired journal coordinator is integrated
+    pub(crate) fn prepare_unallocated_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+    ) -> Result<Self, Error> {
+        Self::prepare_candidate(installation, state_db, candidate_path, None, None)
     }
 
     /// Prepare from an already-retained candidate `/usr` descriptor. The
@@ -38,8 +51,19 @@ impl StatefulTreeIdentity {
             state_db,
             candidate_path,
             Some(candidate_usr),
-            candidate_state,
+            Some(candidate_state),
         )
+    }
+
+    /// Retained-descriptor counterpart to [`Self::prepare_unallocated_candidate`].
+    #[allow(dead_code)] // retained-capability entry point for future live coordinator wiring
+    pub(crate) fn prepare_retained_unallocated_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_path: &Path,
+        candidate_usr: &std::fs::File,
+    ) -> Result<Self, Error> {
+        Self::prepare_candidate(installation, state_db, candidate_path, Some(candidate_usr), None)
     }
 
     fn prepare_candidate(
@@ -47,7 +71,7 @@ impl StatefulTreeIdentity {
         state_db: &db::state::Database,
         candidate_path: &Path,
         retained_candidate_usr: Option<&std::fs::File>,
-        candidate_state: state::Id,
+        candidate_state: Option<state::Id>,
     ) -> Result<Self, Error> {
         let root = &installation.root;
         let previous_path = root.join("usr");
@@ -78,6 +102,13 @@ impl StatefulTreeIdentity {
             TreeMarkerStore::open_path(candidate_path)?
         };
         let previous_store = open_or_synthesize_live_usr(installation)?;
+        let previous_classification = installation.active_state.map_or(
+            RetainedPreviousClassification::SynthesizedEmpty,
+            RetainedPreviousClassification::Active,
+        );
+        if candidate_state.is_none() {
+            state_tree_metadata::RetainedTreeStateId::require_absent(&candidate_store)?;
+        }
         let candidate_durability = RetainedCandidateDurabilitySeal::seal_before_marker(
             candidate_store.retained_directory(),
             candidate_path,
@@ -96,18 +127,36 @@ impl StatefulTreeIdentity {
         candidate_name?;
         previous_name?;
         let candidate_durability = candidate_durability?;
-        let candidate = RetainedIdentity::prepare(candidate_store, Some(candidate_state))?;
-        let _candidate_slot_link = candidate.authorize_recovered_slot_link(installation, candidate_state)?;
+        let candidate = match candidate_state {
+            Some(state) => RetainedIdentity::prepare(candidate_store, Some(state))?,
+            None => RetainedIdentity::prepare_unallocated(candidate_store)?,
+        };
+        let _candidate_slot_link = candidate_state
+            .map(|state| candidate.authorize_recovered_slot_link(installation, state))
+            .transpose()?
+            .flatten();
         // Marker publication is the only admitted inventory delta. Bind that
         // delta to the exact retained marker and state-ID inode on both sides
         // of the post-publication inventory and durability pass.
-        candidate.verify_named_with_state_id(candidate_path)?;
+        match candidate_state {
+            Some(_) => candidate.verify_named_with_state_id(candidate_path)?,
+            None => {
+                candidate.verify_named_read_only(candidate_path)?;
+                state_tree_metadata::RetainedTreeStateId::require_absent(&candidate.store)?;
+            }
+        }
         let durability = candidate_durability.validate_after_marker();
-        let identity = candidate.verify_named_with_state_id(candidate_path);
+        let identity = match candidate_state {
+            Some(_) => candidate.verify_named_with_state_id(candidate_path),
+            None => candidate.verify_named_read_only(candidate_path),
+        };
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         identity?;
         durability?;
+        if candidate_state.is_none() {
+            state_tree_metadata::RetainedTreeStateId::require_absent(&candidate.store)?;
+        }
         // The previous active tree is deliberately opaque during a repair:
         // only its already-retained marker is required. Its `.stateID` may be
         // the corrupt evidence this reblit is replacing.
@@ -140,8 +189,10 @@ impl StatefulTreeIdentity {
 
         Ok(Self {
             journal,
+            state_database: state_db.clone(),
             candidate,
             previous,
+            previous_classification,
             quarantine_attempt: Mutex::new(None),
             previous_archive_attempt: Mutex::new(None),
             archived_candidate_attempt: Mutex::new(None),
