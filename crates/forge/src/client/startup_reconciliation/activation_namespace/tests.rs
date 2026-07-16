@@ -33,6 +33,7 @@ use super::{
 };
 
 mod isolation_abi;
+mod partial_replacement;
 mod slot_links;
 
 const ROOT_ABI: [(&str, &str); 5] = [
@@ -180,7 +181,11 @@ fn write_state_id(usr: &Path, bytes: &[u8]) {
 
 fn active_reblit_wrapper_path(installation: &Installation, record: &TransitionRecord) -> PathBuf {
     installation.state_quarantine_dir().join(format!(
-        "replaced-active-reblit-wrapper-42-{}-0",
+        "replaced-active-reblit-wrapper-{}-{}-0",
+        record
+            .previous
+            .id
+            .expect("active-reblit test record has a previous state ID"),
         record.previous.tree_token.as_str()
     ))
 }

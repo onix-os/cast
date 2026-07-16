@@ -6,7 +6,9 @@ use crate::{
     transition_journal::{Operation, Phase, TransitionRecord},
 };
 
-use super::{InspectionError, metadata_provenance::metadata_provenance_evidence_compatible};
+use super::InspectionError;
+#[cfg(test)]
+use super::metadata_provenance::metadata_provenance_evidence_compatible;
 
 /// Exact state-database evidence correlated with the decoded journal record.
 #[derive(Clone, Debug, Eq, PartialEq)]

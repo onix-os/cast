@@ -2,7 +2,10 @@ use thiserror::Error;
 
 use crate::{Installation, db, installation, transition_identity, transition_journal};
 
-use super::{active_state_snapshot::ActiveStateLease, startup_reconciliation};
+use super::{
+    active_state_snapshot::{ActiveStateLease, ActiveStateReservation},
+    startup_reconciliation,
+};
 
 mod default_system_intent;
 
@@ -17,8 +20,24 @@ pub(super) struct CleanSystemStartup {
     _authority: startup_reconciliation::StartupRecoveryAuthority,
 }
 
+/// Unforgeable safe-code token limiting aggregate replacement-mutation
+/// provider construction to this writer-first startup gate.
+pub(in crate::client) struct ActiveReblitReplacementMutationSeal {
+    _private: (),
+}
+
+impl ActiveReblitReplacementMutationSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
 impl CleanSystemStartup {
-    pub(super) fn enter(installation: &Installation, state_db: &db::state::Database) -> Result<Self, Error> {
+    pub(super) fn enter(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        active_state_reservation: &ActiveStateReservation,
+    ) -> Result<Self, Error> {
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
         after_mutable_namespace_preflight();
@@ -36,6 +55,17 @@ impl CleanSystemStartup {
         namespace?;
         let in_flight = in_flight?;
         if let Some(record) = record {
+            let mutation_seal = ActiveReblitReplacementMutationSeal::new();
+            let mut mutation_authority = startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider::new(
+                &mutation_seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+                in_flight.clone(),
+            );
+            transition_identity::recover_active_reblit_replacement_residue(&mut mutation_authority)?;
             let pending = startup_reconciliation::PendingSystemTransition::inspect(
                 installation,
                 state_db,
@@ -118,6 +148,8 @@ pub(super) enum Error {
     OrphanTransitionRow { state: i32, transition: String },
     #[error("audit interrupted archived-state prune evidence")]
     ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
+    #[error("recover CandidatePrepared active-reblit replacement residue")]
+    ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
     #[error("revalidate retained mutable installation namespace during startup")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]

@@ -22,6 +22,7 @@ const STATE_ID_MODE: u32 = 0o644;
 
 mod handoff;
 mod read_only;
+mod startup_recovery;
 
 pub(super) use read_only::ReadOnlyActiveStateSnapshot;
 
@@ -174,7 +175,7 @@ impl ActiveStateReservation {
 impl ActiveStateSnapshot {
     pub(super) fn resume(self, installation: &Installation) -> Result<ActiveStateLease, super::Error> {
         let coordinator = super::fixed_staging::lock_coordinator()?;
-        revalidate_proof(self.active, &self.proof, installation)?;
+        self.revalidate(installation)?;
         Ok(ActiveStateLease {
             active: self.active,
             proof: self.proof,

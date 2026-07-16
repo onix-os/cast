@@ -62,10 +62,13 @@ impl ClientBuilder {
         self.installation.revalidate_mutable_namespace()?;
         let (install_db, state_db, layout_db) = open_mutable_system_databases(&self.installation)?;
 
-        let startup_gate = startup_gate::CleanSystemStartup::enter(&self.installation, &state_db).map_err(|source| {
-            Error::SystemStartupGate {
-                source: Box::new(source),
-            }
+        let startup_gate = startup_gate::CleanSystemStartup::enter(
+            &self.installation,
+            &state_db,
+            &active_state_reservation,
+        )
+        .map_err(|source| Error::SystemStartupGate {
+            source: Box::new(source),
         });
         let namespace = self.installation.revalidate_mutable_namespace();
         namespace?;

@@ -20,6 +20,9 @@ use crate::{
 mod activation_namespace;
 mod database_evidence;
 mod metadata_provenance;
+mod replacement_mutation_authority;
+
+pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 
 use activation_namespace::{ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability};
 #[cfg(test)]

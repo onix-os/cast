@@ -32,6 +32,7 @@ use crate::{
 };
 
 mod active_previous_slot_parking;
+mod active_reblit_replacement_recovery;
 mod archived_candidate;
 mod archived_state_prune;
 mod archived_state_repair;
@@ -54,6 +55,15 @@ mod state_slot_marker;
 mod state_tree_metadata;
 mod tree_lifecycle;
 
+#[cfg(test)]
+pub(crate) use active_reblit_replacement_recovery::{
+    ActiveReblitReplacementRecovery, arm_before_active_reblit_replacement_normalization_preflight,
+    recover_active_reblit_replacement_residue_for_namespace_test,
+    recover_active_reblit_replacement_residue_with_explicit_context_for_test,
+};
+pub(crate) use active_reblit_replacement_recovery::{
+    ActiveReblitReplacementRecoveryError, recover_active_reblit_replacement_residue,
+};
 #[cfg(test)]
 #[allow(unused_imports)] // Narrow race hook consumed only by exact verification tests.
 pub(crate) use candidate_metadata::arm_after_existing_release_retained as arm_after_existing_candidate_metadata_release_retained;

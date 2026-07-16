@@ -22,6 +22,8 @@ use crate::{
 
 use super::{Client, Error, arm_system_intent_notice_capture, disarm_system_intent_notice_capture, startup_gate};
 
+mod active_reblit_replacement;
+
 const TRANSITION_ID: &str = "0123456789abcdef0123456789abcdef";
 
 fn transition_id() -> TransitionId {
