@@ -7,11 +7,13 @@
 //! journal write fail-stop: an error drops the coordinator and its lock rather
 //! than allowing another in-process effect to guess which record became
 //! durable. The transaction-trigger runner is deliberately visible only inside
-//! this contract module. It is not eligible for live wiring until candidate
-//! preparation transfers its owned metadata proof into the coordinator, which
-//! must require that exact proof before trigger intent and revalidate it after
-//! the effect.
+//! this contract module. Candidate preparation transfers its owned metadata
+//! proof into an operation-specific typestate: only `NewState` and
+//! `ActiveReblit` can reach transaction triggers, while archived activation
+//! cannot. Live wiring remains deferred until startup reconciliation consumes
+//! every record this contract may publish.
 
+mod candidate_preparation;
 mod error;
 mod request;
 mod transaction_triggers;
@@ -19,6 +21,11 @@ mod transaction_triggers;
 #[cfg(test)]
 mod tests;
 
+#[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
+pub(crate) use candidate_preparation::{
+    PreparedArchivedTransitionCoordinator, PreparedStatefulTransitionCoordinator,
+    PreparedTransactionTriggerCoordinator, TransactionTriggersCompleteCoordinator,
+};
 pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[cfg(test)]
@@ -341,44 +348,6 @@ impl StatefulTransitionCoordinator {
             self.require_fresh_allocation_ownership(candidate)?;
             self.require_record_runtime_evidence()?;
             self.identity.require_unallocated_candidate()?;
-            self.require_fresh_allocation_ownership(candidate)?;
-        }
-        self.advance(None)?;
-        Ok(self)
-    }
-
-    /// Publish or revalidate the candidate's exact `.stateID`, then persist
-    /// `CandidatePrepared`. NewState publication is authorized only by the
-    /// durable `CandidatePrepareStarted` record.
-    pub(crate) fn finish_candidate_prepare(mut self) -> Result<Self, StatefulTransitionCoordinatorError> {
-        self.require_phase(Phase::CandidatePrepareStarted, FINISH_CANDIDATE_PREPARE)?;
-        let candidate = self.record.candidate.id.map(state::Id::from).ok_or(
-            StatefulTransitionCoordinatorError::CandidateStateMissing {
-                phase: self.record.phase,
-            },
-        )?;
-        before_finish_candidate_runtime_proof();
-        self.require_record_runtime_evidence()?;
-        match self.record.operation {
-            Operation::NewState => {
-                self.require_fresh_allocation_ownership(candidate)?;
-                self.identity.require_unallocated_candidate()?;
-                self.identity.candidate.state_id = Some(RetainedTreeStateId::publish_new(
-                    &self.identity.candidate.store,
-                    candidate,
-                )?);
-                self.require_fresh_allocation_ownership(candidate)?;
-            }
-            Operation::ActivateArchived | Operation::ActiveReblit => {
-                self.identity.require_existing_candidate_state(candidate)?;
-            }
-        }
-        self.require_record_runtime_evidence()?;
-        self.identity
-            .candidate
-            .verify_store_with_state_id(&self.identity.candidate.store)
-            .map_err(StatefulTransitionCoordinatorError::Identity)?;
-        if self.record.operation == Operation::NewState {
             self.require_fresh_allocation_ownership(candidate)?;
         }
         self.advance(None)?;

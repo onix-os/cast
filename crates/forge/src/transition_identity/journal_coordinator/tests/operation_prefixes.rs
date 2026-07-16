@@ -47,7 +47,7 @@ fn journal_coordinator_new_state_reaches_candidate_prepared_through_exact_genera
         4,
     );
     assert_candidate_state_id_absent(&fixture);
-    let coordinator = coordinator.finish_candidate_prepare().unwrap();
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::NewState,
@@ -56,6 +56,7 @@ fn journal_coordinator_new_state_reaches_candidate_prepared_through_exact_genera
     );
     assert_eq!(coordinator.record().candidate.id, Some(i32::from(allocated)));
     assert_candidate_state_id(&fixture, allocated);
+    assert_candidate_metadata(&fixture);
     assert_new_state_payload_sentinel(&fixture);
 }
 
@@ -146,7 +147,7 @@ fn journal_coordinator_archived_activation_reaches_candidate_prepared_without_al
         Phase::CandidatePrepareStarted,
         2,
     );
-    let coordinator = coordinator.finish_candidate_prepare().unwrap();
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::ActivateArchived,
@@ -154,6 +155,7 @@ fn journal_coordinator_archived_activation_reaches_candidate_prepared_without_al
         3,
     );
     assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+    assert_candidate_metadata(&fixture);
 }
 
 #[test]
@@ -191,7 +193,7 @@ fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocati
         Phase::CandidatePrepareStarted,
         2,
     );
-    let coordinator = coordinator.finish_candidate_prepare().unwrap();
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::ActiveReblit,
@@ -199,6 +201,7 @@ fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocati
         3,
     );
     assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
+    assert_candidate_metadata(&fixture);
 }
 
 #[test]
@@ -223,7 +226,7 @@ fn journal_coordinator_creation_captures_exact_epoch_tokens_and_runtime_tree_wit
     assert_eq!(preparing.previous.usr_runtime_identity, expected_previous);
 
     let coordinator = coordinator.begin_candidate_prepare().unwrap();
-    let coordinator = coordinator.finish_candidate_prepare().unwrap();
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     let prepared = coordinator.record();
     assert_eq!(prepared.creation_epoch, preparing.creation_epoch);
     assert_eq!(prepared.candidate.tree_token, preparing.candidate.tree_token);

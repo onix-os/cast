@@ -32,6 +32,8 @@ enum PreviousKind {
 }
 
 const NEW_STATE_PAYLOAD_SENTINEL: &[u8] = b"state-ID-unallocated payload";
+const COORDINATOR_SYSTEM_SNAPSHOT: &[u8] = b"let system = { hostname = \"coordinator-test\" } in system\n";
+const COORDINATOR_OS_RELEASE: &[u8] = b"NAME=\"Coordinator Test OS\"\nID=coordinator-test\n";
 
 struct CoordinatorFixture {
     _temporary: tempfile::TempDir,
@@ -212,6 +214,23 @@ fn allocate_matching_state(fixture: &CoordinatorFixture, coordinator: &StatefulT
         .id
 }
 
+fn finish_candidate_prepare(
+    coordinator: StatefulTransitionCoordinator,
+) -> Result<PreparedStatefulTransitionCoordinator, StatefulTransitionCoordinatorError> {
+    coordinator.finish_candidate_prepare(COORDINATOR_SYSTEM_SNAPSHOT, |_| COORDINATOR_OS_RELEASE.to_vec())
+}
+
+fn assert_candidate_metadata(fixture: &CoordinatorFixture) {
+    assert_eq!(
+        fs::read(fixture.candidate_path.join("lib/os-release")).unwrap(),
+        COORDINATOR_OS_RELEASE
+    );
+    assert_eq!(
+        fs::read(fixture.candidate_path.join("lib/system-model.glu")).unwrap(),
+        COORDINATOR_SYSTEM_SNAPSHOT
+    );
+}
+
 fn assert_record_prefix(record: &TransitionRecord, operation: Operation, phase: Phase, generation: u64) {
     assert_eq!(record.operation, operation);
     assert_eq!(record.phase, phase);
@@ -231,3 +250,4 @@ fn journal_names(root: &Path) -> Vec<String> {
 include!("operation_prefixes.rs");
 include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
+include!("metadata_proof.rs");

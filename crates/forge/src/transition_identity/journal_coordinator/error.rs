@@ -5,10 +5,12 @@ use thiserror::Error;
 use crate::{
     db,
     state::TransitionId,
-    transition_journal::{CodecError, Operation, Phase, PreviousOrigin, RuntimeEvidenceError, StorageError},
+    transition_journal::{
+        CodecError, Operation, Phase, PreviousOrigin, RuntimeEvidenceError, StorageError, TransitionRecord,
+    },
 };
 
-use super::super::CandidateInventoryError;
+use super::super::{CandidateInventoryError, CandidateMetadataError};
 
 #[derive(Debug, Error)]
 pub(crate) enum StatefulTransitionCoordinatorError {
@@ -26,6 +28,16 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     Record(#[from] CodecError),
     #[error("create or advance the durable state-transition journal")]
     Journal(#[from] StorageError),
+    #[error(
+        "canonical journal for transition {transition_id} changed while {expected_phase:?} authority was retained: {actual:?}"
+    )]
+    CanonicalRecordChanged {
+        transition_id: TransitionId,
+        expected_phase: Phase,
+        actual: Option<TransitionRecord>,
+    },
+    #[error("publish or revalidate exact candidate metadata under CandidatePrepareStarted authority")]
+    CandidateMetadata(#[from] CandidateMetadataError),
     #[error("{action} requires operation {expected:?}, found {actual:?}")]
     UnexpectedOperation {
         action: &'static str,

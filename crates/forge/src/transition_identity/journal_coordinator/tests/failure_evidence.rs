@@ -209,11 +209,8 @@ fn journal_coordinator_database_commit_and_completion_share_exact_transition_cor
         Phase::FreshStateAllocated,
         3,
     );
-    let coordinator = coordinator
-        .begin_candidate_prepare()
-        .unwrap()
-        .finish_candidate_prepare()
-        .unwrap();
+    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::NewState,
@@ -282,7 +279,7 @@ fn journal_coordinator_post_commit_journal_failure_preserves_matching_database_e
         assert_candidate_state_id_absent(&fixture);
         crate::transition_journal::arm_next_temporary_sync_fault();
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::Journal(_))
         ));
         crate::transition_journal::assert_temporary_sync_fault_consumed();
@@ -354,7 +351,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             Ok::<(), &'static str>(())
         };
         candidate_effect().unwrap();
-        let coordinator = coordinator.finish_candidate_prepare().unwrap();
+        let coordinator = finish_candidate_prepare(coordinator).unwrap();
         assert_eq!(coordinator.record().phase, Phase::CandidatePrepared);
         assert_eq!(coordinator.record().generation, expected_generation + 1);
         assert_eq!(read_canonical(&fixture.installation.root), *coordinator.record());
@@ -430,7 +427,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             .clear_transition_if_matches(allocated, &started.transition_id)
             .unwrap();
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::FreshAllocationOwnershipMismatch {
                 state,
                 ownership: TransitionOwnership::Cleared,
@@ -453,7 +450,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             fs::set_permissions(&hook_marker, fs::Permissions::from_mode(0o644)).unwrap();
         });
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::Identity(_))
         ));
         let after = fs::symlink_metadata(&marker).unwrap();
@@ -473,7 +470,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             write_canonical_file(&collision, b"foreign");
         });
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::StateIdPublication(failure))
                 if failure.outcome()
                     == super::super::state_tree_metadata::StateIdPublicationOutcome::NotPublished
@@ -492,7 +489,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             super::super::state_tree_metadata::StateIdPublicationFaultPoint::TemporarySync,
         );
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::StateIdPublication(failure))
                 if failure.outcome()
                     == super::super::state_tree_metadata::StateIdPublicationOutcome::NotPublished
@@ -518,7 +515,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             write_canonical_file(&hook_canonical, b"foreign-after-rename");
         });
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::StateIdPublication(failure))
                 if failure.outcome()
                     == super::super::state_tree_metadata::StateIdPublicationOutcome::Ambiguous
@@ -539,7 +536,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             super::super::state_tree_metadata::StateIdPublicationFaultPoint::DirectorySync,
         );
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::StateIdPublication(failure))
                 if failure.outcome()
                     == super::super::state_tree_metadata::StateIdPublicationOutcome::Published
@@ -564,7 +561,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
                 .unwrap();
         });
         assert!(matches!(
-            coordinator.finish_candidate_prepare(),
+            finish_candidate_prepare(coordinator),
             Err(StatefulTransitionCoordinatorError::FreshAllocationOwnershipMismatch {
                 state,
                 ownership: TransitionOwnership::Cleared,

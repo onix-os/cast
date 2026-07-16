@@ -118,7 +118,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 26; \
+	timeout 10s test "$$count" = 31; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -145,16 +145,41 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_post_effect_previous_database_removal_is_blocked \
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_global_database_audit_blocks_foreign_rows \
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_state_id_and_public_name_substitution_are_blocked \
-		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_failure_releases_journal_while_error_lives; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_failure_releases_journal_while_error_lives \
+		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exact_os_info \
+		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepare_rejects_same_byte_foreign_candidate_before_metadata_or_state_id \
+		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_substitution_before_trigger_intent_runs_no_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_substitution_during_trigger_effect_stops_before_completion \
+		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_publication_failure_releases_authorities_while_error_lives; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
+	prepare_contract="crates/forge/src/transition_identity/journal_coordinator/candidate_preparation.rs"; \
 	timeout 10s grep -Fqx "pub(super) struct StatefulTransactionTriggerAuthority<'authority> {" "$$trigger_contract"; \
 	timeout 10s grep -Fqx 'pub(super) enum StatefulTransactionTriggerFailure<E>' "$$trigger_contract"; \
+	timeout 10s grep -Fqx 'pub(crate) enum PreparedStatefulTransitionCoordinator {' "$$prepare_contract"; \
+	timeout 10s grep -Fqx 'pub(crate) struct PreparedTransactionTriggerCoordinator {' "$$prepare_contract"; \
+	timeout 10s grep -Fqx 'pub(crate) struct PreparedArchivedTransitionCoordinator {' "$$prepare_contract"; \
+	timeout 10s grep -Fqx '    metadata: CandidateMetadataProof,' "$$prepare_contract"; \
+	timeout 10s grep -Fqx 'impl PreparedTransactionTriggerCoordinator {' "$$trigger_contract"; \
 	timeout 10s grep -Fqx '    pub(super) fn run_transaction_triggers<E, F>(' "$$trigger_contract"; \
+	if timeout 10s grep -nF 'Option<CandidateMetadataProof>' "$$prepare_contract" "$$trigger_contract"; then \
+		timeout 10s printf '%s\n' 'proof-bearing coordinator authority became optional' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	runner_signature="$$( timeout 10s sed -n '/pub(super) fn run_transaction_triggers/,/) -> Result/p' "$$trigger_contract" )"; \
+	if timeout 10s grep -Fq 'CandidateMetadataProof' <<<"$$runner_signature"; then \
+		timeout 10s printf '%s\n' 'transaction-trigger runner accepts a caller-supplied metadata proof' >&2; exit 1; \
+	fi; \
+	if timeout 10s grep -nF 'PreparedArchivedTransitionCoordinator' "$$trigger_contract"; then \
+		timeout 10s printf '%s\n' 'archived activation acquired transaction-trigger authority' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	if widened="$$( timeout 10s grep -nE \
 		'pub\(crate\).*(StatefulTransactionTriggerAuthority|StatefulTransactionTriggerFailure|run_transaction_triggers)' \
-		crates/forge/src/transition_identity/journal_coordinator/mod.rs "$$trigger_contract" )"; then \
+		crates/forge/src/transition_identity/journal_coordinator/mod.rs "$$prepare_contract" "$$trigger_contract" )"; then \
 		timeout 10s printf '%s\n' 'unwired transaction-trigger authority was widened before metadata-aware live integration:' "$$widened" >&2; \
 		exit 1; \
 	else \

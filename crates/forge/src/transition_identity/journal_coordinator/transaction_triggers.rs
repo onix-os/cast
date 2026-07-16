@@ -1,11 +1,11 @@
-//! Internal, intentionally unwired transaction-trigger sequencing contract.
+//! Proof-bearing, intentionally unwired transaction-trigger sequencing.
 //!
-//! The callback proves journal ordering, retained identity, database evidence,
-//! and post-effect durability, but it does not yet own the generated candidate
-//! metadata proof used by the live client. Keep this module's authority,
-//! failure, and runner visibility scoped to `journal_coordinator`. Widening it
-//! is unsafe until candidate preparation supplies an owned metadata token and
-//! this boundary requires that token before intent and after the effect.
+//! Only the operation-specific `NewState`/`ActiveReblit` typestate reaches this
+//! runner. It owns the exact metadata proof created during candidate
+//! preparation and sandwiches that proof between complete public-name,
+//! journal, runtime, state-ID, and database evidence both before intent and
+//! after the effect. Archived activation has a different typestate and no path
+//! into this module.
 
 use std::{error::Error as StdError, fs::File, path::Path};
 
@@ -13,11 +13,15 @@ use thiserror::Error;
 
 use crate::{
     state::{self, TransitionId},
-    transition_journal::{Operation, Phase},
+    transition_journal::Phase,
 };
 
+use super::super::CandidateMetadataProof;
 use super::super::prejournal_inventory::{CandidateInventoryLimits, seal_existing_marked_candidate};
-use super::{StatefulTransitionCoordinator, StatefulTransitionCoordinatorError};
+use super::{
+    PreparedTransactionTriggerCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
+    TransactionTriggersCompleteCoordinator,
+};
 
 const RUN_TRANSACTION_TRIGGERS: &str = "run stateful transaction triggers";
 const COMPLETE_TRANSACTION_TRIGGERS: &str = "complete stateful transaction triggers";
@@ -69,11 +73,6 @@ pub(super) enum StatefulTransactionTriggerFailure<E>
 where
     E: StdError + 'static,
 {
-    #[error("transition {transition_id} operation {operation:?} has no stateful transaction-trigger phase")]
-    NotApplicable {
-        transition_id: TransitionId,
-        operation: Operation,
-    },
     #[error("transition {transition_id} failed transaction-trigger preflight")]
     Preflight {
         transition_id: TransitionId,
@@ -112,34 +111,36 @@ where
     },
 }
 
-impl StatefulTransitionCoordinator {
+impl PreparedTransactionTriggerCoordinator {
     /// Persist transaction-trigger intent, invoke one authorized effect, seal
     /// its exact candidate result, and persist completion.
     ///
-    /// `NewState` and `ActiveReblit` are the only operations whose journal
-    /// successor is `TransactionTriggersStarted`. `ActivateArchived` is
-    /// rejected without advancing its record or invoking `effect`; its legal
-    /// successor belongs to the later `/usr`-exchange slice.
+    /// Construction of this wrapper proves that the operation is `NewState`
+    /// or `ActiveReblit`; archived activation is unrepresentable here.
     pub(super) fn run_transaction_triggers<E, F>(
-        mut self,
+        self,
         effect: F,
-    ) -> Result<Self, StatefulTransactionTriggerFailure<E>>
+    ) -> Result<TransactionTriggersCompleteCoordinator, StatefulTransactionTriggerFailure<E>>
     where
         E: StdError + 'static,
         F: for<'authority> FnOnce(StatefulTransactionTriggerAuthority<'authority>) -> Result<(), E>,
     {
-        let transition_id = self.record.transition_id.clone();
-        if let Err(source) = self.require_phase(Phase::CandidatePrepared, RUN_TRANSACTION_TRIGGERS) {
+        let Self {
+            mut coordinator,
+            metadata,
+        } = self;
+        let transition_id = coordinator.record.transition_id.clone();
+        if let Err(source) = coordinator.require_phase(Phase::CandidatePrepared, RUN_TRANSACTION_TRIGGERS) {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
 
-        let candidate = match self.candidate_state() {
+        let candidate = match coordinator.candidate_state() {
             Ok(candidate) => candidate,
             Err(source) => {
                 return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
             }
         };
-        let started = match self.record.forward_successor(None) {
+        let started = match coordinator.record.forward_successor(None) {
             Ok(started) => started,
             Err(source) => {
                 return Err(StatefulTransactionTriggerFailure::Preflight {
@@ -148,52 +149,39 @@ impl StatefulTransitionCoordinator {
                 });
             }
         };
-        if started.phase != Phase::TransactionTriggersStarted {
-            return Err(StatefulTransactionTriggerFailure::NotApplicable {
-                transition_id,
-                operation: self.record.operation,
-            });
-        }
-
-        if let Err(source) = self.require_transaction_trigger_evidence(candidate) {
+        if let Err(source) = coordinator.seal_transaction_candidate() {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
-        if let Err(source) = self.seal_transaction_candidate() {
-            return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
-        }
-        if let Err(source) = self.require_transaction_trigger_evidence(candidate) {
+        if let Err(source) = coordinator.require_transaction_metadata_sandwich(candidate, &metadata) {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
 
-        if let Err(source) = self.identity.journal.advance(&self.record, &started) {
+        if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &started) {
             return Err(StatefulTransactionTriggerFailure::IntentPersistence {
                 transition_id,
                 source: source.into(),
             });
         }
-        self.record = started;
+        coordinator.record = started;
 
         let authority = StatefulTransactionTriggerAuthority {
-            transition_id: &self.record.transition_id,
+            transition_id: &coordinator.record.transition_id,
             candidate_state: candidate,
-            candidate_usr: self.identity.candidate.store.retained_directory(),
-            candidate_usr_path: self.identity.candidate.store.display_path(),
+            candidate_usr: coordinator.identity.candidate.store.retained_directory(),
+            candidate_usr_path: coordinator.identity.candidate.store.display_path(),
         };
         if let Err(source) = effect(authority) {
             return Err(StatefulTransactionTriggerFailure::Effect { transition_id, source });
         }
 
-        if let Err(source) = self.require_transaction_trigger_evidence(candidate) {
+        if let Err(source) = coordinator.seal_transaction_candidate() {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
-        if let Err(source) = self.seal_transaction_candidate() {
-            return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
-        }
-        if let Err(source) = self.require_transaction_trigger_evidence(candidate) {
+        if let Err(source) = coordinator.require_transaction_metadata_sandwich(candidate, &metadata) {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
 
-        let complete = match self.record.forward_successor(None) {
+        let complete = match coordinator.record.forward_successor(None) {
             Ok(complete) => complete,
             Err(source) => {
                 return Err(StatefulTransactionTriggerFailure::PostEffectEvidence {
@@ -212,87 +200,38 @@ impl StatefulTransitionCoordinator {
                 },
             });
         }
-        if let Err(source) = self.identity.journal.advance(&self.record, &complete) {
+        if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &complete) {
             return Err(StatefulTransactionTriggerFailure::CompletionPersistence {
                 transition_id,
                 source: source.into(),
             });
         }
-        self.record = complete;
-        Ok(self)
+        coordinator.record = complete;
+        Ok(TransactionTriggersCompleteCoordinator { coordinator, metadata })
     }
+}
 
-    fn candidate_state(&self) -> Result<state::Id, StatefulTransitionCoordinatorError> {
-        self.record
-            .candidate
-            .id
-            .map(state::Id::from)
-            .ok_or(StatefulTransitionCoordinatorError::CandidateStateMissing {
-                phase: self.record.phase,
-            })
-    }
-
-    fn require_transaction_trigger_evidence(
+impl StatefulTransitionCoordinator {
+    /// Make the owned metadata proof the final observation in a full evidence
+    /// sandwich. Repeating public-name evidence after the first proof catches
+    /// substitution performed while proof revalidation traverses metadata.
+    fn require_transaction_metadata_sandwich(
         &self,
         candidate: state::Id,
+        metadata: &CandidateMetadataProof,
     ) -> Result<(), StatefulTransitionCoordinatorError> {
-        self.require_record_runtime_evidence()?;
-        self.require_transaction_tree_names(candidate)?;
-        self.require_transaction_database_evidence(candidate)?;
-        self.require_record_runtime_evidence()?;
-        self.require_transaction_tree_names(candidate)?;
-        self.require_transaction_database_evidence(candidate)
-    }
-
-    fn require_transaction_tree_names(&self, candidate: state::Id) -> Result<(), StatefulTransitionCoordinatorError> {
-        self.identity.require_existing_candidate_state(candidate)?;
-        let candidate_path = self.identity.candidate.store.display_path();
-        let previous_path = self.identity.previous.store.display_path();
-        self.identity
-            .candidate
-            .verify_named_with_state_id(candidate_path)
-            .map_err(StatefulTransitionCoordinatorError::Identity)?;
-        self.identity
-            .previous
-            .verify_named_read_only(previous_path)
-            .map_err(StatefulTransitionCoordinatorError::Identity)?;
-        self.identity
-            .candidate
-            .verify_named_with_state_id(candidate_path)
-            .map_err(StatefulTransitionCoordinatorError::Identity)
-    }
-
-    fn require_transaction_database_evidence(
-        &self,
-        candidate: state::Id,
-    ) -> Result<(), StatefulTransitionCoordinatorError> {
-        match self.record.operation {
-            Operation::NewState => self.require_fresh_allocation_ownership(candidate),
-            Operation::ActiveReblit => self.identity.require_existing_candidate_database_ownership(
-                self.record.operation,
-                candidate,
-                &self.record.transition_id,
-            ),
-            Operation::ActivateArchived => Err(StatefulTransitionCoordinatorError::UnexpectedOperation {
-                action: RUN_TRANSACTION_TRIGGERS,
-                expected: Operation::ActiveReblit,
-                actual: Operation::ActivateArchived,
-            }),
-        }?;
-        let previous = self.record.previous.id.map(state::Id::from);
-        self.identity.require_previous_state_database_ownership(
-            self.record.operation,
-            previous,
-            Some(candidate),
-            &self.record.transition_id,
+        self.require_prepared_candidate_evidence(candidate)?;
+        metadata.require_same_candidate(
+            self.identity.candidate.store.retained_directory(),
+            self.identity.candidate.store.display_path(),
         )?;
-        let expected = match self.record.operation {
-            Operation::NewState => Some((candidate, &self.record.transition_id)),
-            Operation::ActiveReblit => None,
-            Operation::ActivateArchived => unreachable!("archived activation was rejected before trigger evidence"),
-        };
-        self.identity
-            .require_global_transition_audit(self.record.operation, expected)
+        self.require_prepared_candidate_evidence(candidate)?;
+        metadata
+            .require_same_candidate(
+                self.identity.candidate.store.retained_directory(),
+                self.identity.candidate.store.display_path(),
+            )
+            .map_err(Into::into)
     }
 
     fn seal_transaction_candidate(&self) -> Result<(), StatefulTransitionCoordinatorError> {

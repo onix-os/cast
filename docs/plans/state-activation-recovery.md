@@ -459,33 +459,53 @@ and instant rollback mechanism; it hardens their failure semantics.
   `TransactionTriggersStarted` or `TransactionTriggersComplete`. Every error
   drops the coordinator-owned journal, identity, and database capabilities.
 
-  This callback is a sequencing contract, not production-safe live trigger
-  authorization. Its authority, failure type, and consuming runner are scoped
-  to the coordinator module and cannot be obtained by a client. In particular,
-  `CandidatePrepared` currently retains only exact `.stateID` evidence. The
-  live `CandidateMetadataProof` now duplicates the authenticated candidate
-  descriptor before any decoration side effect, owns that descriptor, and can
-  revalidate the exact `os-release` and `system-model.glu` inodes after the
-  source tree identity has been dropped. A one-shot descriptor-clone fault
-  proves that failure creates neither `usr/lib` nor either metadata output, and
-  a same-byte canonical-name substitution is still rejected through the owned
-  proof. This removes the self-referential lifetime blocker, but the proof is
-  not yet transferred into or retained by the durable coordinator. Before
-  visibility can widen, the coordinator's candidate-preparation boundary must
-  accept that exact owned proof and require it immediately before trigger
-  intent and again after the effect. The callback's post-effect inventory
-  deliberately cannot substitute for that semantic proof because it baselines
-  intentional payload changes. No live client path is changed or silently
-  bypassed by this still-unwired slice.
+  The callback remains an intentionally unwired sequencing contract, but its
+  authorization is now proof-bearing rather than a raw phase check.
+  `CandidatePrepareStarted` is the only coordinator state which can construct
+  the neutral metadata publication capability. The client-policy callback sees
+  only the bounded optional `os-info.json` bytes read through that exact
+  capability and returns semantic `os-release` bytes; it never receives the
+  publication object or a proof token. The coordinator alone consumes the
+  publication, retains the resulting exact `os-release` and
+  `system-model.glu` proof, binds it to the coordinator's candidate descriptor,
+  publishes or verifies `.stateID`, and sandwiches runtime, canonical journal,
+  public-name, database, state-ID, and metadata evidence before recording
+  `CandidatePrepared`.
 
-  The focused `make forge-transition-journal-coordinator-test` lane freezes
+  `CandidatePrepared` returns one of two unforgeable operation-specific
+  wrappers. `NewState` and `ActiveReblit` receive a wrapper which owns both the
+  coordinator and metadata proof; `ActivateArchived` receives a distinct
+  wrapper with no transaction-trigger method. The trigger runner exists only
+  on the former wrapper and accepts no caller-supplied proof. It seals the
+  candidate and performs evidence -> metadata -> evidence -> metadata checks
+  immediately before durable trigger intent and again after the effect before
+  completion. Thus replacing either canonical metadata inode with an
+  identical-byte inode before intent invokes no effect and leaves
+  `CandidatePrepared`; doing so inside the effect invokes it once and leaves
+  `TransactionTriggersStarted`. Every returned failure owns neither the
+  coordinator nor proof, so journal, installation, and database authorities
+  are released while the error remains alive. The post-effect inventory still
+  cannot substitute for the semantic proof because it intentionally baselines
+  permitted payload changes. No live client path is changed or silently
+  bypassed by this still-unwired slice. The live archived-activation path moves
+  an already-decorated tree and therefore still needs a separate exact-existing
+  metadata proof constructed from independent expected snapshot and
+  `os-release` bytes. It must never treat the candidate's current canonical
+  output bytes as their own expectation; the publication-only contract here
+  intentionally remains unwired until that proof path exists.
+
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 31
+  exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
   runtime evidence, fixed quarantine naming, exact database correlation,
   transaction-trigger ordering, predecessor-or-successor persistence faults,
-  substitution rejection, and fail-stop lock release. Its static gates prove
-  that no coordinator method has a callsite outside the contract module and
-  that the trigger runner and authority have not been widened beyond that
-  module before metadata-aware coordinator integration exists. No live
+  substitution rejection, proof-bearing operation dispatch, exact
+  `os-info.json` policy input, pre-intent and post-effect metadata replacement,
+  and fail-stop lock release. Its static gates prove that metadata authority is
+  mandatory rather than optional, the runner accepts no proof parameter,
+  archived activation cannot acquire trigger authority, no coordinator method
+  has a callsite outside the contract module, and the callback authority and
+  failure type remain private. No live
   activation path creates or advances this coordinator, and there is still no
   phase-specific recovery executor; the read-only startup assessment below cannot
   advance it. This item remains open.

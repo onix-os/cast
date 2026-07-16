@@ -11,9 +11,9 @@ impl std::error::Error for TriggerEffectError {}
 
 fn coordinator_at_candidate_prepared(
     candidate_kind: CandidateKind,
-) -> (CoordinatorFixture, StatefulTransitionCoordinator) {
+) -> (CoordinatorFixture, PreparedTransactionTriggerCoordinator) {
     let (fixture, coordinator) = coordinator_at_candidate_prepare_started(candidate_kind);
-    let coordinator = coordinator.finish_candidate_prepare().unwrap();
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     let expected_generation = if candidate_kind == CandidateKind::NewState { 5 } else { 3 };
     assert_record_prefix(
         coordinator.record(),
@@ -25,6 +25,9 @@ fn coordinator_at_candidate_prepared(
         Phase::CandidatePrepared,
         expected_generation,
     );
+    let PreparedStatefulTransitionCoordinator::TransactionTriggers(coordinator) = coordinator else {
+        panic!("archived activation cannot yield transaction-trigger authority")
+    };
     (fixture, coordinator)
 }
 
@@ -121,24 +124,15 @@ fn journal_coordinator_transaction_triggers_complete_exact_new_state_and_active_
 
 #[test]
 fn journal_coordinator_archived_transaction_triggers_are_rejected_without_effect() {
-    let (fixture, coordinator) = coordinator_at_candidate_prepared(CandidateKind::Archived);
+    let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::Archived);
+    let coordinator = finish_candidate_prepare(coordinator).unwrap();
     let prepared = coordinator.record().clone();
     let calls = std::cell::Cell::new(0usize);
 
-    let failure = coordinator
-        .run_transaction_triggers(|_| {
-            calls.set(calls.get() + 1);
-            Ok::<(), TriggerEffectError>(())
-        })
-        .unwrap_err();
-
-    assert!(matches!(
-        failure,
-        StatefulTransactionTriggerFailure::NotApplicable {
-            transition_id,
-            operation: Operation::ActivateArchived,
-        } if transition_id == prepared.transition_id
-    ));
+    let PreparedStatefulTransitionCoordinator::Archived(_archived) = coordinator else {
+        calls.set(calls.get() + 1);
+        panic!("archived activation acquired transaction-trigger authority")
+    };
     assert_eq!(calls.get(), 0);
     assert_eq!(read_canonical(&fixture.installation.root), prepared);
 }
