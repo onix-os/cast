@@ -96,6 +96,13 @@ case "$1" in
             *--property=Environment*)
                 test ! -f "$FAKE_STATE/environment" || cat "$FAKE_STATE/environment"
                 ;;
+            *--property=ActiveState*)
+                if test -f "$FAKE_STATE/environment"; then
+                    printf '%s\n' active
+                else
+                    printf '%s\n' inactive
+                fi
+                ;;
             *) exit 2 ;;
         esac
         ;;
@@ -221,6 +228,22 @@ EOF_PROOF
         printf '%s\n' "$marker" >"$FAKE_STATE/environment"
         exit 143
         ;;
+    direct-supervisor-signal)
+        printf '%s\n' "$marker" >"$FAKE_STATE/environment"
+        kill -TERM "${CAST_LATCHED_SUPERVISOR_PID:?}"
+        sleep 5
+        exit 143
+        ;;
+    freeze-supervisor)
+        printf '%s\n' "$marker" >"$FAKE_STATE/environment"
+        printf '%s\n' "${CAST_LATCHED_SUPERVISOR_PID:?}" \
+            >"$FAKE_STATE/supervisor-pid"
+        kill -STOP "${CAST_LATCHED_SUPERVISOR_PID:?}"
+        : >"$FAKE_STATE/frozen-supervisor-ready"
+        while :; do
+            sleep 1
+        done
+        ;;
     foreign)
         printf '%s\n' 'CAST_DELEGATED_FIXTURE_TOKEN=foreign' >"$FAKE_STATE/environment"
         exit 42
@@ -249,11 +272,25 @@ run_fixture() {
         FAKE_CARGO_MODE="${7:-artifact}" \
         FAKE_GIT_COMMIT="$fake_commit" \
         FAKE_GIT_STATUS_MODE="${8:-clean}" \
+        CAST_DELEGATED_KILL_AFTER_SECONDS="${CAST_DELEGATED_KILL_AFTER_SECONDS-30}" \
+        CAST_DELEGATED_STATUS_TIMEOUT_SECONDS="${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS-}" \
+        CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP="${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}" \
         "$runner" "$selector"
 }
 
 reset_state() {
     rm -f "$state"/*
+}
+
+process_is_live() {
+    process_pid=$1
+    IFS= read -r process_stat 2>/dev/null <"/proc/$process_pid/stat" || return 1
+    process_tail=${process_stat##*) }
+    process_state=${process_tail%% *}
+    case "$process_state" in
+        Z|X|'') return 1 ;;
+        *) return 0 ;;
+    esac
 }
 
 reset_state
@@ -426,6 +463,48 @@ grep -Fqx -- "$unit" "$state/stops"
 
 reset_state
 set +e
+run_fixture custom 1 ready direct-supervisor-signal \
+    >"$work/direct-supervisor-signal.out" 2>"$work/direct-supervisor-signal.err"
+status=$?
+set -e
+test "$status" -eq 143
+unit=$(cat "$state/unit")
+grep -Fqx -- "$unit" "$state/stops"
+
+reset_state
+set +e
+CAST_DELEGATED_KILL_AFTER_SECONDS=1 \
+    CAST_DELEGATED_STATUS_TIMEOUT_SECONDS=1 \
+    run_fixture custom 1 ready freeze-supervisor \
+    >"$work/frozen-supervisor.out" 2>"$work/frozen-supervisor.err"
+frozen_status=$?
+set -e
+frozen_supervisor_pid=$(cat "$state/supervisor-pid")
+frozen_unit=$(cat "$state/unit")
+test "$frozen_status" -eq 124
+if process_is_live "$frozen_supervisor_pid"; then
+    printf 'autonomously bounded delegated supervisor remained live: %s\n' \
+        "$frozen_supervisor_pid" >&2
+    exit 1
+fi
+grep -Fqx -- "$frozen_unit" "$state/stops"
+grep -Fq 'status channel exceeded its 1-second bound' \
+    "$work/frozen-supervisor.err"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP=1 \
+    run_fixture all 1 ready success >"$work/post-reap-signal.out" 2>"$work/post-reap-signal.err"
+status=$?
+set -e
+test "$status" -eq 143
+test ! -e "$evidence/fixtures-ci-proof.json"
+unit=$(cat "$state/unit")
+grep -Fqx -- "$unit" "$state/stops"
+
+reset_state
+set +e
 run_fixture custom 1 ready failure >"$work/failure.out" 2>"$work/failure.err"
 status=$?
 set -e
@@ -439,7 +518,7 @@ run_fixture custom 1 ready foreign >"$work/foreign.out" 2>"$work/foreign.err"
 status=$?
 set -e
 test "$status" -eq 42
-grep -Fq 'refusing to stop delegated unit without this invocation marker' "$work/foreign.err"
+grep -Fq 'refusing to stop fixture unit without this invocation marker' "$work/foreign.err"
 test ! -e "$state/stops"
 test ! -e "$state/kills"
 

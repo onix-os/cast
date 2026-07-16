@@ -5,10 +5,21 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-fixtures-ci-with-evidence.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixtures-ci-evidence-test.XXXXXXXXXXXX")
+current_case=initialization
 cleanup() {
+    cleanup_status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$cleanup_status" -ne 0 ]; then
+        printf 'bounded fixture CI evidence test failed during case: %s\n' \
+            "$current_case" >&2
+    fi
     rm -rf "$work"
+    exit "$cleanup_status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fakebin="$work/bin"
 evidence="$work/evidence"
@@ -155,14 +166,62 @@ case "$FAKE_MAKE_MODE" in
         kill -TERM "$wrapper_pid"
         exit 143
         ;;
+    signal-supervisor)
+        emit_proof
+        printf 'BEGIN-SUPERVISOR-SIGNAL\n'
+        kill -TERM "${CAST_LATCHED_SUPERVISOR_PID:?}"
+        sleep 5
+        exit 143
+        ;;
+    parent-sigkill)
+        : "${FAKE_OUTER_STATE:?}"
+        printf '%s\n' "${CAST_FIXTURE_WRAPPER_PID:?}" \
+            >"$FAKE_OUTER_STATE/wrapper-pid"
+        printf '%s\n' "${CAST_LATCHED_SUPERVISOR_PID:?}" \
+            >"$FAKE_OUTER_STATE/supervisor-pid"
+        printf 'BEGIN-PARENT-SIGKILL\n'
+        ;;
+    parent-sigkill-active)
+        : "${FAKE_OUTER_STATE:?}"
+        emit_proof
+        printf '%s\n' "${CAST_FIXTURE_WRAPPER_PID:?}" \
+            >"$FAKE_OUTER_STATE/wrapper-pid"
+        printf '%s\n' "${CAST_LATCHED_SUPERVISOR_PID:?}" \
+            >"$FAKE_OUTER_STATE/supervisor-pid"
+        printf '%s\n' "$$" >"$FAKE_OUTER_STATE/payload-pid"
+        printf 'BEGIN-ACTIVE-PARENT-SIGKILL\n'
+        : >"$FAKE_OUTER_STATE/active-parent-ready"
+        while :; do
+            sleep 1
+        done
+        ;;
+    freeze-supervisor)
+        : "${FAKE_OUTER_STATE:?}"
+        emit_proof
+        printf '%s\n' "${CAST_FIXTURE_WRAPPER_PID:?}" \
+            >"$FAKE_OUTER_STATE/wrapper-pid"
+        printf '%s\n' "${CAST_LATCHED_SUPERVISOR_PID:?}" \
+            >"$FAKE_OUTER_STATE/supervisor-pid"
+        kill -STOP "${CAST_LATCHED_SUPERVISOR_PID:?}"
+        : >"$FAKE_OUTER_STATE/frozen-supervisor-ready"
+        while :; do
+            sleep 1
+        done
+        ;;
     double-signal)
         emit_proof
         printf 'BEGIN-DOUBLE-SIGNAL\n'
         wrapper_pid=${CAST_FIXTURE_WRAPPER_PID:?}
         (
             trap '' TERM
-            while kill -0 "$wrapper_pid" 2>/dev/null; do
+            signal_attempt=0
+            while [ "$signal_attempt" -lt 20 ] \
+                && kill -0 "$wrapper_pid" 2>/dev/null; do
                 kill -TERM "$wrapper_pid" 2>/dev/null || exit 0
+                signal_attempt=$((signal_attempt + 1))
+                printf '%s\n' "$signal_attempt" \
+                    >"$FAKE_OUTER_STATE/double-signal-count"
+                sleep 0.01
             done
         ) </dev/null >/dev/null 2>&1 &
         exit 143
@@ -377,6 +436,13 @@ case "${1-}" in
                 tr '\n' ' ' <"$FAKE_OUTER_STATE/environment"
                 printf '\n'
                 ;;
+            --property=ActiveState)
+                if [ -f "$FAKE_OUTER_STATE/active" ]; then
+                    printf '%s\n' active
+                else
+                    printf '%s\n' inactive
+                fi
+                ;;
             *) exit 2 ;;
         esac
         ;;
@@ -392,6 +458,7 @@ case "${1-}" in
         if [ -f "$FAKE_OUTER_STATE/unit" ]; then
             test "$(cat "$FAKE_OUTER_STATE/unit")" = "$unit"
         fi
+        printf '%s\n' "$unit" >>"$FAKE_OUTER_STATE/stops"
         signal=TERM
         test "$command" = stop || signal=KILL
         if [ -f "$FAKE_OUTER_STATE/command-pid" ]; then
@@ -417,6 +484,12 @@ case "${1-}" in
                 fi
             fi
         fi
+        if [ "$command" = stop ]; then
+            # The user manager, not the systemd-run client, owns unit state.
+            # A successful stop makes the modeled unit inactive even if the
+            # client itself was concurrently terminated.
+            rm -f "$FAKE_OUTER_STATE/active" "$FAKE_OUTER_STATE/environment"
+        fi
         ;;
     *) exit 2 ;;
 esac
@@ -440,6 +513,7 @@ EOF
 chmod 755 "$fakebin/tee"
 
 run_wrapper() {
+    current_case=$1
     rm -f "$outer_state"/*
     env \
         PATH="$fakebin:$PATH" \
@@ -447,7 +521,8 @@ run_wrapper() {
         FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_FIXTURE_LOG_MAX_BYTES=256 \
         CAST_FIXTURE_CI_TIMEOUT_SECONDS="$2" \
-        CAST_FIXTURE_CI_KILL_AFTER_SECONDS=1 \
+        CAST_FIXTURE_CI_KILL_AFTER_SECONDS="${CAST_FIXTURE_CI_KILL_AFTER_SECONDS-1}" \
+        CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS="${CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS-}" \
         FAKE_LATE_PID_FILE="$work/late-child.pid" \
         FAKE_GIT_COMMIT="$fake_commit" \
         FAKE_GIT_STATUS_MODE="${FAKE_GIT_STATUS_MODE-clean}" \
@@ -455,6 +530,8 @@ run_wrapper() {
         FAKE_OUTER_STATE="$outer_state" \
         FAKE_PUBLIC_EVIDENCE_DIR="$evidence" \
         FAKE_TEE_MODE="${FAKE_TEE_MODE-pass}" \
+        CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP="${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}" \
+        CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE="${CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE-}" \
         REAL_JQ="$real_jq" \
         REAL_TEE="$real_tee" \
         FAKE_MAKE_MODE="$1" \
@@ -504,7 +581,106 @@ grep -Fq 'END-SUCCESS' "$evidence/fixtures-ci.log"
 jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
 assert_bounded_inventory
 
+# Parent death before command completion must be observed by the private
+# release monitor. It stops the authenticated unit, terminates the supervisor
+# group, and lets the independent logger finish on FIFO EOF.
+current_case=parent-sigkill-active
+set +e
+run_wrapper parent-sigkill-active 10 >"$work/active-parent-sigkill.out" 2>&1 &
+active_invocation_pid=$!
+set -e
+active_probe=0
+while [ ! -f "$outer_state/active-parent-ready" ]; do
+    active_probe=$((active_probe + 1))
+    test "$active_probe" -le 300
+    sleep 0.01
+done
+active_wrapper_pid=$(cat "$outer_state/wrapper-pid")
+active_supervisor_pid=$(cat "$outer_state/supervisor-pid")
+active_payload_pid=$(cat "$outer_state/payload-pid")
+active_logger_pid=
+active_logger_probe=0
+while [ -z "$active_logger_pid" ] && [ "$active_logger_probe" -lt 300 ]; do
+    active_logger_probe=$((active_logger_probe + 1))
+    children_path="/proc/$active_wrapper_pid/task/$active_wrapper_pid/children"
+    if [ -r "$children_path" ]; then
+        for child_pid in $(cat "$children_path"); do
+            child_command=
+            if [ -r "/proc/$child_pid/cmdline" ]; then
+                child_command=$(tr '\000' ' ' 2>/dev/null \
+                    <"/proc/$child_pid/cmdline" || :)
+            fi
+            case "$child_command" in
+                *--capture-log*) active_logger_pid=$child_pid ;;
+            esac
+        done
+    fi
+    [ -n "$active_logger_pid" ] || sleep 0.01
+done
+if [ -z "$active_logger_pid" ]; then
+    printf 'could not identify the bounded logger child for wrapper %s\n' \
+        "$active_wrapper_pid" >&2
+    exit 1
+fi
+active_unit=$(cat "$outer_state/unit")
+kill -KILL "$active_wrapper_pid"
+set +e
+wait "$active_invocation_pid"
+active_status=$?
+set -e
+test "$active_status" -eq 137
+active_drain=0
+while process_is_live "$active_supervisor_pid" \
+    || process_is_live "$active_payload_pid" \
+    || process_is_live "$active_logger_pid" \
+    || [ -e "$outer_state/active" ]; do
+    active_drain=$((active_drain + 1))
+    test "$active_drain" -le 500
+    sleep 0.01
+done
+grep -Fqx "$active_unit" "$outer_state/stops"
+test ! -e "$evidence/fixtures-ci-proof.json"
+rm -rf "$evidence"/.fixtures-ci-run.*
+rm -f "$evidence"/.fixtures-ci.log.tmp "$evidence/fixtures-ci.log"
+
+# Kill the parent only after it consumed the status record but before release.
+# The supervisor is then blocked on the release FIFO and must exit on real EOF.
+rm -f "$work/parent-release-gate.ready" "$work/parent-release-gate.continue"
+current_case=parent-sigkill-release
+set +e
+CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE="$work/parent-release-gate" \
+    run_wrapper parent-sigkill 10 >"$work/parent-sigkill.out" 2>&1 &
+parent_invocation_pid=$!
+set -e
+parent_probe=0
+while { [ ! -f "$outer_state/wrapper-pid" ] \
+    || [ ! -f "$outer_state/supervisor-pid" ] \
+    || [ ! -f "$work/parent-release-gate.ready" ]; }
+do
+    parent_probe=$((parent_probe + 1))
+    test "$parent_probe" -le 200
+    sleep 0.01
+done
+killed_wrapper_pid=$(cat "$outer_state/wrapper-pid")
+killed_supervisor_pid=$(cat "$outer_state/supervisor-pid")
+kill -KILL "$killed_wrapper_pid"
+set +e
+wait "$parent_invocation_pid"
+parent_status=$?
+set -e
+test "$parent_status" -eq 137
+supervisor_probe=0
+while process_is_live "$killed_supervisor_pid"; do
+    supervisor_probe=$((supervisor_probe + 1))
+    test "$supervisor_probe" -le 300
+    sleep 0.01
+done
+test ! -e "$evidence/fixtures-ci-proof.json"
+rm -rf "$evidence"/.fixtures-ci-run.*
+rm -f "$evidence"/.fixtures-ci.log.tmp "$evidence/fixtures-ci.log"
+
 setup_attempt=1
+current_case=setup-signal
 while [ "$setup_attempt" -le 30 ]; do
     rm -f "$outer_state"/*
     env \
@@ -676,12 +852,58 @@ grep -Fq 'BEGIN-SIGNAL' "$evidence/fixtures-ci.log"
 assert_bounded_inventory
 
 set +e
+run_wrapper signal-supervisor 10 >"$work/supervisor-signal.out" 2>&1
+status=$?
+set -e
+test "$status" -eq 143
+test ! -e "$evidence/fixtures-ci-proof.json"
+test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
+grep -Fq 'BEGIN-SUPERVISOR-SIGNAL' "$work/supervisor-signal.out"
+if ! grep -Fq 'latched supervisor reaped command and watchdog (status 143)' \
+    "$evidence/fixtures-ci.log"; then
+    printf '%s\n' 'bounded supervisor-signal log did not retain the final supervisor receipt:' >&2
+    cat "$evidence/fixtures-ci.log" >&2
+    exit 1
+fi
+assert_bounded_inventory
+
+set +e
+CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS=1 \
+    run_wrapper freeze-supervisor 10 >"$work/frozen-supervisor.out" 2>&1
+frozen_status=$?
+set -e
+frozen_supervisor_pid=$(cat "$outer_state/supervisor-pid")
+frozen_unit=$(cat "$outer_state/unit")
+test "$frozen_status" -eq 124
+if process_is_live "$frozen_supervisor_pid"; then
+    printf 'autonomously bounded fixture supervisor remained live: %s\n' \
+        "$frozen_supervisor_pid" >&2
+    exit 1
+fi
+grep -Fqx "$frozen_unit" "$outer_state/stops"
+test ! -e "$evidence/fixtures-ci-proof.json"
+grep -Fq 'status channel exceeded its 1-second bound' \
+    "$work/frozen-supervisor.out"
+assert_bounded_inventory
+
+set +e
+CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP=1 \
+    run_wrapper success 10 >"$work/post-reap-signal.out" 2>&1
+status=$?
+set -e
+test "$status" -eq 143
+test ! -e "$evidence/fixtures-ci-proof.json"
+test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
+assert_bounded_inventory
+
+set +e
 run_wrapper double-signal 10 >"$work/double-signal.out" 2>&1
 status=$?
 set -e
 test "$status" -eq 143
 test ! -e "$evidence/fixtures-ci-proof.json"
 test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
+test "$(cat "$outer_state/double-signal-count")" -ge 2
 grep -Fq 'BEGIN-DOUBLE-SIGNAL' "$evidence/fixtures-ci.log"
 assert_bounded_inventory
 
@@ -701,7 +923,9 @@ if process_is_live "$late_child_pid"; then
         "$late_child_pid" >&2
     exit 1
 fi
-grep -Fq 'BEGIN-SIGNAL-LATE-PROOF' "$evidence/fixtures-ci.log"
+grep -Fq 'BEGIN-SIGNAL-LATE-PROOF' "$work/signal-late-proof.out"
+# The public log deliberately retains only its final byte window; later cleanup
+# receipts may evict this early marker. Other cases prove captured-log content.
 assert_bounded_inventory
 
 set +e
@@ -760,5 +984,12 @@ status=$?
 set -e
 test "$status" -eq 2
 grep -Fq 'must be between 1 and 1048576' "$work/oversized.out"
+
+# Individually valid maxima must compose into the default status-channel bound
+# rather than rejecting a production configuration at its documented edge.
+CAST_FIXTURE_CI_KILL_AFTER_SECONDS=300 \
+    run_wrapper success 21600 >"$work/maximum-bounds.out" 2>&1
+jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+assert_bounded_inventory
 
 printf '%s\n' 'bounded fixture CI evidence tests passed'

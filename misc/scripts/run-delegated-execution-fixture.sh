@@ -18,14 +18,62 @@ case "$fixture" in
 esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+latched_runner="$root/misc/scripts/run-latched-command.sh"
+owned_unit_stopper="$root/misc/scripts/stop-owned-fixture-unit.sh"
 tmpdir=${TMPDIR-}
 package_store=${CAST_BOOTSTRAP_PACKAGE_STORE:-$root/target/bootstrap-fixtures/packages}
 require_execution=${CAST_REQUIRE_EXECUTION-}
 cargo_command=${CARGO:-cargo}
 evidence_dir=${CAST_FIXTURE_EVIDENCE_DIR:-$root/target/fixture-evidence}
+test_signal_after_reap=${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}
+client_kill_after_seconds=${CAST_DELEGATED_KILL_AFTER_SECONDS:-30}
+client_status_timeout_seconds=${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS:-}
 proof_path=
 proof_temporary=
 git_commit=
+
+if [ -L "$latched_runner" ] || [ ! -f "$latched_runner" ] || [ ! -x "$latched_runner" ]; then
+    printf 'latched command runner is unavailable or unsafe: %s\n' "$latched_runner" >&2
+    exit 1
+fi
+if [ -L "$owned_unit_stopper" ] || [ ! -f "$owned_unit_stopper" ] \
+    || [ ! -x "$owned_unit_stopper" ]; then
+    printf 'owned fixture unit stopper is unavailable or unsafe: %s\n' \
+        "$owned_unit_stopper" >&2
+    exit 1
+fi
+case "$test_signal_after_reap" in
+    ''|1) ;;
+    *) printf 'CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP must be empty or 1\n' >&2; exit 2 ;;
+esac
+case "$client_kill_after_seconds" in
+    ''|*[!0-9]*) printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be decimal\n' >&2; exit 2 ;;
+esac
+case "$client_kill_after_seconds" in
+    0|0*|????*)
+        printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
+        exit 2
+        ;;
+esac
+if [ "$client_kill_after_seconds" -lt 1 ] || [ "$client_kill_after_seconds" -gt 300 ]; then
+    printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
+    exit 2
+fi
+if [ -z "$client_status_timeout_seconds" ]; then
+    client_status_timeout_seconds=$((7290 + client_kill_after_seconds + 5))
+fi
+case "$client_status_timeout_seconds" in
+    ''|*[!0-9]*) printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be decimal\n' >&2; exit 2 ;;
+    0|0*|?????*)
+        printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be between 1 and 8000\n' >&2
+        exit 2
+        ;;
+esac
+if [ "$client_status_timeout_seconds" -lt 1 ] \
+    || [ "$client_status_timeout_seconds" -gt 8000 ]; then
+    printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be between 1 and 8000\n' >&2
+    exit 2
+fi
 
 case "$require_execution" in
     0|1) ;;
@@ -125,7 +173,15 @@ command -v systemctl >/dev/null 2>&1 || {
     printf 'systemctl is required to own and stop the delegated execution fixture\n' >&2
     exit 1
 }
-if ! systemctl --user show-environment >/dev/null 2>&1; then
+command -v setsid >/dev/null 2>&1 || {
+    printf 'setsid is required to pin delegated client process-group ownership\n' >&2
+    exit 1
+}
+command -v timeout >/dev/null 2>&1 || {
+    printf 'timeout is required to bound the delegated systemd client\n' >&2
+    exit 1
+}
+if ! timeout --kill-after=1s 10s systemctl --user show-environment >/dev/null 2>&1; then
     if [ "$require_execution" = 0 ]; then
         printf '%s\n' \
             'SKIP delegated execution fixture: no reachable systemd user manager; this is not execution success' >&2
@@ -147,22 +203,66 @@ esac
 unit="cast-delegated-fixture-$(id -u)-$$-$invocation_token.service"
 unit_marker="CAST_DELEGATED_FIXTURE_TOKEN=$invocation_token"
 systemd_run_pid=
+systemd_launch_pid=
+client_release_open=0
+client_directory=
+client_ready=
+client_acknowledgement=
+client_channels_ready=
+client_status_fifo=
+client_release_fifo=
+unit_cleanup_failed=0
 
 stop_owned_unit() {
-    environment=$(systemctl --user show "$unit" --property=Environment --value 2>/dev/null) || return 0
-    test -n "$environment" || return 0
-    case " $environment " in
-        *" $unit_marker "*) ;;
-        *)
-            printf 'refusing to stop delegated unit without this invocation marker: %s\n' "$unit" >&2
-            return 0
-            ;;
-    esac
+    "$owned_unit_stopper" "$unit" "$unit_marker" "$client_kill_after_seconds"
+}
 
-    if ! systemctl --user stop "$unit" >/dev/null 2>&1; then
-        printf 'normal stop failed for owned delegated unit %s; forcing its control group down\n' "$unit" >&2
-        systemctl --user kill --kill-whom=all --signal=SIGKILL "$unit" >/dev/null 2>&1 || :
-        systemctl --user stop "$unit" >/dev/null 2>&1 || :
+wait_client_group_exit() {
+    client_pid=$1
+    timeout --kill-after=1s "${client_kill_after_seconds}s" sh -c '
+        target_group=$1
+        while :; do
+            live_member=0
+            for stat_file in /proc/[0-9]*/stat; do
+                IFS= read -r process_stat <"$stat_file" 2>/dev/null || continue
+                process_tail=${process_stat##*) }
+                set -- $process_tail
+                process_state=${1-}
+                process_group=${3-}
+                case "$process_state" in
+                    Z|X|"") ;;
+                    *)
+                        if [ "$process_group" = "$target_group" ]; then
+                            live_member=1
+                            break
+                        fi
+                        ;;
+                esac
+            done
+            [ "$live_member" -eq 1 ] || exit 0
+            sleep 0.05
+        done
+    ' delegated-client-group-wait "$client_pid"
+}
+
+stop_client_group() {
+    client_pid=$1
+    if kill -0 "$client_pid" >/dev/null 2>&1 \
+        || kill -0 "-$client_pid" >/dev/null 2>&1; then
+        kill -TERM "-$client_pid" >/dev/null 2>&1 \
+            || kill -TERM "$client_pid" >/dev/null 2>&1 \
+            || :
+        if ! wait_client_group_exit "$client_pid"; then
+            kill -KILL "-$client_pid" >/dev/null 2>&1 \
+                || kill -KILL "$client_pid" >/dev/null 2>&1 \
+                || :
+        fi
+    fi
+    if wait "$client_pid" 2>/dev/null; then
+        return 0
+    else
+        client_status=$?
+        return "$client_status"
     fi
 }
 
@@ -172,17 +272,31 @@ cleanup() {
     # tear it down between authenticating and stopping the transient unit.
     trap '' HUP INT TERM
     trap - EXIT
-    stop_owned_unit
+    set +e
+    stop_owned_unit || unit_cleanup_failed=1
     if [ -n "$systemd_run_pid" ]; then
-        kill -TERM "$systemd_run_pid" >/dev/null 2>&1 || :
-        wait "$systemd_run_pid" 2>/dev/null || :
+        stop_client_group "$systemd_run_pid"
+        systemd_run_pid=
+        if [ "$client_release_open" -eq 1 ]; then
+            exec 8>&-
+            client_release_open=0
+        fi
         # Catch the narrow race in which systemd accepted the transient unit
         # immediately after the first ownership query.
-        stop_owned_unit
+        stop_owned_unit || unit_cleanup_failed=1
+    elif [ "$client_release_open" -eq 1 ]; then
+        exec 8>&-
+        client_release_open=0
+    fi
+    if [ -n "$client_directory" ]; then
+        rm -rf "$client_directory"
     fi
     rm -f "$cargo_messages"
     if [ -n "$proof_temporary" ]; then
         rm -f "$proof_temporary"
+    fi
+    if [ "$unit_cleanup_failed" -eq 1 ] && [ "$status" -eq 0 ]; then
+        status=1
     fi
     if [ "$status" -ne 0 ] && [ -n "$proof_path" ]; then
         rm -f "$proof_path"
@@ -237,7 +351,8 @@ if [ ! -f "$executable" ] || [ -L "$executable" ] || [ ! -x "$executable" ]; the
 fi
 
 printf 'Running fixture selection %s as a single-task delegated systemd service...\n' "$fixture"
-if load_state=$(systemctl --user show "$unit" --property=LoadState --value 2>/dev/null); then
+if load_state=$(timeout --kill-after=1s 10s systemctl --user show \
+    "$unit" --property=LoadState --value 2>/dev/null); then
     if [ "$load_state" != not-found ]; then
         printf 'refusing pre-existing delegated unit name %s with load state %s\n' "$unit" "$load_state" >&2
         exit 1
@@ -246,6 +361,24 @@ else
     printf 'could not authenticate delegated unit-name availability: %s\n' "$unit" >&2
     exit 1
 fi
+client_directory=$(mktemp -d "$tmpdir/cast-delegated-client.XXXXXXXXXXXX")
+chmod 700 "$client_directory"
+if [ -L "$client_directory" ] || [ ! -d "$client_directory" ] \
+    || [ "$(stat -c '%u:%a' "$client_directory")" != "$(id -u):700" ]; then
+    printf 'delegated client staging must be a caller-owned mode-700 directory\n' >&2
+    exit 1
+fi
+client_status_fifo="$client_directory/status.fifo"
+client_ready="$client_directory/ready"
+client_acknowledgement="$client_directory/acknowledged"
+client_channels_ready="$client_directory/channels-ready"
+client_release_fifo="$client_directory/release.fifo"
+mkfifo -m 600 "$client_status_fifo"
+mkfifo -m 600 "$client_release_fifo"
+# Temporary Linux FIFO anchors make the supervisor's one-way endpoint opens
+# nonblocking. They are closed immediately after channel readiness is proven.
+exec 5<>"$client_status_fifo"
+exec 6<>"$client_release_fifo"
 # Do not enter cleanup in the unavoidably narrow interval between starting the
 # background client and assigning `$!`: defer a first signal until the child
 # PID has been captured. The ordinary exit traps are restored immediately
@@ -265,7 +398,14 @@ fi
 # cannot run repository cleanup if a signal lands before it execs systemd-run.
 # First terminal signals remain deferred until cleanup ownership is restored.
 trap - EXIT
-systemd-run \
+CAST_LATCHED_KILL_AFTER_SECONDS="$client_kill_after_seconds" setsid "$latched_runner" \
+    "$client_ready" "$client_acknowledgement" \
+    "$client_channels_ready" "$client_status_fifo" \
+    "$client_release_fifo" \
+    --parent-loss-cleanup "$owned_unit_stopper" \
+    "$unit" "$unit_marker" "$client_kill_after_seconds" -- \
+    timeout --foreground --kill-after="${client_kill_after_seconds}s" 7290s \
+    systemd-run \
     --user \
     --unit="$unit" \
     --wait \
@@ -288,23 +428,195 @@ systemd-run \
     --property=KillMode=control-group \
     --property=RuntimeMaxSec=2h \
     --property=TimeoutStartSec=30s \
-    --property=TimeoutStopSec=30s \
+    --property="TimeoutStopSec=${client_kill_after_seconds}s" \
     --property=SendSIGKILL=yes \
-    "$@" &
-systemd_run_pid=$!
+    "$@" 5>&- 6>&- &
+systemd_launch_pid=$!
 trap cleanup EXIT
+trap '[ -n "$launch_signal_status" ] || launch_signal_status=129' HUP
+trap '[ -n "$launch_signal_status" ] || launch_signal_status=130' INT
+trap '[ -n "$launch_signal_status" ] || launch_signal_status=143' TERM
+
+# Numeric cleanup remains disabled until the helper proves that `$!` is its
+# live session/process-group leader. It cannot launch systemd-run before the
+# acknowledgement and abandons an unacknowledged launch after ten seconds.
+ready_pid=
+ready_attempt=0
+while [ ! -f "$client_ready" ]; do
+    ready_attempt=$((ready_attempt + 1))
+    if [ "$ready_attempt" -gt 220 ]; then
+        break
+    fi
+    kill -0 "$systemd_launch_pid" >/dev/null 2>&1 || break
+    sleep 0.05
+done
+if [ -f "$client_ready" ] && [ ! -L "$client_ready" ] \
+    && [ "$(stat -c '%u:%a:%h' "$client_ready")" = "$(id -u):600:1" ]; then
+    IFS= read -r ready_pid <"$client_ready" || ready_pid=
+fi
+if [ "$ready_pid" != "$systemd_launch_pid" ]; then
+    trap '' HUP INT TERM
+    wait "$systemd_launch_pid" 2>/dev/null || :
+    systemd_launch_pid=
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if [ -n "$launch_signal_status" ]; then
+        exit "$launch_signal_status"
+    fi
+    printf 'latched delegated supervisor did not prove launch PID ownership\n' >&2
+    exit 1
+fi
+systemd_run_pid=$systemd_launch_pid
+systemd_launch_pid=
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 if [ -n "$launch_signal_status" ]; then
     exit "$launch_signal_status"
 fi
-if wait "$systemd_run_pid"; then
-    status=0
+acknowledgement_temporary="${client_acknowledgement}.tmp.$$"
+( umask 077; set -C; printf 'ready\n' >"$acknowledgement_temporary" ) || exit 1
+mv "$acknowledgement_temporary" "$client_acknowledgement" || exit 1
+channels_pid=
+channels_attempt=0
+while [ ! -f "$client_channels_ready" ]; do
+    channels_attempt=$((channels_attempt + 1))
+    if [ "$channels_attempt" -gt 220 ]; then
+        break
+    fi
+    kill -0 "$systemd_run_pid" >/dev/null 2>&1 || break
+    sleep 0.05
+done
+if [ -f "$client_channels_ready" ] && [ ! -L "$client_channels_ready" ] \
+    && [ "$(stat -c '%u:%a:%h' "$client_channels_ready")" = "$(id -u):600:1" ]; then
+    IFS= read -r channels_pid <"$client_channels_ready" || channels_pid=
+fi
+if [ "$channels_pid" != "$systemd_run_pid" ]; then
+    trap '' HUP INT TERM
+    stop_client_group "$systemd_run_pid"
+    systemd_run_pid=
+    exec 5>&-
+    exec 6>&-
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if [ -n "$launch_signal_status" ]; then
+        exit "$launch_signal_status"
+    fi
+    printf 'latched delegated supervisor did not establish private channels\n' >&2
+    exit 1
+fi
+exec 7<"$client_status_fifo"
+exec 8>"$client_release_fifo"
+client_release_open=1
+exec 5>&-
+exec 6>&-
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ -n "$launch_signal_status" ]; then
+    exit "$launch_signal_status"
+fi
+
+# Kill-capable traps remain active while systemd-run is executing; the
+# acknowledged supervisor pins the PID/PGID until the explicit release.
+status_received=0
+status_read_status=0
+if status=$(
+    # Command substitution itself forks a shell before launching `timeout`.
+    # Close release there too: killing the parent must not leave this orphaned
+    # substitution holding the monitor's only liveness channel open.
+    exec 8>&-
+    timeout --foreground \
+        --kill-after="${client_kill_after_seconds}s" \
+        "${client_status_timeout_seconds}s" sh -c '
+            exec 8>&-
+            IFS= read -r status <&7 || exit 1
+            printf "%s\n" "$status"
+        ' delegated-status-reader 8>&-
+); then
+    status_received=1
+    case "$status" in
+        ''|*[!0-9]*) status=1 ;;
+        *) [ "$status" -le 255 ] || status=1 ;;
+    esac
 else
-    status=$?
+    status_read_status=$?
+    status=1
+    if [ "$status_read_status" -eq 124 ] || [ "$status_read_status" -eq 137 ]; then
+        printf 'latched delegated status channel exceeded its %s-second bound\n' \
+            "$client_status_timeout_seconds" >&2
+    fi
+fi
+exec 7<&-
+launch_signal_status=
+trap '[ -n "$launch_signal_status" ] || launch_signal_status=129' HUP
+trap '[ -n "$launch_signal_status" ] || launch_signal_status=130' INT
+trap '[ -n "$launch_signal_status" ] || launch_signal_status=143' TERM
+
+# The supervisor remains the live group leader until this release. Signals are
+# record-only through reap and numeric-ownership clearing, so cleanup can never
+# target a PID which the kernel has already made reusable.
+if [ "$status_received" -eq 1 ]; then
+    trap '' PIPE
+    if ! printf 'release\n' >&8; then
+        status=1
+    fi
+    trap - PIPE
+    exec 8>&-
+    client_release_open=0
+    if wait "$systemd_run_pid"; then
+        latched_status=0
+    else
+        latched_status=$?
+    fi
+else
+    # Keep release open so the monitor pins the PGID while status-EOF cleanup
+    # stops the authenticated unit and every remaining client-group member.
+    stop_owned_unit || unit_cleanup_failed=1
+    if stop_client_group "$systemd_run_pid"; then
+        latched_status=0
+    else
+        latched_status=$?
+    fi
+    systemd_run_pid=
+    exec 8>&-
+    client_release_open=0
+fi
+if [ -n "$launch_signal_status" ] && [ -n "$systemd_run_pid" ]; then
+    trap '' HUP INT TERM
+    if wait "$systemd_run_pid"; then
+        latched_status=0
+    else
+        latched_status=$?
+    fi
+    trap '[ -n "$launch_signal_status" ] || launch_signal_status=129' HUP
+    trap '[ -n "$launch_signal_status" ] || launch_signal_status=130' INT
+    trap '[ -n "$launch_signal_status" ] || launch_signal_status=143' TERM
+fi
+if [ "$test_signal_after_reap" = 1 ]; then
+    kill -TERM "$$"
 fi
 systemd_run_pid=
+if [ "$status_received" -eq 0 ]; then
+    if [ "$status_read_status" -eq 124 ] || [ "$status_read_status" -eq 137 ]; then
+        status=124
+    else
+        status=$latched_status
+        [ "$status" -ne 0 ] || status=1
+    fi
+elif [ "$latched_status" -ne "$status" ]; then
+    printf 'latched delegated client status changed from %s to %s while reaping\n' \
+        "$status" "$latched_status" >&2
+    status=1
+fi
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ -n "$launch_signal_status" ]; then
+    exit "$launch_signal_status"
+fi
 if [ "$status" -ne 0 ]; then
     exit "$status"
 fi
