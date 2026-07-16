@@ -149,10 +149,10 @@ impl PreparedTransactionTriggerCoordinator {
                 });
             }
         };
-        if let Err(source) = coordinator.seal_transaction_candidate() {
+        if let Err(source) = coordinator.seal_prepared_candidate() {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
-        if let Err(source) = coordinator.require_transaction_metadata_sandwich(candidate, &metadata) {
+        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata) {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
 
@@ -174,10 +174,10 @@ impl PreparedTransactionTriggerCoordinator {
             return Err(StatefulTransactionTriggerFailure::Effect { transition_id, source });
         }
 
-        if let Err(source) = coordinator.seal_transaction_candidate() {
+        if let Err(source) = coordinator.seal_prepared_candidate() {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
-        if let Err(source) = coordinator.require_transaction_metadata_sandwich(candidate, &metadata) {
+        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata) {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
 
@@ -215,7 +215,7 @@ impl StatefulTransitionCoordinator {
     /// Make the owned metadata proof the final observation in a full evidence
     /// sandwich. Repeating public-name evidence after the first proof catches
     /// substitution performed while proof revalidation traverses metadata.
-    fn require_transaction_metadata_sandwich(
+    pub(super) fn require_prepared_metadata_sandwich(
         &self,
         candidate: state::Id,
         metadata: &CandidateMetadataProof,
@@ -234,12 +234,12 @@ impl StatefulTransitionCoordinator {
             .map_err(Into::into)
     }
 
-    fn seal_transaction_candidate(&self) -> Result<(), StatefulTransitionCoordinatorError> {
+    pub(super) fn seal_prepared_candidate(&self) -> Result<(), StatefulTransitionCoordinatorError> {
         seal_existing_marked_candidate(
             self.identity.candidate.store.retained_directory(),
             self.identity.candidate.store.display_path(),
             CandidateInventoryLimits::default(),
         )
-        .map_err(StatefulTransitionCoordinatorError::TransactionCandidateDurability)
+        .map_err(StatefulTransitionCoordinatorError::PreparedCandidateDurability)
     }
 }

@@ -43,8 +43,8 @@ pub(crate) struct PreparedTransactionTriggerCoordinator {
 /// no method capable of running stateful transaction triggers.
 #[derive(Debug)]
 pub(crate) struct PreparedArchivedTransitionCoordinator {
-    coordinator: StatefulTransitionCoordinator,
-    metadata: CandidateMetadataProof,
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
 }
 
 /// Proof-bearing authority after transaction triggers are durably complete.

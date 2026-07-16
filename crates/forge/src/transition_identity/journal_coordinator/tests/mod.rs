@@ -269,3 +269,4 @@ include!("operation_prefixes.rs");
 include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
 include!("metadata_proof.rs");
+include!("usr_exchange_intent.rs");

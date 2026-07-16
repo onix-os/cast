@@ -106,8 +106,8 @@ pub(crate) enum StatefulTransitionCoordinatorError {
         expected_transition: Option<TransitionId>,
         actual: Option<db::state::InFlightTransition>,
     },
-    #[error("durably seal the exact existing marked candidate around transaction triggers")]
-    TransactionCandidateDurability(#[source] CandidateInventoryError),
+    #[error("durably seal the exact existing marked candidate before a forward journal boundary")]
+    PreparedCandidateDurability(#[source] CandidateInventoryError),
     #[error("publish the exact absent candidate state ID under CandidatePrepareStarted authority")]
     StateIdPublication(#[from] super::super::state_tree_metadata::StateIdPublicationFailure),
 }

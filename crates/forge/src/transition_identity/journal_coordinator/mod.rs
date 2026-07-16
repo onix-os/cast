@@ -1,7 +1,8 @@
 //! Durable prefix shared by every stateful `/usr` transition.
 //!
 //! This module owns the shared contract through `CandidatePrepared` and the
-//! stateful transaction-trigger boundary for `NewState` and `ActiveReblit`.
+//! stateful transaction-trigger boundary for `NewState` and `ActiveReblit`,
+//! then records the common intent-only `/usr` exchange boundary.
 //! It is not wired into live activation until startup can reconcile every
 //! record it may publish. Consuming transitions deliberately make an uncertain
 //! journal write fail-stop: an error drops the coordinator and its lock rather
@@ -17,6 +18,7 @@ mod candidate_preparation;
 mod error;
 mod request;
 mod transaction_triggers;
+mod usr_exchange_intent;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +32,10 @@ pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[cfg(test)]
 use transaction_triggers::StatefulTransactionTriggerFailure;
+#[allow(unused_imports)] // contract-only typestate until the exchange effect exists
+pub(crate) use usr_exchange_intent::UsrExchangeIntentCoordinator;
+#[cfg(test)]
+use usr_exchange_intent::UsrExchangeIntentFailure;
 
 use crate::{
     db,

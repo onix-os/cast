@@ -363,9 +363,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   boot result.
 
   As of 2026-07-16, one intentionally unwired coordinator contract owns the
-  durable prefix through `CandidatePrepared` for all three operations and the
+  durable prefix through `CandidatePrepared` for all three operations, the
   internal transaction-trigger sequence through `TransactionTriggersComplete`
-  for new states and active reblits. A typed request makes the legal state
+  for new states and active reblits, and the common intent-only boundary
+  through `UsrExchangeIntent`. A typed request makes the legal state
   relationships explicit: a new state has no
   candidate ID and classifies its previous tree as an active state,
   synthesized empty tree, or unmanaged tree; archived activation has distinct
@@ -394,9 +395,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   `Preparing(1)` -> `CandidatePrepareStarted(2)` -> `CandidatePrepared(3)`.
   New states then reach `TransactionTriggersStarted(6)` and
   `TransactionTriggersComplete(7)`; active reblits reach the same phases at
-  generations 4 and 5. Archived activation has no transaction-trigger phase
+  generations 4 and 5. They then reach `UsrExchangeIntent` at generations 8
+  and 6 respectively. Archived activation has no transaction-trigger phase
   and remains at `CandidatePrepared(3)` when that internal runner is offered;
-  its sole legal successor is the still-unimplemented `UsrExchangeIntent(4)`.
+  its separate proof-bearing typestate advances directly to
+  `UsrExchangeIntent(4)`.
   Every transition uses the journal's conditional create/advance operations.
   A wrong operation or phase fails before storage, and an exact-record compare
   prevents a stale generation from overwriting newer evidence. A persistence
@@ -496,7 +499,40 @@ and instant rollback mechanism; it hardens their failure semantics.
   are released while the error remains alive. The post-effect inventory still
   cannot substitute for the semantic proof because it intentionally baselines
   permitted payload changes. No live client path is changed or silently
-  bypassed by this still-unwired slice. Archived activation now dispatches to a
+  bypassed by this still-unwired slice.
+
+  The common `/usr` exchange-intent boundary is deliberately effect-free.
+  `NewState` and `ActiveReblit` can reach it only from their unforgeable
+  `TransactionTriggersComplete` wrapper; archived activation reaches it only
+  from its distinct `CandidatePrepared` wrapper. Both paths reseal the exact
+  marked candidate, then repeat canonical journal, runtime epoch and tree,
+  exact public-name, candidate state-ID, operation-specific database, global
+  audit, and metadata-proof evidence immediately before a conditional journal
+  advance. The exact sequences are therefore
+  `TransactionTriggersComplete(7)` -> `UsrExchangeIntent(8)` for new states,
+  `TransactionTriggersComplete(5)` -> `UsrExchangeIntent(6)` for active
+  reblits, and `CandidatePrepared(3)` -> `UsrExchangeIntent(4)` for archived
+  activation. A preflight failure leaves the exact predecessor canonical. A
+  persistence failure may leave only that predecessor or `UsrExchangeIntent`,
+  returns no coordinator, proof, descriptor, database, or journal authority,
+  and requires reopening the canonical record before any continuation.
+  Successful intent publication retains the exact tree identity and metadata
+  proof but performs no rename, exchange, root-link publication, or client
+  callback; the candidate remains staged and the previous tree remains live.
+
+  This intent typestate is journal authority only, not exchange-syscall
+  authority. The legacy exchange path is deliberately unusable while a
+  journal exists and must not have its journal-absence checks weakened. A
+  later coordinator-owned effect must additionally retain and revalidate the
+  installation root and staging parents, active-state lease, merged-/usr root
+  ABI preflight, and active-reblit snapshot where applicable; reconcile the
+  exact NotApplied, Applied, or Ambiguous layout after the single syscall; and
+  record `UsrExchanged` only after the applied layout and both parent
+  durability barriers succeed. Until that effect and startup rollback
+  executor exist, publishing `UsrExchangeIntent` from any live client remains
+  forbidden by the focused static gate.
+
+  Archived activation now dispatches to a
   separate read-only verifier because its candidate already contains canonical
   metadata. That verifier clones the candidate first, opens existing `usr/lib`
   without creating it, accepts independently supplied expected snapshot and
@@ -510,7 +546,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   manifest/digest. It must gain one of those sources before this verifier can be
   wired; using the archived output bytes themselves remains forbidden.
 
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 36
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 42
   exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
   runtime evidence, fixed quarantine naming, non-reinterpretable three-way
@@ -518,7 +554,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   transaction-trigger ordering, predecessor-or-successor persistence faults,
   substitution rejection, proof-bearing operation dispatch, exact
   `os-info.json` policy input, pre-intent and post-effect metadata replacement,
-  and fail-stop lock release. Its static gates prove that metadata authority is
+  fail-stop lock release, exact `/usr` exchange-intent generations for all
+  three operations, prepared-candidate resealing, complete pre-intent evidence,
+  predecessor-or-intent persistence faults, and the absence of exchange or
+  root-link effects. Its static gates prove that metadata authority is
   mandatory rather than optional, the runner accepts no proof parameter,
   archived activation cannot acquire trigger authority, no coordinator method
   has a callsite outside the contract module, and the callback authority and
