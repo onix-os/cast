@@ -1,6 +1,6 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
 	forge-mutable-startup-namespace-test forge-candidate-pre-journal-durability-test \
-	forge-transition-journal-coordinator-test \
+	forge-transition-journal-coordinator-test forge-transition-recovery-classifier-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
@@ -144,6 +144,16 @@ forge-transition-journal-coordinator-test:
 	fi; \
 	timeout 900s $(CARGO) test -p forge --lib \
 		"transition_identity::journal_coordinator::tests::journal_coordinator_" \
+		-- --test-threads=1
+
+forge-transition-recovery-classifier-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s test -n "$$listed"; \
+	count="$$( timeout 10s grep -c '^transition_journal::recovery::tests::recovery_classifier_.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 3; \
+	timeout 300s $(CARGO) test -p forge --lib \
+		"transition_journal::recovery::tests::recovery_classifier_" \
 		-- --test-threads=1
 
 forge-linux-fs-test:

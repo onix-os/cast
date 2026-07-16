@@ -29,6 +29,7 @@ use crate::state::TransitionId;
 
 mod codec;
 mod model;
+mod recovery;
 mod runtime_evidence;
 mod store;
 mod successors;
@@ -41,6 +42,8 @@ pub(crate) use read_only::{CleanReadOnlyJournal, ReadOnlyJournalError};
 
 pub(crate) use codec::{CodecError, MAX_CANONICAL_RECORD_BYTES, decode, encode};
 pub(crate) use model::*;
+#[allow(unused_imports)] // consumed by startup reconciliation in the next saved increment
+pub(crate) use recovery::RecoveryDisposition;
 pub(crate) use runtime_evidence::RuntimeEvidenceError;
 pub(crate) use store::TransitionJournalStore;
 #[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
