@@ -31,7 +31,7 @@ use crate::transition_identity::{
 /// activation deliberately has no transaction-trigger runner.
 #[derive(Debug)]
 pub(crate) enum PreparedStatefulTransitionCoordinator {
-    NewStateTriggers(PreparedTransactionTriggerCoordinator),
+    NewStateIsolation(PreparedTransactionIsolationCoordinator),
     ActiveReblitReservation(PreparedActiveReblitReservationCoordinator),
     Archived(PreparedArchivedTransitionCoordinator),
 }
@@ -45,7 +45,19 @@ pub(crate) struct PreparedActiveReblitReservationCoordinator {
     pub(super) provenance: db::state::MetadataProvenance,
 }
 
-/// Proof-bearing `NewState` or `ActiveReblit` authority.
+/// Proof-bearing `NewState` or reserved `ActiveReblit` authority which still
+/// must publish and retain the exact transaction isolation ABI. There is no
+/// trigger runner on this typestate.
+#[derive(Debug)]
+pub(crate) struct PreparedTransactionIsolationCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) operation: TransactionTriggerOperationReadiness,
+}
+
+/// Proof-bearing `NewState` or `ActiveReblit` authority whose exact isolation
+/// ABI is retained and mandatory.
 #[derive(Debug)]
 pub(crate) struct PreparedTransactionTriggerCoordinator {
     pub(super) coordinator: StatefulTransitionCoordinator,
@@ -54,12 +66,20 @@ pub(crate) struct PreparedTransactionTriggerCoordinator {
     pub(super) readiness: TransactionTriggerReadiness,
 }
 
-/// Mandatory operation-specific proof retained through every post-trigger
-/// forward boundary. There is intentionally no archived variant.
+/// Mandatory operation-specific proof established before isolation-ABI
+/// publication. There is intentionally no archived variant.
 #[derive(Debug)]
-pub(super) enum TransactionTriggerReadiness {
+pub(super) enum TransactionTriggerOperationReadiness {
     NewState,
     ActiveReblit(super::super::staging_wrapper_rotation::RetainedActiveReblitReservation),
+}
+
+/// Aggregate trigger-readiness proof retained through every post-trigger
+/// forward boundary. Neither component is optional or caller-constructible.
+#[derive(Debug)]
+pub(super) struct TransactionTriggerReadiness {
+    pub(super) operation: TransactionTriggerOperationReadiness,
+    pub(super) isolation: super::transaction_isolation::RetainedTransactionIsolationAbi,
 }
 
 /// Proof-bearing archived-activation authority. This type intentionally has
@@ -182,12 +202,12 @@ impl StatefulTransitionCoordinator {
         self.advance(None)?;
 
         match self.record.operation {
-            Operation::NewState => Ok(PreparedStatefulTransitionCoordinator::NewStateTriggers(
-                PreparedTransactionTriggerCoordinator {
+            Operation::NewState => Ok(PreparedStatefulTransitionCoordinator::NewStateIsolation(
+                PreparedTransactionIsolationCoordinator {
                     coordinator: self,
                     metadata,
                     provenance,
-                    readiness: TransactionTriggerReadiness::NewState,
+                    operation: TransactionTriggerOperationReadiness::NewState,
                 },
             )),
             Operation::ActiveReblit => Ok(PreparedStatefulTransitionCoordinator::ActiveReblitReservation(
@@ -330,7 +350,7 @@ impl PreparedStatefulTransitionCoordinator {
     #[cfg(test)]
     pub(crate) fn record(&self) -> &TransitionRecord {
         match self {
-            Self::NewStateTriggers(prepared) => prepared.record(),
+            Self::NewStateIsolation(prepared) => prepared.record(),
             Self::ActiveReblitReservation(prepared) => prepared.record(),
             Self::Archived(prepared) => prepared.record(),
         }
@@ -338,6 +358,13 @@ impl PreparedStatefulTransitionCoordinator {
 }
 
 impl PreparedTransactionTriggerCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        &self.coordinator.record
+    }
+}
+
+impl PreparedTransactionIsolationCoordinator {
     #[cfg(test)]
     pub(crate) fn record(&self) -> &TransitionRecord {
         &self.coordinator.record

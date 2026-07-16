@@ -26,14 +26,16 @@ fn coordinator_at_candidate_prepared(
         expected_generation,
     );
     let coordinator = match coordinator {
-        PreparedStatefulTransitionCoordinator::NewStateTriggers(coordinator) => coordinator,
+        PreparedStatefulTransitionCoordinator::NewStateIsolation(coordinator) => coordinator,
         PreparedStatefulTransitionCoordinator::ActiveReblitReservation(coordinator) => coordinator
             .reserve_for_transaction_triggers(&fixture.installation)
             .unwrap(),
         PreparedStatefulTransitionCoordinator::Archived(_) => {
             panic!("archived activation cannot yield transaction-trigger authority")
         }
-    };
+    }
+    .prepare_for_transaction_triggers(&fixture.installation)
+    .unwrap();
     (fixture, coordinator)
 }
 

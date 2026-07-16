@@ -102,7 +102,7 @@ fn journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exac
             assert_eq!(candidate_metadata_evidence(&fixture), existing_before);
         }
         match (candidate_kind, prepared) {
-            (CandidateKind::NewState, PreparedStatefulTransitionCoordinator::NewStateTriggers(_)) => {}
+            (CandidateKind::NewState, PreparedStatefulTransitionCoordinator::NewStateIsolation(_)) => {}
             (
                 CandidateKind::ActiveReblit,
                 PreparedStatefulTransitionCoordinator::ActiveReblitReservation(_),

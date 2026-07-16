@@ -184,9 +184,18 @@ impl WrapperFingerprint {
 
 #[derive(Debug)]
 #[allow(dead_code)]
+pub(super) struct RetainedIsolationScaffold {
+    pub(super) directory: File,
+    pub(super) path: PathBuf,
+    pub(super) witness: InodeWitness,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
 pub(super) struct RetainedWrapper {
     pub(super) directory: File,
     pub(super) fingerprint: WrapperFingerprint,
+    pub(super) isolation_scaffolds: Vec<RetainedIsolationScaffold>,
     pub(super) usr: Option<RetainedUsr>,
     pub(super) slot: Option<RetainedSlotLink>,
 }
@@ -405,6 +414,18 @@ fn revalidate_wrapper_set(
         }
         for (name, witness) in &wrapper.fingerprint.entries {
             revalidate_named_entry(&wrapper.directory, name, *witness, &path.join(os(name)), budget)?;
+        }
+        for scaffold in &wrapper.isolation_scaffolds {
+            require_witness(
+                controlled_directory_witness(&scaffold.directory, &scaffold.path)?,
+                scaffold.witness,
+                &scaffold.path,
+            )?;
+            if !directory_names(&scaffold.directory, &scaffold.path, MAX_WRAPPER_ENTRIES, budget)?.is_empty() {
+                return Err(CaptureError::DirectoryContentsChanged {
+                    path: scaffold.path.clone(),
+                });
+            }
         }
         if let Some(usr) = &wrapper.usr {
             revalidate_usr(usr, budget)?;

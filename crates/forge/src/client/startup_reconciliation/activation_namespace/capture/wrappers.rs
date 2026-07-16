@@ -17,16 +17,39 @@ pub(super) fn inspect_roots(
                 let isolation_path = path.join(os(&name));
                 let witness = controlled_directory_witness(&directory, &isolation_path)?;
                 let mut entries = Vec::new();
+                let mut isolation_scaffolds = Vec::new();
                 for child in directory_names(&directory, &isolation_path, MAX_WRAPPER_ENTRIES, budget)? {
-                    if !ROOT_ABI_LINKS.iter().any(|(allowed, _)| *allowed == child) {
-                        return Err(CaptureError::UnexpectedIsolationEntry { name: child });
-                    }
                     let child_path = isolation_path.join(os(&child));
-                    let retained = open_optional_path(&directory, cstring(&child)?.as_c_str(), &child_path, budget)?
-                        .ok_or_else(|| CaptureError::InodeChanged {
-                            path: child_path.clone(),
-                        })?;
-                    entries.push((child, InodeWitness::read(&retained, &child_path)?));
+                    if ROOT_ABI_LINKS.iter().any(|(allowed, _)| *allowed == child) {
+                        let retained =
+                            open_optional_path(&directory, cstring(&child)?.as_c_str(), &child_path, budget)?
+                                .ok_or_else(|| CaptureError::InodeChanged {
+                                    path: child_path.clone(),
+                                })?;
+                        entries.push((child, InodeWitness::read(&retained, &child_path)?));
+                        continue;
+                    }
+                    if ISOLATION_SCAFFOLD_DIRECTORIES.contains(&child.as_slice()) {
+                        let retained = open_directory(&directory, cstring(&child)?.as_c_str(), &child_path, budget)?;
+                        let scaffold_witness = controlled_directory_witness(&retained, &child_path)?;
+                        if let Some(nested) = directory_names(&retained, &child_path, MAX_WRAPPER_ENTRIES, budget)?
+                            .into_iter()
+                            .next()
+                        {
+                            return Err(CaptureError::UnexpectedWrapperEntry {
+                                wrapper: child_path,
+                                name: nested,
+                            });
+                        }
+                        entries.push((child, scaffold_witness));
+                        isolation_scaffolds.push(RetainedIsolationScaffold {
+                            directory: retained,
+                            path: child_path,
+                            witness: scaffold_witness,
+                        });
+                        continue;
+                    }
+                    return Err(CaptureError::UnexpectedIsolationEntry { name: child });
                 }
                 wrappers.push(RetainedWrapper {
                     directory,
@@ -38,6 +61,7 @@ pub(super) fn inspect_roots(
                         usr: None,
                         slot: None,
                     },
+                    isolation_scaffolds,
                     usr: None,
                     slot: None,
                 });
@@ -135,6 +159,7 @@ fn inspect_wrapper(
     Ok(RetainedWrapper {
         directory,
         fingerprint,
+        isolation_scaffolds: Vec::new(),
         usr,
         slot,
     })

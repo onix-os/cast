@@ -53,6 +53,8 @@ fn journal_coordinator_active_reblit_parked_slot_substitution_before_started_run
     let record = prepared.record().clone();
     let coordinator = prepared
         .reserve_for_transaction_triggers(&fixture.installation)
+        .unwrap()
+        .prepare_for_transaction_triggers(&fixture.installation)
         .unwrap();
     let parked = active_reblit_parked_slot_path(&fixture, &record, 0);
     let displaced = parked.with_extension("retained-displaced");

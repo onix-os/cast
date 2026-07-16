@@ -1,11 +1,11 @@
 //! Proof-bearing, intentionally unwired transaction-trigger sequencing.
 //!
 //! Only the operation-specific `NewState`/`ActiveReblit` typestate reaches this
-//! runner. It owns the exact metadata proof created during candidate
-//! preparation and sandwiches that proof between complete public-name,
-//! journal, runtime, state-ID, and database evidence both before intent and
-//! after the effect. Archived activation has a different typestate and no path
-//! into this module.
+//! runner. It owns both the exact metadata proof created during candidate
+//! preparation and the descriptor-pinned isolation ABI, sandwiching those
+//! capabilities between complete public-name, journal, runtime, state-ID, and
+//! database evidence before intent, before the callback, and after the effect.
+//! Archived activation has a different typestate and no path into this module.
 
 use std::{error::Error as StdError, fs::File, path::Path};
 
@@ -62,6 +62,8 @@ pub(super) struct StatefulTransactionTriggerAuthority<'authority> {
     candidate_state: state::Id,
     candidate_usr: &'authority File,
     candidate_usr_path: &'authority Path,
+    installation: &'authority crate::Installation,
+    isolation_root: &'authority crate::client::RetainedRootAbi,
 }
 
 impl<'authority> StatefulTransactionTriggerAuthority<'authority> {
@@ -78,6 +80,18 @@ impl<'authority> StatefulTransactionTriggerAuthority<'authority> {
     /// trigger discovery or container binding.
     pub(super) fn retained_candidate_usr(&self) -> (&'authority File, &'authority Path) {
         (self.candidate_usr, self.candidate_usr_path)
+    }
+
+    /// Borrow the exact installation and descriptor-pinned isolation ABI which
+    /// authorized the durable trigger intent. Container construction must use
+    /// this retained proof rather than reopening the public isolation path.
+    pub(super) fn retained_isolation_root(
+        &self,
+    ) -> (
+        &'authority crate::Installation,
+        &'authority crate::client::RetainedRootAbi,
+    ) {
+        (self.installation, self.isolation_root)
     }
 }
 
@@ -199,11 +213,14 @@ impl PreparedTransactionTriggerCoordinator {
             return Err(StatefulTransactionTriggerFailure::PreEffectEvidence { transition_id, source });
         }
 
+        let (installation, isolation_root) = readiness.isolation_view();
         let authority = StatefulTransactionTriggerAuthority {
             transition_id: &coordinator.record.transition_id,
             candidate_state: candidate,
             candidate_usr: coordinator.identity.candidate.store.retained_directory(),
             candidate_usr_path: coordinator.identity.candidate.store.display_path(),
+            installation,
+            isolation_root,
         };
         if let Err(source) = effect(authority) {
             return Err(StatefulTransactionTriggerFailure::Effect { transition_id, source });

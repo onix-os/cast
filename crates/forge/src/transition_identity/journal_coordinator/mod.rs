@@ -18,6 +18,7 @@ mod active_reblit_reservation;
 mod candidate_preparation;
 mod error;
 mod request;
+mod transaction_isolation;
 mod transaction_triggers;
 mod usr_exchange_effect;
 mod usr_exchange_intent;
@@ -27,15 +28,17 @@ mod tests;
 
 #[cfg(test)]
 use active_reblit_reservation::ActiveReblitReservationFailure;
-use candidate_preparation::TransactionTriggerReadiness;
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
     PreparedActiveReblitReservationCoordinator, PreparedArchivedTransitionCoordinator,
-    PreparedStatefulTransitionCoordinator, PreparedTransactionTriggerCoordinator,
-    TransactionTriggersCompleteCoordinator,
+    PreparedStatefulTransitionCoordinator, PreparedTransactionIsolationCoordinator,
+    PreparedTransactionTriggerCoordinator, TransactionTriggersCompleteCoordinator,
 };
+use candidate_preparation::{TransactionTriggerOperationReadiness, TransactionTriggerReadiness};
 pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
+#[cfg(test)]
+use transaction_isolation::TransactionIsolationAbiFailure;
 #[cfg(test)]
 use transaction_triggers::StatefulTransactionTriggerFailure;
 #[cfg(test)]

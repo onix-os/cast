@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use thiserror::Error;
 
@@ -46,6 +46,10 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("revalidate the client-owned /usr exchange authority")]
     UsrExchangeAuthority(#[from] JournalUsrExchangeAuthorityError),
+    #[error("publish or revalidate the exact retained transaction isolation ABI")]
+    IsolationAbi(#[source] crate::client::Error),
+    #[error("transaction isolation directory `{}` contains unexpected entries: {entries:?}", path.display())]
+    UnexpectedIsolationEntries { path: PathBuf, entries: Vec<String> },
     #[error("{action} requires operation {expected:?}, found {actual:?}")]
     UnexpectedOperation {
         action: &'static str,

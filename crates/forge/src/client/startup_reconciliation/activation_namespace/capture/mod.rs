@@ -44,6 +44,7 @@ const ROOT_ABI_LINKS: [(&[u8], &[u8]); 5] = [
     (b"lib32", b"usr/lib32"),
     (b"lib64", b"usr/lib"),
 ];
+const ISOLATION_SCAFFOLD_DIRECTORIES: [&[u8]; 6] = [b"etc", b"usr", b"proc", b"tmp", b"sys", b"dev"];
 
 pub(super) fn capture_snapshot(
     installation: &Installation,

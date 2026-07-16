@@ -32,6 +32,7 @@ use super::{
     },
 };
 
+mod isolation_abi;
 mod slot_links;
 
 const ROOT_ABI: [(&str, &str); 5] = [

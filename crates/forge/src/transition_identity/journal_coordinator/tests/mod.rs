@@ -397,3 +397,4 @@ include!("usr_exchange_effect.rs");
 include!("metadata_provenance.rs");
 include!("active_reblit_reservation.rs");
 include!("active_reblit_readiness.rs");
+include!("transaction_isolation.rs");

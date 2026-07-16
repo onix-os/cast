@@ -3,7 +3,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 76; \
+	timeout 10s test "$$count" = 82; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -80,7 +80,13 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_tamper_after_started_stops_before_callback \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_tamper_during_effect_preserves_started \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_tamper_before_exchange_intent_preserves_trigger_complete \
-		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_reservation_survives_intent_and_exchange_direction_flip; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_reservation_survives_intent_and_exchange_direction_flip \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_foreign_entry_prevents_trigger_authority \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_missing_or_substituted_before_started_runs_no_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_substitution_after_started_blocks_callback \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_is_mandatory_for_both_trigger_operations \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_tamper_blocks_later_readiness_boundary \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_candidate_prepared_and_started_are_reopenable; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
@@ -88,6 +94,7 @@ forge-transition-journal-coordinator-test:
 	usr_exchange_effect="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_effect.rs"; \
 	usr_exchange_authority="crates/forge/src/client/journal_usr_exchange_authority.rs"; \
 	prepare_contract="crates/forge/src/transition_identity/journal_coordinator/candidate_preparation.rs"; \
+	isolation_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_isolation.rs"; \
 	coordinator_contract="crates/forge/src/transition_identity/journal_coordinator/mod.rs"; \
 	authority_contract="crates/forge/src/transition_identity/candidate_state_authority.rs"; \
 	tree_lifecycle="crates/forge/src/transition_identity/tree_lifecycle.rs"; \
@@ -130,10 +137,12 @@ forge-transition-journal-coordinator-test:
 		status="$$?"; timeout 10s test "$$status" = 1; \
 	fi; \
 	timeout 10s grep -Fqx "pub(super) struct StatefulTransactionTriggerAuthority<'authority> {" "$$trigger_contract"; \
+	timeout 10s grep -Fqx "    installation: &'authority crate::Installation," "$$trigger_contract"; \
+	timeout 10s grep -Fqx "    isolation_root: &'authority crate::client::RetainedRootAbi," "$$trigger_contract"; \
 	timeout 10s grep -Fqx 'pub(super) enum StatefulTransactionTriggerFailure<E>' "$$trigger_contract"; \
 	timeout 10s grep -Fqx 'pub(crate) enum PreparedStatefulTransitionCoordinator {' "$$prepare_contract"; \
 	for variant in \
-		'    NewStateTriggers(PreparedTransactionTriggerCoordinator),' \
+		'    NewStateIsolation(PreparedTransactionIsolationCoordinator),' \
 		'    ActiveReblitReservation(PreparedActiveReblitReservationCoordinator),' \
 		'    Archived(PreparedArchivedTransitionCoordinator),'; do \
 		timeout 10s grep -Fqx "$$variant" "$$prepare_contract"; \
@@ -144,18 +153,52 @@ forge-transition-journal-coordinator-test:
 	else \
 		status="$$?"; timeout 10s test "$$status" = 1; \
 	fi; \
+	timeout 10s grep -Fqx 'pub(crate) struct PreparedTransactionIsolationCoordinator {' "$$prepare_contract"; \
+	if timeout 10s grep -nF 'PreparedTransactionIsolationCoordinator' "$$trigger_contract"; then \
+		timeout 10s printf '%s\n' 'non-ready isolation authority acquired a trigger runner' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	timeout 10s grep -Fqx 'pub(crate) struct PreparedTransactionTriggerCoordinator {' "$$prepare_contract"; \
 	timeout 10s grep -Fqx 'pub(crate) struct PreparedArchivedTransitionCoordinator {' "$$prepare_contract"; \
-	timeout 10s awk '/PreparedTransactionTriggerCoordinator \{$$/ && $$0 !~ /(struct|impl) PreparedTransactionTriggerCoordinator/ { count++ } END { exit count == 2 ? 0 : 1 }' \
+	timeout 10s awk '/PreparedTransactionTriggerCoordinator \{$$/ && $$0 !~ /(struct|impl) PreparedTransactionTriggerCoordinator/ { count++ } END { exit count == 1 ? 0 : 1 }' \
 		crates/forge/src/transition_identity/journal_coordinator/*.rs; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'Ok(PreparedTransactionTriggerCoordinator {' "$$isolation_contract" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -RFl 'ActiveReblitReservationSeal { _private: () }' \
 		crates/forge/src/transition_identity/journal_coordinator --include='*.rs' )" = \
 		'crates/forge/src/transition_identity/journal_coordinator/active_reblit_reservation.rs'; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveReblitReservationSeal { _private: () }' \
 		crates/forge/src/transition_identity/journal_coordinator/active_reblit_reservation.rs )" = 3; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) metadata: CandidateMetadataProof,' "$$prepare_contract" )" = 4; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) provenance: db::state::MetadataProvenance,' "$$prepare_contract" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) metadata: CandidateMetadataProof,' "$$prepare_contract" )" = 5; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) provenance: db::state::MetadataProvenance,' "$$prepare_contract" )" = 5; \
+	timeout 10s grep -Fqx '    pub(super) operation: TransactionTriggerOperationReadiness,' "$$prepare_contract"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(super) readiness: TransactionTriggerReadiness,' "$$prepare_contract" )" = 2; \
+	timeout 10s grep -Fqx 'mod transaction_isolation;' "$$coordinator_contract"; \
+	timeout 10s grep -Fqx 'pub(super) struct RetainedTransactionIsolationAbi {' "$$isolation_contract"; \
+	for field in \
+		'    installation: Installation,' \
+		'    directory: RetainedDirectory,' \
+		'    root_abi: RetainedRootAbi,'; do \
+		timeout 10s grep -Fqx "$$field" "$$isolation_contract"; \
+	done; \
+	timeout 10s grep -Fqx '    pub(super) fn prepare_for_transaction_triggers(' "$$isolation_contract"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'create_root_links_retained(&installation.isolation_dir(), &directory.file)' "$$isolation_contract" )" = 1; \
+	timeout 10s grep -Fq 'const ISOLATION_MOUNT_TARGETS: [&std::ffi::CStr; 6]' "$$isolation_contract"; \
+	for target in 'c"etc"' 'c"usr"' 'c"proc"' 'c"tmp"' 'c"sys"' 'c"dev"'; do \
+		timeout 10s grep -Fq "$$target" "$$isolation_contract"; \
+	done; \
+	timeout 10s grep -Fqx 'fn require_no_unexpected_isolation_entries(' "$$isolation_contract"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'require_no_unexpected_isolation_entries(&directory)' "$$isolation_contract" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'require_no_unexpected_isolation_entries(&self.directory)' "$$isolation_contract" )" = 2; \
+	timeout 10s grep -Fq '.open_child(target, directory.path.join(target.to_string_lossy().as_ref()))' "$$isolation_contract"; \
+	timeout 10s grep -Fq '.require_exact_entries(&[])' "$$isolation_contract"; \
+	timeout 10s grep -Fq 'UnexpectedIsolationEntries { path: PathBuf, entries: Vec<String> }' crates/forge/src/transition_identity/journal_coordinator/error.rs; \
+	if timeout 10s grep -nE 'Option<(RetainedTransactionIsolationAbi|RetainedRootAbi|TransactionTriggerReadiness)>' \
+		"$$prepare_contract" "$$isolation_contract" "$$trigger_contract"; then \
+		timeout 10s printf '%s\n' 'transaction isolation readiness became optional' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	timeout 10s grep -Fqx '    pub(super) readiness: UsrExchangeReadiness,' "$$usr_exchange_contract"; \
 	timeout 10s grep -Fqx '    readiness: UsrExchangeReadiness,' "$$usr_exchange_effect"; \
 	timeout 10s grep -Fq 'UsrExchangeReadiness::TransactionTriggers(readiness)' "$$usr_exchange_contract"; \
@@ -249,7 +292,7 @@ forge-transition-journal-coordinator-test:
 		status="$$?"; timeout 10s test "$$status" = 1; \
 	fi; \
 	if callsites="$$( timeout 10s grep -RInE \
-		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare|reserve_for_transaction_triggers|run_transaction_triggers|begin_usr_exchange_intent|execute_usr_exchange' \
+		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare|reserve_for_transaction_triggers|prepare_for_transaction_triggers|run_transaction_triggers|begin_usr_exchange_intent|execute_usr_exchange' \
 		--include='*.rs' --exclude-dir=journal_coordinator crates/forge/src )"; then \
 		timeout 10s printf '%s\n' 'journal coordinator has a live callsite outside its contract module:' "$$callsites" >&2; \
 		exit 1; \

@@ -46,7 +46,10 @@ fn coordinator_from_exchange_fixture(
         PreparedStatefulTransitionCoordinator::Archived(ready) => {
             TestUsrExchangeReady::Archived(ready)
         }
-        PreparedStatefulTransitionCoordinator::NewStateTriggers(ready) => {
+        PreparedStatefulTransitionCoordinator::NewStateIsolation(ready) => {
+            let ready = ready
+                .prepare_for_transaction_triggers(&fixture.installation)
+                .unwrap();
             let complete = ready
                 .run_transaction_triggers(|_| Ok::<(), TriggerEffectError>(()))
                 .unwrap();
@@ -55,6 +58,8 @@ fn coordinator_from_exchange_fixture(
         PreparedStatefulTransitionCoordinator::ActiveReblitReservation(ready) => {
             let ready = ready
                 .reserve_for_transaction_triggers(&fixture.installation)
+                .unwrap()
+                .prepare_for_transaction_triggers(&fixture.installation)
                 .unwrap();
             let complete = ready
                 .run_transaction_triggers(|_| Ok::<(), TriggerEffectError>(()))

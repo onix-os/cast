@@ -11,8 +11,8 @@ use crate::{Installation, state::TransitionId, transition_journal::Phase};
 
 use super::super::{Error as IdentityError, staging_wrapper_rotation::ActiveReblitReservationError};
 use super::{
-    ActiveReblitReservationSeal, PreparedActiveReblitReservationCoordinator, PreparedTransactionTriggerCoordinator,
-    StatefulTransitionCoordinatorError, TransactionTriggerReadiness,
+    ActiveReblitReservationSeal, PreparedActiveReblitReservationCoordinator, PreparedTransactionIsolationCoordinator,
+    StatefulTransitionCoordinatorError, TransactionTriggerOperationReadiness,
 };
 
 const RESERVE_ACTIVE_REBLIT: &str = "reserve ActiveReblit pre-trigger capacity";
@@ -42,12 +42,12 @@ pub(super) enum ActiveReblitReservationFailure {
 }
 
 impl PreparedActiveReblitReservationCoordinator {
-    /// Consume CandidatePrepared authority and return trigger-ready authority
-    /// only after exact reservation/parking durability is proven.
+    /// Consume CandidatePrepared authority and return isolation-publication
+    /// authority only after exact reservation/parking durability is proven.
     pub(super) fn reserve_for_transaction_triggers(
         self,
         installation: &Installation,
-    ) -> Result<PreparedTransactionTriggerCoordinator, ActiveReblitReservationFailure> {
+    ) -> Result<PreparedTransactionIsolationCoordinator, ActiveReblitReservationFailure> {
         let Self {
             coordinator,
             metadata,
@@ -105,16 +105,16 @@ impl PreparedActiveReblitReservationCoordinator {
             .require_staged(&coordinator.identity, &seal)
             .map_err(StatefulTransitionCoordinatorError::ActiveReblitReservation)
             .map_err(|source| ActiveReblitReservationFailure::FinalEvidence { transition_id, source })?;
-        Ok(PreparedTransactionTriggerCoordinator {
+        Ok(PreparedTransactionIsolationCoordinator {
             coordinator,
             metadata,
             provenance,
-            readiness: TransactionTriggerReadiness::ActiveReblit(reservation),
+            operation: TransactionTriggerOperationReadiness::ActiveReblit(reservation),
         })
     }
 }
 
-impl TransactionTriggerReadiness {
+impl TransactionTriggerOperationReadiness {
     pub(super) fn require_staged(
         &self,
         identity: &super::super::StatefulTreeIdentity,
