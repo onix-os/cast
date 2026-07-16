@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Embeddable command fragments for Cast's package-management surface.
 //!
 //! This module deliberately does not own argument collection, top-level

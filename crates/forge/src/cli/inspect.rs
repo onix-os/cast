@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use clap::{ArgMatches, Command, arg};
 use fs_err::File;
 use std::io::{Read, Seek, sink};

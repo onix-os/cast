@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;

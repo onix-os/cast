@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Cache management for unpacking remote assets (`.stone`, etc.)
 
 use std::{

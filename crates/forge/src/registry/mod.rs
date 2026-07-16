@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Defines an encapsulation of "query plugins", including an interface
 //! for managing and using them.
 

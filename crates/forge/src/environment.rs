@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 /// Stable user-facing identity of the Cast executable.
 pub const NAME: &str = "cast";
 /// Max concurrency for disk tasks

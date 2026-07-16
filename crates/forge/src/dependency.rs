@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Cast surface for the shared Stone relation model.
 //!
 //! New code should import these types from [`stone::relation`] directly. This

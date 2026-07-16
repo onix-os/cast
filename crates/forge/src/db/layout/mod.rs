@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use astr::AStr;
 use diesel::prelude::*;
 use diesel::{Connection as _, ConnectionError, SqliteConnection};

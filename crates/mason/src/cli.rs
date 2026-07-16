@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Embeddable command fragments for Cast's package-building commands.
 //!

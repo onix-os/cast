@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Operations that happen post-blit (primarily, triggers within container)
 //! Note that we support transaction scope and system scope triggers, invoked

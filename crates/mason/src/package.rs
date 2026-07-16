@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 

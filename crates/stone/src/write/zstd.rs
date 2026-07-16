@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::io::{self, Result, Write};
 
 use zstd::zstd_safe::zstd_sys::ZSTD_EndDirective;

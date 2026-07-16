@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use thiserror::Error;
 
 /// Simple corruption check in the header, will be expanded for v2

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! The pruning system for Cast states and assets
 //!
 //! Quite simply this is a strategy based garbage collector for unused/unwanted

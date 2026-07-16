@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 use std::{fs::File, io, os::unix::fs::PermissionsExt as _, path::Path};
 

@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 //! Canonical package dependency and provider relations shared by Stone,
 //! Mason, Forge, and declarative package evaluation.

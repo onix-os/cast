@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Deterministic credential mapping for isolated build containers.
 //!
 //! A payload starts with namespace UID/GID zero and an empty supplementary

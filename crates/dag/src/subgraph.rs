@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use petgraph::{EdgeType, prelude::Graph, stable_graph::IndexType, visit::Dfs};
 
 /// Given an input [`Graph`] and the start nodes, construct a subgraph
