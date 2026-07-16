@@ -707,25 +707,32 @@ and an unwired one-shot coordinator effect which reaches durable
 `CandidatePrepared`, its ActiveReblit path seals the exact replacement-wrapper
 reservation and authenticated previous-marker parking. Both trigger-capable
 operations then publish and retain the exact transaction-isolation ABI required
-for trigger intent. Mutable startup has two deliberately narrow pre-assessment
-recovery actions. Under exact journal, installation, database, provenance, and
-active-selection authority, the first may normalize only an authenticated
-restrictive ActiveReblit replacement wrapper to mode `0700`; it never advances
-the journal. Commit `3e1ba34` adds a separate journal-only rollback-decision
+for trigger intent. Mutable startup has three deliberately narrow
+pre-assessment recovery steps. Under exact journal, installation, database,
+provenance, and active-selection authority, the first may normalize only an
+authenticated restrictive ActiveReblit replacement wrapper to mode `0700`; it
+never advances the journal. Commit `3e1ba34` adds a separate journal-only rollback-decision
 executor for all three operations. A sealed independent namespace, database,
 provenance, and cooperating-writer-reservation authority admits it only for
 exact `UsrExchangeIntent` + `PRE` or `UsrExchanged` + `POST` evidence and binds
-that evidence to the exact per-open journal. `UsrExchangeIntent` + `POST`
-remains deferred because forward-exchange parent durability is unproven. The
-executor constructs exactly one `rollback_decision` and performs exactly one
-conditional journal `advance`; it mutates no namespace or database, executes no
-rollback effect, and never retries. It drops the old store and authority,
-descriptor-rootedly reopens the journal, and reconciles the complete canonical
-record. Its focused Make lane passes 11/11 contracts, including all five journal
-update faults, mixed-root rejection, and evidence races. The subsequent
-diagnostic-only startup assessment sandwiches a complete bounded,
-descriptor-rooted activation-namespace inventory around the remaining startup
-evidence. That inventory authenticates exact raw names, tree and slot roles,
+that evidence to the exact per-open journal. Commit `72511b3` adds a distinct
+consuming path for exact `UsrExchangeIntent` + `POST`: it checks that journal
+binding first, syncs the retained staging parent and retained installation root
+in production order, repeats the complete evidence sandwich, and only then
+converts through a private completion seal to a rollback decision with reverse
+exchange pending. It never reopens a parent by path or performs another rename,
+exchange, database, trigger, cleanup, or root-link effect. Failure leaves the
+exact Intent record for a fresh idempotent durability retry. The decision
+executor then constructs exactly one `rollback_decision` and performs exactly
+one conditional journal `advance`; it executes no rollback effect and never
+retries. It drops the old store and authority, descriptor-rootedly reopens the
+journal, and reconciles the complete canonical record. The decision and parent
+durability Make lanes each pass 11/11 contracts. The latter includes a real
+coordinator-to-startup proof across all three operations and all three forward
+durability fault points, with the atomic-exchange syscall count remaining one.
+The subsequent diagnostic-only startup assessment sandwiches a complete
+bounded, descriptor-rooted activation-namespace inventory around the remaining
+startup evidence. That inventory authenticates exact raw names, tree and slot roles,
 state IDs, root/isolation ABI, rollback action outcomes, and phase layouts
 without exposing a mutation API; it releases mutation authority before
 returning and cannot execute stale evidence. These slices are not general

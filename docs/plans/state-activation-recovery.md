@@ -639,11 +639,13 @@ and instant rollback mechanism; it hardens their failure semantics.
   Startup classifies ActiveReblit `Preparing` as strictly state-ID-absent and
   treats `CandidatePrepareStarted` as the only state-ID
   publication-ambiguity boundary. There is still no general phase-advancing
-  recovery executor. Commit `3e1ba34` can advance only the two exact `/usr`
-  exchange evidence cases documented below to `RollbackDecided`; it executes no
-  rollback action. The restrictive replacement-mode normalizer never changes
-  the record, and the diagnostic startup assessment remains non-mutating. This
-  item remains open.
+  recovery executor. Commit `3e1ba34` can advance the two directly admitted
+  `/usr` exchange evidence cases documented below to `RollbackDecided`, and
+  commit `72511b3` first completes both exact parent-directory durability
+  barriers for authenticated `UsrExchangeIntent` + `POST` evidence before using
+  that same decision boundary. Neither executes a rollback action. The
+  restrictive replacement-mode normalizer never changes the record, and the
+  diagnostic startup assessment remains non-mutating. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in
@@ -653,24 +655,36 @@ and instant rollback mechanism; it hardens their failure semantics.
   proved repaired.
   As of 2026-07-16, startup's diagnostic checkpoint remains deliberately
   read-only and fail closed. Immediately before it, the mutable startup gate has
-  only two sealed, narrow slices: the ActiveReblit restrictive replacement-mode
-  normalizer described above and the journal-only rollback-decision executor
-  added by commit `3e1ba34`. Neither converts the diagnostic inventory into
-  mutation authority.
+  only three sealed, narrow steps: the ActiveReblit restrictive
+  replacement-mode normalizer described above, the descriptor-bound exchange
+  parent-durability normalizer added by commit `72511b3`, and the journal-only
+  rollback-decision executor added by commit `3e1ba34`. None converts the
+  diagnostic inventory into mutation authority.
 
-  The new executor applies to NewState, ActivateArchived, and ActiveReblit, but
-  admission is restricted to an exact `UsrExchangeIntent` + `PRE` layout or an
-  exact `UsrExchanged` + `POST` layout. The former records the `/usr` rollback
-  action as already satisfied; the latter records it as pending.
-  `UsrExchangeIntent` + `POST` is explicitly deferred with forward-exchange
-  parent durability unproven, and every other phase/layout or incompatible
-  evidence combination remains non-mutating. A private startup seal admits a
-  separately captured authority which retains exact before/after/fresh
-  descriptor-rooted namespace fingerprints and layout, stable database
-  ownership and immutable metadata provenance, the cooperating-writer
-  reservation, installation authority, and the complete source record. An
-  opaque per-open binding also prevents equal-looking or byte-identical journals
-  from another root from consuming that authority.
+  The decision path applies to NewState, ActivateArchived, and ActiveReblit.
+  Exact `UsrExchangeIntent` + `PRE` records the `/usr` rollback action as already
+  satisfied, while exact `UsrExchanged` + `POST` records it as pending. Exact
+  `UsrExchangeIntent` + `POST` now yields a distinct consuming durability
+  authority rather than a decision or diagnostic deferral. Every other
+  phase/layout or incompatible evidence combination remains non-mutating. A
+  private startup seal admits independently captured evidence retaining exact
+  before/after/fresh descriptor-rooted namespace fingerprints and layout,
+  stable database ownership and immutable metadata provenance, the
+  cooperating-writer reservation, installation authority, and the complete
+  source record. An opaque per-open binding also prevents equal-looking or
+  byte-identical journals from another root from consuming that authority.
+
+  The durability normalizer checks that per-open binding before any filesystem
+  effect, then syncs the retained `.cast/root/staging` directory followed by the
+  retained installation root: the two exact parents of the atomic exchange.
+  It never reopens either parent by path and contains no rename, exchange,
+  reverse, database, trigger, cleanup, or root-link operation. After both
+  barriers it repeats the complete journal/namespace/database evidence
+  sandwich and converts through a private completion seal into ordinary
+  rollback-decision authority with `/usr` reversal pending. A sync error or
+  evidence race consumes the authority and leaves the exact
+  `UsrExchangeIntent` record for a fresh startup to retry the idempotent
+  durability suffix; it cannot retry the exchange in process.
 
   After final database/namespace/database and journal revalidation, the executor
   derives exactly one successor with `rollback_decision` and attempts exactly
@@ -736,7 +750,16 @@ and instant rollback mechanism; it hardens their failure semantics.
   contracts across the three operations and both admitted layouts, including
   all five journal-update fault points, mixed-root same-record rejection,
   database/provenance/namespace races, historical runtime epochs, and retained
-  ActiveReblit reservation exclusion. This is only the decision boundary:
+  ActiveReblit reservation exclusion. The separate
+  `make forge-startup-usr-exchange-parent-durability-test` lane passes 11/11
+  contracts. Ten focused startup contracts cover exact ordering, retained
+  parent identity, sync failures, evidence races, retry idempotence, mixed-store
+  rejection, historical evidence, and ActiveReblit. Its eleventh contract runs
+  all three operations through the real one-shot coordinator exchange at each
+  of the three forward durability fault points, releases the failed authority,
+  enters real startup, and proves the exchange syscall count remains exactly
+  one while the exact pending-reverse decision is persisted without database or
+  non-journal namespace changes. This is still only the decision boundary:
   general phase-specific rollback, roll-forward, cleanup, and effect execution
   remain unimplemented, so this item and all six broad Phase 11 work items stay
   open.
