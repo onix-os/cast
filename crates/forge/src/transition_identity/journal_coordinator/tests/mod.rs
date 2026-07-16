@@ -67,6 +67,14 @@ fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (Coord
 
     let candidate_path = installation.staging_path("usr");
     create_canonical_directory(&candidate_path);
+    if candidate_kind == CandidateKind::Archived {
+        create_canonical_directory(&candidate_path.join("lib"));
+        write_canonical_file(&candidate_path.join("lib/os-release"), COORDINATOR_OS_RELEASE);
+        write_canonical_file(
+            &candidate_path.join("lib/system-model.glu"),
+            COORDINATOR_SYSTEM_SNAPSHOT,
+        );
+    }
     let identity = if candidate_kind == CandidateKind::NewState {
         write_canonical_file(&candidate_path.join("payload-sentinel"), NEW_STATE_PAYLOAD_SENTINEL);
         StatefulTreeIdentity::prepare_unallocated_candidate(&installation, &database, &candidate_path).unwrap()

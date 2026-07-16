@@ -118,7 +118,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 31; \
+	timeout 10s test "$$count" = 32; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -147,6 +147,7 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_state_id_and_public_name_substitution_are_blocked \
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_failure_releases_journal_while_error_lives \
 		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exact_os_info \
+		transition_identity::journal_coordinator::tests::journal_coordinator_archived_metadata_proof_rejects_independent_expectation_mismatch_without_mutation \
 		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepare_rejects_same_byte_foreign_candidate_before_metadata_or_state_id \
 		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_substitution_before_trigger_intent_runs_no_effect \
 		transition_identity::journal_coordinator::tests::journal_coordinator_metadata_substitution_during_trigger_effect_stops_before_completion \

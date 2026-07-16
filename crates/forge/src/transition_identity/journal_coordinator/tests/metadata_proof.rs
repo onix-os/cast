@@ -1,5 +1,45 @@
 const COORDINATOR_OS_INFO: &[u8] = b"name = \"Exact Coordinator OS\"\nversion = \"1\"\n";
 
+#[derive(Debug, Eq, PartialEq)]
+struct CandidateMetadataEntryEvidence {
+    relative: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+    bytes: Vec<u8>,
+}
+
+fn candidate_metadata_evidence(fixture: &CoordinatorFixture) -> Vec<CandidateMetadataEntryEvidence> {
+    ["lib", "lib/os-release", "lib/system-model.glu"]
+        .into_iter()
+        .map(|relative| {
+            let path = fixture.candidate_path.join(relative);
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            CandidateMetadataEntryEvidence {
+                relative: PathBuf::from(relative),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.permissions().mode() & 0o7777,
+                links: metadata.nlink(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                changed_seconds: metadata.ctime(),
+                changed_nanoseconds: metadata.ctime_nsec(),
+                bytes: metadata
+                    .file_type()
+                    .is_file()
+                    .then(|| fs::read(path).unwrap())
+                    .unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
 fn park_and_replace_metadata(fixture: &CoordinatorFixture, name: &str) -> PathBuf {
     let canonical = fixture.candidate_path.join("lib").join(name);
     let bytes = fs::read(&canonical).unwrap();
@@ -37,11 +77,15 @@ fn journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exac
         CandidateKind::ActiveReblit,
     ] {
         let (fixture, coordinator) = coordinator_at_candidate_prepare_started(candidate_kind);
-        create_canonical_directory(&fixture.candidate_path.join("lib"));
+        if candidate_kind != CandidateKind::Archived {
+            create_canonical_directory(&fixture.candidate_path.join("lib"));
+        }
         write_canonical_file(
             &fixture.candidate_path.join("lib/os-info.json"),
             COORDINATOR_OS_INFO,
         );
+        let existing_before =
+            (candidate_kind == CandidateKind::Archived).then(|| candidate_metadata_evidence(&fixture));
         let prepared = coordinator
             .finish_candidate_prepare(COORDINATOR_SYSTEM_SNAPSHOT, |actual| {
                 assert_eq!(actual, Some(COORDINATOR_OS_INFO));
@@ -51,6 +95,9 @@ fn journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exac
 
         assert_eq!(prepared.record().phase, Phase::CandidatePrepared);
         assert_candidate_metadata(&fixture);
+        if let Some(existing_before) = existing_before {
+            assert_eq!(candidate_metadata_evidence(&fixture), existing_before);
+        }
         match (candidate_kind, prepared) {
             (
                 CandidateKind::NewState | CandidateKind::ActiveReblit,
@@ -60,6 +107,26 @@ fn journal_coordinator_metadata_proof_is_owned_for_every_operation_and_uses_exac
             _ => panic!("candidate operation received the wrong proof-bearing authority"),
         }
     }
+}
+
+#[test]
+fn journal_coordinator_archived_metadata_proof_rejects_independent_expectation_mismatch_without_mutation() {
+    let (fixture, coordinator) = coordinator_at_candidate_prepare_started(CandidateKind::Archived);
+    let started = coordinator.record().clone();
+    let before = candidate_metadata_evidence(&fixture);
+
+    let failure = coordinator
+        .finish_candidate_prepare(b"independently expected but incorrect snapshot\n", |_| {
+            COORDINATOR_OS_RELEASE.to_vec()
+        })
+        .unwrap_err();
+    assert!(matches!(
+        failure,
+        StatefulTransitionCoordinatorError::CandidateMetadata(_)
+    ));
+    assert_eq!(read_canonical(&fixture.installation.root), started);
+    assert_eq!(candidate_metadata_evidence(&fixture), before);
+    assert_candidate_state_id(&fixture, fixture.candidate_state);
 }
 
 #[test]

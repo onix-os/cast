@@ -125,7 +125,7 @@ config-rooted-gluon-test:
 
 forge-client-startup-gate-test:
 	@set -eu; \
-	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	test -n "$$listed"; \
 	for test in \
 		client::startup_gate_tests::valid_unresolved_journal_precedes_malformed_live_state_system_intent_and_repositories \
@@ -203,6 +203,24 @@ forge-transition-identity-test:
 			timeout 10s printf 'candidate metadata visibility audit failed with status %s\n' "$$status" >&2; exit 1; \
 		fi; \
 	fi; \
+	timeout 10s grep -Fqx 'mod existing_verification;' crates/forge/src/transition_identity/candidate_metadata.rs; \
+	if timeout 10s grep -Fqx 'pub(crate) mod existing_verification;' crates/forge/src/transition_identity/candidate_metadata.rs; then \
+		timeout 10s printf '%s\n' 'existing metadata verifier module visibility widened' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	verification="crates/forge/src/transition_identity/candidate_metadata/existing_verification.rs"; \
+	if timeout 10s grep -nE '\.sync_all\(|\.set_permissions\(|link_path_descriptor|renameat|O_TMPFILE|write_all_at|RetainedDirectory::retain_or_create' "$$verification"; then \
+		timeout 10s printf '%s\n' 'read-only existing metadata verifier gained a mutation primitive' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
+	timeout 10s grep -Fqx '    pub(crate) fn prove(self, os_release: &[u8]) -> Result<CandidateMetadataProof, CandidateMetadataError> {' "$$verification"; \
+	if timeout 10s grep -RInF 'CandidateMetadataVerification' crates/forge/src/client; then \
+		timeout 10s printf '%s\n' 'client bypasses coordinator-owned existing metadata verification' >&2; exit 1; \
+	else \
+		status="$$?"; timeout 10s test "$$status" = 1; \
+	fi; \
 	for forbidden in 'client::' 'MetadataContext' 'SystemModel'; do \
 		if timeout 10s grep -R -n -F "$$forbidden" crates/forge/src/transition_identity/candidate_metadata.rs crates/forge/src/transition_identity/candidate_metadata; then \
 			timeout 10s printf 'candidate metadata core depends on forbidden client policy: %s\n' "$$forbidden" >&2; exit 1; \
@@ -213,9 +231,13 @@ forge-transition-identity-test:
 			fi; \
 		fi; \
 	done; \
-	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
 		transition_identity::candidate_metadata::tests::same_candidate_proof_accepts_exact_inode_and_rejects_same_layout_foreign_candidate_without_mutation \
+		transition_identity::candidate_metadata::tests::existing_metadata_verification_proves_independent_bytes_without_mutation \
+		transition_identity::candidate_metadata::tests::existing_metadata_verification_rejects_wrong_independent_bytes_without_mutation \
+		transition_identity::candidate_metadata::tests::existing_metadata_verification_rejects_same_byte_release_replacement_during_proof \
+		transition_identity::candidate_metadata::tests::existing_metadata_verification_rejects_unsafe_canonical_outputs_without_repair \
 		client::tests::stateful_tree_tokens_follow_their_logical_trees_through_exchange_and_archive \
 		client::tests::retained_exchange_adopts_applied_forward_and_reverse_moves_when_the_syscall_reports_error \
 		client::tests::retained_exchange_error_before_rename_preserves_both_exact_names \
@@ -251,8 +273,8 @@ forge-transition-identity-test:
 		client::tests::first_install_rejects_a_preexisting_nonempty_unmanaged_usr_unchanged \
 		client::tests::first_install_rejects_a_racing_nonempty_usr_occupant_unchanged \
 		client::tests::duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees; do \
-		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
-		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 forge-state-prune-test:

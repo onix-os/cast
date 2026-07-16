@@ -28,10 +28,15 @@ use crate::linux_fs::{
     require_no_access_acl, require_no_default_acl,
 };
 
+mod existing_verification;
 mod private_directory;
 mod retained_inode;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use existing_verification::CandidateMetadataVerification;
+#[cfg(test)]
+pub(crate) use existing_verification::arm_after_existing_release_retained;
 
 use retained_inode::{
     directory_witness, effective_user_id, file_type_name, metadata_io, published_witness, read_exact_at,

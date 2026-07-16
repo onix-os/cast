@@ -18,7 +18,7 @@ use super::{
     before_finish_candidate_runtime_proof,
 };
 use crate::transition_identity::state_tree_metadata::RetainedTreeStateId;
-use crate::transition_identity::{CandidateMetadataProof, CandidateMetadataPublication};
+use crate::transition_identity::{CandidateMetadataProof, CandidateMetadataPublication, CandidateMetadataVerification};
 
 /// Operation dispatch after the exact candidate metadata proof has become
 /// durable journal evidence.
@@ -54,8 +54,9 @@ pub(crate) struct TransactionTriggersCompleteCoordinator {
 }
 
 impl StatefulTransitionCoordinator {
-    /// Publish metadata and the exact `.stateID`, then durably advance to
-    /// `CandidatePrepared` while retaining the sole metadata proof.
+    /// Publish fresh metadata or verify archived metadata, publish the exact
+    /// new-state `.stateID`, then durably advance to `CandidatePrepared` while
+    /// retaining the sole metadata proof.
     ///
     /// `derive_os_release` sees only the optional bytes read through the
     /// publication's retained `usr/lib` descriptor. It supplies semantic
@@ -76,10 +77,23 @@ impl StatefulTransitionCoordinator {
 
         let candidate_usr = self.identity.candidate.store.retained_directory();
         let candidate_path = self.identity.candidate.store.display_path();
-        let publication = CandidateMetadataPublication::begin(candidate_usr, candidate_path, snapshot)?;
-        let os_info = publication.read_optional_os_info()?;
-        let os_release = derive_os_release(os_info.as_deref());
-        let metadata = publication.publish(&os_release)?;
+        // Dispatch is fixed by the durable operation: callers cannot select a
+        // mutating publication for archived activation or substitute read-only
+        // verification for a candidate that still requires publication.
+        let metadata = match self.record.operation {
+            Operation::ActivateArchived => {
+                let verification = CandidateMetadataVerification::begin(candidate_usr, candidate_path, snapshot)?;
+                let os_info = verification.read_optional_os_info()?;
+                let os_release = derive_os_release(os_info.as_deref());
+                verification.prove(&os_release)?
+            }
+            Operation::NewState | Operation::ActiveReblit => {
+                let publication = CandidateMetadataPublication::begin(candidate_usr, candidate_path, snapshot)?;
+                let os_info = publication.read_optional_os_info()?;
+                let os_release = derive_os_release(os_info.as_deref());
+                publication.publish(&os_release)?
+            }
+        };
 
         // Metadata proof must bind to the coordinator's exact candidate before
         // NewState is allowed to publish even its state ID.

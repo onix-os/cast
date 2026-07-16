@@ -487,14 +487,21 @@ and instant rollback mechanism; it hardens their failure semantics.
   are released while the error remains alive. The post-effect inventory still
   cannot substitute for the semantic proof because it intentionally baselines
   permitted payload changes. No live client path is changed or silently
-  bypassed by this still-unwired slice. The live archived-activation path moves
-  an already-decorated tree and therefore still needs a separate exact-existing
-  metadata proof constructed from independent expected snapshot and
-  `os-release` bytes. It must never treat the candidate's current canonical
-  output bytes as their own expectation; the publication-only contract here
-  intentionally remains unwired until that proof path exists.
+  bypassed by this still-unwired slice. Archived activation now dispatches to a
+  separate read-only verifier because its candidate already contains canonical
+  metadata. That verifier clones the candidate first, opens existing `usr/lib`
+  without creating it, accepts independently supplied expected snapshot and
+  `os-release` bytes, retains both exact output inodes through read-only file
+  descriptors, and returns the same owned proof without chmod, synchronization,
+  replacement, or any other mutation. It never reads either canonical output
+  to manufacture its own expectation, and a same-byte output replacement
+  during proof construction is rejected with both inodes preserved. Live
+  archived activation still lacks independent expectation provenance: its
+  current API has neither the original `SystemModel` nor a durable metadata
+  manifest/digest. It must gain one of those sources before this verifier can be
+  wired; using the archived output bytes themselves remains forbidden.
 
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 31
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 32
   exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
   runtime evidence, fixed quarantine naming, exact database correlation,
@@ -505,7 +512,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   mandatory rather than optional, the runner accepts no proof parameter,
   archived activation cannot acquire trigger authority, no coordinator method
   has a callsite outside the contract module, and the callback authority and
-  failure type remain private. No live
+  failure type remain private. The transition-identity gate additionally
+  rejects mutation primitives in the existing-metadata verifier and any client
+  bypass around coordinator-owned verification. No live
   activation path creates or advances this coordinator, and there is still no
   phase-specific recovery executor; the read-only startup assessment below cannot
   advance it. This item remains open.

@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, Permissions},
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
     path::{Path, PathBuf},
 };
 
@@ -18,6 +18,10 @@ struct EntryEvidence {
     mode: u32,
     links: u64,
     length: u64,
+    modified_seconds: i64,
+    modified_nanoseconds: i64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
     bytes: Vec<u8>,
 }
 
@@ -51,6 +55,114 @@ fn same_candidate_proof_accepts_exact_inode_and_rejects_same_layout_foreign_cand
     );
     assert_eq!(retained_evidence(&exact_path), exact_before);
     assert_eq!(retained_evidence(&foreign_path), foreign_before);
+}
+
+#[test]
+fn existing_metadata_verification_proves_independent_bytes_without_mutation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let candidate_path = temporary.path().join("archived-usr");
+    create_candidate_root(&candidate_path);
+    mirror_logical_metadata(&candidate_path);
+    let before = retained_evidence(&candidate_path);
+
+    let candidate = File::open(&candidate_path).unwrap();
+    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
+    assert_eq!(verification.read_optional_os_info().unwrap(), None);
+    let proof = verification.prove(RELEASE).unwrap();
+    proof.require_same_candidate(&candidate, &candidate_path).unwrap();
+
+    assert_eq!(retained_evidence(&candidate_path), before);
+}
+
+#[test]
+fn existing_metadata_verification_rejects_wrong_independent_bytes_without_mutation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let candidate_path = temporary.path().join("archived-usr");
+    create_candidate_root(&candidate_path);
+    mirror_logical_metadata(&candidate_path);
+    let before = retained_evidence(&candidate_path);
+    let mut wrong_release = RELEASE.to_vec();
+    wrong_release[0] = b'X';
+
+    let candidate = File::open(&candidate_path).unwrap();
+    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
+    let error = verification.prove(&wrong_release).unwrap_err();
+
+    assert!(matches!(error, CandidateMetadataError::FileChanged { .. }));
+    assert_eq!(retained_evidence(&candidate_path), before);
+}
+
+#[test]
+fn existing_metadata_verification_rejects_same_byte_release_replacement_during_proof() {
+    let temporary = tempfile::tempdir().unwrap();
+    let candidate_path = temporary.path().join("archived-usr");
+    let parked_release = temporary.path().join("parked-os-release");
+    create_candidate_root(&candidate_path);
+    mirror_logical_metadata(&candidate_path);
+    let canonical_release = candidate_path.join("lib/os-release");
+    let original = fs::symlink_metadata(&canonical_release).unwrap();
+
+    let hook_release = canonical_release.clone();
+    let hook_parked = parked_release.clone();
+    arm_after_existing_release_retained(move || {
+        fs::rename(&hook_release, &hook_parked).unwrap();
+        fs::write(&hook_release, RELEASE).unwrap();
+        fs::set_permissions(&hook_release, Permissions::from_mode(0o644)).unwrap();
+    });
+
+    let candidate = File::open(&candidate_path).unwrap();
+    let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
+    let error = verification.prove(RELEASE).unwrap_err();
+
+    assert!(matches!(error, CandidateMetadataError::FileChanged { .. }));
+    let parked = fs::symlink_metadata(&parked_release).unwrap();
+    let replacement = fs::symlink_metadata(&canonical_release).unwrap();
+    assert_eq!((parked.dev(), parked.ino()), (original.dev(), original.ino()));
+    assert_ne!((replacement.dev(), replacement.ino()), (original.dev(), original.ino()));
+    assert_eq!(fs::read(parked_release).unwrap(), RELEASE);
+    assert_eq!(fs::read(canonical_release).unwrap(), RELEASE);
+    assert_eq!(fs::read(candidate_path.join("lib/system-model.glu")).unwrap(), SNAPSHOT);
+}
+
+#[test]
+fn existing_metadata_verification_rejects_unsafe_canonical_outputs_without_repair() {
+    for unsafe_shape in ["writable", "hardlinked", "symlink"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let candidate_path = temporary.path().join("archived-usr");
+        create_candidate_root(&candidate_path);
+        mirror_logical_metadata(&candidate_path);
+        let canonical_release = candidate_path.join("lib/os-release");
+        let external = temporary.path().join("external-release");
+        match unsafe_shape {
+            "writable" => fs::set_permissions(&canonical_release, Permissions::from_mode(0o666)).unwrap(),
+            "hardlinked" => {
+                fs::hard_link(&canonical_release, &external).unwrap();
+            }
+            "symlink" => {
+                fs::write(&external, RELEASE).unwrap();
+                fs::remove_file(&canonical_release).unwrap();
+                symlink(&external, &canonical_release).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = fs::symlink_metadata(&canonical_release).unwrap();
+
+        let candidate = File::open(&candidate_path).unwrap();
+        let verification = CandidateMetadataVerification::begin(&candidate, &candidate_path, SNAPSHOT).unwrap();
+        let error = verification.prove(RELEASE).unwrap_err();
+
+        assert!(matches!(error, CandidateMetadataError::FileChanged { .. }));
+        let after = fs::symlink_metadata(&canonical_release).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.permissions().mode(), before.permissions().mode());
+        assert_eq!(after.nlink(), before.nlink());
+        if unsafe_shape == "symlink" {
+            assert!(after.file_type().is_symlink());
+            assert_eq!(fs::read(external).unwrap(), RELEASE);
+        } else {
+            assert_eq!(fs::read(canonical_release).unwrap(), RELEASE);
+        }
+    }
 }
 
 fn create_candidate_root(path: &Path) {
@@ -99,6 +211,10 @@ fn retained_evidence(candidate: &Path) -> Vec<EntryEvidence> {
                 mode: metadata.permissions().mode() & 0o7777,
                 links: metadata.nlink(),
                 length: metadata.len(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                changed_seconds: metadata.ctime(),
+                changed_nanoseconds: metadata.ctime_nsec(),
                 bytes: if metadata.file_type().is_file() {
                     fs::read(path).unwrap()
                 } else {
