@@ -61,6 +61,8 @@ pub(crate) enum ActivePreviousSlotParkingError {
         #[source]
         source: Box<super::Error>,
     },
+    #[error("coordinator evidence failed while parking the retained active previous-state slot")]
+    CoordinatorEvidence(#[source] Box<super::journal_coordinator::StatefulTransitionCoordinatorError>),
     #[error("construct a bounded active previous-state parking name")]
     InvalidParkingName(#[source] crate::transition_journal::CodecError),
     #[error("all {limit} active previous-state parking names are occupied for state {state}")]
@@ -201,9 +203,39 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
+        self.prepare_active_previous_slot_parking_validated(installation, state, &|| {
+            self.require_no_journal()
+                .map_err(|source| identity("check journal while parking active previous-state slot", source))
+        })
+    }
+
+    /// Journal-aware counterpart used only by the sealed ActiveReblit
+    /// reservation typestate. It never relaxes the legacy no-journal entry
+    /// point above; instead the coordinator supplies a complete semantic proof
+    /// immediately before the no-replace move and after its durability suffix.
+    pub(super) fn prepare_active_previous_slot_parking_with_journal(
+        &self,
+        _seal: &super::journal_coordinator::ActiveReblitReservationSeal,
+        installation: &Installation,
+        state: state::Id,
+        validate_transition: &impl Fn() -> Result<(), super::journal_coordinator::StatefulTransitionCoordinatorError>,
+    ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
+        let validate = || {
+            validate_transition()
+                .map_err(|source| ActivePreviousSlotParkingError::CoordinatorEvidence(Box::new(source)))
+        };
+        self.prepare_active_previous_slot_parking_validated(installation, state, &validate)
+    }
+
+    fn prepare_active_previous_slot_parking_validated(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        validate_transition: &impl Fn() -> Result<(), ActivePreviousSlotParkingError>,
+    ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
         let mut retried = false;
         loop {
-            match self.park_active_previous_state_slot(installation, state) {
+            match self.park_active_previous_state_slot_validated(installation, state, validate_transition) {
                 Ok(()) => return Ok(()),
                 Err(failure)
                     if failure.outcome() != RetainedActivePreviousSlotParkingOutcome::Ambiguous && !retried =>
@@ -219,6 +251,18 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         state: state::Id,
+    ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
+        self.park_active_previous_state_slot_validated(installation, state, &|| {
+            self.require_no_journal()
+                .map_err(|source| identity("check journal while parking active previous-state slot", source))
+        })
+    }
+
+    fn park_active_previous_state_slot_validated(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        validate_transition: &impl Fn() -> Result<(), ActivePreviousSlotParkingError>,
     ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
         let not_applied = |source| RetainedActivePreviousSlotParkingFailure {
             outcome: RetainedActivePreviousSlotParkingOutcome::NotApplied,
@@ -249,7 +293,7 @@ impl StatefulTreeIdentity {
         match self.active_previous_slot_location(attempt).map_err(ambiguous)? {
             SlotLocation::Parked => {
                 return self
-                    .finish_active_previous_slot_parking(installation, attempt)
+                    .finish_active_previous_slot_parking(installation, attempt, validate_transition)
                     .map_err(applied);
             }
             SlotLocation::Canonical => {}
@@ -279,10 +323,11 @@ impl StatefulTreeIdentity {
                     path: attempt.parking_path(),
                 });
             }
+            validate_transition()?;
             checkpoint(RetainedActivePreviousSlotParkingFaultPoint::BeforeRename)
         })();
         if let Err(source) = preflight {
-            return self.reconcile_active_previous_slot_preflight(installation, attempt, source);
+            return self.reconcile_active_previous_slot_preflight(installation, attempt, validate_transition, source);
         }
 
         let parking_name = attempt
@@ -308,7 +353,7 @@ impl StatefulTreeIdentity {
                     .unwrap_or(ActivePreviousSlotParkingError::ReportedSuccessWithoutMove),
             )),
             SlotLocation::Parked => self
-                .finish_active_previous_slot_parking(installation, attempt)
+                .finish_active_previous_slot_parking(installation, attempt, validate_transition)
                 .map_err(applied),
         }
     }
@@ -323,12 +368,44 @@ impl StatefulTreeIdentity {
         self.require_active_previous_slot_parked_core(installation, state)
     }
 
+    /// Prove the completed parked layout while the reservation journal is
+    /// active. The private seal prevents legacy callers from bypassing their
+    /// mandatory journal-absence check.
+    pub(super) fn require_active_previous_slot_parked_with_journal(
+        &self,
+        _seal: &super::journal_coordinator::ActiveReblitReservationSeal,
+        installation: &Installation,
+        state: state::Id,
+    ) -> Result<(), ActivePreviousSlotParkingError> {
+        self.require_active_previous_slot_parked_core(installation, state)
+    }
+
     /// Read-only proof of an authorized second marker link while a durable
     /// coordinator journal is active.  It preserves the exact recovered
     /// canonical-or-parked location and performs no reservation or move.
     pub(super) fn require_active_previous_slot_unchanged_with_journal(
         &self,
         _seal: &super::journal_coordinator::UsrExchangeEffectSeal,
+        installation: &Installation,
+        state: state::Id,
+    ) -> Result<(), ActivePreviousSlotParkingError> {
+        self.require_active_previous_slot_unchanged_core(installation, state)
+    }
+
+    /// Reservation-sealed form of the same canonical-or-parked proof. It is
+    /// used before the monotonic no-replace move, while CandidatePrepared may
+    /// legitimately retain either exact location.
+    pub(super) fn require_active_previous_slot_unchanged_for_reservation(
+        &self,
+        _seal: &super::journal_coordinator::ActiveReblitReservationSeal,
+        installation: &Installation,
+        state: state::Id,
+    ) -> Result<(), ActivePreviousSlotParkingError> {
+        self.require_active_previous_slot_unchanged_core(installation, state)
+    }
+
+    fn require_active_previous_slot_unchanged_core(
+        &self,
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), ActivePreviousSlotParkingError> {
@@ -402,6 +479,7 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         attempt: &RetainedActivePreviousSlotParking,
+        validate_transition: &impl Fn() -> Result<(), ActivePreviousSlotParkingError>,
         source: ActivePreviousSlotParkingError,
     ) -> Result<(), RetainedActivePreviousSlotParkingFailure> {
         let reconciled = self
@@ -412,16 +490,15 @@ impl StatefulTreeIdentity {
                 outcome: RetainedActivePreviousSlotParkingOutcome::NotApplied,
                 source,
             }),
-            Ok(SlotLocation::Parked) => {
-                self.finish_active_previous_slot_parking(installation, attempt)
-                    .map_err(|finish| RetainedActivePreviousSlotParkingFailure {
-                        outcome: RetainedActivePreviousSlotParkingOutcome::Applied,
-                        source: ActivePreviousSlotParkingError::AppliedAfterPreflightFailure {
-                            primary: Box::new(source),
-                            finish: Box::new(finish),
-                        },
-                    })
-            }
+            Ok(SlotLocation::Parked) => self
+                .finish_active_previous_slot_parking(installation, attempt, validate_transition)
+                .map_err(|finish| RetainedActivePreviousSlotParkingFailure {
+                    outcome: RetainedActivePreviousSlotParkingOutcome::Applied,
+                    source: ActivePreviousSlotParkingError::AppliedAfterPreflightFailure {
+                        primary: Box::new(source),
+                        finish: Box::new(finish),
+                    },
+                }),
             Err(reconciliation) => Err(RetainedActivePreviousSlotParkingFailure {
                 outcome: RetainedActivePreviousSlotParkingOutcome::Ambiguous,
                 source: ActivePreviousSlotParkingError::PreflightReconciliationFailed {
@@ -436,6 +513,7 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         attempt: &RetainedActivePreviousSlotParking,
+        validate_transition: &impl Fn() -> Result<(), ActivePreviousSlotParkingError>,
     ) -> Result<(), ActivePreviousSlotParkingError> {
         checkpoint(RetainedActivePreviousSlotParkingFaultPoint::MarkerPostSync)?;
         attempt
@@ -453,8 +531,7 @@ impl StatefulTreeIdentity {
             .sync("sync roots after active previous-state slot parking")
             .map_err(|source| identity("sync roots after active previous-state slot parking", source))?;
         checkpoint(RetainedActivePreviousSlotParkingFaultPoint::FinalRevalidation)?;
-        self.require_no_journal()
-            .map_err(|source| identity("recheck journal after active previous-state slot parking", source))?;
+        validate_transition()?;
         self.revalidate_active_previous_slot_base(installation, attempt)?;
         self.require_active_previous_slot_location(attempt, SlotLocation::Parked)
     }

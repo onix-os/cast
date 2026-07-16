@@ -9,9 +9,10 @@
 
 use std::{ffi::CString, path::PathBuf};
 
-use thiserror::Error;
-
-use super::fault_injection::{before_exchange, checkpoint};
+use super::fault_injection::{
+    before_exchange, before_final_preparation_revalidation, before_journal_validation, checkpoint,
+};
+use super::model::*;
 use super::state_snapshot::same_state_snapshot;
 
 use super::{
@@ -28,135 +29,6 @@ use crate::{
 const STAGING_NAME: &std::ffi::CStr = c"staging";
 const MAX_QUARANTINE_NAMES: usize = 256;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RetainedStagingWrapperRotationOutcome {
-    NotApplied,
-    Applied,
-    Ambiguous,
-}
-
-#[derive(Debug, Error)]
-#[error("retained staging-wrapper rotation outcome is {outcome:?}")]
-pub(crate) struct RetainedStagingWrapperRotationFailure {
-    pub(super) outcome: RetainedStagingWrapperRotationOutcome,
-    #[source]
-    pub(super) source: StagingWrapperRotationError,
-}
-
-impl RetainedStagingWrapperRotationFailure {
-    pub(crate) fn outcome(&self) -> RetainedStagingWrapperRotationOutcome {
-        self.outcome
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RetainedStagingWrapperRotationFaultPoint {
-    ReplacementPostCreate,
-    ReplacementPreparationSync,
-    QuarantinePreparationSync,
-    FinalPreparationRevalidation,
-    OriginalPreSync,
-    ReplacementPreSync,
-    QuarantinePreSync,
-    BeforeExchange,
-    AfterExchange,
-    OriginalPostSync,
-    ReplacementPostSync,
-    RootsParentSync,
-    QuarantineParentSync,
-    FinalRevalidation,
-}
-
-#[derive(Debug, Error)]
-pub(super) enum StagingWrapperRotationError {
-    #[error("{operation} while rotating the retained staging wrapper: {source}")]
-    Identity {
-        operation: &'static str,
-        #[source]
-        source: Box<super::Error>,
-    },
-    #[error("construct the private staging-wrapper quarantine name")]
-    InvalidName(#[source] crate::transition_journal::CodecError),
-    #[error("all {limit} private staging-wrapper quarantine names are occupied")]
-    DestinationExhausted { limit: usize },
-    #[error(
-        "staging wrapper and quarantine replacement are on different filesystems: `{}` and `{}`",
-        staging.display(),
-        quarantine.display()
-    )]
-    CrossDevice { staging: PathBuf, quarantine: PathBuf },
-    #[error("retained staging-wrapper namespace mismatch: staging={staging}, quarantine={quarantine}")]
-    NamespaceMismatch {
-        staging: &'static str,
-        quarantine: &'static str,
-    },
-    #[error("staging-wrapper exchange reported success without moving either exact wrapper")]
-    ReportedSuccessWithoutMove,
-    #[error("retained active-reblit staging rotation lock is poisoned")]
-    AttemptLockPoisoned,
-    #[error("no retained active-reblit staging rotation was reserved")]
-    AttemptMissing,
-    #[error("an active-reblit staging rotation is already reserved")]
-    AttemptAlreadyReserved,
-    #[error("park the retained active previous-state slot before the live /usr exchange")]
-    ActivePreviousSlotParking(
-        #[source] Box<super::active_previous_slot_parking::RetainedActivePreviousSlotParkingFailure>,
-    ),
-    #[error("exchange retained staging wrapper at `{}`", path.display())]
-    Exchange {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("staging-wrapper preflight failed ({primary}) and exact reconciliation failed ({reconciliation})")]
-    PreflightReconciliationFailed {
-        primary: Box<StagingWrapperRotationError>,
-        reconciliation: Box<StagingWrapperRotationError>,
-    },
-    #[cfg(test)]
-    #[error("injected retained staging-wrapper fault at {point:?}")]
-    InjectedFault {
-        point: RetainedStagingWrapperRotationFaultPoint,
-    },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WrapperLayout {
-    OriginalStaged,
-    OriginalQuarantined,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NamedWrapper {
-    Absent,
-    Original,
-    Replacement,
-    Foreign,
-}
-
-impl NamedWrapper {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Absent => "absent",
-            Self::Original => "original",
-            Self::Replacement => "replacement",
-            Self::Foreign => "foreign",
-        }
-    }
-}
-
-/// Retains both wrapper inodes and both parent namespaces until the exchange
-/// and every durability barrier have been proven.
-#[derive(Debug)]
-pub(in crate::transition_identity) struct RetainedStagingWrapperRotation {
-    roots: RetainedDirectory,
-    quarantine: RetainedDirectory,
-    original: RetainedDirectory,
-    replacement: RetainedDirectory,
-    quarantine_name: CString,
-    quarantine_path: PathBuf,
-}
-
 impl RetainedStagingWrapperRotation {
     /// Reserve and retain one fresh empty replacement. No fallible durability
     /// suffix runs after this returns, so callers can store the attempt before
@@ -167,7 +39,44 @@ impl RetainedStagingWrapperRotation {
         state: state::Id,
         token: &str,
     ) -> Result<Self, RetainedStagingWrapperRotationFailure> {
-        Self::reserve_validated(installation, role, state, token, &|| Ok(()))
+        Self::reserve_core(
+            installation,
+            role,
+            state,
+            token,
+            OriginalWrapperModePolicy::NormalizeBeforeJournal,
+            &|| Ok(()),
+        )
+    }
+
+    /// Journal-sealed reservation which treats the existing fixed wrapper as
+    /// immutable evidence. Unlike the legacy entry point, this path never
+    /// chmods a wrong-mode wrapper: it fails untouched while CandidatePrepared
+    /// remains canonical.
+    pub(super) fn reserve_with_journal(
+        _seal: &super::super::journal_coordinator::ActiveReblitReservationSeal,
+        installation: &Installation,
+        role: &'static str,
+        state: state::Id,
+        token: &str,
+        validate_before_create: &impl Fn() -> Result<
+            (),
+            super::super::journal_coordinator::StatefulTransitionCoordinatorError,
+        >,
+    ) -> Result<Self, RetainedStagingWrapperRotationFailure> {
+        let validate = || {
+            before_journal_validation();
+            validate_before_create()
+                .map_err(|source| StagingWrapperRotationError::CoordinatorEvidence(Box::new(source)))
+        };
+        Self::reserve_core(
+            installation,
+            role,
+            state,
+            token,
+            OriginalWrapperModePolicy::RequirePrivateWithJournal,
+            &validate,
+        )
     }
 
     /// Reserve one exact replacement while a caller-owned semantic proof is
@@ -176,12 +85,13 @@ impl RetainedStagingWrapperRotation {
     /// Journal-aware callers are sealed in the sibling module. The legacy
     /// entry point above supplies a no-op because its clean-baseline proof is
     /// established by the surrounding lifecycle before this core is entered.
-    pub(super) fn reserve_validated(
+    fn reserve_core(
         installation: &Installation,
         role: &'static str,
         state: state::Id,
         token: &str,
-        validate_before_create: &impl Fn() -> Result<(), super::Error>,
+        mode_policy: OriginalWrapperModePolicy,
+        validate_before_create: &impl Fn() -> Result<(), StagingWrapperRotationError>,
     ) -> Result<Self, RetainedStagingWrapperRotationFailure> {
         let not_applied = |source| RetainedStagingWrapperRotationFailure {
             outcome: RetainedStagingWrapperRotationOutcome::NotApplied,
@@ -193,6 +103,7 @@ impl RetainedStagingWrapperRotation {
             .map_err(|source| not_applied(identity("revalidate installation root", source)))?;
         canonical_state_name(state)
             .map_err(|source| not_applied(identity("validate staging-wrapper state", source)))?;
+        validate_before_create().map_err(not_applied)?;
 
         let roots_path = installation.root_path("");
         let roots = RetainedDirectory::open_beneath(installation.root_directory(), ROOTS_RELATIVE, roots_path.clone())
@@ -200,16 +111,31 @@ impl RetainedStagingWrapperRotation {
         let preliminary = roots
             .open_child(STAGING_NAME, installation.staging_dir())
             .map_err(|source| not_applied(identity("retain original staging wrapper", source)))?;
-        chmod_path_descriptor(&preliminary.file, 0o700).map_err(|source| {
-            not_applied(identity(
-                "normalize original staging wrapper mode",
-                super::Error::Quarantine {
-                    operation: "normalize original staging wrapper mode",
-                    path: preliminary.path.clone(),
-                    source,
-                },
-            ))
-        })?;
+        match mode_policy {
+            OriginalWrapperModePolicy::NormalizeBeforeJournal => {
+                chmod_path_descriptor(&preliminary.file, 0o700).map_err(|source| {
+                    not_applied(identity(
+                        "normalize original staging wrapper mode",
+                        super::Error::Quarantine {
+                            operation: "normalize original staging wrapper mode",
+                            path: preliminary.path.clone(),
+                            source,
+                        },
+                    ))
+                })?;
+            }
+            OriginalWrapperModePolicy::RequirePrivateWithJournal if preliminary.witness.mode != 0o700 => {
+                return Err(not_applied(identity(
+                    "require private staging wrapper before journal reservation",
+                    super::Error::UnsafeQuarantineDirectory {
+                        path: preliminary.path.clone(),
+                        owner: preliminary.witness.owner,
+                        mode: preliminary.witness.mode,
+                    },
+                )));
+            }
+            OriginalWrapperModePolicy::RequirePrivateWithJournal => {}
+        }
         drop(preliminary);
         let original = roots
             .open_child(STAGING_NAME, installation.staging_dir())
@@ -253,12 +179,7 @@ impl RetainedStagingWrapperRotation {
             {
                 continue;
             }
-            validate_before_create().map_err(|source| {
-                not_applied(identity(
-                    "validate transition immediately before empty-wrapper reservation",
-                    source,
-                ))
-            })?;
+            validate_before_create().map_err(not_applied)?;
             match RetainedDirectory::create_private_child(&quarantine, &quarantine_name, replacement_path.clone()) {
                 Ok(replacement) => {
                     reserved = Some((quarantine_name, replacement_path, replacement));
@@ -294,45 +215,62 @@ impl RetainedStagingWrapperRotation {
         &self,
         installation: &Installation,
     ) -> Result<(), RetainedStagingWrapperRotationFailure> {
-        self.finish_preparation_validated(installation, &|| Ok(()))
+        self.finish_preparation_core(installation, &|| Ok(()))
+            .map_err(legacy_preparation_failure)
     }
 
     /// Complete replacement durability while sandwiching the retained layout
     /// around the caller's exact journal/runtime/database evidence.
-    pub(super) fn finish_preparation_validated(
+    pub(super) fn finish_preparation_with_journal(
+        &self,
+        _seal: &super::super::journal_coordinator::ActiveReblitReservationSeal,
+        installation: &Installation,
+        validate_transition: &impl Fn() -> Result<(), super::super::journal_coordinator::StatefulTransitionCoordinatorError>,
+    ) -> Result<(), StagingWrapperPreparationFailure> {
+        let validate = || {
+            before_journal_validation();
+            validate_transition().map_err(|source| StagingWrapperRotationError::CoordinatorEvidence(Box::new(source)))
+        };
+        self.finish_preparation_core(installation, &validate)
+    }
+
+    fn finish_preparation_core(
         &self,
         installation: &Installation,
-        validate_transition: &impl Fn() -> Result<(), super::Error>,
-    ) -> Result<(), RetainedStagingWrapperRotationFailure> {
-        let not_applied = |source| RetainedStagingWrapperRotationFailure {
-            outcome: RetainedStagingWrapperRotationOutcome::NotApplied,
-            source,
-        };
-        checkpoint(RetainedStagingWrapperRotationFaultPoint::ReplacementPostCreate).map_err(not_applied)?;
+        validate_transition: &impl Fn() -> Result<(), StagingWrapperRotationError>,
+    ) -> Result<(), StagingWrapperPreparationFailure> {
+        let durability_unproven = StagingWrapperPreparationFailure::DurabilityUnproven;
+        checkpoint(RetainedStagingWrapperRotationFaultPoint::ReplacementPostCreate).map_err(durability_unproven)?;
         self.replacement
             .require_exact_entries(&[])
-            .map_err(|source| not_applied(identity("validate empty staging replacement", source)))?;
-        checkpoint(RetainedStagingWrapperRotationFaultPoint::ReplacementPreparationSync).map_err(not_applied)?;
+            .map_err(|source| durability_unproven(identity("validate empty staging replacement", source)))?;
+        checkpoint(RetainedStagingWrapperRotationFaultPoint::ReplacementPreparationSync)
+            .map_err(durability_unproven)?;
         self.replacement
             .sync("sync empty staging replacement")
-            .map_err(|source| not_applied(identity("sync empty staging replacement", source)))?;
-        checkpoint(RetainedStagingWrapperRotationFaultPoint::QuarantinePreparationSync).map_err(not_applied)?;
+            .map_err(|source| durability_unproven(identity("sync empty staging replacement", source)))?;
+        checkpoint(RetainedStagingWrapperRotationFaultPoint::QuarantinePreparationSync).map_err(durability_unproven)?;
         self.quarantine
             .sync("sync quarantine after staging replacement creation")
-            .map_err(|source| not_applied(identity("sync staging replacement name", source)))?;
-        checkpoint(RetainedStagingWrapperRotationFaultPoint::FinalPreparationRevalidation).map_err(not_applied)?;
+            .map_err(|source| durability_unproven(identity("sync staging replacement name", source)))?;
+        checkpoint(RetainedStagingWrapperRotationFaultPoint::FinalPreparationRevalidation).map_err(|source| {
+            StagingWrapperPreparationFailure::DurableReservationEvidenceFailed {
+                stage: StagingWrapperPreparationEvidenceStage::FinalCheckpoint,
+                source,
+            }
+        })?;
+        before_final_preparation_revalidation();
         self.revalidate_base(installation)
             .and_then(|()| self.require_layout(WrapperLayout::OriginalStaged))
-            .and_then(|()| {
-                validate_transition()
-                    .map_err(|source| identity("validate transition after empty-wrapper reservation", source))
-            })
+            .and_then(|()| validate_transition())
             .and_then(|()| self.revalidate_base(installation))
             .and_then(|()| self.require_layout(WrapperLayout::OriginalStaged))
-            .map_err(|source| RetainedStagingWrapperRotationFailure {
-                outcome: RetainedStagingWrapperRotationOutcome::Ambiguous,
-                source,
-            })
+            .map_err(
+                |source| StagingWrapperPreparationFailure::DurableReservationEvidenceFailed {
+                    stage: StagingWrapperPreparationEvidenceStage::EvidenceSandwich,
+                    source,
+                },
+            )
     }
 
     pub(super) fn rotate(
@@ -970,6 +908,21 @@ impl ActiveReblitTreeLocation {
             Self::Live => installation.root.join("usr"),
         }
     }
+}
+
+fn legacy_preparation_failure(failure: StagingWrapperPreparationFailure) -> RetainedStagingWrapperRotationFailure {
+    let (outcome, source) = match failure {
+        StagingWrapperPreparationFailure::DurabilityUnproven(source)
+        | StagingWrapperPreparationFailure::DurableReservationEvidenceFailed {
+            stage: StagingWrapperPreparationEvidenceStage::FinalCheckpoint,
+            source,
+        } => (RetainedStagingWrapperRotationOutcome::NotApplied, source),
+        StagingWrapperPreparationFailure::DurableReservationEvidenceFailed {
+            stage: StagingWrapperPreparationEvidenceStage::EvidenceSandwich,
+            source,
+        } => (RetainedStagingWrapperRotationOutcome::Ambiguous, source),
+    };
+    RetainedStagingWrapperRotationFailure { outcome, source }
 }
 
 fn identity(operation: &'static str, source: super::Error) -> StagingWrapperRotationError {

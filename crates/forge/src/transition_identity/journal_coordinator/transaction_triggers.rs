@@ -21,11 +21,31 @@ use super::super::CandidateMetadataProof;
 use super::super::prejournal_inventory::{CandidateInventoryLimits, seal_existing_marked_candidate};
 use super::{
     PreparedTransactionTriggerCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
-    TransactionTriggersCompleteCoordinator,
+    TransactionTriggerReadiness, TransactionTriggersCompleteCoordinator,
 };
 
 const RUN_TRANSACTION_TRIGGERS: &str = "run stateful transaction triggers";
 const COMPLETE_TRANSACTION_TRIGGERS: &str = "complete stateful transaction triggers";
+
+#[cfg(test)]
+std::thread_local! {
+    static BEFORE_TRIGGER_EFFECT_EVIDENCE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) fn arm_before_transaction_trigger_effect_evidence(hook: impl FnOnce() + 'static) {
+    BEFORE_TRIGGER_EFFECT_EVIDENCE.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
+}
+
+fn before_transaction_trigger_effect_evidence() {
+    #[cfg(test)]
+    BEFORE_TRIGGER_EFFECT_EVIDENCE.with(|armed| {
+        if let Some(hook) = armed.borrow_mut().take() {
+            hook();
+        }
+    });
+}
 
 /// Narrow, callback-scoped authority for one stateful transaction-trigger run.
 ///
@@ -89,6 +109,14 @@ where
         source: StatefulTransitionCoordinatorError,
     },
     #[error(
+        "transition {transition_id} failed final pre-effect reservation evidence after durable trigger intent; the trigger callback was not invoked"
+    )]
+    PreEffectEvidence {
+        transition_id: TransitionId,
+        #[source]
+        source: StatefulTransitionCoordinatorError,
+    },
+    #[error(
         "transition {transition_id} transaction-trigger effect failed after durable intent; external effects may remain"
     )]
     Effect {
@@ -130,6 +158,7 @@ impl PreparedTransactionTriggerCoordinator {
             mut coordinator,
             metadata,
             provenance,
+            readiness,
         } = self;
         let transition_id = coordinator.record.transition_id.clone();
         if let Err(source) = coordinator.require_phase(Phase::CandidatePrepared, RUN_TRANSACTION_TRIGGERS) {
@@ -151,10 +180,8 @@ impl PreparedTransactionTriggerCoordinator {
                 });
             }
         };
-        if let Err(source) = coordinator.seal_prepared_candidate() {
-            return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
-        }
-        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata, &provenance) {
+        if let Err(source) = require_trigger_ready_sandwich(&coordinator, candidate, &metadata, &provenance, &readiness)
+        {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
 
@@ -165,6 +192,12 @@ impl PreparedTransactionTriggerCoordinator {
             });
         }
         coordinator.record = started;
+        before_transaction_trigger_effect_evidence();
+
+        if let Err(source) = require_trigger_ready_sandwich(&coordinator, candidate, &metadata, &provenance, &readiness)
+        {
+            return Err(StatefulTransactionTriggerFailure::PreEffectEvidence { transition_id, source });
+        }
 
         let authority = StatefulTransactionTriggerAuthority {
             transition_id: &coordinator.record.transition_id,
@@ -176,10 +209,8 @@ impl PreparedTransactionTriggerCoordinator {
             return Err(StatefulTransactionTriggerFailure::Effect { transition_id, source });
         }
 
-        if let Err(source) = coordinator.seal_prepared_candidate() {
-            return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
-        }
-        if let Err(source) = coordinator.require_prepared_metadata_sandwich(candidate, &metadata, &provenance) {
+        if let Err(source) = require_trigger_ready_sandwich(&coordinator, candidate, &metadata, &provenance, &readiness)
+        {
             return Err(StatefulTransactionTriggerFailure::PostEffectEvidence { transition_id, source });
         }
 
@@ -213,8 +244,23 @@ impl PreparedTransactionTriggerCoordinator {
             coordinator,
             metadata,
             provenance,
+            readiness,
         })
     }
+}
+
+fn require_trigger_ready_sandwich(
+    coordinator: &StatefulTransitionCoordinator,
+    candidate: state::Id,
+    metadata: &CandidateMetadataProof,
+    provenance: &db::state::MetadataProvenance,
+    readiness: &TransactionTriggerReadiness,
+) -> Result<(), StatefulTransitionCoordinatorError> {
+    coordinator.seal_prepared_candidate()?;
+    coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)?;
+    readiness.require_staged(&coordinator.identity)?;
+    coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)?;
+    readiness.require_staged(&coordinator.identity)
 }
 
 impl StatefulTransitionCoordinator {

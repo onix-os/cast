@@ -25,8 +25,14 @@ fn coordinator_at_candidate_prepared(
         Phase::CandidatePrepared,
         expected_generation,
     );
-    let PreparedStatefulTransitionCoordinator::TransactionTriggers(coordinator) = coordinator else {
-        panic!("archived activation cannot yield transaction-trigger authority")
+    let coordinator = match coordinator {
+        PreparedStatefulTransitionCoordinator::NewStateTriggers(coordinator) => coordinator,
+        PreparedStatefulTransitionCoordinator::ActiveReblitReservation(coordinator) => coordinator
+            .reserve_for_transaction_triggers(&fixture.installation)
+            .unwrap(),
+        PreparedStatefulTransitionCoordinator::Archived(_) => {
+            panic!("archived activation cannot yield transaction-trigger authority")
+        }
     };
     (fixture, coordinator)
 }

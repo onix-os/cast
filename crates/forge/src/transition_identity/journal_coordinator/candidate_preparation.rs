@@ -31,8 +31,18 @@ use crate::transition_identity::{
 /// activation deliberately has no transaction-trigger runner.
 #[derive(Debug)]
 pub(crate) enum PreparedStatefulTransitionCoordinator {
-    TransactionTriggers(PreparedTransactionTriggerCoordinator),
+    NewStateTriggers(PreparedTransactionTriggerCoordinator),
+    ActiveReblitReservation(PreparedActiveReblitReservationCoordinator),
     Archived(PreparedArchivedTransitionCoordinator),
+}
+
+/// Proof-bearing `ActiveReblit` authority which is deliberately not trigger
+/// ready. It must consume the sealed reservation boundary first.
+#[derive(Debug)]
+pub(crate) struct PreparedActiveReblitReservationCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
 }
 
 /// Proof-bearing `NewState` or `ActiveReblit` authority.
@@ -41,6 +51,15 @@ pub(crate) struct PreparedTransactionTriggerCoordinator {
     pub(super) coordinator: StatefulTransitionCoordinator,
     pub(super) metadata: CandidateMetadataProof,
     pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) readiness: TransactionTriggerReadiness,
+}
+
+/// Mandatory operation-specific proof retained through every post-trigger
+/// forward boundary. There is intentionally no archived variant.
+#[derive(Debug)]
+pub(super) enum TransactionTriggerReadiness {
+    NewState,
+    ActiveReblit(super::super::staging_wrapper_rotation::RetainedActiveReblitReservation),
 }
 
 /// Proof-bearing archived-activation authority. This type intentionally has
@@ -58,6 +77,7 @@ pub(crate) struct TransactionTriggersCompleteCoordinator {
     pub(super) coordinator: StatefulTransitionCoordinator,
     pub(super) metadata: CandidateMetadataProof,
     pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) readiness: TransactionTriggerReadiness,
 }
 
 impl StatefulTransitionCoordinator {
@@ -162,13 +182,21 @@ impl StatefulTransitionCoordinator {
         self.advance(None)?;
 
         match self.record.operation {
-            Operation::NewState | Operation::ActiveReblit => Ok(
-                PreparedStatefulTransitionCoordinator::TransactionTriggers(PreparedTransactionTriggerCoordinator {
+            Operation::NewState => Ok(PreparedStatefulTransitionCoordinator::NewStateTriggers(
+                PreparedTransactionTriggerCoordinator {
                     coordinator: self,
                     metadata,
                     provenance,
-                }),
-            ),
+                    readiness: TransactionTriggerReadiness::NewState,
+                },
+            )),
+            Operation::ActiveReblit => Ok(PreparedStatefulTransitionCoordinator::ActiveReblitReservation(
+                PreparedActiveReblitReservationCoordinator {
+                    coordinator: self,
+                    metadata,
+                    provenance,
+                },
+            )),
             Operation::ActivateArchived => Ok(PreparedStatefulTransitionCoordinator::Archived(
                 PreparedArchivedTransitionCoordinator {
                     coordinator: self,
@@ -302,13 +330,21 @@ impl PreparedStatefulTransitionCoordinator {
     #[cfg(test)]
     pub(crate) fn record(&self) -> &TransitionRecord {
         match self {
-            Self::TransactionTriggers(prepared) => prepared.record(),
+            Self::NewStateTriggers(prepared) => prepared.record(),
+            Self::ActiveReblitReservation(prepared) => prepared.record(),
             Self::Archived(prepared) => prepared.record(),
         }
     }
 }
 
 impl PreparedTransactionTriggerCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        &self.coordinator.record
+    }
+}
+
+impl PreparedActiveReblitReservationCoordinator {
     #[cfg(test)]
     pub(crate) fn record(&self) -> &TransitionRecord {
         &self.coordinator.record

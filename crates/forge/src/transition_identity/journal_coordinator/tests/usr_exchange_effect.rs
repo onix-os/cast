@@ -46,7 +46,16 @@ fn coordinator_from_exchange_fixture(
         PreparedStatefulTransitionCoordinator::Archived(ready) => {
             TestUsrExchangeReady::Archived(ready)
         }
-        PreparedStatefulTransitionCoordinator::TransactionTriggers(ready) => {
+        PreparedStatefulTransitionCoordinator::NewStateTriggers(ready) => {
+            let complete = ready
+                .run_transaction_triggers(|_| Ok::<(), TriggerEffectError>(()))
+                .unwrap();
+            TestUsrExchangeReady::TransactionTriggers(complete)
+        }
+        PreparedStatefulTransitionCoordinator::ActiveReblitReservation(ready) => {
+            let ready = ready
+                .reserve_for_transaction_triggers(&fixture.installation)
+                .unwrap();
             let complete = ready
                 .run_transaction_triggers(|_| Ok::<(), TriggerEffectError>(()))
                 .unwrap();
@@ -135,7 +144,7 @@ fn journal_coordinator_new_state_synthesized_empty_exchange_applies_once_and_ret
 }
 
 #[test]
-fn journal_coordinator_active_reblit_exchange_preserves_exact_two_link_slot_without_rotation_or_parking() {
+fn journal_coordinator_active_reblit_exchange_preserves_exact_parked_two_link_slot_and_reservation() {
     let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
     let wrapper = fixture.installation.root_path(fixture.previous_state.to_string());
     let slot = fs::read_dir(&wrapper).unwrap().next().unwrap().unwrap().path();
@@ -143,21 +152,32 @@ fn journal_coordinator_active_reblit_exchange_preserves_exact_two_link_slot_with
     let slot_before = fs::symlink_metadata(&slot).unwrap();
     let (fixture, intent, authority) =
         coordinator_from_exchange_fixture(CandidateKind::ActiveReblit, fixture, identity, authority);
+    let intent_record = intent.record().clone();
+    let parked = active_reblit_parked_slot_path(&fixture, &intent_record, 0);
+    let parked_slot = active_reblit_slot_marker_path(
+        &parked,
+        fixture.previous_state,
+        intent_record.previous.tree_token.as_str(),
+    );
+    let replacement = active_reblit_replacement_path(&fixture, &intent_record, 0);
+    assert!(!wrapper.exists());
+    assert_eq!(directory_identity(&parked), wrapper_before);
+    let parked_before = fs::symlink_metadata(&parked_slot).unwrap();
+    assert_eq!((parked_before.dev(), parked_before.ino()), (slot_before.dev(), slot_before.ino()));
+    assert_empty_private_reservation(&replacement);
     reset_retained_exchange_syscall_count();
 
     let exchanged = intent.execute_usr_exchange(authority).unwrap();
 
     assert_eq!(exchanged.record().phase, Phase::UsrExchanged);
     assert_eq!(retained_exchange_syscall_count(), 1);
-    assert_eq!(directory_identity(&wrapper), wrapper_before);
-    let slot_after = fs::symlink_metadata(&slot).unwrap();
+    assert!(!wrapper.exists());
+    assert_eq!(directory_identity(&parked), wrapper_before);
+    let slot_after = fs::symlink_metadata(&parked_slot).unwrap();
     assert_eq!((slot_after.dev(), slot_after.ino()), (slot_before.dev(), slot_before.ino()));
     assert_eq!(slot_after.nlink(), 2);
-    let root_names = fs::read_dir(fixture.installation.root_path(""))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    assert!(root_names.iter().all(|name| !name.starts_with(".archived-candidate-slot-")));
+    assert_empty_private_reservation(&replacement);
+    exchanged.revalidate_retained_authorities().unwrap();
     assert_root_links_absent(&fixture);
 }
 
@@ -165,17 +185,17 @@ fn journal_coordinator_active_reblit_exchange_preserves_exact_two_link_slot_with
 fn journal_coordinator_active_reblit_slot_and_state_substitution_stop_before_exchange() {
     {
         let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
-        let wrapper = fixture.installation.root_path(fixture.previous_state.to_string());
         let displaced = fixture.installation.root_path("slot-wrapper.displaced");
-        let hook_wrapper = wrapper.clone();
-        let hook_displaced = displaced.clone();
         let (fixture, intent, authority) =
             coordinator_from_exchange_fixture(CandidateKind::ActiveReblit, fixture, identity, authority);
         let intent_record = intent.record().clone();
+        let parked = active_reblit_parked_slot_path(&fixture, &intent_record, 0);
+        let hook_parked = parked.clone();
+        let hook_displaced = displaced.clone();
         arm_before_retained_exchange_rename(move || {
-            fs::rename(&hook_wrapper, &hook_displaced).unwrap();
-            fs::create_dir(&hook_wrapper).unwrap();
-            fs::set_permissions(&hook_wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::rename(&hook_parked, &hook_displaced).unwrap();
+            fs::create_dir(&hook_parked).unwrap();
+            fs::set_permissions(&hook_parked, fs::Permissions::from_mode(0o700)).unwrap();
         });
         reset_retained_exchange_syscall_count();
 
@@ -454,7 +474,6 @@ fn journal_coordinator_usr_exchange_effect_post_apply_authority_failures_remain_
         } else {
             CandidateKind::NewState
         };
-        let wrapper = fixture.installation.root_path(fixture.previous_state.to_string());
         let displaced_wrapper = fixture.installation.root_path("post-effect-slot.displaced");
         let database = fixture.database.clone();
         let candidate = fixture.candidate_state;
@@ -462,6 +481,7 @@ fn journal_coordinator_usr_exchange_effect_post_apply_authority_failures_remain_
         let (fixture, intent, authority) =
             coordinator_from_exchange_fixture(kind, fixture, identity, authority);
         let intent_record = intent.record().clone();
+        let parked_wrapper = active_reblit_parked_slot_path(&fixture, &intent_record, 0);
         arm_after_retained_exchange_rename(move || match mutation {
             "database" => database
                 .clear_transition_if_matches(candidate, &intent_record.transition_id)
@@ -470,9 +490,9 @@ fn journal_coordinator_usr_exchange_effect_post_apply_authority_failures_remain_
             "root-abi" => std::os::unix::fs::symlink("usr/bin", root.join("bin")).unwrap(),
             "active-reblit-state" => database.remove(&candidate).unwrap(),
             "second-link" => {
-                fs::rename(&wrapper, &displaced_wrapper).unwrap();
-                fs::create_dir(&wrapper).unwrap();
-                fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+                fs::rename(&parked_wrapper, &displaced_wrapper).unwrap();
+                fs::create_dir(&parked_wrapper).unwrap();
+                fs::set_permissions(&parked_wrapper, fs::Permissions::from_mode(0o700)).unwrap();
             }
             _ => unreachable!(),
         });

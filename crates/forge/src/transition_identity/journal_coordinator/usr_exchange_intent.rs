@@ -20,7 +20,7 @@ use crate::{db, state::TransitionId, transition_journal::Phase};
 use super::super::CandidateMetadataProof;
 use super::{
     PreparedArchivedTransitionCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
-    TransactionTriggersCompleteCoordinator,
+    TransactionTriggerReadiness, TransactionTriggersCompleteCoordinator,
 };
 
 const BEGIN_USR_EXCHANGE_INTENT: &str = "begin /usr exchange intent";
@@ -36,6 +36,13 @@ pub(crate) struct UsrExchangeIntentCoordinator {
     pub(super) coordinator: StatefulTransitionCoordinator,
     pub(super) metadata: CandidateMetadataProof,
     pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) readiness: UsrExchangeReadiness,
+}
+
+#[derive(Debug)]
+pub(super) enum UsrExchangeReadiness {
+    TransactionTriggers(TransactionTriggerReadiness),
+    Archived,
 }
 
 /// Fail-stop result of publishing the `/usr` exchange intent.
@@ -72,8 +79,15 @@ impl TransactionTriggersCompleteCoordinator {
             coordinator,
             metadata,
             provenance,
+            readiness,
         } = self;
-        begin_usr_exchange_intent(coordinator, metadata, provenance, Phase::TransactionTriggersComplete)
+        begin_usr_exchange_intent(
+            coordinator,
+            metadata,
+            provenance,
+            UsrExchangeReadiness::TransactionTriggers(readiness),
+            Phase::TransactionTriggersComplete,
+        )
     }
 }
 
@@ -87,7 +101,13 @@ impl PreparedArchivedTransitionCoordinator {
             metadata,
             provenance,
         } = self;
-        begin_usr_exchange_intent(coordinator, metadata, provenance, Phase::CandidatePrepared)
+        begin_usr_exchange_intent(
+            coordinator,
+            metadata,
+            provenance,
+            UsrExchangeReadiness::Archived,
+            Phase::CandidatePrepared,
+        )
     }
 }
 
@@ -95,6 +115,7 @@ fn begin_usr_exchange_intent(
     mut coordinator: StatefulTransitionCoordinator,
     metadata: CandidateMetadataProof,
     provenance: db::state::MetadataProvenance,
+    readiness: UsrExchangeReadiness,
     predecessor: Phase,
 ) -> Result<UsrExchangeIntentCoordinator, UsrExchangeIntentFailure> {
     let transition_id = coordinator.record.transition_id.clone();
@@ -125,9 +146,7 @@ fn begin_usr_exchange_intent(
     // been retained for an arbitrary time. Reseal the exact candidate, then
     // make the metadata proof the final observation in the full evidence
     // sandwich immediately before the conditional journal update.
-    coordinator.seal_prepared_candidate().map_err(preflight)?;
-    coordinator
-        .require_prepared_metadata_sandwich(candidate, &metadata, &provenance)
+    require_usr_exchange_intent_sandwich(&coordinator, candidate, &metadata, &provenance, &readiness)
         .map_err(preflight)?;
 
     if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &intent) {
@@ -142,7 +161,44 @@ fn begin_usr_exchange_intent(
         coordinator,
         metadata,
         provenance,
+        readiness,
     })
+}
+
+fn require_usr_exchange_intent_sandwich(
+    coordinator: &StatefulTransitionCoordinator,
+    candidate: crate::state::Id,
+    metadata: &CandidateMetadataProof,
+    provenance: &db::state::MetadataProvenance,
+    readiness: &UsrExchangeReadiness,
+) -> Result<(), StatefulTransitionCoordinatorError> {
+    coordinator.seal_prepared_candidate()?;
+    coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)?;
+    readiness.require_staged(&coordinator.identity)?;
+    coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)?;
+    readiness.require_staged(&coordinator.identity)
+}
+
+impl UsrExchangeReadiness {
+    pub(super) fn require_staged(
+        &self,
+        identity: &super::super::StatefulTreeIdentity,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        match self {
+            Self::TransactionTriggers(readiness) => readiness.require_staged(identity),
+            Self::Archived => Ok(()),
+        }
+    }
+
+    pub(super) fn require_live(
+        &self,
+        identity: &super::super::StatefulTreeIdentity,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        match self {
+            Self::TransactionTriggers(readiness) => readiness.require_live(identity),
+            Self::Archived => Ok(()),
+        }
+    }
 }
 
 impl UsrExchangeIntentCoordinator {

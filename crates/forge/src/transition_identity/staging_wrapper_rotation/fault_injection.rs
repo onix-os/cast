@@ -1,12 +1,16 @@
 //! Test-only fault and race hooks for retained wrapper mechanics.
 
-use super::legacy_lifecycle::{RetainedStagingWrapperRotationFaultPoint, StagingWrapperRotationError};
+use super::model::{RetainedStagingWrapperRotationFaultPoint, StagingWrapperRotationError};
 
 #[cfg(test)]
 std::thread_local! {
     static FAULT: std::cell::RefCell<Vec<RetainedStagingWrapperRotationFaultPoint>> =
         const { std::cell::RefCell::new(Vec::new()) };
     static BEFORE_EXCHANGE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_JOURNAL_VALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_FINAL_PREPARATION_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -22,6 +26,34 @@ pub(crate) fn arm_staging_wrapper_rotation_faults(
 #[cfg(test)]
 pub(crate) fn arm_before_staging_wrapper_exchange(hook: impl FnOnce() + 'static) {
     BEFORE_EXCHANGE.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+pub(crate) fn arm_before_staging_wrapper_journal_validation(hook: impl FnOnce() + 'static) {
+    BEFORE_JOURNAL_VALIDATION.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+pub(crate) fn arm_before_staging_wrapper_final_preparation_revalidation(hook: impl FnOnce() + 'static) {
+    BEFORE_FINAL_PREPARATION_REVALIDATION.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
+}
+
+pub(super) fn before_journal_validation() {
+    #[cfg(test)]
+    BEFORE_JOURNAL_VALIDATION.with(|armed| {
+        if let Some(hook) = armed.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+pub(super) fn before_final_preparation_revalidation() {
+    #[cfg(test)]
+    BEFORE_FINAL_PREPARATION_REVALIDATION.with(|armed| {
+        if let Some(hook) = armed.borrow_mut().take() {
+            hook();
+        }
+    });
 }
 
 pub(super) fn before_exchange() {

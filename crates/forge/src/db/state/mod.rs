@@ -140,6 +140,24 @@ impl Database {
         self.conn.exec(|conn| load_state(conn, id))
     }
 
+    /// Mutate one state field through the ordinary SQLite capability so tests
+    /// can prove that coordinator evidence retains the complete state
+    /// snapshot, not only its durable row identity.
+    #[cfg(test)]
+    pub(crate) fn change_summary_for_test(
+        &self,
+        state: Id,
+        summary: Option<&str>,
+    ) -> Result<(), TransitionMutationError> {
+        let changed = self.conn.exclusive_tx(|tx| {
+            diesel::update(model::state::table.filter(model::state::id.eq(i32::from(state))))
+                .set(model::state::summary.eq(summary))
+                .execute(tx)
+                .map_err(Error::from)
+        })?;
+        require_one_transition_row(changed, state)
+    }
+
     /// Inspect an exact state/transition pair without mutating either row.
     ///
     /// Stored transition text is parsed back through [`TransitionId`] before

@@ -10,7 +10,10 @@ use crate::{
     },
 };
 
-use super::super::{CandidateInventoryError, CandidateMetadataError};
+use super::super::{
+    CandidateInventoryError, CandidateMetadataError,
+    staging_wrapper_rotation::RetainedActiveReblitReservationEvidenceFailure,
+};
 use crate::client::JournalUsrExchangeAuthorityError;
 
 #[derive(Debug, Error)]
@@ -113,6 +116,8 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     },
     #[error("durably seal the exact existing marked candidate before a forward journal boundary")]
     PreparedCandidateDurability(#[source] CandidateInventoryError),
+    #[error("revalidate the exact pre-trigger ActiveReblit reservation")]
+    ActiveReblitReservation(#[source] RetainedActiveReblitReservationEvidenceFailure),
     #[error("publish the exact absent candidate state ID under CandidatePrepareStarted authority")]
     StateIdPublication(#[from] super::super::state_tree_metadata::StateIdPublicationFailure),
 }

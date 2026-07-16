@@ -40,6 +40,8 @@ pub(crate) enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("coordinator evidence failed immediately before the retained /usr exchange")]
+    RetainedExchangeCoordinatorEvidence(#[source] Box<super::journal_coordinator::StatefulTransitionCoordinatorError>),
     #[error(
         "retained /usr exchange parents are on different filesystems: live `{}` and staged `{}`",
         live_parent.display(),

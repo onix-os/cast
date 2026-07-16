@@ -5,13 +5,10 @@
 //! reconciles both retained tree names, completes both parent durability
 //! barriers for an applied layout, and only then records `UsrExchanged`.
 //!
-//! ActiveReblit wrapper rotation and second-link parking are intentionally not
-//! performed here: their legacy helpers require journal absence and would
-//! recreate an unjournaled crash window.  This boundary only proves the exact
-//! retained canonical-or-already-parked slot unchanged.  A later sealed,
-//! recoverable coordinator phase must own those monotonic namespace effects.
-
-use std::io;
+//! ActiveReblit replacement reservation and second-link parking are completed
+//! by the sealed pre-trigger typestate. This boundary only revalidates that
+//! exact aggregate reservation in staged and live directions; it never repeats
+//! either monotonic namespace effect.
 
 use thiserror::Error;
 
@@ -22,10 +19,10 @@ use crate::{
     transition_journal::Phase,
 };
 
-use super::super::{CandidateMetadataProof, Error as IdentityError, RetainedExchangeFailure, RetainedExchangeOutcome};
+use super::super::{CandidateMetadataProof, RetainedExchangeFailure, RetainedExchangeOutcome};
 use super::{
     StatefulTransitionCoordinator, StatefulTransitionCoordinatorError, UsrExchangeEffectSeal,
-    UsrExchangeIntentCoordinator,
+    UsrExchangeIntentCoordinator, usr_exchange_intent::UsrExchangeReadiness,
 };
 
 const EXECUTE_USR_EXCHANGE: &str = "execute coordinator-owned /usr exchange";
@@ -40,6 +37,7 @@ pub(crate) struct UsrExchangedCoordinator {
     metadata: CandidateMetadataProof,
     provenance: db::state::MetadataProvenance,
     authority: AppliedJournalUsrExchangeAuthority,
+    readiness: UsrExchangeReadiness,
 }
 
 /// Fail-stop result of the one-shot exchange effect.  No error retains an
@@ -87,11 +85,14 @@ impl UsrExchangeIntentCoordinator {
             mut coordinator,
             metadata,
             provenance,
+            readiness,
         } = self;
         let transition_id = coordinator.record.transition_id.clone();
         let seal = UsrExchangeEffectSeal { _private: () };
 
-        if let Err(source) = require_pre_exchange_sandwich(&coordinator, &metadata, &provenance, &authority, &seal) {
+        if let Err(source) =
+            require_pre_exchange_sandwich(&coordinator, &metadata, &provenance, &readiness, &authority, &seal)
+        {
             return Err(UsrExchangeEffectFailure::Preflight { transition_id, source });
         }
 
@@ -99,13 +100,7 @@ impl UsrExchangeIntentCoordinator {
         let exchange = coordinator
             .identity
             .exchange_forward_with_journal(installation, &seal, &|| {
-                require_pre_exchange_sandwich(&coordinator, &metadata, &provenance, &authority, &seal).map_err(
-                    |source| IdentityError::RetainedExchange {
-                        operation: "repeat complete coordinator evidence immediately before one-shot /usr exchange",
-                        path: installation.root.join("usr"),
-                        source: io::Error::other(source.to_string()),
-                    },
-                )
+                require_pre_exchange_sandwich(&coordinator, &metadata, &provenance, &readiness, &authority, &seal)
             });
         if let Err(source) = exchange {
             return Err(UsrExchangeEffectFailure::Exchange {
@@ -116,7 +111,8 @@ impl UsrExchangeIntentCoordinator {
         }
 
         let authority = authority.into_applied();
-        if let Err(source) = require_applied_exchange_sandwich(&coordinator, &metadata, &provenance, &authority, &seal)
+        if let Err(source) =
+            require_applied_exchange_sandwich(&coordinator, &metadata, &provenance, &readiness, &authority, &seal)
         {
             return Err(UsrExchangeEffectFailure::PostEffectEvidence { transition_id, source });
         }
@@ -151,6 +147,7 @@ impl UsrExchangeIntentCoordinator {
             metadata,
             provenance,
             authority,
+            readiness,
         })
     }
 }
@@ -159,6 +156,7 @@ fn require_pre_exchange_sandwich(
     coordinator: &StatefulTransitionCoordinator,
     metadata: &CandidateMetadataProof,
     provenance: &db::state::MetadataProvenance,
+    readiness: &UsrExchangeReadiness,
     authority: &JournalUsrExchangeAuthority,
     seal: &UsrExchangeEffectSeal,
 ) -> Result<(), StatefulTransitionCoordinatorError> {
@@ -168,6 +166,7 @@ fn require_pre_exchange_sandwich(
     authority.require_pre_exchange(coordinator.record.operation, candidate, previous)?;
     coordinator.seal_prepared_candidate()?;
     coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)?;
+    readiness.require_staged(&coordinator.identity)?;
     require_active_reblit_snapshot(
         coordinator,
         authority.active_reblit(),
@@ -176,25 +175,28 @@ fn require_pre_exchange_sandwich(
         false,
     )?;
     authority.require_pre_exchange(coordinator.record.operation, candidate, previous)?;
-    coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)
+    coordinator.require_prepared_metadata_sandwich(candidate, metadata, provenance)?;
+    readiness.require_staged(&coordinator.identity)
 }
 
 fn require_applied_exchange_sandwich(
     coordinator: &StatefulTransitionCoordinator,
     metadata: &CandidateMetadataProof,
     provenance: &db::state::MetadataProvenance,
+    readiness: &UsrExchangeReadiness,
     authority: &AppliedJournalUsrExchangeAuthority,
     seal: &UsrExchangeEffectSeal,
 ) -> Result<(), StatefulTransitionCoordinatorError> {
     coordinator.seal_prepared_candidate()?;
-    require_applied_exchange_evidence(coordinator, metadata, provenance, authority, seal)?;
-    require_applied_exchange_evidence(coordinator, metadata, provenance, authority, seal)
+    require_applied_exchange_evidence(coordinator, metadata, provenance, readiness, authority, seal)?;
+    require_applied_exchange_evidence(coordinator, metadata, provenance, readiness, authority, seal)
 }
 
 fn require_applied_exchange_evidence(
     coordinator: &StatefulTransitionCoordinator,
     metadata: &CandidateMetadataProof,
     provenance: &db::state::MetadataProvenance,
+    readiness: &UsrExchangeReadiness,
     authority: &AppliedJournalUsrExchangeAuthority,
     seal: &UsrExchangeEffectSeal,
 ) -> Result<(), StatefulTransitionCoordinatorError> {
@@ -224,9 +226,11 @@ fn require_applied_exchange_evidence(
     let (os_release, system_model) = metadata.policy_output_bytes();
     provenance.require_outputs(candidate, os_release, system_model)?;
     require_active_reblit_snapshot(coordinator, authority.active_reblit(), installation, seal, true)?;
+    readiness.require_live(&coordinator.identity)?;
     authority.require_post_exchange()?;
     coordinator.require_record_runtime_evidence()?;
-    coordinator.require_canonical_record()
+    coordinator.require_canonical_record()?;
+    readiness.require_live(&coordinator.identity)
 }
 
 fn require_active_reblit_snapshot(
@@ -251,6 +255,7 @@ impl UsrExchangedCoordinator {
         let _metadata = &self.metadata;
         let _provenance = &self.provenance;
         let _authority = &self.authority;
+        let _readiness = &self.readiness;
         &self.coordinator.record
     }
 
@@ -261,6 +266,7 @@ impl UsrExchangedCoordinator {
             &self.coordinator,
             &self.metadata,
             &self.provenance,
+            &self.readiness,
             &self.authority,
             &seal,
         )

@@ -26,6 +26,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 .DEFAULT_GOAL := cast
 
 include misc/make/hardening-tests.mk
+include misc/make/transition-coordinator-tests.mk
 include misc/make/activation-namespace-tests.mk
 include misc/make/userspace-profile-fixture.mk
 

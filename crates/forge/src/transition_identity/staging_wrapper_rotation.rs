@@ -7,12 +7,22 @@
 use super::*;
 
 mod fault_injection;
+mod journal_reservation;
 mod legacy_lifecycle;
+mod model;
 mod state_snapshot;
 
 #[cfg(test)]
-pub(crate) use fault_injection::{arm_before_staging_wrapper_exchange, arm_staging_wrapper_rotation_faults};
-pub(super) use legacy_lifecycle::RetainedStagingWrapperRotation;
+pub(crate) use fault_injection::{
+    arm_before_staging_wrapper_exchange, arm_before_staging_wrapper_final_preparation_revalidation,
+    arm_before_staging_wrapper_journal_validation, arm_staging_wrapper_rotation_faults,
+};
+pub(super) use journal_reservation::{
+    ActiveReblitReservationError, RetainedActiveReblitReservation, RetainedActiveReblitReservationEvidenceFailure,
+};
+pub(super) use model::RetainedStagingWrapperRotation;
 #[cfg(test)]
-pub(crate) use legacy_lifecycle::RetainedStagingWrapperRotationFaultPoint;
-pub(crate) use legacy_lifecycle::{RetainedStagingWrapperRotationFailure, RetainedStagingWrapperRotationOutcome};
+pub(crate) use model::RetainedStagingWrapperRotationFaultPoint;
+pub(crate) use model::{RetainedStagingWrapperRotationFailure, RetainedStagingWrapperRotationOutcome};
+#[cfg(test)]
+pub(super) use model::{StagingWrapperPreparationEvidenceStage, StagingWrapperPreparationFailure};

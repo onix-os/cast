@@ -142,7 +142,9 @@ pub(crate) use staging_wrapper_rotation::{
 };
 #[cfg(test)]
 pub(crate) use staging_wrapper_rotation::{
-    RetainedStagingWrapperRotationFaultPoint, arm_before_staging_wrapper_exchange, arm_staging_wrapper_rotation_faults,
+    RetainedStagingWrapperRotationFaultPoint, arm_before_staging_wrapper_exchange,
+    arm_before_staging_wrapper_final_preparation_revalidation, arm_before_staging_wrapper_journal_validation,
+    arm_staging_wrapper_rotation_faults,
 };
 #[cfg(test)]
 pub(crate) use tree_lifecycle::arm_after_candidate_mutable_namespace_preflight;

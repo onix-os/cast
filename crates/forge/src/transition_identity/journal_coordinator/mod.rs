@@ -14,6 +14,7 @@
 //! cannot. Live wiring remains deferred until startup reconciliation consumes
 //! every record this contract may publish.
 
+mod active_reblit_reservation;
 mod candidate_preparation;
 mod error;
 mod request;
@@ -24,10 +25,14 @@ mod usr_exchange_intent;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+use active_reblit_reservation::ActiveReblitReservationFailure;
+use candidate_preparation::TransactionTriggerReadiness;
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
-    PreparedArchivedTransitionCoordinator, PreparedStatefulTransitionCoordinator,
-    PreparedTransactionTriggerCoordinator, TransactionTriggersCompleteCoordinator,
+    PreparedActiveReblitReservationCoordinator, PreparedArchivedTransitionCoordinator,
+    PreparedStatefulTransitionCoordinator, PreparedTransactionTriggerCoordinator,
+    TransactionTriggersCompleteCoordinator,
 };
 pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
@@ -60,6 +65,14 @@ use super::{
 /// descendants; legacy callers cannot use it to bypass journal-absence guards.
 #[derive(Debug)]
 pub(super) struct UsrExchangeEffectSeal {
+    _private: (),
+}
+
+/// Private capability accepted only by journal-aware ActiveReblit reservation
+/// primitives. Legacy lifecycle methods cannot construct it and retain their
+/// strict clean-baseline and journal-absence guards.
+#[derive(Debug)]
+pub(super) struct ActiveReblitReservationSeal {
     _private: (),
 }
 

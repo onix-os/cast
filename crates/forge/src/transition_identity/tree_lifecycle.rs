@@ -406,13 +406,14 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         seal: &journal_coordinator::UsrExchangeEffectSeal,
-        validate: &impl Fn() -> Result<(), Error>,
+        validate: &impl Fn() -> Result<(), StatefulTransitionCoordinatorError>,
     ) -> Result<(), RetainedExchangeFailure> {
+        let validate = || validate().map_err(|source| Error::RetainedExchangeCoordinatorEvidence(Box::new(source)));
         self.exchange_live_and_staged(
             installation,
             RetainedExchangeDirection::Forward,
             ExchangeJournalGuard::Coordinator(seal),
-            validate,
+            &validate,
         )
     }
 
