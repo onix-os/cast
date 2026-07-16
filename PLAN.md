@@ -707,7 +707,7 @@ and an unwired one-shot coordinator effect which reaches durable
 `CandidatePrepared`, its ActiveReblit path seals the exact replacement-wrapper
 reservation and authenticated previous-marker parking. Both trigger-capable
 operations then publish and retain the exact transaction-isolation ABI required
-for trigger intent. Mutable startup has three deliberately narrow
+for trigger intent. Mutable startup has four deliberately narrow
 pre-assessment recovery steps. Under exact journal, installation, database,
 provenance, and active-selection authority, the first may normalize only an
 authenticated restrictive ActiveReblit replacement wrapper to mode `0700`; it
@@ -730,6 +730,23 @@ journal, and reconciles the complete canonical record. The decision and parent
 durability Make lanes each pass 11/11 contracts. The latter includes a real
 coordinator-to-startup proof across all three operations and all three forward
 durability fault points, with the atomic-exchange syscall count remaining one.
+Commit `911dcbc` adds the fourth checkpoint without chaining another journal
+mutation into the startup entry which persisted `RollbackDecided`. A later
+startup must independently recapture exact journal, database, provenance,
+namespace, and cooperating-writer authority. Exact `RollbackDecided` with a
+pending `/usr` action and `POST` layout routes to `ReverseExchangeIntent`;
+an already-satisfied `/usr` action with `PRE` layout skips reversal and routes
+to `CandidatePreserveIntent`. The executor derives one `rollback_successor(None)`
+and attempts one conditional journal advance. It performs no exchange and no
+non-journal filesystem, database, trigger, cleanup, or root-link effect. It
+drops the old authority and lock-bearing store before descriptor-rooted reopen, where an
+uncertain result must reconcile to the exact source or exact successor. The
+focused rollback-resume route lane passes 11/11 contracts. Its additional real
+coordinator-origin proof covers all three operations at all three forward
+durability fault points, enters startup once for the decision and again for the
+route, and proves the atomic-exchange syscall count remains one with unchanged
+database and non-journal namespace evidence. `make check` and all three narrow
+startup recovery Make lanes pass at this checkpoint.
 The subsequent diagnostic-only startup assessment sandwiches a complete
 bounded, descriptor-rooted activation-namespace inventory around the remaining
 startup evidence. That inventory authenticates exact raw names, tree and slot roles,

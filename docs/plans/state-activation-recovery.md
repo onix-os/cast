@@ -60,8 +60,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   journal. The focused `make forge-client-startup-gate-test` lane lists 21
   contracts, including 5 which prove compatible repair and zero chmod for
   incompatible database, active-selection, record, or installation authority.
-  Apart from this chmod and the journal-only rollback-decision slice documented
-  below, general phase recovery execution is not implemented. The public
+  Apart from this chmod and the journal-only rollback-decision and
+  rollback-resume routing slices documented below, general phase recovery
+  execution is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -643,7 +644,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   `/usr` exchange evidence cases documented below to `RollbackDecided`, and
   commit `72511b3` first completes both exact parent-directory durability
   barriers for authenticated `UsrExchangeIntent` + `POST` evidence before using
-  that same decision boundary. Neither executes a rollback action. The
+  that same decision boundary. Commit `911dcbc` can route a separately reopened
+  exact `RollbackDecided` record to its exact first unresolved intent without
+  executing that intent. None executes a rollback action. The
   restrictive replacement-mode normalizer never changes the record, and the
   diagnostic startup assessment remains non-mutating. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
@@ -655,11 +658,12 @@ and instant rollback mechanism; it hardens their failure semantics.
   proved repaired.
   As of 2026-07-16, startup's diagnostic checkpoint remains deliberately
   read-only and fail closed. Immediately before it, the mutable startup gate has
-  only three sealed, narrow steps: the ActiveReblit restrictive
+  only four sealed, narrow steps: the ActiveReblit restrictive
   replacement-mode normalizer described above, the descriptor-bound exchange
   parent-durability normalizer added by commit `72511b3`, and the journal-only
-  rollback-decision executor added by commit `3e1ba34`. None converts the
-  diagnostic inventory into mutation authority.
+  rollback-decision executor added by commit `3e1ba34`, followed on a separate
+  startup entry by the journal-only rollback-resume router added by commit
+  `911dcbc`. None converts the diagnostic inventory into mutation authority.
 
   The decision path applies to NewState, ActivateArchived, and ActiveReblit.
   Exact `UsrExchangeIntent` + `PRE` records the `/usr` rollback action as already
@@ -694,6 +698,29 @@ and instant rollback mechanism; it hardens their failure semantics.
   a descriptor-rooted reopen; the complete canonical record must reconcile to
   the exact source or exact decision, including all error-after-application
   outcomes, before startup reports the result.
+
+  Startup deliberately permits only one recovery journal mutation per entry.
+  An entry which persists `RollbackDecided` returns `RecoveryPending`; it does
+  not immediately route that new record. A later entry reloads the decision and
+  independently captures a sealed authority retaining the complete record,
+  exact per-open journal binding, stable database ownership and immutable
+  provenance, before/after/fresh descriptor-rooted namespace fingerprints, and
+  the cooperating-writer reservation. The decision must contain the exact
+  operation-specific rollback plan. A pending `/usr` action with exact `POST`
+  layout selects `ReverseExchangeIntent`; an already-satisfied action with exact
+  `PRE` layout selects `CandidatePreserveIntent`. Every other plan, phase,
+  layout, binding, database, provenance, or namespace combination remains
+  non-mutating.
+
+  After a complete database/namespace/database and journal revalidation, the
+  route executor calls `rollback_successor(None)` exactly once and attempts one
+  conditional journal advance. It contains no reverse exchange, rename,
+  non-journal filesystem write, database mutation, trigger, cleanup, candidate
+  movement, or root-link effect. Before descriptor-rooted reopen it drops both the old
+  authority and lock-bearing journal store. Success accepts only the exact
+  successor; an uncertain advance is reported only after reopen reconciles the
+  complete canonical record to the exact source or exact successor. There is
+  no same-process retry or continuation into the selected intent.
 
   The assessment then classifies every validated persisted phase as begin
   rollback, resume rollback, roll forward, finalize rollback, or manual
@@ -759,10 +786,22 @@ and instant rollback mechanism; it hardens their failure semantics.
   of the three forward durability fault points, releases the failed authority,
   enters real startup, and proves the exchange syscall count remains exactly
   one while the exact pending-reverse decision is persisted without database or
-  non-journal namespace changes. This is still only the decision boundary:
-  general phase-specific rollback, roll-forward, cleanup, and effect execution
-  remain unimplemented, so this item and all six broad Phase 11 work items stay
-  open.
+  non-journal namespace changes. The additional
+  `make forge-startup-usr-rollback-resume-route-test` lane passes 11/11 focused
+  routing contracts across both legal successors, all three operations,
+  journal binding and mixed-root rejection, database/provenance/namespace and
+  final-revalidation races, historical epochs, ActiveReblit reservation
+  retention, and all five journal-update fault prefixes with exact
+  source/successor reopen reconciliation. The lane also reruns the real
+  coordinator-origin matrix across all three operations and all three forward
+  durability fault points. A first startup persists the pending-reverse
+  decision, a second routes it to `ReverseExchangeIntent`, and the exchange
+  syscall count remains exactly one while database and non-journal namespace
+  evidence remain unchanged. At commit `911dcbc`, `make check` and the focused
+  rollback-decision, parent-durability, and rollback-resume-route Make lanes all
+  pass. This remains only a journal-routing boundary: general phase-specific
+  rollback, roll-forward, cleanup, and effect execution remain unimplemented,
+  so this item and all six broad Phase 11 work items stay open.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not
