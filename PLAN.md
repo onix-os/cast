@@ -595,6 +595,15 @@ live container run remains blocked on this host by the
 narrowly classified supplementary-group `EPERM`, so this stronger offline and
 unit evidence still does not close the two required-execution items.
 
+On 2026-07-16, the selected userspace-profile lane was exercised directly
+with `FIXTURE=userspace-profile`. The ordinary delegated Make lane returned
+only the narrowly typed absence of a reachable systemd user manager and
+explicitly labelled it as a skip rather than execution success. Repeating the
+same selection with `REQUIRE_EXECUTION=1` failed at that exact capability
+boundary. No delegated runner executed and no Stone archive was emitted,
+decoded, or reproduced, so the userspace-profile execution item below remains
+open.
+
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
   typed dependency roles, multiple sources, split outputs, conflicts, tuning,
