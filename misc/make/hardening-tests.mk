@@ -150,8 +150,11 @@ forge-linux-fs-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^linux_fs::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 17; \
+	timeout 10s test "$$count" = 20; \
 	for test in \
+		linux_fs::tests::xattrs::no_xattr_probe_classifies_empty_positive_unsupported_and_indeterminate_results \
+		linux_fs::tests::xattrs::no_xattr_probe_bounds_interrupted_retries_and_obeys_its_deadline \
+		linux_fs::tests::xattrs::retained_no_xattr_probe_rejects_a_real_user_xattr_when_supported \
 		linux_fs::tests::interrupted_retry_limit_accepts_n_and_rejects_n_plus_one \
 		linux_fs::tests::expired_retry_deadline_fails_before_another_syscall \
 		linux_fs::tests::expired_rename_deadline_preserves_both_namespaces \
@@ -171,7 +174,15 @@ forge-linux-fs-test:
 		linux_fs::tests::chmod_uses_the_calling_tasks_private_descriptor_table; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
-	done
+	done; \
+	security=crates/forge/src/linux_fs/directory_security.rs; \
+	timeout 10s grep -Fqx 'pub(crate) fn require_no_xattrs(file: &std::fs::File, path: &Path) -> io::Result<()> {' "$$security"; \
+	timeout 10s grep -Fqx 'pub(crate) fn require_no_xattrs_until(file: &std::fs::File, path: &Path, deadline: Instant) -> io::Result<()> {' "$$security"; \
+	timeout 10s grep -Fq 'nix::libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0)' "$$security"; \
+	if timeout 10s rg -n '(^|[^[:alnum:]_])(listxattr|llistxattr)[[:space:]]*\(' "$$security"; then exit 1; fi; \
+	timeout 10s grep -Fq 'match retry_interrupted(deadline, probe) {' "$$security"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$security" )" -le 1000; \
+	timeout 10s test "$$( timeout 10s wc -l < crates/forge/src/linux_fs/tests/xattrs.rs )" -le 1000
 
 forge-cache-test:
 	@set -eu; \

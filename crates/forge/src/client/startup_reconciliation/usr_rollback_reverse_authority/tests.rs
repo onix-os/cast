@@ -4,3 +4,4 @@ mod evidence;
 #[path = "../../startup_recovery/test_support.rs"]
 mod fixture;
 mod support;
+mod xattr_races;

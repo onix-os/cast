@@ -8,6 +8,8 @@ use std::{
 
 use super::*;
 
+mod xattrs;
+
 #[test]
 fn interrupted_retry_limit_accepts_n_and_rejects_n_plus_one() {
     let accepted_attempts = Cell::new(0usize);

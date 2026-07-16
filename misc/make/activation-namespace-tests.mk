@@ -5,8 +5,12 @@ forge-startup-activation-namespace-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::activation_namespace::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 20; \
+	timeout 10s test "$$count" = 24; \
 	for test in \
+		client::startup_reconciliation::activation_namespace::tests::usr_xattrs::startup_activation_inventory_rejects_live_usr_extended_attributes \
+		client::startup_reconciliation::activation_namespace::tests::usr_xattrs::startup_activation_inventory_rejects_staged_usr_extended_attributes \
+		client::startup_reconciliation::activation_namespace::tests::usr_xattrs::startup_activation_retained_revalidation_rejects_new_usr_extended_attributes \
+		client::startup_reconciliation::activation_namespace::tests::usr_xattrs::startup_activation_retained_revalidation_rejects_new_staged_usr_extended_attributes \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_accepts_exact_preparing_layout_without_mutation \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_rejects_raw_names_bounds_acls_and_isolation_foreign_entries \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_final_revalidation_detects_public_namespace_substitution \
@@ -34,11 +38,15 @@ forge-startup-activation-namespace-test:
 	capture_wrappers="crates/forge/src/client/startup_reconciliation/activation_namespace/capture/wrappers.rs"; \
 	timeout 10s grep -Fqx 'mod isolation_abi;' crates/forge/src/client/startup_reconciliation/activation_namespace/tests.rs; \
 	timeout 10s grep -Fqx 'mod partial_replacement;' crates/forge/src/client/startup_reconciliation/activation_namespace/tests.rs; \
+	timeout 10s grep -Fqx 'mod usr_xattrs;' crates/forge/src/client/startup_reconciliation/activation_namespace/tests.rs; \
 	timeout 10s grep -Fq 'const ISOLATION_SCAFFOLD_DIRECTORIES: [&[u8]; 6]' "$$capture_contract"; \
 	timeout 10s grep -Fqx 'pub(super) struct RetainedIsolationScaffold {' "$$capture_model"; \
 	timeout 10s grep -Fqx '    pub(super) isolation_scaffolds: Vec<RetainedIsolationScaffold>,' "$$capture_model"; \
 	timeout 10s grep -Fq 'ISOLATION_SCAFFOLD_DIRECTORIES.contains(&child.as_slice())' "$$capture_wrappers"; \
 	timeout 10s grep -Fq 'for scaffold in &wrapper.isolation_scaffolds {' "$$capture_model"; \
+	timeout 10s awk '$$0 ~ /^fn safe_usr_witness\(store: &TreeMarkerStore/ { active = 1 } active && $$0 == "    budget.operation(path)?;" { operations++ } active && $$0 ~ /let witness = InodeWitness::read/ { before = NR } active && $$0 ~ /require_no_access_acl_until/ { access = NR } active && $$0 ~ /require_no_default_acl_until/ { default_acl = NR } active && $$0 ~ /require_no_xattrs_until/ { xattrs = NR } active && $$0 ~ /if InodeWitness::read\(file, path\)\? != witness/ { after = NR } active && $$0 ~ /Ok\(witness\)/ { valid = operations == 5 && before < access && access < default_acl && default_acl < xattrs && xattrs < after; exit !valid } END { exit !valid }' "$$capture_contract"; \
+	timeout 10s grep -Fqx '    let directory_witness = safe_usr_witness(&store, &path, budget)?;' "$$capture_wrappers"; \
+	timeout 10s test "$$( timeout 10s wc -l < crates/forge/src/client/startup_reconciliation/activation_namespace/tests/usr_xattrs.rs )" -le 1000; \
 	timeout 900s $(CARGO) test -p forge --lib \
 		"client::startup_reconciliation::activation_namespace::tests::" \
 		-- --test-threads=1

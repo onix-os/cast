@@ -175,8 +175,8 @@ pub(super) fn inspect_usr(
     let Some(directory) = open_optional_directory(parent, name, &path, budget)? else {
         return Ok(None);
     };
-    let directory_witness = safe_usr_witness(&directory, &path)?;
     let store = TreeMarkerStore::open(&directory, &path).map_err(CaptureError::TreeMarker)?;
+    let directory_witness = safe_usr_witness(&store, &path, budget)?;
     let marker = store.read_for_transition_recovery().map_err(CaptureError::TreeMarker)?;
     let marker_path = path.join(".cast-tree-id");
     let marker_file = open_file(&directory, c".cast-tree-id", &marker_path, budget)?;

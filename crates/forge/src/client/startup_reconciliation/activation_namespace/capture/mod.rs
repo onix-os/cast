@@ -21,7 +21,10 @@ use std::{
 
 use crate::{
     Installation,
-    linux_fs::{controlled_resolution, openat2_file, require_no_access_acl, require_no_default_acl},
+    linux_fs::{
+        controlled_resolution, openat2_file, require_no_access_acl, require_no_access_acl_until,
+        require_no_default_acl, require_no_default_acl_until, require_no_xattrs_until,
+    },
     transition_journal::{
         AbortDisposition, Operation, QuarantineName, RuntimeEpoch, RuntimeEvidenceError, RuntimeTreeIdentity,
         TransitionRecord, TreeToken,
@@ -287,7 +290,9 @@ fn controlled_directory_witness(file: &File, path: &Path) -> Result<InodeWitness
     Ok(witness)
 }
 
-fn safe_usr_witness(file: &File, path: &Path) -> Result<InodeWitness, CaptureError> {
+fn safe_usr_witness(store: &TreeMarkerStore, path: &Path, budget: &mut Budget) -> Result<InodeWitness, CaptureError> {
+    let file = store.retained_directory();
+    budget.operation(path)?;
     let witness = InodeWitness::read(file, path)?;
     if witness.kind() != nix::libc::S_IFDIR
         || witness.owner != effective_uid()
@@ -296,16 +301,28 @@ fn safe_usr_witness(file: &File, path: &Path) -> Result<InodeWitness, CaptureErr
     {
         return Err(CaptureError::UnsafeDirectory { path: path.to_owned() });
     }
-    require_no_access_acl(file, path).map_err(|source| CaptureError::Io {
+    budget.operation(path)?;
+    require_no_access_acl_until(file, path, budget.deadline()).map_err(|source| CaptureError::Io {
         operation: "reject access ACL on retained /usr tree",
         path: path.to_owned(),
         source,
     })?;
-    require_no_default_acl(file, path).map_err(|source| CaptureError::Io {
+    budget.operation(path)?;
+    require_no_default_acl_until(file, path, budget.deadline()).map_err(|source| CaptureError::Io {
         operation: "reject default ACL on retained /usr tree",
         path: path.to_owned(),
         source,
     })?;
+    budget.operation(path)?;
+    require_no_xattrs_until(file, path, budget.deadline()).map_err(|source| CaptureError::Io {
+        operation: "reject extended attributes on retained /usr tree",
+        path: path.to_owned(),
+        source,
+    })?;
+    budget.operation(path)?;
+    if InodeWitness::read(file, path)? != witness {
+        return Err(CaptureError::InodeChanged { path: path.to_owned() });
+    }
     Ok(witness)
 }
 
@@ -609,6 +626,10 @@ impl Budget {
         }
         self.operations += 1;
         Ok(())
+    }
+
+    fn deadline(&self) -> Instant {
+        self.deadline
     }
 
     fn name(&mut self, bytes: usize, path: &Path) -> Result<(), CaptureError> {

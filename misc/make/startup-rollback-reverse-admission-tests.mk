@@ -5,8 +5,10 @@ forge-startup-usr-rollback-reverse-admission-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::usr_rollback_reverse_authority::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 10; \
+	timeout 10s test "$$count" = 12; \
 	for test in \
+		client::startup_reconciliation::usr_rollback_reverse_authority::tests::xattr_races::startup_usr_rollback_reverse_apply_handoff_rejects_fresh_usr_xattr_race \
+		client::startup_reconciliation::usr_rollback_reverse_authority::tests::xattr_races::startup_usr_rollback_reverse_finish_handoff_rejects_fresh_usr_xattr_race \
 		client::startup_reconciliation::usr_rollback_reverse_authority::tests::admission::startup_usr_rollback_reverse_admission_splits_post_apply_from_pre_finish \
 		client::startup_reconciliation::usr_rollback_reverse_authority::tests::admission::startup_usr_rollback_reverse_admission_accepts_historical_runtime_evidence \
 		client::startup_reconciliation::usr_rollback_reverse_authority::tests::admission::startup_usr_rollback_reverse_admission_bypasses_usr_restored_and_other_phases \
@@ -58,6 +60,9 @@ forge-startup-usr-rollback-reverse-admission-test:
 	timeout 10s awk '$$0 == "pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespaceEffectEvidence {" { state = 1; next } state == 1 && $$0 == "    baseline: NamespaceSnapshot," { baseline = 1; fields++; next } state == 1 && $$0 == "    projection: ProjectedReverseNamespace," { projection = 1; fields++; next } state == 1 && $$0 == "    parents: RetainedReverseExchangeParents," { parents = 1; fields++; next } state == 1 && $$0 == "    layout: UsrExchangeLayout," { layout = 1; fields++; next } state == 1 && $$0 ~ /^    [A-Za-z_][A-Za-z0-9_]*:/ { exit 1 } state == 1 && $$0 == "}" { found = baseline && projection && parents && layout && fields == 4; exit !found } END { exit !found }' "$$proof"; \
 	timeout 10s grep -Fq 'namespace: namespace.into_effect_evidence(expected_layout)?,' "$$authority"; \
 	timeout 10s grep -Fq 'self.projection.layout() != expected_layout' "$$proof"; \
+	timeout 10s grep -Fqx 'mod xattr_races;' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests.rs; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_reverse_fresh_namespace_capture(move || {' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests/xattr_races.rs; \
+	timeout 10s grep -Fq 'assert_eq!(retained_exchange_syscall_count(), 0);' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests/xattr_races.rs; \
 	timeout 10s awk '$$0 == "    fn into_effect_lease(" { active = 1; next } active && $$0 == "        self.revalidate(journal, expected_layout)?;" { found = 1; exit } active && ($$0 ~ /let Self/ || $$0 ~ /into_effect_evidence/) { exit 1 } END { exit !found }' "$$authority"; \
 	if timeout 10s rg -n '^impl.*UsrRollbackReverse(Apply|Finish)EffectLease' "$$authority"; then exit 1; fi; \
 	if timeout 10s rg -n '^impl UsrRollbackReverseNamespaceEffectEvidence' "$$proof"; then exit 1; fi; \
@@ -66,6 +71,7 @@ forge-startup-usr-rollback-reverse-admission-test:
 	timeout 10s test "$$( timeout 10s wc -l < "$$authority" )" -le 1000; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$proof" )" -le 1000; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$startup_recovery" )" -le 1000; \
+	timeout 10s test "$$( timeout 10s wc -l < crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests/xattr_races.rs )" -le 1000; \
 	timeout 1200s $(CARGO) test -p forge --lib \
 		'client::startup_reconciliation::usr_rollback_reverse_authority::tests::' \
 		-- --test-threads=1

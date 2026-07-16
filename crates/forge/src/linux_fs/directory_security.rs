@@ -33,6 +33,58 @@ pub(crate) fn require_no_access_acl_until(file: &std::fs::File, path: &Path, dea
     require_no_acl_xattr(file, path, POSIX_ACCESS_ACL_XATTR, "POSIX access", Some(deadline))
 }
 
+/// Reject every extended attribute on an authenticated readable descriptor.
+///
+/// Callers which need the more specific POSIX ACL diagnostics must run those
+/// checks first because ACLs are themselves represented as xattrs. Linux
+/// aliases `ENOTSUP` to `EOPNOTSUPP`, so a filesystem without xattr support is
+/// accepted while every populated or indeterminate result fails closed.
+#[allow(dead_code)] // the bounded inventory uses the deadline form; other retained callers need this twin
+pub(crate) fn require_no_xattrs(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    require_no_xattrs_with_deadline(file, path, None)
+}
+
+/// Deadline-aware form used by bounded retained-namespace inventories.
+pub(crate) fn require_no_xattrs_until(file: &std::fs::File, path: &Path, deadline: Instant) -> io::Result<()> {
+    require_no_xattrs_with_deadline(file, path, Some(deadline))
+}
+
+fn require_no_xattrs_with_deadline(
+    file: &std::fs::File,
+    path: &Path,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
+    require_no_xattrs_with_probe(path, deadline, || {
+        // SAFETY: `file` remains live for the call. A null list with size zero
+        // is the documented size probe and writes no bytes.
+        let result = unsafe { nix::libc::flistxattr(file.as_raw_fd(), std::ptr::null_mut(), 0) };
+        if result >= 0 {
+            Ok(usize::try_from(result).expect("nonnegative flistxattr length fits usize"))
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })
+}
+
+fn require_no_xattrs_with_probe(
+    path: &Path,
+    deadline: Option<Instant>,
+    probe: impl FnMut() -> io::Result<usize>,
+) -> io::Result<()> {
+    match retry_interrupted(deadline, probe) {
+        Ok(0) => Ok(()),
+        Ok(name_bytes) => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "capability inode carries {name_bytes} xattr-name bytes: {}",
+                path.display()
+            ),
+        )),
+        Err(source) if source.raw_os_error() == Some(nix::libc::EOPNOTSUPP) => Ok(()),
+        Err(source) => Err(source),
+    }
+}
+
 fn require_no_acl_xattr(
     file: &std::fs::File,
     path: &Path,

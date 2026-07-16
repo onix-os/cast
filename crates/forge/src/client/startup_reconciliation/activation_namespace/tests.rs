@@ -35,6 +35,7 @@ use super::{
 mod isolation_abi;
 mod partial_replacement;
 mod slot_links;
+mod usr_xattrs;
 
 const ROOT_ABI: [(&str, &str); 5] = [
     ("bin", "usr/bin"),

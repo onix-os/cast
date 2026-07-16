@@ -482,7 +482,7 @@ fn revalidate_named_entry(
 fn revalidate_usr(usr: &RetainedUsr, budget: &mut Budget) -> Result<(), CaptureError> {
     let path = usr.store.display_path();
     require_witness(
-        safe_usr_witness(usr.store.retained_directory(), path)?,
+        safe_usr_witness(&usr.store, path, budget)?,
         usr.fingerprint.directory,
         path,
     )?;
