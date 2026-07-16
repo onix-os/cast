@@ -113,7 +113,7 @@ emit_proof() {
   "git_tree": "clean",
   "selection": "all",
   "required_execution": true,
-  "fixture_count": 13,
+  "fixture_count": 14,
   "fixtures": [
     "autotools",
     "autotools-options",
@@ -127,7 +127,8 @@ emit_proof() {
     "generated-config",
     "hooks-patch",
     "meson",
-    "split"
+    "split",
+    "userspace-profile"
   ],
   "assertions": [
     "contentful-build-and-publish",

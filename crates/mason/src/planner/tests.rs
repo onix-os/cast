@@ -136,7 +136,24 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 13] = [
+const EXECUTION_FIXTURES: [&str; 14] = [
+    "autotools",
+    "autotools-options",
+    "cargo",
+    "cargo-features",
+    "cargo-vendored",
+    "cmake",
+    "custom",
+    "daemon-generated",
+    "factory-override",
+    "generated-config",
+    "hooks-patch",
+    "meson",
+    "split",
+    "userspace-profile",
+];
+
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 13] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -151,6 +168,15 @@ const EXECUTION_FIXTURES: [&str; 13] = [
     "meson",
     "split",
 ];
+
+fn execution_fixture_package_directory(name: &str) -> PathBuf {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon");
+    if name == "userspace-profile" {
+        fixtures.join(name)
+    } else {
+        fixtures.join("execution/packages").join(name)
+    }
+}
 
 #[path = "tests/bootstrap.rs"]
 mod bootstrap;

@@ -627,14 +627,21 @@ unit evidence still does not close the two required-execution items.
   public checker and two byte-identical evaluations, proves five empty phases
   and five exact runtime relations, and does not pretend that evaluation built
   a Stone archive.
-- [ ] Admit that userspace profile to the contentful delegated fixture matrix,
-  emit and decode its empty-root `out` Stone, prove its exact five-package
-  runtime closure, and require byte-identical locked replans and rebuilds.
+- [x] Admit that userspace profile to the contentful delegated fixture matrix.
+  The offline gate resolves its exact five direct package identities and
+  separately pinned 70-package transitive closure from the immutable Stone
+  index, freezes an empty-phase execution topology, and installs strict bundle,
+  manifest, relation, and reproduction expectations without adding a source
+  lock or host tool.
+- [ ] On a supported delegated host, emit and decode its empty-root `out`
+  Stone, prove its exact five-package runtime relation set, and attach the
+  byte-identical locked replan/rebuild evidence. A capability skip is not
+  execution proof.
 - [x] Maintain a pinned, contentful Stone bootstrap closure for every real
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the thirteen exact closure declarations and their aggregate bootstrap
+  each of the fourteen exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's

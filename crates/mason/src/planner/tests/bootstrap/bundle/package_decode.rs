@@ -32,6 +32,7 @@ pub(super) fn assert_fixture_bundle(
                 | "hooks-patch"
                 | "meson"
                 | "split"
+                | "userspace-profile"
         ),
         "unknown contentful execution fixture {name:?}"
     );
@@ -93,7 +94,7 @@ pub(super) fn assert_fixture_bundle(
         .iter()
         .map(|output| output.name.as_str())
         .collect::<BTreeSet<_>>();
-    if name == "generated-config" {
+    if matches!(name, "generated-config" | "userspace-profile") {
         assert_eq!(output_names, BTreeSet::from(["out"]));
     } else if name == "split" {
         assert_eq!(
@@ -135,6 +136,8 @@ pub(super) fn assert_fixture_bundle(
     assert_manifests(name, planned, &artefacts, &packages);
     if name == "generated-config" {
         assert_generated_config_fixture(planned, &packages);
+    } else if name == "userspace-profile" {
+        assert_userspace_profile_fixture(planned, &packages);
     } else if name == "split" {
         assert_split_fixture(planned, &packages);
     } else if name == "daemon-generated" {

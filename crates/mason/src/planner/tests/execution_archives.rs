@@ -18,7 +18,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         names.sort();
         names
     });
-    assert_eq!(discovered[0], EXECUTION_FIXTURES);
+    assert_eq!(discovered[0], EXECUTION_PACKAGE_DIRECTORIES);
     assert_eq!(
         discovered[1],
         [
@@ -42,7 +42,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     let mut sourceful_fixtures = 0_usize;
     let mut source_less_fixtures = 0_usize;
     for name in EXECUTION_FIXTURES {
-        let recipe_path = packages.join(name).join("stone.glu");
+        let recipe_path = execution_fixture_package_directory(name).join("stone.glu");
         let recipe = crate::Recipe::load_authored(&recipe_path)
             .unwrap_or_else(|error| panic!("{name}: evaluate execution fixture: {error:#}"));
         if name == "factory-override" {
@@ -133,6 +133,39 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             );
             assert!(script.contains("profile = \"stone-native\""));
             assert!(script.contains("${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"));
+            continue;
+        }
+        if name == "userspace-profile" {
+            source_less_fixtures += 1;
+            assert!(
+                recipe.declaration.sources.is_empty(),
+                "userspace-profile: declaration must remain source-less"
+            );
+            assert!(
+                !lock_path.exists(),
+                "userspace-profile: a source-less fixture must not gain a source lock"
+            );
+            assert!(
+                recipe.declaration.builder.required_tools.is_empty(),
+                "userspace-profile: declarative composition must not gain build tools"
+            );
+            for (phase, steps) in [
+                ("setup", &recipe.declaration.builder.phases.setup.steps),
+                ("build", &recipe.declaration.builder.phases.build.steps),
+                ("install", &recipe.declaration.builder.phases.install.steps),
+                ("check", &recipe.declaration.builder.phases.check.steps),
+                ("workload", &recipe.declaration.builder.phases.workload.steps),
+            ] {
+                assert!(steps.is_empty(), "userspace-profile: {phase} must remain empty");
+            }
+            let [output] = recipe.declaration.outputs.as_slice() else {
+                panic!("userspace-profile: declaration must have exactly one output");
+            };
+            assert_eq!(output.name, "out");
+            assert_eq!(
+                dependency_names(&output.runtime_inputs),
+                ["bash", "uutils-coreutils", "findutils", "ca-certificates", "xz"]
+            );
             continue;
         }
         sourceful_fixtures += 1;
@@ -283,5 +316,5 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         "execution fixtures must cover nine plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
     assert_eq!(sourceful_fixtures, 12, "execution archive inventory drift");
-    assert_eq!(source_less_fixtures, 1, "source-less execution fixture inventory drift");
+    assert_eq!(source_less_fixtures, 2, "source-less execution fixture inventory drift");
 }

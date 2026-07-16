@@ -184,6 +184,51 @@ fn assert_generated_config_fixture(planned: &super::super::Planned, packages: &B
     );
 }
 
+fn assert_userspace_profile_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "userspace-profile";
+    const RUNTIME_RELATIONS: [&str; 5] = ["bash", "uutils-coreutils", "findutils", "ca-certificates", "xz"];
+
+    assert!(planned.plan.sources.is_empty(), "{FIXTURE}: source list must be empty");
+    let [root_plan] = planned.plan.outputs.as_slice() else {
+        panic!("{FIXTURE}: source-less package must freeze exactly one output");
+    };
+    assert_eq!(root_plan.name, "out");
+    assert_eq!(root_plan.package_name, "cast-userspace-profile-fixture");
+    assert!(
+        root_plan.include_in_manifest,
+        "{FIXTURE}: userspace profile must participate in both build manifests"
+    );
+    assert_eq!(root_plan.summary.as_deref(), Some("Declarative userspace profile fixture"));
+    assert_eq!(
+        root_plan.description.as_deref(),
+        Some("Shell, core commands, discovery, trust, and archive roles composed as one explicit closure.")
+    );
+    assert!(root_plan.conflicts.is_empty());
+    assert_eq!(
+        root_plan
+            .runtime_inputs
+            .iter()
+            .map(|relation| match relation {
+                OutputRelation::Locked { relation, .. } => relation.canonical_name(),
+                OutputRelation::Planned { output } => {
+                    panic!("{FIXTURE}: external userspace relation unexpectedly targets local output {output}")
+                }
+            })
+            .collect::<Vec<_>>(),
+        RUNTIME_RELATIONS
+    );
+
+    let root = &packages[&root_plan.package_name];
+    assert!(root.layouts.is_empty(), "{FIXTURE}: empty profile emitted a layout");
+    assert!(root.content.is_empty(), "{FIXTURE}: empty profile emitted content bytes");
+    assert_exact_relations(
+        FIXTURE,
+        root,
+        RUNTIME_RELATIONS.into_iter().map(str::to_owned).collect(),
+        BTreeSet::from([root_plan.package_name.clone()]),
+    );
+}
+
 fn assert_daemon_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
     const FIXTURE: &str = "daemon-generated";
     let flags = planned

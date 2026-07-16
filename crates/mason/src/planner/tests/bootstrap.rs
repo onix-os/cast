@@ -537,12 +537,11 @@ cast.profiles [
         )
         .unwrap();
 
-        let authored_packages = bootstrap_root().parent().unwrap().join("packages");
         let recipes = EXECUTION_FIXTURES
             .iter()
             .map(|name| {
                 let recipe_dir = recipes_dir.join(name);
-                copy_package_directory(&authored_packages.join(name), &recipe_dir);
+                copy_package_directory(&super::execution_fixture_package_directory(name), &recipe_dir);
                 ((*name).to_owned(), recipe_dir.join("stone.glu"))
             })
             .collect();
@@ -635,10 +634,13 @@ cast.profiles [
         // on that authoritative path so a contentful test never falls through
         // to the deliberately unreachable HTTPS fixture URL.
         let storage_dir = planned.runtime.paths.upstreams().host;
-        if planned.plan.package.name == "cast-generated-config-fixture" {
+        if matches!(
+            planned.plan.package.name.as_str(),
+            "cast-generated-config-fixture" | "cast-userspace-profile-fixture"
+        ) {
             assert!(
                 planned.plan.sources.is_empty(),
-                "generated-config must enter execution without an upstream mapping"
+                "source-less fixture must enter execution without an upstream mapping"
             );
         } else {
             assert_eq!(

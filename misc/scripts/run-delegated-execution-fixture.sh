@@ -9,10 +9,10 @@ fi
 
 fixture=$1
 case "$fixture" in
-    all|autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|hooks-patch|meson|split) ;;
+    all|autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|hooks-patch|meson|split|userspace-profile) ;;
     *)
         printf '%s\n' \
-            'fixture must be exactly `all` or one of: autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config hooks-patch meson split' >&2
+            'fixture must be exactly `all` or one of: autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config hooks-patch meson split userspace-profile' >&2
         exit 2
         ;;
 esac
@@ -656,7 +656,7 @@ if [ -n "$proof_path" ]; then
           git_tree: "clean",
           selection: "all",
           required_execution: true,
-          fixture_count: 13,
+          fixture_count: 14,
           fixtures: [
             "autotools",
             "autotools-options",
@@ -670,7 +670,8 @@ if [ -n "$proof_path" ]; then
             "generated-config",
             "hooks-patch",
             "meson",
-            "split"
+            "split",
+            "userspace-profile"
           ],
           assertions: [
             "contentful-build-and-publish",

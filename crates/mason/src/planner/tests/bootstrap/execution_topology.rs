@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 13] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 14] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -12,6 +12,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 13] = [
     "hooks-patch",
     "meson",
     "split",
+    "userspace-profile",
 ];
 const EXECUTION_FIXTURE_SELECTOR_ENV: &str = "CAST_EXECUTION_FIXTURE";
 
@@ -160,6 +161,56 @@ fn run(program: &str, first_argument: &str) -> FrozenStepShape {
     }
 }
 
+fn assert_userspace_profile_relations(plan: &stone_recipe::derivation::DerivationPlan) {
+    const EXACT_RUNTIME: [(&str, &str); 5] = [
+        (
+            "bash",
+            "20a6cfc76001152c45a7f77f1ee50bfdb816d0b67408cd6857f023022f37f0d9",
+        ),
+        (
+            "uutils-coreutils",
+            "1a3f33a18144f93019f9572be47ce56ec60b79707a8e0678df0acbc98699a9cf",
+        ),
+        (
+            "findutils",
+            "154290fa77e4195e01500d586386b40b54dd818d964a8716b2aacb772609db6c",
+        ),
+        (
+            "ca-certificates",
+            "d0e58fc88b5d2ce74ca0d9d15effd521964da4a40108881f7a02ce7b02429c62",
+        ),
+        (
+            "xz",
+            "77f24568486ea39af22b71ed668653debaa9ddff4188626c61a626abd8b663ed",
+        ),
+    ];
+
+    assert!(plan.sources.is_empty(), "userspace-profile: frozen sources must be empty");
+    let [output] = plan.outputs.as_slice() else {
+        panic!("userspace-profile: frozen plan must have exactly one output");
+    };
+    assert_eq!(output.name, "out");
+    assert_eq!(output.package_name, "cast-userspace-profile-fixture");
+    let actual = output
+        .runtime_inputs
+        .iter()
+        .map(|relation| match relation {
+                stone_recipe::derivation::OutputRelation::Locked {
+                    relation,
+                    reference,
+                } => (relation.canonical_name(), reference.package_id.clone()),
+                stone_recipe::derivation::OutputRelation::Planned { output } => {
+                    panic!("userspace-profile: runtime relation unexpectedly targets local output {output}")
+                }
+            })
+        .collect::<Vec<_>>();
+    let expected = EXACT_RUNTIME
+        .into_iter()
+        .map(|(name, package_id)| (name.to_owned(), package_id.to_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
 fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation::DerivationPlan) {
     assert_eq!(EXECUTION_FIXTURES, REQUIRED_EXECUTION_FIXTURES);
     assert_eq!(plan.execution.jobs, 1, "{name}: execution preflight jobs drifted");
@@ -282,6 +333,7 @@ install -Dm644 generated-config.conf \
             phase("Install", vec![run("cmake", "--install")]),
             phase("Check", vec![run("ctest", "--test-dir")]),
         ],
+        "userspace-profile" => Vec::new(),
         other => panic!("unexpected execution fixture {other:?}"),
     };
 
@@ -299,6 +351,9 @@ install -Dm644 generated-config.conf \
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
+    if name == "userspace-profile" {
+        assert_userspace_profile_relations(plan);
+    }
     if name == "autotools-options" {
         let setup = job.phases.iter().find(|phase| phase.name == "Setup").unwrap();
         let [stone_recipe::derivation::StepPlan::Run { args, .. }] = setup.steps.as_slice() else {

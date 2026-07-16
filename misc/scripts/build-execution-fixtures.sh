@@ -66,13 +66,31 @@ for entry in "$package_root"/*; do
 done
 
 test "$package_count" -eq 13 || {
-    printf 'expected exactly thirteen execution fixture packages, found %s\n' "$package_count" >&2
+    printf 'expected exactly thirteen archive-matrix package directories, found %s\n' "$package_count" >&2
     exit 1
 }
 test "$source_less_count" -eq 1 || {
-    printf 'expected exactly one source-less execution fixture, found %s\n' "$source_less_count" >&2
+    printf 'expected exactly one source-less archive-matrix fixture, found %s\n' "$source_less_count" >&2
     exit 1
 }
+
+userspace_root="$root/tests/fixtures/gluon/userspace-profile"
+test -d "$userspace_root" && test ! -L "$userspace_root" || {
+    printf 'userspace-profile execution fixture is unavailable or unsafe: %s\n' "$userspace_root" >&2
+    exit 1
+}
+for authored in package_set.glu roles.glu stone.glu; do
+    test -f "$userspace_root/$authored" && test ! -L "$userspace_root/$authored" || {
+        printf 'userspace-profile authored input is unavailable or unsafe: %s\n' "$userspace_root/$authored" >&2
+        exit 1
+    }
+done
+for forbidden in sources.lock.glu build.lock.glu; do
+    test ! -e "$userspace_root/$forbidden" && test ! -L "$userspace_root/$forbidden" || {
+        printf 'source-less userspace-profile must not contain %s\n' "$forbidden" >&2
+        exit 1
+    }
+done
 
 source_tree_count=0
 for entry in "$source_root"/*; do

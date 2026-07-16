@@ -170,7 +170,7 @@ case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
   "git_tree": "clean",
   "selection": "all",
   "required_execution": true,
-  "fixture_count": 13,
+  "fixture_count": 14,
   "fixtures": [
     "autotools",
     "autotools-options",
@@ -184,7 +184,8 @@ case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
     "generated-config",
     "hooks-patch",
     "meson",
-    "split"
+    "split",
+    "userspace-profile"
   ],
   "assertions": [
     "contentful-build-and-publish",
@@ -319,7 +320,9 @@ grep -Fqx -- "--unit=$unit" "$args"
 grep -Fqx -- "$unit" "$state/stops"
 
 fixture_count=0
-for fixture_directory in "$root/tests/fixtures/gluon/execution/packages"/*; do
+for fixture_directory in \
+    "$root/tests/fixtures/gluon/execution/packages"/* \
+    "$root/tests/fixtures/gluon/userspace-profile"; do
     test -d "$fixture_directory" || continue
     fixture=${fixture_directory##*/}
     fixture_count=$((fixture_count + 1))
@@ -327,7 +330,7 @@ for fixture_directory in "$root/tests/fixtures/gluon/execution/packages"/*; do
     run_fixture "$fixture" 1 ready success
     grep -Fqx -- "--setenv=CAST_EXECUTION_FIXTURE=$fixture" "$state/systemd-run-args"
 done
-test "$fixture_count" -eq 13
+test "$fixture_count" -eq 14
 test ! -e "$evidence/fixtures-ci-proof.json"
 
 rm -f "$evidence"/*
@@ -345,10 +348,10 @@ jq -e --arg commit "$fake_commit" '
     and .git_tree == "clean"
     and .selection == "all"
     and .required_execution == true
-    and .fixture_count == 13
-    and (.fixtures | length) == 13
+    and .fixture_count == 14
+    and (.fixtures | length) == 14
     and .fixtures[0] == "autotools"
-    and .fixtures[12] == "split"
+    and .fixtures[13] == "userspace-profile"
     and (.assertions | length) == 5
     and .result == "passed"
 ' "$proof" >/dev/null
