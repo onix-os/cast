@@ -676,9 +676,11 @@ appendix.
 Completed foundations include canonical transition IDs, no-replace merged-/usr
 link publication, the bounded checksummed journal, retained tree identity and
 marker primitives, strict startup evidence gates, and database ownership
-probes. They now also include the persisted-phase recovery-direction classifier
-and a diagnostic-only startup assessment which releases mutation authority
-before returning and cannot execute stale evidence. The remaining closure is
+probes. They now also include the persisted-phase recovery-direction classifier,
+an unwired one-shot coordinator effect which reaches durable `UsrExchanged`
+without retry, reversal, cleanup, or root-link publication, and a
+diagnostic-only startup assessment which releases mutation authority before
+returning and cannot execute stale evidence. The remaining closure is
 to finish recovery-ordered mutable client construction, replace residual
 path-based lifecycle authority, establish the durable pre-journal baseline,
 route every state transition through one durable coordinator, execute every

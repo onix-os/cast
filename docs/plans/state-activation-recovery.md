@@ -528,17 +528,40 @@ and instant rollback mechanism; it hardens their failure semantics.
   proof but performs no rename, exchange, root-link publication, or client
   callback; the candidate remains staged and the previous tree remains live.
 
-  This intent typestate is journal authority only, not exchange-syscall
-  authority. The legacy exchange path is deliberately unusable while a
-  journal exists and must not have its journal-absence checks weakened. A
-  later coordinator-owned effect must additionally retain and revalidate the
-  installation root and staging parents, active-state lease, merged-/usr root
-  ABI preflight, and active-reblit snapshot where applicable; reconcile the
-  exact NotApplied, Applied, or Ambiguous layout after the single syscall; and
-  record `UsrExchanged` only after the applied layout and both parent
-  durability barriers succeed. Until that effect and startup rollback
-  executor exist, publishing `UsrExchangeIntent` from any live client remains
-  forbidden by the focused static gate.
+  The intent typestate remains proof-only, but a separate private and still
+  unwired effect now owns exchange-syscall authority. Client preflight takes
+  the active-state writer lease before inspecting the journal, retains the
+  installation namespace, merged-/usr root-ABI preflight, and exact
+  ActiveReblit snapshot when applicable, then consumes that authority during
+  tree-identity preparation. The coordinator-only preparation seal selects a
+  nonblocking journal acquisition. If a contender wins the small handoff gap,
+  preparation fails immediately and releases the writer lease instead of
+  waiting behind a journal owner which may itself need that lease. Legacy
+  identity preparation keeps its existing blocking order, and every legacy
+  exchange path still requires journal absence.
+
+  The effect consumes both `UsrExchangeIntent` and the client authority. It
+  repeats the complete journal, runtime epoch, public-name, marker, state-ID,
+  database, provenance, metadata, active-state, root-ABI, and ActiveReblit
+  evidence immediately before the syscall; makes exactly one
+  descriptor-relative `RENAME_EXCHANGE` attempt; and never retries, reverses,
+  cleans up, or publishes root links. Every raw syscall result is reconciled
+  as `NotApplied`, `Applied`, or `Ambiguous`. Only the exact applied layout is
+  synced through the staging parent and installation root, re-proved through
+  the retained post-exchange authorities, and conditionally advanced to
+  `UsrExchanged`: generation 9 for NewState, 7 for ActiveReblit, and 5 for
+  archived activation. Any uncertain persistence result returns no reusable
+  coordinator or authority and leaves only `UsrExchangeIntent` or its legal
+  `UsrExchanged` successor durable.
+
+  ActiveReblit deliberately does not call the legacy unjournaled wrapper
+  rotation or slot-parking helpers. It retains and proves the exact
+  canonical-or-parked two-link marker arrangement unchanged; a later sealed
+  coordinator phase must own that monotonic namespace effect. Positive first
+  installation coverage proves a synthesized empty previous `/usr` exchanges
+  once and remains staged without a `.stateID`. The effect still has no live
+  client callsite. Publishing its intent remains forbidden until the startup
+  executor can resume or reverse every corresponding durable phase.
 
   Archived activation dispatches to a separate read-only verifier because its
   candidate already contains canonical metadata. The coordinator first loads
@@ -553,7 +576,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   Legacy archived states without provenance fail closed rather than hashing
   their archived bytes into a new expectation.
 
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 48
+  The focused `make forge-transition-journal-coordinator-test` lane now runs 61
   exact tests and freezes
   those three phase/generation sequences, request-derived origins and options,
   runtime evidence, fixed quarantine naming, non-reinterpretable three-way
@@ -561,12 +584,16 @@ and instant rollback mechanism; it hardens their failure semantics.
   transaction-trigger ordering, predecessor-or-successor persistence faults,
   substitution rejection, proof-bearing operation dispatch, exact
   `os-info.json` policy input, pre-intent and post-effect metadata replacement,
-  fail-stop lock release, exact `/usr` exchange-intent generations for all
-  three operations, prepared-candidate resealing, complete pre-intent evidence,
-  predecessor-or-intent persistence faults, provenance commit outcomes,
+  fail-stop lock release, exact `/usr` exchange-intent and `UsrExchanged`
+  generations for all three operations, prepared-candidate resealing, complete
+  pre-intent and immediate pre-syscall evidence, predecessor-or-intent and
+  intent-or-completion persistence faults, provenance commit outcomes,
   first/second output interruption, existing-state legacy/mismatch rejection,
-  archived provenance sandwiches, proof/provenance typestate retention, and the
-  absence of exchange or root-link effects. Its static gates prove that metadata authority is
+  archived provenance sandwiches, proof/provenance typestate retention,
+  one-shot raw-result reconciliation, applied durability faults, post-syscall
+  metadata and namespace substitution, a bounded writer/journal handoff,
+  synthesized-empty first installation, and the absence of root-link,
+  reverse, retry, or cleanup effects. Its static gates prove that metadata authority is
   mandatory rather than optional, the runner accepts no proof parameter,
   archived activation cannot acquire trigger authority, no coordinator method
   has a callsite outside the contract module, and the callback authority and
@@ -575,8 +602,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   bypass around coordinator-owned verification. No live
   activation path creates or advances this coordinator. In particular, the
   legacy ActiveReblit wrapper rotation still requires journal absence and an
-  already published `.stateID`; it must be replaced by phase-authorized
-  coordinator authority rather than reused or weakened. Startup must also
+  already published `.stateID`; it must be replaced by a later
+  phase-authorized coordinator effect rather than reused or weakened. Startup must also
   classify ActiveReblit `Preparing` as strictly state-ID-absent and treat
   `CandidatePrepareStarted` as the only publication-ambiguity boundary. There
   is still no phase-specific recovery executor; the read-only startup
