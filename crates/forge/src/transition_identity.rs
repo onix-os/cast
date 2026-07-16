@@ -35,6 +35,7 @@ mod active_previous_slot_parking;
 mod archived_candidate;
 mod archived_state_prune;
 mod archived_state_repair;
+mod candidate_metadata;
 mod candidate_quarantine;
 mod error;
 mod fault_injection;
@@ -51,6 +52,16 @@ mod state_slot_marker;
 mod state_tree_metadata;
 mod tree_lifecycle;
 
+pub(crate) use candidate_metadata::{
+    CandidateMetadataError, CandidateMetadataProof, CandidateMetadataPublication, RetainedCandidateUsr,
+};
+#[cfg(test)]
+pub(crate) use candidate_metadata::{
+    arm_after_first_publication as arm_after_candidate_metadata_first_publication,
+    arm_applied_private_directory_publication_error as arm_applied_candidate_metadata_directory_publication_error,
+    arm_before_publication as arm_before_candidate_metadata_publication, arm_candidate_usr_clone_fault,
+    assert_candidate_usr_clone_fault_consumed,
+};
 pub(crate) use error::Error;
 use fault_injection::{
     before_live_usr_mkdir, before_previous_archive_slot_reopen, before_previous_slot_retirement_rename,

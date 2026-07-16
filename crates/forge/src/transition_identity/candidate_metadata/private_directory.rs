@@ -1,4 +1,4 @@
-//! Private creation and no-replace publication of candidate directories.
+//! Private creation and no-replace publication of candidate metadata directories.
 
 use std::ffi::CString;
 

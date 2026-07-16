@@ -194,8 +194,28 @@ forge-active-state-snapshot-test:
 
 forge-transition-identity-test:
 	@set -eu; \
+	timeout 10s grep -Fqx 'mod candidate_metadata;' crates/forge/src/transition_identity.rs; \
+	if timeout 10s grep -Fqx 'pub(crate) mod candidate_metadata;' crates/forge/src/transition_identity.rs; then \
+		timeout 10s printf '%s\n' 'candidate metadata core module visibility widened' >&2; exit 1; \
+	else \
+		status="$$?"; \
+		if [ "$$status" -ne 1 ]; then \
+			timeout 10s printf 'candidate metadata visibility audit failed with status %s\n' "$$status" >&2; exit 1; \
+		fi; \
+	fi; \
+	for forbidden in 'client::' 'MetadataContext' 'SystemModel'; do \
+		if timeout 10s grep -R -n -F "$$forbidden" crates/forge/src/transition_identity/candidate_metadata.rs crates/forge/src/transition_identity/candidate_metadata; then \
+			timeout 10s printf 'candidate metadata core depends on forbidden client policy: %s\n' "$$forbidden" >&2; exit 1; \
+		else \
+			status="$$?"; \
+			if [ "$$status" -ne 1 ]; then \
+				timeout 10s printf 'candidate metadata layering audit failed with status %s\n' "$$status" >&2; exit 1; \
+			fi; \
+		fi; \
+	done; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
+		transition_identity::candidate_metadata::tests::same_candidate_proof_accepts_exact_inode_and_rejects_same_layout_foreign_candidate_without_mutation \
 		client::tests::stateful_tree_tokens_follow_their_logical_trees_through_exchange_and_archive \
 		client::tests::retained_exchange_adopts_applied_forward_and_reverse_moves_when_the_syscall_reports_error \
 		client::tests::retained_exchange_error_before_rename_preserves_both_exact_names \
