@@ -4,8 +4,11 @@ use thiserror::Error;
 
 use crate::{
     db,
+    state::TransitionId,
     transition_journal::{CodecError, Operation, Phase, PreviousOrigin, RuntimeEvidenceError, StorageError},
 };
+
+use super::super::CandidateInventoryError;
 
 #[derive(Debug, Error)]
 pub(crate) enum StatefulTransitionCoordinatorError {
@@ -64,6 +67,29 @@ pub(crate) enum StatefulTransitionCoordinatorError {
         state: i32,
         ownership: db::state::TransitionOwnership,
     },
+    #[error("{operation:?} candidate state {state} has {ownership:?} transition ownership instead of Cleared")]
+    ExistingCandidateOwnershipMismatch {
+        operation: Operation,
+        state: i32,
+        ownership: db::state::TransitionOwnership,
+    },
+    #[error("{operation:?} previous state {state} has {ownership:?} transition ownership instead of Cleared")]
+    PreviousStateOwnershipMismatch {
+        operation: Operation,
+        state: i32,
+        ownership: db::state::TransitionOwnership,
+    },
+    #[error(
+        "{operation:?} global transition audit mismatch: expected state={expected_state:?}, transition={expected_transition:?}; found {actual:?}"
+    )]
+    TransitionAuditMismatch {
+        operation: Operation,
+        expected_state: Option<i32>,
+        expected_transition: Option<TransitionId>,
+        actual: Option<db::state::InFlightTransition>,
+    },
+    #[error("durably seal the exact existing marked candidate around transaction triggers")]
+    TransactionCandidateDurability(#[source] CandidateInventoryError),
     #[error("publish the exact fresh-state ID under CandidatePrepareStarted authority")]
     StateIdPublication(#[from] super::super::state_tree_metadata::StateIdPublicationFailure),
 }

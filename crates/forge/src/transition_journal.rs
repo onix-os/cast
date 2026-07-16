@@ -72,6 +72,19 @@ pub(crate) fn arm_next_temporary_sync_fault() {
 pub(crate) fn assert_temporary_sync_fault_consumed() {
     assert_storage_fault_consumed();
 }
+
+/// Arm the first journal-directory sync after the next update exchange. The
+/// new canonical record is already visible when this fault is reported, so a
+/// consuming coordinator must fail stop without invoking or retrying an effect.
+#[cfg(test)]
+pub(crate) fn arm_next_update_first_directory_sync_fault() {
+    arm_storage_fault(StorageFaultPoint::UpdateFirstDirectorySync);
+}
+
+#[cfg(test)]
+pub(crate) fn assert_update_first_directory_sync_fault_consumed() {
+    assert_storage_fault_consumed();
+}
 #[cfg(test)]
 use validation::{next_forward_phase, next_rollback_phase, rollback_allowed, validate_advance};
 

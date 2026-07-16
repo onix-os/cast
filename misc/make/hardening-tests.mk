@@ -118,7 +118,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 12; \
+	timeout 10s test "$$count" = 26; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -131,11 +131,38 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_allocation_finish_rejects_missing_cleared_foreign_and_wrong_state_evidence \
 		transition_identity::journal_coordinator::tests::journal_coordinator_database_commit_and_completion_share_exact_transition_correlation \
 		transition_identity::journal_coordinator::tests::journal_coordinator_post_commit_journal_failure_preserves_matching_database_evidence \
-		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact_evidence; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact_evidence \
+		transition_identity::journal_coordinator::tests::journal_coordinator_existing_candidate_database_removal_blocks_journal_creation \
+		transition_identity::journal_coordinator::tests::journal_coordinator_distinct_previous_database_removal_blocks_journal_creation \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_triggers_complete_exact_new_state_and_active_reblit_generations \
+		transition_identity::journal_coordinator::tests::journal_coordinator_archived_transaction_triggers_are_rejected_without_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_effect_error_runs_once_and_preserves_started \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_intent_faults_leave_old_or_successor_without_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_completion_faults_leave_started_or_complete_after_one_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_preflight_failure_runs_no_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_post_effect_failure_preserves_started \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_post_effect_database_changes_are_blocked \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_post_effect_previous_database_removal_is_blocked \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_global_database_audit_blocks_foreign_rows \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_state_id_and_public_name_substitution_are_blocked \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_trigger_failure_releases_journal_while_error_lives; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
+	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
+	timeout 10s grep -Fqx "pub(super) struct StatefulTransactionTriggerAuthority<'authority> {" "$$trigger_contract"; \
+	timeout 10s grep -Fqx 'pub(super) enum StatefulTransactionTriggerFailure<E>' "$$trigger_contract"; \
+	timeout 10s grep -Fqx '    pub(super) fn run_transaction_triggers<E, F>(' "$$trigger_contract"; \
+	if widened="$$( timeout 10s grep -nE \
+		'pub\(crate\).*(StatefulTransactionTriggerAuthority|StatefulTransactionTriggerFailure|run_transaction_triggers)' \
+		crates/forge/src/transition_identity/journal_coordinator/mod.rs "$$trigger_contract" )"; then \
+		timeout 10s printf '%s\n' 'unwired transaction-trigger authority was widened before an owned metadata proof exists:' "$$widened" >&2; \
+		exit 1; \
+	else \
+		status=$$?; \
+		timeout 10s test "$$status" = 1; \
+	fi; \
 	if callsites="$$( timeout 10s grep -RInE \
-		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare' \
+		'begin_transition|begin_fresh_allocation|transition_id_for_allocation|finish_fresh_allocation|begin_candidate_prepare|finish_candidate_prepare|run_transaction_triggers' \
 		--include='*.rs' --exclude-dir=journal_coordinator crates/forge/src )"; then \
 		timeout 10s printf '%s\n' 'journal coordinator has a live callsite outside its contract module:' "$$callsites" >&2; \
 		exit 1; \

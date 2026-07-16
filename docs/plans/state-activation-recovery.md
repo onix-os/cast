@@ -363,8 +363,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   boot result.
 
   As of 2026-07-16, one intentionally unwired coordinator contract owns the
-  durable prefix through `CandidatePrepared` for all three operations. A typed
-  request makes the legal state relationships explicit: a new state has no
+  durable prefix through `CandidatePrepared` for all three operations and the
+  internal transaction-trigger sequence through `TransactionTriggersComplete`
+  for new states and active reblits. A typed request makes the legal state
+  relationships explicit: a new state has no
   candidate ID and classifies its previous tree as an active state,
   synthesized empty tree, or unmanaged tree; archived activation has distinct
   candidate and previous active-state IDs; and an active reblit binds the same
@@ -390,6 +392,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   `CandidatePrepareStarted(4)` -> `CandidatePrepared(5)`. Archived activation
   and active reblit skip the inapplicable allocation states and follow exactly
   `Preparing(1)` -> `CandidatePrepareStarted(2)` -> `CandidatePrepared(3)`.
+  New states then reach `TransactionTriggersStarted(6)` and
+  `TransactionTriggersComplete(7)`; active reblits reach the same phases at
+  generations 4 and 5. Archived activation has no transaction-trigger phase
+  and remains at `CandidatePrepared(3)` when that internal runner is offered;
+  its sole legal successor is the still-unimplemented `UsrExchangeIntent(4)`.
   Every transition uses the journal's conditional create/advance operations.
   A wrong operation or phase fails before storage, and an exact-record compare
   prevents a stale generation from overwriting newer evidence. A persistence
@@ -428,18 +435,55 @@ and instant rollback mechanism; it hardens their failure semantics.
   record, so an uncertain persistence result fails stop instead of permitting
   an in-process continuation.
 
+  The internal transaction-trigger runner derives its started and completed
+  records through the journal's sole forward-successor constructor. It proves
+  both retained runtime identities, both exact public tree names and markers,
+  the candidate's retained `.stateID`, and operation-specific database
+  ownership before intent and after the callback. New states require the exact
+  `Matching` transition token; active reblits and every existing-state journal
+  creation require an existing candidate row with `Cleared` ownership. Every
+  distinct recorded previous state also requires a `Cleared` row, while a
+  synthesized previous tree has no row and an active reblit reuses its already
+  checked candidate row. The global database audit must contain exactly the
+  new-state candidate and journal transition ID for `NewState`, and no
+  transition-bearing row for `ActiveReblit`; invalid, multiple, or unrelated
+  transition evidence cannot reach completion. A bounded
+  existing-marker inventory seals the candidate before intent and establishes,
+  syncs, and exactly re-inventories the callback's accepted result before
+  completion. Safe root-owned one-link payload changes are therefore accepted,
+  while candidate-name, state-ID, database, unsafe-inode, or unstable-inventory
+  substitutions leave the durable phase at `TransactionTriggersStarted`.
+  Intent persistence failure invokes no callback and may leave only
+  `CandidatePrepared` or `TransactionTriggersStarted`; completion persistence
+  failure invokes the callback once and may leave only
+  `TransactionTriggersStarted` or `TransactionTriggersComplete`. Every error
+  drops the coordinator-owned journal, identity, and database capabilities.
+
+  This callback is a sequencing contract, not production-safe live trigger
+  authorization. Its authority, failure type, and consuming runner are scoped
+  to the coordinator module and cannot be obtained by a client. In particular,
+  `CandidatePrepared` currently retains only exact `.stateID` evidence, while
+  the live `CandidateMetadataProof` borrows the tree identity and cannot survive
+  moving that identity into the coordinator. Before visibility can widen,
+  candidate preparation must return an owned metadata token (using an exact
+  duplicated candidate descriptor), and the coordinator must require its
+  `os-release` and `system-model.glu` proofs immediately before trigger intent
+  and again after the effect. The callback's post-effect inventory deliberately
+  cannot substitute for that semantic proof because it baselines intentional
+  payload changes. No client metadata code is changed or silently bypassed by
+  this unwired slice.
+
   The focused `make forge-transition-journal-coordinator-test` lane freezes
   those three phase/generation sequences, request-derived origins and options,
-  runtime evidence, fixed quarantine naming, exact database correlation, and
-  fail-stop evidence. It also executes a static gate proving that none of the
-  coordinator's prefix methods is called outside its own contract module.
-  The tests manually interleave representative allocation and preparation
-  effects to observe the intended durable ordering; the production API has no
-  effect callbacks or authorization wrappers and therefore does not yet
-  structurally enforce arbitrary external-effect sequencing. No live
-  activation path creates or advances this coordinator, and there is still no
-  phase-specific recovery executor; the read-only startup assessment described
-  below cannot advance it. This item remains open.
+  runtime evidence, fixed quarantine naming, exact database correlation,
+  transaction-trigger ordering, predecessor-or-successor persistence faults,
+  substitution rejection, and fail-stop lock release. Its static gates prove
+  that no coordinator method has a callsite outside the contract module and
+  that the trigger runner and authority have not been widened beyond that
+  module before the owned metadata bridge exists. No live activation path
+  creates or advances this coordinator, and there is still no phase-specific
+  recovery executor; the read-only startup assessment described below cannot
+  advance it. This item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in

@@ -1,19 +1,27 @@
 //! Durable prefix shared by every stateful `/usr` transition.
 //!
-//! This module owns only the contract through `CandidatePrepared`. It is not
-//! wired into live activation until startup can reconcile every record it may
-//! publish. Consuming transitions deliberately make an uncertain journal
-//! write fail-stop: an error drops the coordinator and its lock rather than
-//! allowing another in-process effect to guess which record became durable.
+//! This module owns the shared contract through `CandidatePrepared` and the
+//! stateful transaction-trigger boundary for `NewState` and `ActiveReblit`.
+//! It is not wired into live activation until startup can reconcile every
+//! record it may publish. Consuming transitions deliberately make an uncertain
+//! journal write fail-stop: an error drops the coordinator and its lock rather
+//! than allowing another in-process effect to guess which record became
+//! durable. The transaction-trigger runner is deliberately visible only inside
+//! this contract module. It is not eligible for live wiring until candidate
+//! preparation returns an owned metadata proof which the coordinator can
+//! require before trigger intent and revalidate after the effect.
 
 mod error;
 mod request;
+mod transaction_triggers;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
+#[cfg(test)]
+use transaction_triggers::StatefulTransactionTriggerFailure;
 
 use crate::{
     db,
@@ -69,6 +77,16 @@ impl StatefulTreeIdentity {
         let runtime = capture_runtime_evidence(&self)?;
         let transition_id =
             TransitionId::generate().map_err(StatefulTransitionCoordinatorError::GenerateTransitionId)?;
+        if let Some(candidate) = parts.candidate_id {
+            self.require_existing_candidate_database_ownership(parts.operation, candidate, &transition_id)?;
+        }
+        self.require_previous_state_database_ownership(
+            parts.operation,
+            parts.previous_id,
+            parts.candidate_id,
+            &transition_id,
+        )?;
+        self.require_global_transition_audit(parts.operation, None)?;
         let quarantine_name = transition_quarantine_name(&transition_id)?;
         let record = TransitionRecord::preparing(
             transition_id,
@@ -96,6 +114,16 @@ impl StatefulTreeIdentity {
             Some(candidate) => self.require_existing_candidate_state(candidate)?,
             None => self.require_unallocated_candidate()?,
         }
+        if let Some(candidate) = parts.candidate_id {
+            self.require_existing_candidate_database_ownership(parts.operation, candidate, &record.transition_id)?;
+        }
+        self.require_previous_state_database_ownership(
+            parts.operation,
+            parts.previous_id,
+            parts.candidate_id,
+            &record.transition_id,
+        )?;
+        self.require_global_transition_audit(parts.operation, None)?;
         self.require_no_journal()
             .map_err(StatefulTransitionCoordinatorError::Identity)?;
         self.journal.create(&record)?;
@@ -126,6 +154,74 @@ impl StatefulTreeIdentity {
             .verify_store_read_only(&self.candidate.store)
             .map_err(StatefulTransitionCoordinatorError::Identity)?;
         RetainedTreeStateId::require_absent(&self.candidate.store).map_err(StatefulTransitionCoordinatorError::Identity)
+    }
+
+    fn require_existing_candidate_database_ownership(
+        &self,
+        operation: Operation,
+        candidate: state::Id,
+        transition: &TransitionId,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        debug_assert!(matches!(
+            operation,
+            Operation::ActivateArchived | Operation::ActiveReblit
+        ));
+        let ownership = self.state_database.transition_ownership(candidate, transition)?;
+        if ownership == db::state::TransitionOwnership::Cleared {
+            Ok(())
+        } else {
+            Err(StatefulTransitionCoordinatorError::ExistingCandidateOwnershipMismatch {
+                operation,
+                state: i32::from(candidate),
+                ownership,
+            })
+        }
+    }
+
+    fn require_previous_state_database_ownership(
+        &self,
+        operation: Operation,
+        previous: Option<state::Id>,
+        candidate: Option<state::Id>,
+        transition: &TransitionId,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        let Some(previous) = previous.filter(|previous| Some(*previous) != candidate) else {
+            return Ok(());
+        };
+        let ownership = self.state_database.transition_ownership(previous, transition)?;
+        if ownership == db::state::TransitionOwnership::Cleared {
+            Ok(())
+        } else {
+            Err(StatefulTransitionCoordinatorError::PreviousStateOwnershipMismatch {
+                operation,
+                state: i32::from(previous),
+                ownership,
+            })
+        }
+    }
+
+    fn require_global_transition_audit(
+        &self,
+        operation: Operation,
+        expected: Option<(state::Id, &TransitionId)>,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        let actual = self.state_database.audit_in_flight_transition()?;
+        let matches = match (expected, actual.as_ref()) {
+            (None, None) => true,
+            (Some((expected_state, expected_transition)), Some(actual)) => {
+                actual.state_id == expected_state && actual.transition_id == *expected_transition
+            }
+            _ => false,
+        };
+        if matches {
+            return Ok(());
+        }
+        Err(StatefulTransitionCoordinatorError::TransitionAuditMismatch {
+            operation,
+            expected_state: expected.map(|(state, _)| i32::from(state)),
+            expected_transition: expected.map(|(_, transition)| transition.clone()),
+            actual,
+        })
     }
 
     fn require_request_previous(&self, parts: request::RequestParts) -> Result<(), StatefulTransitionCoordinatorError> {

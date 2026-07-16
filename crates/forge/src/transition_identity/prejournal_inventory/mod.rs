@@ -152,6 +152,35 @@ impl RetainedCandidateDurabilitySeal {
     }
 }
 
+/// Durably seal an already-marked candidate without treating its marker as a
+/// publication delta.
+///
+/// Transaction effects may intentionally change candidate descendants after
+/// the pre-journal seal. Before a later journal phase records those effects as
+/// complete, inventory the exact retained tree with its canonical marker
+/// already present, sync every accepted inode bottom-up, and require a second
+/// whole-tree inventory to match exactly. The caller must sandwich this
+/// bounded walk between its retained marker, state-ID, public-name, and
+/// database proofs; this function authenticates stable inventory and
+/// durability, not transition policy.
+pub(crate) fn seal_existing_marked_candidate(
+    root: &File,
+    display_path: impl Into<PathBuf>,
+    limits: CandidateInventoryLimits,
+) -> Result<(), CandidateInventoryError> {
+    let display_path = display_path.into();
+    let mut budget = WorkBudget::new(limits, &display_path)?;
+    budget.operation(&display_path)?;
+    let root = root
+        .try_clone()
+        .map_err(|source| error::inventory_io("retain exact existing candidate root", &display_path, source))?;
+
+    let baseline = collect_inventory(&root, &display_path, limits, MarkerPolicy::MustBePresent, &mut budget)?;
+    sync_baseline(&root, &display_path, &baseline, limits, &mut budget)?;
+    let after_sync = collect_inventory(&root, &display_path, limits, MarkerPolicy::MustBePresent, &mut budget)?;
+    baseline.require_exact(&after_sync, &display_path, &mut budget)
+}
+
 /// One aggregate cooperative budget per public phase.
 ///
 /// Syscalls such as `readdir` and `fsync` cannot be safely cancelled, so the
