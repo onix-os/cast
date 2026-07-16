@@ -123,4 +123,25 @@ jobs:
         run: make examples
 
       - name: Build and reproduce all frozen fixtures
-        run: make fixtures-ci
+        id: fixture_execution
+        run: misc/scripts/run-fixtures-ci-with-evidence.sh
+
+      - name: Upload successful fixture execution evidence
+        if: ${{ always() && steps.fixture_execution.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-execution-proof-${{ github.sha }}
+          path: |
+            target/fixture-evidence/fixtures-ci-proof.json
+            target/fixture-evidence/fixtures-ci.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload bounded failed fixture log
+        if: ${{ always() && steps.fixture_execution.outcome != 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-execution-failure-${{ github.sha }}
+          path: target/fixture-evidence/fixtures-ci.log
+          if-no-files-found: warn
+          retention-days: 14

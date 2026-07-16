@@ -15,8 +15,10 @@ state="$work/state"
 private_tmp="$work/tmp"
 package_store="$work/packages"
 artifact="$work/delegated_execution_fixture"
-mkdir -p "$fakebin" "$state" "$private_tmp" "$package_store"
-chmod 700 "$private_tmp"
+evidence="$work/evidence"
+fake_commit=0123456789abcdef0123456789abcdef01234567
+mkdir -p "$fakebin" "$state" "$private_tmp" "$package_store" "$evidence"
+chmod 700 "$private_tmp" "$evidence"
 
 cat >"$artifact" <<'EOF'
 #!/bin/sh
@@ -30,10 +32,47 @@ set -eu
 : "${FAKE_ARTIFACT:?}"
 : "${FAKE_SOURCE:?}"
 printf '%s\n' cargo-called >>"$FAKE_STATE/cargo-calls"
+if test "${FAKE_CARGO_MODE:-artifact}" = missing-artifact; then
+    printf '%s\n' '{"reason":"build-finished","success":true}'
+    exit 0
+fi
 printf '%s\n' \
     "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"delegated_execution_fixture\",\"kind\":[\"test\"],\"crate_types\":[\"bin\"],\"src_path\":\"$FAKE_SOURCE\"},\"profile\":{\"test\":true},\"executable\":\"$FAKE_ARTIFACT\"}"
 EOF
 chmod 755 "$fakebin/cargo"
+
+cat >"$fakebin/git" <<'EOF'
+#!/bin/sh
+set -eu
+: "${FAKE_GIT_COMMIT:?}"
+: "${FAKE_STATE:?}"
+test "$1" = -C
+shift 2
+case "$1" in
+    rev-parse)
+        test "$2" = --verify
+        test "$3" = HEAD
+        printf '%s\n' "$FAKE_GIT_COMMIT"
+        ;;
+    status)
+        test "$2" = --porcelain
+        test "$3" = --untracked-files=normal
+        printf '%s\n' status >>"$FAKE_STATE/git-status-calls"
+        status_call=$(wc -l <"$FAKE_STATE/git-status-calls")
+        case "${FAKE_GIT_STATUS_MODE:-clean}" in
+            clean) ;;
+            dirty) printf '%s\n' ' M fixture-input' ;;
+            fail-before) exit 71 ;;
+            fail-after)
+                test "$status_call" -lt 2 || exit 72
+                ;;
+            *) exit 2 ;;
+        esac
+        ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod 755 "$fakebin/git"
 
 cat >"$fakebin/systemctl" <<'EOF'
 #!/bin/sh
@@ -89,12 +128,16 @@ set -eu
 : "${FAKE_STATE:?}"
 unit=
 marker=
+proof=
+commit=
 : >"$FAKE_STATE/systemd-run-args"
 for argument in "$@"; do
     printf '%s\n' "$argument" >>"$FAKE_STATE/systemd-run-args"
     case "$argument" in
         --unit=*) unit=${argument#--unit=} ;;
         --setenv=CAST_DELEGATED_FIXTURE_TOKEN=*) marker=${argument#--setenv=} ;;
+        --setenv=CAST_FIXTURE_PROOF_PATH=*) proof=${argument#--setenv=CAST_FIXTURE_PROOF_PATH=} ;;
+        --setenv=CAST_FIXTURE_GIT_COMMIT=*) commit=${argument#--setenv=CAST_FIXTURE_GIT_COMMIT=} ;;
     esac
 done
 test -n "$unit"
@@ -104,6 +147,55 @@ printf '%s\n' "$unit" >"$FAKE_STATE/unit"
 case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
     success)
         printf '%s\n' "$marker" >"$FAKE_STATE/environment"
+        if test -n "$proof"; then
+            case "${FAKE_PROOF_MODE:-valid}" in
+                valid|multi-document)
+                    test -n "$commit"
+                    if test "$FAKE_PROOF_MODE" = multi-document; then
+                        printf '%s\n' '{"ignored":"document"}' >"$proof"
+                    else
+                        : >"$proof"
+                    fi
+                    cat >>"$proof" <<EOF_PROOF
+{
+  "schema": "cast.fixtures-ci-proof.v1",
+  "git_commit": "$commit",
+  "git_tree": "clean",
+  "selection": "all",
+  "required_execution": true,
+  "fixture_count": 13,
+  "fixtures": [
+    "autotools",
+    "autotools-options",
+    "cargo",
+    "cargo-features",
+    "cargo-vendored",
+    "cmake",
+    "custom",
+    "daemon-generated",
+    "factory-override",
+    "generated-config",
+    "hooks-patch",
+    "meson",
+    "split"
+  ],
+  "assertions": [
+    "contentful-build-and-publish",
+    "decoded-bundle-contract",
+    "locked-plan-and-derivation-reuse",
+    "second-contentful-build-reused",
+    "stone-and-manifest-bytes-identical"
+  ],
+  "result": "passed"
+}
+EOF_PROOF
+                    chmod 644 "$proof"
+                    ;;
+                missing) ;;
+                malformed) printf '%s\n' '{"result":"passed"}' >"$proof"; chmod 644 "$proof" ;;
+                *) exit 2 ;;
+            esac
+        fi
         exit 0
         ;;
     failure)
@@ -144,6 +236,7 @@ run_fixture() {
         PATH="$fakebin:$PATH" \
         TMPDIR="$private_tmp" \
         CAST_BOOTSTRAP_PACKAGE_STORE="$package_store" \
+        CAST_FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_REQUIRE_EXECUTION="$2" \
         CARGO="$fakebin/cargo" \
         FAKE_ARTIFACT="$artifact" \
@@ -152,6 +245,10 @@ run_fixture() {
         FAKE_MANAGER="$3" \
         FAKE_SYSTEMD_RUN_MODE="$4" \
         FAKE_STOP_MODE="${5:-success}" \
+        FAKE_PROOF_MODE="${6:-valid}" \
+        FAKE_CARGO_MODE="${7:-artifact}" \
+        FAKE_GIT_COMMIT="$fake_commit" \
+        FAKE_GIT_STATUS_MODE="${8:-clean}" \
         "$runner" "$selector"
 }
 
@@ -194,6 +291,110 @@ for fixture_directory in "$root/tests/fixtures/gluon/execution/packages"/*; do
     grep -Fqx -- "--setenv=CAST_EXECUTION_FIXTURE=$fixture" "$state/systemd-run-args"
 done
 test "$fixture_count" -eq 13
+test ! -e "$evidence/fixtures-ci-proof.json"
+
+rm -f "$evidence"/*
+reset_state
+run_fixture all 1 ready success
+proof="$evidence/fixtures-ci-proof.json"
+test -f "$proof"
+test ! -L "$proof"
+test "$(stat -c '%a' "$proof")" = 644
+test "$(stat -c '%h' "$proof")" -eq 1
+test "$(stat -c '%s' "$proof")" -le 4096
+jq -e --arg commit "$fake_commit" '
+    .schema == "cast.fixtures-ci-proof.v1"
+    and .git_commit == $commit
+    and .git_tree == "clean"
+    and .selection == "all"
+    and .required_execution == true
+    and .fixture_count == 13
+    and (.fixtures | length) == 13
+    and .fixtures[0] == "autotools"
+    and .fixtures[12] == "split"
+    and (.assertions | length) == 5
+    and .result == "passed"
+' "$proof" >/dev/null
+grep -Fqx -- "--setenv=CAST_FIXTURE_PROOF_PATH=$proof" "$state/systemd-run-args"
+grep -Fqx -- "--setenv=CAST_FIXTURE_GIT_COMMIT=$fake_commit" "$state/systemd-run-args"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+run_fixture all 1 ready success success valid artifact fail-before \
+    >"$work/git-status-before.out" 2>"$work/git-status-before.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'cannot inspect fixture CI checkout cleanliness before execution' \
+    "$work/git-status-before.err"
+test ! -e "$proof"
+test ! -e "$state/cargo-calls"
+test ! -e "$state/systemd-run-args"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+run_fixture all 1 ready success success valid artifact fail-after \
+    >"$work/git-status-after.out" 2>"$work/git-status-after.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'cannot inspect fixture CI checkout cleanliness after execution' \
+    "$work/git-status-after.err"
+test ! -e "$proof"
+test -e "$state/cargo-calls"
+test -e "$state/systemd-run-args"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+run_fixture all 1 ready success success missing >"$work/missing-proof.out" 2>"$work/missing-proof.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'did not emit one regular completion proof' "$work/missing-proof.err"
+test ! -e "$proof"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+run_fixture all 1 ready success success malformed >"$work/malformed-proof.out" 2>"$work/malformed-proof.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'does not exactly match' "$work/malformed-proof.err"
+test ! -e "$proof"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+run_fixture all 1 ready success success multi-document \
+    >"$work/multi-document-proof.out" 2>"$work/multi-document-proof.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'does not exactly match' "$work/multi-document-proof.err"
+test ! -e "$proof"
+
+printf '%s\n' stale-proof >"$proof"
+reset_state
+set +e
+run_fixture all 1 ready failure >"$work/failed-matrix.out" 2>"$work/failed-matrix.err"
+status=$?
+set -e
+test "$status" -eq 42
+test ! -e "$proof"
+
+reset_state
+set +e
+run_fixture all 1 ready success success valid missing-artifact >"$work/missing-artifact.out" 2>"$work/missing-artifact.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'did not report exactly one harness-free delegated fixture executable' "$work/missing-artifact.err"
+test ! -e "$proof"
+test ! -e "$state/systemd-run-args"
 
 reset_state
 set +e

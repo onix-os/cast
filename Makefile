@@ -796,12 +796,14 @@ delegated-execution-fixtures: bootstrap-fixture-selection bootstrap-execution-re
 	@echo "Building, packaging, and reproducing fixture selection '$(FIXTURE_SELECTION)' in an explicit delegated unit..."
 	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" \
 		CAST_BOOTSTRAP_PACKAGE_STORE="$(BOOTSTRAP_PACKAGE_STORE)" \
+		CAST_FIXTURE_EVIDENCE_DIR="$${CAST_FIXTURE_EVIDENCE_DIR:-$(TOP_DIR)/target/fixture-evidence}" \
 		CAST_REQUIRE_EXECUTION="$(EXECUTION_REQUIREMENT)" \
 		CARGO="$(CARGO)" \
 		"$(TOP_DIR)/misc/scripts/run-delegated-execution-fixture.sh" "$(FIXTURE_SELECTION)"
 
 delegated-fixture-runner-test:
 	@"$(TOP_DIR)/misc/scripts/test-run-delegated-execution-fixture.sh"
+	@"$(TOP_DIR)/misc/scripts/test-run-fixtures-ci-with-evidence.sh"
 
 bootstrap-fixtures: bootstrap-fixture-selection bootstrap-execution-requirement bootstrap-fixtures-prepare
 	@$(MAKE) --no-print-directory bootstrap-fixtures-offline \
@@ -872,7 +874,7 @@ help:
 	@echo "  forge-installation-test  Run all direct installation policy and filesystem tests"
 	@echo "  forge-mutable-startup-namespace-test  Run retained mutable startup namespace substitution tests"
 	@timeout 10s echo "  forge-candidate-pre-journal-durability-test  Run candidate durability, marker-link, and namespace tests"
-	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through transaction triggers"
+	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through /usr exchange intent"
 	@timeout 10s echo "  forge-transition-recovery-classifier-test  Run persisted-phase startup recovery direction tests"
 	@timeout 10s echo "  forge-startup-reconciliation-test  Run read-only startup recovery assessment tests"
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
@@ -933,7 +935,7 @@ help:
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  execution-capability-preflight-test  Test optional/required preflight policy and classification"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
-	@echo "  delegated-fixture-runner-test  Test delegated-unit timeout and interruption cleanup"
+	@echo "  delegated-fixture-runner-test  Test delegated-unit cleanup and bounded CI evidence"
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"
 	@echo "  bootstrap-fixtures-prepare  Fetch and verify the pinned 107-package Stone closure"
 	@echo "  bootstrap-fixtures-offline  Build selected fixtures twice without downloading"

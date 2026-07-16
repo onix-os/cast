@@ -22,6 +22,10 @@ tmpdir=${TMPDIR-}
 package_store=${CAST_BOOTSTRAP_PACKAGE_STORE:-$root/target/bootstrap-fixtures/packages}
 require_execution=${CAST_REQUIRE_EXECUTION-}
 cargo_command=${CARGO:-cargo}
+evidence_dir=${CAST_FIXTURE_EVIDENCE_DIR:-$root/target/fixture-evidence}
+proof_path=
+proof_temporary=
+git_commit=
 
 case "$require_execution" in
     0|1) ;;
@@ -31,6 +35,50 @@ case "$require_execution" in
         exit 2
         ;;
 esac
+
+if [ "$fixture" = all ] && [ "$require_execution" = 1 ]; then
+    case "$evidence_dir" in
+        /*) ;;
+        *) printf 'CAST_FIXTURE_EVIDENCE_DIR must be absolute: %s\n' "$evidence_dir" >&2; exit 2 ;;
+    esac
+    if [ -L "$evidence_dir" ] || { [ -e "$evidence_dir" ] && [ ! -d "$evidence_dir" ]; }; then
+        printf 'fixture evidence path must be a non-symlink directory: %s\n' "$evidence_dir" >&2
+        exit 1
+    fi
+    mkdir -p "$evidence_dir"
+    chmod 700 "$evidence_dir"
+    if [ "$(stat -c '%u' "$evidence_dir")" -ne "$(id -u)" ] || [ "$(stat -c '%a' "$evidence_dir")" != 700 ]; then
+        printf 'fixture evidence directory must be caller-owned with mode 700: %s\n' "$evidence_dir" >&2
+        exit 1
+    fi
+    proof_path="$evidence_dir/fixtures-ci-proof.json"
+    proof_temporary="$evidence_dir/.fixtures-ci-proof.json.tmp"
+    rm -f "$proof_path" "$proof_temporary"
+
+    command -v git >/dev/null 2>&1 || {
+        printf 'git is required to bind fixture CI evidence to the exact checkout\n' >&2
+        exit 1
+    }
+    git_commit=$(git -C "$root" rev-parse --verify HEAD) || {
+        printf 'cannot resolve the exact fixture CI Git commit\n' >&2
+        exit 1
+    }
+    case "$git_commit" in
+        ''|*[!0-9a-f]*) printf 'Git returned a noncanonical fixture CI commit: %s\n' "$git_commit" >&2; exit 1 ;;
+    esac
+    if [ "${#git_commit}" -ne 40 ] && [ "${#git_commit}" -ne 64 ]; then
+        printf 'Git returned an unexpected fixture CI commit length: %s\n' "${#git_commit}" >&2
+        exit 1
+    fi
+    if ! git_status=$(git -C "$root" status --porcelain --untracked-files=normal); then
+        printf 'cannot inspect fixture CI checkout cleanliness before execution\n' >&2
+        exit 1
+    fi
+    if [ -n "$git_status" ]; then
+        printf 'required fixture CI proof refuses a checkout which differs from commit %s\n' "$git_commit" >&2
+        exit 1
+    fi
+fi
 
 case "$tmpdir" in
     /*) ;;
@@ -120,10 +168,10 @@ stop_owned_unit() {
 
 cleanup() {
     status=$?
-    trap - EXIT
     # Cleanup owns the first interruption. A second terminal signal must not
     # tear it down between authenticating and stopping the transient unit.
     trap '' HUP INT TERM
+    trap - EXIT
     stop_owned_unit
     if [ -n "$systemd_run_pid" ]; then
         kill -TERM "$systemd_run_pid" >/dev/null 2>&1 || :
@@ -133,6 +181,12 @@ cleanup() {
         stop_owned_unit
     fi
     rm -f "$cargo_messages"
+    if [ -n "$proof_temporary" ]; then
+        rm -f "$proof_temporary"
+    fi
+    if [ "$status" -ne 0 ] && [ -n "$proof_path" ]; then
+        rm -f "$proof_path"
+    fi
     exit "$status"
 }
 trap cleanup EXIT
@@ -200,6 +254,17 @@ launch_signal_status=
 trap 'launch_signal_status=129' HUP
 trap 'launch_signal_status=130' INT
 trap 'launch_signal_status=143' TERM
+set -- "$executable"
+if [ -n "$proof_path" ]; then
+    set -- \
+        "--setenv=CAST_FIXTURE_PROOF_PATH=$proof_path" \
+        "--setenv=CAST_FIXTURE_GIT_COMMIT=$git_commit" \
+        "$@"
+fi
+# Clear the parent EXIT trap before forking so the asynchronous Bash child
+# cannot run repository cleanup if a signal lands before it execs systemd-run.
+# First terminal signals remain deferred until cleanup ownership is restored.
+trap - EXIT
 systemd-run \
     --user \
     --unit="$unit" \
@@ -225,8 +290,9 @@ systemd-run \
     --property=TimeoutStartSec=30s \
     --property=TimeoutStopSec=30s \
     --property=SendSIGKILL=yes \
-    "$executable" &
+    "$@" &
 systemd_run_pid=$!
+trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -239,4 +305,75 @@ else
     status=$?
 fi
 systemd_run_pid=
-exit "$status"
+if [ "$status" -ne 0 ]; then
+    exit "$status"
+fi
+
+if [ -n "$proof_path" ]; then
+    git_commit_after=$(git -C "$root" rev-parse --verify HEAD) || {
+        printf 'cannot revalidate the fixture CI Git commit after execution\n' >&2
+        exit 1
+    }
+    if ! git_status_after=$(git -C "$root" status --porcelain --untracked-files=normal); then
+        printf 'cannot inspect fixture CI checkout cleanliness after execution\n' >&2
+        exit 1
+    fi
+    if [ "$git_commit_after" != "$git_commit" ] || [ -n "$git_status_after" ]; then
+        printf 'fixture CI checkout changed while proving commit %s\n' "$git_commit" >&2
+        exit 1
+    fi
+    if [ ! -f "$proof_path" ] || [ -L "$proof_path" ]; then
+        printf 'required all-fixture harness did not emit one regular completion proof: %s\n' "$proof_path" >&2
+        exit 1
+    fi
+    if [ "$(stat -c '%u' "$proof_path")" -ne "$(id -u)" ] \
+        || [ "$(stat -c '%a' "$proof_path")" != 644 ] \
+        || [ "$(stat -c '%h' "$proof_path")" -ne 1 ]; then
+        printf 'fixture CI proof must be caller-owned, mode 644, and singly linked: %s\n' "$proof_path" >&2
+        exit 1
+    fi
+    proof_size=$(stat -c '%s' "$proof_path")
+    if [ "$proof_size" -le 0 ] || [ "$proof_size" -gt 4096 ]; then
+        printf 'fixture CI proof exceeds its 4096-byte bound: %s bytes\n' "$proof_size" >&2
+        exit 1
+    fi
+    if ! jq -s -e --arg commit "$git_commit" '
+        length == 1 and .[0] == {
+          schema: "cast.fixtures-ci-proof.v1",
+          git_commit: $commit,
+          git_tree: "clean",
+          selection: "all",
+          required_execution: true,
+          fixture_count: 13,
+          fixtures: [
+            "autotools",
+            "autotools-options",
+            "cargo",
+            "cargo-features",
+            "cargo-vendored",
+            "cmake",
+            "custom",
+            "daemon-generated",
+            "factory-override",
+            "generated-config",
+            "hooks-patch",
+            "meson",
+            "split"
+          ],
+          assertions: [
+            "contentful-build-and-publish",
+            "decoded-bundle-contract",
+            "locked-plan-and-derivation-reuse",
+            "second-contentful-build-reused",
+            "stone-and-manifest-bytes-identical"
+          ],
+          result: "passed"
+        }
+    ' "$proof_path" >/dev/null; then
+        printf 'fixture CI proof does not exactly match the required commit and fixture matrix\n' >&2
+        exit 1
+    fi
+    printf 'Published bounded fixture CI proof for commit %s: %s\n' "$git_commit" "$proof_path"
+fi
+
+exit 0
