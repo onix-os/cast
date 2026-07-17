@@ -203,7 +203,6 @@ fn startup_active_reblit_post_exchange_durability_orders_identical_events_for_ap
     assert_eq!(applied_events, applied_expected);
     assert_eq!(barrier_order(&applied_events), exact_order);
     assert_eq!(durable.origin_for_test(), RollbackActionOutcome::Applied);
-    durable.revalidate_for_test(&applied_journal).unwrap();
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 1);
     applied_fixture.assert_non_namespace_unchanged();
     drop(durable);

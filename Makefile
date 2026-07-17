@@ -38,6 +38,7 @@ include misc/make/startup-candidate-preserve-target-tests.mk
 include misc/make/startup-candidate-preserve-effect-tests.mk
 include misc/make/startup-active-reblit-candidate-preserve-effect-tests.mk
 include misc/make/startup-active-reblit-candidate-preserve-post-exchange-durability-tests.mk
+include misc/make/startup-active-reblit-candidate-preserve-persistence-tests.mk
 include misc/make/startup-candidate-preserve-post-move-durability-tests.mk
 include misc/make/startup-candidate-preserve-persistence-tests.mk
 include misc/make/startup-fresh-db-invalidation-route-tests.mk

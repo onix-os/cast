@@ -44,6 +44,13 @@ pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAu
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority;
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveEffectLease;
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
+    UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
+    UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
+    UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
+    arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
+};
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
@@ -150,10 +157,12 @@ use activation_namespace::{
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
-    NewStateCandidatePreserveMoveFault, NewStateCandidatePreservePostMoveDurabilityEvent,
-    NewStateCandidatePreservePostMoveDurabilityFaultPoint, NewStateCandidatePreserveTargetDurabilityEvent,
-    NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetCreateFault,
-    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
+    ActiveReblitCandidatePreservePostExchangeDurabilityEvent, NewStateCandidatePreserveMoveFault,
+    NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
+    NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
+    NewStateTargetCreateFault, NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
+    arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_candidate_sync,
     arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture,
@@ -177,10 +186,13 @@ pub(in crate::client) use activation_namespace::{
     arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_create_fault,
     arm_new_state_target_normalize_durability_fault, arm_new_state_target_normalize_fault,
     new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
-    new_state_target_normalize_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    new_state_target_normalize_attempt_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
+    reset_active_reblit_candidate_preserve_post_exchange_durability_events,
+    reset_new_state_candidate_preserve_move_attempt_count,
     reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_create_attempt_count,
     reset_new_state_target_normalize_attempt_count, reset_new_state_target_normalize_durability_events,
+    take_active_reblit_candidate_preserve_post_exchange_durability_events,
     take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };

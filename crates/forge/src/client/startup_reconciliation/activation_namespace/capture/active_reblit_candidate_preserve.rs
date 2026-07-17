@@ -36,6 +36,7 @@ pub(in crate::client) use post_exchange_durability::{
     ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
     ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint,
     arm_active_reblit_candidate_preserve_post_exchange_durability_fault,
+    arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture,
     arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync,
     arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync,
     arm_before_active_reblit_candidate_preserve_post_exchange_final_post_capture,

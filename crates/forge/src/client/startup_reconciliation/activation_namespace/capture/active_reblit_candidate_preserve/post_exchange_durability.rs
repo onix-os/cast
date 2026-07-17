@@ -239,6 +239,7 @@ impl DurableActiveReblitCandidatePreservePostExchangeNamespace {
             &self.final_post,
             &self.final_post_projection,
         )?;
+        run_before_durable_post_revalidation_capture();
         let fresh_post = capture_snapshot(installation, record)?;
         fresh_post.revalidate_retained()?;
         if fresh_post.fingerprint() != self.final_post.fingerprint() {
@@ -415,6 +416,7 @@ std::thread_local! {
     static BEFORE_ROOTS_PARENT_SYNC: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     static BEFORE_QUARANTINE_PARENT_SYNC: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     static BEFORE_FINAL_POST_CAPTURE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_DURABLE_POST_REVALIDATION_CAPTURE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 pub(in crate::client) fn arm_active_reblit_candidate_preserve_post_exchange_durability_fault(
@@ -483,6 +485,11 @@ define_hook!(
     arm_before_active_reblit_candidate_preserve_post_exchange_final_post_capture,
     run_before_final_post_capture,
     BEFORE_FINAL_POST_CAPTURE
+);
+define_hook!(
+    arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture,
+    run_before_durable_post_revalidation_capture,
+    BEFORE_DURABLE_POST_REVALIDATION_CAPTURE
 );
 
 fn record_candidate_synced(file: &File) {

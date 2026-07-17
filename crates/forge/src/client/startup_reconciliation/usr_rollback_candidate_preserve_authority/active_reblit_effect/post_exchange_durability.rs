@@ -3,6 +3,10 @@
 //! This child is reachable only through the already test-gated ActiveReblit
 //! effect module. It neither selects production work nor persists a journal.
 
+mod persistence;
+
+pub(in crate::client) use persistence::arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence;
+
 use crate::{
     Installation, db,
     transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
@@ -151,24 +155,6 @@ impl UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'_> {
             ActiveReblitDurabilityOrigin::Applied => RollbackActionOutcome::Applied,
             ActiveReblitDurabilityOrigin::AlreadySatisfied => RollbackActionOutcome::AlreadySatisfied,
         }
-    }
-
-    pub(in crate::client) fn revalidate_for_test(
-        &self,
-        journal: &TransitionJournalStore,
-    ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-        require_effect_binding(&self._effect.journal_binding, journal)?;
-        require_active_reblit_post_effect_evidence(
-            &self._effect.installation,
-            &self._effect.state_db,
-            &self._effect.record,
-            &self._effect.database,
-            journal,
-        )?;
-        self._effect
-            .namespace
-            .revalidate(&self._effect.installation, &self._effect.record)?;
-        Ok(())
     }
 }
 

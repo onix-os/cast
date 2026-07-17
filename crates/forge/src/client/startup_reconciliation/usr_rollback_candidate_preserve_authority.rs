@@ -48,6 +48,7 @@ pub(in crate::client) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveEffectLease,
     arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,
+    arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
 };
 
 #[cfg(test)]
