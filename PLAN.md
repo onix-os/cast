@@ -716,6 +716,15 @@ restart matrices and genuine `SIGKILL` processes cover the reverse-execution
 and journal-update boundaries, but do not claim reboot or power-loss
 durability.
 
+Commit `7e0618dc` adds the next candidate-preservation foundation without
+putting it on that production ladder. A sealed, read-only, test-only admission
+distinguishes exact staged evidence from an already-preserved crash prefix
+across all three operations, both rollback sources, both recorded `/usr`
+outcomes, and both layouts. Its focused gate passes 19/19 contracts covering
+historical evidence, evidence races, and exact-topology refusals. There is no
+production constructor, mutation, persistence, dispatch, effect, or durability
+claim; candidate preservation itself remains unimplemented.
+
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the
 durable pre-journal baseline, connect every live state transition to the

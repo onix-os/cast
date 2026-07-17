@@ -139,6 +139,57 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   `CandidatePreserveIntent`, again returns `RecoveryPending`, and performs no
   preservation effect. Thus no startup entry advances more than one phase.
 
+## Candidate-preservation admission foundation
+
+  Commit `7e0618dc` adds a sealed, read-only admission boundary for exact
+  `CandidatePreserveIntent` evidence. The seal has only a test-only constructor,
+  and the focused static gate proves that production has zero seal-construction
+  and zero authority-capture call sites. Admission retains the exact per-open
+  journal binding, active-state reservation, installation and state-database
+  handles, complete record, database ownership and immutable provenance, and
+  independent before/after namespace fingerprints. Revalidation checks the
+  journal binding first, sandwiches fresh database and namespace evidence, and
+  consumes neither the staged nor the already-preserved typestate.
+
+  The complete admission matrix covers NewState, ActivateArchived, and
+  ActiveReblit; rollback sources `UsrExchangeIntent` and `UsrExchanged`;
+  recorded `/usr` outcomes `Applied` and `AlreadySatisfied`; and staged and
+  already-preserved layouts. Staged evidence yields a private Apply typestate,
+  while an already-preserved crash prefix yields a private Finish typestate.
+  Those names classify evidence only: neither typestate exposes an operation
+  which moves a candidate or advances the journal. NewState admits the exact
+  staged topology, including one empty transition-quarantine target left by a
+  create-before-move crash, or the exact preserved quarantine topology.
+  ActivateArchived requires its canonical two-link state-slot relationship.
+  ActiveReblit requires its unique reserved replacement wrapper and retains its
+  exact, possibly nonzero wrapper index across staged and preserved evidence.
+
+  Admission rejects an occupied NewState destination; missing, wrong,
+  duplicate, or transferred archived slots; missing, duplicate, or wrong
+  ActiveReblit reservations; a generic ActiveReblit quarantine; and an empty
+  transition wrapper for archived activation or ActiveReblit. NewState and
+  archived activation also reject unmodeled previous- or
+  archived-candidate-parking wrappers. Empty or foreign canonical wrappers for
+  a current previous-state ID are refused, as are current candidate-ID wrappers
+  outside the exact archived destination; unrelated state wrappers remain
+  admissible only when their complete fingerprints remain stable. The
+  ActiveReblit reservation index is retained only in the startup-reconciliation
+  topology, and its topology accessors remain test-only rather than becoming a
+  client-wide API. Wrong phases, unsupported rollback sources, or any mismatch
+  in the operation-specific rollback plan never yield preservation authority.
+
+  The focused
+  `make forge-startup-usr-rollback-candidate-preserve-admission-test` lane
+  passes 19/19 contracts. Besides the full operation/source/outcome/layout
+  matrix, it accepts historical runtime evidence, rejects a different open
+  journal binding, invalidates database, provenance, and namespace changes,
+  and defers or fails closed across initial-capture and fresh-revalidation
+  races. Static gates forbid any effect or dispatcher surface, mutable
+  filesystem operation, database mutation, journal successor or advance,
+  trigger, cleanup, raw descriptor authority, or synchronization call in this
+  boundary. It therefore establishes no production constructor, mutation,
+  persistence, dispatch, effect, or durability claim.
+
 ## Diagnostic reconciliation and namespace inventory
 
   The assessment then classifies every validated persisted phase as begin
@@ -312,15 +363,16 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  This is still only the authenticated `/usr` rollback prefix. No startup
-  executor yet handles the effects of `CandidatePreserveIntent`, candidate
-  preservation, fresh-row invalidation, the remaining rollback actions,
-  roll-forward, boot repair, or cleanup. The exact reverse prefix now has both deterministic
-  in-process contracts and genuine process-termination coverage. It still has
-  no reboot or power-loss proof: `SIGKILL` preserves the kernel-visible state at
-  termination and cannot establish which pre-fsync rename survives a power
-  cycle. The complete campaign required below therefore remains open, as do
-  this item and all six broad Phase 11 work items.
+  This is still only the authenticated `/usr` rollback prefix. The sealed
+  candidate-preservation admission above remains test-only and read-only; no
+  startup executor yet handles the effects of `CandidatePreserveIntent`,
+  candidate preservation, fresh-row invalidation, the remaining rollback
+  actions, roll-forward, boot repair, or cleanup. The exact reverse prefix now
+  has both deterministic in-process contracts and genuine process-termination
+  coverage. It still has no reboot or power-loss proof: `SIGKILL` preserves the
+  kernel-visible state at termination and cannot establish which pre-fsync
+  rename survives a power cycle. The complete campaign required below
+  therefore remains open, as do this item and all six broad Phase 11 work items.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not
