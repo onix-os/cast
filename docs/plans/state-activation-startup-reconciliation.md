@@ -303,13 +303,31 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   normalized and synchronized evidence therefore forces a new startup entry;
   this checkpoint cannot fall through into candidate movement.
 
+  Commit `0d93f979` strengthens every freshly selected Move lease independently.
+  Each lease repeats the retained candidate-tree barrier, then synchronizes the
+  exact canonical target and retained quarantine parent in that order. Complete
+  retained-descriptor, public-name, and full PRE revalidation surrounds the
+  barriers, and one fresh final PRE capture must still match before namespace
+  preparation can return.
+
+  The enclosing authority then checks the open-journal binding first again and
+  repeats the full installation, database, journal, and plan evidence. The
+  resulting target-durable typestate performs one final exact pre-move
+  revalidation before permitting at most one descriptor-relative
+  `RENAME_NOREPLACE` attempt. The raw syscall helper is structurally private to
+  that typestate; sibling paths cannot obtain it or bypass the durability
+  constructor. This is pre-move durability only and adds no production
+  dispatch, persistence, or post-move durability.
+
   The focused
-  `make forge-startup-usr-rollback-candidate-preserve-effect-test` lane passes
-  10/10 contracts. It covers effect selection, all raw-report/semantic-layout
-  combinations from both rollback origins, ambiguity, final-prefix races,
-  binding-first ordering, trailing database and journal checks, database and
-  journal races during candidate sync, candidate namespace races, and the final
-  target-mode race.
+  `make forge-startup-usr-rollback-candidate-preserve-effect-test` lane now
+  passes 14/14 contracts. It covers effect selection, all raw-report/semantic-
+  layout combinations from both rollback origins, ambiguity, final-prefix
+  races, binding-first ordering, trailing database and journal checks, database
+  and journal races during candidate sync, candidate namespace races, and the
+  final target-mode race. Its four added contracts prove ordered target
+  durability, exact fault prefixes, fail-closed namespace races, and repetition
+  of the complete barriers by a fresh Move lease after failure.
 
   The focused
   `make forge-startup-usr-rollback-candidate-preserve-target-creation-test`
@@ -331,7 +349,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   durability order, durability faults, namespace races, and the final canonical
   capture. The complete target-prefix aggregate is 26/26, the combined
   authority run is 50/50, preparation and creation remain 3/3 and 11/11
-  respectively, and move reconciliation remains 10/10.
+  respectively, and move reconciliation is now 14/14. `make check` passes with
+  only the four established warnings, while `make source-loc` reports all 1058
+  tracked text files at no more than 1000 lines.
 
   Creation static gates permit exactly one directory-creation attempt while
   forbidding retries, normalization, movement, synchronization, persistence,
@@ -345,11 +365,11 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   production recovery, a production target-preparation executor, post-create or
   post-move durability, nor completed candidate preservation.
 
-  The next checkpoint must strengthen every Move lease independently. Before
-  its one move, it must repeat idempotent synchronization of the exact target
-  inode and then the quarantine parent, followed by fresh revalidation. This is
-  required even if a prior normalization entry completed those barriers; a
-  canonical `0700` target alone is not durable move authority.
+  The next checkpoint is the still-unimplemented indivisible post-move
+  durability suffix shared by freshly `Applied` and already-preserved Finish
+  evidence: candidate tree, staging parent, target wrapper, quarantine parent,
+  then a final exact POST proof. No implementation or production-completion
+  claim is made here.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -529,7 +549,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   and test-only. The one-shot NewState target-creation, target-normalization,
   and move checkpoints are also test-sealed and undispatched. Normalization
   proves only its ordered target-preparation durability suffix; creation and
-  movement still provide no post-effect durability. No production startup
+  movement still provide no post-effect durability, persistence, or production
+  dispatch. No production startup
   executor yet handles the effects of `CandidatePreserveIntent`, candidate
   preservation, fresh-row invalidation, the remaining rollback actions,
   roll-forward, boot repair, or cleanup. The exact reverse prefix now has both

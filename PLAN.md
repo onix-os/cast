@@ -799,18 +799,35 @@ are all fieldless; no result carries a descriptor, retry, move, or partial
 durability capability. Every outcome therefore ends the startup entry, and
 normalization can never fall through into candidate movement or persistence.
 
-Target-prefix preparation remains sealed and undispatched: it supplies no
-production candidate-preservation executor, journal or database mutation,
-post-move durability, or effect for ActivateArchived or ActiveReblit. The
-normalization lane passes 12/12, the complete target-prefix aggregate passes
-26/26, the combined authority run passes 50/50, and move reconciliation remains
-10/10. The preparation and creation lanes remain 3/3 and 11/11 respectively.
+At that checkpoint target-prefix preparation remained sealed and undispatched:
+it supplied no production candidate-preservation executor, journal or database
+mutation, post-move durability, or effect for ActivateArchived or ActiveReblit.
+The normalization lane passed 12/12, the complete target-prefix aggregate
+passed 26/26, the combined authority run passed 50/50, and move reconciliation
+remained 10/10. The preparation and creation lanes remained 3/3 and 11/11
+respectively.
 
-The next checkpoint must strengthen every Move lease independently. Before its
-single move, it must repeat the idempotent exact target-inode barrier followed
-by the quarantine-parent barrier and revalidate the resulting namespace, even
-when a prior normalization entry completed the same ordered suffix. A
-canonical `0700` name alone is not durable move authority.
+Commit `0d93f979` strengthens every freshly selected Move lease independently.
+It repeats the candidate-tree barrier, then synchronizes the exact canonical
+target and retained quarantine parent in that order. Complete retained,
+public-name, and full PRE evidence is revalidated around those barriers before
+one fresh final PRE capture. The enclosing authority then repeats the
+open-journal binding first and the full non-namespace evidence check; a final
+exact pre-move revalidation is still required before at most one no-replace move.
+The raw syscall helper is structurally private to that target-durable typestate,
+so no sibling path can bypass the barriers or their final checks.
+
+The focused move lane now passes 14/14, the target-prefix aggregate remains
+26/26 (3/3 preparation, 11/11 creation, and 12/12 normalization), and the
+combined authority run remains 50/50. `make check` passes with only the four
+established warnings, and `make source-loc` reports all 1058 tracked text files
+at no more than 1000 lines. This remains test-sealed and supplies no production
+dispatch, persistence, or post-move durability.
+
+The next checkpoint is the still-unimplemented indivisible post-move
+durability suffix shared by freshly `Applied` and already-preserved Finish
+evidence: candidate tree, staging parent, target wrapper, quarantine parent,
+then one final exact POST proof. This plan does not yet claim its implementation.
 Candidate preservation therefore remains absent from the production recovery
 ladder and Phase 11 remains open.
 
