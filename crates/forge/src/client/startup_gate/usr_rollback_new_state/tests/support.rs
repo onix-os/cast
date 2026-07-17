@@ -1,4 +1,8 @@
-use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
+use std::{
+    fs,
+    os::unix::fs::{PermissionsExt as _, symlink},
+    path::Path,
+};
 
 use crate::{
     Installation,
@@ -16,7 +20,7 @@ use crate::{
     db,
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
-    transition_journal::{Phase, RollbackActionOutcome, TransitionRecord, decode},
+    transition_journal::{ForwardPhase, Phase, RollbackActionOutcome, TransitionRecord, decode},
 };
 
 use super::super::{
@@ -30,6 +34,13 @@ use super::super::{
 
 const OS_RELEASE: &[u8] = b"NAME=Rollback Dispatch Test\nID=rollback-dispatch-test\n";
 const SYSTEM_MODEL: &[u8] = b"let system = { hostname = \"rollback-dispatch-test\" } in system\n";
+const ROOT_ABI: [(&str, &str); 5] = [
+    ("bin", "usr/bin"),
+    ("sbin", "usr/sbin"),
+    ("lib", "usr/lib"),
+    ("lib32", "usr/lib32"),
+    ("lib64", "usr/lib"),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Epoch {
@@ -139,6 +150,9 @@ pub(super) fn build_candidate(
         Epoch::Current => CandidatePreserveFixture::new(OperationKind::NewState, source, usr_outcome, layout),
         Epoch::Historical => CandidatePreserveFixture::historical(OperationKind::NewState, source, usr_outcome, layout),
     };
+    if source == CandidateSource::Exchanged {
+        install_live_root_abi(&fixture.fixture.installation);
+    }
     if matches!(prefix, TargetPrefix::Residue | TargetPrefix::Canonical) {
         let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
         create_private_directory(&target);
@@ -219,12 +233,14 @@ pub(super) fn persist_rollback_complete(
     let journal = fixture.open_journal();
     journal.advance(invalidated, &successor).unwrap();
     drop(journal);
+    if successor.rollback.as_ref().unwrap().source == ForwardPhase::UsrExchanged {
+        install_live_root_abi(&fixture.fixture.fixture.installation);
+    }
     successor
 }
 
 pub(super) fn enter(installation: &Installation, database: &db::state::Database) -> startup_gate::Error {
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(installation, database, &reservation) {
+    match enter_result(installation, database) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved transition"),
         Err(error) => error,
     }
@@ -236,6 +252,22 @@ pub(super) fn enter_candidate(fixture: &CandidatePreserveFixture) -> startup_gat
 
 pub(super) fn enter_invalidation(fixture: &FreshDbInvalidationFixture) -> startup_gate::Error {
     enter(&fixture.fixture.fixture.installation, &fixture.fixture.fixture.database)
+}
+
+pub(super) fn enter_clean(installation: &Installation, database: &db::state::Database) {
+    drop(retain_clean(installation, database));
+}
+
+pub(super) fn enter_clean_invalidation(fixture: &FreshDbInvalidationFixture) {
+    enter_clean(&fixture.fixture.fixture.installation, &fixture.fixture.fixture.database)
+}
+
+pub(super) fn enter_clean_candidate(fixture: &CandidatePreserveFixture) {
+    enter_clean(&fixture.fixture.installation, &fixture.fixture.database)
+}
+
+pub(super) fn retain_clean_invalidation(fixture: &FreshDbInvalidationFixture) -> CleanSystemStartup {
+    retain_clean(&fixture.fixture.fixture.installation, &fixture.fixture.fixture.database)
 }
 
 pub(super) fn assert_pending_phase(error: &startup_gate::Error, phase: Phase) {
@@ -304,6 +336,13 @@ pub(super) fn target_path(fixture: &CandidatePreserveFixture) -> std::path::Path
     transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent)
 }
 
+pub(super) fn invalidation_target_path(
+    fixture: &FreshDbInvalidationFixture,
+    record: &TransitionRecord,
+) -> std::path::PathBuf {
+    transition_quarantine_path(&fixture.fixture.fixture, record)
+}
+
 pub(super) fn install_persistent_database(fixture: &mut CandidatePreserveFixture) {
     let database = open_state_database(&fixture.fixture.installation);
     let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
@@ -336,6 +375,12 @@ pub(super) fn enter_fresh_handles(root: &Path) -> startup_gate::Error {
     enter(&installation, &database)
 }
 
+pub(super) fn enter_fresh_clean_handles(root: &Path) {
+    let installation = Installation::open(root, None).unwrap();
+    let database = open_state_database(&installation);
+    enter_clean(&installation, &database);
+}
+
 pub(super) fn release_candidate_handles(mut fixture: CandidatePreserveFixture) -> tempfile::TempDir {
     let retained = std::mem::replace(&mut fixture.fixture._temporary, private_installation_tempdir());
     drop(fixture);
@@ -351,6 +396,28 @@ fn open_state_database(installation: &Installation) -> db::state::Database {
     database
 }
 
+fn enter_result(
+    installation: &Installation,
+    database: &db::state::Database,
+) -> Result<CleanSystemStartup, startup_gate::Error> {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(installation, database, &reservation)
+}
+
+fn retain_clean(installation: &Installation, database: &db::state::Database) -> CleanSystemStartup {
+    enter_result(installation, database).unwrap_or_else(|error| panic!("expected clean startup, got {error:?}"))
+}
+
 pub(super) fn canonical_record(root: &Path) -> TransitionRecord {
     decode(&fs::read(root.join(".cast/journal/state-transition")).unwrap()).unwrap()
+}
+
+pub(super) fn assert_canonical_absent(root: &Path) {
+    assert!(!root.join(".cast/journal/state-transition").exists());
+}
+
+fn install_live_root_abi(installation: &Installation) {
+    for (name, target) in ROOT_ABI {
+        symlink(target, installation.root.join(name)).unwrap();
+    }
 }

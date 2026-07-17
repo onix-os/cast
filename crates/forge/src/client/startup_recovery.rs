@@ -1,10 +1,10 @@
 //! Narrow, phase-specific mutable startup recovery effects.
 //!
 //! This module is separate from diagnostic startup reconciliation. Its
-//! executors consume exact mutation authority. Success may return only a
-//! lock-bearing journal store paired with an exact canonical record for
-//! uninterrupted diagnostic inspection; failure returns neither a store nor
-//! reusable authority.
+//! executors consume exact mutation authority. Success returns a lock-bearing
+//! journal store paired with either an exact canonical record or proven
+//! terminal absence for uninterrupted startup inspection; failure returns
+//! neither a store nor reusable authority.
 
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;

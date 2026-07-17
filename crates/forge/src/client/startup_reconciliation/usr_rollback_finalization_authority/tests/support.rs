@@ -43,13 +43,6 @@ pub(super) enum FreshDbOutcome {
 impl FreshDbOutcome {
     pub(super) const ALL: [Self; 2] = [Self::Applied, Self::AlreadySatisfied];
 
-    fn journal_outcome(self) -> RollbackActionOutcome {
-        match self {
-            Self::Applied => RollbackActionOutcome::Applied,
-            Self::AlreadySatisfied => RollbackActionOutcome::AlreadySatisfied,
-        }
-    }
-
     fn row(self) -> FreshRowLayout {
         match self {
             Self::Applied => FreshRowLayout::Present,

@@ -10,19 +10,25 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 25; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 33; \
 	for name in \
 		exclusions::startup_new_state_suffix_leaves_every_non_new_state_operation_zero_effect \
-		exclusions::startup_new_state_suffix_retains_rollback_complete_with_zero_suffix_effects \
+		exclusions::startup_new_state_suffix_defers_inexact_rollback_complete_with_zero_suffix_effects \
 		failures::startup_new_state_suffix_candidate_effect_failure_retries_once_on_a_fresh_entry \
 		failures::startup_new_state_suffix_database_effect_failures_restart_from_exact_present_or_joint_absence \
 		failures::startup_new_state_suffix_source_durable_storage_failures_repeat_no_candidate_or_database_effect \
 		failures::startup_new_state_suffix_successor_durable_storage_failure_never_redispatches_the_completed_phase \
 		failures::startup_new_state_suffix_reloads_an_overwritten_durable_successor_before_dispatch \
 		failures::startup_new_state_suffix_evidence_change_defers_before_route_or_later_effects \
+		finalization::startup_new_state_suffix_terminal_handoff_retains_the_same_journal_lock_through_clean_startup \
+		finalization::startup_new_state_suffix_reaudits_database_after_finalization_before_clean_admission \
+		finalization::startup_new_state_suffix_finalization_converges_into_the_shared_prune_residue_audit \
+		finalization::startup_new_state_suffix_rejects_terminal_record_recreated_during_clean_handoff \
+		finalization::startup_new_state_suffix_rejects_mutable_namespace_substitution_after_terminal_finalization \
 		matrix::startup_new_state_suffix_routes_every_exact_candidate_preserved_matrix_without_later_effects \
 		matrix::startup_new_state_suffix_invalidates_present_or_accepts_joint_absence_for_every_exact_matrix \
 		matrix::startup_new_state_suffix_completes_every_exact_invalidated_outcome_without_repeating_effects \
+		matrix::startup_new_state_suffix_finalizes_every_exact_terminal_matrix_without_later_effects \
 		preparation_failures::startup_new_state_suffix_target_creation_not_applied_retries_only_creation_on_a_fresh_entry \
 		preparation_failures::startup_new_state_suffix_target_creation_post_evidence_change_defers_to_normalization_without_move \
 		preparation_failures::startup_new_state_suffix_target_creation_post_evidence_failure_consumes_creation_before_fresh_recovery \
@@ -36,7 +42,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		sequence::startup_new_state_suffix_consumes_exactly_one_checkpoint_per_entry_for_every_target_prefix \
 		sequence::startup_new_state_suffix_runs_the_exact_multi_entry_sequence_without_same_entry_fallthrough \
 		sequence::startup_new_state_suffix_reacquires_fresh_installation_database_journal_and_reservation_handles \
-		storage_faults::startup_new_state_suffix_all_five_journal_faults_reenter_each_of_four_persistence_boundaries_exactly; do \
+		storage_faults::startup_new_state_suffix_all_five_journal_faults_reenter_each_of_four_persistence_boundaries_exactly \
+		storage_faults::startup_new_state_suffix_terminal_unlink_fault_restarts_from_exact_source_without_duplicate_effects \
+		storage_faults::startup_new_state_suffix_terminal_directory_sync_fault_restarts_from_exact_absence_without_duplicate_effects; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	gate=crates/forge/src/client/startup_gate.rs; \
@@ -44,8 +52,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	recovery_root=crates/forge/src/client/startup_recovery.rs; \
 	candidate_leaf=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	fresh_leaf=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_dispatch.rs; \
+	finalization_leaf=crates/forge/src/client/startup_recovery/usr_rollback_finalization.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests; \
-	for seal in UsrRollbackCandidatePreserveSeal UsrRollbackFreshDbInvalidationRouteSeal UsrRollbackFreshDbInvalidationSeal UsrRollbackCompleteRouteSeal; do \
+	for seal in UsrRollbackCandidatePreserveSeal UsrRollbackFreshDbInvalidationRouteSeal UsrRollbackFreshDbInvalidationSeal UsrRollbackCompleteRouteSeal UsrRollbackFinalizationSeal; do \
 		timeout 10s test "$$( timeout 10s rg -l "^pub\\(in crate::client\\) struct $$seal \\{" crates/forge/src/client --glob '*.rs' )" = "$$orchestrator"; \
 		timeout 10s grep -Fq "$$seal," "$$gate"; \
 		timeout 10s grep -Fqx "pub(in crate::client) struct $$seal {" "$$orchestrator"; \
@@ -72,6 +81,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fqx 'mod tests;' "$$orchestrator"; \
 	timeout 10s grep -Fqx 'mod exclusions;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod failures;' "$$tests/mod.rs"; \
+	timeout 10s grep -Fqx 'mod finalization;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod matrix;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod preparation_failures;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod sequence;' "$$tests/mod.rs"; \
@@ -83,21 +93,24 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fqx 'pub(super) fn dispatch<'\''reservation>(' "$$orchestrator"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'if record.operation != Operation::NewState {' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    match record.phase {' "$$orchestrator" )" = 1; \
-	for phase in CandidatePreserveIntent CandidatePreserved FreshDbInvalidationIntent FreshDbInvalidated; do \
+	for phase in CandidatePreserveIntent CandidatePreserved FreshDbInvalidationIntent FreshDbInvalidated RollbackComplete; do \
 		timeout 10s test "$$( timeout 10s grep -Fc "        Phase::$$phase => {" "$$orchestrator" )" = 1; \
 	done; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveSeal::new();' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteSeal::new();' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationSeal::new();' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteSeal::new();' "$$orchestrator" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFinalizationSeal::new();' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveAuthority::capture(' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteAuthority::capture(' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationAuthority::capture(' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteAuthority::capture(' "$$orchestrator" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFinalizationAuthority::capture(' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'dispatch_usr_rollback_candidate_preserve_and_reopen(journal, record, ready)?' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)?' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'dispatch_usr_rollback_fresh_db_invalidation_and_reopen(journal, ready)?' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen(journal, authority)?' "$$orchestrator" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'finalize_usr_rollback(journal, authority)?' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$candidate_leaf" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveDurabilitySeal::new();' "$$candidate_leaf" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationEffectSeal::new();' "$$fresh_leaf" )" = 1; \
@@ -113,10 +126,10 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 1; \
 		timeout 10s test "$$( timeout 10s cut -d: -f1 "$$inventory" )" = "$$expected_file"; \
 	}; \
-	for symbol in UsrRollbackCandidatePreserveAuthority UsrRollbackFreshDbInvalidationRouteAuthority UsrRollbackFreshDbInvalidationAuthority UsrRollbackCompleteRouteAuthority; do \
+	for symbol in UsrRollbackCandidatePreserveAuthority UsrRollbackFreshDbInvalidationRouteAuthority UsrRollbackFreshDbInvalidationAuthority UsrRollbackCompleteRouteAuthority UsrRollbackFinalizationAuthority; do \
 		production_single_ref "$$symbol::capture(" "$$orchestrator"; \
 	done; \
-	for seal in UsrRollbackCandidatePreserveSeal UsrRollbackFreshDbInvalidationRouteSeal UsrRollbackFreshDbInvalidationSeal UsrRollbackCompleteRouteSeal; do \
+	for seal in UsrRollbackCandidatePreserveSeal UsrRollbackFreshDbInvalidationRouteSeal UsrRollbackFreshDbInvalidationSeal UsrRollbackCompleteRouteSeal UsrRollbackFinalizationSeal; do \
 		production_single_ref "$$seal::new();" "$$orchestrator"; \
 	done; \
 	production_single_ref 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$candidate_leaf"; \
@@ -126,6 +139,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	production_single_ref 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)?' "$$orchestrator"; \
 	production_single_ref 'persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority)' "$$fresh_leaf"; \
 	production_single_ref 'persist_usr_rollback_complete_route_and_reopen(journal, authority)?' "$$orchestrator"; \
+	production_single_ref 'finalize_usr_rollback(journal, authority)?' "$$orchestrator"; \
 	production_single_ref 'dispatch_usr_rollback_candidate_preserve_and_reopen(journal, record, ready)?' "$$orchestrator"; \
 	production_single_ref 'dispatch_usr_rollback_fresh_db_invalidation_and_reopen(journal, ready)?' "$$orchestrator"; \
 	production_single_ref '.into_effect_selection(&effect_seal, &journal)?' "$$candidate_leaf"; \
@@ -150,6 +164,20 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s test "$$reverse_line" -lt "$$suffix_line"; \
 	timeout 10s test "$$suffix_line" -lt "$$diagnostic_line"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'usr_rollback_new_state::dispatch(' "$$gate" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'usr_rollback_new_state::Dispatch::Finalized { journal } => {' "$$gate" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'return Self::admit_clean(installation, state_db, journal, in_flight);' "$$gate" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'Self::admit_clean(installation, state_db, journal, in_flight)' "$$gate" )" = 2; \
+	timeout 10s grep -Fq 'after_usr_rollback_finalization_before_clean_audit();' "$$gate"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'authority.journal().load_revalidated_retained_cast(cast)' "$$gate" )" = 1; \
+	timeout 10s grep -Fq 'CanonicalTransitionAppearedDuringCleanAdmission {' "$$gate"; \
+	timeout 10s grep -Fq 'arm_after_usr_rollback_finalization_before_clean_audit' "$$tests/finalization.rs"; \
+	timeout 10s grep -Fq 'write_new_private_record(&canonical, &recreated)' "$$tests/finalization.rs"; \
+	timeout 10s grep -Fq 'fs::rename(callback_cast, &callback_displaced)' "$$tests/finalization.rs"; \
+	residue_audit_line="$$( timeout 10s grep -nF 'let residue = transition_identity::audit_archived_state_prune_residue' "$$gate" | timeout 10s cut -d: -f1 )"; \
+	final_absence_line="$$( timeout 10s grep -nF 'authority.journal().load_revalidated_retained_cast(cast)' "$$gate" | timeout 10s cut -d: -f1 )"; \
+	clean_admission_line="$$( timeout 10s grep -nF 'Ok(Self { _authority: authority })' "$$gate" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$residue_audit_line" -lt "$$final_absence_line"; \
+	timeout 10s test "$$final_absence_line" -lt "$$clean_admission_line"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'return Err(Error::RecoveryPending(pending));' "$$gate" )" -ge 4; \
 	timeout 10s sed -E 's,//.*$$,,' "$$orchestrator" "$$candidate_leaf" "$$fresh_leaf" > "$$production"; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry' "$$production"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
@@ -169,8 +197,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	for seam in arm_new_state_target_create_fault arm_before_new_state_target_create_reconciliation_capture arm_new_state_target_normalize_fault arm_before_new_state_target_normalize_reconciliation_capture arm_new_state_target_normalize_durability_fault arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture arm_new_state_candidate_preserve_target_durability_fault arm_before_new_state_candidate_preserve_post_move_candidate_sync arm_new_state_candidate_preserve_post_move_durability_fault; do timeout 10s grep -Fq "$$seam" "$$tests/preparation_failures.rs"; done; \
 	timeout 10s grep -Fqx 'const JOURNAL_FAULTS: [JournalFault; 5] = [' "$$tests/storage_faults.rs"; \
 	for fault in arm_next_temporary_sync_fault arm_next_update_exchange_fault arm_next_update_first_directory_sync_fault arm_next_displaced_unlink_fault arm_next_update_final_directory_sync_fault; do timeout 10s grep -Fq "$$fault" "$$tests/storage_faults.rs"; done; \
+	for fault in arm_next_delete_canonical_unlink_fault arm_next_delete_directory_sync_fault; do timeout 10s grep -Fq "$$fault" "$$tests/storage_faults.rs"; done; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'exercise_' "$$tests/storage_faults.rs" )" -ge 8; \
-	for file in "$$gate" "$$orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
+	for file in "$$gate" "$$orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1

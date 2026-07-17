@@ -39,6 +39,16 @@ forge-startup-usr-rollback-finalization-test:
 		storage_reconciliation::startup_usr_rollback_finalization_reports_delete_error_with_ambiguous_observation; do \
 		timeout 10s grep -Fqx "$$executor_prefix$$name: test" "$$listed"; \
 	done; \
+	startup_prefix='client::startup_gate::usr_rollback_new_state::tests::finalization::'; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$startup_prefix.*: test$$" "$$listed" )" = 5; \
+	for name in \
+		startup_new_state_suffix_terminal_handoff_retains_the_same_journal_lock_through_clean_startup \
+		startup_new_state_suffix_reaudits_database_after_finalization_before_clean_admission \
+		startup_new_state_suffix_finalization_converges_into_the_shared_prune_residue_audit \
+		startup_new_state_suffix_rejects_terminal_record_recreated_during_clean_handoff \
+		startup_new_state_suffix_rejects_mutable_namespace_substitution_after_terminal_finalization; do \
+		timeout 10s grep -Fqx "$$startup_prefix$$name: test" "$$listed"; \
+	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_finalization_authority.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_finalization_proof.rs; \
 	topology=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
@@ -50,6 +60,7 @@ forge-startup-usr-rollback-finalization-test:
 	journal_store=crates/forge/src/transition_journal/store.rs; \
 	orchestrator=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
+	startup_tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests/finalization.rs; \
 	executor_tests=crates/forge/src/client/startup_recovery/usr_rollback_finalization/tests/mod.rs; \
 	executor_support=crates/forge/src/client/startup_recovery/usr_rollback_finalization/tests/support.rs; \
 	executor_matrix=crates/forge/src/client/startup_recovery/usr_rollback_finalization/tests/matrix.rs; \
@@ -81,8 +92,9 @@ forge-startup-usr-rollback-finalization-test:
 	done; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackFinalizationSeal {' "$$orchestrator"; \
 	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackFinalizationSeal {/,/^}/p' "$$orchestrator" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
-	if timeout 10s grep -Fq '    fn new() -> Self {' <<<"$$seal_impl"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq '        Self::new()' <<<"$$seal_impl"; \
 	timeout 10s grep -Fq 'UsrRollbackFinalizationSeal' "$$startup_gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) enum UsrRollbackFinalizationAdmission<'\''reservation> {' "$$authority"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackFinalizationAuthority<'\''reservation> {' "$$authority"; \
@@ -95,9 +107,23 @@ forge-startup-usr-rollback-finalization-test:
 	if timeout 10s rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*(?:pub\([^)]*\)[[:space:]]+)?(?:struct|enum)[[:space:]]+(UsrRollbackFinalization(?:Authority|DatabaseEvidence|NamespaceProof))' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'impl Clone for UsrRollbackFinalization(?:Authority|DatabaseEvidence|NamespaceProof)' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '\.delete\(|dispatch_usr_|persist_usr_|fn new\(\) -> Self' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s rg -n -F 'UsrRollbackFinalizationAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_finalization_authority.rs' > "$$refs" || status="$$?"; \
-	timeout 10s test "$${status:-1}" = 1; \
-	timeout 10s test ! -s "$$refs"; \
+	timeout 10s rg -n -F 'UsrRollbackFinalizationAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_finalization_authority.rs' > "$$refs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$refs" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$refs" )" = "$$orchestrator"; \
+	timeout 10s grep -Fq 'UsrRollbackFinalizationSeal::new();' "$$orchestrator"; \
+	timeout 10s grep -Fq 'let journal = finalize_usr_rollback(journal, authority)?;' "$$orchestrator"; \
+	timeout 10s grep -Fq 'Ok(Dispatch::Finalized { journal })' "$$orchestrator"; \
+	timeout 10s grep -Fq 'usr_rollback_new_state::Dispatch::Finalized { journal } => {' "$$startup_gate"; \
+	timeout 10s grep -Fq 'return Self::admit_clean(installation, state_db, journal, in_flight);' "$$startup_gate"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'authority.journal().load_revalidated_retained_cast(cast)' "$$startup_gate" )" = 1; \
+	timeout 10s grep -Fq 'CanonicalTransitionAppearedDuringCleanAdmission {' "$$startup_gate"; \
+	timeout 10s grep -Fq 'write_new_private_record(&canonical, &recreated)' "$$startup_tests"; \
+	timeout 10s grep -Fq 'fs::rename(callback_cast, &callback_displaced)' "$$startup_tests"; \
+	residue_audit_line="$$( timeout 10s grep -nF 'let residue = transition_identity::audit_archived_state_prune_residue' "$$startup_gate" | timeout 10s cut -d: -f1 )"; \
+	final_absence_line="$$( timeout 10s grep -nF 'authority.journal().load_revalidated_retained_cast(cast)' "$$startup_gate" | timeout 10s cut -d: -f1 )"; \
+	clean_admission_line="$$( timeout 10s grep -nF 'Ok(Self { _authority: authority })' "$$startup_gate" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$residue_audit_line" -lt "$$final_absence_line"; \
+	timeout 10s test "$$final_absence_line" -lt "$$clean_admission_line"; \
 	timeout 10s rg -U -q '^pub\(in crate::client\) fn finalize_usr_rollback\(\n    journal: TransitionJournalStore,\n    authority: UsrRollbackFinalizationAuthority<'\''_>,\n\) -> Result<TransitionJournalStore, UsrRollbackFinalizationError> \{' "$$executor"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate(&journal)' "$$executor" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'journal.delete_revalidated_retained_cast(cast, &source_record)' "$$executor" )" = 1; \
@@ -145,11 +171,12 @@ forge-startup-usr-rollback-finalization-test:
 	if timeout 10s rg -n 'ensure_|mkdir|chmod|cleanup|create_|renameat|write_all|set_permissions|remove_(dir|file)|directory_entries' "$$store_delete_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in \
 		"$$authority" "$$proof" "$$topology" "$$executor" "$$recovery_root" "$$reconciliation_root" \
-		"$$namespace_root" "$$journal_root" "$$journal_store" "$$orchestrator" "$$startup_gate" \
+		"$$namespace_root" "$$journal_root" "$$journal_store" "$$orchestrator" "$$startup_gate" "$$startup_tests" \
 		"$$executor_tests" "$$executor_support" "$$executor_matrix" "$$executor_delete_report" "$$executor_storage" \
 		"$$executor_races" "$$executor_post" "$$executor_binding" \
 		misc/make/startup-rollback-finalization-tests.mk misc/make/help.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 300s $(CARGO) test -p forge --lib "$$authority_prefix" -- --test-threads=1; \
-	timeout 300s $(CARGO) test -p forge --lib "$$executor_prefix" -- --test-threads=1
+	timeout 300s $(CARGO) test -p forge --lib "$$executor_prefix" -- --test-threads=1; \
+	timeout 300s $(CARGO) test -p forge --lib "$$startup_prefix" -- --test-threads=1

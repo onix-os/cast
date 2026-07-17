@@ -2,6 +2,7 @@
 
 mod exclusions;
 mod failures;
+mod finalization;
 mod matrix;
 mod preparation_failures;
 mod sequence;

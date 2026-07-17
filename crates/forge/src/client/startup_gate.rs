@@ -241,6 +241,15 @@ impl CleanSystemStartup {
                     .map_err(map_reconciliation_error)?;
                     return Err(Error::RecoveryPending(pending));
                 }
+                usr_rollback_new_state::Dispatch::Finalized { journal } => {
+                    after_usr_rollback_finalization_before_clean_audit();
+                    installation.revalidate_mutable_namespace()?;
+                    let in_flight = state_db.audit_in_flight_transition();
+                    let namespace = installation.revalidate_mutable_namespace();
+                    namespace?;
+                    let in_flight = in_flight?;
+                    return Self::admit_clean(installation, state_db, journal, in_flight);
+                }
             };
             let pending = startup_reconciliation::PendingSystemTransition::inspect(
                 installation,
@@ -252,6 +261,20 @@ impl CleanSystemStartup {
             .map_err(map_reconciliation_error)?;
             return Err(Error::RecoveryPending(pending));
         }
+        Self::admit_clean(installation, state_db, journal, in_flight)
+    }
+
+    /// Enter the shared clean-startup residue audit with the caller's exact
+    /// continuously locked journal store. Terminal finalization and initially
+    /// absent startup both converge here without reopening the journal. A
+    /// final public-aware read through that same store proves that no record
+    /// appeared while the database and residue audits ran.
+    fn admit_clean(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        journal: transition_journal::TransitionJournalStore,
+        in_flight: Option<db::state::InFlightTransition>,
+    ) -> Result<Self, Error> {
         if let Some(orphan) = in_flight {
             return Err(Error::OrphanTransitionRow {
                 state: i32::from(orphan.state_id),
@@ -264,6 +287,20 @@ impl CleanSystemStartup {
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         residue?;
+
+        installation.revalidate_mutable_namespace()?;
+        let cast = installation.retained_mutable_cast_directory()?;
+        let canonical = authority.journal().load_revalidated_retained_cast(cast);
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        let canonical = canonical?;
+        if let Some(record) = canonical {
+            return Err(Error::CanonicalTransitionAppearedDuringCleanAdmission {
+                transition: record.transition_id.as_str().to_owned(),
+                operation: record.operation,
+                phase: record.phase,
+            });
+        }
         Ok(Self { _authority: authority })
     }
 
@@ -291,11 +328,20 @@ fn map_reconciliation_error(source: startup_reconciliation::InspectionError) -> 
 std::thread_local! {
     static AFTER_MUTABLE_NAMESPACE_PREFLIGHT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static AFTER_USR_ROLLBACK_FINALIZATION_BEFORE_CLEAN_AUDIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 pub(super) fn arm_after_mutable_namespace_preflight(hook: impl FnOnce() + 'static) {
     AFTER_MUTABLE_NAMESPACE_PREFLIGHT.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+pub(super) fn arm_after_usr_rollback_finalization_before_clean_audit(hook: impl FnOnce() + 'static) {
+    AFTER_USR_ROLLBACK_FINALIZATION_BEFORE_CLEAN_AUDIT.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });
 }
@@ -309,8 +355,20 @@ fn after_mutable_namespace_preflight() {
     });
 }
 
+#[cfg(test)]
+fn after_usr_rollback_finalization_before_clean_audit() {
+    AFTER_USR_ROLLBACK_FINALIZATION_BEFORE_CLEAN_AUDIT.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
 #[cfg(not(test))]
 fn after_mutable_namespace_preflight() {}
+
+#[cfg(not(test))]
+fn after_usr_rollback_finalization_before_clean_audit() {}
 
 #[derive(Debug, Error)]
 pub(super) enum Error {
@@ -324,6 +382,12 @@ pub(super) enum Error {
     MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("state {state} retains orphan transition {transition} while the canonical journal is absent")]
     OrphanTransitionRow { state: i32, transition: String },
+    #[error("canonical transition {transition} appeared as {operation:?} {phase:?} while proving clean startup")]
+    CanonicalTransitionAppearedDuringCleanAdmission {
+        transition: String,
+        operation: transition_journal::Operation,
+        phase: transition_journal::Phase,
+    },
     #[error("audit interrupted archived-state prune evidence")]
     ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
     #[error("recover CandidatePrepared active-reblit replacement residue")]

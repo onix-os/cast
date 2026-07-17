@@ -33,7 +33,6 @@ mod replacement_mutation_authority;
 mod usr_rollback_candidate_preserve_authority;
 mod usr_rollback_complete_route_authority;
 mod usr_rollback_decision_authority;
-#[allow(dead_code)] // checkpoint A remains sealed from production dispatch
 mod usr_rollback_finalization_authority;
 mod usr_rollback_fresh_db_invalidation_authority;
 mod usr_rollback_fresh_db_invalidation_route_authority;
@@ -67,7 +66,6 @@ pub(in crate::client) use usr_rollback_decision_authority::{
     UsrExchangeParentDurabilityAuthority, UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority,
     UsrRollbackDecisionAuthorityError,
 };
-#[allow(unused_imports)] // exported for the separately landed finalizer checkpoint
 pub(in crate::client) use usr_rollback_finalization_authority::{
     UsrRollbackFinalizationAdmission, UsrRollbackFinalizationAuthority, UsrRollbackFinalizationAuthorityError,
 };

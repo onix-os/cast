@@ -1,13 +1,15 @@
 //! Zero-effect exclusions for phases outside the exact NewState suffix.
 
+use std::os::unix::fs::PermissionsExt as _;
+
 use crate::transition_journal::{Phase, RollbackActionOutcome};
 
 use super::{
     super::{candidate_test_support::CandidateSource, test_fixture::OperationKind},
     support::{
         CandidateOutcome, Epoch, FreshOutcome, assert_pending_phase, build_fresh_invalidation, build_non_new_state,
-        effect_counts, enter_candidate, enter_invalidation, persist_fresh_invalidated, persist_rollback_complete,
-        reset_namespace_effect_counts,
+        effect_counts, enter_candidate, enter_invalidation, invalidation_target_path, persist_fresh_invalidated,
+        persist_rollback_complete, reset_namespace_effect_counts,
     },
 };
 
@@ -35,7 +37,7 @@ fn startup_new_state_suffix_leaves_every_non_new_state_operation_zero_effect() {
 }
 
 #[test]
-fn startup_new_state_suffix_retains_rollback_complete_with_zero_suffix_effects() {
+fn startup_new_state_suffix_defers_inexact_rollback_complete_with_zero_suffix_effects() {
     for epoch in Epoch::ALL {
         for source in CandidateSource::ALL {
             for candidate_outcome in CandidateOutcome::ALL {
@@ -49,6 +51,11 @@ fn startup_new_state_suffix_retains_rollback_complete_with_zero_suffix_effects()
                     );
                     let invalidated = persist_fresh_invalidated(&fixture, fresh_outcome);
                     let complete = persist_rollback_complete(&fixture, &invalidated);
+                    std::fs::set_permissions(
+                        invalidation_target_path(&fixture, &complete),
+                        std::fs::Permissions::from_mode(0o500),
+                    )
+                    .unwrap();
                     let journal_before = fixture.canonical_bytes();
                     let database_before = fixture.fixture.fixture.database_snapshot();
                     let namespace_before = fixture.namespace_snapshot();

@@ -4,9 +4,10 @@ use crate::transition_journal::{Phase, RollbackActionOutcome};
 
 use super::super::candidate_test_support::CandidateSource;
 use super::support::{
-    CandidateOutcome, EffectCounts, Epoch, FreshOutcome, TargetPrefix, assert_pending_phase, build_candidate,
-    canonical_record, effect_counts, enter_candidate, enter_fresh_handles, install_persistent_database,
-    release_candidate_handles, reset_namespace_effect_counts, target_path,
+    CandidateOutcome, EffectCounts, Epoch, FreshOutcome, TargetPrefix, assert_canonical_absent, assert_pending_phase,
+    build_candidate, canonical_record, effect_counts, enter_candidate, enter_clean_candidate,
+    enter_fresh_clean_handles, enter_fresh_handles, install_persistent_database, release_candidate_handles,
+    reset_namespace_effect_counts, target_path,
 };
 
 const USR_OUTCOMES: [RollbackActionOutcome; 2] =
@@ -127,11 +128,18 @@ fn startup_new_state_suffix_runs_the_exact_multi_entry_sequence_without_same_ent
                 assert_eq!(effect_counts().candidate_move, 1);
                 assert_eq!(effect_counts().fresh_removal, 1);
 
-                let sixth = enter_candidate(&fixture);
-                assert_pending_phase(&sixth, Phase::RollbackComplete);
-                assert_eq!(fixture.fixture.canonical_record(), complete);
+                enter_clean_candidate(&fixture);
+                assert_canonical_absent(&fixture.fixture.installation.root);
                 assert_eq!(effect_counts().candidate_move, 1);
                 assert_eq!(effect_counts().fresh_removal, 1);
+
+                // A second clean entry has no record which could dispatch a
+                // later suffix phase and repeats no candidate/database effect.
+                enter_clean_candidate(&fixture);
+                assert_canonical_absent(&fixture.fixture.installation.root);
+                assert_eq!(effect_counts().candidate_move, 1);
+                assert_eq!(effect_counts().fresh_removal, 1);
+                assert_eq!(complete.phase, Phase::RollbackComplete);
             }
         }
     }
@@ -179,6 +187,16 @@ fn startup_new_state_suffix_reacquires_fresh_installation_database_journal_and_r
     let complete = invalidated.rollback_successor(None).unwrap();
     assert_pending_phase(&fifth, Phase::RollbackComplete);
     assert_eq!(canonical_record(root), complete);
+    assert_eq!(effect_counts().candidate_move, 1);
+    assert_eq!(effect_counts().fresh_removal, 1);
+
+    enter_fresh_clean_handles(root);
+    assert_canonical_absent(root);
+    assert_eq!(effect_counts().candidate_move, 1);
+    assert_eq!(effect_counts().fresh_removal, 1);
+
+    enter_fresh_clean_handles(root);
+    assert_canonical_absent(root);
     assert_eq!(effect_counts().candidate_move, 1);
     assert_eq!(effect_counts().fresh_removal, 1);
 }

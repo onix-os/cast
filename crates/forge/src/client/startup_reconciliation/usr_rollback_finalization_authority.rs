@@ -1,4 +1,4 @@
-//! Test-sealed authority for exact NewState rollback finalization.
+//! Sealed authority for exact NewState rollback finalization.
 //!
 //! Admission pairs general startup database context with a non-cloneable,
 //! source-database-bound proof that the exact fresh transition is jointly
@@ -45,8 +45,8 @@ pub(in crate::client) enum UsrRollbackFinalizationAdmission<'reservation> {
 
 /// Retained evidence authorizing only a future terminal journal finalizer.
 ///
-/// This type is intentionally not `Clone`. Checkpoint A provides no method
-/// which exposes or deletes the retained journal record.
+/// This type is intentionally not `Clone` and exposes no journal-deletion
+/// effect. Only the separately sealed finalizer can consume it.
 pub(in crate::client) struct UsrRollbackFinalizationAuthority<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
@@ -73,7 +73,6 @@ enum DatabaseInspection {
 impl<'reservation> UsrRollbackFinalizationAuthority<'reservation> {
     /// Capture exact durable `RollbackComplete` evidence without effects.
     ///
-    /// The supplied seal has no production constructor in checkpoint A.
     pub(in crate::client) fn capture(
         _startup_gate_seal: &UsrRollbackFinalizationSeal,
         installation: &Installation,

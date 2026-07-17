@@ -4,9 +4,10 @@ use crate::transition_journal::{Phase, RollbackActionOutcome};
 
 use super::super::candidate_test_support::CandidateSource;
 use super::support::{
-    CandidateOutcome, Epoch, FreshOutcome, TargetPrefix, assert_pending_phase, build_candidate,
-    build_fresh_invalidation, effect_counts, enter_candidate, enter_invalidation, persist_candidate_preserved,
-    persist_fresh_invalidated, reset_namespace_effect_counts,
+    CandidateOutcome, Epoch, FreshOutcome, TargetPrefix, assert_canonical_absent, assert_pending_phase,
+    build_candidate, build_fresh_invalidation, effect_counts, enter_candidate, enter_clean_invalidation,
+    enter_invalidation, persist_candidate_preserved, persist_fresh_invalidated, persist_rollback_complete,
+    reset_namespace_effect_counts,
 };
 
 const USR_OUTCOMES: [RollbackActionOutcome; 2] =
@@ -109,6 +110,44 @@ fn startup_new_state_suffix_completes_every_exact_invalidated_outcome_without_re
                         assert_eq!(effect_counts().normalize, 0);
                         assert_eq!(effect_counts().candidate_move, 0);
                         assert_eq!(effect_counts().fresh_removal, removal_before);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn startup_new_state_suffix_finalizes_every_exact_terminal_matrix_without_later_effects() {
+    for epoch in Epoch::ALL {
+        for source in CandidateSource::ALL {
+            for usr_outcome in USR_OUTCOMES {
+                for candidate_outcome in CandidateOutcome::ALL {
+                    for fresh_outcome in FreshOutcome::ALL {
+                        let fixture = build_fresh_invalidation(
+                            epoch,
+                            source,
+                            usr_outcome,
+                            candidate_outcome,
+                            FreshOutcome::AlreadySatisfied,
+                        );
+                        let invalidated = persist_fresh_invalidated(&fixture, fresh_outcome);
+                        let complete = persist_rollback_complete(&fixture, &invalidated);
+                        let database_before = fixture.fixture.fixture.database_snapshot();
+                        let namespace_before = fixture.namespace_snapshot();
+                        reset_namespace_effect_counts();
+                        let removal_before = effect_counts().fresh_removal;
+
+                        enter_clean_invalidation(&fixture);
+
+                        assert_canonical_absent(&fixture.fixture.fixture.installation.root);
+                        assert_eq!(fixture.fixture.fixture.database_snapshot(), database_before);
+                        assert_eq!(fixture.namespace_snapshot(), namespace_before);
+                        assert_eq!(effect_counts().create, 0);
+                        assert_eq!(effect_counts().normalize, 0);
+                        assert_eq!(effect_counts().candidate_move, 0);
+                        assert_eq!(effect_counts().fresh_removal, removal_before);
+                        assert_eq!(complete.phase, Phase::RollbackComplete);
                     }
                 }
             }

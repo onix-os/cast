@@ -1,17 +1,20 @@
 use crate::transition_journal::{
-    Phase, RollbackActionOutcome, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-    arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
-    arm_next_update_first_directory_sync_fault, assert_displaced_unlink_fault_consumed,
-    assert_temporary_sync_fault_consumed, assert_update_exchange_fault_consumed,
-    assert_update_final_directory_sync_fault_consumed, assert_update_first_directory_sync_fault_consumed,
+    Phase, RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
+    arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault, arm_next_update_exchange_fault,
+    arm_next_update_final_directory_sync_fault, arm_next_update_first_directory_sync_fault,
+    assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
+    assert_displaced_unlink_fault_consumed, assert_temporary_sync_fault_consumed,
+    assert_update_exchange_fault_consumed, assert_update_final_directory_sync_fault_consumed,
+    assert_update_first_directory_sync_fault_consumed,
 };
 
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
-        CandidateOutcome, Epoch, FreshOutcome, TargetPrefix, assert_pending_phase, assert_suffix_dispatch_error,
-        build_candidate, build_fresh_invalidation, effect_counts, enter_candidate, enter_invalidation,
-        persist_candidate_preserved, persist_fresh_invalidated, reset_namespace_effect_counts,
+        CandidateOutcome, Epoch, FreshOutcome, TargetPrefix, assert_canonical_absent, assert_pending_phase,
+        assert_suffix_dispatch_error, build_candidate, build_fresh_invalidation, effect_counts, enter_candidate,
+        enter_clean_invalidation, enter_invalidation, persist_candidate_preserved, persist_fresh_invalidated,
+        persist_rollback_complete, reset_namespace_effect_counts,
     },
 };
 
@@ -216,8 +219,83 @@ fn exercise_rollback_complete_route(fault: JournalFault) {
     );
     assert_eq!(effect_counts().fresh_removal, removal_before);
 
-    let second = enter_invalidation(&fixture);
-    assert_pending_phase(&second, Phase::RollbackComplete);
+    if fault.successor_durable {
+        enter_clean_invalidation(&fixture);
+        assert_canonical_absent(&fixture.fixture.fixture.installation.root);
+    } else {
+        let second = enter_invalidation(&fixture);
+        assert_pending_phase(&second, Phase::RollbackComplete);
+        assert_eq!(fixture.canonical_record(), complete);
+    }
+    assert_eq!(effect_counts().fresh_removal, removal_before);
+}
+
+#[test]
+fn startup_new_state_suffix_terminal_unlink_fault_restarts_from_exact_source_without_duplicate_effects() {
+    let fixture = build_fresh_invalidation(
+        Epoch::Current,
+        CandidateSource::Intent,
+        RollbackActionOutcome::Applied,
+        CandidateOutcome::Applied,
+        FreshOutcome::AlreadySatisfied,
+    );
+    let invalidated = persist_fresh_invalidated(&fixture, FreshOutcome::Applied);
+    let complete = persist_rollback_complete(&fixture, &invalidated);
+    let database_before = fixture.fixture.fixture.database_snapshot();
+    let namespace_before = fixture.namespace_snapshot();
+    reset_namespace_effect_counts();
+    let removal_before = effect_counts().fresh_removal;
+    arm_next_delete_canonical_unlink_fault();
+
+    let first = enter_invalidation(&fixture);
+
+    assert_delete_canonical_unlink_fault_consumed();
+    assert_suffix_dispatch_error(&first);
     assert_eq!(fixture.canonical_record(), complete);
+    assert_eq!(fixture.fixture.fixture.database_snapshot(), database_before);
+    assert_eq!(fixture.namespace_snapshot(), namespace_before);
+    assert_eq!(effect_counts().create, 0);
+    assert_eq!(effect_counts().normalize, 0);
+    assert_eq!(effect_counts().candidate_move, 0);
+    assert_eq!(effect_counts().fresh_removal, removal_before);
+
+    enter_clean_invalidation(&fixture);
+    assert_canonical_absent(&fixture.fixture.fixture.installation.root);
+    assert_eq!(effect_counts().candidate_move, 0);
+    assert_eq!(effect_counts().fresh_removal, removal_before);
+}
+
+#[test]
+fn startup_new_state_suffix_terminal_directory_sync_fault_restarts_from_exact_absence_without_duplicate_effects() {
+    let fixture = build_fresh_invalidation(
+        Epoch::Historical,
+        CandidateSource::Exchanged,
+        RollbackActionOutcome::AlreadySatisfied,
+        CandidateOutcome::AlreadySatisfied,
+        FreshOutcome::AlreadySatisfied,
+    );
+    let invalidated = persist_fresh_invalidated(&fixture, FreshOutcome::AlreadySatisfied);
+    let _complete = persist_rollback_complete(&fixture, &invalidated);
+    let database_before = fixture.fixture.fixture.database_snapshot();
+    let namespace_before = fixture.namespace_snapshot();
+    reset_namespace_effect_counts();
+    let removal_before = effect_counts().fresh_removal;
+    arm_next_delete_directory_sync_fault();
+
+    let first = enter_invalidation(&fixture);
+
+    assert_delete_directory_sync_fault_consumed();
+    assert_suffix_dispatch_error(&first);
+    assert_canonical_absent(&fixture.fixture.fixture.installation.root);
+    assert_eq!(fixture.fixture.fixture.database_snapshot(), database_before);
+    assert_eq!(fixture.namespace_snapshot(), namespace_before);
+    assert_eq!(effect_counts().create, 0);
+    assert_eq!(effect_counts().normalize, 0);
+    assert_eq!(effect_counts().candidate_move, 0);
+    assert_eq!(effect_counts().fresh_removal, removal_before);
+
+    enter_clean_invalidation(&fixture);
+    assert_canonical_absent(&fixture.fixture.fixture.installation.root);
+    assert_eq!(effect_counts().candidate_move, 0);
     assert_eq!(effect_counts().fresh_removal, removal_before);
 }

@@ -17,14 +17,16 @@ use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_reconciliation::{
         UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority,
-        UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackFreshDbInvalidationAdmission,
+        UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackFinalizationAdmission,
+        UsrRollbackFinalizationAuthority, UsrRollbackFreshDbInvalidationAdmission,
         UsrRollbackFreshDbInvalidationAuthority, UsrRollbackFreshDbInvalidationRouteAdmission,
         UsrRollbackFreshDbInvalidationRouteAuthority,
     },
     startup_recovery::{
         UsrRollbackCandidatePreserveReady, UsrRollbackFreshDbInvalidationReady,
         dispatch_usr_rollback_candidate_preserve_and_reopen, dispatch_usr_rollback_fresh_db_invalidation_and_reopen,
-        persist_usr_rollback_complete_route_and_reopen, persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
+        finalize_usr_rollback, persist_usr_rollback_complete_route_and_reopen,
+        persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
     },
 };
 
@@ -98,16 +100,18 @@ impl UsrRollbackCompleteRouteSeal {
 
 /// Unforgeable safe-code token limiting terminal rollback-finalization
 /// authority capture to this exact writer-first NewState suffix orchestrator.
-/// Checkpoint A deliberately has no production constructor or dispatch arm.
-#[allow(dead_code)] // finalization remains intentionally unreachable from production
 pub(in crate::client) struct UsrRollbackFinalizationSeal {
     _private: (),
 }
 
 impl UsrRollbackFinalizationSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
     #[cfg(test)]
     pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
+        Self::new()
     }
 }
 
@@ -121,6 +125,10 @@ pub(super) enum Dispatch {
         journal: TransitionJournalStore,
         record: TransitionRecord,
     },
+    /// The exact terminal record was deleted and the same lock-bearing store
+    /// proved public canonical absence. There is deliberately no record which
+    /// could fall through into another phase dispatch in this startup entry.
+    Finalized { journal: TransitionJournalStore },
 }
 
 /// Dispatch at most the one NewState rollback phase present at entry.
@@ -221,6 +229,22 @@ pub(super) fn dispatch<'reservation>(
             let (journal, record) = persist_usr_rollback_complete_route_and_reopen(journal, authority)?;
             Ok(Dispatch::Handled { journal, record })
         }
+        Phase::RollbackComplete => {
+            let seal = UsrRollbackFinalizationSeal::new();
+            let admission = UsrRollbackFinalizationAuthority::capture(
+                &seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+            )?;
+            let UsrRollbackFinalizationAdmission::Ready(authority) = admission else {
+                return Ok(Dispatch::Unhandled { journal, record });
+            };
+            let journal = finalize_usr_rollback(journal, authority)?;
+            Ok(Dispatch::Finalized { journal })
+        }
         _ => Ok(Dispatch::Unhandled { journal, record }),
     }
 }
@@ -253,6 +277,10 @@ pub(in crate::client) enum Error {
     ),
     #[error("persist exact startup NewState rollback-completion route")]
     RollbackCompleteRoutePersistence(#[from] crate::client::startup_recovery::UsrRollbackCompleteRoutePersistenceError),
+    #[error("capture exact startup NewState terminal rollback-finalization authority")]
+    RollbackFinalizationAuthority(#[from] crate::client::startup_reconciliation::UsrRollbackFinalizationAuthorityError),
+    #[error("finalize exact startup NewState terminal rollback journal")]
+    RollbackFinalization(#[from] crate::client::startup_recovery::UsrRollbackFinalizationError),
 }
 
 #[cfg(test)]
