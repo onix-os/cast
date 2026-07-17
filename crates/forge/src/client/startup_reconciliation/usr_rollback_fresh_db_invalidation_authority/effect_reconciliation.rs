@@ -5,6 +5,8 @@
 //! retains capability for the later persistence checkpoint; known non-apply
 //! and ambiguous outcomes are fieldless.
 
+mod persistence;
+
 use crate::{
     Installation, db,
     transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
@@ -36,7 +38,7 @@ pub(in crate::client) enum UsrRollbackFreshDbInvalidationApplyReconciliation<'re
 
 /// Opaque, absence-bound authority for the later persistence checkpoint.
 #[must_use = "successful fresh-database invalidation still requires persistence"]
-#[allow(dead_code)] // the persistence checkpoint is intentionally not present yet
+#[allow(dead_code)] // persistence remains sealed from production dispatch
 pub(in crate::client) struct UsrRollbackFreshDbInvalidationEffectAuthority<'reservation> {
     installation: Installation,
     state_db: db::state::Database,

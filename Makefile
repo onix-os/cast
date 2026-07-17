@@ -40,6 +40,7 @@ include misc/make/startup-candidate-preserve-post-move-durability-tests.mk
 include misc/make/startup-candidate-preserve-persistence-tests.mk
 include misc/make/startup-fresh-db-invalidation-route-tests.mk
 include misc/make/startup-fresh-db-invalidation-effect-tests.mk
+include misc/make/startup-fresh-db-invalidation-persistence-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk
 include misc/make/startup-rollback-reverse-projection-tests.mk
 include misc/make/startup-rollback-reverse-effect-adapter-tests.mk
