@@ -403,16 +403,19 @@ authority, trigger sequencing, and one-shot forward exchange contract.
 
 The open startup-reconciliation and interruption work items, including the
 completed database-ownership probes, Phase 11A's exact source-database-bound
-fresh-transition removal substrate, and the bounded authenticated `/usr`
-rollback prefix, continue in the
+fresh-transition removal substrate, Phase 11B's sealed exact invalidation
+effect authority, and the bounded authenticated `/usr` rollback prefix,
+continue in the
 [startup-reconciliation plan](state-activation-startup-reconciliation.md).
-That substrate provides non-`Clone` complete-state/provenance evidence, one
-exact no-retry transaction, and conservative post-attempt reconciliation; it
-provides no startup authority, journal operation, dispatcher, namespace
-mutation, or trigger action. That document owns the next separately sealed
-`FreshDbInvalidationIntent` effect authority, phase-specific admission,
-restart matrices, genuine process-death evidence, and the remaining power-loss
-campaign.
+The substrate provides non-`Clone` complete-state/provenance evidence, one
+exact no-retry transaction, and invocation-causal post-attempt reconciliation.
+The test-sealed effect checkpoint pairs that evidence with exact journal,
+installation, reservation, and preserved-candidate namespace authority; only
+proved applied or already-satisfied absence can retain capability. It still
+provides no journal advance or production dispatcher. That document owns the
+next `FreshDbInvalidated` persistence checkpoint, later rollback routing,
+restart matrices, genuine process-death evidence, and the remaining
+power-loss campaign.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

@@ -317,9 +317,13 @@ closure remain authoritative in `PLAN.md`.
   source-database-bound, non-`Clone`, exact fresh-transition removal substrate:
   one snapshot binds complete state, selections, provenance, and the global
   in-flight invariant; one no-retry transaction removes provenance, selections,
-  then state; and fresh reconciliation treats exact ABA conservatively. It has
-  no startup authority, journal operation, production dispatch, namespace
-  mutation, or trigger action. The next recovery checkpoint must separately
-  seal the `FreshDbInvalidationIntent` effect authority. Candidate preservation,
-  production database invalidation, later rollback actions, roll-forward, and
-  cleanup are not executed, so this item remains open.
+  then state; and commit `7af46ce9` ensures that fresh reconciliation never
+  mistakes net absence for proof that this invocation performed the deletion.
+  Commit `ab1bfd5e` consumes that substrate only behind a separate test seal:
+  exact NewState `FreshDbInvalidationIntent` evidence selects disjoint one-call
+  Apply and zero-call Finish typestates, while only proved applied or already-
+  satisfied absence retains capability. It performs no journal operation,
+  production dispatch, namespace mutation, or trigger action. The next
+  recovery checkpoint must persist the authority-owned outcome as the exact
+  `FreshDbInvalidated` successor. Production dispatch, later rollback actions,
+  roll-forward, and cleanup are not executed, so this item remains open.

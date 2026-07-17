@@ -453,26 +453,59 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   Consuming `Present` permits one exact transaction attempt and no retry. It
   rechecks the complete preimage, then deletes provenance, selections, and the
-  state row in that order with exact affected-row counts. A fresh exclusive
-  snapshot reconciles every reported result: joint absence is success; an
-  unchanged complete preimage is definitely not applied only when the attempt
-  provably never started or rolled back; and changed, partial, unobservable,
-  commit-uncertain, post-success, or exactly restored ABA evidence is
-  `Ambiguous`.
+  state row in that order with exact affected-row counts. Commit `7af46ce9`
+  tightens the fresh exclusive reconciliation around invocation causality.
+  Reported success or a deterministically known committed attempt plus joint
+  absence is success. A proven non-start or rollback remains definitely not
+  applied even when another writer removes the row before reconciliation.
+  Generic uncertain reports, partial or changed restoration, unobservable
+  state, and exactly restored ABA evidence are `Ambiguous`; absence alone never
+  attributes the deletion to this invocation.
 
   The dedicated `make forge-exact-fresh-transition-removal-test` lane passes
-  13/13 contracts. The adjacent route, candidate-preservation persistence, and
+  15/15 contracts. The adjacent route, candidate-preservation persistence, and
   post-move durability lanes remain 11/11, 9/9, and 6/6. `make fmt` and
   `make check` pass in the repository Nix shell; `make source-loc` reports all
   1091 tracked text files at no more than 1000 lines; and independent review
   returned CLEAN.
 
-  This checkpoint is database substrate, not a startup recovery effect. It
-  grants no startup authority and performs no journal advance, production
-  dispatch, namespace mutation, or trigger action. The next checkpoint is a
-  separately sealed `FreshDbInvalidationIntent` effect authority which may
-  consume this substrate only after complete recovery evidence. Phase 11
-  remains open.
+  Commit `ab1bfd5e` adds that separately sealed Phase 11B startup recovery
+  effect while deliberately withholding every production constructor and
+  dispatcher. Admission requires the exact NewState
+  `FreshDbInvalidationIntent` rollback plan, a matching per-open journal
+  binding, the active-state reservation, and the exact preserved-candidate
+  namespace. A general database ownership/provenance observation is accepted
+  only between equal source-bound exact observations. Complete admission and
+  revalidation then use binding-first database -> namespace -> database
+  sandwiches without switching the source database or selected typestate.
+
+  Exact `Present` evidence yields a consuming Apply authority which calls the
+  Phase 11A substrate exactly once. Jointly absent evidence yields a disjoint
+  Finish authority which calls it zero times. Proved success retains an opaque,
+  non-`Clone` authority with private `Applied` origin; Finish retains the same
+  authority shape with private `AlreadySatisfied` origin. Definitely-not-
+  applied and ambiguous outcomes are fieldless and cannot retry or reach later
+  persistence. Every failed one-shot result additionally repeats the retained
+  journal, namespace, plan, and installation checks, while the exact substrate
+  remains the sole authority over post-attempt database classification.
+
+  The dedicated
+  `make forge-startup-usr-rollback-fresh-db-invalidation-effect-test` lane
+  passes 12/12 contracts. The exact-removal, route, candidate-preservation
+  persistence, post-move durability, and database-adapter lanes pass 15/15,
+  11/11, 9/9, 6/6, and 29/29. `make fmt` and `make check` pass in the repository
+  Nix shell with only the four established warnings; `make source-loc` reports
+  all 1100 tracked text files at no more than 1000 lines; and independent
+  review returned CLEAN. Unrelated ambient quarantine wrappers are allowed
+  only while retained in the complete stable namespace fingerprint; unsafe or
+  conflicting lookalikes fail closed.
+
+  This checkpoint performs no journal advance, production dispatch, namespace
+  mutation, trigger action, cleanup, or retry. Phase 11C must next consume only
+  the successful effect authority, derive its private outcome exactly once,
+  advance to `FreshDbInvalidated`, and reopen the canonical journal. Routing
+  that durable successor to `RollbackComplete` remains a later independent
+  checkpoint, so Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 

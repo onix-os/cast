@@ -885,25 +885,27 @@ the repository Nix shell with only the four established warnings;
 lines; and independent review found no issue. Commit `9adc2760` keeps those
 inventory gates equivalent while avoiding the host argument-size limit.
 
-Commit `20b36768` completes Phase 11A's exact fresh-transition removal
-substrate. Its non-`Clone` `Present` and `JointlyAbsent` evidence remains bound
-to the source `Database`; one exclusive snapshot covers the global in-flight
-set and the complete `State`, selections, and metadata provenance. Consuming a
-`Present` preimage permits one exact transaction attempt, with no retry, that
-deletes provenance, selections, and then the state row with exact affected-row
-checks. A fresh exclusive snapshot reconciles every result conservatively:
-joint absence is success, only a proven non-start or rollback can be definitely
-not applied, and changed, partial, unobservable, commit-uncertain, or exactly
-restored ABA evidence is ambiguous.
+Commits `20b36768` and `7af46ce9` complete Phase 11A's source-database-bound,
+non-`Clone` exact fresh-transition removal substrate. One exclusive snapshot
+covers state, selections, provenance, and the global in-flight invariant; one
+no-retry transaction deletes the exact row set. Reconciliation preserves
+invocation causality: net absence alone never proves which writer deleted it.
 
-The focused lane passes 13/13; the adjacent route, persistence, and durability
-lanes remain 11/11, 9/9, and 6/6. `make fmt` and `make check` pass in the Nix
-shell, `make source-loc` keeps all 1091 tracked text files at no more than 1000
-lines, and independent review returned CLEAN. This is database substrate only:
-it grants no startup authority and performs no journal, dispatch, namespace, or
-trigger effect. Next comes the sealed `FreshDbInvalidationIntent` effect
-authority. Recovery wiring, later rollback actions, roll-forward, boot repair,
-cleanup, and power-loss-equivalent convergence remain open.
+Commit `ab1bfd5e` adds the test-sealed Phase 11B
+`FreshDbInvalidationIntent` effect authority. Exact NewState evidence retains
+the journal, database, reservation, and preserved-candidate namespace through
+binding-first database -> namespace -> database checks. Present may call the
+substrate once; joint absence calls it zero times. Only proved `Applied` or
+`AlreadySatisfied` outcomes retain a non-`Clone` persistence authority;
+not-applied and ambiguous exits are fieldless. The detailed evidence and
+ambient-namespace rules remain in the linked startup-reconciliation subplan.
+
+The effect, substrate, route, candidate-persistence, post-move durability, and
+database-adapter lanes pass 12/12, 15/15, 11/11, 9/9, 6/6, and 29/29. Formatting,
+checks, the 1100-file line limit, and independent review are clean. There is
+still no journal advance, production dispatch, namespace mutation, trigger,
+cleanup, or retry. Phase 11C next persists the authority-owned
+`FreshDbInvalidated` successor; later routing and convergence remain open.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,
