@@ -12,6 +12,8 @@
 //! The production NewState leaf consumes those exact effects and their one
 //! persistence boundary; cleanup and trigger authority remain absent.
 
+#[cfg(test)]
+mod active_reblit_effect;
 mod effect_evidence;
 mod effect_reconciliation;
 mod target_creation;
@@ -35,6 +37,11 @@ use super::{
     UsrRollbackCandidatePreserveTopology, UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
     database_ownership_evidence_compatible, inspect_database, metadata_provenance_evidence_compatible,
+};
+
+#[cfg(test)]
+pub(in crate::client) use active_reblit_effect::{
+    UsrRollbackActiveReblitCandidatePreserveApplyReconciliation, UsrRollbackActiveReblitCandidatePreserveEffectLease,
 };
 
 #[cfg(test)]

@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod active_reblit_candidate_preserve;
 mod model;
 mod new_state_candidate_preserve;
 mod new_state_candidate_target_preparation;
@@ -34,6 +36,20 @@ use crate::{
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
 };
 
+#[cfg(test)]
+pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_candidate_preserve::{
+    ActiveReblitCandidatePreserveEffectError, ActiveReblitCandidatePreserveExchangeReconciliation,
+    ActiveReblitCandidatePreserveLayout, AppliedActiveReblitCandidatePreserveExchangeReconciliation,
+    PreparedActiveReblitCandidatePreserveExchange, ProjectedActiveReblitCandidatePreserveNamespace,
+    RetainedActiveReblitCandidatePreserveParents,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_candidate_preserve::{
+    ActiveReblitCandidatePreserveExchangeFault, active_reblit_candidate_preserve_exchange_attempt_count,
+    arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_before_active_reblit_candidate_preserve_reconciliation_capture,
+    reset_active_reblit_candidate_preserve_exchange_attempt_count,
+};
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
 pub(in crate::client::startup_reconciliation::activation_namespace) use new_state_candidate_preserve::DurableNewStateCandidatePreservePostMoveNamespace;

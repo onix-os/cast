@@ -67,6 +67,13 @@ pub(in crate::client) use candidate_preserve_proof::{
     take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
+#[cfg(test)]
+pub(in crate::client::startup_reconciliation) use candidate_preserve_proof::{
+    UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackActiveReblitCandidatePreserveAppliedNamespace,
+    UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
+    UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
+};
 pub(super) use candidate_preserve_proof::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
     UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace,
@@ -77,18 +84,22 @@ pub(super) use candidate_preserve_proof::{
 };
 #[cfg(test)]
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
-use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 #[cfg(test)]
 pub(in crate::client) use capture::{
-    NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault, NewStateTargetNormalizeFault,
+    ActiveReblitCandidatePreserveExchangeFault, NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault,
+    NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
+    arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_before_active_reblit_candidate_preserve_reconciliation_capture,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture, arm_before_new_state_target_create_attempt,
     arm_before_new_state_target_create_reconciliation_capture, arm_before_new_state_target_normalize_attempt,
     arm_before_new_state_target_normalize_reconciliation_capture, arm_new_state_candidate_preserve_move_fault,
     arm_new_state_target_create_fault, arm_new_state_target_normalize_fault,
     new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
-    new_state_target_normalize_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
-    reset_new_state_target_create_attempt_count, reset_new_state_target_normalize_attempt_count,
+    new_state_target_normalize_attempt_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
+    reset_new_state_candidate_preserve_move_attempt_count, reset_new_state_target_create_attempt_count,
+    reset_new_state_target_normalize_attempt_count,
 };
+use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 pub(super) use capture::{
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
 };

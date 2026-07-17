@@ -25,6 +25,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-admission-test  Run sealed read-only candidate-preservation admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-target-test  Run all candidate target preparation, creation, and normalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-effect-test  Run sealed NewState candidate-preservation move contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-preserve-effect-test  Run test-sealed ActiveReblit wrapper-exchange contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-post-move-durability-test  Run shared NewState post-move durability contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-persistence-test  Run durable CandidatePreserved journal persistence contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-route-test  Run journal-only fresh-database invalidation routing contracts"

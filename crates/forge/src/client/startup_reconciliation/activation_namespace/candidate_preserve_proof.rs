@@ -8,6 +8,8 @@
 //! children. Exact move evidence must also cross fresh target and
 //! quarantine-parent durability before it can reach rename.
 
+#[cfg(test)]
+mod active_reblit_effect;
 mod effect_reconciliation;
 mod target_creation;
 mod target_normalization;
@@ -26,6 +28,14 @@ use super::{
         WrapperFingerprint, capture_snapshot,
     },
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
+};
+
+#[cfg(test)]
+pub(in crate::client::startup_reconciliation) use active_reblit_effect::{
+    UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackActiveReblitCandidatePreserveAppliedNamespace,
+    UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
+    UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
 
 #[cfg(test)]
@@ -597,6 +607,9 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     Policy(#[from] NamespacePolicyConflict),
     #[error("capture or reconcile an exact NewState candidate-preservation namespace effect")]
     NewStateEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[cfg(test)]
+    #[error("capture or reconcile an exact ActiveReblit whole-wrapper candidate-preservation effect")]
+    ActiveReblitEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("read the retained canonical transition journal")]
     Journal(#[from] StorageError),
     #[error("the retained canonical transition journal changed during candidate-preservation proof")]
