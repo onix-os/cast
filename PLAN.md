@@ -574,35 +574,19 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-On 2026-07-14, `make examples` and `make execution-fixtures` passed for the
-then-complete checked-in corpus and all twelve locked real-source fixtures. The
-production-format offline bootstrap root also materialized successfully. The
-ordinary delegated lane then reported its narrowly classified lack of a
-reachable systemd user manager, while the same run with
-`REQUIRE_EXECUTION=1` rejected that condition. This is useful fail-closed host
-capability evidence, but it is not contentful execution or bundle-reproduction
-evidence and therefore does not close either item below.
-
-On 2026-07-15, the custom fixture became a real compiled C package. Its check
-phase uses the typed `RunBuilt` operation for the generated native Linux ELF.
-The relative authored path is frozen beneath the phase working directory and
-opened without symlink or mount traversal; `execveat` receives that exact
-close-on-exec inode capability without reopening its public pathname or using
-procfs. Scripts remain explicit `Shell` steps, and descriptor-executed shebangs
-fail closed. `make test`, `make examples`, and `make execution-fixtures` pass
-with the regenerated source archive and exact bootstrap closure. The required
-live container run remains blocked on this host by the
-narrowly classified supplementary-group `EPERM`, so this stronger offline and
-unit evidence still does not close the two required-execution items.
-
-On 2026-07-16, the selected userspace-profile lane was exercised directly
-with `FIXTURE=userspace-profile`. The ordinary delegated Make lane returned
-only the narrowly typed absence of a reachable systemd user manager and
-explicitly labelled it as a skip rather than execution success. Repeating the
-same selection with `REQUIRE_EXECUTION=1` failed at that exact capability
-boundary. No delegated runner executed and no Stone archive was emitted,
-decoded, or reproduced, so the userspace-profile execution item below remains
-open.
+By 2026-07-17, the matrix contained sixteen fixtures, including two declarative
+generated payloads, an empty userspace profile, and a runtime-loaded plugin.
+The plugin host validates the exact identity returned through `dlopen`/`dlsym`;
+its complete compiler commands are frozen, and bundle goldens require PIE,
+RELRO, immediate binding, non-executable stack, separated writable/executable
+loads, no runtime search path or text relocations, and the exact loader imports.
+Both GCC and Clang compiled and ran that source as a supplemental host proof.
+`make test`, `make examples`, and `make execution-fixtures` pass for the complete
+offline corpus and exact bootstrap closures. Required live runs for the new
+fixtures materialized their offline roots and then failed closed at the host's
+supplementary-group `EPERM` boundary before package execution. No Stone archive
+was emitted, decoded, or reproduced, so the three live-evidence items below
+remain open.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
@@ -623,13 +607,13 @@ open.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
   multi-binary Cargo, vendored Cargo, CMake, custom-step, generated-daemon,
-  pre-setup-hook, Meson, and split-output builds.
+  pre-setup-hook, Meson, explicit plugin-output, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
-- [x] Add a thirteenth, source-less generated-configuration fixture whose
-  declarative Gluon script authors the complete payload. Require only frozen
-  `bash` and `install` providers; admit no source lock, archive, network, host
-  shim, or mounted recipe input.
+- [x] Add source-less generated-configuration and generated-shell fixtures whose
+  Gluon scripts author exact payloads using only frozen `bash` and `install`.
+  Give the installed script an explicit Bash runtime relation and test it
+  without `RunBuilt`; admit no source lock, archive, network, or recipe mount.
 - [x] Add a source-less userspace-profile declaration which composes shell,
   core-command, discovery, trust-store, and archive roles as pure Gluon
   functions over one explicit package set. Its dedicated Make gate runs the
@@ -650,7 +634,7 @@ open.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the fourteen exact closure declarations and their aggregate bootstrap
+  each of the sixteen exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's
@@ -662,9 +646,9 @@ open.
   at least one hermetic fixture for each standard builder: CMake, Meson, Cargo,
   and Autotools. Also execute one honest custom-step fixture and one native
   split-output fixture containing an executable, shared library, development
-  files, pkg-config metadata, documentation, and a man page. Also execute the
-  source-less generated-configuration fixture and install its exact authored
-  bytes without introducing a source path.
+  files, pkg-config metadata, documentation, and a man page. Also execute both
+  source-less generated payloads and the explicit plugin-output relation; install
+  their exact bytes without a hidden source or link-time dependency.
 - [ ] Decode each emitted fixture bundle and prove the expected metadata,
   layout, index, content, output relations, modes, and manifest membership.
   Rebuild from the unchanged source and build locks and require byte-identical
@@ -677,7 +661,7 @@ open.
   creates an authenticated, bounded-lifetime delegated systemd unit and CI
   establishes and preflights the required user manager first.
   The complete live execution, bundle decoding, and repeated-build assertions
-  are implemented, but the two items above remain open pending one non-skipped
+  are implemented, but the three items above remain open pending one non-skipped
   `make fixtures-ci` run attached to the exact accepted commit. A local required
   custom-fixture run reached the delegated service and then failed closed at
   credential preflight because this host denies isolated `setgroups`; no build

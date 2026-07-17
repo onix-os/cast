@@ -1,3 +1,8 @@
+use elf::abi::{
+    DF_1_NOW, DF_BIND_NOW, DF_TEXTREL, DT_BIND_NOW, DT_FLAGS, DT_FLAGS_1, DT_RPATH, DT_RUNPATH, DT_TEXTREL, PF_W,
+    PF_X, PT_GNU_RELRO, PT_GNU_STACK,
+};
+
 #[derive(Debug, Clone, Copy)]
 enum RuntimeElfKind {
     Executable,
@@ -16,7 +21,23 @@ struct NativeElf {
     build_id: String,
     dependencies: BTreeSet<String>,
     soname: Option<String>,
+    undefined_dynamic_imports: BTreeSet<String>,
+    has_gnu_relro: bool,
+    immediate_binding: bool,
+    gnu_stack_executable: Option<bool>,
+    has_rpath_or_runpath: bool,
+    has_text_relocations: bool,
     debug_link: DebugLink,
+}
+
+#[derive(Debug)]
+struct RuntimeElfDynamic {
+    dependencies: BTreeSet<String>,
+    soname: Option<String>,
+    undefined_imports: BTreeSet<String>,
+    immediate_binding: bool,
+    has_rpath_or_runpath: bool,
+    has_text_relocations: bool,
 }
 
 fn parse_structural_elf<'a>(fixture: &str, target: &str, bytes: &'a [u8]) -> ElfBytes<'a, AnyEndian> {
@@ -152,7 +173,39 @@ fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeEl
         segments.iter().any(|segment| segment.p_type == PT_LOAD),
         "{fixture}: runtime ELF /usr/{target} has no loadable segment"
     );
+    let gnu_relro_segments = segments
+        .iter()
+        .filter(|segment| segment.p_type == PT_GNU_RELRO)
+        .collect::<Vec<_>>();
+    assert!(
+        gnu_relro_segments.len() <= 1,
+        "{fixture}: runtime ELF /usr/{target} repeats PT_GNU_RELRO"
+    );
+    if let Some(segment) = gnu_relro_segments.first() {
+        assert_ne!(
+            segment.p_memsz, 0,
+            "{fixture}: runtime ELF /usr/{target} has an empty PT_GNU_RELRO"
+        );
+    }
+    let gnu_stack_segments = segments
+        .iter()
+        .filter(|segment| segment.p_type == PT_GNU_STACK)
+        .collect::<Vec<_>>();
+    assert!(
+        gnu_stack_segments.len() <= 1,
+        "{fixture}: runtime ELF /usr/{target} repeats PT_GNU_STACK"
+    );
+    let gnu_stack_executable = gnu_stack_segments
+        .first()
+        .map(|segment| segment.p_flags & PF_X != 0);
     for segment in &segments {
+        if segment.p_type == PT_LOAD {
+            assert_ne!(
+                segment.p_flags & (PF_W | PF_X),
+                PF_W | PF_X,
+                "{fixture}: runtime ELF /usr/{target} has a writable and executable PT_LOAD segment"
+            );
+        }
         assert!(
             segment.p_memsz >= segment.p_filesz,
             "{fixture}: runtime ELF /usr/{target} has a segment larger on disk than in memory"
@@ -245,15 +298,15 @@ fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeEl
         "{fixture}: /usr/{target} GNU build ID is not lowercase hexadecimal"
     );
 
-    let (dependencies, soname) = runtime_elf_relations(fixture, target, &elf, interpreter);
+    let dynamic = runtime_elf_dynamic(fixture, target, &elf, interpreter);
     if matches!(kind, RuntimeElfKind::SharedLibrary) {
         assert!(
-            soname.is_some(),
+            dynamic.soname.is_some(),
             "{fixture}: shared library /usr/{target} has no DT_SONAME"
         );
     } else {
         assert!(
-            soname.is_none(),
+            dynamic.soname.is_none(),
             "{fixture}: executable /usr/{target} unexpectedly has DT_SONAME"
         );
     }
@@ -261,20 +314,29 @@ fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeEl
     NativeElf {
         elf_type: elf.ehdr.e_type,
         build_id,
-        dependencies,
-        soname,
+        dependencies: dynamic.dependencies,
+        soname: dynamic.soname,
+        undefined_dynamic_imports: dynamic.undefined_imports,
+        has_gnu_relro: gnu_relro_segments.len() == 1,
+        immediate_binding: dynamic.immediate_binding,
+        gnu_stack_executable,
+        has_rpath_or_runpath: dynamic.has_rpath_or_runpath,
+        has_text_relocations: dynamic.has_text_relocations,
         debug_link: parse_debug_link(fixture, target, &elf),
     }
 }
 
-fn runtime_elf_relations(
+fn runtime_elf_dynamic(
     fixture: &str,
     target: &str,
     elf: &ElfBytes<'_, AnyEndian>,
     interpreter: Option<&str>,
-) -> (BTreeSet<String>, Option<String>) {
+) -> RuntimeElfDynamic {
     let mut needed = Vec::new();
     let mut soname = None;
+    let mut immediate_binding = false;
+    let mut has_rpath_or_runpath = false;
+    let mut has_text_relocations = false;
     let dynamic = elf
         .dynamic()
         .unwrap_or_else(|error| panic!("{fixture}: parse /usr/{target} dynamic table: {error}"))
@@ -283,10 +345,20 @@ fn runtime_elf_relations(
         match entry.d_tag {
             DT_NEEDED => needed.push(usize::try_from(entry.d_val()).unwrap()),
             DT_SONAME => soname = Some(usize::try_from(entry.d_val()).unwrap()),
+            DT_BIND_NOW => immediate_binding = true,
+            DT_FLAGS => {
+                immediate_binding |= entry.d_val() & u64::try_from(DF_BIND_NOW).unwrap() != 0;
+                has_text_relocations |= entry.d_val() & u64::try_from(DF_TEXTREL).unwrap() != 0;
+            }
+            DT_FLAGS_1 => {
+                immediate_binding |= entry.d_val() & u64::try_from(DF_1_NOW).unwrap() != 0;
+            }
+            DT_RPATH | DT_RUNPATH => has_rpath_or_runpath = true,
+            DT_TEXTREL => has_text_relocations = true,
             _ => {}
         }
     }
-    let (_, strings) = elf
+    let (symbols, strings) = elf
         .dynamic_symbol_table()
         .unwrap_or_else(|error| panic!("{fixture}: parse /usr/{target} dynamic strings: {error}"))
         .unwrap_or_else(|| panic!("{fixture}: runtime ELF /usr/{target} has no dynamic string table"));
@@ -308,7 +380,26 @@ fn runtime_elf_relations(
             .unwrap_or_else(|error| panic!("{fixture}: resolve /usr/{target} DT_SONAME: {error}"))
             .to_owned()
     });
-    (dependencies, soname)
+    let undefined_imports = symbols
+        .iter()
+        .filter(|symbol| symbol.is_undefined() && symbol.st_name != 0)
+        .map(|symbol| {
+            strings
+                .get(usize::try_from(symbol.st_name).unwrap())
+                .unwrap_or_else(|error| {
+                    panic!("{fixture}: resolve /usr/{target} undefined dynamic symbol: {error}")
+                })
+                .to_owned()
+        })
+        .collect();
+    RuntimeElfDynamic {
+        dependencies,
+        soname,
+        undefined_imports,
+        immediate_binding,
+        has_rpath_or_runpath,
+        has_text_relocations,
+    }
 }
 
 fn elf_build_id(fixture: &str, target: &str, elf: &ElfBytes<'_, AnyEndian>) -> String {

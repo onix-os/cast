@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 14] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 16] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -9,8 +9,10 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 14] = [
     "daemon-generated",
     "factory-override",
     "generated-config",
+    "generated-shell",
     "hooks-patch",
     "meson",
+    "plugin-output",
     "split",
     "userspace-profile",
 ];
@@ -211,6 +213,45 @@ fn assert_userspace_profile_relations(plan: &stone_recipe::derivation::Derivatio
     assert_eq!(actual, expected);
 }
 
+fn assert_plugin_output_relations(plan: &stone_recipe::derivation::DerivationPlan) {
+    let outputs = plan
+        .outputs
+        .iter()
+        .map(|output| (output.name.as_str(), output))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(outputs.keys().copied().collect::<Vec<_>>(), ["dbginfo", "out", "plugins"]);
+    assert!(outputs["out"].include_in_manifest);
+    assert!(outputs["plugins"].include_in_manifest);
+    assert!(!outputs["dbginfo"].include_in_manifest);
+    assert!(matches!(
+        outputs["out"].runtime_inputs.as_slice(),
+        [stone_recipe::derivation::OutputRelation::Planned { output }] if output == "plugins"
+    ));
+    assert!(outputs["plugins"].runtime_inputs.is_empty());
+    assert!(outputs["dbginfo"].runtime_inputs.is_empty());
+}
+
+fn assert_generated_shell_relations(plan: &stone_recipe::derivation::DerivationPlan) {
+    const BASH_PACKAGE_ID: &str = "20a6cfc76001152c45a7f77f1ee50bfdb816d0b67408cd6857f023022f37f0d9";
+
+    assert!(plan.sources.is_empty(), "generated-shell: frozen sources must be empty");
+    let [output] = plan.outputs.as_slice() else {
+        panic!("generated-shell: frozen plan must have exactly one output");
+    };
+    assert_eq!(output.name, "out");
+    assert_eq!(output.package_name, "cast-generated-shell-fixture");
+    assert!(output.include_in_manifest);
+    let [stone_recipe::derivation::OutputRelation::Locked {
+        relation,
+        reference,
+    }] = output.runtime_inputs.as_slice()
+    else {
+        panic!("generated-shell: runtime must be exactly one locked Bash relation");
+    };
+    assert_eq!(relation.canonical_name(), "binary(bash)");
+    assert_eq!(reference.package_id, BASH_PACKAGE_ID);
+}
+
 fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation::DerivationPlan) {
     assert_eq!(EXECUTION_FIXTURES, REQUIRED_EXECUTION_FIXTURES);
     assert_eq!(plan.execution.jobs, 1, "{name}: execution preflight jobs drifted");
@@ -305,6 +346,29 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Install", vec![run("cmake", "--install")]),
             phase("Check", vec![run("ctest", "--test-dir")]),
         ],
+        "plugin-output" => vec![
+            prepare("cast-plugin-output-fixture"),
+            phase("Setup", vec![run("mkdir", "-p")]),
+            phase("Build", vec![run("cc", "-std=c11"), run("cc", "-std=c11")]),
+            phase(
+                "Install",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/dash".to_owned(),
+                    declared_programs: vec!["/usr/bin/install".to_owned()],
+                    script: r#"
+install -Dm755 build/cast-plugin-host \
+    "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-plugin-host"
+install -Dm644 build/cast-plugin-output.so \
+    "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/cast/plugins/cast-plugin-output.so"
+"#
+                    .to_owned(),
+                }],
+            ),
+            phase(
+                "Check",
+                vec![run_built("build/cast-plugin-host", "--plugin")],
+            ),
+        ],
         "generated-config" => vec![phase(
             "Install",
             vec![FrozenStepShape::Shell {
@@ -320,8 +384,66 @@ install -Dm644 generated-config.conf \
     "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"
 "#
                 .to_owned(),
-            }],
+                }],
         )],
+        "generated-shell" => vec![
+            phase(
+                "Build",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/bash".to_owned(),
+                    declared_programs: Vec::new(),
+                    script: r#"
+printf '%s\n' \
+    '#!/usr/bin/bash' \
+    'set -euo pipefail' \
+    '' \
+    'if [[ "$#" -eq 0 ]]; then' \
+    "    printf '%s\\n' 'cast-generated-shell'" \
+    'elif [[ "$#" -eq 1 && "$1" == --self-test ]]; then' \
+    "    printf '%s\\n' 'cast-generated-shell: self-test passed'" \
+    'else' \
+    "    printf '%s\\n' 'usage: cast-generated-shell [--self-test]' >&2" \
+    '    exit 64' \
+    'fi' \
+    > cast-generated-shell
+"#
+                    .to_owned(),
+                }],
+            ),
+            phase(
+                "Install",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/bash".to_owned(),
+                    declared_programs: vec!["/usr/bin/install".to_owned()],
+                    script: r#"install -Dm755 cast-generated-shell "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-generated-shell""#
+                        .to_owned(),
+                }],
+            ),
+            phase(
+                "Check",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/bash".to_owned(),
+                    declared_programs: Vec::new(),
+                    script: r#"
+actual="$(source ./cast-generated-shell --self-test)"
+if [[ "${actual}" != 'cast-generated-shell: self-test passed' ]]; then
+    printf '%s\n' 'generated shell self-test output differed' >&2
+    exit 1
+fi
+
+set +e
+(source ./cast-generated-shell --unexpected >/dev/null 2>&1)
+status="$?"
+set -e
+if [[ "${status}" -ne 64 ]]; then
+    printf 'unexpected-argument status was %s, expected 64\n' "${status}" >&2
+    exit 1
+fi
+"#
+                    .to_owned(),
+                }],
+            ),
+        ],
         "hooks-patch" => vec![
             prepare("cast-hooks-fixture"),
             phase_with_pre(
@@ -353,6 +475,83 @@ install -Dm644 generated-config.conf \
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
     if name == "userspace-profile" {
         assert_userspace_profile_relations(plan);
+    }
+    if name == "generated-shell" {
+        assert_generated_shell_relations(plan);
+    }
+    if name == "plugin-output" {
+        assert_plugin_output_relations(plan);
+        let build = job.phases.iter().find(|phase| phase.name == "Build").unwrap();
+        let [
+            stone_recipe::derivation::StepPlan::Run {
+                program: plugin_cc,
+                args: plugin_args,
+                ..
+            },
+            stone_recipe::derivation::StepPlan::Run {
+                program: host_cc,
+                args: host_args,
+                ..
+            },
+        ] = build.steps.as_slice()
+        else {
+            panic!("plugin-output: frozen Build phase has unexpected steps");
+        };
+        assert_eq!(plugin_cc.path, "/usr/bin/cc");
+        assert_eq!(host_cc.path, "/usr/bin/cc");
+        assert_eq!(
+            plugin_args.as_slice(),
+            [
+                "-std=c11",
+                "-O2",
+                "-g",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fstack-protector-strong",
+                "-D_FORTIFY_SOURCE=3",
+                "-fPIC",
+                "-shared",
+                "plugin.c",
+                "-Wl,-soname,cast-plugin-output.so",
+                "-Wl,--build-id=sha1",
+                "-Wl,-z,relro,-z,now",
+                "-Wl,-z,noexecstack",
+                "-Wl,-z,separate-code",
+                "-Wl,--no-undefined",
+                "-o",
+                "build/cast-plugin-output.so",
+            ]
+        );
+        assert_eq!(
+            host_args.as_slice(),
+            [
+                "-std=c11",
+                "-O2",
+                "-g",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fstack-protector-strong",
+                "-D_FORTIFY_SOURCE=3",
+                "-fPIE",
+                "host.c",
+                "-Wl,-pie",
+                "-Wl,--build-id=sha1",
+                "-Wl,-z,relro,-z,now",
+                "-Wl,-z,noexecstack",
+                "-Wl,-z,separate-code",
+                "-Wl,--as-needed",
+                "-ldl",
+                "-o",
+                "build/cast-plugin-host",
+            ]
+        );
+        let check = job.phases.iter().find(|phase| phase.name == "Check").unwrap();
+        let [stone_recipe::derivation::StepPlan::RunBuilt { args, .. }] = check.steps.as_slice() else {
+            panic!("plugin-output: frozen Check phase has unexpected steps");
+        };
+        assert_eq!(args.as_slice(), ["--plugin", "build/cast-plugin-output.so"]);
     }
     if name == "autotools-options" {
         let setup = job.phases.iter().find(|phase| phase.name == "Setup").unwrap();

@@ -91,21 +91,26 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Fourteen separate fixtures cover representative package shapes. Twelve contain
+Sixteen separate fixtures cover representative package shapes. Thirteen contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
-generated daemon assets, Gluon factory/override composition, and native
-split-output builds. The other two are deliberately source-less.
+generated daemon assets, Gluon factory/override composition, a runtime-loaded
+plugin with an explicit output relation, and native split-output builds. The
+other three are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
 source lock, archive, network access, host shim, or mounted recipe input.
+`generated-shell` authors and executes a complete shell application through its
+frozen Bash provider, then installs the exact script with an explicit runtime
+interpreter relation. It likewise has no source lock, archive, network access,
+host shim, or mounted recipe input.
 `userspace-profile` goes further: it has no build tools and all five authored
 phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in archive matrix keeps nine fixtures as plain USTAR and exercises
+The checked-in archive matrix keeps ten fixtures as plain USTAR and exercises
 all three supported compressed paths with vendored Cargo as deterministic
 gzip, the patch-hook fixture as deterministic XZ, and the generated-daemon
 fixture as deterministic Zstandard. `make fixture-sources` rebuilds those
@@ -130,7 +135,8 @@ materializes the production-format root mirror, then attempts to build,
 package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `factory-override`,
-`generated-config`, `hooks-patch`, `meson`, `split`, or `userspace-profile`;
+`generated-config`, `generated-shell`, `hooks-patch`, `meson`, `plugin-output`,
+`split`, or `userspace-profile`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
 works with `make bootstrap-fixtures-offline` when the package store has already
@@ -138,15 +144,22 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all fourteen, and always requires execution.
+selection, runs all sixteen, and always requires execution.
 
-Every selected fixture, including both source-less fixtures, goes through the same
-real execution, Stone package decoding, manifest decoding, and locked
+Every selected fixture, including all three source-less fixtures, goes through
+the same real execution, Stone package decoding, manifest decoding, and locked
 reproduction path. The generated configuration golden freezes its exact
 `/usr/share/cast/generated-config.conf` bytes, `0644` mode, package metadata,
 relations, and manifest membership. Replanning must reuse the unchanged build
 lock, and the repeated build must reproduce every emitted `.stone` and manifest
-byte-for-byte. The userspace-profile golden additionally decodes its
+byte-for-byte. The generated shell golden fixes the script bytes, executable
+mode, Bash relation, and command provider. The plugin golden pins both compiler
+commands and proves that the host uses the dynamic-loader API, validates the
+plugin identity, and depends explicitly on the `plugins` output rather than an
+accidental ELF link. Its native-ELF checks require PIE, RELRO, immediate
+binding, a non-executable stack, separated writable/executable loads, no runtime
+search path or text relocations, and exact build-ID debug payloads. The
+userspace-profile golden additionally decodes its
 production-format `.stone` to prove a Meta-only payload topology, no layout or
 content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.

@@ -33,6 +33,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-factory-override-fixture-1.0.0",
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
+            "cast-plugin-output-fixture-1.0.0",
             "cast-split-fixture-1.0.0",
         ]
     );
@@ -100,6 +101,152 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             };
             assert_eq!(features.as_slice(), ["fixture-protocol"]);
         }
+        if name == "plugin-output" {
+            let source_root = source_trees.join("cast-plugin-output-fixture-1.0.0");
+            let host_source = fs::read_to_string(source_root.join("host.c")).unwrap();
+            let plugin_source = fs::read_to_string(source_root.join("plugin.c")).unwrap();
+            let assert_source_fragment_once = |role: &str, source: &str, fragment: &str| {
+                assert_eq!(
+                    source.matches(fragment).count(),
+                    1,
+                    "plugin-output: {role} source must contain its exact semantic fragment once: {fragment:?}"
+                );
+            };
+            for fragment in [
+                "static const char expected_identity[] =\n    \"cast plugin output fixture: loaded explicitly\";",
+                "handle = dlopen(plugin_path, RTLD_NOW | RTLD_LOCAL);",
+                "dlerror();\n    symbol = dlsym(handle, \"cast_plugin_output_identity\");\n    error = dlerror();",
+                "_Static_assert(sizeof(identity) == sizeof(symbol),\n                   \"function and object pointers must have equal size\");",
+                "memcpy(&identity, &symbol, sizeof(identity));",
+                "message = identity();\n    if (message == NULL || strcmp(message, expected_identity) != 0) {\n        (void)dlclose(handle);\n        return 1;\n    }",
+                "return dlclose(handle) == 0\n        ? 0\n        : report_loader_error(\"dlclose\", dlerror());",
+            ] {
+                assert_source_fragment_once("host", &host_source, fragment);
+            }
+            for fragment in [
+                "static const char fixture_identity[] =\n    \"cast plugin output fixture: loaded explicitly\";",
+                "const char *cast_plugin_output_identity(void)\n{\n    return fixture_identity;\n}",
+            ] {
+                assert_source_fragment_once("plugin", &plugin_source, fragment);
+            }
+            assert_eq!(
+                host_source
+                    .matches("cast plugin output fixture: loaded explicitly")
+                    .count(),
+                1,
+                "plugin-output: host must bind exactly one expected identity"
+            );
+            assert_eq!(
+                plugin_source
+                    .matches("cast plugin output fixture: loaded explicitly")
+                    .count(),
+                1,
+                "plugin-output: plugin must expose exactly one identity"
+            );
+            assert_eq!(
+                dependency_names(&recipe.declaration.builder.required_tools),
+                ["binary(mkdir)", "binary(cc)", "binary(dash)", "binary(install)"]
+            );
+            let [StepSpec::Run { program, args }] = recipe.declaration.builder.phases.setup.steps.as_slice() else {
+                panic!("plugin-output: expected one structural setup step");
+            };
+            assert_eq!(program.path, "/usr/bin/mkdir");
+            assert_eq!(args.as_slice(), ["-p", "build"]);
+            let [
+                StepSpec::Run {
+                    program: plugin_cc,
+                    args: plugin_args,
+                },
+                StepSpec::Run {
+                    program: host_cc,
+                    args: host_args,
+                },
+            ] = recipe.declaration.builder.phases.build.steps.as_slice()
+            else {
+                panic!("plugin-output: expected two structural compiler steps");
+            };
+            assert_eq!(plugin_cc.path, "/usr/bin/cc");
+            assert_eq!(host_cc.path, "/usr/bin/cc");
+            assert_eq!(
+                plugin_args.as_slice(),
+                [
+                    "-std=c11",
+                    "-O2",
+                    "-g",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-fstack-protector-strong",
+                    "-D_FORTIFY_SOURCE=3",
+                    "-fPIC",
+                    "-shared",
+                    "plugin.c",
+                    "-Wl,-soname,cast-plugin-output.so",
+                    "-Wl,--build-id=sha1",
+                    "-Wl,-z,relro,-z,now",
+                    "-Wl,-z,noexecstack",
+                    "-Wl,-z,separate-code",
+                    "-Wl,--no-undefined",
+                    "-o",
+                    "build/cast-plugin-output.so",
+                ]
+            );
+            assert_eq!(
+                host_args.as_slice(),
+                [
+                    "-std=c11",
+                    "-O2",
+                    "-g",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-fstack-protector-strong",
+                    "-D_FORTIFY_SOURCE=3",
+                    "-fPIE",
+                    "host.c",
+                    "-Wl,-pie",
+                    "-Wl,--build-id=sha1",
+                    "-Wl,-z,relro,-z,now",
+                    "-Wl,-z,noexecstack",
+                    "-Wl,-z,separate-code",
+                    "-Wl,--as-needed",
+                    "-ldl",
+                    "-o",
+                    "build/cast-plugin-host",
+                ]
+            );
+            let [StepSpec::RunBuilt { program, args }] = recipe.declaration.builder.phases.check.steps.as_slice()
+            else {
+                panic!("plugin-output: expected one descriptor-executed native check step");
+            };
+            assert_eq!(program.path, "build/cast-plugin-host");
+            assert_eq!(args.as_slice(), ["--plugin", "build/cast-plugin-output.so"]);
+            let [StepSpec::Shell {
+                interpreter,
+                declared_programs,
+                script,
+            }] = recipe.declaration.builder.phases.install.steps.as_slice()
+            else {
+                panic!("plugin-output: expected one explicit install shell step");
+            };
+            assert_eq!(interpreter.path, "/usr/bin/dash");
+            assert_eq!(
+                declared_programs
+                    .iter()
+                    .map(|program| program.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["/usr/bin/install"]
+            );
+            assert_eq!(
+                script,
+                r#"
+install -Dm755 build/cast-plugin-host \
+    "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-plugin-host"
+install -Dm644 build/cast-plugin-output.so \
+    "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/cast/plugins/cast-plugin-output.so"
+"#
+            );
+        }
         let lock_path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
         if name == "generated-config" {
             source_less_fixtures += 1;
@@ -133,6 +280,72 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             );
             assert!(script.contains("profile = \"stone-native\""));
             assert!(script.contains("${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"));
+            continue;
+        }
+        if name == "generated-shell" {
+            source_less_fixtures += 1;
+            assert!(
+                recipe.declaration.sources.is_empty(),
+                "generated-shell: authored script must remain source-less"
+            );
+            assert!(
+                !lock_path.exists(),
+                "generated-shell: a source-less fixture must not gain a source lock"
+            );
+            assert_eq!(
+                dependency_names(&recipe.declaration.builder.required_tools),
+                ["binary(bash)", "binary(install)"]
+            );
+            let [StepSpec::Shell {
+                interpreter: build_interpreter,
+                declared_programs: build_programs,
+                script: build_script,
+            }] = recipe.declaration.builder.phases.build.steps.as_slice()
+            else {
+                panic!("generated-shell: expected one explicit authoring shell step");
+            };
+            assert_eq!(build_interpreter.path, "/usr/bin/bash");
+            assert!(build_programs.is_empty());
+            assert!(build_script.contains("'#!/usr/bin/bash'"));
+            assert!(build_script.contains("'cast-generated-shell: self-test passed'"));
+            assert!(build_script.contains("'    exit 64'"));
+            let [StepSpec::Shell {
+                interpreter: check_interpreter,
+                declared_programs: check_programs,
+                script: check_script,
+            }] = recipe.declaration.builder.phases.check.steps.as_slice()
+            else {
+                panic!("generated-shell: expected one explicit Bash check step");
+            };
+            assert_eq!(check_interpreter.path, "/usr/bin/bash");
+            assert!(check_programs.is_empty());
+            assert!(check_script.contains("source ./cast-generated-shell --self-test"));
+            assert!(check_script.contains("status was %s, expected 64"));
+            let [StepSpec::Shell {
+                interpreter: install_interpreter,
+                declared_programs: install_programs,
+                script: install_script,
+            }] = recipe.declaration.builder.phases.install.steps.as_slice()
+            else {
+                panic!("generated-shell: expected one explicit install shell step");
+            };
+            assert_eq!(install_interpreter.path, "/usr/bin/bash");
+            assert_eq!(
+                install_programs
+                    .iter()
+                    .map(|program| program.path.as_str())
+                    .collect::<Vec<_>>(),
+                ["/usr/bin/install"]
+            );
+            assert_eq!(
+                install_script,
+                "install -Dm755 cast-generated-shell \"${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-generated-shell\""
+            );
+            let [output] = recipe.declaration.outputs.as_slice() else {
+                panic!("generated-shell: declaration must have exactly one output");
+            };
+            assert_eq!(output.name, "out");
+            assert_eq!(dependency_names(&output.runtime_inputs), ["binary(bash)"]);
             continue;
         }
         if name == "userspace-profile" {
@@ -312,9 +525,9 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     );
     assert_eq!(
         archive_format_counts,
-        [9, 1, 1, 1],
-        "execution fixtures must cover nine plain tar streams plus one each of gzip, XZ, and Zstandard"
+        [10, 1, 1, 1],
+        "execution fixtures must cover ten plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 12, "execution archive inventory drift");
-    assert_eq!(source_less_fixtures, 2, "source-less execution fixture inventory drift");
+    assert_eq!(sourceful_fixtures, 13, "execution archive inventory drift");
+    assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

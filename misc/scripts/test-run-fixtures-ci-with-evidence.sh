@@ -113,7 +113,7 @@ emit_proof() {
   "git_tree": "clean",
   "selection": "all",
   "required_execution": true,
-  "fixture_count": 14,
+  "fixture_count": 16,
   "fixtures": [
     "autotools",
     "autotools-options",
@@ -125,8 +125,10 @@ emit_proof() {
     "daemon-generated",
     "factory-override",
     "generated-config",
+    "generated-shell",
     "hooks-patch",
     "meson",
+    "plugin-output",
     "split",
     "userspace-profile"
   ],

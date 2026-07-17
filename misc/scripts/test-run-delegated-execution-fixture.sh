@@ -170,7 +170,7 @@ case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
   "git_tree": "clean",
   "selection": "all",
   "required_execution": true,
-  "fixture_count": 14,
+  "fixture_count": 16,
   "fixtures": [
     "autotools",
     "autotools-options",
@@ -182,8 +182,10 @@ case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
     "daemon-generated",
     "factory-override",
     "generated-config",
+    "generated-shell",
     "hooks-patch",
     "meson",
+    "plugin-output",
     "split",
     "userspace-profile"
   ],
@@ -330,7 +332,7 @@ for fixture_directory in \
     run_fixture "$fixture" 1 ready success
     grep -Fqx -- "--setenv=CAST_EXECUTION_FIXTURE=$fixture" "$state/systemd-run-args"
 done
-test "$fixture_count" -eq 14
+test "$fixture_count" -eq 16
 test ! -e "$evidence/fixtures-ci-proof.json"
 
 rm -f "$evidence"/*
@@ -348,10 +350,10 @@ jq -e --arg commit "$fake_commit" '
     and .git_tree == "clean"
     and .selection == "all"
     and .required_execution == true
-    and .fixture_count == 14
-    and (.fixtures | length) == 14
+    and .fixture_count == 16
+    and (.fixtures | length) == 16
     and .fixtures[0] == "autotools"
-    and .fixtures[13] == "userspace-profile"
+    and .fixtures[15] == "userspace-profile"
     and (.assertions | length) == 5
     and .result == "passed"
 ' "$proof" >/dev/null

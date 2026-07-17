@@ -43,14 +43,14 @@ for entry in "$package_root"/*; do
     }
     fixture=$(basename "$entry")
     case "$fixture" in
-        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|hooks-patch|meson|split) ;;
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|generated-shell|hooks-patch|meson|plugin-output|split) ;;
         *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
     esac
     test -f "$entry/stone.glu" && test ! -L "$entry/stone.glu" || {
         printf 'execution fixture recipe is not a regular authored file: %s\n' "$entry/stone.glu" >&2
         exit 1
     }
-    if [ "$fixture" = generated-config ]; then
+    if [ "$fixture" = generated-config ] || [ "$fixture" = generated-shell ]; then
         test ! -e "$entry/sources.lock.glu" && test ! -L "$entry/sources.lock.glu" || {
             printf 'source-less execution fixture must not have a source lock: %s\n' "$entry/sources.lock.glu" >&2
             exit 1
@@ -65,12 +65,12 @@ for entry in "$package_root"/*; do
     package_count=$((package_count + 1))
 done
 
-test "$package_count" -eq 13 || {
-    printf 'expected exactly thirteen archive-matrix package directories, found %s\n' "$package_count" >&2
+test "$package_count" -eq 15 || {
+    printf 'expected exactly fifteen archive-matrix package directories, found %s\n' "$package_count" >&2
     exit 1
 }
-test "$source_less_count" -eq 1 || {
-    printf 'expected exactly one source-less archive-matrix fixture, found %s\n' "$source_less_count" >&2
+test "$source_less_count" -eq 2 || {
+    printf 'expected exactly two source-less archive-matrix fixtures, found %s\n' "$source_less_count" >&2
     exit 1
 }
 
@@ -110,14 +110,15 @@ for entry in "$source_root"/*; do
         cast-factory-override-fixture-1.0.0|\
         cast-hooks-fixture-1.0.0|\
         cast-meson-fixture-1.0.0|\
+        cast-plugin-output-fixture-1.0.0|\
         cast-split-fixture-1.0.0) ;;
         *) printf 'unexpected execution source tree: %s\n' "$entry" >&2; exit 1 ;;
     esac
     source_tree_count=$((source_tree_count + 1))
 done
 
-test "$source_tree_count" -eq 12 || {
-    printf 'expected exactly twelve source-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
+test "$source_tree_count" -eq 13 || {
+    printf 'expected exactly thirteen source-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
     exit 1
 }
 
@@ -137,6 +138,7 @@ for fixture in \
     cast-factory-override-fixture-1.0.0 \
     cast-hooks-fixture-1.0.0 \
     cast-meson-fixture-1.0.0 \
+    cast-plugin-output-fixture-1.0.0 \
     cast-split-fixture-1.0.0
 do
     source="$source_root/$fixture"
@@ -241,13 +243,14 @@ for entry in "$archive_root"/*; do
         cast-factory-override-fixture-1.0.0.tar|\
         cast-hooks-fixture-1.0.0.tar.xz|\
         cast-meson-fixture-1.0.0.tar|\
+        cast-plugin-output-fixture-1.0.0.tar|\
         cast-split-fixture-1.0.0.tar) ;;
         *) printf 'unexpected execution fixture archive: %s\n' "$entry" >&2; exit 1 ;;
     esac
     count=$((count + 1))
 done
 
-test "$count" -eq 12 || {
-    printf 'expected exactly twelve source-backed execution fixture archives, found %s\n' "$count" >&2
+test "$count" -eq 13 || {
+    printf 'expected exactly thirteen source-backed execution fixture archives, found %s\n' "$count" >&2
     exit 1
 }

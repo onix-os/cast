@@ -184,6 +184,165 @@ fn assert_generated_config_fixture(planned: &super::super::Planned, packages: &B
     );
 }
 
+fn assert_generated_shell_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "generated-shell";
+    const TARGET: &str = "bin/cast-generated-shell";
+    const CONTENT: &[u8] = b"#!/usr/bin/bash\nset -euo pipefail\n\nif [[ \"$#\" -eq 0 ]]; then\n    printf '%s\\n' 'cast-generated-shell'\nelif [[ \"$#\" -eq 1 && \"$1\" == --self-test ]]; then\n    printf '%s\\n' 'cast-generated-shell: self-test passed'\nelse\n    printf '%s\\n' 'usage: cast-generated-shell [--self-test]' >&2\n    exit 64\nfi\n";
+
+    assert!(planned.plan.sources.is_empty(), "{FIXTURE}: source list must be empty");
+    let [root_plan] = planned.plan.outputs.as_slice() else {
+        panic!("{FIXTURE}: source-less package must freeze exactly one output");
+    };
+    assert_eq!(root_plan.name, "out");
+    assert_eq!(root_plan.package_name, "cast-generated-shell-fixture");
+    assert!(root_plan.include_in_manifest);
+    assert_eq!(
+        root_plan.summary.as_deref(),
+        Some("Gluon-authored shell application fixture")
+    );
+    assert_eq!(root_plan.description, None);
+    assert!(root_plan.conflicts.is_empty());
+    assert_eq!(planned_output_dependencies(planned, root_plan), BTreeSet::from(["binary(bash)".to_owned()]));
+
+    let root = &packages[&root_plan.package_name];
+    assert_leaf_paths(FIXTURE, "out", root, [TARGET]);
+    assert_no_directories(FIXTURE, "out", root);
+    assert_regular(FIXTURE, root, TARGET, 0o755, CONTENT.to_vec());
+    assert!(
+        !regular_bytes(FIXTURE, root, TARGET).starts_with(b"\x7fELF"),
+        "{FIXTURE}: authored shell unexpectedly became a native ELF"
+    );
+    assert_exact_relations(
+        FIXTURE,
+        root,
+        BTreeSet::from(["binary(bash)".to_owned()]),
+        BTreeSet::from([
+            root_plan.package_name.clone(),
+            "binary(cast-generated-shell)".to_owned(),
+        ]),
+    );
+}
+
+fn assert_plugin_output_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "plugin-output";
+    const HOST: &str = "bin/cast-plugin-host";
+    const PLUGIN: &str = "lib/cast/plugins/cast-plugin-output.so";
+    const PLUGIN_SONAME: &str = "cast-plugin-output.so";
+
+    assert_eq!(
+        planned
+            .plan
+            .outputs
+            .iter()
+            .map(|output| (output.name.as_str(), output.include_in_manifest))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([("out", true), ("plugins", true), ("dbginfo", false)])
+    );
+    let (root_plan, root) = output(planned, packages, "out");
+    let (plugin_plan, plugin) = output(planned, packages, "plugins");
+    let (debug_plan, debug) = output(planned, packages, "dbginfo");
+    assert_eq!(root_plan.package_name, "cast-plugin-output-fixture");
+    assert_eq!(plugin_plan.package_name, "cast-plugin-output-fixture-plugins");
+    assert_eq!(debug_plan.package_name, "cast-plugin-output-fixture-dbginfo");
+    assert_eq!(root_plan.summary.as_deref(), Some("Explicit runtime-loaded plugin host"));
+    assert_eq!(plugin_plan.summary.as_deref(), Some("Explicit runtime-loaded plugin"));
+    assert_eq!(
+        debug_plan.summary.as_deref(),
+        Some("Plugin host and module debugging symbols")
+    );
+    assert!(planned.plan.outputs.iter().all(|output| output.description.is_none()));
+    assert!(matches!(
+        root_plan.runtime_inputs.as_slice(),
+        [OutputRelation::Planned { output }] if output == "plugins"
+    ));
+
+    assert_leaf_paths(FIXTURE, "out", root, [HOST]);
+    assert_no_directories(FIXTURE, "out", root);
+    assert_leaf_paths(FIXTURE, "plugins", plugin, [PLUGIN]);
+    assert_no_directories(FIXTURE, "plugins", plugin);
+    let host_bytes = regular_bytes(FIXTURE, root, HOST);
+    let plugin_bytes = regular_bytes(FIXTURE, plugin, PLUGIN);
+    assert_eq!(root.layouts[HOST].mode & 0o777, 0o755);
+    assert_eq!(plugin.layouts[PLUGIN].mode & 0o777, 0o644);
+    assert!(
+        contains_bytes(host_bytes, b"/usr/lib/cast/plugins/cast-plugin-output.so"),
+        "{FIXTURE}: host omits its exact default plugin path"
+    );
+    assert!(
+        contains_bytes(plugin_bytes, b"cast plugin output fixture: loaded explicitly"),
+        "{FIXTURE}: plugin omits its exact identity marker"
+    );
+
+    let host_elf = assert_runtime_elf(FIXTURE, HOST, host_bytes, RuntimeElfKind::Executable);
+    let plugin_elf = assert_runtime_elf(FIXTURE, PLUGIN, plugin_bytes, RuntimeElfKind::SharedLibrary);
+    assert_eq!(
+        host_elf.elf_type, ET_DYN,
+        "{FIXTURE}: host must be an ET_DYN position-independent executable"
+    );
+    for import in ["dlopen", "dlsym", "dlclose", "dlerror"] {
+        assert!(
+            host_elf.undefined_dynamic_imports.contains(import),
+            "{FIXTURE}: host does not dynamically import {import}"
+        );
+    }
+    for (target, native) in [(HOST, &host_elf), (PLUGIN, &plugin_elf)] {
+        assert!(
+            native.has_gnu_relro,
+            "{FIXTURE}: /usr/{target} is missing PT_GNU_RELRO"
+        );
+        assert!(
+            native.immediate_binding,
+            "{FIXTURE}: /usr/{target} does not request immediate dynamic binding"
+        );
+        assert_eq!(
+            native.gnu_stack_executable,
+            Some(false),
+            "{FIXTURE}: /usr/{target} must have one non-executable PT_GNU_STACK"
+        );
+        assert!(
+            !native.has_rpath_or_runpath,
+            "{FIXTURE}: /usr/{target} must not contain DT_RPATH or DT_RUNPATH"
+        );
+        assert!(
+            !native.has_text_relocations,
+            "{FIXTURE}: /usr/{target} must not contain dynamic text relocations"
+        );
+    }
+    assert_eq!(plugin_elf.soname.as_deref(), Some(PLUGIN_SONAME));
+    let plugin_relation = format!("soname({PLUGIN_SONAME}(x86_64))");
+    assert!(
+        !host_elf.dependencies.contains(&plugin_relation),
+        "{FIXTURE}: explicitly loaded plugin leaked into host DT_NEEDED"
+    );
+
+    let mut host_dependencies = planned_output_dependencies(planned, root_plan);
+    host_dependencies.extend(host_elf.dependencies.iter().cloned());
+    assert_exact_relations(
+        FIXTURE,
+        root,
+        host_dependencies,
+        BTreeSet::from([
+            root_plan.package_name.clone(),
+            "binary(cast-plugin-host)".to_owned(),
+        ]),
+    );
+    let mut plugin_dependencies = planned_output_dependencies(planned, plugin_plan);
+    plugin_dependencies.extend(plugin_elf.dependencies.iter().cloned());
+    assert_exact_relations(
+        FIXTURE,
+        plugin,
+        plugin_dependencies,
+        BTreeSet::from([plugin_plan.package_name.clone(), plugin_relation]),
+    );
+    assert_debug_output(FIXTURE, debug, &[host_elf, plugin_elf]);
+    assert_exact_relations(
+        FIXTURE,
+        debug,
+        planned_output_dependencies(planned, debug_plan),
+        BTreeSet::from([debug_plan.package_name.clone()]),
+    );
+}
+
 fn assert_userspace_profile_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
     const FIXTURE: &str = "userspace-profile";
     const RUNTIME_RELATIONS: [&str; 5] = ["bash", "uutils-coreutils", "findutils", "ca-certificates", "xz"];

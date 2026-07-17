@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 14] = [
+const EXECUTION_FIXTURES: [&str; 16] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -147,13 +147,15 @@ const EXECUTION_FIXTURES: [&str; 14] = [
     "daemon-generated",
     "factory-override",
     "generated-config",
+    "generated-shell",
     "hooks-patch",
     "meson",
+    "plugin-output",
     "split",
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 13] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 15] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -164,8 +166,10 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 13] = [
     "daemon-generated",
     "factory-override",
     "generated-config",
+    "generated-shell",
     "hooks-patch",
     "meson",
+    "plugin-output",
     "split",
 ];
 

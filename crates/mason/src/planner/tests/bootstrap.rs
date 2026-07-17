@@ -636,7 +636,7 @@ cast.profiles [
         let storage_dir = planned.runtime.paths.upstreams().host;
         if matches!(
             planned.plan.package.name.as_str(),
-            "cast-generated-config-fixture" | "cast-userspace-profile-fixture"
+            "cast-generated-config-fixture" | "cast-generated-shell-fixture" | "cast-userspace-profile-fixture"
         ) {
             assert!(
                 planned.plan.sources.is_empty(),

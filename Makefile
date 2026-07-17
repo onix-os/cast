@@ -12,7 +12,7 @@ EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 REQUIRE_EXECUTION ?= 0
 FIXTURE ?= all
-EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config hooks-patch meson split userspace-profile
+EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config generated-shell hooks-patch meson plugin-output split userspace-profile
 VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
 # Capture the literal command-line value once. A recursive make variable such
 # as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
@@ -727,7 +727,7 @@ execution-fixtures: fixture-sources-check
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
-	@echo "Resolving all fourteen execution fixtures against the pinned real Stone index..."
+	@echo "Resolving all sixteen execution fixtures against the pinned real Stone index..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \
