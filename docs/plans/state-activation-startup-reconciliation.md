@@ -25,13 +25,17 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   one sealed, bounded recovery ladder: the ActiveReblit restrictive
   replacement-mode normalizer, descriptor-bound forward exchange-parent
   durability normalization, rollback-decision persistence, journal-only
-  rollback-resume routing, and the exact `/usr` reverse dispatcher. The same
-  sealed route step now also moves exact `UsrRestored` to
-  `CandidatePreserveIntent` on a separate later entry. Each step captures its own
-  authority from the current canonical record and fresh database and namespace
-  evidence; none converts the diagnostic inventory into mutation authority.
-  Decision, routing, and reversal are separate persisted boundaries rather than
-  a same-process rollback loop.
+  rollback-resume routing, and the exact `/usr` reverse dispatcher. Separate
+  later entries route exact `UsrRestored` to `CandidatePreserveIntent`, prepare
+  its quarantine target, preserve the candidate, route
+  `FreshDbInvalidationIntent`, invalidate the exact fresh database row, persist
+  `FreshDbInvalidated`, and advance it to retained `RollbackComplete`.
+  Each entry recaptures authority from the current canonical record and fresh
+  database and namespace evidence, admits at most one preparation/effect
+  checkpoint and at most one journal advance, then returns without dispatching
+  its successor.
+  `RollbackComplete` remains diagnostic rather than silently finalizing the
+  transition, and no step converts diagnostic inventory into mutation authority.
 
   Commit `3e1ba34` introduced the journal-only rollback-decision boundary. The
   decision path applies to NewState, ActivateArchived, and ActiveReblit.
@@ -141,6 +145,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Candidate-preservation admission foundation
 
+  This section records the capabilities as they landed behind test-only seals.
+  Its no-production-caller statements are commit-local history; the current
+  production wiring is summarized under `Remaining recovery campaign`.
+
   Commit `7e0618dc` adds a sealed, read-only admission boundary for exact
   `CandidatePreserveIntent` evidence. The seal has only a test-only constructor,
   and the focused static gate proves that production has zero seal-construction
@@ -199,7 +207,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   boundary. It therefore establishes no production constructor, mutation,
   persistence, dispatch, effect, or durability claim.
 
-### Test-only NewState target selection, creation, normalization, and move reconciliation
+### Historical test-sealed NewState target selection, creation, normalization, and move reconciliation
 
   Commit `d3bf0cd8` adds the first consuming preservation checkpoint without
   connecting it to production startup. Its initial effect path admits only the
@@ -394,7 +402,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   established warnings; `make source-loc` reports all 1063 tracked text files
   at no more than 1000 lines; and independent review found no issue.
 
-  The seal has no production constructor, caller, or dispatcher. This
+  At that checkpoint the seal had no production constructor, caller, or
+  dispatcher. This
   checkpoint performs no persistence, database mutation, trigger, cleanup, or
   additional namespace mutation, and makes no power-loss claim.
 
@@ -561,8 +570,20 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   startup-gate lanes remain 9/9, 12/12, 15/15, 11/11, 9/9, 6/6, 29/29, and
   21/21. `make fmt`, `make check`, and the 1120-file source limit pass; the
   four established warnings remain, and independent review returned CLEAN.
-  Phase 11D still has no production constructor, dispatcher, journal
-  finalizer, or later rollback effect, so Phase 11 remains open.
+  Commit `a5313099` connects these four exact NewState suffix checkpoints to
+  the real startup gate after reverse recovery and before final diagnostics.
+  One entry handles only its observed checkpoint and returns immediately,
+  including preparation-only creation or normalization which safely retains
+  `CandidatePreserveIntent`. Compiler-local seal definitions prevent sibling
+  modules from minting effect authority. The 25 real-gate contracts cover both
+  epochs and sources, both `/usr` and candidate outcomes, every target prefix,
+  present and jointly absent fresh rows, all five journal faults at each of four
+  persistence boundaries, effect/evidence/durability failures, fresh handles,
+  non-NewState exclusion, and retained `RollbackComplete`. All adjacent lanes,
+  the broader startup and reverse-dispatch gates, `make check`, the 1132-file
+  limit, and independent review pass. No journal finalizer, later rollback
+  effect, other-operation dispatcher, reboot proof, or power-loss proof exists,
+  so Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -737,26 +758,25 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  The production ladder is still only the authenticated `/usr` rollback prefix.
-  Candidate-preservation admission and target-prefix selection remain sealed
-  and test-only. The one-shot NewState target-creation, target-normalization,
-  and move checkpoints are also test-sealed and undispatched. Normalization
-  proves its target-preparation suffix, and exact NewState POST evidence can now
-  complete the shared post-move durability suffix behind a separate test-only
-  seal. Exact candidate-preservation evidence can also advance the journal once
-  to `CandidatePreserved` behind its own test-only seal, without changing the
-  fresh database row or provenance. Separate sealed checkpoints then route to
-  invalidation intent, reconcile one exact source-bound removal, persist its
-  outcome, and route the jointly absent database to `RollbackComplete`.
-  Production startup still dispatches none of that suffix, and no production
-  executor yet finalizes rollback or handles roll-forward, boot repair, or
-  cleanup. The exact reverse prefix now has both
-  deterministic in-process contracts and
-  genuine process-termination coverage. It still has no reboot or power-loss
-  proof: `SIGKILL` preserves the kernel-visible state at termination and cannot
-  establish which pre-fsync rename survives a power cycle. The complete
-  campaign required below therefore remains open, as do this item and all six
-  broad Phase 11 work items.
+  The production ladder now covers the authenticated `/usr` rollback prefix and
+  the exact NewState suffix from `CandidatePreserveIntent` through retained
+  `RollbackComplete`. Separate startup entries may create or normalize the
+  quarantine target without advancing, move and durably preserve the candidate,
+  route to invalidation intent, remove the exact fresh transition or accept
+  proved joint absence, persist that outcome, and route to completion. Every
+  entry handles at most its observed checkpoint and immediately returns; no
+  resulting record is redispatched in the same entry.
+
+  The ladder still has no rollback finalizer, roll-forward executor, boot
+  repair, cleanup, or candidate suffix for ActivateArchived or ActiveReblit.
+  The exact reverse prefix has deterministic contracts and genuine
+  process-termination coverage. The NewState suffix adds deterministic
+  real-startup matrices and all five journal durability faults across each of
+  four persistence boundaries, but not a process-kill case at every suffix
+  effect. Neither prefix has reboot or power-loss proof: `SIGKILL` preserves the
+  kernel-visible state at termination and cannot establish which pre-fsync
+  rename survives a power cycle. The complete campaign required below
+  therefore remains open, as do this item and all six broad Phase 11 work items.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

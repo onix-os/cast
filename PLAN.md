@@ -705,19 +705,19 @@ database ownership probes, an operation-typed durable coordinator prefix
 through `UsrExchanged`, and descriptor-rooted activation-namespace
 assessment.
 
-The production startup ladder is deliberately narrower than general recovery.
-Separate startup entries can normalize forward exchange durability, persist a
-rollback decision, route its first unresolved action, reverse `/usr`, persist
-`UsrRestored`, and route a later entry to `CandidatePreserveIntent`. Each
-entry captures fresh journal, installation, database, provenance, namespace,
-and cooperating-writer authority; performs at most one journal mutation; and
-cannot chain into candidate movement or another rollback effect. Deterministic
-restart matrices and genuine `SIGKILL` processes cover the reverse-execution
-and journal-update boundaries, but do not claim reboot or power-loss
-durability.
+The production startup ladder deliberately handles one freshly observed
+checkpoint per entry rather than a general recovery loop. Separate entries
+normalize exchange durability, persist and route rollback, reverse `/usr`,
+persist `UsrRestored`, route `CandidatePreserveIntent`, prepare its target,
+preserve the candidate, route and perform exact fresh-row invalidation, and
+transition `FreshDbInvalidated` to retained `RollbackComplete`. Every entry
+recaptures fresh authority; admits at most one preparation/effect checkpoint
+and at most one journal advance; never redispatches its successor. Restart
+and `SIGKILL` matrices cover implemented boundaries; reboot and power-loss
+durability remain unproved.
 
-Commit `7e0618dc` adds the next candidate-preservation foundation without
-putting it on that production ladder. A sealed, read-only, test-only admission
+Commit `7e0618dc` adds the next candidate-preservation foundation, which at
+that historical checkpoint was not yet on the production ladder. A sealed,
 distinguishes exact staged evidence from an already-preserved crash prefix
 across all three operations, both rollback sources, both recorded `/usr`
 outcomes, and both layouts. Commit `d3bf0cd8` consumes only the admitted
@@ -900,16 +900,16 @@ substrate once; joint absence calls it zero times. Only proved `Applied` or
 not-applied and ambiguous exits are fieldless. The detailed evidence and
 ambient-namespace rules remain in the linked startup-reconciliation subplan.
 
-Commit `51a4a348` completes Phase 11D. A dedicated non-`Clone` authority pairs
-generic missing-row context with source-database-bound exact joint absence
-inside binding-first database -> namespace -> database sandwiches.
-Two revalidations bracket one `rollback_successor(None)` and one journal
-advance; canonical reopen accepts only `FreshDbInvalidated` or
-`RollbackComplete`, so source faults retry only this route and successor faults skip it.
-The completion lane passes 11/11 while persistence, effect, substrate, route,
-candidate-persistence, durability, database, and startup-gate lanes remain
-9/9, 12/12, 15/15, 11/11, 9/9, 6/6, 29/29, and 21/21. Checks, the 1120-file
-limit, and review are clean; production dispatch and finalization remain absent.
+Commit `51a4a348` completes Phase 11D by binding exact joint absence inside
+database -> namespace -> database sandwiches around one successor projection,
+one journal advance, and an exact reopen to either terminal route record.
+Commit `a5313099` then wires all four exact NewState suffix checkpoints into production startup.
+Each entry handles only its entry checkpoint, returns after one preparation,
+effect, or persistence boundary, and cannot redispatch its resulting record or
+mint sibling authority in safe Rust. Its 25 real-startup tests cover every
+target/database matrix and all five faults at four persistence boundaries.
+All adjacent and prior reverse gates, checks, the 1132-file limit, and review
+are clean. Finalization, later operation families, reboot, and power-loss proof remain absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

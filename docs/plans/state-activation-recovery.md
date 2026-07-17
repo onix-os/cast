@@ -402,21 +402,19 @@ authority, trigger sequencing, and one-shot forward exchange contract.
 ### Startup reconciliation and interruption campaign
 
 The open startup-reconciliation and interruption work items, including the
-completed database-ownership probes, Phase 11A's exact source-database-bound
-fresh-transition removal substrate, Phase 11B's sealed exact invalidation
-effect authority, Phase 11C's exact journal persistence checkpoint, and the
-bounded authenticated `/usr` rollback prefix continue in the
+completed database-ownership probes and the exact source-bound NewState
+rollback suffix, continue in the
 [startup-reconciliation plan](state-activation-startup-reconciliation.md).
-The substrate provides non-`Clone` complete-state/provenance evidence, one
-exact no-retry transaction, and invocation-causal post-attempt reconciliation.
-The test-sealed effect checkpoint pairs that evidence with exact journal,
-installation, reservation, and preserved-candidate namespace authority; only
-proved applied or already-satisfied absence can retain capability. Persistence
-consumes that capability through one authority-owned journal advance and exact
-canonical reopen. It still has no production dispatcher or second rollback
-effect. That document owns the next route from durable `FreshDbInvalidated`,
-later rollback actions, restart matrices, genuine process-death evidence, and
-the remaining power-loss campaign.
+Production startup now handles exactly one entry checkpoint at a time from
+`CandidatePreserveIntent` through the transition to `RollbackComplete`.
+Preparation-only target creation or normalization retains its phase, while
+movement, routing, exact fresh-row invalidation, and completion persistence
+each stop after their own boundary; `RollbackComplete` itself remains a
+retained diagnostic record. Compiler-local seals prevent sibling authority
+construction, and 25 real-gate contracts cover the complete target/database
+matrices plus all five journal faults across all four persistence boundaries.
+The document owns the remaining finalizer, other operation families, later
+rollback actions, restart/process-death expansion, and the power-loss campaign.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.
