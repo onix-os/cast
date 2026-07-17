@@ -49,6 +49,81 @@ fn expired_retry_deadline_fails_before_another_syscall() {
 }
 
 #[test]
+fn mkdirat_once_issues_one_descriptor_relative_creation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let retained_path = temporary.path().join("retained");
+    let displaced_path = temporary.path().join("displaced");
+    std::fs::create_dir(&retained_path).unwrap();
+    std::fs::set_permissions(&retained_path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let retained_directory = std::fs::File::open(&retained_path).unwrap();
+
+    std::fs::rename(&retained_path, &displaced_path).unwrap();
+    std::fs::create_dir(&retained_path).unwrap();
+
+    mkdirat_once(&retained_directory, c"created", 0o700).unwrap();
+
+    let created = std::fs::symlink_metadata(displaced_path.join("created")).unwrap();
+    assert!(created.file_type().is_dir());
+    let created_mode = created.permissions().mode() & 0o7777;
+    assert_eq!(created_mode & !0o700, 0);
+    assert_eq!(
+        std::fs::symlink_metadata(retained_path.join("created"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn mkdirat_once_reports_eexist_without_replacing_the_existing_entry() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = std::fs::File::open(temporary.path()).unwrap();
+    let existing = temporary.path().join("existing");
+    std::fs::create_dir(&existing).unwrap();
+    std::fs::write(existing.join("sentinel"), b"retained contents").unwrap();
+    let before = std::fs::symlink_metadata(&existing).unwrap();
+
+    let error = mkdirat_once(&directory, c"existing", 0o700).unwrap_err();
+
+    assert_eq!(error.raw_os_error(), Some(nix::libc::EEXIST));
+    let after = std::fs::symlink_metadata(&existing).unwrap();
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+    assert_eq!(std::fs::read(existing.join("sentinel")).unwrap(), b"retained contents");
+}
+
+#[test]
+fn mkdirat_once_rejects_invalid_components_and_modes_without_mutation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let nested = temporary.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let directory = std::fs::File::open(temporary.path()).unwrap();
+    let inventory = |path: &Path| {
+        let mut names = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    let parent_before = inventory(temporary.path());
+    let nested_before = inventory(&nested);
+
+    for invalid in [c"".as_ref(), c".".as_ref(), c"..".as_ref(), c"nested/name".as_ref()] {
+        assert_eq!(
+            mkdirat_once(&directory, invalid, 0o700).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    assert_eq!(
+        mkdirat_once(&directory, c"outside-mode", 0o10000).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+
+    assert_eq!(inventory(temporary.path()), parent_before);
+    assert_eq!(inventory(&nested), nested_before);
+}
+
+#[test]
 fn expired_rename_deadline_preserves_both_namespaces() {
     let source = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();

@@ -137,6 +137,40 @@ pub(crate) fn link_retained_file_noreplace(
     require_same_inode(expected, inode_identity(&target.metadata()?))
 }
 
+/// Make exactly one descriptor-relative directory-creation attempt.
+///
+/// This is only a raw syscall adapter, not evidence that the requested name
+/// is present or absent. The requested mode is an upper bound under the
+/// process umask and inherited directory policy. The caller must retain the
+/// parent and freshly reconcile the name after every return value; in
+/// particular, this function never retries an interrupted attempt or adopts
+/// an existing entry as success.
+#[allow(dead_code)] // consumed by the future sealed target-preparation path
+pub(crate) fn mkdirat_once(parent_directory: &std::fs::File, name: &CStr, mode: u32) -> io::Result<()> {
+    let name_bytes = name.to_bytes();
+    if name_bytes.is_empty() || name_bytes.contains(&b'/') || matches!(name_bytes, b"." | b"..") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "descriptor-relative mkdir name must be one nonempty component",
+        ));
+    }
+    if mode & !0o7777 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("descriptor-relative mkdir mode is outside the canonical 07777 mask: {mode:#o}"),
+        ));
+    }
+
+    // SAFETY: the retained parent descriptor and validated single-component
+    // C string remain live for this one call. mkdirat never follows or
+    // replaces the final component. The caller reconciles every raw result.
+    if unsafe { nix::libc::mkdirat(parent_directory.as_raw_fd(), name.as_ptr(), mode) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Move one exact directory entry between retained parents without replacing
 /// any destination entry. Both names must be single components; callers keep
 /// authority in the descriptors rather than mutable absolute pathnames.
