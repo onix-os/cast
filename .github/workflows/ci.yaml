@@ -69,11 +69,19 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Install rootless ID mapping support
+      - name: Install and verify fixture host tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes uidmap
-          test -x /usr/bin/newgidmap
+          sudo apt-get install --yes jq uidmap util-linux
+          for tool in \
+            git id jq make mkfifo mktemp newgidmap setsid stat \
+            systemctl systemd-run tail tee timeout unshare; do
+            tool_path="/usr/bin/$tool"
+            test -x "$tool_path"
+            test "$(command -v "$tool")" = "$tool_path"
+          done
+          test -x /bin/bash
+          test -x /bin/sh
           user_name="$(id -un)"
           user_id="$(id -u)"
           if ! awk -F: -v name="$user_name" -v uid="$user_id" \
