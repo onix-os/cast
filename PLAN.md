@@ -741,12 +741,12 @@ and attempts one conditional journal advance. It performs no exchange and no
 non-journal filesystem, database, trigger, cleanup, or root-link effect. It
 drops the old authority and lock-bearing store before descriptor-rooted reopen, where an
 uncertain result must reconcile to the exact source or exact successor. The
-focused rollback-resume route lane passes 11/11 contracts. Its additional real
-coordinator-origin proof covers all three operations at all three forward
-durability fault points, enters startup once for the decision and again for the
-route, and proves the atomic-exchange syscall count remains one with unchanged
-database and non-journal namespace evidence. `make check` and all three narrow
-startup recovery Make lanes pass at this checkpoint.
+focused rollback-resume route lane now passes 12/12 contracts, retaining those
+original decision routes and adding the exact restored route described below.
+Its additional real coordinator-origin proof covers all three operations at all
+three forward durability fault points, enters startup once per persisted phase,
+and proves the exchange syscall counts remain exact with unchanged database and
+non-journal namespace evidence.
 
 Commits `62b15f29`, `e69ad276`, `50cb98f8`, and `86c6c900` extend that ladder
 past journal routing through one authenticated `/usr` reverse phase. Commits
@@ -762,8 +762,25 @@ the raw syscall report, determines which case occurred. Successful persistence
 drops the consumed authority and old lock-bearing journal before a
 descriptor-rooted reopen, and an uncertain write reconciles only to the exact
 source or exact successor. Every successful entry still returns
-`RecoveryPending`; stable `UsrRestored` is neither redispatched nor chained into
-candidate preservation in the same process.
+`RecoveryPending`; the reverse entry stops at `UsrRestored` and cannot chain
+into another phase in the same process.
+
+Commit `c7c97d4c` extends the existing sealed journal-only route authority for a
+fresh later startup. It accepts exact `UsrRestored` only when the rollback
+origin is `UsrExchangeIntent` or `UsrExchanged`, `/usr` has exact `PRE`
+evidence, and the recorded outcome is `Applied` or `AlreadySatisfied`. The
+operation plan must remain exact: NewState has a pending fresh-row rollback,
+quarantines the candidate, and may retain external effects; ActivateArchived
+requires no fresh-row rollback, rearchives the candidate, and has no external
+effects; ActiveReblit requires no fresh-row rollback, quarantines the candidate,
+and may retain external effects. All require candidate pending, previous
+archive and boot repair not required, stable database/provenance evidence, and
+no premature transition-quarantine wrapper. The executor derives one
+`CandidatePreserveIntent` successor, attempts one conditional journal advance,
+drops the consumed authority and store, and descriptor-rootedly reopens the
+canonical record. It performs no candidate movement, database mutation,
+trigger, root-link, or other non-journal filesystem effect, and stops at the new
+intent. Candidate preservation itself remains unimplemented.
 
 The focused reverse-dispatch Make lane now freezes twelve dispatcher contracts
 across all three operations, plus two coordinator-origin contracts. Its
@@ -787,7 +804,9 @@ persistence revalidation. All three operations therefore cover 12 process-death
 cases. An independent recovery process opens fresh installation and database
 handles, observes the physically restored PRE layout, performs no second
 exchange, and persists exact `UsrRestored(AlreadySatisfied)`. Every child is
-deadline-bounded and forcibly killed and reaped if it hangs.
+deadline-bounded and forcibly killed and reaped if it hangs. A separate later
+startup routes that restored record to `CandidatePreserveIntent` without
+redispatching the reverse exchange.
 
 The second process matrix covers all three operations, both POST and PRE source
 layouts, and all five successful journal-update durability boundaries: 30
@@ -796,11 +815,15 @@ authoritative and the fully synced temporary successor is discarded on reopen;
 because the namespace is already PRE, recovery records
 `UsrRestored(AlreadySatisfied)`, even when the discarded POST successor said
 `Applied`. At the other four boundaries the canonical successor is already
-published, so recovery preserves its exact original `Applied` or
-`AlreadySatisfied` outcome and performs no further journal update. These are
-real process-termination tests with fresh-process handles, but they are not
+published, so recovery routes its exact original `Applied` or
+`AlreadySatisfied` outcome to `CandidatePreserveIntent` without another reverse
+update. These are real process-termination tests with fresh-process handles,
+but they are not
 reboot or power-loss evidence: kernel-visible state after `SIGKILL` does not
-prove which pre-fsync rename survives a power cycle.
+prove which pre-fsync rename survives a power cycle. The adapted restart
+contracts distinguish a recovery entry that first persists `UsrRestored` from
+one that finds it already canonical and immediately performs the separate
+journal-only candidate-intent route.
 
 Two additional coordinator-origin contracts carry real failed forward
 exchanges through separate decision, route, and reverse startup entries. One
@@ -810,8 +833,10 @@ reopen retains either `UsrExchangeIntent` or `UsrExchanged`. Both cover all
 three operations, require exactly one forward and one reverse exchange, leave
 the database and unrelated namespace unchanged, and restore the pre-forward
 namespace semantically: names, identities, modes, link counts, lengths, and
-payloads match rather than merely looking correct by pathname. A later startup
-proves the exact `UsrRestored` outcome remains stable.
+payloads match rather than merely looking correct by pathname. The reverse
+entry still stops at exact `UsrRestored`; a later coordinator-contract startup
+routes it once to `CandidatePreserveIntent` without another exchange or any
+candidate, database, trigger, or root-link effect.
 
 The subsequent diagnostic-only startup assessment sandwiches a complete
 bounded, descriptor-rooted activation-namespace inventory around the remaining

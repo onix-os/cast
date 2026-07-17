@@ -61,8 +61,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   contracts, including 5 which prove compatible repair and zero chmod for
   incompatible database, active-selection, record, or installation authority.
   Apart from this chmod and the narrow rollback ladder through exact `/usr`
-  reversal and `UsrRestored` persistence documented below, general phase
-  recovery execution is not implemented. The public
+  reversal, `UsrRestored` persistence, and the later journal-only route to
+  `CandidatePreserveIntent` documented below, general phase recovery execution
+  is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -643,15 +644,18 @@ and instant rollback mechanism; it hardens their failure semantics.
   publication-ambiguity boundary. There is still no general phase-advancing
   recovery executor. The narrow production startup ladder can now normalize
   forward exchange-parent durability, persist `RollbackDecided`, route a later
-  entry to its first unresolved rollback intent, and, for exact
-  `ReverseExchangeIntent`, restore `/usr` and persist `UsrRestored`. Commits
+  entry to its first unresolved rollback intent, restore `/usr` and persist
+  `UsrRestored`, then route a separate later entry to
+  `CandidatePreserveIntent`. Commits
   `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
   outcome, connected the one-phase reverse dispatcher to real mutable startup,
   and proved its initial parent- and journal-restart convergence. Commit
   `86c6c900` extended that interruption matrix through fresh-handle restart,
   evidence races, and both coordinator-origin failure classes. Commits
   `ecd58020` and `e8c952f9` add genuine `SIGKILL` coverage around reverse
-  execution and its journal update, respectively. The restrictive
+  execution and its journal update, respectively. Commit `c7c97d4c` adds the
+  final journal-only route in that prefix without executing candidate
+  preservation. The restrictive
   replacement-mode normalizer still never changes the record, and the
   diagnostic startup assessment remains non-mutating. Candidate preservation,
   database invalidation, later rollback actions, roll-forward, and cleanup are
@@ -667,8 +671,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   read-only and fail closed. Immediately before it, the mutable startup gate has
   one sealed, bounded recovery ladder: the ActiveReblit restrictive
   replacement-mode normalizer, descriptor-bound forward exchange-parent
-  durability normalization, rollback-decision persistence, rollback-resume
-  routing, and the exact `/usr` reverse dispatcher. Each step captures its own
+  durability normalization, rollback-decision persistence, journal-only
+  rollback-resume routing, and the exact `/usr` reverse dispatcher. The same
+  sealed route step now also moves exact `UsrRestored` to
+  `CandidatePreserveIntent` on a separate later entry. Each step captures its own
   authority from the current canonical record and fresh database and namespace
   evidence; none converts the diagnostic inventory into mutation authority.
   Decision, routing, and reversal are separate persisted boundaries rather than
@@ -721,15 +727,30 @@ and instant rollback mechanism; it hardens their failure semantics.
   layout, binding, database, provenance, or namespace combination remains
   non-mutating.
 
+  Commit `c7c97d4c` reuses that same sealed authority for one additional exact
+  source: `UsrRestored` whose recorded forward rollback source is
+  `UsrExchangeIntent` or `UsrExchanged`, whose `/usr` evidence is `PRE`, and
+  whose `/usr` outcome is `Applied` or `AlreadySatisfied`. Previous archive and
+  boot actions must be `NotRequired`, and candidate preservation must still be
+  `Pending`. NewState requires fresh-row invalidation pending, quarantine, and
+  possible external effects; ActivateArchived requires no fresh-row action,
+  rearchive, and no external effects; ActiveReblit requires no fresh-row action,
+  quarantine, and possible external effects. Exact journal binding, stable
+  database ownership and provenance, and the descriptor-rooted namespace
+  sandwich remain mandatory. A transition-quarantine wrapper at `UsrRestored`
+  is rejected as a premature candidate-movement prefix rather than accepted as
+  evidence for the route.
+
   After a complete database/namespace/database and journal revalidation, the
   route executor calls `rollback_successor(None)` exactly once and attempts one
-  conditional journal advance. It contains no reverse exchange, rename,
+  conditional journal advance. This yields `CandidatePreserveIntent` for an
+  admitted `UsrRestored` source. It contains no reverse exchange, rename,
   non-journal filesystem write, database mutation, trigger, cleanup, candidate
-  movement, or root-link effect. Before descriptor-rooted reopen it drops both the old
-  authority and lock-bearing journal store. Success accepts only the exact
-  successor; an uncertain advance is reported only after reopen reconciles the
-  complete canonical record to the exact source or exact successor. There is
-  no same-process retry or continuation into the selected intent.
+  movement, or root-link effect. Before descriptor-rooted reopen it drops both
+  the old authority and lock-bearing journal store. Success accepts only the
+  exact successor; an uncertain advance is reported only after reopen
+  reconciles the complete canonical record to the exact source or successor.
+  There is no same-process retry or continuation into the selected intent.
 
   A later startup may admit only an exact `ReverseExchangeIntent` under a
   private reverse seal. Exact `POST` evidence yields a consuming Apply
@@ -756,10 +777,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   The one-recovery-journal-mutation-per-entry rule therefore remains intact.
   One entry may persist `RollbackDecided`, a later one may persist
   `ReverseExchangeIntent`, and a later one may perform the admitted reverse and
-  persist `UsrRestored`. Every successful boundary returns `RecoveryPending`.
-  An already canonical `UsrRestored` record is not redispatched and is not
-  chained directly into `CandidatePreserveIntent`; a fresh startup merely
-  reports that stable pending phase.
+  persist `UsrRestored`. Because the journal-only route ran earlier in that
+  startup entry, the reverse entry stops there and returns `RecoveryPending`.
+  One fresh later entry may route exact `UsrRestored` to
+  `CandidatePreserveIntent`, again returns `RecoveryPending`, and performs no
+  preservation effect. Thus no startup entry advances more than one phase.
 
   The assessment then classifies every validated persisted phase as begin
   rollback, resume rollback, roll forward, finalize rollback, or manual
@@ -826,12 +848,14 @@ and instant rollback mechanism; it hardens their failure semantics.
   enters real startup, and proves the exchange syscall count remains exactly
   one while the exact pending-reverse decision is persisted without database or
   non-journal namespace changes. The additional
-  `make forge-startup-usr-rollback-resume-route-test` lane passes 11/11 focused
-  routing contracts across both legal successors, all three operations,
-  journal binding and mixed-root rejection, database/provenance/namespace and
-  final-revalidation races, historical epochs, ActiveReblit reservation
-  retention, and all five journal-update fault prefixes with exact
-  source/successor reopen reconciliation.
+  `make forge-startup-usr-rollback-resume-route-test` lane passes 12/12 focused
+  routing contracts. Its added matrix crosses all three operations, both
+  admitted forward rollback sources, and both exact restored outcomes on PRE
+  evidence. The lane also retains both decision successors, journal binding and
+  mixed-root rejection, database/provenance/namespace and final-revalidation
+  races, premature transition-quarantine rejection, historical epochs,
+  ActiveReblit reservation retention, and all five journal-update fault
+  prefixes with exact source/successor reopen reconciliation.
 
   The real reverse-dispatch lane added through commits `e69ad276`, `50cb98f8`,
   `86c6c900`, `ecd58020`, and `e8c952f9` now passes twelve dispatcher contracts
@@ -843,12 +867,16 @@ and instant rollback mechanism; it hardens their failure semantics.
   exchange attempt. After a physical reverse, an injected failure leaves
   `ReverseExchangeIntent` canonical; a fresh startup observes PRE, completes
   the durability suffix without a second exchange, and persists
-  `UsrRestored(AlreadySatisfied)`. A third startup proves that phase is stable.
+  `UsrRestored(AlreadySatisfied)`. A third startup performs the separate
+  journal-only route to `CandidatePreserveIntent`, with no reverse redispatch
+  or candidate effect.
   Its journal restart matrix crosses all three operations, POST and PRE, and all
   five conditional-update fault points. Canonical reopen finds only the exact
   source or exact `UsrRestored` successor. If the source survived, fresh startup
-  finishes the already restored layout without exchanging again; if the
-  successor survived, it is left untouched. Neither restart path mutates the
+  finishes the already restored layout without exchanging again and stops; if
+  the successor survived, that startup routes it to `CandidatePreserveIntent`.
+  A later entry performs the same route for the source-survived case. Neither
+  restart path mutates the
   database, root links, or non-journal namespace after the failed entry.
 
   A separate contract drops the failed startup result, old `Installation`,
@@ -868,7 +896,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   installation, database, journal, and reservation handles first; each child
   opens fresh installation and database handles. Recovery must see physical
   PRE, attempt no second exchange, persist exact
-  `UsrRestored(AlreadySatisfied)`, and remain stable on another startup. A
+  `UsrRestored(AlreadySatisfied)`, then route it on another startup to
+  `CandidatePreserveIntent` without a preservation effect. A
   15-second deadline surrounds every child, and timeout cleanup kills and reaps
   a hung process rather than blocking the lane indefinitely.
 
@@ -885,8 +914,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   POST attempt's discarded temporary `UsrRestored(Applied)` record. At each of
   the other four boundaries the canonical successor is already published, so
   recovery preserves its exact original `Applied` or `AlreadySatisfied`
-  outcome, removes any displaced temporary residue, and performs neither a
-  second exchange nor another journal update. Crash and recovery again use
+  outcome, removes any displaced temporary residue, performs no second
+  exchange, and makes exactly the separate journal-only route to
+  `CandidatePreserveIntent`. Crash and recovery again use
   fresh-process handles and strict child deadlines.
 
   The same lane classifies all four raw exchange report/layout combinations,
@@ -911,18 +941,19 @@ and instant rollback mechanism; it hardens their failure semantics.
   respectively, all three forward exchange-durability fault points and all five
   forward exchange-completion journal fault points. Separate startup entries
   persist the rollback decision, route it to `ReverseExchangeIntent`, execute
-  exactly one reverse exchange, and stop at the exact `UsrRestored` successor.
+  exactly one reverse exchange, stop at the exact `UsrRestored` successor, then
+  route a later entry to `CandidatePreserveIntent`.
   The forward and reverse syscall count is exactly two, the database is
-  unchanged, and another startup does not redispatch or chain the restored
-  record. The restored non-journal namespace comparison is semantic: it covers
+  unchanged, and the later route neither redispatches nor performs candidate
+  effects. The restored non-journal namespace comparison is semantic: it covers
   names, identities, modes, link counts, lengths, and payloads while deliberately
   excluding kernel rename timestamps, which a forward/reverse exchange cannot
   preserve.
 
   This is still only the authenticated `/usr` rollback prefix. No startup
-  executor yet handles `CandidatePreserveIntent`, candidate preservation,
-  fresh-row invalidation, the remaining rollback actions, roll-forward, boot
-  repair, or cleanup. The exact reverse prefix now has both deterministic
+  executor yet handles the effects of `CandidatePreserveIntent`, candidate
+  preservation, fresh-row invalidation, the remaining rollback actions,
+  roll-forward, boot repair, or cleanup. The exact reverse prefix now has both deterministic
   in-process contracts and genuine process-termination coverage. It still has
   no reboot or power-loss proof: `SIGKILL` preserves the kernel-visible state at
   termination and cannot establish which pre-fsync rename survives a power
