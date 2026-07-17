@@ -32,6 +32,7 @@ env \
     FAKE_GIT_STATUS_MODE=clean \
     FAKE_JQ_SIGNAL_CALL= \
     FAKE_OUTER_STATE="$outer_state" \
+    FAKE_PROOF_GENERATOR="$proof_generator" \
     FAKE_TEE_MODE=pass \
     REAL_JQ="$real_jq" \
     REAL_TEE="$real_tee" \

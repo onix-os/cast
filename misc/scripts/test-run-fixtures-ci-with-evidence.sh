@@ -4,6 +4,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-fixtures-ci-with-evidence.sh"
+proof_generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixtures-ci-evidence-test.XXXXXXXXXXXX")
 current_case=initialization
 tracked_runner_pid=
@@ -85,6 +86,12 @@ real_jq=$(command -v jq)
 fake_commit=$(git -C "$root" rev-parse --verify HEAD)
 mkdir -p "$fakebin" "$evidence" "$outer_state" "$gates"
 chmod 700 "$evidence"
+if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
+    || [ ! -x "$proof_generator" ]; then
+    printf 'fixture proof test generator is unavailable or unsafe: %s\n' \
+        "$proof_generator" >&2
+    exit 1
+fi
 
 grep -Fq 'CAST_FIXTURE_EVIDENCE_DIR="$${CAST_FIXTURE_EVIDENCE_DIR:-$(TOP_DIR)/target/fixture-evidence}"' \
     "$root/Makefile"
@@ -112,45 +119,11 @@ repository=$3
 
 emit_proof() {
     commit=$(git -C "$repository" rev-parse --verify HEAD)
-    cat >"$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json" <<EOF_PROOF
-{
-  "schema": "cast.fixtures-ci-proof.v1",
-  "git_commit": "$commit",
-  "git_tree": "clean",
-  "selection": "all",
-  "required_execution": true,
-  "fixture_count": 16,
-  "fixtures": [
-    "autotools",
-    "autotools-options",
-    "cargo",
-    "cargo-features",
-    "cargo-vendored",
-    "cmake",
-    "custom",
-    "daemon-generated",
-    "factory-override",
-    "generated-config",
-    "generated-shell",
-    "hooks-patch",
-    "meson",
-    "plugin-output",
-    "split",
-    "userspace-profile"
-  ],
-  "assertions": [
-    "contentful-build-and-publish",
-    "decoded-bundle-contract",
-    "locked-plan-and-derivation-reuse",
-    "second-contentful-build-reused",
-    "stone-and-manifest-bytes-identical"
-  ],
-  "result": "passed"
-}
-EOF_PROOF
+    : "${FAKE_PROOF_GENERATOR:?}"
+    "$FAKE_PROOF_GENERATOR" \
+        "$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json" "$commit"
     printf 'temporary-proof-from-%s\n' "$FAKE_MAKE_MODE" \
         >"$CAST_FIXTURE_EVIDENCE_DIR/.fixtures-ci-proof.json.tmp"
-    chmod 644 "$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json"
 }
 
 wait_for_child_receipt() {
@@ -691,6 +664,7 @@ run_wrapper() {
         CAST_FIXTURE_CI_KILL_AFTER_SECONDS="${CAST_FIXTURE_CI_KILL_AFTER_SECONDS-1}" \
         CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS="${CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS-}" \
         FAKE_LATE_PID_FILE="$work/late-child.pid" \
+        FAKE_PROOF_GENERATOR="$proof_generator" \
         FAKE_GIT_COMMIT="$fake_commit" \
         FAKE_GIT_STATUS_MODE="${FAKE_GIT_STATUS_MODE-clean}" \
         FAKE_JQ_SIGNAL_CALL="${FAKE_JQ_SIGNAL_CALL-}" \

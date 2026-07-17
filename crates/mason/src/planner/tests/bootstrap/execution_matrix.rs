@@ -7,23 +7,24 @@ fn contentful_bootstrap_materializes_a_complete_offline_root_mirror() {
 }
 
 #[cfg(feature = "delegated-fixture-test-support")]
-pub(super) fn run_delegated_execution_fixture() {
-    run_execution_fixtures_from_contentful_closure();
+pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
+    run_execution_fixtures_from_contentful_closure()
 }
 
 // Keep the existing implementation type-checked by ordinary unit-test builds
 // without registering it with libtest. Only the feature-gated harness-free
 // entry point above is allowed to execute it.
 #[cfg(test)]
-const _: fn() = run_execution_fixtures_from_contentful_closure;
+const _: fn() -> DelegatedExecutionOutcome = run_execution_fixtures_from_contentful_closure;
 
 #[cfg(any(test, feature = "delegated-fixture-test-support"))]
-fn run_execution_fixtures_from_contentful_closure() {
+fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome {
     let selection = execution_fixture_selection_from_env()
         .unwrap_or_else(|error| panic!("invalid execution-fixture selector: {error}"));
     let (closure, indexed) = validated_bootstrap();
     let matrix = BootstrapPlanningMatrix::new(&closure);
     matrix.materialize_package_pool(&closure, &indexed);
+    let mut evidence = execution_evidence::ExecutionEvidenceBuilder::new(selection);
     let mut executed = 0usize;
 
     for (name, recipe) in matrix.recipes.iter().filter(|(name, _)| selection.includes(name)) {
@@ -32,8 +33,20 @@ fn run_execution_fixtures_from_contentful_closure() {
         assert_fixture_package_closure(name, &first.plan, &closure);
         assert_execution_fixture_topology(name, &first.plan);
         matrix.import_sources(&first);
+        assert_eq!(
+            first.lock_outcome,
+            Some(WriteOutcome::Written),
+            "{name}: first plan must publish a fresh build.lock.glu"
+        );
         let canonical_plan = first.plan.canonical_bytes();
         let derivation_id = first.plan.derivation_id();
+        let first_lock = fs::read(&first.lock_path)
+            .unwrap_or_else(|error| panic!("{name}: read first build.lock.glu observation: {error}"));
+        assert_eq!(
+            first_lock,
+            encode_build_lock(&first.plan.build_lock).into_bytes(),
+            "{name}: first build.lock.glu presentation does not encode the frozen lock"
+        );
         let input_snapshot = ExecutionInputSnapshot::capture(recipe, &first.lock_path);
 
         let first_publication = match execute_and_publish(&first) {
@@ -47,7 +60,7 @@ fn run_execution_fixtures_from_contentful_closure() {
                     "skipping selected contentful execution fixture(s): this host cannot create the required user/mount namespaces: {}",
                     error_chain(error.as_ref())
                 );
-                return;
+                return evidence.capability_unavailable();
             }
             Err(error) => panic!(
                 "{name}: contentful execution failed after successful planning: {}",
@@ -68,17 +81,19 @@ fn run_execution_fixtures_from_contentful_closure() {
 
         let locked = plan_for_build(matrix.env(), matrix.request(recipe, false), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: reuse contentful build lock: {error:#}"));
+        let repeated_plan = locked.plan.canonical_bytes();
+        let repeated_derivation_id = locked.plan.derivation_id();
         assert_eq!(
             locked.lock_outcome, None,
             "{name}: reuse must not rewrite build.lock.glu"
         );
         assert_eq!(
-            locked.plan.canonical_bytes(),
+            repeated_plan,
             canonical_plan,
             "{name}: canonical plan drift"
         );
         assert_eq!(
-            locked.plan.derivation_id(),
+            repeated_derivation_id,
             derivation_id,
             "{name}: derivation ID drift"
         );
@@ -86,6 +101,9 @@ fn run_execution_fixtures_from_contentful_closure() {
             locked.lock_path, first.lock_path,
             "{name}: repeated planning selected a different build.lock.glu path"
         );
+        let repeated_lock = fs::read(&locked.lock_path)
+            .unwrap_or_else(|error| panic!("{name}: read repeated build.lock.glu observation: {error}"));
+        assert_eq!(repeated_lock, first_lock, "{name}: repeated build.lock.glu bytes drifted");
         input_snapshot.assert_unchanged(name, "after locked replanning", recipe, &locked.lock_path);
 
         let second_publication = execute_and_publish(&locked).unwrap_or_else(|error| {
@@ -111,9 +129,26 @@ fn run_execution_fixtures_from_contentful_closure() {
             recipe,
             &locked.lock_path,
         );
+        evidence.push(execution_evidence::FixtureEvidenceInputs {
+            name,
+            first_plan: &canonical_plan,
+            first_derivation_id: derivation_id.as_str(),
+            repeat_plan: &repeated_plan,
+            repeat_derivation_id: repeated_derivation_id.as_str(),
+            first_build_lock: &first_lock,
+            first_build_lock_outcome: first.lock_outcome,
+            repeat_build_lock: &repeated_lock,
+            repeat_build_lock_outcome: locked.lock_outcome,
+            first_publication,
+            repeat_publication: second_publication,
+            published_after_first: &published,
+            staged_after_repeat: &repeated,
+            published_after_repeat: &preserved,
+        });
     }
 
     assert_eq!(executed, selection.expected_count());
+    evidence.finish()
 }
 
 #[test]

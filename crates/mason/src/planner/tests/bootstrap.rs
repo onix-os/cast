@@ -21,6 +21,10 @@ use super::{
 
 #[path = "bootstrap/bundle.rs"]
 mod bundle;
+#[path = "bootstrap/execution_evidence.rs"]
+mod execution_evidence;
+
+pub(crate) use execution_evidence::DelegatedExecutionOutcome;
 
 const BOOTSTRAP_SCHEMA_VERSION: i64 = 2;
 const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;

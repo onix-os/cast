@@ -172,6 +172,26 @@ production-format `.stone` to prove a Meta-only payload topology, no layout or
 content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
+The required all-fixture lane publishes one bounded v2 JSON receipt only after
+all sixteen fixtures complete both executions. It records the exact matrix
+totals, repeated plan and lock identities, actual publication outcomes, the
+sorted Stone/manifest inventory, and three matching bundle-ledger observations
+per fixture. Mason derives those ledgers from the authenticated raw bundle
+bytes and publishes the receipt without replacing an existing file. The exact
+shell validator rejects duplicate or reordered keys, unexpected fields,
+unbounded values, inconsistent totals, and ledger framing that does not match
+the recorded names, sizes, and raw-byte digests. `make fixture-proof-test`
+exercises the Rust producer, the adversarial validator, and their direct
+cross-boundary contract without claiming that an offline test performed the
+live delegated builds.
+
+That receipt is a deterministic CI result, not a signed remote attestation.
+Its trust root is the sealed Mason execution path: post-run validation binds
+the ledger to Mason's recorded raw-byte digests but cannot reread artifacts
+which were not retained beside the receipt. A capability skip, a hand-authored
+JSON document, or a receipt from a different commit therefore does not prove
+fixture execution.
+
 The execution stage does not run under Rust's multithreaded test harness. Its
 runner first builds Mason's feature-gated `harness = false` test target outside
 the delegated unit, selects the one exact Cargo-reported test executable with

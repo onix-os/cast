@@ -105,6 +105,37 @@ fn parse_execution_requirement(value: Option<&std::ffi::OsStr>) -> Result<Execut
 }
 
 #[cfg(any(test, feature = "delegated-fixture-test-support"))]
+fn required_matrix_proof_policy(
+    requirement: ExecutionRequirement,
+    selector: Option<&std::ffi::OsStr>,
+    proof_path_present: bool,
+    proof_commit_present: bool,
+) -> Result<bool, String> {
+    let selection_is_all = match selector {
+        None => true,
+        Some(value) => {
+            value
+                .to_str()
+                .ok_or_else(|| "CAST_EXECUTION_FIXTURE must contain valid UTF-8".to_owned())?
+                == "all"
+        }
+    };
+    let proof_required = requirement == ExecutionRequirement::Required && selection_is_all;
+    if proof_path_present != proof_commit_present {
+        return Err(
+            "CAST_FIXTURE_PROOF_PATH and CAST_FIXTURE_GIT_COMMIT must be both present or both absent".to_owned(),
+        );
+    }
+    if proof_required && !proof_path_present {
+        return Err("required all-fixture execution must receive its proof path and Git commit".to_owned());
+    }
+    if !proof_required && proof_path_present {
+        return Err("only required all-fixture execution may receive proof publication state".to_owned());
+    }
+    Ok(proof_required)
+}
+
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
 fn run_after_delegated_preflight<T>(
     requirement: ExecutionRequirement,
     preflight: Result<(), container::Error>,
@@ -168,13 +199,20 @@ pub mod delegated_fixture_test_support {
         let execution_requirement =
             super::parse_execution_requirement(std::env::var_os("CAST_REQUIRE_EXECUTION").as_deref())
                 .unwrap_or_else(|message| panic!("{message}"));
+        let proof_required = super::required_matrix_proof_policy(
+            execution_requirement,
+            std::env::var_os("CAST_EXECUTION_FIXTURE").as_deref(),
+            std::env::var_os("CAST_FIXTURE_PROOF_PATH").is_some(),
+            std::env::var_os("CAST_FIXTURE_GIT_COMMIT").is_some(),
+        )
+        .unwrap_or_else(|message| panic!("{message}"));
         let outcome = super::run_after_delegated_preflight(
             execution_requirement,
             crate::container::preflight_delegated_execution_capability(),
             crate::planner::run_delegated_execution_fixture,
         );
         match outcome {
-            Ok(DelegatedPreflightOutcome::Executed(())) => {}
+            Ok(DelegatedPreflightOutcome::Executed(outcome)) => outcome.publish_if_required(proof_required),
             Ok(DelegatedPreflightOutcome::Skipped(error)) => {
                 assert_exact_main_task("after optional delegated execution-capability denial");
                 eprintln!(
@@ -267,6 +305,43 @@ mod delegated_preflight_tests {
         assert!(parse_execution_requirement(Some(std::ffi::OsStr::new(""))).is_err());
         assert!(parse_execution_requirement(Some(std::ffi::OsStr::new("yes"))).is_err());
         assert!(parse_execution_requirement(Some(std::ffi::OsStr::from_bytes(&[0xff]))).is_err());
+    }
+
+    #[test]
+    fn proof_environment_is_exclusive_to_required_all_fixture_execution() {
+        let all = std::ffi::OsStr::new("all");
+        let one = std::ffi::OsStr::new("cmake");
+        assert_eq!(
+            required_matrix_proof_policy(ExecutionRequirement::Required, Some(all), true, true),
+            Ok(true)
+        );
+        assert_eq!(
+            required_matrix_proof_policy(ExecutionRequirement::Required, None, true, true),
+            Ok(true)
+        );
+        for (requirement, selector) in [
+            (ExecutionRequirement::Optional, Some(all)),
+            (ExecutionRequirement::Optional, Some(one)),
+            (ExecutionRequirement::Required, Some(one)),
+        ] {
+            assert_eq!(
+                required_matrix_proof_policy(requirement, selector, false, false),
+                Ok(false)
+            );
+            assert!(required_matrix_proof_policy(requirement, selector, true, true).is_err());
+        }
+        assert!(required_matrix_proof_policy(ExecutionRequirement::Required, Some(all), false, false).is_err());
+        assert!(required_matrix_proof_policy(ExecutionRequirement::Required, Some(all), true, false).is_err());
+        assert!(required_matrix_proof_policy(ExecutionRequirement::Required, Some(all), false, true).is_err());
+        assert!(
+            required_matrix_proof_policy(
+                ExecutionRequirement::Required,
+                Some(std::ffi::OsStr::from_bytes(&[0xff])),
+                false,
+                false,
+            )
+            .is_err()
+        );
     }
 
     #[test]

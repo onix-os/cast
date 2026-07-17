@@ -26,6 +26,7 @@ esac
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 latched_runner="$root/misc/scripts/run-latched-command.sh"
 owned_unit_stopper="$root/misc/scripts/stop-owned-fixture-unit.sh"
+proof_validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
 tmpdir=${TMPDIR-}
 package_store=${CAST_BOOTSTRAP_PACKAGE_STORE:-$root/target/bootstrap-fixtures/packages}
 require_execution=${CAST_REQUIRE_EXECUTION-}
@@ -55,6 +56,12 @@ if [ -L "$owned_unit_stopper" ] || [ ! -f "$owned_unit_stopper" ] \
     || [ ! -x "$owned_unit_stopper" ]; then
     printf 'owned fixture unit stopper is unavailable or unsafe: %s\n' \
         "$owned_unit_stopper" >&2
+    exit 1
+fi
+if [ -L "$proof_validator" ] || [ ! -f "$proof_validator" ] \
+    || [ ! -x "$proof_validator" ]; then
+    printf 'fixture CI proof validator is unavailable or unsafe: %s\n' \
+        "$proof_validator" >&2
     exit 1
 fi
 case "$test_signal_after_reap" in
@@ -678,54 +685,7 @@ if [ -n "$proof_path" ]; then
         printf 'required all-fixture harness did not emit one regular completion proof: %s\n' "$proof_path" >&2
         exit 1
     fi
-    if [ "$(stat -c '%u' "$proof_path")" -ne "$(id -u)" ] \
-        || [ "$(stat -c '%a' "$proof_path")" != 644 ] \
-        || [ "$(stat -c '%h' "$proof_path")" -ne 1 ]; then
-        printf 'fixture CI proof must be caller-owned, mode 644, and singly linked: %s\n' "$proof_path" >&2
-        exit 1
-    fi
-    proof_size=$(stat -c '%s' "$proof_path")
-    if [ "$proof_size" -le 0 ] || [ "$proof_size" -gt 4096 ]; then
-        printf 'fixture CI proof exceeds its 4096-byte bound: %s bytes\n' "$proof_size" >&2
-        exit 1
-    fi
-    if ! jq -s -e --arg commit "$git_commit" '
-        length == 1 and .[0] == {
-          schema: "cast.fixtures-ci-proof.v1",
-          git_commit: $commit,
-          git_tree: "clean",
-          selection: "all",
-          required_execution: true,
-          fixture_count: 16,
-          fixtures: [
-            "autotools",
-            "autotools-options",
-            "cargo",
-            "cargo-features",
-            "cargo-vendored",
-            "cmake",
-            "custom",
-            "daemon-generated",
-            "factory-override",
-            "generated-config",
-            "generated-shell",
-            "hooks-patch",
-            "meson",
-            "plugin-output",
-            "split",
-            "userspace-profile"
-          ],
-          assertions: [
-            "contentful-build-and-publish",
-            "decoded-bundle-contract",
-            "locked-plan-and-derivation-reuse",
-            "second-contentful-build-reused",
-            "stone-and-manifest-bytes-identical"
-          ],
-          result: "passed"
-        }
-    ' "$proof_path" >/dev/null; then
-        printf 'fixture CI proof does not exactly match the required commit and fixture matrix\n' >&2
+    if ! "$proof_validator" "$proof_path" "$git_commit"; then
         exit 1
     fi
     printf 'Published bounded fixture CI proof for commit %s: %s\n' "$git_commit" "$proof_path"

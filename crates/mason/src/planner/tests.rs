@@ -184,6 +184,8 @@ fn execution_fixture_package_directory(name: &str) -> PathBuf {
 
 #[path = "tests/bootstrap.rs"]
 mod bootstrap;
+#[cfg(feature = "delegated-fixture-test-support")]
+pub(crate) use bootstrap::DelegatedExecutionOutcome;
 #[path = "tests/documented_semantics/code_generation.rs"]
 mod documented_code_generation;
 #[path = "tests/documented_semantics/composition.rs"]
@@ -215,8 +217,8 @@ include!("tests/package_examples.rs");
 include!("tests/planning_identity.rs");
 
 #[cfg(feature = "delegated-fixture-test-support")]
-pub(super) fn run_delegated_execution_fixture() {
-    bootstrap::run_delegated_execution_fixture();
+pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
+    bootstrap::run_delegated_execution_fixture()
 }
 
 const RECIPE: &str = r#"let b = import! cast.package.v3

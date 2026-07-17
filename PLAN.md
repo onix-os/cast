@@ -662,12 +662,16 @@ remain open.
   runs `make delegated-execution-preflight` through that exact production
   capability boundary, before restoring the Stone bootstrap cache.
   The complete live execution, bundle decoding, and repeated-build assertions
-  are implemented, but the three items above remain open pending one non-skipped
-  `make fixtures-ci` run attached to the exact accepted commit. A local required
-  custom-fixture run reached the delegated service and then failed closed at
-  credential preflight because this host denies isolated `setgroups`; no build
-  or publication was misreported as successful. CI now also covers `develop`,
-  matching the required untouched-`main` integration workflow.
+  are implemented. Only a complete required matrix can atomically publish its
+  bounded v2 receipt, binding each fixture's repeated plan and lock, actual
+  publication outcomes, sorted artifact digests, and three matching bundle
+  ledgers. Exact validation rejects duplicate keys, structural drift, unsafe
+  bounds, and ledger-framing changes; a direct producer/validator test still
+  does not substitute for live execution. The three items above therefore
+  remain open pending one non-skipped `make fixtures-ci` run attached to the
+  accepted commit. This host fails closed at isolated `setgroups` preflight, so
+  no build or publication is misreported. CI also covers `develop`, matching
+  the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production
 boundaries; all four standard builders plus the custom and split-output cases

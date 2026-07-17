@@ -36,6 +36,7 @@ trap '[[ -n "$launch_signal_status" ]] || launch_signal_status=143' TERM
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 latched_runner="$root/misc/scripts/run-latched-command.sh"
 owned_unit_stopper="$root/misc/scripts/stop-owned-fixture-unit.sh"
+proof_validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
 evidence_dir=${FIXTURE_EVIDENCE_DIR:-$root/target/fixture-evidence}
 maximum_log_bytes=${CAST_FIXTURE_LOG_MAX_BYTES:-1048576}
 timeout_seconds=${CAST_FIXTURE_CI_TIMEOUT_SECONDS:-10800}
@@ -52,6 +53,11 @@ if [[ -L $owned_unit_stopper || ! -f $owned_unit_stopper \
     || ! -x $owned_unit_stopper ]]; then
     printf 'owned fixture unit stopper is unavailable or unsafe: %s\n' \
         "$owned_unit_stopper" >&2
+    exit 1
+fi
+if [[ -L $proof_validator || ! -f $proof_validator || ! -x $proof_validator ]]; then
+    printf 'fixture CI proof validator is unavailable or unsafe: %s\n' \
+        "$proof_validator" >&2
     exit 1
 fi
 case "$test_signal_after_reap" in
@@ -203,30 +209,13 @@ fi
 
 validate_proof() {
     local candidate_proof=$1
-    local proof_owner proof_mode proof_links proof_size proof_commit git_status
+    local proof_commit git_status validator_status
     if [[ ! -f "$candidate_proof" || -L "$candidate_proof" ]]; then
         printf 'successful fixture CI did not publish one regular proof: %s\n' "$candidate_proof" >&2
         return 1
     fi
-    proof_owner=$(stat -c '%u' "$candidate_proof") || return 1
-    proof_mode=$(stat -c '%a' "$candidate_proof") || return 1
-    proof_links=$(stat -c '%h' "$candidate_proof") || return 1
-    proof_size=$(stat -c '%s' "$candidate_proof") || return 1
-    if [[ $proof_owner -ne $(id -u) || $proof_mode != 644 || $proof_links -ne 1 ]]; then
-        printf 'fixture CI proof must be caller-owned, mode 644, and singly linked: %s\n' \
-            "$candidate_proof" >&2
-        return 1
-    fi
-    if [[ $proof_size -le 0 || $proof_size -gt 4096 ]]; then
-        printf 'fixture CI proof must contain between 1 and 4096 bytes: %s\n' "$candidate_proof" >&2
-        return 1
-    fi
     command -v git >/dev/null 2>&1 || {
         printf 'git is required to validate fixture CI proof provenance\n' >&2
-        return 1
-    }
-    command -v jq >/dev/null 2>&1 || {
-        printf 'jq is required to validate fixture CI proof content\n' >&2
         return 1
     }
     proof_commit=$(git -C "$root" rev-parse --verify HEAD) || {
@@ -253,45 +242,19 @@ validate_proof() {
             "$proof_commit" >&2
         return 1
     fi
-    if ! jq -s -e --arg commit "$proof_commit" '
-        length == 1 and .[0] == {
-          schema: "cast.fixtures-ci-proof.v1",
-          git_commit: $commit,
-          git_tree: "clean",
-          selection: "all",
-          required_execution: true,
-          fixture_count: 16,
-          fixtures: [
-            "autotools",
-            "autotools-options",
-            "cargo",
-            "cargo-features",
-            "cargo-vendored",
-            "cmake",
-            "custom",
-            "daemon-generated",
-            "factory-override",
-            "generated-config",
-            "generated-shell",
-            "hooks-patch",
-            "meson",
-            "plugin-output",
-            "split",
-            "userspace-profile"
-          ],
-          assertions: [
-            "contentful-build-and-publish",
-            "decoded-bundle-contract",
-            "locked-plan-and-derivation-reuse",
-            "second-contentful-build-reused",
-            "stone-and-manifest-bytes-identical"
-          ],
-          result: "passed"
-        }
-    ' "$candidate_proof" >/dev/null; then
-        printf 'fixture CI proof does not exactly match the required commit and fixture matrix\n' >&2
-        return 1
+    if "$proof_validator" "$candidate_proof" "$proof_commit"; then
+        return 0
+    else
+        validator_status=$?
     fi
+    # Preserve the outer wrapper's signal/cleanup contract even though the
+    # shared validator now owns the jq child which observed the interruption.
+    case "$validator_status" in
+        129) kill -HUP "$$" ;;
+        130) kill -INT "$$" ;;
+        143) kill -TERM "$$" ;;
+    esac
+    return "$validator_status"
 }
 
 wait_group_exit() {

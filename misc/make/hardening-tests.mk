@@ -691,9 +691,15 @@ mason-planner-bootstrap-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
-	count="$$( timeout 10s grep -c '^planner::hermetic_tests::bootstrap::.*: test$$' <<<"$$listed" )"; \
+	count="$$( timeout 10s awk \
+		'/^planner::hermetic_tests::bootstrap::.*: test$$/ && \
+		 !/^planner::hermetic_tests::bootstrap::execution_evidence::tests::/ \
+		 { count += 1 } END { print count + 0 }' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 11; \
-	timeout 1200s $(CARGO) test -p mason --lib "planner::hermetic_tests::bootstrap::" -- --test-threads=1
+	timeout 1200s $(CARGO) test -p mason --lib \
+		"planner::hermetic_tests::bootstrap::" -- \
+		--skip "planner::hermetic_tests::bootstrap::execution_evidence::tests::" \
+		--test-threads=1
 
 mason-policy-test:
 	@set -eu; \

@@ -4,6 +4,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-delegated-execution-fixture.sh"
+proof_generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/cast-delegated-runner-test.XXXXXXXXXXXX")
 cleanup() {
     rm -rf "$work"
@@ -19,6 +20,12 @@ evidence="$work/evidence"
 fake_commit=0123456789abcdef0123456789abcdef01234567
 mkdir -p "$fakebin" "$state" "$private_tmp" "$package_store" "$evidence"
 chmod 700 "$private_tmp" "$evidence"
+if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
+    || [ ! -x "$proof_generator" ]; then
+    printf 'fixture proof test generator is unavailable or unsafe: %s\n' \
+        "$proof_generator" >&2
+    exit 1
+fi
 
 cat >"$artifact" <<'EOF'
 #!/bin/sh
@@ -156,50 +163,16 @@ case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
         printf '%s\n' "$marker" >"$FAKE_STATE/environment"
         if test -n "$proof"; then
             case "${FAKE_PROOF_MODE:-valid}" in
-                valid|multi-document)
+                valid)
                     test -n "$commit"
-                    if test "$FAKE_PROOF_MODE" = multi-document; then
-                        printf '%s\n' '{"ignored":"document"}' >"$proof"
-                    else
-                        : >"$proof"
-                    fi
-                    cat >>"$proof" <<EOF_PROOF
-{
-  "schema": "cast.fixtures-ci-proof.v1",
-  "git_commit": "$commit",
-  "git_tree": "clean",
-  "selection": "all",
-  "required_execution": true,
-  "fixture_count": 16,
-  "fixtures": [
-    "autotools",
-    "autotools-options",
-    "cargo",
-    "cargo-features",
-    "cargo-vendored",
-    "cmake",
-    "custom",
-    "daemon-generated",
-    "factory-override",
-    "generated-config",
-    "generated-shell",
-    "hooks-patch",
-    "meson",
-    "plugin-output",
-    "split",
-    "userspace-profile"
-  ],
-  "assertions": [
-    "contentful-build-and-publish",
-    "decoded-bundle-contract",
-    "locked-plan-and-derivation-reuse",
-    "second-contentful-build-reused",
-    "stone-and-manifest-bytes-identical"
-  ],
-  "result": "passed"
-}
-EOF_PROOF
-                    chmod 644 "$proof"
+                    : "${FAKE_PROOF_GENERATOR:?}"
+                    "$FAKE_PROOF_GENERATOR" "$proof" "$commit"
+                    ;;
+                multi-document)
+                    test -n "$commit"
+                    : "${FAKE_PROOF_GENERATOR:?}"
+                    "$FAKE_PROOF_GENERATOR" "$proof" "$commit"
+                    printf '%s\n' '{"ignored":"document"}' >>"$proof"
                     ;;
                 missing) ;;
                 malformed) printf '%s\n' '{"result":"passed"}' >"$proof"; chmod 644 "$proof" ;;
@@ -267,6 +240,7 @@ run_fixture() {
         CAST_DELEGATED_PREFLIGHT_ONLY=1 \
         CARGO="$fakebin/cargo" \
         FAKE_ARTIFACT="$artifact" \
+        FAKE_PROOF_GENERATOR="$proof_generator" \
         FAKE_SOURCE="$root/crates/mason/tests/delegated_execution_fixture.rs" \
         FAKE_STATE="$state" \
         FAKE_MANAGER="$3" \
@@ -292,6 +266,7 @@ run_preflight() {
         CAST_DELEGATED_PREFLIGHT_ONLY=0 \
         CARGO="$fakebin/cargo" \
         FAKE_ARTIFACT="$artifact" \
+        FAKE_PROOF_GENERATOR="$proof_generator" \
         FAKE_SOURCE="$root/crates/mason/tests/delegated_execution_fixture.rs" \
         FAKE_STATE="$state" \
         FAKE_MANAGER="$2" \
@@ -442,18 +417,29 @@ test -f "$proof"
 test ! -L "$proof"
 test "$(stat -c '%a' "$proof")" = 644
 test "$(stat -c '%h' "$proof")" -eq 1
-test "$(stat -c '%s' "$proof")" -le 4096
+test "$(stat -c '%s' "$proof")" -le 131072
 jq -e --arg commit "$fake_commit" '
-    .schema == "cast.fixtures-ci-proof.v1"
+    .schema == "cast.fixtures-ci-proof.v2"
     and .git_commit == $commit
     and .git_tree == "clean"
     and .selection == "all"
     and .required_execution == true
-    and .fixture_count == 16
+    and .bundle_ledger_schema == "cast.fixtures-ci.bundle.v1"
+    and .totals == {
+        fixture_count: 16,
+        execution_count: 32,
+        bundle_validation_count: 48,
+        stone_count: 104,
+        manifest_count: 32,
+        artifact_count: 136,
+        artifact_bytes: .totals.artifact_bytes
+    }
     and (.fixtures | length) == 16
-    and .fixtures[0] == "autotools"
-    and .fixtures[15] == "userspace-profile"
-    and (.assertions | length) == 5
+    and .fixtures[0].name == "autotools"
+    and .fixtures[15].name == "userspace-profile"
+    and ([.fixtures[].artifacts.stone_count] | add) == 104
+    and ([.fixtures[].artifacts.manifest_count] | add) == 32
+    and ([.fixtures[].artifacts.artifact_count] | add) == 136
     and .result == "passed"
 ' "$proof" >/dev/null
 grep -Fqx -- "--setenv=CAST_FIXTURE_PROOF_PATH=$proof" "$state/systemd-run-args"
