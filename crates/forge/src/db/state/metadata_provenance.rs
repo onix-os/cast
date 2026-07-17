@@ -241,7 +241,7 @@ fn transition_ownership_impl(
     }
 }
 
-fn metadata_provenance_impl(
+pub(super) fn metadata_provenance_impl(
     conn: &mut SqliteConnection,
     state: Id,
 ) -> Result<Option<MetadataProvenance>, MetadataProvenanceError> {
@@ -253,6 +253,30 @@ fn metadata_provenance_impl(
         .map_err(Error::from)?
         .map(MetadataProvenance::try_from)
         .transpose()
+}
+
+/// Delete one provenance row only while both stored labeled digests still
+/// equal the independently retained expectation.
+///
+/// The caller owns the surrounding exclusive transaction and must require an
+/// affected-row count of exactly one. Keeping the digest fields private here
+/// prevents sibling modules from accidentally exchanging their labels while
+/// still permitting an exact compare-and-delete boundary.
+pub(super) fn delete_exact_metadata_provenance(
+    tx: &mut SqliteConnection,
+    state: Id,
+    expected: &MetadataProvenance,
+) -> Result<usize, Error> {
+    diesel::delete(
+        state_metadata_provenance::table
+            .filter(state_metadata_provenance::state_id.eq(i32::from(state)))
+            .filter(state_metadata_provenance::os_release_sha256.eq(expected.os_release_sha256.as_bytes().as_slice()))
+            .filter(
+                state_metadata_provenance::system_model_sha256.eq(expected.system_model_sha256.as_bytes().as_slice()),
+            ),
+    )
+    .execute(tx)
+    .map_err(Error::from)
 }
 
 pub(super) fn insert_metadata_provenance_row(

@@ -12,6 +12,8 @@ use crate::state::{self, Id, Selection, TransitionId};
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/state/migrations");
 
 mod exact_archived_removal;
+#[allow(dead_code)] // exact fresh removal remains sealed from startup dispatch
+mod exact_fresh_transition_removal;
 mod metadata_provenance;
 #[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
 mod read_only;
@@ -20,6 +22,17 @@ mod schema;
 pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
 #[cfg(test)]
 use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
+#[allow(unused_imports)] // exact fresh removal remains sealed from startup dispatch
+pub(crate) use exact_fresh_transition_removal::{
+    ExactFreshTransitionAbsence, ExactFreshTransitionInspectionError, ExactFreshTransitionObservation,
+    ExactFreshTransitionPreimage, ExactFreshTransitionRemovalError, ExactFreshTransitionRemovalOutcome,
+};
+#[cfg(test)]
+#[allow(unused_imports)] // consumed by the focused exact-removal test module
+pub(crate) use exact_fresh_transition_removal::{
+    ExactFreshTransitionRemovalFault, arm_exact_fresh_transition_removal_fault,
+    assert_exact_fresh_transition_removal_fault_consumed, exact_fresh_transition_removal_transaction_attempts,
+};
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[cfg(test)]
 pub(crate) use metadata_provenance::{
