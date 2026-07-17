@@ -1,10 +1,10 @@
-//! Test-sealed authority for one exact fresh-database invalidation effect.
+//! Sealed authority for one exact fresh-database invalidation effect.
 //!
 //! Admission pairs the broader startup database context with the non-cloneable
 //! exact fresh-transition observation. Present and jointly-absent observations
 //! become disjoint Apply and Finish authorities only after a binding-first
-//! DB -> namespace -> DB proof. No production constructor or dispatcher can
-//! reach this checkpoint.
+//! DB -> namespace -> DB proof. Only the phase-specific writer-first startup
+//! child and consuming invalidation leaf can reach this checkpoint.
 
 mod effect_reconciliation;
 

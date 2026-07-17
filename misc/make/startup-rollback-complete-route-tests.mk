@@ -38,6 +38,7 @@ forge-startup-usr-rollback-complete-route-test:
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	recovery_root=crates/forge/src/client/startup_recovery.rs; \
 	reconciliation_root=crates/forge/src/client/startup_reconciliation.rs; \
+	production_dispatch=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	namespace_root=crates/forge/src/client/startup_reconciliation/activation_namespace.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/support.rs; \
@@ -57,21 +58,33 @@ forge-startup-usr-rollback-complete-route-test:
 	done; \
 	timeout 10s test "$$( timeout 10s grep -Ec '^mod [a-z_]+;' "$$tests" )" = 6; \
 	timeout 10s rg -U -q '^pub\(in crate::client\) fn persist_usr_rollback_complete_route_and_reopen\(\n    journal: TransitionJournalStore,\n    authority: UsrRollbackCompleteRouteAuthority<'\''_>,\n\) -> Result<\(TransitionJournalStore, TransitionRecord\), UsrRollbackCompleteRoutePersistenceError> \{' "$$executor"; \
-	timeout 10s grep -Fqx '    persist_usr_rollback_complete_route_and_reopen,' "$$recovery_root"; \
-	timeout 10s rg -n -F 'persist_usr_rollback_complete_route_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_complete_route.rs' > "$$symbol_refs"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$recovery_root"; \
-	timeout 10s test "$$( timeout 10s cut -d: -f3- "$$symbol_refs" )" = '    persist_usr_rollback_complete_route_and_reopen,'; \
+	timeout 10s grep -Fqx '    UsrRollbackCompleteRoutePersistenceError, persist_usr_rollback_complete_route_and_reopen,' "$$recovery_root"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen,' "$$recovery_root" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen(journal, authority)?' "$$production_dispatch" )" = 1; \
+	timeout 10s rg -n -F 'persist_usr_rollback_complete_route_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_complete_route.rs' > "$$symbol_refs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$recovery_root:" "$$symbol_refs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" "$$symbol_refs" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen(' "$$executor" )" = 1; \
 	timeout 10s grep -Fqx 'pub(in crate::client) enum UsrRollbackCompleteRouteAdmission<'\''reservation> {' "$$authority"; \
 	for variant in '    NotApplicable,' '    Deferred,' '    Ready(UsrRollbackCompleteRouteAuthority<'\''reservation>),'; do \
 		timeout 10s grep -Fqx "$$variant" "$$authority"; \
 	done; \
-	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCompleteRouteSeal {' "$$startup_gate"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCompleteRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$startup_gate"; \
-	timeout 10s awk '$$0 == "impl UsrRollbackCompleteRouteSeal {" { state = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated = 1; next } state == 1 && gated && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { test_only = 1; gated = 0; next } state == 1 && gated { exit 1 } state == 1 && $$0 ~ /^    .*fn new/ { exit 1 } state == 1 && $$0 == "}" { found = test_only; exit !found } END { exit !found }' "$$startup_gate"; \
-	if timeout 10s rg -n 'UsrRollbackCompleteRouteSeal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n -F 'UsrRollbackCompleteRouteAuthority::capture' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_complete_route_authority.rs'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCompleteRouteSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
+	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFreshDbInvalidationRouteSeal,' "$$startup_gate"; \
+	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCompleteRouteSeal {' "$$production_dispatch"; \
+	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCompleteRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
+	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCompleteRouteSeal {/,/^}/p' "$$production_dispatch" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteSeal::new();' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteAuthority::capture(' "$$production_dispatch" )" = 1; \
+	timeout 10s rg -n -F 'UsrRollbackCompleteRouteSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$symbol_refs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$production_dispatch"; \
+	timeout 10s rg -n -F 'UsrRollbackCompleteRouteAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$symbol_refs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$production_dispatch"; \
 	if timeout 10s rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*(?:pub\([^)]*\)[[:space:]]+)?(?:struct|enum)[[:space:]]+(UsrRollbackCompleteRoute(?:Authority|DatabaseEvidence)|ExactFreshTransitionAbsence)' "$$authority" "$$exact"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'impl Clone for (UsrRollbackCompleteRoute(?:Authority|DatabaseEvidence)|ExactFreshTransitionAbsence)' "$$authority" "$$exact"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx '    context: DatabaseEvidence,' "$$authority"; \

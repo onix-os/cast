@@ -21,8 +21,8 @@ use crate::{
 };
 
 use super::support::{
-    CandidateOutcome, CandidateSource, FreshDbInvalidationFixture, FreshRowLayout, canonical_journal,
-    create_private_directory, transition_quarantine_path,
+    CandidateOutcome, CandidateSource, FreshDbInvalidationFixture, FreshRowLayout, create_private_directory,
+    transition_quarantine_path,
 };
 
 #[test]
@@ -172,11 +172,7 @@ fn startup_fresh_db_invalidation_binding_rejects_reopened_and_cross_root_journal
         CandidateOutcome::AlreadySatisfied,
         FreshRowLayout::Present,
     );
-    fs::write(
-        canonical_journal(&second.fixture.fixture.installation.root),
-        first.canonical_bytes(),
-    )
-    .unwrap();
+    second.overwrite_canonical(&first.record);
     let journal = first.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
     let authority = first.capture_apply(&journal, &reservation);

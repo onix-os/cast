@@ -1,4 +1,4 @@
-//! Test-sealed read-only authority for routing a preserved NewState candidate.
+//! Sealed read-only authority for routing a preserved NewState candidate.
 
 use crate::{
     Installation, db,
@@ -40,8 +40,8 @@ pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteAuthority<'reser
 
 impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
     /// Capture the exact durable `CandidatePreserved` prefix without effects.
-    /// The route-specific seal has no production constructor, so this checkpoint
-    /// remains unreachable from production startup dispatch.
+    /// Only the phase-specific writer-first startup child can construct the
+    /// production route seal.
     pub(in crate::client) fn capture(
         _startup_gate_seal: &UsrRollbackFreshDbInvalidationRouteSeal,
         installation: &Installation,

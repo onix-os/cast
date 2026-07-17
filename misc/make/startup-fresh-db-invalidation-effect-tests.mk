@@ -36,6 +36,8 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	namespace_root=crates/forge/src/client/startup_reconciliation/activation_namespace.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	startup_recovery=crates/forge/src/client/startup_recovery.rs; \
+	production_dispatch=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
+	production_leaf=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_dispatch.rs; \
 	exact=crates/forge/src/db/state/exact_fresh_transition_removal.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests.rs; \
 	admission_tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/admission.rs; \
@@ -56,15 +58,30 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 		timeout 10s grep -Fqx "$$variant" "$$effect"; \
 	done; \
 	for seal in UsrRollbackFreshDbInvalidationSeal UsrRollbackFreshDbInvalidationEffectSeal; do \
-		seal_file="$$startup_gate"; \
-		if timeout 10s test "$$seal" = UsrRollbackFreshDbInvalidationEffectSeal; then seal_file="$$startup_recovery"; fi; \
+		seal_file="$$production_dispatch"; \
+		reexport_file="$$startup_gate"; \
+		if timeout 10s test "$$seal" = UsrRollbackFreshDbInvalidationEffectSeal; then seal_file="$$production_leaf"; reexport_file="$$startup_recovery"; fi; \
+		timeout 10s test "$$( timeout 10s rg -l "^pub\\(in crate::client\\) struct $$seal \\{" crates/forge/src/client --glob '*.rs' )" = "$$seal_file"; \
+		timeout 10s grep -Fq "$$seal," "$$reexport_file"; \
 		timeout 10s grep -Fqx "pub(in crate::client) struct $$seal {" "$$seal_file"; \
 		timeout 10s awk -v seal="$$seal" '$$0 == "pub(in crate::client) struct " seal " {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$seal_file"; \
-		timeout 10s awk -v seal="$$seal" '$$0 == "impl " seal " {" { state = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated = 1; next } state == 1 && gated && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { test_only = 1; gated = 0; next } state == 1 && gated { exit 1 } state == 1 && $$0 ~ /^    .*fn new/ { exit 1 } state == 1 && $$0 == "}" { found = test_only; exit !found } END { exit !found }' "$$seal_file"; \
+		seal_impl="$$( timeout 10s sed -n "/^impl $$seal {/,/^}/p" "$$seal_file" )"; \
+		timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
+		timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
 	done; \
-	if timeout 10s rg -n 'UsrRollbackFreshDbInvalidation(Effect)?Seal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs'; then exit 1; fi; \
-	if timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationAuthority::capture' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_fresh_db_invalidation_authority.rs'; then exit 1; fi; \
-	timeout 10s rg -n -w -F 'remove_exact_fresh_transition' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' > "$$bare_calls"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationSeal::new();' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationAuthority::capture(' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationEffectSeal::new();' "$$production_leaf" )" = 1; \
+	production_admission_seal_calls="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_admission_seal_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_admission_seal_calls" )" = "$$production_dispatch"; \
+	production_capture_calls="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_capture_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_capture_calls" )" = "$$production_dispatch"; \
+	production_effect_seal_calls="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationEffectSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_effect_seal_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_effect_seal_calls" )" = "$$production_leaf"; \
+	timeout 10s rg -n -w -F 'remove_exact_fresh_transition' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$bare_calls"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$bare_calls" )" = 1; \
 	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$bare_calls" )" = "$$effect"; \
 	timeout 10s grep -Fq 'state_db.remove_exact_fresh_transition(preimage)' "$$effect"; \
@@ -124,7 +141,8 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	timeout 10s grep -Fq 'FreshRowLayout::JointlyAbsent' "$$admission_tests"; \
 	timeout 10s grep -Fq 'fresh_db_invalidation_removal_call_count(), 0' "$$effect_tests"; \
 	timeout 10s grep -Fq 'fresh_db_invalidation_removal_call_count(), 1' "$$effect_tests"; \
-	timeout 10s grep -Fq 'canonical_journal' "$$race_tests"; \
+	timeout 10s grep -Fqx '    pub(super) fn overwrite_canonical(&self, record: &TransitionRecord) {' "$$support"; \
+	timeout 10s grep -Fqx '    second.overwrite_canonical(&first.record);' "$$race_tests"; \
 	timeout 10s grep -Fq 'transition_quarantine_path' "$$race_tests"; \
 	for file in "$$authority" "$$effect" "$$proof" "$$reconciliation_root" "$$namespace_root" "$$startup_gate" "$$startup_recovery" "$$tests" "$$admission_tests" "$$effect_tests" "$$race_tests" "$$support" misc/make/startup-fresh-db-invalidation-effect-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \

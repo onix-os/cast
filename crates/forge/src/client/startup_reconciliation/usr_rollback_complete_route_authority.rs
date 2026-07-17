@@ -1,4 +1,4 @@
-//! Test-sealed read-only authority for routing `FreshDbInvalidated` to
+//! Sealed read-only authority for routing `FreshDbInvalidated` to
 //! rollback completion.
 //!
 //! Admission pairs the broader startup database context with a non-cloneable,
@@ -55,8 +55,8 @@ enum DatabaseInspection {
 
 impl<'reservation> UsrRollbackCompleteRouteAuthority<'reservation> {
     /// Capture the exact durable `FreshDbInvalidated` prefix without effects.
-    /// The route-specific seal has no production constructor, so this
-    /// checkpoint remains unreachable from production startup dispatch.
+    /// Only the phase-specific writer-first startup child can construct the
+    /// production route seal.
     pub(in crate::client) fn capture(
         _startup_gate_seal: &UsrRollbackCompleteRouteSeal,
         installation: &Installation,

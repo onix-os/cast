@@ -3,15 +3,16 @@
 //!
 //! Admission remains read-only. Consumed rollback-reverse typestates cross the
 //! production one-shot exchange and ordered parent-durability boundaries. A
-//! separate test-only checkpoint consumes exact NewState target prefixes into
+//! separate production leaf consumes exact NewState target prefixes into
 //! disjoint create, normalize, or move capabilities. All three have separate
 //! one-attempt semantic reconciliation. Normalization also completes its
 //! exact target and quarantine-parent durability suffix before returning a
 //! restart result. Every move independently completes candidate, target, and
 //! quarantine-parent pre-move barriers before rename. Applied movement and
-//! exact already-preserved NewState evidence also share one test-sealed
-//! candidate-and-parent post-move durability suffix. None has production
-//! dispatch, persistence, cleanup, or triggers.
+//! exact already-preserved NewState evidence also share one sealed
+//! candidate-and-parent post-move durability suffix before one journal
+//! persistence boundary. The complete suffix remains phase-specific and has
+//! no cleanup or trigger authority.
 
 use std::{fmt, path::PathBuf};
 
@@ -29,35 +30,29 @@ mod activation_namespace;
 mod database_evidence;
 mod metadata_provenance;
 mod replacement_mutation_authority;
-#[allow(dead_code)] // candidate preservation remains sealed from production dispatch
 mod usr_rollback_candidate_preserve_authority;
-#[allow(dead_code)] // rollback-completion routing remains test-sealed
 mod usr_rollback_complete_route_authority;
 mod usr_rollback_decision_authority;
-#[allow(dead_code)] // fresh-database invalidation effect remains test-sealed
 mod usr_rollback_fresh_db_invalidation_authority;
-#[allow(dead_code)] // fresh-database invalidation routing remains test-sealed
 mod usr_rollback_fresh_db_invalidation_route_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 #[cfg(test)]
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority;
+#[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveEffectLease;
-#[allow(unused_imports)] // candidate effect authorities remain sealed from production dispatch
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
-    UsrRollbackCandidatePreserveFinishDurabilitySelection,
-    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
-    UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
     UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
     UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation,
 };
-#[allow(unused_imports)] // rollback-completion route authority remains sealed from production dispatch
 pub(in crate::client) use usr_rollback_complete_route_authority::{
     UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError,
 };
@@ -70,14 +65,12 @@ pub(in crate::client) use usr_rollback_decision_authority::{
     UsrExchangeParentDurabilityAuthority, UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority,
     UsrRollbackDecisionAuthorityError,
 };
-#[allow(unused_imports)] // effect authority remains sealed from production dispatch
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_authority::{
     UsrRollbackFreshDbInvalidationAdmission, UsrRollbackFreshDbInvalidationApplyAuthority,
     UsrRollbackFreshDbInvalidationApplyReconciliation, UsrRollbackFreshDbInvalidationAuthority,
     UsrRollbackFreshDbInvalidationAuthorityError, UsrRollbackFreshDbInvalidationEffectAuthority,
     UsrRollbackFreshDbInvalidationFinishAuthority,
 };
-#[allow(unused_imports)] // route authority remains sealed from production dispatch
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_route_authority::{
     UsrRollbackFreshDbInvalidationRouteAdmission, UsrRollbackFreshDbInvalidationRouteAuthority,
     UsrRollbackFreshDbInvalidationRouteAuthorityError,

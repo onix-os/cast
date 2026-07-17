@@ -33,6 +33,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-persistence-test:
 	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	recovery_root=crates/forge/src/client/startup_recovery.rs; \
 	reconciliation_root=crates/forge/src/client/startup_reconciliation.rs; \
+	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_dispatch.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_persistence/tests.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_persistence/tests/support.rs; \
 	matrix=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_persistence/tests/matrix.rs; \
@@ -48,11 +49,13 @@ forge-startup-usr-rollback-fresh-db-invalidation-persistence-test:
 	done; \
 	timeout 10s test "$$( timeout 10s grep -Ec '^mod [a-z_]+;' "$$tests" )" = 5; \
 	timeout 10s rg -U -q '^pub\(in crate::client\) fn persist_usr_rollback_fresh_db_invalidation_and_reopen\(\n    journal: TransitionJournalStore,\n    authority: UsrRollbackFreshDbInvalidationEffectAuthority<'\''_>,\n\) -> Result<\(TransitionJournalStore, TransitionRecord\), UsrRollbackFreshDbInvalidationPersistenceError> \{' "$$executor"; \
-	timeout 10s grep -Fqx '    persist_usr_rollback_fresh_db_invalidation_and_reopen,' "$$recovery_root"; \
-	timeout 10s rg -n -F 'persist_usr_rollback_fresh_db_invalidation_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_fresh_db_invalidation_persistence.rs' > "$$symbol_refs"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$recovery_root"; \
-	timeout 10s test "$$( timeout 10s cut -d: -f3- "$$symbol_refs" )" = '    persist_usr_rollback_fresh_db_invalidation_and_reopen,'; \
+	timeout 10s grep -Fqx '    UsrRollbackFreshDbInvalidationPersistenceError, persist_usr_rollback_fresh_db_invalidation_and_reopen,' "$$recovery_root"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_and_reopen,' "$$recovery_root" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority)' "$$production_dispatch" )" = 1; \
+	timeout 10s rg -n -F 'persist_usr_rollback_fresh_db_invalidation_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_fresh_db_invalidation_persistence.rs' > "$$symbol_refs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$recovery_root:" "$$symbol_refs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" "$$symbol_refs" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_and_reopen(' "$$executor" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'authority.revalidate(&journal)' "$$executor" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'authority.record()' "$$executor" )" = 1; \
@@ -123,13 +126,13 @@ forge-startup-usr-rollback-fresh-db-invalidation-persistence-test:
 	timeout 10s test "$$final_joint_absence_line" -lt "$$final_installation_revalidation_line"; \
 	if timeout 10s rg -n -w -F 'before_database' "$$persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'RollbackActionOutcome|\.rollback_successor\(' "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s rg -n -w -F 'fresh_db_invalidated_successor' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' > "$$symbol_refs"; \
+	timeout 10s rg -n -w -F 'fresh_db_invalidated_successor' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$symbol_refs"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$executor:" "$$symbol_refs" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$persistence_authority:" "$$symbol_refs" )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -n '\.rollback_successor\(' "$$executor" "$$persistence_authority" "$$effect" "$$authority" "$$reopen" | timeout 10s wc -l )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -n '\.advance[[:space:]]*\(' "$$executor" "$$persistence_authority" "$$effect" "$$authority" "$$reopen" | timeout 10s wc -l )" = 1; \
-	timeout 10s rg -n -w -F 'remove_exact_fresh_transition' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' > "$$symbol_refs"; \
+	timeout 10s rg -n -w -F 'remove_exact_fresh_transition' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$symbol_refs"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
 	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$effect"; \
 	timeout 10s grep -Fq 'state_db.remove_exact_fresh_transition(preimage)' "$$effect"; \
@@ -137,7 +140,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-persistence-test:
 	timeout 10s rg -U -q '^    pub\(crate\) fn remove_exact_fresh_transition\(\n        &self,\n        preimage: ExactFreshTransitionPreimage,\n    \) -> Result<ExactFreshTransitionAbsence, ExactFreshTransitionRemovalError> \{' "$$exact"; \
 	if timeout 10s rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*(?:pub\([^)]*\)[[:space:]]+)?(?:struct|enum)[[:space:]]+(UsrRollbackFreshDbInvalidation(?:Authority|ApplyAuthority|FinishAuthority|DatabaseEvidence|EffectAuthority))' "$$authority" "$$effect" "$$persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'impl Clone for UsrRollbackFreshDbInvalidation(?:Authority|ApplyAuthority|FinishAuthority|DatabaseEvidence|EffectAuthority)' "$$authority" "$$effect" "$$persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'FreshDbInvalidationPersistenceSeal|FreshDbInvalidation.*Persistence.*Seal' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'FreshDbInvalidationPersistenceSeal|FreshDbInvalidation.*Persistence.*Seal' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '[[:alnum:]_]+Seal' "$$executor" "$$persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx 'pub(in crate::client) enum DurableUsrRollbackFreshDbInvalidationRecord {' "$$executor"; \
 	timeout 10s grep -Fqx '    FreshDbInvalidationIntent,' "$$executor"; \

@@ -30,6 +30,7 @@ forge-startup-usr-rollback-candidate-preserve-target-creation-test:
 	namespace_reconciliation=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/new_state_candidate_target_preparation/create/reconciliation.rs; \
 	linux_fs=crates/forge/src/linux_fs/namespace_operations.rs; \
 	startup_recovery=crates/forge/src/client/startup_recovery.rs; \
+	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/target_creation.rs; \
 	timeout 10s grep -Fqx 'mod target_creation;' "$$authority"; \
 	timeout 10s grep -Fqx 'mod target_creation;' "$$proof"; \
@@ -54,10 +55,11 @@ forge-startup-usr-rollback-candidate-preserve-target-creation-test:
 	if timeout 10s rg -n 'raw_report\.(is_ok|is_err|unwrap|expect)|match[[:space:]]+raw_report|if[[:space:]]+let.*raw_report' "$$namespace_create" "$$namespace_reconciliation"; then exit 1; fi; \
 	if timeout 10s rg -n 'MoveNewState|reconcile_move|attempt_move|renameat|rename\(' "$$effect_evidence" "$$authority_create" "$$proof_create" "$$namespace_create" "$$namespace_reconciliation"; then exit 1; fi; \
 	if timeout 10s rg -n 'sync_all|sync_data|complete_.*durability|RollbackActionOutcome|rollback_successor|forward_successor|\.advance[[:space:]]*\(|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|insert_fresh_metadata|delete_metadata|\.execute\(|\.transaction\(|\.delete\(' "$$effect_evidence" "$$authority_create" "$$proof_create" "$$namespace_create" "$$namespace_reconciliation"; then exit 1; fi; \
-	production_seal_calls="$$( timeout 10s rg -n 'UsrRollbackCandidatePreserveEffectSeal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$production_seal_calls" = 0; \
-	production_target_create_dispatch_calls="$$( timeout 10s rg -n 'CreateNewStateTarget|CreateTargetReconciliation|new_state_target_create|target_creation' crates/forge/src/client/startup_recovery.rs crates/forge/src/client/startup_recovery --glob '*.rs' --glob '!**/tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$production_target_create_dispatch_calls" = 0; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveEffectSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
+	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveApplyEffectSelection::CreateNewStateTarget(lease) =>' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired =>' "$$production_dispatch" )" = 1; \
 	timeout 10s grep -Fq 'NewStateTargetCreateFault::ErrorAfterApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateTargetCreateFault::ErrorWithoutApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateTargetCreateFault::SuccessWithoutApply' "$$tests"; \

@@ -8,6 +8,12 @@ use super::{
 };
 
 mod default_system_intent;
+mod usr_rollback_new_state;
+
+pub(in crate::client) use usr_rollback_new_state::{
+    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFreshDbInvalidationRouteSeal,
+    UsrRollbackFreshDbInvalidationSeal,
+};
 
 /// Exclusive proof that no interrupted system transition predates client
 /// construction.
@@ -80,67 +86,6 @@ impl UsrRollbackReverseSeal {
     #[cfg(test)]
     pub(in crate::client) fn new_for_test() -> Self {
         Self::new()
-    }
-}
-
-/// Unforgeable safe-code token limiting candidate-preservation authority
-/// capture to the writer-first startup gate.  Checkpoint one deliberately has
-/// no production constructor or dispatcher.
-#[allow(dead_code)] // checkpoint one is intentionally unreachable from production
-pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {
-    _private: (),
-}
-
-impl UsrRollbackCandidatePreserveSeal {
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
-
-/// Unforgeable safe-code token limiting the post-preservation journal route
-/// to the writer-first startup gate. This checkpoint deliberately has no
-/// production constructor or dispatcher.
-#[allow(dead_code)] // routing remains intentionally unreachable from production
-pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {
-    _private: (),
-}
-
-impl UsrRollbackFreshDbInvalidationRouteSeal {
-    #[cfg(test)]
-    #[allow(dead_code)] // consumed only once the next sealed checkpoint is present
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
-
-/// Unforgeable safe-code token limiting fresh-database invalidation authority
-/// capture to the writer-first startup gate. This checkpoint deliberately has
-/// no production constructor or dispatcher.
-#[allow(dead_code)] // invalidation remains intentionally unreachable from production
-pub(in crate::client) struct UsrRollbackFreshDbInvalidationSeal {
-    _private: (),
-}
-
-impl UsrRollbackFreshDbInvalidationSeal {
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
-
-/// Unforgeable safe-code token limiting the journal-only route from
-/// `FreshDbInvalidated` to rollback completion. This checkpoint deliberately
-/// has no production constructor or dispatcher.
-#[allow(dead_code)] // rollback-completion routing remains intentionally unreachable from production
-pub(in crate::client) struct UsrRollbackCompleteRouteSeal {
-    _private: (),
-}
-
-impl UsrRollbackCompleteRouteSeal {
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
     }
 }
 
@@ -274,6 +219,29 @@ impl CleanSystemStartup {
                 .map_err(map_reconciliation_error)?;
                 return Err(Error::RecoveryPending(pending));
             }
+
+            let (journal, record) = match usr_rollback_new_state::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+                in_flight.clone(),
+            )? {
+                usr_rollback_new_state::Dispatch::Unhandled { journal, record } => (journal, record),
+                usr_rollback_new_state::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
             let pending = startup_reconciliation::PendingSystemTransition::inspect(
                 installation,
                 state_db,
@@ -374,6 +342,8 @@ pub(super) enum Error {
     UsrRollbackReverseAuthority(#[from] startup_reconciliation::UsrRollbackReverseAuthorityError),
     #[error("execute and persist one exact startup /usr rollback-reverse phase")]
     UsrRollbackReverseDispatch(#[from] super::startup_recovery::UsrRollbackReverseDispatchError),
+    #[error("dispatch one exact phase of the startup NewState rollback suffix")]
+    UsrRollbackNewStateDispatch(#[from] usr_rollback_new_state::Error),
     #[error("revalidate retained mutable installation namespace during startup")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]

@@ -23,15 +23,22 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	namespace=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/new_state_candidate_preserve.rs; \
 	namespace_post=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/new_state_candidate_preserve/post_move_durability.rs; \
 	startup_recovery=crates/forge/src/client/startup_recovery.rs; \
+	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/post_move_durability.rs; \
 	timeout 10s grep -Fqx 'mod post_move_durability;' "$$authority_effect"; \
 	timeout 10s grep -Fqx 'mod post_move_durability;' "$$proof_effect"; \
 	timeout 10s grep -Fqx 'mod post_move_durability;' "$$namespace"; \
-	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {' "$$startup_recovery"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$startup_recovery"; \
-	timeout 10s awk '$$0 == "impl UsrRollbackCandidatePreserveDurabilitySeal {" { state = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated = 1; next } state == 1 && gated && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { test_only = 1; gated = 0; next } state == 1 && gated { exit 1 } state == 1 && $$0 ~ /^    .*fn new/ { exit 1 } state == 1 && $$0 == "}" { found = test_only; exit !found } END { exit !found }' "$$startup_recovery"; \
-	production_seal_calls="$$( timeout 10s rg -n 'UsrRollbackCandidatePreserveDurabilitySeal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$production_seal_calls" = 0; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveDurabilitySeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
+	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveDispatchError, UsrRollbackCandidatePreserveDurabilitySeal,' "$$startup_recovery"; \
+	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {' "$$production_dispatch"; \
+	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
+	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveDurabilitySeal {/,/^}/p' "$$production_dispatch" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveDurabilitySeal::new();' "$$production_dispatch" )" = 1; \
+	production_seal_calls="$$( timeout 10s rg -n -F 'UsrRollbackCandidatePreserveDurabilitySeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_seal_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_seal_calls" )" = "$$production_dispatch"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'parents.candidate.sync_retained_tree()' "$$namespace_post" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.sync_all()' "$$namespace_post" )" = 3; \
 	candidate_line="$$( timeout 10s grep -nF '.sync_retained_tree()' "$$namespace_post" | timeout 10s cut -d: -f1 )"; \
@@ -59,8 +66,10 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	if timeout 10s rg -n 'renameat|std::fs::rename[[:space:]]*\(|(^|[^_[:alnum:]])fs::rename[[:space:]]*\(|attempt_move|reconcile_move|move_attempt|mkdir|create_dir|set_permissions|chmod|unlink|remove_dir|remove_file' <<<"$$production_post_code"; then exit 1; fi; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry' <<<"$$production_post_code"; then exit 1; fi; \
 	if timeout 10s rg -n '\.advance[[:space:]]*\(|rollback_successor|forward_successor|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|insert_fresh_metadata|delete_metadata|\.execute\(|\.transaction\(|\.delete\(|cleanup|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' <<<"$$production_post_code"; then exit 1; fi; \
-	production_completion_calls="$$( timeout 10s rg -n '\.complete_post_move_durability\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/effect_reconciliation/post_move_durability.rs' | timeout 10s wc -l )"; \
-	timeout 10s test "$$production_completion_calls" = 0; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'complete_post_move_durability(&durability_seal, &journal)?' "$$production_dispatch" )" = 2; \
+	production_completion_calls="$$( timeout 10s rg -n -F 'complete_post_move_durability(&durability_seal, &journal)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_completion_calls" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" <<<"$$production_completion_calls" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc '#[test]' "$$tests" )" = 6; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorAfterApply' "$$tests"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported' "$$tests"; \

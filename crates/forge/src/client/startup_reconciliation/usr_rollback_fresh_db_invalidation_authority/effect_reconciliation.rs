@@ -38,11 +38,11 @@ pub(in crate::client) enum UsrRollbackFreshDbInvalidationApplyReconciliation<'re
 
 /// Opaque, absence-bound authority for the later persistence checkpoint.
 #[must_use = "successful fresh-database invalidation still requires persistence"]
-#[allow(dead_code)] // persistence remains sealed from production dispatch
 pub(in crate::client) struct UsrRollbackFreshDbInvalidationEffectAuthority<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
+    #[allow(dead_code)] // retained as non-authorizing pre-effect diagnostic context
     before_database: DatabaseEvidence,
     database: UsrRollbackFreshDbInvalidationDatabaseEvidence,
     namespace: UsrRollbackFreshDbInvalidationNamespaceProof,

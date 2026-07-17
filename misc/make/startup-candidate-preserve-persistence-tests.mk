@@ -24,6 +24,7 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/effect_reconciliation/post_move_durability/persistence.rs; \
 	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	root=crates/forge/src/client/startup_recovery.rs; \
+	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests/support.rs; \
 	matrix=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests/matrix.rs; \
@@ -44,10 +45,12 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	timeout 10s grep -Fqx '        Ok(successor) if successor.phase == Phase::CandidatePreserved => successor,' "$$executor"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_candidate_preserve_and_reopen(' "$$executor" )" = 1; \
 	timeout 10s grep -Fqx '    UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_candidate_preserve_and_reopen,' "$$root"; \
-	production_references="$$( timeout 10s rg -n -F 'persist_usr_rollback_candidate_preserve_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_candidate_preserve_persistence.rs' )"; \
-	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_references" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_references" )" = "$$root"; \
-	timeout 10s test "$$( timeout 10s cut -d: -f3- <<<"$$production_references" )" = '    UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_candidate_preserve_and_reopen,'; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_candidate_preserve_and_reopen,' "$$root" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_candidate_preserve_and_reopen(journal, durable)' "$$production_dispatch" )" = 1; \
+	production_references="$$( timeout 10s rg -n -F 'persist_usr_rollback_candidate_preserve_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_candidate_preserve_persistence.rs' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_references" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$root:" <<<"$$production_references" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" <<<"$$production_references" )" = 2; \
 	first_revalidate_line="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$executor" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
 	successor_line="$$( timeout 10s grep -nF '    let successor = match authority.candidate_preserved_successor() {' "$$executor" | timeout 10s cut -d: -f1 )"; \
 	seam_line="$$( timeout 10s grep -nF '    before_usr_rollback_candidate_preserve_persistence_final_revalidation();' "$$executor" | timeout 10s cut -d: -f1 )"; \

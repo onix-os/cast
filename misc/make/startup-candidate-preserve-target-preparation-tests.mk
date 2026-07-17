@@ -16,16 +16,25 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
 	namespace=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/new_state_candidate_target_preparation.rs; \
 	startup_recovery=crates/forge/src/client/startup_recovery.rs; \
+	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests; \
 	create_lease=UsrRollbackNewStateCandidatePreserveCreateTargetLease; \
 	normalize_lease=UsrRollbackNewStateCandidatePreserveNormalizeTargetLease; \
-	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {' "$$startup_recovery"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$startup_recovery"; \
-	timeout 10s awk '$$0 == "impl UsrRollbackCandidatePreserveEffectSeal {" { state = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated = 1; next } state == 1 && gated && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { test_only = 1; gated = 0; next } state == 1 && gated { exit 1 } state == 1 && $$0 ~ /^    .*fn new/ { exit 1 } state == 1 && $$0 == "}" { found = test_only; exit !found } END { exit !found }' "$$startup_recovery"; \
-	production_seal_calls="$$( timeout 10s rg -n 'UsrRollbackCandidatePreserveEffectSeal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$production_seal_calls" = 0; \
-	production_selection_calls="$$( timeout 10s rg -n '\.into_effect_selection\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$production_selection_calls" = 0; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveEffectSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
+	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
+	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {' "$$production_dispatch"; \
+	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
+	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveEffectSeal {/,/^}/p' "$$production_dispatch" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.into_effect_selection(&effect_seal, &journal)?' "$$production_dispatch" )" = 1; \
+	production_seal_calls="$$( timeout 10s rg -n -F 'UsrRollbackCandidatePreserveEffectSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_seal_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_seal_calls" )" = "$$production_dispatch"; \
+	production_selection_calls="$$( timeout 10s rg -n -F '.into_effect_selection(&effect_seal, &journal)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_selection_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_selection_calls" )" = "$$production_dispatch"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    CreateNewStateTarget(UsrRollbackNewStateCandidatePreserveCreateTargetLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    NormalizeNewStateTarget(UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'\''reservation>),' "$$authority" )" = 1; \

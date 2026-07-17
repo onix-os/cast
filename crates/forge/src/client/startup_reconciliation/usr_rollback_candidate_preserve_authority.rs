@@ -3,14 +3,14 @@
 //! Admission retains exact journal, database, provenance, and independent
 //! namespace evidence. It remains read-only and classifies staged/crash-prefix
 //! evidence separately from already-preserved evidence. Only the exact
-//! NewState target prefixes can be consumed into disjoint test-sealed create,
+//! NewState target prefixes can be consumed into disjoint sealed create,
 //! normalize, or move leases. Normalization completes its exact target and
 //! quarantine-parent durability internally before it can report a restart.
 //! Movement separately completes candidate, target, and quarantine-parent
 //! pre-move barriers before rename. Applied and exact NewState Finish evidence
 //! can then consume the same post-move candidate-and-parent durability suffix.
-//! All effects remain test-sealed; production dispatch, persistence, cleanup,
-//! and triggers remain absent.
+//! The production NewState leaf consumes those exact effects and their one
+//! persistence boundary; cleanup and trigger authority remain absent.
 
 mod effect_evidence;
 mod effect_reconciliation;
@@ -38,11 +38,11 @@ use super::{
 };
 
 #[cfg(test)]
+pub(in crate::client) use effect_reconciliation::UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority;
+#[cfg(test)]
 pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use effect_reconciliation::{
-    UsrRollbackCandidatePreserveFinishDurabilitySelection,
-    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
-    UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
 };
@@ -147,8 +147,8 @@ pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveEffectLease<'re
 }
 
 impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
-    /// Capture is sealed and read-only. Admission still has only a test seal;
-    /// production startup cannot yet construct or dispatch this authority.
+    /// Capture is sealed and read-only. Only the phase-specific writer-first
+    /// startup child can construct the production admission seal.
     pub(in crate::client) fn capture(
         _startup_gate_seal: &UsrRollbackCandidatePreserveSeal,
         installation: &Installation,
@@ -251,6 +251,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn revalidate_kind(
         &self,
         journal: &TransitionJournalStore,
@@ -377,6 +378,7 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
     }
 
     /// Revalidate only the retained staged/crash-prefix typestate.
+    #[cfg(test)]
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,
@@ -386,7 +388,7 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
 
     /// Consume generic Apply admission into one exact target-prefix lease or a
     /// fieldless unsupported result. Possessing admission is insufficient:
-    /// production cannot construct the distinct effect seal at this checkpoint.
+    /// only the consuming NewState leaf can construct the distinct effect seal.
     pub(in crate::client) fn into_effect_selection(
         self,
         _effect_seal: &UsrRollbackCandidatePreserveEffectSeal,
@@ -406,6 +408,7 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
     }
 
     /// Revalidate only the retained already-preserved typestate.
+    #[cfg(test)]
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,

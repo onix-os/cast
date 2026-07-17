@@ -2,76 +2,23 @@
 //!
 //! This module is separate from diagnostic startup reconciliation. Its
 //! executors consume exact mutation authority. Success may return only a
-//! freshly reopened lock-bearing journal store for uninterrupted diagnostic
-//! inspection; failure returns neither a store nor reusable authority.
+//! lock-bearing journal store paired with an exact canonical record for
+//! uninterrupted diagnostic inspection; failure returns neither a store nor
+//! reusable authority.
 
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
-#[allow(dead_code)] // candidate persistence remains sealed from production dispatch
+mod usr_rollback_candidate_preserve_dispatch;
 mod usr_rollback_candidate_preserve_persistence;
-#[allow(dead_code)] // rollback-completion routing remains sealed from production dispatch
 mod usr_rollback_complete_route;
 mod usr_rollback_decision;
-#[allow(dead_code)] // fresh-database invalidation persistence remains sealed from production dispatch
+mod usr_rollback_fresh_db_invalidation_dispatch;
 mod usr_rollback_fresh_db_invalidation_persistence;
-#[allow(dead_code)] // fresh-database invalidation routing remains sealed from production dispatch
 mod usr_rollback_fresh_db_invalidation_route;
 mod usr_rollback_resume_route;
 mod usr_rollback_reverse_dispatch;
 mod usr_rollback_reverse_durability;
 mod usr_rollback_reverse_persistence;
-
-/// Unforgeable permission to consume read-only candidate-preservation
-/// admission into test-only NewState target-creation, normalization, or move
-/// checkpoints.
-///
-/// Production deliberately has no constructor until the complete effect,
-/// durability, persistence, and dispatcher boundaries are ready together.
-#[allow(dead_code)] // the checkpoint remains unreachable from production
-pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {
-    _private: (),
-}
-
-impl UsrRollbackCandidatePreserveEffectSeal {
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
-
-/// Unforgeable permission to consume exact NewState POST authority through
-/// the candidate-preservation durability suffix.
-///
-/// Production deliberately has no constructor until persistence and the full
-/// candidate-preservation dispatcher are ready as one recovery boundary.
-#[allow(dead_code)] // the checkpoint remains unreachable from production
-pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {
-    _private: (),
-}
-
-impl UsrRollbackCandidatePreserveDurabilitySeal {
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
-
-/// Unforgeable permission to consume exact `FreshDbInvalidationIntent`
-/// admission through the one-attempt database invalidation effect.
-///
-/// Production deliberately has no constructor until persistence and the full
-/// fresh-database invalidation dispatcher are ready as one recovery boundary.
-#[allow(dead_code)] // invalidation remains intentionally unreachable from production
-pub(in crate::client) struct UsrRollbackFreshDbInvalidationEffectSeal {
-    _private: (),
-}
-
-impl UsrRollbackFreshDbInvalidationEffectSeal {
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
 
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
@@ -132,27 +79,31 @@ pub(super) use usr_rollback_reverse_persistence::{
     UsrRollbackReversePersistenceError, persist_usr_rollback_reverse_and_reopen,
 };
 
-#[allow(unused_imports)] // candidate persistence remains sealed from production dispatch
+pub(super) use usr_rollback_candidate_preserve_dispatch::{
+    UsrRollbackCandidatePreserveDispatchError, UsrRollbackCandidatePreserveDurabilitySeal,
+    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,
+    dispatch_usr_rollback_candidate_preserve_and_reopen,
+};
+
 pub(super) use usr_rollback_candidate_preserve_persistence::{
     UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_candidate_preserve_and_reopen,
 };
 
-#[allow(unused_imports)] // rollback-completion routing remains sealed from production dispatch
 pub(super) use usr_rollback_complete_route::{
-    UsrRollbackCompleteRoutePersistenceError, UsrRollbackCompleteRouteReopenError,
-    persist_usr_rollback_complete_route_and_reopen,
+    UsrRollbackCompleteRoutePersistenceError, persist_usr_rollback_complete_route_and_reopen,
 };
 
-#[allow(unused_imports)] // invalidation persistence remains sealed from production dispatch
+pub(super) use usr_rollback_fresh_db_invalidation_dispatch::{
+    UsrRollbackFreshDbInvalidationDispatchError, UsrRollbackFreshDbInvalidationEffectSeal,
+    UsrRollbackFreshDbInvalidationReady, dispatch_usr_rollback_fresh_db_invalidation_and_reopen,
+};
+
 pub(super) use usr_rollback_fresh_db_invalidation_persistence::{
-    UsrRollbackFreshDbInvalidationPersistenceError, UsrRollbackFreshDbInvalidationReopenError,
-    persist_usr_rollback_fresh_db_invalidation_and_reopen,
+    UsrRollbackFreshDbInvalidationPersistenceError, persist_usr_rollback_fresh_db_invalidation_and_reopen,
 };
 
-#[allow(unused_imports)] // fresh-database invalidation routing remains sealed from production dispatch
 pub(super) use usr_rollback_fresh_db_invalidation_route::{
-    UsrRollbackFreshDbInvalidationRoutePersistenceError, UsrRollbackFreshDbInvalidationRouteReopenError,
-    persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
+    UsrRollbackFreshDbInvalidationRoutePersistenceError, persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
 };
 
 #[cfg(test)]

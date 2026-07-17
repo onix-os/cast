@@ -11,21 +11,18 @@
 //! Every movement lease separately completes its candidate, target, and
 //! quarantine-parent pre-move barriers before rename. Freshly applied and
 //! already-preserved NewState evidence then converge on the same ordered
-//! post-move candidate-and-parent durability suffix. Every path remains sealed
-//! from production dispatch, persistence, cleanup, and triggers.
+//! post-move candidate-and-parent durability suffix. Production dispatch may
+//! consume only those phase-specific paths and their journal persistence
+//! boundaries; no path exposes general cleanup or trigger authority.
 
-#[allow(dead_code)] // checkpoint one remains sealed from production dispatch
 mod candidate_preserve_proof;
 mod capture;
 mod decision_proof;
-#[allow(dead_code)] // fresh-database invalidation remains test-sealed
 mod fresh_db_invalidation_proof;
-#[allow(dead_code)] // fresh-database invalidation routing remains test-sealed
 mod fresh_db_invalidation_route_proof;
 mod parent_durability;
 mod policy;
 mod resume_route_proof;
-#[allow(dead_code)] // rollback-completion routing remains test-sealed
 mod rollback_complete_route_proof;
 mod rollback_reverse_proof;
 

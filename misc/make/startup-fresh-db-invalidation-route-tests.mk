@@ -30,6 +30,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	reconciliation_root=crates/forge/src/client/startup_reconciliation.rs; \
 	activation_root=crates/forge/src/client/startup_reconciliation/activation_namespace.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
+	production_dispatch=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_route/tests.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_route/tests/support.rs; \
 	admission=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_route/tests/admission.rs; \
@@ -49,18 +50,26 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	timeout 10s test "$$( timeout 10s rg -n '\.advance\(' "$$executor" "$$authority" "$$proof" "$$topology" "$$reopen" | timeout 10s wc -l )" = 1; \
 	timeout 10s grep -Fqx '    let advance = journal.advance(&source_record, &successor);' "$$executor"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(' "$$executor" )" = 1; \
-	timeout 10s grep -Fqx '    persist_usr_rollback_fresh_db_invalidation_route_and_reopen,' "$$recovery_root"; \
-	production_references="$$( timeout 10s rg -n -F 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_fresh_db_invalidation_route.rs' )"; \
+	timeout 10s grep -Fqx '    UsrRollbackFreshDbInvalidationRoutePersistenceError, persist_usr_rollback_fresh_db_invalidation_route_and_reopen,' "$$recovery_root"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen,' "$$recovery_root" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)?' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteAuthority::capture(' "$$production_dispatch" )" = 1; \
+	production_references="$$( timeout 10s rg -n -F 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
 	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_references" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_references" )" = "$$recovery_root"; \
-	timeout 10s test "$$( timeout 10s cut -d: -f3- <<<"$$production_references" )" = '    persist_usr_rollback_fresh_db_invalidation_route_and_reopen,'; \
-	capture_references="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationRouteAuthority::capture' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' || true )"; \
-	timeout 10s test -z "$$capture_references"; \
-	authority_references="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationRouteAuthority' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_fresh_db_invalidation_route_authority.rs' )"; \
-	timeout 10s test "$$( timeout 10s grep -c . <<<"$$authority_references" )" = 5; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_references" )" = "$$production_dispatch"; \
+	production_name_references="$$( timeout 10s rg -n -F 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_fresh_db_invalidation_route.rs' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_name_references" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$recovery_root:" <<<"$$production_name_references" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" <<<"$$production_name_references" )" = 2; \
+	capture_references="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationRouteAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$capture_references" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$capture_references" )" = "$$production_dispatch"; \
+	authority_references="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationRouteAuthority' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_fresh_db_invalidation_route_authority.rs' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$authority_references" )" = 8; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteAuthority' "$$reconciliation_root" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteAuthority' "$$executor" )" = 3; \
-	unexpected_authority_file="$$( timeout 10s cut -d: -f1 <<<"$$authority_references" | timeout 10s grep -Fvx -e "$$reconciliation_root" -e "$$executor" || true )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteAuthority' "$$production_dispatch" )" = 3; \
+	unexpected_authority_file="$$( timeout 10s cut -d: -f1 <<<"$$authority_references" | timeout 10s grep -Fvx -e "$$reconciliation_root" -e "$$executor" -e "$$production_dispatch" || true )"; \
 	timeout 10s test -z "$$unexpected_authority_file"; \
 	first_revalidate_line="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$executor" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
 	successor_line="$$( timeout 10s grep -nF '    let successor = match source_record.rollback_successor(None) {' "$$executor" | timeout 10s cut -d: -f1 )"; \
@@ -107,14 +116,18 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	if timeout 10s rg -n 'renameat|std::fs|(^|[^_[:alnum:]])fs::|rename[[:space:]]*\(|unlink(at)?[[:space:]]*\(|linkat[[:space:]]*\(|sync_(all|data)|write_all|set_permissions|chmod|create_dir|remove_(dir|file)|hard_link|symlink|attempt_move|reconcile_move' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n 'run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|cleanup|retry|dispatch' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]' <<<"$$production_code"; then exit 1; fi; \
-	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {' "$$startup_gate"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { state = 2; next } state == 2 && $$0 == "}" { found = 1 } END { exit !found }' "$$startup_gate"; \
-	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackFreshDbInvalidationRouteSeal {/,/^}/p' "$$startup_gate" )"; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackFreshDbInvalidationRouteSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
+	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFreshDbInvalidationRouteSeal,' "$$startup_gate"; \
+	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {' "$$production_dispatch"; \
+	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { state = 2; next } state == 2 && $$0 == "}" { found = 1 } END { exit !found }' "$$production_dispatch"; \
+	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackFreshDbInvalidationRouteSeal {/,/^}/p' "$$production_dispatch" )"; \
 	timeout 10s test "$$( timeout 10s grep -Ec '^[[:space:]]+pub\(in crate::client\) fn ' <<<"$$seal_impl" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    #[cfg(test)]' <<<"$$seal_impl" )" = 1; \
 	timeout 10s grep -Fq 'pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl"; \
-	seal_production_calls="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationRouteSeal::new(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' || true )"; \
-	timeout 10s test -z "$$seal_production_calls"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteSeal::new();' "$$production_dispatch" )" = 1; \
+	seal_production_calls="$$( timeout 10s rg -n -F 'UsrRollbackFreshDbInvalidationRouteSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$seal_production_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$seal_production_calls" )" = "$$production_dispatch"; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackFreshDbInvalidationRouteSeal,' "$$authority"; \
 	timeout 10s grep -Fq 'let seal = UsrRollbackFreshDbInvalidationRouteSeal::new_for_test();' "$$support"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'for source in CandidateSource::ALL {' "$$matrix" )" = 1; \

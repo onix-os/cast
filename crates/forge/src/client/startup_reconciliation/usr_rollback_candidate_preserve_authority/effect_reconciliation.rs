@@ -27,11 +27,11 @@ use crate::client::{
 };
 
 #[cfg(test)]
+pub(in crate::client) use post_move_durability::UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority;
+#[cfg(test)]
 pub(in crate::client) use post_move_durability::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use post_move_durability::{
-    UsrRollbackCandidatePreserveFinishDurabilitySelection,
-    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
-    UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
 };
 
 /// Semantic result of consuming one exact empty-prefix NewState move lease.
@@ -49,7 +49,7 @@ pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveApplyReconciliati
 /// Opaque authority retained only after fresh namespace evidence proves that
 /// this invocation applied the exact staging-to-quarantine candidate move.
 ///
-/// Only the distinct test-sealed durability child can consume this authority;
+/// Only the distinct consuming durability child can consume this authority;
 /// no persistence API exists at this checkpoint.
 #[must_use = "an applied candidate-preservation move still requires post-move durability"]
 pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority<'reservation> {
