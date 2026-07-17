@@ -93,12 +93,6 @@ jobs:
             '($1 == name || $1 == uid) && $3 >= 1 { found = 1 } END { exit !found }' \
             /etc/subgid
 
-      - name: Restore the verified Stone bootstrap closure
-        uses: actions/cache@v5
-        with:
-          path: target/bootstrap-fixtures/packages
-          key: stone-bootstrap-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/fixtures/gluon/execution/bootstrap/closure.glu', 'tests/fixtures/gluon/execution/bootstrap/stone.index') }}
-
       - name: Require unprivileged user and mount namespaces
         run: |
           if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
@@ -126,6 +120,15 @@ jobs:
           systemctl --user show-environment >/dev/null
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+
+      - name: Preflight the exact delegated execution boundary
+        run: timeout --signal=TERM --kill-after=30s 900s make delegated-execution-preflight
+
+      - name: Restore the verified Stone bootstrap closure
+        uses: actions/cache@v5
+        with:
+          path: target/bootstrap-fixtures/packages
+          key: stone-bootstrap-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/fixtures/gluon/execution/bootstrap/closure.glu', 'tests/fixtures/gluon/execution/bootstrap/stone.index') }}
 
       - name: Check and freeze the documented Gluon examples
         run: make examples

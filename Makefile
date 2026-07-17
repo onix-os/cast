@@ -56,7 +56,7 @@ include misc/make/startup-rollback-reverse-dispatch-tests.mk
 include misc/make/userspace-profile-fixture.mk
 include misc/make/help.mk
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-preflight delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone
 
@@ -777,6 +777,13 @@ execution-capability-preflight-test:
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p mason --lib "$$test" -- --exact --test-threads=1; \
 	done
+
+delegated-execution-preflight: bootstrap-fixtures-tmp
+	@echo "Checking the exact production execution capability before bootstrap download..."
+	@TMPDIR="$(BOOTSTRAP_TMP_DIR)" \
+		CAST_REQUIRE_EXECUTION=1 \
+		CARGO="$(CARGO)" \
+		"$(TOP_DIR)/misc/scripts/run-delegated-execution-fixture.sh" --preflight-only
 
 bootstrap-fixtures-prepare: bootstrap-fixtures-tmp
 	@echo "Fetching and verifying the exact contentful Stone bootstrap closure..."

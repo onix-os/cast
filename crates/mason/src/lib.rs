@@ -129,19 +129,41 @@ pub mod delegated_fixture_test_support {
 
     use super::{DelegatedPreflightOutcome, ExecutionRequirement};
 
+    /// Exercise the exact production clone3, cgroup, ID-map, credential, and
+    /// mount path without reading or materializing a bootstrap package store.
+    /// This is required-only: a fast host gate must never turn an unavailable
+    /// production capability into a successful pre-download result.
+    pub fn preflight() {
+        require_runner_marker();
+        assert_exact_main_task("harness-free delegated capability preflight startup");
+        let execution_requirement =
+            super::parse_execution_requirement(std::env::var_os("CAST_REQUIRE_EXECUTION").as_deref())
+                .unwrap_or_else(|message| panic!("{message}"));
+        assert_eq!(
+            execution_requirement,
+            ExecutionRequirement::Required,
+            "delegated capability preflight requires CAST_REQUIRE_EXECUTION=1"
+        );
+        match crate::container::preflight_delegated_execution_capability() {
+            Ok(()) => {}
+            Err(error) if crate::container::execution_namespace_capability_unavailable(&error) => {
+                panic!(
+                    "required execution-capability preflight failed before package/root materialization; enable unprivileged user namespaces and permit isolated setgroups and mount setup for the delegated service: {}",
+                    error_chain(&error)
+                );
+            }
+            Err(error) => panic!(
+                "delegated execution-capability preflight failed before package/root materialization: {}",
+                error_chain(&error)
+            ),
+        }
+        assert_exact_main_task("harness-free delegated capability preflight completion");
+    }
+
     /// Run the selected existing contentful execution fixture under the exact
     /// validated optional-or-required capability policy supplied by Make.
     pub fn run() {
-        match std::env::var("CAST_DELEGATED_FIXTURE_RUNNER") {
-            Ok(value) if value == "1" => {}
-            Ok(value) => panic!("CAST_DELEGATED_FIXTURE_RUNNER must be exactly `1`, found {value:?}"),
-            Err(std::env::VarError::NotPresent) => {
-                panic!("CAST_DELEGATED_FIXTURE_RUNNER must be set by the delegated fixture runner")
-            }
-            Err(std::env::VarError::NotUnicode(_)) => {
-                panic!("CAST_DELEGATED_FIXTURE_RUNNER must be the UTF-8 value `1`")
-            }
-        }
+        require_runner_marker();
         assert_exact_main_task("harness-free delegated fixture startup");
         let execution_requirement =
             super::parse_execution_requirement(std::env::var_os("CAST_REQUIRE_EXECUTION").as_deref())
@@ -176,6 +198,19 @@ pub mod delegated_fixture_test_support {
             ),
         }
         assert_exact_main_task("harness-free delegated fixture completion");
+    }
+
+    fn require_runner_marker() {
+        match std::env::var("CAST_DELEGATED_FIXTURE_RUNNER") {
+            Ok(value) if value == "1" => {}
+            Ok(value) => panic!("CAST_DELEGATED_FIXTURE_RUNNER must be exactly `1`, found {value:?}"),
+            Err(std::env::VarError::NotPresent) => {
+                panic!("CAST_DELEGATED_FIXTURE_RUNNER must be set by the delegated fixture runner")
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                panic!("CAST_DELEGATED_FIXTURE_RUNNER must be the UTF-8 value `1`")
+            }
+        }
     }
 
     fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {

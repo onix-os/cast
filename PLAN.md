@@ -658,8 +658,9 @@ remain open.
   report a narrowly classified capability skip, but must never report it as an
   execution success or use it to hide a payload failure. `make fixtures-ci`
   selects every fixture with `REQUIRE_EXECUTION=1`; its harness-free runner
-  creates an authenticated, bounded-lifetime delegated systemd unit and CI
-  establishes and preflights the required user manager first.
+  creates an authenticated, bounded-lifetime delegated systemd unit. CI first
+  runs `make delegated-execution-preflight` through that exact production
+  capability boundary, before restoring the Stone bootstrap cache.
   The complete live execution, bundle decoding, and repeated-build assertions
   are implemented, but the three items above remain open pending one non-skipped
   `make fixtures-ci` run attached to the exact accepted commit. A local required

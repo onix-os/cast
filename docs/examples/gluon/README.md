@@ -120,6 +120,7 @@ Zstandard command-line encoders.
 
 ```sh
 make execution-fixtures
+make delegated-execution-preflight
 make bootstrap-fixtures
 make bootstrap-fixtures FIXTURE=cmake
 make delegated-execution-fixtures FIXTURE=cmake
@@ -145,6 +146,13 @@ cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
 selection, runs all sixteen, and always requires execution.
+
+`make delegated-execution-preflight` is the required-only, pre-download host
+gate. It builds the harness-free probe but neither fetches nor reads the Stone
+bootstrap closure, then exercises the same delegated service, `clone3`, cgroup,
+ID-map, credential, mount, and pinned-bind boundary used by real execution.
+CI runs it before restoring the bootstrap cache, so an incapable host fails
+quickly rather than downloading packages it cannot execute.
 
 Every selected fixture, including all three source-less fixtures, goes through
 the same real execution, Stone package decoding, manifest decoding, and locked

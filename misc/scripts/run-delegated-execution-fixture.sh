@@ -3,16 +3,22 @@
 set -eu
 
 if [ "$#" -ne 1 ]; then
-    printf 'usage: %s <all|fixture-name>\n' "$0" >&2
+    printf 'usage: %s <--preflight-only|all|fixture-name>\n' "$0" >&2
     exit 2
 fi
 
-fixture=$1
-case "$fixture" in
-    all|autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|generated-shell|hooks-patch|meson|plugin-output|split|userspace-profile) ;;
+mode=fixture
+fixture=
+case "$1" in
+    --preflight-only)
+        mode=preflight
+        ;;
+    all|autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|generated-shell|hooks-patch|meson|plugin-output|split|userspace-profile)
+        fixture=$1
+        ;;
     *)
         printf '%s\n' \
-            'fixture must be exactly `all` or one of: autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config generated-shell hooks-patch meson plugin-output split userspace-profile' >&2
+            'argument must be exactly `--preflight-only`, `all`, or one of: autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config generated-shell hooks-patch meson plugin-output split userspace-profile' >&2
         exit 2
         ;;
 esac
@@ -26,7 +32,16 @@ require_execution=${CAST_REQUIRE_EXECUTION-}
 cargo_command=${CARGO:-cargo}
 evidence_dir=${CAST_FIXTURE_EVIDENCE_DIR:-$root/target/fixture-evidence}
 test_signal_after_reap=${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}
-client_kill_after_seconds=${CAST_DELEGATED_KILL_AFTER_SECONDS:-30}
+if [ "$mode" = preflight ]; then
+    default_client_kill_after_seconds=5
+    service_runtime_max=30s
+    systemd_client_timeout_seconds=40
+else
+    default_client_kill_after_seconds=30
+    service_runtime_max=2h
+    systemd_client_timeout_seconds=7290
+fi
+client_kill_after_seconds=${CAST_DELEGATED_KILL_AFTER_SECONDS:-$default_client_kill_after_seconds}
 client_status_timeout_seconds=${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS:-}
 proof_path=
 proof_temporary=
@@ -60,7 +75,7 @@ if [ "$client_kill_after_seconds" -lt 1 ] || [ "$client_kill_after_seconds" -gt 
     exit 2
 fi
 if [ -z "$client_status_timeout_seconds" ]; then
-    client_status_timeout_seconds=$((7290 + client_kill_after_seconds + 5))
+    client_status_timeout_seconds=$((systemd_client_timeout_seconds + client_kill_after_seconds + 5))
 fi
 case "$client_status_timeout_seconds" in
     ''|*[!0-9]*) printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be decimal\n' >&2; exit 2 ;;
@@ -83,8 +98,12 @@ case "$require_execution" in
         exit 2
         ;;
 esac
+if [ "$mode" = preflight ] && [ "$require_execution" != 1 ]; then
+    printf 'delegated execution preflight requires CAST_REQUIRE_EXECUTION=1\n' >&2
+    exit 2
+fi
 
-if [ "$fixture" = all ] && [ "$require_execution" = 1 ]; then
+if [ "$mode" = fixture ] && [ "$fixture" = all ] && [ "$require_execution" = 1 ]; then
     case "$evidence_dir" in
         /*) ;;
         *) printf 'CAST_FIXTURE_EVIDENCE_DIR must be absolute: %s\n' "$evidence_dir" >&2; exit 2 ;;
@@ -141,14 +160,16 @@ if [ "$(stat -c '%u' "$tmpdir")" -ne "$(id -u)" ] || [ "$(stat -c '%a' "$tmpdir"
     exit 2
 fi
 
-case "$package_store" in
-    /*) ;;
-    *) printf 'CAST_BOOTSTRAP_PACKAGE_STORE must be absolute: %s\n' "$package_store" >&2; exit 2 ;;
-esac
-if [ ! -d "$package_store" ] || [ -L "$package_store" ]; then
-    printf 'verified bootstrap package store is unavailable at %s; run `make bootstrap-fixtures-prepare` first\n' \
-        "$package_store" >&2
-    exit 1
+if [ "$mode" = fixture ]; then
+    case "$package_store" in
+        /*) ;;
+        *) printf 'CAST_BOOTSTRAP_PACKAGE_STORE must be absolute: %s\n' "$package_store" >&2; exit 2 ;;
+    esac
+    if [ ! -d "$package_store" ] || [ -L "$package_store" ]; then
+        printf 'verified bootstrap package store is unavailable at %s; run `make bootstrap-fixtures-prepare` first\n' \
+            "$package_store" >&2
+        exit 1
+    fi
 fi
 
 case "$cargo_command" in
@@ -182,13 +203,18 @@ command -v timeout >/dev/null 2>&1 || {
     exit 1
 }
 if ! timeout --kill-after=1s 10s systemctl --user show-environment >/dev/null 2>&1; then
-    if [ "$require_execution" = 0 ]; then
+    if [ "$mode" = fixture ] && [ "$require_execution" = 0 ]; then
         printf '%s\n' \
             'SKIP delegated execution fixture: no reachable systemd user manager; this is not execution success' >&2
         exit 0
     fi
-    printf '%s\n' \
-        'required delegated execution fixture has no reachable systemd user manager' >&2
+    if [ "$mode" = preflight ]; then
+        printf '%s\n' \
+            'required delegated execution preflight has no reachable systemd user manager' >&2
+    else
+        printf '%s\n' \
+            'required delegated execution fixture has no reachable systemd user manager' >&2
+    fi
     exit 1
 fi
 
@@ -350,7 +376,11 @@ if [ ! -f "$executable" ] || [ -L "$executable" ] || [ ! -x "$executable" ]; the
     exit 1
 fi
 
-printf 'Running fixture selection %s as a single-task delegated systemd service...\n' "$fixture"
+if [ "$mode" = preflight ]; then
+    printf 'Running production capability preflight as a single-task delegated systemd service...\n'
+else
+    printf 'Running fixture selection %s as a single-task delegated systemd service...\n' "$fixture"
+fi
 if load_state=$(timeout --kill-after=1s 10s systemctl --user show \
     "$unit" --property=LoadState --value 2>/dev/null); then
     if [ "$load_state" != not-found ]; then
@@ -388,6 +418,17 @@ trap 'launch_signal_status=129' HUP
 trap 'launch_signal_status=130' INT
 trap 'launch_signal_status=143' TERM
 set -- "$executable"
+if [ "$mode" = preflight ]; then
+    set -- \
+        "--setenv=CAST_DELEGATED_PREFLIGHT_ONLY=1" \
+        "$@"
+else
+    set -- \
+        "--setenv=CAST_DELEGATED_PREFLIGHT_ONLY=0" \
+        "--setenv=CAST_BOOTSTRAP_PACKAGE_STORE=$package_store" \
+        "--setenv=CAST_EXECUTION_FIXTURE=$fixture" \
+        "$@"
+fi
 if [ -n "$proof_path" ]; then
     set -- \
         "--setenv=CAST_FIXTURE_PROOF_PATH=$proof_path" \
@@ -404,7 +445,8 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$client_kill_after_seconds" setsid "$latched_ru
     "$client_release_fifo" \
     --parent-loss-cleanup "$owned_unit_stopper" \
     "$unit" "$unit_marker" "$client_kill_after_seconds" -- \
-    timeout --foreground --kill-after="${client_kill_after_seconds}s" 7290s \
+    timeout --foreground --kill-after="${client_kill_after_seconds}s" \
+    "${systemd_client_timeout_seconds}s" \
     systemd-run \
     --user \
     --unit="$unit" \
@@ -416,8 +458,6 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$client_kill_after_seconds" setsid "$latched_ru
     --service-type=exec \
     --working-directory="$root" \
     --setenv="TMPDIR=$tmpdir" \
-    --setenv="CAST_BOOTSTRAP_PACKAGE_STORE=$package_store" \
-    --setenv="CAST_EXECUTION_FIXTURE=$fixture" \
     --setenv="CAST_REQUIRE_EXECUTION=$require_execution" \
     --setenv=CAST_DELEGATED_FIXTURE_RUNNER=1 \
     --setenv="$unit_marker" \
@@ -426,7 +466,7 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$client_kill_after_seconds" setsid "$latched_ru
     --property=DelegateSubgroup=cast-supervisor \
     --property=ExitType=cgroup \
     --property=KillMode=control-group \
-    --property=RuntimeMaxSec=2h \
+    --property="RuntimeMaxSec=$service_runtime_max" \
     --property=TimeoutStartSec=30s \
     --property="TimeoutStopSec=${client_kill_after_seconds}s" \
     --property=SendSIGKILL=yes \

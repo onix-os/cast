@@ -264,6 +264,7 @@ run_fixture() {
         CAST_BOOTSTRAP_PACKAGE_STORE="$package_store" \
         CAST_FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_REQUIRE_EXECUTION="$2" \
+        CAST_DELEGATED_PREFLIGHT_ONLY=1 \
         CARGO="$fakebin/cargo" \
         FAKE_ARTIFACT="$artifact" \
         FAKE_SOURCE="$root/crates/mason/tests/delegated_execution_fixture.rs" \
@@ -279,6 +280,26 @@ run_fixture() {
         CAST_DELEGATED_STATUS_TIMEOUT_SECONDS="${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS-}" \
         CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP="${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}" \
         "$runner" "$selector"
+}
+
+run_preflight() {
+    env \
+        PATH="$fakebin:$PATH" \
+        TMPDIR="$private_tmp" \
+        CAST_BOOTSTRAP_PACKAGE_STORE="$work/definitely-missing-packages" \
+        CAST_FIXTURE_EVIDENCE_DIR="$work/definitely-missing-evidence" \
+        CAST_REQUIRE_EXECUTION="$1" \
+        CAST_DELEGATED_PREFLIGHT_ONLY=0 \
+        CARGO="$fakebin/cargo" \
+        FAKE_ARTIFACT="$artifact" \
+        FAKE_SOURCE="$root/crates/mason/tests/delegated_execution_fixture.rs" \
+        FAKE_STATE="$state" \
+        FAKE_MANAGER="$2" \
+        FAKE_SYSTEMD_RUN_MODE="$3" \
+        FAKE_STOP_MODE="${4:-success}" \
+        CAST_DELEGATED_KILL_AFTER_SECONDS="${CAST_DELEGATED_KILL_AFTER_SECONDS-}" \
+        CAST_DELEGATED_STATUS_TIMEOUT_SECONDS="${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS-}" \
+        "$runner" --preflight-only
 }
 
 reset_state() {
@@ -314,12 +335,90 @@ for expected in \
     --property=TimeoutStartSec=30s \
     --property=TimeoutStopSec=30s \
     --property=SendSIGKILL=yes \
-    --setenv=CAST_DELEGATED_FIXTURE_RUNNER=1
+    --setenv=CAST_DELEGATED_FIXTURE_RUNNER=1 \
+    --setenv=CAST_DELEGATED_PREFLIGHT_ONLY=0
 do
     grep -Fqx -- "$expected" "$args"
 done
 grep -Fqx -- "--unit=$unit" "$args"
 grep -Fqx -- "$unit" "$state/stops"
+
+reset_state
+run_preflight 1 ready success
+args="$state/systemd-run-args"
+unit=$(cat "$state/unit")
+test -e "$state/cargo-calls"
+test ! -e "$work/definitely-missing-packages"
+test ! -e "$work/definitely-missing-evidence"
+for expected in \
+    --wait \
+    --pipe \
+    --collect \
+    '--property=Delegate=cpu memory pids' \
+    --property=DelegateSubgroup=cast-supervisor \
+    --property=ExitType=cgroup \
+    --property=KillMode=control-group \
+    --property=RuntimeMaxSec=30s \
+    --property=TimeoutStartSec=30s \
+    --property=TimeoutStopSec=5s \
+    --property=SendSIGKILL=yes \
+    --setenv=CAST_DELEGATED_FIXTURE_RUNNER=1 \
+    --setenv=CAST_DELEGATED_PREFLIGHT_ONLY=1 \
+    --setenv=CAST_REQUIRE_EXECUTION=1 \
+    "$artifact"
+do
+    grep -Fqx -- "$expected" "$args"
+done
+if grep -Fq -- '--setenv=CAST_BOOTSTRAP_PACKAGE_STORE=' "$args" \
+    || grep -Fq -- '--setenv=CAST_EXECUTION_FIXTURE=' "$args" \
+    || grep -Fq -- '--setenv=CAST_FIXTURE_PROOF_PATH=' "$args" \
+    || grep -Fq -- '--setenv=CAST_FIXTURE_GIT_COMMIT=' "$args"; then
+    printf 'preflight leaked fixture materialization or proof state into its unit\n' >&2
+    exit 1
+fi
+grep -Fqx -- "$unit" "$state/stops"
+
+reset_state
+set +e
+run_preflight 0 ready success >"$work/preflight-optional.out" 2>"$work/preflight-optional.err"
+status=$?
+set -e
+test "$status" -eq 2
+grep -Fq 'delegated execution preflight requires CAST_REQUIRE_EXECUTION=1' \
+    "$work/preflight-optional.err"
+test ! -e "$state/cargo-calls"
+test ! -e "$state/systemd-run-args"
+
+reset_state
+set +e
+run_preflight 1 missing success >"$work/preflight-manager.out" 2>"$work/preflight-manager.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'required delegated execution preflight has no reachable systemd user manager' \
+    "$work/preflight-manager.err"
+test ! -e "$state/cargo-calls"
+test ! -e "$state/systemd-run-args"
+
+reset_state
+set +e
+CAST_DELEGATED_KILL_AFTER_SECONDS=1 \
+    CAST_DELEGATED_STATUS_TIMEOUT_SECONDS=1 \
+    run_preflight 1 ready freeze-supervisor \
+    >"$work/preflight-timeout.out" 2>"$work/preflight-timeout.err"
+preflight_timeout_status=$?
+set -e
+preflight_supervisor_pid=$(cat "$state/supervisor-pid")
+preflight_unit=$(cat "$state/unit")
+test "$preflight_timeout_status" -eq 124
+if process_is_live "$preflight_supervisor_pid"; then
+    printf 'timed-out delegated preflight supervisor remained live: %s\n' \
+        "$preflight_supervisor_pid" >&2
+    exit 1
+fi
+grep -Fqx -- "$preflight_unit" "$state/stops"
+grep -Fq 'status channel exceeded its 1-second bound' \
+    "$work/preflight-timeout.err"
 
 fixture_count=0
 for fixture_directory in \
@@ -444,7 +543,7 @@ run_fixture not-an-execution-fixture 1 ready success >"$work/invalid.out" 2>"$wo
 status=$?
 set -e
 test "$status" -eq 2
-grep -Fq 'fixture must be exactly `all` or one of:' "$work/invalid.err"
+grep -Fq 'argument must be exactly `--preflight-only`, `all`, or one of:' "$work/invalid.err"
 test ! -e "$state/cargo-calls"
 test ! -e "$state/systemd-run-args"
 

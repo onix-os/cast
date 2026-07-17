@@ -14,13 +14,26 @@ use std::{
 
 const PROOF_FILE_NAME: &str = "fixtures-ci-proof.json";
 const PROOF_TEMP_FILE_NAME: &str = ".fixtures-ci-proof.json.tmp";
+const PREFLIGHT_ONLY_ENV: &str = "CAST_DELEGATED_PREFLIGHT_ONLY";
 
 fn main() {
     match env::var("CAST_DELEGATED_FIXTURE_RUNNER") {
-        Ok(value) if value == "1" => {
-            mason::delegated_fixture_test_support::run();
-            write_required_matrix_proof_if_requested();
-        }
+        Ok(value) if value == "1" => match env::var(PREFLIGHT_ONLY_ENV) {
+            Ok(value) if value == "1" => mason::delegated_fixture_test_support::preflight(),
+            Ok(value) if value == "0" => {
+                mason::delegated_fixture_test_support::run();
+                write_required_matrix_proof_if_requested();
+            }
+            Ok(value) => {
+                panic!("{PREFLIGHT_ONLY_ENV} must be exactly `0` or `1`, found {value:?}")
+            }
+            Err(env::VarError::NotPresent) => {
+                panic!("{PREFLIGHT_ONLY_ENV} must be set explicitly by the delegated fixture runner")
+            }
+            Err(env::VarError::NotUnicode(_)) => {
+                panic!("{PREFLIGHT_ONLY_ENV} must be the UTF-8 value `0` or `1`")
+            }
+        },
         Err(env::VarError::NotPresent) => {
             eprintln!("delegated execution fixture is runner-only; use `make delegated-execution-fixtures`");
         }

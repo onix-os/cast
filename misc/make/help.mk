@@ -100,6 +100,7 @@ help:
 	@echo "  examples-gate-test  Test example discovery and failure propagation"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  execution-capability-preflight-test  Test optional/required preflight policy and classification"
+	@echo "  delegated-execution-preflight  Check production execution capability before bootstrap download"
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
 	@echo "  delegated-fixture-runner-test  Test delegated-unit cleanup and bounded CI evidence"
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"
