@@ -108,11 +108,13 @@ impl Database {
     /// its exact provenance and state row.
     ///
     /// The method makes one transaction attempt and never retries it. Whatever
-    /// that attempt reports, a fresh exclusive snapshot reconciles the net
-    /// result: joint absence is success, a complete retained preimage after an
-    /// attempt proven not-started or rolled-back is definitely not applied,
-    /// and every changed, partial, unobservable, commit-uncertain, or
-    /// post-success reappearance is ambiguous.
+    /// that attempt reports, a fresh exclusive snapshot reconciles both the
+    /// net result and this invocation's application provenance. Joint absence
+    /// is success only after reported transaction success or a deterministic
+    /// known-committed report. Joint absence after a proven non-start or
+    /// rollback is definitely not applied, while uncertain application,
+    /// changed, partial, unobservable, or post-success reappearance is
+    /// ambiguous.
     pub(crate) fn remove_exact_fresh_transition(
         &self,
         preimage: ExactFreshTransitionPreimage,
@@ -143,6 +145,19 @@ impl Database {
                 Err(ExactFreshTransitionAttemptError::FaultInjected {
                     point: ExactFreshTransitionRemovalFault::AfterCommit,
                 })
+            }
+            Ok(())
+                if exact_fresh_transition_removal_fault(
+                    ExactFreshTransitionRemovalFault::AfterCommitWithUncertainReport,
+                ) =>
+            {
+                // Exercise the same conservative branch as a generic SQLite
+                // or commit report whose application provenance is unknown.
+                // The transaction above committed, but this synthetic report
+                // deliberately carries no trusted known-committed marker.
+                Err(ExactFreshTransitionAttemptError::Database(Error::Diesel(
+                    diesel::result::Error::NotFound,
+                )))
             }
             Ok(())
                 if exact_fresh_transition_removal_fault(
@@ -187,11 +202,27 @@ impl Database {
             attempt => attempt,
         };
 
-        let attempt_error = attempt.err();
+        run_after_exact_fresh_transition_removal_attempt_before_reconciliation();
+
         let observation = self.inspect_exact_fresh_transition(state_id, &transition_id);
-        match observation {
-            Ok(ExactFreshTransitionObservation::JointlyAbsent(absence)) => Ok(absence),
-            Ok(ExactFreshTransitionObservation::Present(actual)) if actual == preimage => {
+        match (observation, attempt.err()) {
+            (Ok(ExactFreshTransitionObservation::JointlyAbsent(absence)), None) => Ok(absence),
+            (Ok(ExactFreshTransitionObservation::JointlyAbsent(absence)), Some(source)) if source.known_committed() => {
+                Ok(absence)
+            }
+            (Ok(ExactFreshTransitionObservation::JointlyAbsent(_)), Some(source))
+                if source.rolled_back_or_not_started() =>
+            {
+                Err(ExactFreshTransitionRemovalError::not_applied_error(state_id, source))
+            }
+            (Ok(ExactFreshTransitionObservation::JointlyAbsent(_)), Some(source)) => {
+                Err(ExactFreshTransitionRemovalError::ambiguous(
+                    state_id,
+                    Some(source),
+                    ExactFreshTransitionReconciliation::UncertainJointAbsence,
+                ))
+            }
+            (Ok(ExactFreshTransitionObservation::Present(actual)), attempt_error) if actual == preimage => {
                 // For supported writers, AUTOINCREMENT state IDs are not
                 // reissued and each coordinator TransitionId is single-use.
                 // Even so, an exact tuple restored after reported success or
@@ -214,12 +245,14 @@ impl Database {
                     ))
                 }
             }
-            Ok(ExactFreshTransitionObservation::Present(_)) => Err(ExactFreshTransitionRemovalError::ambiguous(
-                state_id,
-                attempt_error,
-                ExactFreshTransitionReconciliation::ChangedPreimage,
-            )),
-            Err(source) => Err(ExactFreshTransitionRemovalError::ambiguous(
+            (Ok(ExactFreshTransitionObservation::Present(_)), attempt_error) => {
+                Err(ExactFreshTransitionRemovalError::ambiguous(
+                    state_id,
+                    attempt_error,
+                    ExactFreshTransitionReconciliation::ChangedPreimage,
+                ))
+            }
+            (Err(source), attempt_error) => Err(ExactFreshTransitionRemovalError::ambiguous(
                 state_id,
                 attempt_error,
                 ExactFreshTransitionReconciliation::Unobservable(Box::new(source)),
@@ -564,6 +597,17 @@ impl From<diesel::result::Error> for ExactFreshTransitionAttemptError {
 }
 
 impl ExactFreshTransitionAttemptError {
+    /// Whether the deterministic report was emitted only after the exact
+    /// removal transaction was known to have committed successfully.
+    fn known_committed(&self) -> bool {
+        matches!(
+            self,
+            Self::FaultInjected {
+                point: ExactFreshTransitionRemovalFault::AfterCommit
+            }
+        )
+    }
+
     /// Whether returning this error proves the removal transaction never
     /// started or returned through a closure error which Diesel rolled back.
     /// Raw SQLite and commit errors remain uncertain.
@@ -600,6 +644,7 @@ impl From<diesel::result::Error> for ExactFreshTransitionRestorationError {
 
 #[derive(Debug)]
 enum ExactFreshTransitionReconciliation {
+    UncertainJointAbsence,
     ExactPreimageAfterUncertainAttempt,
     ChangedPreimage,
     Unobservable(Box<ExactFreshTransitionInspectionError>),
@@ -608,6 +653,9 @@ enum ExactFreshTransitionReconciliation {
 impl std::fmt::Display for ExactFreshTransitionReconciliation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UncertainJointAbsence => formatter.write_str(
+                "the exact rows are jointly absent, but the reported attempt does not prove this invocation committed their removal",
+            ),
             Self::ExactPreimageAfterUncertainAttempt => {
                 formatter.write_str("the exact preimage remains after a successful or uncertain attempt")
             }
@@ -624,8 +672,8 @@ pub(crate) enum ExactFreshTransitionRemovalOutcome {
     Ambiguous,
 }
 
-/// A removal failure whose outcome is derived only from a fresh exclusive
-/// reconciliation snapshot.
+/// A removal failure whose outcome combines the one attempt's application
+/// provenance with a fresh exclusive reconciliation snapshot.
 #[derive(Debug, thiserror::Error)]
 #[error("exact fresh-transition removal for state {state_id} is {outcome:?}: {detail}")]
 pub(crate) struct ExactFreshTransitionRemovalError {
@@ -651,7 +699,7 @@ impl std::fmt::Display for ExactFreshTransitionRemovalFailure {
             Self::DefinitelyNotApplied { attempt } => {
                 write!(
                     formatter,
-                    "source binding or fresh reconciliation proves no removal effect: {attempt}"
+                    "attempt provenance proves this invocation made no removal effect: {attempt}"
                 )
             }
             Self::Ambiguous {
@@ -709,6 +757,7 @@ pub(crate) enum ExactFreshTransitionRemovalFault {
     BetweenProvenanceAndStateDelete,
     BeforeCommit,
     AfterCommit,
+    AfterCommitWithUncertainReport,
     AfterCommitWithPartialRestoration,
     AfterCommitWithChangedRestoration,
     AfterCommitWithExactRestoration,
@@ -720,6 +769,8 @@ std::thread_local! {
         std::cell::Cell<Option<ExactFreshTransitionRemovalFault>> = const { std::cell::Cell::new(None) };
     static EXACT_FRESH_TRANSITION_REMOVAL_TRANSACTION_ATTEMPTS:
         std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static AFTER_EXACT_FRESH_TRANSITION_REMOVAL_ATTEMPT_BEFORE_RECONCILIATION:
+        std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -747,6 +798,28 @@ pub(crate) fn assert_exact_fresh_transition_removal_fault_consumed() {
 pub(crate) fn exact_fresh_transition_removal_transaction_attempts() -> usize {
     EXACT_FRESH_TRANSITION_REMOVAL_TRANSACTION_ATTEMPTS.with(std::cell::Cell::get)
 }
+
+/// Install one deterministic external action after the sole removal attempt
+/// has returned (and therefore after any closure error has rolled back), but
+/// before the fresh reconciliation snapshot is captured.
+#[cfg(test)]
+pub(crate) fn arm_after_exact_fresh_transition_removal_attempt_before_reconciliation(hook: impl FnOnce() + 'static) {
+    AFTER_EXACT_FRESH_TRANSITION_REMOVAL_ATTEMPT_BEFORE_RECONCILIATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn run_after_exact_fresh_transition_removal_attempt_before_reconciliation() {
+    AFTER_EXACT_FRESH_TRANSITION_REMOVAL_ATTEMPT_BEFORE_RECONCILIATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_after_exact_fresh_transition_removal_attempt_before_reconciliation() {}
 
 #[cfg(test)]
 fn exact_fresh_transition_removal_fault(point: ExactFreshTransitionRemovalFault) -> bool {

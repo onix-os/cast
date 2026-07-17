@@ -9,7 +9,7 @@ forge-exact-fresh-transition-removal-test:
 	timeout 10s grep -q . "$$listed"; \
 	prefix='db::state::exact_fresh_transition_removal::tests::'; \
 	count="$$( timeout 10s awk -v prefix="$$prefix" 'index($$0, prefix) == 1 && $$0 ~ /: test$$/ { count += 1 } END { print count + 0 }' "$$listed" )"; \
-	timeout 10s test "$$count" = 13; \
+	timeout 10s test "$$count" = 15; \
 	for name in \
 		mutation_faults::exact_fresh_removal_atomically_deletes_state_selections_and_provenance_only \
 		mutation_faults::exact_fresh_removal_pre_and_in_transaction_faults_preserve_one_complete_preimage_without_retry \
@@ -22,7 +22,9 @@ forge-exact-fresh-transition-removal-test:
 		reconciliation_concurrency::exact_fresh_removal_after_commit_error_reconciles_joint_absence_as_success \
 		reconciliation_concurrency::exact_fresh_removal_exact_post_commit_restoration_is_ambiguous_aba \
 		reconciliation_concurrency::exact_fresh_removal_partial_and_changed_post_error_states_are_ambiguous \
+		reconciliation_concurrency::exact_fresh_removal_rolled_back_then_external_absence_is_definitely_not_applied \
 		reconciliation_concurrency::exact_fresh_removal_stale_preimage_cannot_delete_an_independent_replacement \
+		reconciliation_concurrency::exact_fresh_removal_uncertain_report_with_joint_absence_is_ambiguous \
 		reconciliation_concurrency::exact_fresh_preimage_and_absence_are_bound_to_their_database_capability; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -67,6 +69,16 @@ forge-exact-fresh-transition-removal-test:
 	timeout 10s test "$$binding_line" -lt "$$fault_line"; \
 	timeout 10s test "$$fault_line" -lt "$$increment_line"; \
 	timeout 10s test "$$increment_line" -lt "$$once_call_line"; \
+	hook_line="$$( timeout 10s grep -nF '        run_after_exact_fresh_transition_removal_attempt_before_reconciliation();' "$$production" | timeout 10s cut -d: -f1 )"; \
+	observation_line="$$( timeout 10s grep -nF '        let observation = self.inspect_exact_fresh_transition(state_id, &transition_id);' "$$production" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test -n "$$hook_line"; \
+	timeout 10s test -n "$$observation_line"; \
+	timeout 10s test "$$once_call_line" -lt "$$hook_line"; \
+	timeout 10s test "$$hook_line" -lt "$$observation_line"; \
+	timeout 10s grep -Fq 'if source.known_committed() =>' "$$production"; \
+	timeout 10s grep -Fq 'if source.rolled_back_or_not_started() =>' "$$production"; \
+	timeout 10s grep -Fq 'ExactFreshTransitionReconciliation::UncertainJointAbsence' "$$production"; \
+	timeout 10s grep -Fq 'point: ExactFreshTransitionRemovalFault::AfterCommit' "$$production"; \
 	once="$$( timeout 10s sed -n '/^    fn remove_exact_fresh_transition_once(/,/^    }/p' "$$production" )"; \
 	timeout 10s test -n "$$once"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'self.conn.exclusive_tx(|tx|' <<<"$$once" )" = 1; \
@@ -102,9 +114,12 @@ forge-exact-fresh-transition-removal-test:
 	for fault in BeforeTransaction BetweenProvenanceAndStateDelete BeforeCommit; do \
 		timeout 10s grep -Fq "ExactFreshTransitionRemovalFault::$$fault" "$$mutation"; \
 	done; \
-	for fault in AfterCommit AfterCommitWithPartialRestoration AfterCommitWithChangedRestoration AfterCommitWithExactRestoration; do \
+	for fault in AfterCommit AfterCommitWithUncertainReport AfterCommitWithPartialRestoration AfterCommitWithChangedRestoration AfterCommitWithExactRestoration; do \
 		timeout 10s grep -Fq "ExactFreshTransitionRemovalFault::$$fault" "$$reconciliation"; \
 	done; \
+	timeout 10s grep -Fq 'arm_after_exact_fresh_transition_removal_attempt_before_reconciliation' "$$reconciliation"; \
+	timeout 10s grep -Fq 'ExactFreshTransitionRemovalFault::BeforeCommit' "$$reconciliation"; \
+	timeout 10s grep -Fq 'does not prove this invocation committed their removal' "$$reconciliation"; \
 	timeout 10s grep -Fq 'exact_fresh_transition_removal_transaction_attempts()' "$$mutation"; \
 	timeout 10s grep -Fq 'exact_fresh_transition_removal_transaction_attempts(), 0' "$$reconciliation"; \
 	timeout 10s grep -Fq 'assert_ne!(first_actual, second_actual);' "$$reconciliation"; \

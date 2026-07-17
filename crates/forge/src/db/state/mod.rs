@@ -30,8 +30,9 @@ pub(crate) use exact_fresh_transition_removal::{
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by the focused exact-removal test module
 pub(crate) use exact_fresh_transition_removal::{
-    ExactFreshTransitionRemovalFault, arm_exact_fresh_transition_removal_fault,
-    assert_exact_fresh_transition_removal_fault_consumed, exact_fresh_transition_removal_transaction_attempts,
+    ExactFreshTransitionRemovalFault, arm_after_exact_fresh_transition_removal_attempt_before_reconciliation,
+    arm_exact_fresh_transition_removal_fault, assert_exact_fresh_transition_removal_fault_consumed,
+    exact_fresh_transition_removal_transaction_attempts,
 };
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[cfg(test)]
