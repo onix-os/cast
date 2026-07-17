@@ -347,29 +347,58 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   inode replacement defense, payload, ACL, and xattr boundaries, binding and
   final-PRE ordering, post-attempt ambiguity, exact target-then-parent
   durability order, durability faults, namespace races, and the final canonical
-  capture. The complete target-prefix aggregate is 26/26, the combined
-  authority run is 50/50, preparation and creation remain 3/3 and 11/11
-  respectively, and move reconciliation is now 14/14. `make check` passes with
-  only the four established warnings, while `make source-loc` reports all 1058
-  tracked text files at no more than 1000 lines.
+  capture. At that checkpoint the complete target-prefix aggregate was 26/26,
+  the combined authority run was 50/50, preparation and creation remained 3/3
+  and 11/11 respectively, and move reconciliation was 14/14. `make check`
+  passed with only the four established warnings, while `make source-loc`
+  reported all 1058 tracked text files at no more than 1000 lines.
 
-  Creation static gates permit exactly one directory-creation attempt while
+  At the pre-move checkpoint, creation static gates permitted exactly one
+  directory-creation attempt while
   forbidding retries, normalization, movement, synchronization, persistence,
   database or journal mutation, triggers, cleanup, descriptor escape, and
-  production dispatch. Normalization static gates permit one descriptor-bound
+  production dispatch. Normalization static gates permitted one descriptor-bound
   mode attempt and exactly the ordered target-then-parent durability suffix,
   while forbidding creation, movement, retries, persistence, database or
   journal mutation, triggers, cleanup, and production dispatch. The move gates
-  continue to forbid target mutation, a second move, and post-move
-  synchronization. All three checkpoints remain undispatched and claim neither
+  forbade target mutation, a second move, and post-move synchronization. All
+  three checkpoints remained undispatched and claimed neither
   production recovery, a production target-preparation executor, post-create or
   post-move durability, nor completed candidate preservation.
 
-  The next checkpoint is the still-unimplemented indivisible post-move
-  durability suffix shared by freshly `Applied` and already-preserved Finish
-  evidence: candidate tree, staging parent, target wrapper, quarantine parent,
-  then a final exact POST proof. No implementation or production-completion
-  claim is made here.
+  Commit `a84d0f47` implements the previously named indivisible post-move
+  durability checkpoint behind a distinct test-only durability seal. Newly
+  `Applied` movement and independently admitted exact NewState Finish evidence
+  converge to the same consuming namespace suffix. Their provenance cannot be
+  supplied by a caller: it is fixed internally to `Applied` for the first path
+  and `AlreadySatisfied` for the second.
+
+  The suffix order is exact: retained candidate tree, empty staging wrapper,
+  journal target wrapper, retained quarantine parent, then one final fresh
+  exact POST capture. Complete retained-descriptor, public-name, installation,
+  and full POST identity checks surround every physical barrier. Both origins
+  begin with the open-journal binding check and full pre-effect evidence, then
+  perform a trailing binding-first full non-namespace gate regardless of the
+  namespace result.
+
+  No partial physical prefix yields authority. A later exact Finish admission
+  must rerun the complete idempotent suffix after any failure rather than
+  continuing from an intermediate barrier. Archived and ActiveReblit Finish
+  evidence selects only fieldless `Unsupported` and performs no durability
+  event.
+
+  The dedicated
+  `make forge-startup-usr-rollback-candidate-preserve-post-move-durability-test`
+  lane passes 6/6 contracts. The combined authority run passes 56/56, and the
+  existing move lane remains 14/14. `make check` passes with only the four
+  established warnings; `make source-loc` reports all 1063 tracked text files
+  at no more than 1000 lines; and independent review found no issue.
+
+  The seal has no production constructor, caller, or dispatcher. This
+  checkpoint performs no persistence, database mutation, trigger, cleanup, or
+  additional namespace mutation, and makes no power-loss claim. Journal
+  persistence and fresh-row invalidation ordering are now under audit; neither
+  is implemented, no ordering is asserted here, and Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -548,9 +577,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Candidate-preservation admission and target-prefix selection remain sealed
   and test-only. The one-shot NewState target-creation, target-normalization,
   and move checkpoints are also test-sealed and undispatched. Normalization
-  proves only its ordered target-preparation durability suffix; creation and
-  movement still provide no post-effect durability, persistence, or production
-  dispatch. No production startup
+  proves its target-preparation suffix, and exact NewState POST evidence can now
+  complete the shared post-move durability suffix behind a separate test-only
+  seal. None has a production caller, dispatcher, persistence step, or database
+  mutation. No production startup
   executor yet handles the effects of `CandidatePreserveIntent`, candidate
   preservation, fresh-row invalidation, the remaining rollback actions,
   roll-forward, boot repair, or cleanup. The exact reverse prefix now has both

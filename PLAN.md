@@ -817,17 +817,36 @@ exact pre-move revalidation is still required before at most one no-replace move
 The raw syscall helper is structurally private to that target-durable typestate,
 so no sibling path can bypass the barriers or their final checks.
 
-The focused move lane now passes 14/14, the target-prefix aggregate remains
-26/26 (3/3 preparation, 11/11 creation, and 12/12 normalization), and the
-combined authority run remains 50/50. `make check` passes with only the four
-established warnings, and `make source-loc` reports all 1058 tracked text files
-at no more than 1000 lines. This remains test-sealed and supplies no production
-dispatch, persistence, or post-move durability.
+At that checkpoint the focused move lane passed 14/14, the target-prefix
+aggregate remained 26/26 (3/3 preparation, 11/11 creation, and 12/12
+normalization), and the combined authority run remained 50/50. `make check`
+passed with only the four established warnings, and `make source-loc` reported
+all 1058 tracked text files at no more than 1000 lines. It remained test-sealed
+and supplied no production dispatch, persistence, or post-move durability.
 
-The next checkpoint is the still-unimplemented indivisible post-move
-durability suffix shared by freshly `Applied` and already-preserved Finish
-evidence: candidate tree, staging parent, target wrapper, quarantine parent,
-then one final exact POST proof. This plan does not yet claim its implementation.
+Commit `a84d0f47` implements that indivisible post-move durability checkpoint
+behind a distinct test-only seal. Newly `Applied` movement and independently
+admitted exact NewState Finish evidence converge to one consuming suffix while
+retaining fixed internal `Applied` and `AlreadySatisfied` provenance. The order
+is exact: candidate tree, empty staging wrapper, journal target wrapper,
+quarantine parent, then one final fresh exact POST capture. Complete retained-
+descriptor and public-name identity checks surround every physical barrier.
+
+Both origins start binding-first, repeat full pre-effect evidence, and finish
+with a trailing binding-first full non-namespace gate. A partial physical
+prefix returns no authority; a fresh exact Finish admission must rerun the
+entire idempotent suffix. Archived and ActiveReblit Finish evidence still
+selects only fieldless `Unsupported`.
+
+The dedicated durability lane passes 6/6, the combined authority run passes
+56/56, and the existing move lane remains 14/14. `make check` passes with only
+the four established warnings, `make source-loc` reports all 1063 tracked text
+files at no more than 1000 lines, and independent review found no issue. There
+is still no production caller or dispatcher, persistence, database mutation,
+trigger, cleanup, or power-loss claim.
+
+Journal persistence and fresh-row invalidation ordering are now under audit;
+neither is implemented, and this plan does not yet prescribe their order.
 Candidate preservation therefore remains absent from the production recovery
 ladder and Phase 11 remains open.
 
