@@ -720,19 +720,33 @@ Commit `7e0618dc` adds the next candidate-preservation foundation without
 putting it on that production ladder. A sealed, read-only, test-only admission
 distinguishes exact staged evidence from an already-preserved crash prefix
 across all three operations, both rollback sources, both recorded `/usr`
-outcomes, and both layouts. Its focused gate passes 19/19 contracts covering
-historical evidence, evidence races, and exact-topology refusals. Commit
-`d3bf0cd8` consumes only the admitted NewState staged-plus-empty-quarantine
-typestate through a second sealed, test-only checkpoint. It checks the open
-journal binding before retained evidence, pre-syncs the exact staged candidate,
-revalidates the complete prefix, issues one no-replace move into the already
-existing empty journal quarantine, ignores the raw syscall report, and uses a
-fresh namespace capture to classify `Applied`, `NotApplied`, or `Ambiguous`.
-Its focused effect gate passes 8/8 contracts while the admission gate remains
-19/19. The checkpoint cannot create a missing quarantine target and supplies
-no post-move durability, persistence, database or journal mutation, production
-dispatch, or effect for ActivateArchived or ActiveReblit. Candidate
-preservation therefore remains absent from the production recovery ladder.
+outcomes, and both layouts. Commit `d3bf0cd8` consumes only the admitted
+NewState staged-plus-empty-quarantine typestate through a second sealed,
+test-only checkpoint. It pre-syncs the exact staged candidate, issues at most
+one no-replace move into the already-existing empty journal quarantine, treats
+the raw syscall report as diagnostic only, and uses fresh namespace evidence
+to classify `Applied`, `NotApplied`, or `Ambiguous`.
+
+Commit `c998ad82` closes the stale non-namespace-evidence window around that
+checkpoint. Namespace preparation now performs candidate sync and final PRE
+capture without moving the candidate; the effect then repeats the open-journal
+binding check first and revalidates journal, database, installation, and plan
+evidence before consuming the opaque prepared move authority. Database or
+journal changes during preparation therefore fail before the single move
+attempt, while the trailing evidence observation remains in place after an
+attempt or preparation failure. Commit `3da2b3d5` additionally requires every
+existing NewState quarantine target to have permissions exactly `0700` in
+staged-empty admission, already-preserved admission, move projection, and the
+final PRE check. All fifteen otherwise-controlled non-`0700` modes are refused
+for both layouts, and a final-PRE change to `0755` prevents any move attempt.
+POSIX access or default ACLs on these wrappers fail closed through namespace
+capture; arbitrary wrapper xattrs are not inspected and are not claimed absent.
+The focused admission and effect gates now pass 20/20 and 10/10 contracts.
+
+These commits do not create a missing quarantine target and supply no post-move
+durability, persistence, database or journal mutation, production dispatch, or
+effect for ActivateArchived or ActiveReblit. Candidate preservation therefore
+remains absent from the production recovery ladder and Phase 11 remains open.
 
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the

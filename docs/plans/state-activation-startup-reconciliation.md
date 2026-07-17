@@ -159,7 +159,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Those names classify evidence only: neither typestate exposes an operation
   which moves a candidate or advances the journal. NewState admits the exact
   staged topology, including one empty transition-quarantine target left by a
-  create-before-move crash, or the exact preserved quarantine topology.
+  create-before-move crash, or the exact preserved quarantine topology. Every
+  existing NewState target in either topology must have permissions exactly
+  `0700`.
   ActivateArchived requires its canonical two-link state-slot relationship.
   ActiveReblit requires its unique reserved replacement wrapper and retains its
   exact, possibly nonzero wrapper index across staged and preserved evidence.
@@ -177,10 +179,16 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   topology, and its topology accessors remain test-only rather than becoming a
   client-wide API. Wrong phases, unsupported rollback sources, or any mismatch
   in the operation-specific rollback plan never yield preservation authority.
+  Commit `3da2b3d5` also proves that all fifteen non-`0700` modes otherwise
+  accepted by the general controlled-directory policy are refused, with no
+  evidence mutation, for both staged-empty and already-preserved NewState
+  layouts. POSIX access or default ACLs on the wrappers fail closed during
+  namespace capture; arbitrary wrapper xattrs are not inspected and are not
+  claimed absent.
 
   The focused
   `make forge-startup-usr-rollback-candidate-preserve-admission-test` lane
-  passes 19/19 contracts. Besides the full operation/source/outcome/layout
+  passes 20/20 contracts. Besides the full operation/source/outcome/layout
   matrix, it accepts historical runtime evidence, rejects a different open
   journal binding, invalidates database, provenance, and namespace changes,
   and defers or fails closed across initial-capture and fresh-revalidation
@@ -206,8 +214,18 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   installation, database, journal, plan, and retained-namespace sandwich. Before
   the last PRE capture it syncs the retained staged candidate tree. This is a
   candidate-data safety barrier before the move, not a claim that the move or
-  its changed parents are durable afterward. If candidate sync or final-prefix
-  revalidation observes a race, the one-shot move is not attempted.
+  its changed parents are durable afterward.
+
+  Commit `c998ad82` separates that namespace preparation from the irreversible
+  move. After candidate sync and final PRE capture return an opaque prepared
+  namespace authority, consumption checks the open-journal binding first again,
+  then repeats the journal, database, installation, and plan evidence checks
+  immediately before the one-shot move. A database or journal race during the
+  potentially slow candidate sync therefore produces an error with zero move
+  attempts. Preparation failures retain the trailing evidence observation but
+  cannot produce move authority. Commit `3da2b3d5` makes exact target mode part
+  of both the projection and final PRE evidence, so a last-moment change from
+  `0700` to `0755` likewise fails before the move.
 
   Exact PRE authority permits one descriptor-relative `RENAME_NOREPLACE`
   attempt from staged `usr` into the empty quarantine wrapper. There is no loop
@@ -221,14 +239,16 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   The focused
   `make forge-startup-usr-rollback-candidate-preserve-effect-test` lane passes
-  8/8 contracts. It covers effect selection, all raw-report/semantic-layout
+  10/10 contracts. It covers effect selection, all raw-report/semantic-layout
   combinations from both rollback origins, ambiguity, final-prefix races,
-  binding-first ordering, trailing database and journal checks, and candidate
-  pre-sync races. The admission lane remains 19/19. Static gates keep the seal
+  binding-first ordering, trailing database and journal checks, database and
+  journal races during candidate sync, candidate namespace races, and the final
+  target-mode race. The admission lane passes 20/20. Static gates keep the seal
   test-only and forbid production selection calls, retry loops, a second move,
   target creation, post-move synchronization, persistence, database or journal
-  mutation, triggers, cleanup, and descriptor escape. This checkpoint therefore
-  claims neither post-move durability nor completed candidate preservation.
+  mutation, triggers, cleanup, and descriptor escape. This checkpoint remains
+  undispatched and therefore claims neither production recovery, post-move
+  durability, nor completed candidate preservation.
 
 ## Diagnostic reconciliation and namespace inventory
 
