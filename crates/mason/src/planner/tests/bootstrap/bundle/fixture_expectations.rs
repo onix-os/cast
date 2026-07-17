@@ -10,6 +10,13 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
 
     let (root_plan, root) = output(planned, packages, "out");
     let (executable, messages) = match fixture {
+        "autotools" => (
+            "bin/cast-autotools-fixture".to_owned(),
+            vec![
+                "cast autotools fixture: autoreconf build=%s host=%s",
+                "x86_64-aerynos-linux",
+            ],
+        ),
         "cargo-vendored" => (
             "bin/cast-cargo-vendored-fixture".to_owned(),
             vec!["hello from ", "vendored Cargo fixture"],
@@ -18,7 +25,6 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
         _ => (
             format!("bin/cast-{fixture}-fixture"),
             vec![match fixture {
-                "autotools" => "cast autotools fixture",
                 "autotools-options" => "cast autotools options fixture: enabled",
                 "cargo" => "cast cargo fixture",
                 "cmake" => "cast cmake fixture: zlib round-trip verified",

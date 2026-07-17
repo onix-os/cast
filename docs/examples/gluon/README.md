@@ -100,6 +100,10 @@ plugin with an explicit output relation, and native split-output builds. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
+The primary Autotools case carries only authored `configure.ac`, `Makefile.am`,
+and C input. Its declared native `binary(autoreconf)` provider regenerates the
+build system in pre-setup before the structural builder supplies its frozen
+build/host triples, runs the generated test suite, and installs the result.
 The CMake case declares `cmake(zlib)` as a target build input, resolves the
 exact pinned `zlib-devel` provider, and performs a real `compress2`/`uncompress`
 round trip under CTest. Its bundle checks bind the manifest BuildDepends entry

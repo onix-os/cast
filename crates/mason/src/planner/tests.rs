@@ -211,6 +211,7 @@ mod documented_sources;
 #[path = "tests/documented_semantics/variants.rs"]
 mod documented_variants;
 include!("tests/execution_archives.rs");
+include!("tests/execution_autotools_regeneration.rs");
 include!("tests/execution_capability.rs");
 include!("tests/execution_cmake_zlib.rs");
 include!("tests/execution_meson_dependency_roles.rs");

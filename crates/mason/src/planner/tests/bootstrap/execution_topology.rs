@@ -475,19 +475,23 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Install", vec![run("install", "-Dm00755")]),
             phase("Check", vec![run("cargo", "test")]),
         ],
-        "autotools" | "autotools-options" => vec![
-            prepare(if name == "autotools" {
-                "cast-autotools-fixture"
-            } else {
-                "cast-autotools-options-fixture"
-            }),
+        "autotools" => vec![
+            prepare("cast-autotools-fixture"),
+            phase_with_pre(
+                "Setup",
+                vec![run("autoreconf", "-fi")],
+                vec![run("dash", "./configure")],
+            ),
+            phase("Build", vec![run("make", "VERBOSE=1")]),
+            phase("Install", vec![run("make", "install")]),
+            phase("Check", vec![run("make", "check")]),
+        ],
+        "autotools-options" => vec![
+            prepare("cast-autotools-options-fixture"),
             phase("Setup", vec![run("dash", "./configure")]),
             phase("Build", vec![run("make", "VERBOSE=1")]),
             phase("Install", vec![run("make", "install")]),
-        ]
-        .into_iter()
-        .chain((name == "autotools").then(|| phase("Check", vec![run("make", "check")])))
-        .collect(),
+        ],
         "custom" => vec![
             prepare("cast-custom-fixture"),
             phase("Setup", vec![run("mkdir", "-p")]),
@@ -647,6 +651,9 @@ fi
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
     if name == "userspace-profile" {
         assert_userspace_profile_relations(plan);
+    }
+    if name == "autotools" {
+        assert_autotools_regeneration_relations(plan);
     }
     if name == "cmake" {
         assert_cmake_zlib_relations(plan);

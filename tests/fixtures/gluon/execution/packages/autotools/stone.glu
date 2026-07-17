@@ -12,10 +12,20 @@ let base = b.mk_package (b.meta {
 
 {
     builder = autotools.default,
+    hooks = b.hooks {
+        // Regenerate the build system from authored Autoconf/Automake inputs.
+        // The program binding and native dependency are both explicit so the
+        // frozen plan retains the executable and dependency-role origins.
+        pre_setup = [
+            b.step.run (b.program.binary "autoreconf") ["-fi"],
+        ],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "autoreconf"],
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-autotools-fixture-1.0.0.tar",
-            hash = "986ba27cfb0487842b0cf26be901f03cae1f05eba721d7563a6538a71f4253a2",
+            hash = "cc72bc585ef513808277602603a6d883d0d9b8722a84e43fe65090035accf394",
             rename = b.optional.set "cast-autotools-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

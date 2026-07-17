@@ -17,6 +17,18 @@ fn assert_manifests(
         .iter()
         .map(|relation| relation.canonical_name())
         .collect::<BTreeSet<_>>();
+    if fixture == "autotools" {
+        assert_eq!(
+            expected_build_dependencies,
+            BTreeSet::from([
+                "binary(autoconf)".to_owned(),
+                "binary(automake)".to_owned(),
+                "binary(autoreconf)".to_owned(),
+                "binary(install)".to_owned(),
+            ]),
+            "autotools: exact regeneration BuildDepends contract drifted"
+        );
+    }
     if fixture == "cmake" {
         assert_eq!(
             expected_build_dependencies,
