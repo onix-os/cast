@@ -49,6 +49,8 @@ forge-startup-usr-rollback-finalization-test:
 		startup_new_state_suffix_rejects_mutable_namespace_substitution_after_terminal_finalization; do \
 		timeout 10s grep -Fqx "$$startup_prefix$$name: test" "$$listed"; \
 	done; \
+	journal_delete_callback_contract='transition_journal::tests::journal_delete_durability_callbacks_follow_filesystem_operation_order'; \
+	timeout 10s grep -Fqx "$$journal_delete_callback_contract: test" "$$listed"; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_finalization_authority.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_finalization_proof.rs; \
 	topology=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
@@ -58,6 +60,7 @@ forge-startup-usr-rollback-finalization-test:
 	namespace_root=crates/forge/src/client/startup_reconciliation/activation_namespace.rs; \
 	journal_root=crates/forge/src/transition_journal.rs; \
 	journal_store=crates/forge/src/transition_journal/store.rs; \
+	journal_transactions=crates/forge/src/transition_journal/tests/storage_transactions.rs; \
 	orchestrator=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	startup_tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests/finalization.rs; \
@@ -147,6 +150,12 @@ forge-startup-usr-rollback-finalization-test:
 	for api in revalidate_retained_cast_binding load_revalidated_retained_cast delete_revalidated_retained_cast; do \
 		timeout 10s grep -Fq "pub(crate) fn $$api(" "$$journal_store"; \
 	done; \
+	timeout 10s grep -Fqx 'pub(crate) enum JournalDeleteDurabilityBoundary {' "$$journal_store"; \
+	timeout 10s grep -Fqx 'pub(crate) fn arm_journal_delete_durability_callback(' "$$journal_store"; \
+	timeout 10s grep -Fq 'JournalDeleteDurabilityBoundary' "$$journal_root"; \
+	timeout 10s grep -Fq 'arm_journal_delete_durability_callback' "$$journal_root"; \
+	timeout 10s grep -Fq 'fn journal_delete_durability_callbacks_follow_filesystem_operation_order()' "$$journal_transactions"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'arm_journal_delete_durability_callback(' "$$journal_transactions" )" = 2; \
 	timeout 10s sed -E 's,//.*$$,,' "$$executor" > "$$executor_code"; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry|cleanup' "$$executor_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'diesel::|SqliteConnection|sql_query|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|clear_transition_if_matches|remove_transition_if_matches|remove_exact_(fresh|archived)|\.add[[:space:]]*\(|\.create[[:space:]]*\(|\.remove[[:space:]]*\(|\.batch_remove[[:space:]]*\(|\.execute[[:space:]]*\(|\.transaction[[:space:]]*\(' "$$executor_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
@@ -168,10 +177,23 @@ forge-startup-usr-rollback-finalization-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'self.revalidate_retained_cast_binding_locked(cast_directory)?;' "$$store_delete_code" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'unlinkat(self.directory.as_raw_fd(), CANONICAL_NAME)' "$$store_delete_code" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.sync_all()' "$$store_delete_code" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::CanonicalUnlinked);' "$$store_delete_code" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::DeleteDirectorySynced);' "$$store_delete_code" )" = 1; \
+	timeout 10s rg -U -q '#\[cfg\(test\)\]\n        journal_delete_durability_boundary\(JournalDeleteDurabilityBoundary::CanonicalUnlinked\);' "$$store_delete_code"; \
+	timeout 10s rg -U -q '#\[cfg\(test\)\]\n        journal_delete_durability_boundary\(JournalDeleteDurabilityBoundary::DeleteDirectorySynced\);' "$$store_delete_code"; \
+	unlink_line="$$( timeout 10s grep -nF 'unlinkat(self.directory.as_raw_fd(), CANONICAL_NAME)' "$$store_delete_code" | timeout 10s cut -d: -f1 )"; \
+	unlink_callback_line="$$( timeout 10s grep -nF 'journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::CanonicalUnlinked);' "$$store_delete_code" | timeout 10s cut -d: -f1 )"; \
+	sync_line="$$( timeout 10s grep -nF '.and_then(|()| self.directory.sync_all())' "$$store_delete_code" | timeout 10s cut -d: -f1 )"; \
+	sync_callback_line="$$( timeout 10s grep -nF 'journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::DeleteDirectorySynced);' "$$store_delete_code" | timeout 10s cut -d: -f1 )"; \
+	final_binding_line="$$( timeout 10s grep -nF 'PublicBindingRevalidationBoundary::BeforeDeleteFinalBinding' "$$store_delete_code" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$unlink_line" -lt "$$unlink_callback_line"; \
+	timeout 10s test "$$unlink_callback_line" -lt "$$sync_line"; \
+	timeout 10s test "$$sync_line" -lt "$$sync_callback_line"; \
+	timeout 10s test "$$sync_callback_line" -lt "$$final_binding_line"; \
 	if timeout 10s rg -n 'ensure_|mkdir|chmod|cleanup|create_|renameat|write_all|set_permissions|remove_(dir|file)|directory_entries' "$$store_delete_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in \
 		"$$authority" "$$proof" "$$topology" "$$executor" "$$recovery_root" "$$reconciliation_root" \
-		"$$namespace_root" "$$journal_root" "$$journal_store" "$$orchestrator" "$$startup_gate" "$$startup_tests" \
+		"$$namespace_root" "$$journal_root" "$$journal_store" "$$journal_transactions" "$$orchestrator" "$$startup_gate" "$$startup_tests" \
 		"$$executor_tests" "$$executor_support" "$$executor_matrix" "$$executor_delete_report" "$$executor_storage" \
 		"$$executor_races" "$$executor_post" "$$executor_binding" \
 		misc/make/startup-rollback-finalization-tests.mk misc/make/help.mk Makefile; do \
@@ -179,4 +201,5 @@ forge-startup-usr-rollback-finalization-test:
 	done; \
 	timeout 300s $(CARGO) test -p forge --lib "$$authority_prefix" -- --test-threads=1; \
 	timeout 300s $(CARGO) test -p forge --lib "$$executor_prefix" -- --test-threads=1; \
-	timeout 300s $(CARGO) test -p forge --lib "$$startup_prefix" -- --test-threads=1
+	timeout 300s $(CARGO) test -p forge --lib "$$startup_prefix" -- --test-threads=1; \
+	timeout 300s $(CARGO) test -p forge --lib "$$journal_delete_callback_contract" -- --exact --test-threads=1

@@ -135,6 +135,44 @@ fn journal_update_durability_callbacks_follow_filesystem_operation_order() {
 }
 
 #[test]
+fn journal_delete_durability_callbacks_follow_filesystem_operation_order() {
+    let (_temporary, store) = fixture();
+    let initial = creation_record();
+    store.create(&initial).unwrap();
+    let terminal = advance_to_complete(&store, initial);
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let unlink_observed = Arc::clone(&observed);
+    arm_journal_delete_durability_callback(JournalDeleteDurabilityBoundary::CanonicalUnlinked, move || {
+        unlink_observed
+            .lock()
+            .unwrap()
+            .push(JournalDeleteDurabilityBoundary::CanonicalUnlinked);
+        let sync_observed = Arc::clone(&unlink_observed);
+        arm_journal_delete_durability_callback(
+            JournalDeleteDurabilityBoundary::DeleteDirectorySynced,
+            move || {
+                sync_observed
+                    .lock()
+                    .unwrap()
+                    .push(JournalDeleteDurabilityBoundary::DeleteDirectorySynced);
+            },
+        );
+    });
+
+    assert!(store.delete(&terminal).unwrap());
+    assert_eq!(
+        *observed.lock().unwrap(),
+        [
+            JournalDeleteDurabilityBoundary::CanonicalUnlinked,
+            JournalDeleteDurabilityBoundary::DeleteDirectorySynced,
+        ]
+    );
+    assert!(!store.delete(&terminal).unwrap());
+    assert_eq!(observed.lock().unwrap().len(), 2, "delete callbacks must remain one-shot");
+}
+
+#[test]
 fn temporary_update_callback_survives_create_and_is_one_shot() {
     let (_temporary, store) = fixture();
     let observed = Arc::new(Mutex::new(0));

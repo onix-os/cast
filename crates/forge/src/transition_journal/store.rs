@@ -59,12 +59,27 @@ pub(crate) enum JournalUpdateDurabilityBoundary {
     UpdateFinalDirectorySynced,
 }
 
+/// A completed filesystem operation in the durable journal-delete protocol.
+///
+/// Test-only process-kill contracts arm one exact boundary. The production
+/// journal has no callback storage, dispatch, or additional control flow.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JournalDeleteDurabilityBoundary {
+    CanonicalUnlinked,
+    DeleteDirectorySynced,
+}
+
 #[cfg(test)]
 std::thread_local! {
     static DURABILITY_CHECKPOINTS: std::cell::RefCell<Vec<DurabilityCheckpoint>> = const { std::cell::RefCell::new(Vec::new()) };
     static STORAGE_FAULT: std::cell::Cell<Option<StorageFaultPoint>> = const { std::cell::Cell::new(None) };
     static JOURNAL_UPDATE_DURABILITY_CALLBACK: std::cell::RefCell<Option<(
         JournalUpdateDurabilityBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+    static JOURNAL_DELETE_DURABILITY_CALLBACK: std::cell::RefCell<Option<(
+        JournalDeleteDurabilityBoundary,
         Box<dyn FnOnce()>,
     )>> = const { std::cell::RefCell::new(None) };
     static PUBLIC_BINDING_REVALIDATION_CALLBACK: std::cell::RefCell<Option<(
@@ -88,12 +103,44 @@ pub(crate) fn arm_journal_update_durability_callback(
     });
 }
 
+/// Arm one callback after one exact successful journal-delete filesystem
+/// operation. A different boundary does not consume the callback.
+#[cfg(test)]
+pub(crate) fn arm_journal_delete_durability_callback(
+    boundary: JournalDeleteDurabilityBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    JOURNAL_DELETE_DURABILITY_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "a journal-delete durability callback is already armed"
+        );
+    });
+}
+
 #[cfg(test)]
 fn journal_update_durability_boundary(boundary: JournalUpdateDurabilityBoundary) {
     // Take the one-shot callback while borrowed, but invoke it only after the
     // RefCell borrow ends. This lets a callback arm the next process-kill seam
     // without a nested-borrow panic.
     let callback = JOURNAL_UPDATE_DURABILITY_CALLBACK.with(|armed| {
+        let mut armed = armed.borrow_mut();
+        if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
+            armed.take().map(|(_, callback)| callback)
+        } else {
+            None
+        }
+    });
+    if let Some(callback) = callback {
+        callback();
+    }
+}
+
+#[cfg(test)]
+fn journal_delete_durability_boundary(boundary: JournalDeleteDurabilityBoundary) {
+    // End the RefCell borrow before invoking the callback so the canonical-
+    // unlink callback can arm the following directory-sync boundary.
+    let callback = JOURNAL_DELETE_DURABILITY_CALLBACK.with(|armed| {
         let mut armed = armed.borrow_mut();
         if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
             armed.take().map(|(_, callback)| callback)
@@ -609,10 +656,14 @@ impl TransitionJournalStore {
         storage_fault(StorageFaultPoint::CanonicalUnlink)
             .and_then(|()| unlinkat(self.directory.as_raw_fd(), CANONICAL_NAME))
             .map_err(|source| StorageError::DeleteCanonical { source })?;
+        #[cfg(test)]
+        journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::CanonicalUnlinked);
         durability_checkpoint(DurabilityCheckpoint::CanonicalUnlinked);
         storage_fault(StorageFaultPoint::DeleteDirectorySync)
             .and_then(|()| self.directory.sync_all())
             .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        #[cfg(test)]
+        journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::DeleteDirectorySynced);
         durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
         if let Some(cast_directory) = cast_directory {
             public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteFinalBinding);
