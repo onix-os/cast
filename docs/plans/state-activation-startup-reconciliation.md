@@ -199,7 +199,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   boundary. It therefore establishes no production constructor, mutation,
   persistence, dispatch, effect, or durability claim.
 
-### Test-only NewState target selection, creation, and move reconciliation
+### Test-only NewState target selection, creation, normalization, and move reconciliation
 
   Commit `d3bf0cd8` adds the first consuming preservation checkpoint without
   connecting it to production startup. Its initial effect path admits only the
@@ -279,6 +279,30 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   xattrs are not inspected and are explicitly outside the claimed security
   boundary.
 
+  Commit `7bd1e640` separately consumes only the restrictive-residue Normalize
+  lease. Binding-first non-namespace checks surround a final exact residue PRE,
+  after which the checkpoint makes exactly one mode-normalization attempt on
+  the retained target descriptor. It neither reopens a replacement inode nor
+  trusts the raw chmod report. Fresh semantic evidence classifies a completely
+  unchanged fingerprint as `NotApplied`, admits only the same-inode transition
+  to an exact empty private target as canonical, and treats every other result
+  as `Ambiguous`. Payload and ACL state remain opaque until that fresh
+  inspection; arbitrary user xattrs remain uninspected and unclaimed.
+
+  Commit `36fea65f` prevents even that fresh canonical evidence from escaping
+  as completion. The checkpoint first syncs the exact retained target, then
+  syncs the retained quarantine parent, with complete public-name and retained-
+  identity revalidation around each barrier. It performs one final fresh
+  canonical capture before returning `RestartRequired`. A barrier error,
+  replacement, namespace race, or final mismatch yields `Ambiguous` and no
+  partial durability authority.
+
+  The externally observable normalization results are the fieldless
+  `RestartRequired`, `NotApplied`, and `Ambiguous`. None retains evidence,
+  descriptors, a retry, movement, or persistence capability. Even fully
+  normalized and synchronized evidence therefore forces a new startup entry;
+  this checkpoint cannot fall through into candidate movement.
+
   The focused
   `make forge-startup-usr-rollback-candidate-preserve-effect-test` lane passes
   10/10 contracts. It covers effect selection, all raw-report/semantic-layout
@@ -294,27 +318,37 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   residue, unsafe modes and target types, ACLs, removal and replacement, parent
   rebinding, unrelated namespace changes, binding-first ordering, final-PRE
   races, and trailing database and journal races. Every case proves zero
-  candidate-move attempts. The admission inventory remains 24/24, the dedicated
-  target-prefix preparation lane is 3/3, the combined authority run is 38/38,
-  creation is 11/11, and move reconciliation remains 10/10.
+  candidate-move attempts. At that checkpoint, the admission inventory was
+  24/24, the target-prefix preparation lane was 3/3, the combined authority run
+  was 38/38, creation was 11/11, and move reconciliation remained 10/10.
+
+  The focused
+  `make forge-startup-usr-rollback-candidate-preserve-target-normalization-test`
+  lane passes 12/12 contracts. It covers the raw-report semantic matrix, every
+  restrictive mode and rollback origin, concurrent canonicalization, retained-
+  inode replacement defense, payload, ACL, and xattr boundaries, binding and
+  final-PRE ordering, post-attempt ambiguity, exact target-then-parent
+  durability order, durability faults, namespace races, and the final canonical
+  capture. The complete target-prefix aggregate is 26/26, the combined
+  authority run is 50/50, preparation and creation remain 3/3 and 11/11
+  respectively, and move reconciliation remains 10/10.
 
   Creation static gates permit exactly one directory-creation attempt while
   forbidding retries, normalization, movement, synchronization, persistence,
   database or journal mutation, triggers, cleanup, descriptor escape, and
-  production dispatch. The move gates continue to forbid target mutation, a
-  second move, and post-move synchronization. Both checkpoints remain
-  undispatched and claim neither production recovery, production target
-  preparation, post-create or post-move durability, nor completed candidate
-  preservation.
+  production dispatch. Normalization static gates permit one descriptor-bound
+  mode attempt and exactly the ordered target-then-parent durability suffix,
+  while forbidding creation, movement, retries, persistence, database or
+  journal mutation, triggers, cleanup, and production dispatch. The move gates
+  continue to forbid target mutation, a second move, and post-move
+  synchronization. All three checkpoints remain undispatched and claim neither
+  production recovery, a production target-preparation executor, post-create or
+  post-move durability, nor completed candidate preservation.
 
-  The next effect checkpoint may consume only the restrictive-residue Normalize
-  lease. It must normalize through the retained descriptor exactly once, reopen
-  the exact public name and prove the same inode, freshly inspect permissions,
-  emptiness, and security metadata, complete ordered target and
-  quarantine-parent durability barriers, and then force another startup entry.
-  It cannot move the candidate in the same entry. Later move preparation must
-  still repeat idempotent target-inode then quarantine-parent synchronization
-  and revalidation, even after normalization completed those barriers; a
+  The next checkpoint must strengthen every Move lease independently. Before
+  its one move, it must repeat idempotent synchronization of the exact target
+  inode and then the quarantine parent, followed by fresh revalidation. This is
+  required even if a prior normalization entry completed those barriers; a
   canonical `0700` target alone is not durable move authority.
 
 ## Diagnostic reconciliation and namespace inventory
@@ -492,8 +526,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   The production ladder is still only the authenticated `/usr` rollback prefix.
   Candidate-preservation admission and target-prefix selection remain sealed
-  and test-only. The one-shot NewState target-creation and move checkpoints are
-  also test-sealed, undispatched, and not durable. No production startup
+  and test-only. The one-shot NewState target-creation, target-normalization,
+  and move checkpoints are also test-sealed and undispatched. Normalization
+  proves only its ordered target-preparation durability suffix; creation and
+  movement still provide no post-effect durability. No production startup
   executor yet handles the effects of `CandidatePreserveIntent`, candidate
   preservation, fresh-row invalidation, the remaining rollback actions,
   roll-forward, boot repair, or cleanup. The exact reverse prefix now has both

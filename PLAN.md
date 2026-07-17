@@ -776,22 +776,41 @@ it. Every result is fieldless and consumes all retry, normalization, and move
 authority, so even the safe prefix requires a fresh startup entry. Canonical
 targets with access or default ACLs fail closed, restrictive residues retain
 opaque payload and ACL state, and arbitrary user xattrs remain uninspected and
-unclaimed. The admission inventory remains 24/24, target-prefix preparation
-passes 3/3, creation passes 11/11, the combined authority run passes 38/38,
-and move reconciliation remains 10/10.
+unclaimed. At that checkpoint the admission inventory remained 24/24,
+target-prefix preparation passed 3/3, creation passed 11/11, the combined
+authority run passed 38/38, and move reconciliation remained 10/10.
 
-The checkpoint now creates but does not normalize a quarantine target. It
-still supplies no post-create or post-move durability, persistence, database
-or journal mutation, production dispatch, or effect for ActivateArchived or
-ActiveReblit. The next checkpoint is a separate descriptor-bound normalization
-of the retained restrictive residue, followed by a same-inode named reopen,
-fresh permissions, emptiness, and security-metadata inspection, ordered target
-and quarantine-parent durability barriers, and another mandatory restart. It
-must never fall through into candidate movement in the same startup entry.
-A later move preparation must still repeat idempotent target-inode then
-quarantine-parent synchronization and revalidation, even when normalization
-already completed those barriers; a canonical `0700` name alone is not durable
-move authority.
+Commit `7bd1e640` separately consumes only the restrictive-residue Normalize
+lease. After binding-first non-namespace checks and a final exact residue PRE,
+it makes one descriptor-bound mode-normalization attempt against the retained
+target inode. The raw result is diagnostic only. Fresh semantic evidence
+classifies an unchanged exact fingerprint as `NotApplied`, the same-inode
+transition to an exact empty private target as the only canonical prefix, and
+every other observation as `Ambiguous`. Payload and ACL state remain opaque
+until that fresh inspection, and arbitrary user xattrs remain uninspected and
+unclaimed.
+
+Commit `36fea65f` keeps that canonical prefix private until it completes
+ordered durability against the exact retained target and then the retained
+quarantine parent, revalidating the public name and identity around both
+barriers. One final fresh canonical capture is required before the authority
+may return `RestartRequired`. `RestartRequired`, `NotApplied`, and `Ambiguous`
+are all fieldless; no result carries a descriptor, retry, move, or partial
+durability capability. Every outcome therefore ends the startup entry, and
+normalization can never fall through into candidate movement or persistence.
+
+Target-prefix preparation remains sealed and undispatched: it supplies no
+production candidate-preservation executor, journal or database mutation,
+post-move durability, or effect for ActivateArchived or ActiveReblit. The
+normalization lane passes 12/12, the complete target-prefix aggregate passes
+26/26, the combined authority run passes 50/50, and move reconciliation remains
+10/10. The preparation and creation lanes remain 3/3 and 11/11 respectively.
+
+The next checkpoint must strengthen every Move lease independently. Before its
+single move, it must repeat the idempotent exact target-inode barrier followed
+by the quarantine-parent barrier and revalidate the resulting namespace, even
+when a prior normalization entry completed the same ordered suffix. A
+canonical `0700` name alone is not durable move authority.
 Candidate preservation therefore remains absent from the production recovery
 ladder and Phase 11 remains open.
 
