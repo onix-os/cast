@@ -92,6 +92,12 @@ if grep -Fq 'FIXTURE_EVIDENCE_DIR ?=' "$root/Makefile"; then
     printf '%s\n' 'fixture evidence must not cross a Make-expanded path variable' >&2
     exit 1
 fi
+grep -Fq 'IFS= read -r process_stat 2>/dev/null <"$stat_file" || continue' \
+    "$runner"
+if grep -Fq 'IFS= read -r process_stat <"$stat_file" 2>/dev/null' "$runner"; then
+    printf '%s\n' 'volatile /proc reads must silence open failures before redirection' >&2
+    exit 1
+fi
 
 cat >"$fakebin/make" <<'EOF'
 #!/bin/sh

@@ -302,7 +302,7 @@ wait_group_exit() {
             while :; do
                 live_member=0
                 for stat_file in /proc/[0-9]*/stat; do
-                    IFS= read -r process_stat <"$stat_file" 2>/dev/null || continue
+                    IFS= read -r process_stat 2>/dev/null <"$stat_file" || continue
                     process_tail=${process_stat##*) }
                     set -- $process_tail
                     process_state=${1-}
@@ -571,19 +571,12 @@ fi
 # acknowledged supervisor pins the process-group identity until release.
 status_received=0
 status_read_status=0
-if status=$(
-    # Bash forks the command-substitution shell before it applies the command's
-    # redirections. Close release in that shell as well, otherwise a SIGKILLed
-    # parent can leave an orphan which falsely keeps the monitor alive.
-    exec 8>&-
-    timeout --foreground \
-        --kill-after="${kill_after_seconds}s" -- "${status_timeout_seconds}s" \
-        bash -c '
-            exec 8>&-
-            IFS= read -r status <&7 || exit 1
-            printf "%s\n" "$status"
-        ' fixture-ci-status-reader 8>&-
-); then
+# Keep the bounded read in this shell. Bash defers trapped terminal signals
+# while waiting for a foreground command-substitution child, which can delay
+# EXIT finalization until systemd has already timed out and collected the unit.
+# Its timed `read` builtin remains signal-interruptible, so the first terminal
+# signal immediately transfers ownership to `finalize` while the unit is live.
+if IFS= read -r -t "$status_timeout_seconds" status <&7; then
     status_received=1
     case "$status" in
         ''|*[!0-9]*) status=1 ;;
@@ -592,7 +585,8 @@ if status=$(
 else
     status_read_status=$?
     status=1
-    if [[ $status_read_status -eq 124 || $status_read_status -eq 137 ]]; then
+    if (( status_read_status > 128 )); then
+        status_read_status=124
         printf 'latched fixture status channel exceeded its %s-second bound\n' \
             "$status_timeout_seconds" >&2
     fi
