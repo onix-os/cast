@@ -1,5 +1,7 @@
 //! Focused contracts for the sealed first NewState preservation move.
 
+mod target_durability;
+
 use std::{fs, os::unix::fs::PermissionsExt as _};
 
 use crate::{
@@ -13,6 +15,8 @@ use crate::{
             arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
             arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
             reset_new_state_candidate_preserve_move_attempt_count,
+            reset_new_state_candidate_preserve_target_durability_events,
+            take_new_state_candidate_preserve_target_durability_events,
         },
         startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
@@ -157,8 +161,10 @@ fn startup_new_state_candidate_preserve_move_reconciles_every_raw_result_for_eve
                 let journal = fixture.open_journal();
                 let reservation = ActiveStateReservation::acquire().unwrap();
                 let lease = move_lease(&fixture, &journal, &reservation);
+                let expected_durability = target_durability::expected_events(&fixture);
                 let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
                 reset_new_state_candidate_preserve_move_attempt_count();
+                reset_new_state_candidate_preserve_target_durability_events();
                 match fault {
                     Some(fault) => arm_new_state_candidate_preserve_move_fault(fault),
                     None => {}
@@ -169,6 +175,11 @@ fn startup_new_state_candidate_preserve_move_reconciles_every_raw_result_for_eve
                 assert_eq!(
                     new_state_candidate_preserve_move_attempt_count(),
                     1,
+                    "{source:?} {usr_outcome:?} {fault:?}"
+                );
+                assert_eq!(
+                    take_new_state_candidate_preserve_target_durability_events(),
+                    expected_durability,
                     "{source:?} {usr_outcome:?} {fault:?}"
                 );
                 match (expected_applied, result) {
@@ -259,10 +270,12 @@ fn startup_new_state_candidate_preserve_move_final_prefix_race_prevents_the_atte
         fixture.namespace_change_hook("candidate-preserve-final-prefix-race".to_owned()),
     );
     reset_new_state_candidate_preserve_move_attempt_count();
+    reset_new_state_candidate_preserve_target_durability_events();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
     assert!(lease.reconcile(&seal, &journal).is_err());
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert_eq!(take_new_state_candidate_preserve_target_durability_events().len(), 2);
     fixture.assert_non_namespace_unchanged();
 }
 
@@ -281,10 +294,12 @@ fn startup_new_state_candidate_preserve_move_final_target_mode_race_prevents_the
         fs::set_permissions(raced_target, fs::Permissions::from_mode(0o755)).unwrap();
     });
     reset_new_state_candidate_preserve_move_attempt_count();
+    reset_new_state_candidate_preserve_target_durability_events();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
     assert!(lease.reconcile(&seal, &journal).is_err());
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert_eq!(take_new_state_candidate_preserve_target_durability_events().len(), 2);
     assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
     assert!(!target.join("usr").exists());
     assert_eq!(fs::metadata(target).unwrap().permissions().mode() & 0o7777, 0o755);
@@ -306,9 +321,11 @@ fn startup_new_state_candidate_preserve_effect_selection_starts_with_the_open_bi
     let second = fixture.open_journal();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     reset_new_state_candidate_preserve_move_attempt_count();
+    reset_new_state_candidate_preserve_target_durability_events();
 
     assert!(authority.into_effect_selection(&seal, &second).is_err());
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert!(take_new_state_candidate_preserve_target_durability_events().is_empty());
     fixture.assert_non_namespace_unchanged();
 }
 
@@ -325,9 +342,11 @@ fn startup_new_state_candidate_preserve_move_consumption_starts_with_the_open_bi
     let second = fixture.open_journal();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     reset_new_state_candidate_preserve_move_attempt_count();
+    reset_new_state_candidate_preserve_target_durability_events();
 
     assert!(lease.reconcile(&seal, &second).is_err());
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert!(take_new_state_candidate_preserve_target_durability_events().is_empty());
     fixture.assert_non_namespace_unchanged();
 }
 
@@ -396,10 +415,16 @@ fn startup_new_state_candidate_preserve_move_pre_candidate_sync_evidence_races_p
         };
         arm_before_new_state_candidate_preserve_candidate_sync(hook);
         reset_new_state_candidate_preserve_move_attempt_count();
+        reset_new_state_candidate_preserve_target_durability_events();
         let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
         assert!(lease.reconcile(&seal, &journal).is_err(), "{change:?}");
         assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0, "{change:?}");
+        assert_eq!(
+            take_new_state_candidate_preserve_target_durability_events().len(),
+            3,
+            "{change:?}"
+        );
         assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
         assert!(
             !transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent)
@@ -443,10 +468,12 @@ fn startup_new_state_candidate_preserve_move_candidate_presync_race_prevents_the
         fs::remove_file(marker).unwrap();
     });
     reset_new_state_candidate_preserve_move_attempt_count();
+    reset_new_state_candidate_preserve_target_durability_events();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
     assert!(lease.reconcile(&seal, &journal).is_err());
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert!(take_new_state_candidate_preserve_target_durability_events().is_empty());
     assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
     assert!(
         !transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent)

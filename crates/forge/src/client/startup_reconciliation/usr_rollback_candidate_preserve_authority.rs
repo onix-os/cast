@@ -6,8 +6,9 @@
 //! NewState target prefixes can be consumed into disjoint test-sealed create,
 //! normalize, or move leases. Normalization completes its exact target and
 //! quarantine-parent durability internally before it can report a restart.
-//! All three effects remain test-sealed; production dispatch, persistence,
-//! cleanup, and triggers remain absent.
+//! Movement separately completes candidate, target, and quarantine-parent
+//! pre-move barriers before rename. All three effects remain test-sealed;
+//! production dispatch, persistence, cleanup, and triggers remain absent.
 
 mod effect_evidence;
 mod effect_reconciliation;

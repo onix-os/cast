@@ -39,13 +39,23 @@ pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrF
 pub(super) use new_state_candidate_preserve::{
     AppliedNewStateCandidatePreserveMoveReconciliation, NewStateCandidatePreserveCaptureError,
     NewStateCandidatePreserveLayout, NewStateCandidatePreserveMoveReconciliation,
-    ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents,
+    NewStateCandidatePreserveTargetDurabilityError, ProjectedNewStateCandidatePreserveNamespace,
+    RetainedNewStateCandidatePreserveParents, TargetDurableNewStateCandidatePreservePre,
 };
 #[cfg(test)]
 pub(in crate::client) use new_state_candidate_preserve::{
-    NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_move_reconciliation_capture,
-    arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
-    reset_new_state_candidate_preserve_move_attempt_count,
+    NewStateCandidatePreserveMoveFault, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveTargetDurabilityFaultPoint,
+    arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_before_new_state_candidate_preserve_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
+    arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
+    arm_before_new_state_candidate_preserve_target_sync,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
+    arm_new_state_candidate_preserve_move_fault, arm_new_state_candidate_preserve_target_durability_fault,
+    new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_target_durability_events,
+    take_new_state_candidate_preserve_target_durability_events,
 };
 #[cfg(test)]
 pub(in crate::client) use new_state_candidate_target_preparation::{

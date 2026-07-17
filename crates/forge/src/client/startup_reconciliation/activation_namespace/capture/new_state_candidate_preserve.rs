@@ -4,9 +4,11 @@
 //! staging wrapper into the already-existing, exact journal-named quarantine
 //! wrapper. The projection permits only metadata changes inherent in that
 //! cross-parent rename, while the opaque parent holder keeps every descriptor
-//! needed by the one-shot syscall and its mandatory fresh reconciliation.
+//! needed by ordered pre-move durability, the one-shot syscall, and mandatory
+//! fresh reconciliation.
 
 mod effect;
+mod target_durability;
 
 use std::{ffi::CString, fs::File, path::PathBuf};
 
@@ -21,14 +23,27 @@ use super::{
     StateIdFingerprint, TreeLocation, UsrFingerprint, WrapperFingerprint, controlled_directory_witness, open_directory,
 };
 
+#[cfg(test)]
+pub(in crate::client) use effect::arm_before_new_state_candidate_preserve_move_reconciliation_capture;
 pub(in crate::client::startup_reconciliation::activation_namespace) use effect::{
     AppliedNewStateCandidatePreserveMoveReconciliation, NewStateCandidatePreserveMoveReconciliation,
 };
 #[cfg(test)]
-pub(in crate::client) use effect::{
-    NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_move_reconciliation_capture,
-    arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
-    reset_new_state_candidate_preserve_move_attempt_count,
+pub(in crate::client) use target_durability::{
+    NewStateCandidatePreserveMoveFault, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveTargetDurabilityFaultPoint,
+    arm_before_new_state_candidate_preserve_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
+    arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
+    arm_before_new_state_candidate_preserve_target_sync,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
+    arm_new_state_candidate_preserve_move_fault, arm_new_state_candidate_preserve_target_durability_fault,
+    new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_target_durability_events,
+    take_new_state_candidate_preserve_target_durability_events,
+};
+pub(in crate::client::startup_reconciliation::activation_namespace) use target_durability::{
+    NewStateCandidatePreserveTargetDurabilityError, TargetDurableNewStateCandidatePreservePre,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,8 +338,9 @@ impl MoveParentIdentity {
 
 /// Opaque descriptors for the source and destination parent namespace.
 ///
-/// No raw descriptor, callback, clone, or conversion API is exposed. Only the
-/// private effect child can consume this value into the one-shot move.
+/// No raw descriptor, callback, clone, or conversion API is exposed. The
+/// private durability child must consume this value before the resulting
+/// target-durable typestate can reach the one-shot move.
 #[derive(Debug)]
 pub(in crate::client::startup_reconciliation::activation_namespace) struct RetainedNewStateCandidatePreserveParents {
     root: File,
@@ -399,10 +415,11 @@ impl RetainedNewStateCandidatePreserveParents {
         })
     }
 
-    /// Flush the exact retained candidate tree before its final PRE recapture.
+    /// Flush the exact retained candidate tree before target durability and
+    /// the final PRE recapture.
     ///
-    /// This is only the pre-move safety barrier. The post-move tree resync and
-    /// changed-parent durability suffix deliberately remain a later checkpoint.
+    /// This remains a pre-move safety barrier. Post-move tree and changed-parent
+    /// durability are deliberately outside this checkpoint.
     pub(in crate::client::startup_reconciliation::activation_namespace) fn sync_retained_candidate_for_move(
         &self,
     ) -> Result<(), NewStateCandidatePreserveCaptureError> {

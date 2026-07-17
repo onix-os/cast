@@ -39,13 +39,14 @@ pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveApplyReconciliati
 /// Opaque authority retained only after fresh namespace evidence proves that
 /// this invocation applied the exact staging-to-quarantine candidate move.
 ///
-/// This checkpoint intentionally supplies no durability or persistence API.
-#[must_use = "an applied candidate-preservation move still requires durability"]
+/// This checkpoint intentionally supplies no post-move durability or
+/// persistence API.
+#[must_use = "an applied candidate-preservation move still requires post-move durability"]
 pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority<'reservation> {
     _effect: ReconciledNewStateCandidatePreserveEffect<'reservation>,
 }
 
-/// Complete authority retained for the later durability checkpoint.
+/// Complete authority retained for the later post-move durability checkpoint.
 struct ReconciledNewStateCandidatePreserveEffect<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
@@ -103,9 +104,10 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
         }
         let prepared_namespace = prepared_namespace?;
 
-        // Namespace preparation runs candidate sync and a fresh PRE1 capture.
-        // Repeat the binding-first non-namespace sandwich afterward so a
-        // journal or database change during that work cannot reach rename.
+        // Namespace preparation runs candidate, target, and quarantine-parent
+        // barriers plus a fresh PRE1 capture. Repeat the binding-first
+        // non-namespace sandwich afterward so a journal or database change
+        // during that work cannot reach rename.
         require_effect_binding(&journal_binding, journal)?;
         require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
 

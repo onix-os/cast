@@ -5,7 +5,8 @@
 //! shapes, retains both sides of the admission sandwich, and requires a fresh
 //! matching capture whenever an authority is revalidated. Exact NewState
 //! target prefixes can be consumed only by their separate one-attempt proof
-//! children.
+//! children. Exact move evidence must also cross fresh target and
+//! quarantine-parent durability before it can reach rename.
 
 mod effect_reconciliation;
 mod target_creation;
@@ -19,29 +20,32 @@ use crate::{
 use super::{
     capture::{
         CaptureError, NamespaceSnapshot, NewStateCandidatePreserveCaptureError,
-        ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents, TreeLocation,
-        UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
-        WrapperFingerprint, capture_snapshot,
+        NewStateCandidatePreserveTargetDurabilityError, ProjectedNewStateCandidatePreserveNamespace,
+        RetainedNewStateCandidatePreserveParents, TreeLocation, UsrRollbackNewStateTargetCreateNamespaceEvidence,
+        UsrRollbackNewStateTargetNormalizeNamespaceEvidence, WrapperFingerprint, capture_snapshot,
     },
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
 };
 
 #[cfg(test)]
 pub(in crate::client) use super::capture::{
+    NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
-    arm_before_new_state_target_normalize_final_canonical_capture,
+    arm_before_new_state_candidate_preserve_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
+    arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
+    arm_before_new_state_candidate_preserve_target_sync, arm_before_new_state_target_normalize_final_canonical_capture,
     arm_before_new_state_target_normalize_quarantine_parent_sync, arm_before_new_state_target_normalize_target_sync,
-    arm_new_state_target_normalize_durability_fault, reset_new_state_target_normalize_durability_events,
-    take_new_state_target_normalize_durability_events,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
+    arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_normalize_durability_fault,
+    reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_normalize_durability_events,
+    take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
+#[cfg(test)]
+pub(in crate::client) use effect_reconciliation::arm_before_new_state_candidate_preserve_candidate_sync;
 pub(in crate::client::startup_reconciliation) use effect_reconciliation::{
     UsrRollbackNewStateCandidatePreserveAppliedNamespace,
     UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
-};
-#[cfg(test)]
-pub(in crate::client) use effect_reconciliation::{
-    arm_before_new_state_candidate_preserve_candidate_sync,
-    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
 };
 pub(in crate::client::startup_reconciliation) use target_creation::UsrRollbackNewStateTargetCreateNamespaceReconciliation;
 #[cfg(test)]
@@ -88,7 +92,8 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackCandidatePreserv
 ///
 /// The retained descriptors and normalized projection deliberately have no
 /// accessor. The private effect child can only consume them through the
-/// pre-move candidate sync, final PRE recapture, and one-shot move.
+/// pre-move candidate, target, and quarantine-parent barriers, final PRE
+/// recapture, and one-shot move.
 pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
     baseline: NamespaceSnapshot,
     projection: ProjectedNewStateCandidatePreserveNamespace,
@@ -506,6 +511,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
 
 impl From<NewStateCandidatePreserveCaptureError> for UsrRollbackCandidatePreserveNamespaceError {
     fn from(source: NewStateCandidatePreserveCaptureError) -> Self {
+        Self::NewStateEffect(Box::new(source))
+    }
+}
+
+impl From<NewStateCandidatePreserveTargetDurabilityError> for UsrRollbackCandidatePreserveNamespaceError {
+    fn from(source: NewStateCandidatePreserveTargetDurabilityError) -> Self {
         Self::NewStateEffect(Box::new(source))
     }
 }

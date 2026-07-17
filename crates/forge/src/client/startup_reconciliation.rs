@@ -7,8 +7,9 @@
 //! disjoint create, normalize, or move capabilities. All three have separate
 //! one-attempt semantic reconciliation. Normalization also completes its
 //! exact target and quarantine-parent durability suffix before returning a
-//! restart result. None has production dispatch, persistence, cleanup, or
-//! triggers.
+//! restart result. Every move independently completes candidate, target, and
+//! quarantine-parent pre-move barriers before rename. None has production
+//! dispatch, persistence, cleanup, or triggers.
 
 use std::{fmt, path::PathBuf};
 
@@ -99,10 +100,15 @@ use activation_namespace::{
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
-    NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault, NewStateTargetNormalizeDurabilityEvent,
-    NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
+    NewStateCandidatePreserveMoveFault, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetCreateFault,
+    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
     arm_before_new_state_candidate_preserve_candidate_sync,
-    arm_before_new_state_candidate_preserve_move_reconciliation_capture, arm_before_new_state_target_create_attempt,
+    arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_before_new_state_candidate_preserve_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
+    arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
+    arm_before_new_state_candidate_preserve_target_sync, arm_before_new_state_target_create_attempt,
     arm_before_new_state_target_create_reconciliation_capture, arm_before_new_state_target_normalize_attempt,
     arm_before_new_state_target_normalize_final_canonical_capture,
     arm_before_new_state_target_normalize_quarantine_parent_sync,
@@ -110,12 +116,13 @@ pub(in crate::client) use activation_namespace::{
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
     arm_before_usr_rollback_new_state_target_create_final_pre_capture,
     arm_before_usr_rollback_new_state_target_normalize_final_pre_capture, arm_new_state_candidate_preserve_move_fault,
-    arm_new_state_target_create_fault, arm_new_state_target_normalize_durability_fault,
-    arm_new_state_target_normalize_fault, new_state_candidate_preserve_move_attempt_count,
-    new_state_target_create_attempt_count, new_state_target_normalize_attempt_count,
-    reset_new_state_candidate_preserve_move_attempt_count, reset_new_state_target_create_attempt_count,
+    arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_create_fault,
+    arm_new_state_target_normalize_durability_fault, arm_new_state_target_normalize_fault,
+    new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
+    new_state_target_normalize_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_create_attempt_count,
     reset_new_state_target_normalize_attempt_count, reset_new_state_target_normalize_durability_events,
-    take_new_state_target_normalize_durability_events,
+    take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{

@@ -9,7 +9,7 @@ use crate::client::startup_reconciliation::activation_namespace::capture::{
 };
 
 /// Opaque retained capabilities produced only by an exact PRE-to-POST move.
-#[must_use = "an applied NewState candidate move still requires durability"]
+#[must_use = "an applied NewState candidate move still requires post-move durability"]
 pub(in crate::client::startup_reconciliation::activation_namespace) struct AppliedNewStateCandidatePreserveMoveReconciliation
 {
     pub(super) _parents: RetainedNewStateCandidatePreserveParents,
@@ -42,9 +42,13 @@ impl PendingNewStateCandidatePreserveMoveReconciliation {
         self,
         installation: &Installation,
         record: &TransitionRecord,
-        authenticated_pre: NamespaceSnapshot,
-        authenticated_pre_projection: ProjectedNewStateCandidatePreserveNamespace,
     ) -> NewStateCandidatePreserveMoveReconciliation {
+        let Self {
+            parents,
+            authenticated_pre,
+            authenticated_pre_projection,
+            raw_report,
+        } = self;
         run_before_reconciliation_capture();
         let fresh_capture = capture_snapshot(installation, record);
         let classification =
@@ -52,7 +56,6 @@ impl PendingNewStateCandidatePreserveMoveReconciliation {
 
         match classification {
             ClassifiedFreshNamespace::Applied { snapshot, projection } => {
-                let Self { parents, raw_report } = self;
                 if parents.revalidate_value_identity(installation).is_err() {
                     return NewStateCandidatePreserveMoveReconciliation::Ambiguous;
                 }
@@ -66,13 +69,10 @@ impl PendingNewStateCandidatePreserveMoveReconciliation {
                 )
             }
             ClassifiedFreshNamespace::NotApplied => {
-                let Self {
-                    parents,
-                    raw_report: _raw_report,
-                } = self;
                 if parents.revalidate_value_identity(installation).is_err() {
                     return NewStateCandidatePreserveMoveReconciliation::Ambiguous;
                 }
+                let _raw_report = raw_report;
                 NewStateCandidatePreserveMoveReconciliation::NotApplied
             }
             ClassifiedFreshNamespace::Ambiguous => NewStateCandidatePreserveMoveReconciliation::Ambiguous,

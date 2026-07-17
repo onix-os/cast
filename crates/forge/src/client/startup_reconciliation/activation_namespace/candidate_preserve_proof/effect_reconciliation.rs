@@ -1,25 +1,25 @@
-//! Final PRE proof and one-shot reconciliation for NewState preservation.
+//! Target-durable PRE proof and one-shot reconciliation for NewState preservation.
 //!
-//! Candidate `syncfs` plus retained-tree fsync runs before the last exact PRE
-//! recapture. This is a pre-move safety barrier only: the post-move candidate
-//! resync and changed-parent durability suffix are intentionally deferred.
+//! Candidate `syncfs` plus retained-tree fsync runs before the exact target
+//! and quarantine-parent barriers. Only their final fresh PRE can reach the
+//! one-shot move. Post-move durability remains intentionally deferred.
 
 use crate::{Installation, transition_journal::TransitionRecord};
 
 use super::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveTopology,
-    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, require_matching_fingerprints, require_topology,
+    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, require_topology,
 };
 use crate::client::startup_reconciliation::activation_namespace::capture::{
     AppliedNewStateCandidatePreserveMoveReconciliation, NamespaceSnapshot, NewStateCandidatePreserveLayout,
     NewStateCandidatePreserveMoveReconciliation, ProjectedNewStateCandidatePreserveNamespace,
-    RetainedNewStateCandidatePreserveParents, capture_snapshot,
+    TargetDurableNewStateCandidatePreservePre,
 };
 
 /// Opaque POST namespace authority retained after fresh reconciliation.
 ///
-/// No durability or persistence method exists at this checkpoint.
-#[must_use = "an applied candidate-preservation move still requires durability"]
+/// No post-move durability or persistence method exists at this checkpoint.
+#[must_use = "an applied candidate-preservation move still requires post-move durability"]
 pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreserveAppliedNamespace {
     _reconciliation: AppliedNewStateCandidatePreserveMoveReconciliation,
 }
@@ -34,21 +34,20 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackNewStateCandidateP
     Ambiguous,
 }
 
-/// Opaque namespace authority prepared by candidate sync plus a fresh PRE1
-/// capture, but not yet consumed into the one-shot move.
+/// Opaque namespace authority prepared by candidate sync, exact target and
+/// quarantine-parent durability, and a final fresh PRE capture.
 ///
 /// Keeping this value separate lets the enclosing authority repeat its exact
 /// journal, database, plan, and installation checks after namespace
 /// preparation and immediately before the rename attempt.
 #[must_use = "prepared NewState candidate-preservation namespace authority must be consumed"]
 pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreservePreparedNamespace {
-    baseline: NamespaceSnapshot,
-    projection: ProjectedNewStateCandidatePreserveNamespace,
-    parents: RetainedNewStateCandidatePreserveParents,
+    durable_pre: TargetDurableNewStateCandidatePreservePre,
 }
 
 impl UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
-    /// Sync the exact candidate and prove one final fresh PRE1 namespace.
+    /// Sync the exact candidate, destination, and quarantine parent, then
+    /// prove one final fresh PRE1 namespace.
     ///
     /// This deliberately stops before the one-shot move so the enclosing
     /// authority can repeat every non-namespace evidence check.
@@ -57,23 +56,6 @@ impl UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
         installation: &Installation,
         record: &TransitionRecord,
     ) -> Result<UsrRollbackNewStateCandidatePreservePreparedNamespace, UsrRollbackCandidatePreserveNamespaceError> {
-        let FinalNewStateCandidatePreservePre {
-            baseline,
-            projection,
-            parents,
-        } = self.final_exact_pre(installation, record)?;
-        Ok(UsrRollbackNewStateCandidatePreservePreparedNamespace {
-            baseline,
-            projection,
-            parents,
-        })
-    }
-
-    fn final_exact_pre(
-        self,
-        installation: &Installation,
-        record: &TransitionRecord,
-    ) -> Result<FinalNewStateCandidatePreservePre, UsrRollbackCandidatePreserveNamespaceError> {
         let Self {
             baseline,
             projection,
@@ -95,37 +77,14 @@ impl UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
 
         run_before_candidate_sync();
         parents.sync_retained_candidate_for_move()?;
-
-        run_before_final_pre_capture();
-        let fresh = capture_snapshot(installation, record)?;
-        fresh.revalidate_retained()?;
-        require_matching_fingerprints(&baseline, &fresh)?;
-        require_projection(record, &fresh, &projection)?;
-        require_topology(
-            record,
-            &fresh,
-            UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine,
-        )?;
-        parents.revalidate_value_identity(installation)?;
-        installation.revalidate_mutable_namespace()?;
-
-        Ok(FinalNewStateCandidatePreservePre {
-            baseline: fresh,
-            projection,
-            parents,
-        })
+        let durable_pre = parents.complete_target_durability(installation, record, baseline, projection)?;
+        Ok(UsrRollbackNewStateCandidatePreservePreparedNamespace { durable_pre })
     }
 }
 
-struct FinalNewStateCandidatePreservePre {
-    baseline: NamespaceSnapshot,
-    projection: ProjectedNewStateCandidatePreserveNamespace,
-    parents: RetainedNewStateCandidatePreserveParents,
-}
-
 impl UsrRollbackNewStateCandidatePreservePreparedNamespace {
-    /// Consume prepared PRE1 authority through at most one no-replace move and
-    /// classify only the fresh post-attempt namespace.
+    /// Consume target-durable PRE1 authority through final exact revalidation,
+    /// at most one no-replace move, and fresh post-attempt classification.
     pub(in crate::client::startup_reconciliation) fn reconcile_move(
         self,
         installation: &Installation,
@@ -134,13 +93,9 @@ impl UsrRollbackNewStateCandidatePreservePreparedNamespace {
         UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
         UsrRollbackCandidatePreserveNamespaceError,
     > {
-        let Self {
-            baseline,
-            projection,
-            parents,
-        } = self;
-        let pending = parents.attempt_move_once();
-        Ok(match pending.reconcile(installation, record, baseline, projection) {
+        let Self { durable_pre } = self;
+        let pending = durable_pre.attempt_move_once(installation, record)?;
+        Ok(match pending.reconcile(installation, record) {
             NewStateCandidatePreserveMoveReconciliation::Applied(reconciliation) => {
                 UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::Applied(
                     UsrRollbackNewStateCandidatePreserveAppliedNamespace {
@@ -174,22 +129,11 @@ fn require_projection(
 std::thread_local! {
     static BEFORE_CANDIDATE_SYNC: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
-    static BEFORE_FINAL_PRE_CAPTURE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 pub(in crate::client) fn arm_before_new_state_candidate_preserve_candidate_sync(hook: impl FnOnce() + 'static) {
     BEFORE_CANDIDATE_SYNC.with(|slot| {
-        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
-    });
-}
-
-#[cfg(test)]
-pub(in crate::client) fn arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture(
-    hook: impl FnOnce() + 'static,
-) {
-    BEFORE_FINAL_PRE_CAPTURE.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });
 }
@@ -205,15 +149,3 @@ fn run_before_candidate_sync() {
 
 #[cfg(not(test))]
 fn run_before_candidate_sync() {}
-
-#[cfg(test)]
-fn run_before_final_pre_capture() {
-    BEFORE_FINAL_PRE_CAPTURE.with(|slot| {
-        if let Some(hook) = slot.borrow_mut().take() {
-            hook();
-        }
-    });
-}
-
-#[cfg(not(test))]
-fn run_before_final_pre_capture() {}
