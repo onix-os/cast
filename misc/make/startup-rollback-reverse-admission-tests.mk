@@ -25,13 +25,16 @@ forge-startup-usr-rollback-reverse-admission-test:
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	startup_recovery=crates/forge/src/client/startup_recovery.rs; \
+	dispatcher=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch.rs; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackReverseSeal {' "$$startup_gate"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackReverseSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { state = 2; next } state == 2 && $$0 == "}" { found = 1 } END { exit !found }' "$$startup_gate"; \
-	timeout 10s awk '$$0 == "impl UsrRollbackReverseSeal {" { state = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated = 1; next } state == 1 && gated && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { constructor = 1; next } state == 1 && $$0 ~ /fn new\(/ { exit 1 } state == 1 && $$0 == "}" { exit !constructor } END { exit !constructor }' "$$startup_gate"; \
+	timeout 10s awk '$$0 == "impl UsrRollbackReverseSeal {" { state = 1; next } state == 1 && $$0 == "    fn new() -> Self {" { production = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated_next = 1; next } state == 1 && gated_next && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { test_only = 1; gated_next = 0; next } state == 1 && gated_next { exit 1 } state == 1 && $$0 ~ /^    .*fn new/ { exit 1 } state == 1 && $$0 == "}" { found = production && test_only; exit !found } END { exit !found }' "$$startup_gate"; \
 	seal_call_count="$$( timeout 10s rg -n 'UsrRollbackReverseSeal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$seal_call_count" = 0; \
+	timeout 10s test "$$seal_call_count" = 1; \
 	capture_call_count="$$( timeout 10s rg -n 'UsrRollbackReverseAuthority::capture\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$capture_call_count" = 0; \
+	timeout 10s test "$$capture_call_count" = 1; \
+	timeout 10s grep -Fqx '            let reverse_seal = UsrRollbackReverseSeal::new();' "$$startup_gate"; \
+	timeout 10s grep -Fqx '            let reverse = startup_reconciliation::UsrRollbackReverseAuthority::capture(' "$$startup_gate"; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackReverseSeal,' "$$authority"; \
 	timeout 10s grep -Fqx '    journal_binding: TransitionJournalBinding,' "$$authority"; \
 	timeout 10s grep -Fqx "    _active_state_reservation: &'reservation ActiveStateReservation," "$$authority"; \
@@ -50,9 +53,10 @@ forge-startup-usr-rollback-reverse-admission-test:
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackReverseEffectSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { state = 2; next } state == 2 && $$0 == "}" { found = 1 } END { exit !found }' "$$startup_recovery"; \
 	timeout 10s awk '$$0 == "impl UsrRollbackReverseEffectSeal {" { state = 1; next } state == 1 && $$0 == "    fn new() -> Self {" { production = 1; next } state == 1 && $$0 == "    #[cfg(test)]" { gated_next = 1; next } state == 1 && gated_next && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { test_only = 1; gated_next = 0; next } state == 1 && gated_next { exit 1 } state == 1 && $$0 ~ /^    .*fn new/ { exit 1 } state == 1 && $$0 == "}" { found = production && test_only; exit !found } END { exit !found }' "$$startup_recovery"; \
 	effect_seal_call_count="$$( timeout 10s rg -n 'UsrRollbackReverseEffectSeal::(new|new_for_test)\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
-	timeout 10s test "$$effect_seal_call_count" = 0; \
+	timeout 10s test "$$effect_seal_call_count" = 1; \
+	timeout 10s grep -Fqx '    let effect_seal = UsrRollbackReverseEffectSeal::new();' "$$dispatcher"; \
 	external_handoff_call_count="$$( timeout 10s rg -n 'into_effect_lease\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_reverse_authority.rs' | timeout 10s wc -l )"; \
-	timeout 10s test "$$external_handoff_call_count" = 0; \
+	timeout 10s test "$$external_handoff_call_count" = 2; \
 	timeout 10s test "$$( timeout 10s rg -n '_effect_seal: &UsrRollbackReverseEffectSeal' "$$authority" | timeout 10s wc -l )" = 2; \
 	timeout 10s test "$$( timeout 10s rg -n '\.into_effect_lease\(' "$$authority" | timeout 10s wc -l )" = 2; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackReverseApplyEffectLease<'\''reservation> {" { state = 1; next } state == 1 && $$0 == "    lease: UsrRollbackReverseEffectLease<'\''reservation>," { field = 1; next } state == 1 && $$0 ~ /^    [A-Za-z_][A-Za-z0-9_]*:/ { exit 1 } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$authority"; \

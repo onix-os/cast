@@ -18,10 +18,9 @@ use crate::client::startup_reconciliation::activation_namespace::{
 
 /// Opaque capabilities retained only after an exact POST-to-PRE exchange.
 ///
-/// The fields remain private to this functional module. Later durability work
-/// may consume this type here without exposing a descriptor or snapshot getter.
+/// The fields remain private to this functional module. The durability suffix
+/// consumes this type here without exposing a descriptor or snapshot getter.
 #[must_use = "an applied reverse exchange still requires parent durability"]
-#[allow(dead_code)] // retained behind the unwired reverse durability executor
 pub(in crate::client::startup_reconciliation::activation_namespace) struct AppliedReverseExchangeReconciliation {
     parents: RetainedReverseExchangeParents,
     fresh_pre: NamespaceSnapshot,
@@ -33,7 +32,6 @@ pub(in crate::client::startup_reconciliation::activation_namespace) struct Appli
 /// report remains retained as diagnostic evidence and is never interpreted as
 /// the semantic outcome.
 #[must_use = "durable applied reverse-exchange evidence must be consumed by persistence"]
-#[allow(dead_code)] // consumed by the later journal-persistence checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) struct DurableAppliedReverseExchangeReconciliation {
     _namespace: DurableReverseExchangeNamespace,
     _raw_report: Result<(), Error>,
@@ -79,7 +77,6 @@ impl DurableAppliedReverseExchangeReconciliation {
 /// Failure variants are intentionally fieldless: neither can be retried with
 /// a retained descriptor, baseline, or pending effect capability.
 #[must_use = "a reconciled reverse exchange outcome must be handled"]
-#[allow(dead_code)] // consumed by the later rollback-reverse executor
 pub(in crate::client::startup_reconciliation::activation_namespace) enum ReverseExchangeReconciliation {
     Applied(AppliedReverseExchangeReconciliation),
     NotApplied,
@@ -101,7 +98,6 @@ impl PendingReverseExchangeReconciliation {
     /// Capture is unconditional and precedes all classification. The raw
     /// report remains sealed inside `self` until after classification and is
     /// never inspected, matched, or used as semantic evidence.
-    #[allow(dead_code)] // invoked by the later rollback-reverse executor
     pub(in crate::client::startup_reconciliation::activation_namespace) fn reconcile(
         self,
         installation: &Installation,

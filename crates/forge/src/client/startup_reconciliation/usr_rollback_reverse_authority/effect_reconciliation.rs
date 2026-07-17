@@ -33,7 +33,6 @@ pub(in crate::client) use durability::UsrRollbackReverseDurableEffectAuthority;
 /// Only `Applied` retains capability. The other variants are fieldless so a
 /// caller cannot retry an uncertain or known-unapplied one-shot attempt.
 #[must_use = "a consumed rollback-reverse apply lease must be handled"]
-#[allow(dead_code)] // consumed only through the unwired durability executor
 pub(in crate::client) enum UsrRollbackReverseApplyReconciliation<'reservation> {
     Applied(UsrRollbackReverseAppliedEffectAuthority<'reservation>),
     NotApplied,
@@ -43,7 +42,6 @@ pub(in crate::client) enum UsrRollbackReverseApplyReconciliation<'reservation> {
 /// Opaque authority for the durability suffix after this invocation applied
 /// the exact POST-to-PRE exchange.
 #[must_use = "an applied rollback-reverse effect still requires durability"]
-#[allow(dead_code)] // consumed only through the unwired durability executor
 pub(in crate::client) struct UsrRollbackReverseAppliedEffectAuthority<'reservation> {
     _effect: ReconciledReverseEffect<'reservation, UsrRollbackReverseAppliedNamespace>,
 }
@@ -51,14 +49,12 @@ pub(in crate::client) struct UsrRollbackReverseAppliedEffectAuthority<'reservati
 /// Opaque authority for the durability suffix after this invocation found an
 /// exact PRE namespace and made no exchange attempt.
 #[must_use = "an already-satisfied rollback-reverse effect still requires durability"]
-#[allow(dead_code)] // consumed only through the unwired durability executor
 pub(in crate::client) struct UsrRollbackReverseAlreadySatisfiedEffectAuthority<'reservation> {
     _effect: ReconciledReverseEffect<'reservation, UsrRollbackReverseAlreadySatisfiedNamespace>,
 }
 
-/// Evidence retained for the later parent-durability and persistence suffix.
+/// Evidence retained for the parent-durability and persistence suffix.
 /// The namespace parameter keeps Applied and AlreadySatisfied disjoint.
-#[allow(dead_code)] // retained behind the unwired durability executor
 struct ReconciledReverseEffect<'reservation, Namespace> {
     installation: Installation,
     state_db: db::state::Database,
@@ -71,7 +67,6 @@ struct ReconciledReverseEffect<'reservation, Namespace> {
 
 impl<'reservation> UsrRollbackReverseApplyEffectLease<'reservation> {
     /// Consume an exact POST lease into one namespace-derived semantic result.
-    #[allow(dead_code)] // invoked by the later rollback-reverse executor
     pub(in crate::client) fn reconcile(
         self,
         _effect_seal: &UsrRollbackReverseEffectSeal,
@@ -87,7 +82,6 @@ impl<'reservation> UsrRollbackReverseApplyEffectLease<'reservation> {
 
 impl<'reservation> UsrRollbackReverseFinishEffectLease<'reservation> {
     /// Consume an exact PRE lease without issuing an exchange attempt.
-    #[allow(dead_code)] // invoked by the later rollback-reverse executor
     pub(in crate::client) fn reconcile(
         self,
         _effect_seal: &UsrRollbackReverseEffectSeal,

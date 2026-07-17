@@ -1,12 +1,12 @@
 use crate::{
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
-    transition_journal::{Phase, RecoveryDisposition},
+    transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome},
 };
 
 use super::fixture::{Fixture, OperationKind, SourceCase, pending};
 
 #[test]
-fn startup_usr_rollback_resume_route_decision_then_route_uses_one_persistence_boundary_per_entry() {
+fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persistence_boundary_per_entry() {
     for kind in OperationKind::ALL {
         for source in [SourceCase::IntentPre, SourceCase::IntentPost, SourceCase::ExchangedPost] {
             let fixture = Fixture::new(kind, source);
@@ -43,9 +43,28 @@ fn startup_usr_rollback_resume_route_decision_then_route_uses_one_persistence_bo
 
             drop(second);
             let third = fixture.enter();
-            assert_eq!(pending(&third).phase(), expected.phase, "{kind:?} {source:?}");
-            assert_eq!(fixture.canonical_record(), expected, "{kind:?} {source:?}");
-            assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?} {source:?}");
+            if expected.phase == Phase::ReverseExchangeIntent {
+                let restored = expected
+                    .rollback_successor(Some(RollbackActionOutcome::Applied))
+                    .unwrap();
+                assert_eq!(pending(&third).phase(), Phase::UsrRestored, "{kind:?} {source:?}");
+                assert_eq!(fixture.canonical_record(), restored, "{kind:?} {source:?}");
+                assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {source:?}");
+                assert_ne!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
+                assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
+
+                drop(third);
+                let fourth = fixture.enter();
+                assert_eq!(pending(&fourth).phase(), Phase::UsrRestored, "{kind:?} {source:?}");
+                assert_eq!(fixture.canonical_record(), restored, "{kind:?} {source:?}");
+                assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {source:?}");
+            } else {
+                assert_eq!(pending(&third).phase(), expected.phase, "{kind:?} {source:?}");
+                assert_eq!(fixture.canonical_record(), expected, "{kind:?} {source:?}");
+                assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?} {source:?}");
+                assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
+                assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
+            }
         }
     }
 }

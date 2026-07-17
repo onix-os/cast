@@ -18,6 +18,7 @@ forge-startup-usr-rollback-reverse-durability-test:
 	parent=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation/durability.rs; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_reverse_durability.rs; \
+	dispatcher=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation/durability/tests/mod.rs; \
 	timeout 10s grep -Fqx 'mod durability;' "$$parent"; \
 	timeout 10s grep -Fqx 'mod usr_rollback_reverse_durability;' crates/forge/src/client/startup_recovery.rs; \
@@ -52,7 +53,9 @@ forge-startup-usr-rollback-reverse-durability-test:
 	timeout 10s test "$$namespace_result_line" -lt "$$trailing_result_line"; \
 	if timeout 10s rg -n 'RollbackActionOutcome|outcome:' "$$parent"; then exit 1; fi; \
 	callers="$$( timeout 10s rg -n 'complete_(applied|already_satisfied)_usr_rollback_reverse_durability\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_reverse_durability.rs' | timeout 10s wc -l )"; \
-	timeout 10s test "$$callers" = 0; \
+	timeout 10s test "$$callers" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'complete_applied_usr_rollback_reverse_durability(&journal, authority)?' "$$dispatcher" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'complete_already_satisfied_usr_rollback_reverse_durability(&journal, authority)?' "$$dispatcher" )" = 1; \
 	if timeout 10s rg -n 'exchange_retained_usr_once|attempt_usr_exchange_once|renameat2|RENAME_EXCHANGE|unlinkat|linkat|symlinkat' "$$authority" "$$executor"; then exit 1; fi; \
 	if timeout 10s rg -n 'rollback_successor|forward_successor' "$$executor"; then exit 1; fi; \
 	if timeout 10s rg -n '\.advance[[:space:]]*\(|forward_successor|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' "$$authority" "$$executor"; then exit 1; fi; \

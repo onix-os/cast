@@ -25,19 +25,17 @@ pub(in crate::client) use crate::client::startup_reconciliation::activation_name
 /// Opaque namespace proof shared only after the Applied or AlreadySatisfied
 /// path has independently completed both parent barriers and final PRE proof.
 #[must_use = "durable rollback-reverse namespace evidence must be consumed by persistence"]
-#[allow(dead_code)] // consumed by the later journal-persistence checkpoint
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseDurableNamespace {
     _origin: DurableReverseOrigin,
 }
 
-#[allow(dead_code)] // retained privately for diagnostic provenance
 enum DurableReverseOrigin {
     Applied(DurableAppliedReverseExchangeReconciliation),
     AlreadySatisfied(DurableReverseExchangeNamespace),
 }
 
 impl UsrRollbackReverseDurableNamespace {
-    /// Borrow and freshly revalidate the exact durable PRE proof for the later
+    /// Borrow and freshly revalidate the exact durable PRE proof for the
     /// persistence boundary.
     pub(in crate::client::startup_reconciliation) fn revalidate(
         &self,

@@ -1,4 +1,4 @@
-//! Sealed, unwired executor for reverse `/usr` parent durability.
+//! Sealed executor for reverse `/usr` parent durability.
 //!
 //! The namespace capability owns the descriptor-bound staging-parent and
 //! installation-root sync sequence. This executor owns the production seal
@@ -27,7 +27,6 @@ impl UsrRollbackReverseDurabilitySeal {
 }
 
 /// Complete durability after this invocation applied POST-to-PRE.
-#[allow(dead_code)] // intentionally unwired until the reverse dispatcher lands
 pub(in crate::client) fn complete_applied_usr_rollback_reverse_durability<'reservation>(
     journal: &TransitionJournalStore,
     authority: UsrRollbackReverseAppliedEffectAuthority<'reservation>,
@@ -39,7 +38,6 @@ pub(in crate::client) fn complete_applied_usr_rollback_reverse_durability<'reser
 
 /// Complete durability after this invocation admitted exact PRE without an
 /// exchange attempt.
-#[allow(dead_code)] // intentionally unwired until the reverse dispatcher lands
 pub(in crate::client) fn complete_already_satisfied_usr_rollback_reverse_durability<'reservation>(
     journal: &TransitionJournalStore,
     authority: UsrRollbackReverseAlreadySatisfiedEffectAuthority<'reservation>,

@@ -39,7 +39,6 @@ pub(in crate::client) enum DurableUsrRollbackReverseRecord {
 
 /// Persist the sole `UsrRestored` successor fixed by durable reverse evidence,
 /// then independently reopen and compare the complete canonical record.
-#[allow(dead_code)] // wired only when the reverse startup dispatcher lands
 pub(in crate::client) fn persist_usr_rollback_reverse_and_reopen(
     journal: TransitionJournalStore,
     authority: UsrRollbackReverseDurableEffectAuthority<'_>,

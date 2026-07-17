@@ -23,6 +23,7 @@ forge-startup-usr-rollback-reverse-persistence-test:
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_reverse_persistence.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation/durability.rs; \
 	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
+	dispatcher=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch.rs; \
 	root=crates/forge/src/client/startup_recovery.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_reverse_persistence/tests.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_reverse_persistence/tests/support.rs; \
@@ -42,7 +43,8 @@ forge-startup-usr-rollback-reverse-persistence-test:
 	timeout 10s grep -Fqx '        Ok(successor) if successor.phase == Phase::UsrRestored => successor,' "$$executor"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_reverse_and_reopen(' "$$executor" )" = 1; \
 	callers="$$( timeout 10s rg -n 'persist_usr_rollback_reverse_and_reopen\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_reverse_persistence.rs' | timeout 10s wc -l )"; \
-	timeout 10s test "$$callers" = 0; \
+	timeout 10s test "$$callers" = 1; \
+	timeout 10s grep -Fqx '    persist_usr_rollback_reverse_and_reopen(journal, durable).map_err(UsrRollbackReverseDispatchError::from)' "$$dispatcher"; \
 	first_revalidate_line="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$executor" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
 	successor_line="$$( timeout 10s grep -nF '    let successor = match authority.usr_restored_successor() {' "$$executor" | timeout 10s cut -d: -f1 )"; \
 	seam_line="$$( timeout 10s grep -nF '    before_usr_rollback_reverse_persistence_final_revalidation();' "$$executor" | timeout 10s cut -d: -f1 )"; \

@@ -52,10 +52,9 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespace
     layout: UsrExchangeLayout,
 }
 
-/// Opaque normalized namespace evidence transferred into the future effect
+/// Opaque normalized namespace evidence transferred into the consuming effect
 /// lease. The projection and retained parent descriptors deliberately have no
 /// accessor at this layer.
-#[allow(dead_code)] // consumed by the later reverse-effect checkpoint
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespaceEffectEvidence {
     baseline: NamespaceSnapshot,
     projection: ProjectedReverseNamespace,

@@ -29,18 +29,16 @@ use crate::client::{
     startup_recovery::UsrRollbackReverseDurabilitySeal,
 };
 
-/// Opaque post-durability authority for the later exact journal successor.
+/// Opaque post-durability authority for the exact journal successor.
 ///
 /// This type can exist only after staging-parent sync, installation-root sync,
 /// and the low-level final durable PRE proof all succeeded.
 #[must_use = "durable rollback-reverse evidence still requires exact journal persistence"]
-#[allow(dead_code)] // consumed by the later rollback-reverse persistence checkpoint
 pub(in crate::client) struct UsrRollbackReverseDurableEffectAuthority<'reservation> {
     _effect: DurableReverseEffect<'reservation>,
     outcome: RollbackActionOutcome,
 }
 
-#[allow(dead_code)] // consumed by the later rollback-reverse persistence checkpoint
 struct DurableReverseEffect<'reservation> {
     installation: Installation,
     state_db: db::state::Database,

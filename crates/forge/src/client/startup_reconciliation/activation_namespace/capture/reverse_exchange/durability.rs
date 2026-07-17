@@ -18,7 +18,6 @@ use crate::client::startup_reconciliation::activation_namespace::{
 /// Opaque proof that both exact reverse-exchange parents are durable and a
 /// final fresh capture still matches the authenticated PRE baseline.
 #[must_use = "durable reverse-exchange namespace evidence must be consumed by persistence"]
-#[allow(dead_code)] // consumed by the later journal-persistence checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) struct DurableReverseExchangeNamespace {
     _parents: RetainedReverseExchangeParents,
     _final_pre: NamespaceSnapshot,

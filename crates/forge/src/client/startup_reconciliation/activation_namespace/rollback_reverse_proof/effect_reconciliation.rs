@@ -34,14 +34,12 @@ pub(in crate::client) use durability::{
 
 /// Opaque POST-to-PRE namespace authority retained after fresh reconciliation.
 #[must_use = "an applied reverse exchange still requires parent durability"]
-#[allow(dead_code)] // retained behind the unwired reverse durability executor
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseAppliedNamespace {
     reconciliation: AppliedReverseExchangeReconciliation,
 }
 
 /// Opaque exact-PRE namespace authority produced without an exchange attempt.
 #[must_use = "an already-satisfied reverse exchange still requires parent durability"]
-#[allow(dead_code)] // retained behind the unwired reverse durability executor
 pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseAlreadySatisfiedNamespace {
     parents: RetainedReverseExchangeParents,
     fresh_pre: NamespaceSnapshot,
@@ -53,7 +51,6 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseAlreadySa
 /// Failure variants deliberately contain no retained evidence and therefore
 /// cannot authorize a retry.
 #[must_use = "a consumed reverse exchange must be handled"]
-#[allow(dead_code)] // consumed by the sealed authority-level reconciliation
 pub(in crate::client::startup_reconciliation) enum UsrRollbackReverseNamespaceApplyReconciliation {
     Applied(UsrRollbackReverseAppliedNamespace),
     NotApplied,

@@ -40,12 +40,16 @@ pub(in crate::client) use usr_rollback_resume_route_authority::{
     UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority, UsrRollbackResumeRouteAuthorityError,
 };
 
-#[allow(unused_imports)] // intentionally unwired until the consuming reverse effect lands
 pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
-    UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyEffectLease,
-    UsrRollbackReverseApplyReconciliation, UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError,
-    UsrRollbackReverseDurableEffectAuthority, UsrRollbackReverseFinishAuthority, UsrRollbackReverseFinishEffectLease,
+    UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyReconciliation,
+    UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError, UsrRollbackReverseDurableEffectAuthority,
+    UsrRollbackReverseFinishAuthority,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_reverse_authority::{
+    UsrRollbackReverseApplyEffectLease, UsrRollbackReverseFinishEffectLease,
 };
 
 #[cfg(test)]

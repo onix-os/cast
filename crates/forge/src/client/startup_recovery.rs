@@ -9,18 +9,18 @@ mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_rollback_decision;
 mod usr_rollback_resume_route;
+mod usr_rollback_reverse_dispatch;
 mod usr_rollback_reverse_durability;
 mod usr_rollback_reverse_persistence;
 
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
-/// this module and its future phase-specific executor descendants.
+/// this module and its phase-specific executor descendants.
 pub(in crate::client) struct UsrRollbackReverseEffectSeal {
     _private: (),
 }
 
 impl UsrRollbackReverseEffectSeal {
-    #[allow(dead_code)] // constructed by the later rollback-reverse executor
     fn new() -> Self {
         Self { _private: () }
     }
@@ -35,7 +35,6 @@ pub(in crate::client) use usr_exchange_parent_durability::{
     UsrExchangeParentDurabilityCompletionSeal, UsrExchangeParentDurabilityError,
     normalize_usr_exchange_parent_durability,
 };
-#[allow(unused_imports)] // unwired until the reverse startup dispatcher lands
 pub(in crate::client) use usr_rollback_reverse_durability::{
     UsrRollbackReverseDurabilityError, UsrRollbackReverseDurabilitySeal,
     complete_already_satisfied_usr_rollback_reverse_durability, complete_applied_usr_rollback_reverse_durability,
@@ -49,7 +48,7 @@ pub(crate) use usr_exchange_parent_durability::{
     reset_usr_exchange_parent_durability_events, take_usr_exchange_parent_durability_events,
 };
 
-#[allow(unused_imports)] // unwired until the startup recovery dispatcher lands
+#[allow(unused_imports)] // detailed outcome types remain available to focused persistence contracts
 pub(super) use usr_rollback_decision::{
     DurableUsrRollbackDecisionRecord, UsrRollbackDecisionPersistenceError, UsrRollbackDecisionReopenError,
     persist_usr_rollback_decision_and_reopen,
@@ -65,11 +64,16 @@ pub(super) use usr_rollback_resume_route::{
     persist_usr_rollback_resume_route_and_reopen,
 };
 
-#[allow(unused_imports)] // unwired until the reverse startup dispatcher lands
-pub(super) use usr_rollback_reverse_persistence::{
-    DurableUsrRollbackReverseRecord, UsrRollbackReversePersistenceError, UsrRollbackReverseReopenError,
-    persist_usr_rollback_reverse_and_reopen,
+pub(super) use usr_rollback_reverse_dispatch::{
+    UsrRollbackReverseDispatchError, UsrRollbackReverseReady, dispatch_usr_rollback_reverse_and_reopen,
 };
+
+pub(super) use usr_rollback_reverse_persistence::{
+    UsrRollbackReversePersistenceError, persist_usr_rollback_reverse_and_reopen,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_reverse_persistence::DurableUsrRollbackReverseRecord;
 
 #[cfg(test)]
 pub(crate) use usr_rollback_resume_route::arm_before_usr_rollback_resume_route_final_revalidation;

@@ -34,7 +34,6 @@ pub(in crate::client) use effect_reconciliation::{
 };
 
 /// Exact result of read-only reverse-effect admission.
-#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
 pub(in crate::client) enum UsrRollbackReverseAdmission<'reservation> {
     NotApplicable,
     Deferred,
@@ -43,7 +42,6 @@ pub(in crate::client) enum UsrRollbackReverseAdmission<'reservation> {
 }
 
 /// Common evidence retained privately behind the disjoint POST/PRE typestates.
-#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
 pub(in crate::client) struct UsrRollbackReverseAuthority<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
@@ -54,23 +52,20 @@ pub(in crate::client) struct UsrRollbackReverseAuthority<'reservation> {
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
-/// Exact `ReverseExchangeIntent + POST` evidence. A future executor may
-/// consume this type to make one reverse exchange attempt.
-#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+/// Exact `ReverseExchangeIntent + POST` evidence consumed by the production
+/// dispatcher for one reverse exchange attempt.
 pub(in crate::client) struct UsrRollbackReverseApplyAuthority<'reservation> {
     evidence: UsrRollbackReverseAuthority<'reservation>,
 }
 
-/// Exact `ReverseExchangeIntent + PRE` evidence. A future executor may consume
-/// this type only to finish exchange-parent durability and journal completion.
-#[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+/// Exact `ReverseExchangeIntent + PRE` evidence consumed by the production
+/// dispatcher only to finish exchange-parent durability and journal completion.
 pub(in crate::client) struct UsrRollbackReverseFinishAuthority<'reservation> {
     evidence: UsrRollbackReverseAuthority<'reservation>,
 }
 
 /// Common evidence privately retained by the disjoint effect leases. No
 /// field or generic accessor is exposed outside this module.
-#[allow(dead_code)] // consumed by the later rollback-reverse executor
 struct UsrRollbackReverseEffectLease<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
@@ -82,21 +77,18 @@ struct UsrRollbackReverseEffectLease<'reservation> {
 }
 
 /// Consumed, exact `ReverseExchangeIntent + POST` effect typestate.
-#[allow(dead_code)] // consumed by the later rollback-reverse executor
 pub(in crate::client) struct UsrRollbackReverseApplyEffectLease<'reservation> {
     lease: UsrRollbackReverseEffectLease<'reservation>,
 }
 
 /// Consumed, exact `ReverseExchangeIntent + PRE` effect typestate.
-#[allow(dead_code)] // consumed by the later rollback-reverse executor
 pub(in crate::client) struct UsrRollbackReverseFinishEffectLease<'reservation> {
     lease: UsrRollbackReverseEffectLease<'reservation>,
 }
 
 impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
-    /// Capture is sealed and read-only. Production cannot construct the seal
-    /// until the future startup dispatcher is intentionally wired.
-    #[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+    /// Capture is sealed and read-only. Only the production startup dispatcher
+    /// constructs the seal which admits this phase.
     pub(in crate::client) fn capture(
         _startup_gate_seal: &UsrRollbackReverseSeal,
         installation: &Installation,
@@ -209,7 +201,7 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
 
 impl<'reservation> UsrRollbackReverseApplyAuthority<'reservation> {
     /// Revalidate only the exact POST typestate; this remains read-only.
-    #[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+    #[allow(dead_code)] // retained for focused admission revalidation contracts
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,
@@ -220,7 +212,6 @@ impl<'reservation> UsrRollbackReverseApplyAuthority<'reservation> {
     /// Consume POST admission into its sealed effect typestate. Possessing an
     /// authority alone is insufficient: only mutable startup recovery can
     /// construct the required seal in production.
-    #[allow(dead_code)] // consumed by the later rollback-reverse executor
     pub(in crate::client) fn into_effect_lease(
         self,
         _effect_seal: &UsrRollbackReverseEffectSeal,
@@ -233,7 +224,7 @@ impl<'reservation> UsrRollbackReverseApplyAuthority<'reservation> {
 
 impl<'reservation> UsrRollbackReverseFinishAuthority<'reservation> {
     /// Revalidate only the exact PRE typestate; this remains read-only.
-    #[allow(dead_code)] // intentionally unwired until the consuming reverse effect lands
+    #[allow(dead_code)] // retained for focused admission revalidation contracts
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,
@@ -242,7 +233,6 @@ impl<'reservation> UsrRollbackReverseFinishAuthority<'reservation> {
     }
 
     /// Consume PRE admission into its sealed durability-finish typestate.
-    #[allow(dead_code)] // consumed by the later rollback-reverse executor
     pub(in crate::client) fn into_effect_lease(
         self,
         _effect_seal: &UsrRollbackReverseEffectSeal,

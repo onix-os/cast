@@ -39,8 +39,7 @@ pub(in crate::client) use durability::{
 #[cfg(test)]
 pub(in crate::client) use effect::arm_before_reverse_exchange_reconciliation_capture;
 pub(in crate::client::startup_reconciliation::activation_namespace) use effect::{
-    AppliedReverseExchangeReconciliation, DurableAppliedReverseExchangeReconciliation,
-    PendingReverseExchangeReconciliation, ReverseExchangeReconciliation,
+    AppliedReverseExchangeReconciliation, DurableAppliedReverseExchangeReconciliation, ReverseExchangeReconciliation,
 };
 
 /// Stable inode fields which a retained exchange must never change.
@@ -132,7 +131,6 @@ struct ReverseExchangeProjection {
 
 /// Layout plus its pathname-independent reverse-exchange invariant.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)] // consumed by the later reverse-effect checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) struct ProjectedReverseNamespace {
     layout: UsrExchangeLayout,
     invariant: ReverseExchangeProjection,
@@ -141,7 +139,6 @@ pub(in crate::client::startup_reconciliation::activation_namespace) struct Proje
 impl ProjectedReverseNamespace {
     /// Project an authenticated snapshot by the record's permanent tree
     /// tokens. No current pathname is accepted as logical identity.
-    #[allow(dead_code)] // consumed by the later reverse-effect checkpoint
     pub(in crate::client::startup_reconciliation::activation_namespace) fn capture(
         snapshot: &NamespaceSnapshot,
         record: &TransitionRecord,
@@ -198,13 +195,11 @@ impl ProjectedReverseNamespace {
         })
     }
 
-    #[allow(dead_code)] // consumed by the later reverse-effect checkpoint
     pub(in crate::client::startup_reconciliation::activation_namespace) fn layout(&self) -> UsrExchangeLayout {
         self.layout
     }
 
     /// Require exactly one semantic exchange and no other namespace delta.
-    #[allow(dead_code)] // consumed by the later reverse-effect checkpoint
     pub(in crate::client::startup_reconciliation::activation_namespace) fn require_post_to_pre(
         &self,
         after: &Self,
@@ -279,7 +274,6 @@ fn exact_staging_usr(staging: &WrapperFingerprint) -> Result<&UsrFingerprint, Re
 
 /// Value-only identities for the two parents of the fixed-name exchange.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)] // consumed by the later reverse-effect checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) struct ReverseExchangeParentIdentity {
     root: ExchangeStableInode,
     staging: ExchangeStableInode,
@@ -314,7 +308,6 @@ impl ReverseExchangeParentIdentity {
 /// syscall, sync, callback, or transparent dereference implementation. This
 /// foundation can only report and revalidate value identity.
 #[derive(Debug)]
-#[allow(dead_code)] // consumed by the later reverse-effect checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) struct RetainedReverseExchangeParents {
     root: File,
     roots: File,
@@ -327,7 +320,6 @@ pub(in crate::client::startup_reconciliation::activation_namespace) struct Retai
 }
 
 impl RetainedReverseExchangeParents {
-    #[allow(dead_code)] // consumed by the later reverse-effect checkpoint
     pub(in crate::client::startup_reconciliation::activation_namespace) fn capture(
         snapshot: &NamespaceSnapshot,
         record: &TransitionRecord,
@@ -351,7 +343,7 @@ impl RetainedReverseExchangeParents {
 
     /// Return only copyable identity values; descriptors never cross this
     /// boundary.
-    #[allow(dead_code)] // consumed by the later reverse-effect checkpoint
+    #[allow(dead_code)] // exposed only to focused retained-parent identity tests
     pub(in crate::client::startup_reconciliation::activation_namespace) fn identity(
         &self,
     ) -> ReverseExchangeParentIdentity {
@@ -361,7 +353,6 @@ impl RetainedReverseExchangeParents {
     /// Rebind both retained parents beneath authenticated descriptors while
     /// comparing only fields which an exchange cannot legitimately change.
     /// This proves identity, not permission to mutate.
-    #[allow(dead_code)] // consumed by the later reverse-effect checkpoint
     pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate_value_identity(
         &self,
         installation: &Installation,
@@ -444,7 +435,6 @@ fn require_exact_witness(
 }
 
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // consumed by the later reverse-effect checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) enum ReverseExchangeCaptureError {
     #[error(transparent)]
     Capture(#[from] CaptureError),

@@ -66,17 +66,20 @@ impl UsrRollbackResumeRouteSeal {
     }
 }
 
-/// Unforgeable safe-code token reserved for the future persisted `/usr`
-/// reverse-effect dispatcher. Production construction is intentionally absent
-/// until that consuming effect and its crash contract are implemented.
+/// Unforgeable safe-code token limiting rollback-reverse authority capture to
+/// this writer-first startup gate.
 pub(in crate::client) struct UsrRollbackReverseSeal {
     _private: (),
 }
 
 impl UsrRollbackReverseSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
     #[cfg(test)]
     pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
+        Self::new()
     }
 }
 
@@ -164,6 +167,41 @@ impl CleanSystemStartup {
             if let startup_reconciliation::UsrRollbackResumeRouteAdmission::Ready(authority) = route {
                 let (journal, record) =
                     super::startup_recovery::persist_usr_rollback_resume_route_and_reopen(journal, authority)?;
+                let in_flight = state_db.audit_in_flight_transition()?;
+                let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                    installation,
+                    state_db,
+                    journal,
+                    record,
+                    in_flight,
+                )
+                .map_err(map_reconciliation_error)?;
+                return Err(Error::RecoveryPending(pending));
+            }
+
+            let reverse_seal = UsrRollbackReverseSeal::new();
+            let reverse = startup_reconciliation::UsrRollbackReverseAuthority::capture(
+                &reverse_seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+                in_flight.clone(),
+            )?;
+            let ready = match reverse {
+                startup_reconciliation::UsrRollbackReverseAdmission::Apply(authority) => {
+                    Some(super::startup_recovery::UsrRollbackReverseReady::Apply(authority))
+                }
+                startup_reconciliation::UsrRollbackReverseAdmission::Finish(authority) => {
+                    Some(super::startup_recovery::UsrRollbackReverseReady::Finish(authority))
+                }
+                startup_reconciliation::UsrRollbackReverseAdmission::NotApplicable
+                | startup_reconciliation::UsrRollbackReverseAdmission::Deferred => None,
+            };
+            if let Some(ready) = ready {
+                let (journal, record) =
+                    super::startup_recovery::dispatch_usr_rollback_reverse_and_reopen(journal, ready)?;
                 let in_flight = state_db.audit_in_flight_transition()?;
                 let pending = startup_reconciliation::PendingSystemTransition::inspect(
                     installation,
@@ -271,6 +309,10 @@ pub(super) enum Error {
     UsrRollbackResumeRouteAuthority(#[from] startup_reconciliation::UsrRollbackResumeRouteAuthorityError),
     #[error("persist and reconcile the exact startup /usr rollback-resume route")]
     UsrRollbackResumeRoutePersistence(#[from] super::startup_recovery::UsrRollbackResumeRoutePersistenceError),
+    #[error("capture exact startup /usr rollback-reverse authority")]
+    UsrRollbackReverseAuthority(#[from] startup_reconciliation::UsrRollbackReverseAuthorityError),
+    #[error("execute and persist one exact startup /usr rollback-reverse phase")]
+    UsrRollbackReverseDispatch(#[from] super::startup_recovery::UsrRollbackReverseDispatchError),
     #[error("revalidate retained mutable installation namespace during startup")]
     Installation(#[from] installation::Error),
     #[error("load canonical authored system intent after the system startup gate")]
