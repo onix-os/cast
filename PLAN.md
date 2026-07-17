@@ -693,166 +693,38 @@ lane passes on its supported Linux CI host.
 ### Phase 11: Make state activation crash-recoverable
 
 The detailed implementation evidence, completed foundations, remaining
-coordinator work, and phase-specific recovery rules live in
+coordinator work, and phase-specific recovery rules are indexed by
 [the state-activation recovery subplan](docs/plans/state-activation-recovery.md).
-That document is a required part of this canonical plan, not an optional
-appendix.
+That hub and its linked continuations are a required part of this canonical
+plan, not optional appendices.
 
-Completed foundations include canonical transition IDs, no-replace merged-/usr
-link publication, the bounded checksummed journal, retained tree identity and
-marker primitives, strict startup evidence gates, and database ownership
-probes. They now also include the persisted-phase recovery-direction classifier
-and an unwired one-shot coordinator effect which reaches durable
-`UsrExchanged` without retry, reversal, cleanup, or root-link publication. At
-`CandidatePrepared`, its ActiveReblit path seals the exact replacement-wrapper
-reservation and authenticated previous-marker parking. Both trigger-capable
-operations then publish and retain the exact transaction-isolation ABI required
-for trigger intent. Mutable startup now has five deliberately narrow
-pre-assessment recovery steps. Under exact journal, installation, database,
-provenance, and active-selection authority, the first may normalize only an
-authenticated restrictive ActiveReblit replacement wrapper to mode `0700`; it
-never advances the journal. Commit `3e1ba34` adds a separate journal-only rollback-decision
-executor for all three operations. A sealed independent namespace, database,
-provenance, and cooperating-writer-reservation authority admits it only for
-exact `UsrExchangeIntent` + `PRE` or `UsrExchanged` + `POST` evidence and binds
-that evidence to the exact per-open journal. Commit `72511b3` adds a distinct
-consuming path for exact `UsrExchangeIntent` + `POST`: it checks that journal
-binding first, syncs the retained staging parent and retained installation root
-in production order, repeats the complete evidence sandwich, and only then
-converts through a private completion seal to a rollback decision with reverse
-exchange pending. It never reopens a parent by path or performs another rename,
-exchange, database, trigger, cleanup, or root-link effect. Failure leaves the
-exact Intent record for a fresh idempotent durability retry. The decision
-executor then constructs exactly one `rollback_decision` and performs exactly
-one conditional journal `advance`; it executes no rollback effect and never
-retries. It drops the old store and authority, descriptor-rootedly reopens the
-journal, and reconciles the complete canonical record. The decision and parent
-durability Make lanes each pass 11/11 contracts. The latter includes a real
-coordinator-to-startup proof across all three operations and all three forward
-durability fault points, with the atomic-exchange syscall count remaining one.
-Commit `911dcbc` adds the fourth checkpoint without chaining another journal
-mutation into the startup entry which persisted `RollbackDecided`. A later
-startup must independently recapture exact journal, database, provenance,
-namespace, and cooperating-writer authority. Exact `RollbackDecided` with a
-pending `/usr` action and `POST` layout routes to `ReverseExchangeIntent`;
-an already-satisfied `/usr` action with `PRE` layout skips reversal and routes
-to `CandidatePreserveIntent`. The executor derives one `rollback_successor(None)`
-and attempts one conditional journal advance. It performs no exchange and no
-non-journal filesystem, database, trigger, cleanup, or root-link effect. It
-drops the old authority and lock-bearing store before descriptor-rooted reopen, where an
-uncertain result must reconcile to the exact source or exact successor. The
-focused rollback-resume route lane now passes 12/12 contracts, retaining those
-original decision routes and adding the exact restored route described below.
-Its additional real coordinator-origin proof covers all three operations at all
-three forward durability fault points, enters startup once per persisted phase,
-and proves the exchange syscall counts remain exact with unchanged database and
-non-journal namespace evidence.
+Phase 11 remains open. Completed foundations include canonical transition IDs,
+no-replace merged-/usr link publication, the bounded checksummed journal,
+retained tree identity and marker primitives, strict startup evidence gates,
+database ownership probes, an operation-typed durable coordinator prefix
+through `UsrExchanged`, and descriptor-rooted activation-namespace
+assessment.
 
-Commits `62b15f29`, `e69ad276`, `50cb98f8`, and `86c6c900` extend that ladder
-past journal routing through one authenticated `/usr` reverse phase. Commits
-`ecd58020` and `e8c952f9` then exercise that phase across real process-death
-boundaries without broadening its production authority. The
-rollback decision, resume route, and reverse execution deliberately occur in
-three separate startup entries, with at most one journal mutation in each. A
-reverse entry accepts only exact `ReverseExchangeIntent`: `POST` evidence makes
-one descriptor-relative exchange attempt and records `UsrRestored(Applied)`,
-while already restored `PRE` evidence performs no exchange and records
-`UsrRestored(AlreadySatisfied)`. Fresh semantic namespace evidence, rather than
-the raw syscall report, determines which case occurred. Successful persistence
-drops the consumed authority and old lock-bearing journal before a
-descriptor-rooted reopen, and an uncertain write reconciles only to the exact
-source or exact successor. Every successful entry still returns
-`RecoveryPending`; the reverse entry stops at `UsrRestored` and cannot chain
-into another phase in the same process.
+The production startup ladder is deliberately narrower than general recovery.
+Separate startup entries can normalize forward exchange durability, persist a
+rollback decision, route its first unresolved action, reverse `/usr`, persist
+`UsrRestored`, and route a later entry to `CandidatePreserveIntent`. Each
+entry captures fresh journal, installation, database, provenance, namespace,
+and cooperating-writer authority; performs at most one journal mutation; and
+cannot chain into candidate movement or another rollback effect. Deterministic
+restart matrices and genuine `SIGKILL` processes cover the reverse-execution
+and journal-update boundaries, but do not claim reboot or power-loss
+durability.
 
-Commit `c7c97d4c` extends the existing sealed journal-only route authority for a
-fresh later startup. It accepts exact `UsrRestored` only when the rollback
-origin is `UsrExchangeIntent` or `UsrExchanged`, `/usr` has exact `PRE`
-evidence, and the recorded outcome is `Applied` or `AlreadySatisfied`. The
-operation plan must remain exact: NewState has a pending fresh-row rollback,
-quarantines the candidate, and may retain external effects; ActivateArchived
-requires no fresh-row rollback, rearchives the candidate, and has no external
-effects; ActiveReblit requires no fresh-row rollback, quarantines the candidate,
-and may retain external effects. All require candidate pending, previous
-archive and boot repair not required, stable database/provenance evidence, and
-no premature transition-quarantine wrapper. The executor derives one
-`CandidatePreserveIntent` successor, attempts one conditional journal advance,
-drops the consumed authority and store, and descriptor-rootedly reopens the
-canonical record. It performs no candidate movement, database mutation,
-trigger, root-link, or other non-journal filesystem effect, and stops at the new
-intent. Candidate preservation itself remains unimplemented.
-
-The focused reverse-dispatch Make lane now freezes twelve dispatcher contracts
-across all three operations, plus two coordinator-origin contracts. Its
-in-process durability matrix covers both starting layouts, both
-changed parent barriers, the final pre-persistence proof boundary, and ordinary
-or error-after-application exchange reports; a restart from an already restored
-layout completes without a second exchange. Its journal matrix crosses both
-layouts with all five conditional-update fault points and proves that canonical
-reopen exposes only the exact source or exact `UsrRestored` successor. Its race
-matrix changes database, journal, or namespace evidence during admission, at
-the immediate effect boundary, and during final durable revalidation, proving
-that stale authority cannot advance or retry. Its fresh-handle matrix discards
-all installation, database, journal, and reservation handles after an injected
-failure, reopens them independently, and still converges without another
-exchange.
-
-The first new process matrix sends genuine `SIGKILL` to a separately re-executed
-crash process at four reverse boundaries: immediately after the exchange,
-between the two parent barriers, before the final PRE capture, and before final
-persistence revalidation. All three operations therefore cover 12 process-death
-cases. An independent recovery process opens fresh installation and database
-handles, observes the physically restored PRE layout, performs no second
-exchange, and persists exact `UsrRestored(AlreadySatisfied)`. Every child is
-deadline-bounded and forcibly killed and reaped if it hangs. A separate later
-startup routes that restored record to `CandidatePreserveIntent` without
-redispatching the reverse exchange.
-
-The second process matrix covers all three operations, both POST and PRE source
-layouts, and all five successful journal-update durability boundaries: 30
-additional `SIGKILL` cases. At the first boundary the canonical source remains
-authoritative and the fully synced temporary successor is discarded on reopen;
-because the namespace is already PRE, recovery records
-`UsrRestored(AlreadySatisfied)`, even when the discarded POST successor said
-`Applied`. At the other four boundaries the canonical successor is already
-published, so recovery routes its exact original `Applied` or
-`AlreadySatisfied` outcome to `CandidatePreserveIntent` without another reverse
-update. These are real process-termination tests with fresh-process handles,
-but they are not
-reboot or power-loss evidence: kernel-visible state after `SIGKILL` does not
-prove which pre-fsync rename survives a power cycle. The adapted restart
-contracts distinguish a recovery entry that first persists `UsrRestored` from
-one that finds it already canonical and immediately performs the separate
-journal-only candidate-intent route.
-
-Two additional coordinator-origin contracts carry real failed forward
-exchanges through separate decision, route, and reverse startup entries. One
-crosses the three forward parent-durability fault points; the other crosses all
-five forward journal-completion fault points, including cases where canonical
-reopen retains either `UsrExchangeIntent` or `UsrExchanged`. Both cover all
-three operations, require exactly one forward and one reverse exchange, leave
-the database and unrelated namespace unchanged, and restore the pre-forward
-namespace semantically: names, identities, modes, link counts, lengths, and
-payloads match rather than merely looking correct by pathname. The reverse
-entry still stops at exact `UsrRestored`; a later coordinator-contract startup
-routes it once to `CandidatePreserveIntent` without another exchange or any
-candidate, database, trigger, or root-link effect.
-
-The subsequent diagnostic-only startup assessment sandwiches a complete
-bounded, descriptor-rooted activation-namespace inventory around the remaining
-startup evidence. That inventory authenticates exact raw names, tree and slot roles,
-state IDs, root/isolation ABI, rollback action outcomes, and phase layouts
-without exposing a mutation API; it releases mutation authority before
-returning and cannot execute stale evidence. This remains an authenticated
-`/usr` rollback prefix, not general recovery: candidate preservation, database
-invalidation, later rollback actions, roll-forward, boot repair, and cleanup
-are still unimplemented. The remaining closure is to finish recovery-ordered
-mutable client construction, replace residual path-based lifecycle authority,
-establish the durable pre-journal baseline, route every state transition
-through one durable coordinator, execute the later persisted phases on startup,
-extend deterministic process-kill coverage beyond the exact reverse phase, and
-prove power-loss-equivalent convergence at every boundary. Phase 11 therefore
-remains open.
+The remaining closure is to finish recovery-ordered mutable client
+construction, replace residual path-based lifecycle authority, complete the
+durable pre-journal baseline, connect every live state transition to the
+coordinator, execute candidate preservation and every later persisted recovery
+phase, extend deterministic interruption coverage beyond the authenticated
+`/usr` rollback prefix, and prove power-loss-equivalent convergence. Until
+then the diagnostic inventory remains non-mutating, candidate preservation,
+database invalidation, later rollback actions, roll-forward, boot repair, and
+cleanup remain unimplemented, and Phase 11 cannot be marked complete.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

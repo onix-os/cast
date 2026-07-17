@@ -2,9 +2,19 @@
 
 [Back to the canonical package-function plan](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 
-This subplan owns the detailed Phase 11 recovery contract and its accumulated
-implementation evidence. Phase order, global constraints, validation gates,
-completion, and repository closure remain authoritative in `PLAN.md`.
+This hub and its linked continuations own the detailed Phase 11 recovery
+contract and its accumulated implementation evidence. Phase order, global
+constraints, validation gates, completion, and repository closure remain
+authoritative in `PLAN.md`.
+
+Detailed evidence is divided by authority boundary:
+
+- this hub retains the journal, client-opening, namespace, tree-identity, and
+  pre-journal foundations;
+- the [durable coordinator plan](state-activation-coordinator.md) owns forward
+  transition sequencing and one-shot effects; and
+- the [startup-reconciliation plan](state-activation-startup-reconciliation.md)
+  owns recovery admission, rollback execution, and interruption evidence.
 
 ## Phase 11: Make state activation crash-recoverable
 
@@ -15,6 +25,8 @@ the exact filesystem trees involved, and recover from durable evidence rather
 than from in-memory flags or mutable pathnames. This work preserves the
 existing Stone state model, merged-/usr layout, container-trigger boundary,
 and instant rollback mechanism; it hardens their failure semantics.
+
+### Journal and client-opening foundations
 
 - [x] Give each fresh-state database row a unique, canonical transition ID and
   provide exact `(state ID, transition ID)` lookup, clear, and removal
@@ -62,8 +74,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   incompatible database, active-selection, record, or installation authority.
   Apart from this chmod and the narrow rollback ladder through exact `/usr`
   reversal, `UsrRestored` persistence, and the later journal-only route to
-  `CandidatePreserveIntent` documented below, general phase recovery execution
-  is not implemented. The public
+  `CandidatePreserveIntent` documented in the
+  [startup-reconciliation plan](state-activation-startup-reconciliation.md),
+  general phase recovery execution is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -101,9 +114,13 @@ and instant rollback mechanism; it hardens their failure semantics.
   Five focused tests replace each authority boundary, prove detached anchored
   operation, reject the substitution, and verify that every foreign replacement
   remains untouched. This proof currently gates construction; post-build
-  lifecycle operations still require the coordinator-wide capability preflight
-  below. Startup reconciliation and the remaining mutable recovery coordinator
-  therefore keep this item open.
+  lifecycle operations still require the coordinator-wide capability
+  preflight in the [coordinator plan](state-activation-coordinator.md), while
+  the [startup-reconciliation plan](state-activation-startup-reconciliation.md)
+  owns recovery execution. Both keep this item open.
+
+### Retained activation namespace
+
 - [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
   with one retained capability namespace. Resolve beneath authenticated
   directory descriptors without symlink, magic-link, or mount traversal. Give
@@ -139,6 +156,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   and destructive replacement triggers, and retained root-ABI publication.
   Other path-based lifecycle and cleanup paths remain, so this item is
   intentionally still open.
+
+### Durable tree identity
+
 - [x] Land the descriptor-relative `/usr/.cast-tree-id` primitive independently
   of coordinator integration. Its fixed v1 frame is bounded, checksummed, and
   locked by an exact golden; pre-journal publication uses an anonymous
@@ -263,8 +283,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   unsafe, or conflicting live selection fails closed before candidate staging is
   mutated. After exchange, the displaced old payload remains opaque and is never
   repaired in place. Restart-safe recovery from damaged live selection metadata
-  remains dependent on the durable baseline and startup reconciliation work
-  below. Once the replacement reservation is retained, a pre-commit failure,
+  remains dependent on the durable baseline later in this hub and the
+  [startup-reconciliation work](state-activation-startup-reconciliation.md).
+  Once the replacement reservation is retained, a pre-commit failure,
   or a failure after a compensating `/usr` reverse, uses that same pre-reserved
   exchange to preserve the entire failed candidate wrapper and consumes no
   second quarantine name. If bounded-name exhaustion or a create/reopen failure
@@ -287,8 +308,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   uncooperative same-UID writer. It does not create a journal record, reconcile
   a reboot, durably fence an ambiguous post-exchange namespace, perform the
   bounded descriptor-recursive stable-inventory proof, authenticate the entire
-  activation namespace, or finish the pre-journal baseline and coordinator
-  items below. Repaired-archive publication is descriptor-relative, and
+  activation namespace, or finish the pre-journal baseline below and the
+  [coordinator work](state-activation-coordinator.md). Repaired-archive
+  publication is descriptor-relative, and
   production stateful materialization already uses the retained fixed-staging
   capability; `blit_root_with_materialization` is test-only. Archived-state
   pruning now authenticates an exact journal-locked batch of at most 64 retained
@@ -306,6 +328,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   deletion failure, syscall deadlines are cooperative, and package/CAS orphan
   cleanup remains path-based. Other legacy garbage-collection paths also remain,
   so this item does not claim complete lifecycle safety.
+
+### Pre-journal baseline
+
 - [ ] Establish a durable pre-journal baseline. With no journal and no orphan
   transition row, clean only bounded authenticated scratch, materialize and
   recursively sync the candidate, create or adopt its strictly validated tree
@@ -365,619 +390,24 @@ and instant rollback mechanism; it hardens their failure semantics.
   reconcile a reboot. Authenticated scratch cleanup, complete
   previous-tree classification, trigger-proof marker reservation, and
   coordinator integration remain open, so this item is not complete.
-- [ ] Drive new-state creation, archived-state activation, and active-state
-  reblits through the same journal coordinator. Persist each intent before DB
-  allocation, candidate decoration, trigger execution, `/usr` exchange,
-  previous-state archive, boot synchronization, commit cleanup, or rollback;
-  persist completion only after the effect and its durability and identity
-  proofs succeed. Production-safe record constructors now derive the sole legal
-  forward successor, insert a fresh state ID only at allocation completion,
-  derive rollback requirements from exact observations, and advance every
-  recovery action only with an explicit outcome. Their focused contract covers
-  the complete fixed rollback order and the deliberately terminal unverified
-  boot result.
 
-  As of 2026-07-16, one intentionally unwired coordinator contract owns the
-  durable prefix through `CandidatePrepared` for all three operations. While
-  that phase remains canonical, ActiveReblit must consume a sealed,
-  non-trigger-ready typestate to reserve the exact replacement wrapper and
-  park the authenticated previous-marker link. Both NewState and the reserved
-  ActiveReblit path must then publish and retain the exact transaction-isolation
-  ABI before acquiring trigger authority. The coordinator owns the internal
-  transaction-trigger sequence through `TransactionTriggersComplete`, the
-  common intent-only boundary through `UsrExchangeIntent`, and the one-shot
-  exchange effect through durable `UsrExchanged`. A typed request makes the
-  legal state relationships explicit: a new state has no
-  candidate ID and classifies its previous tree as an active state,
-  synthesized empty tree, or unmanaged tree; archived activation has distinct
-  candidate and previous active-state IDs; and an active reblit binds the same
-  state ID to the active-reblit candidate and corrupt previous-tree roles.
-  Identity preparation retains an exact previous classification under the
-  installation authority, and transition creation compares the request with
-  that retained fact before runtime capture or journal creation. An
-  `Unmanaged` request remains representable for a future authenticated path but
-  is currently rejected: preparation can authenticate only the exact active
-  state or a genuinely empty synthesized live `/usr`, never bless an arbitrary
-  nonempty unowned tree.
-  Transition creation generates one kernel-random 32-character lowercase
-  hexadecimal transition ID and derives the exact state-ID-independent
-  `failed-transition-<transition-id>` quarantine component from it. It captures
-  the boot/mount-namespace epoch plus exact candidate and previous
-  runtime tree witnesses and durable tree tokens, revalidates the retained
-  identities, and persists `Preparing` at generation 1 before returning.
-  `archive_previous` is derived only from the authenticated previous origin;
-  system-trigger and boot-sync selections remain explicit request data.
+### Durable transition coordination
 
-  The new-state prefix is exactly `Preparing(1)` ->
-  `FreshStateAllocating(2)` -> `FreshStateAllocated(3)` ->
-  `CandidatePrepareStarted(4)` -> `CandidatePrepared(5)`. Archived activation
-  and active reblit skip the inapplicable allocation states and follow exactly
-  `Preparing(1)` -> `CandidatePrepareStarted(2)` -> `CandidatePrepared(3)`.
-  New states then reach `TransactionTriggersStarted(6)` and
-  `TransactionTriggersComplete(7)`; active reblits reach the same phases at
-  generations 4 and 5. They then reach `UsrExchangeIntent` at generations 8
-  and 6 respectively. Archived activation has no transaction-trigger phase
-  and remains at `CandidatePrepared(3)` when that internal runner is offered;
-  its separate proof-bearing typestate advances directly to
-  `UsrExchangeIntent(4)`.
-  Every transition uses the journal's conditional create/advance operations.
-  A wrong operation or phase fails before storage, and an exact-record compare
-  prevents a stale generation from overwriting newer evidence. A persistence
-  error is deliberately fail-stop rather than assumed not applied: depending
-  on the durable storage boundary, reopening may find the exact predecessor or
-  its sole legal successor. Fresh allocation uses the transition ID as the
-  sole database correlation token. Identity preparation also retains the exact
-  in-process state-database capability; completion rejects a different handle
-  before any ownership query and consults only the retained database.
-  Completion accepts only the exact newly allocated state row with `Matching`
-  ownership, and
-  rejects missing, cleared, foreign-token, or wrong-state evidence without
-  advancing. If the database commit succeeds but the following journal advance
-  fails before publication, the matching row and older durable journal phase
-  are deliberately preserved for later reconciliation rather than compensated
-  or hidden; a post-publication error may instead leave the exact successor
-  durable. Candidate identity is a private three-way retained authority rather
-  than `Option<state::Id>`: `NewState` begins as unknown-ID/absent and becomes
-  known-ID/absent only after correlated allocation is durably recorded;
-  `ActiveReblit` begins as known-ID/absent because its newly materialized tree
-  reuses the active database row; and `ActivateArchived` begins with an exact
-  retained existing `.stateID`. Operation-specific constructors bind that
-  distinction before a request can create the journal, so an absent candidate
-  cannot be reinterpreted between NewState and ActiveReblit and neither can be
-  passed off as an archived tree. For both newly decorated operations, the
-  payload and exact marker are retained while `.stateID` and the fixed
-  `.cast-state-id.tmp` are descriptor-proved absent through
-  `CandidatePrepareStarted`. Only that durable phase authorizes publication.
-  The coordinator creates one exclusive owner-private temporary, writes and
-  syncs the canonical decimal state ID, normalizes and syncs mode `0644`, then
-  makes one descriptor-relative `RENAME_NOREPLACE` attempt. It reconciles both
-  names after every result, never retries an ambiguous rename, syncs the exact
-  candidate directory after an applied move, and retains the published inode
-  before recording `CandidatePrepared`. Certain pre-rename failures remove
-  only the exact temporary and sync that cleanup; published or ambiguous
-  failures remain at the operation's `CandidatePrepareStarted` generation as
-  recovery evidence without overwriting or adopting a foreign final or
-  temporary. NewState and ActiveReblit both enter this publication path;
-  archived activation may only revalidate the state-ID inode retained during
-  preparation and cannot enter it. Candidate preparation therefore preserves its exact
-  durable predecessor-or-successor evidence when publication, identity proof,
-  or final journal persistence fails. Every state-changing
-  coordinator method consumes its
-  coordinator; an error returns no reusable coordinator or stale in-memory
-  record, so an uncertain persistence result fails stop instead of permitting
-  an in-process continuation.
+The open coordinator work item, its implemented durable prefix, and its exact
+validation evidence continue in the
+[durable state-activation coordinator plan](state-activation-coordinator.md).
+That document owns the operation state machines, metadata and provenance
+authority, trigger sequencing, and one-shot forward exchange contract.
 
-  The internal transaction-trigger runner derives its started and completed
-  records through the journal's sole forward-successor constructor. It proves
-  both retained runtime identities, both exact public tree names and markers,
-  the candidate's retained `.stateID`, operation-specific database ownership,
-  mandatory operation readiness, and the exact descriptor-pinned isolation
-  ABI before intent, immediately before the callback, after the callback, and
-  at later readiness boundaries. New states require the exact
-  `Matching` transition token; active reblits and every existing-state journal
-  creation require an existing candidate row with `Cleared` ownership. Every
-  distinct recorded previous state also requires a `Cleared` row, while a
-  synthesized previous tree has no row and an active reblit reuses its already
-  checked candidate row. The global database audit must contain exactly the
-  new-state candidate and journal transition ID for `NewState`, and no
-  transition-bearing row for `ActiveReblit`; invalid, multiple, or unrelated
-  transition evidence cannot reach completion. A bounded
-  existing-marker inventory seals the candidate before intent and establishes,
-  syncs, and exactly re-inventories the callback's accepted result before
-  completion. Safe root-owned one-link payload changes are therefore accepted,
-  while candidate-name, state-ID, database, unsafe-inode, or unstable-inventory
-  substitutions leave the durable phase at `TransactionTriggersStarted`.
-  Intent persistence failure invokes no callback and may leave only
-  `CandidatePrepared` or `TransactionTriggersStarted`; completion persistence
-  failure invokes the callback once and may leave only
-  `TransactionTriggersStarted` or `TransactionTriggersComplete`. Every error
-  drops the coordinator-owned journal, identity, and database capabilities.
+### Startup reconciliation and interruption campaign
 
-  The callback remains an intentionally unwired sequencing contract, but its
-  authorization is now proof-bearing rather than a raw phase check.
-  `CandidatePrepareStarted` is the only coordinator state which can construct
-  the neutral metadata publication capability. The client-policy callback sees
-  only the bounded optional `os-info.json` bytes read through that exact
-  capability and returns both labeled, size-bounded semantic outputs together;
-  it never receives the publication object, archived canonical bytes, or a
-  proof token. The coordinator alone consumes those buffers and the publication
-  capability. For `NewState`, it hashes both independently derived buffers and
-  immutably inserts that pair under exact `Matching` transition ownership before
-  either canonical output is published. An interrupted provenance commit may
-  therefore leave no row or the exact row, while first/second publication and
-  final journal faults may leave provenance plus absent/partial/complete outputs
-  under `CandidatePrepareStarted`. `ActiveReblit` instead requires the existing
-  immutable pair to match the newly derived buffers before publication. The
-  resulting exact `os-release` and `system-model.glu` descriptor proof and the
-  independently loaded provenance pair travel together through private
-  operation typestates. Their database and descriptor evidence is sandwiched
-  before `.stateID`, trigger, exchange-intent, and `CandidatePrepared`
-  boundaries.
+The open startup-reconciliation and interruption work items, including the
+completed database-ownership probes and the bounded authenticated `/usr`
+rollback prefix, continue in the
+[startup-reconciliation plan](state-activation-startup-reconciliation.md).
+That document owns phase-specific admission, diagnostic inventory, restart
+matrices, genuine process-death evidence, and the remaining power-loss
+campaign.
 
-  `CandidatePrepared` returns one of three unforgeable operation-specific
-  variants. `NewState` receives isolation-preparation authority;
-  `ActiveReblit` receives a distinct non-trigger-ready reservation authority
-  and reaches isolation preparation only after exact replacement and
-  previous-marker parking durability; `ActivateArchived` receives a distinct
-  wrapper with no transaction-trigger method. The two trigger-capable paths
-  obtain the common trigger runner only after isolation preparation publishes
-  and retains the exact ABI. That runner accepts no caller-supplied proof and
-  carries the metadata, provenance, operation-readiness, and isolation
-  authorities together. It repeats the candidate, evidence, metadata, and
-  readiness sandwiches immediately before durable trigger intent and again
-  after the effect before completion. Thus replacing either
-  canonical metadata inode with an
-  identical-byte inode before intent invokes no effect and leaves
-  `CandidatePrepared`; doing so inside the effect invokes it once and leaves
-  `TransactionTriggersStarted`. Every returned failure owns neither the
-  coordinator nor proof, so journal, installation, and database authorities
-  are released while the error remains alive. The post-effect inventory still
-  cannot substitute for the semantic proof because it intentionally baselines
-  permitted payload changes. No live client path is changed or silently
-  bypassed by this still-unwired slice.
-
-  The common `/usr` exchange-intent boundary is deliberately effect-free.
-  `NewState` and `ActiveReblit` can reach it only from their unforgeable
-  `TransactionTriggersComplete` wrapper; archived activation reaches it only
-  from its distinct `CandidatePrepared` wrapper. Both paths reseal the exact
-  marked candidate, then repeat canonical journal, runtime epoch and tree,
-  exact public-name, candidate state-ID, operation-specific database, global
-  audit, and metadata-proof evidence immediately before a conditional journal
-  advance. The exact sequences are therefore
-  `TransactionTriggersComplete(7)` -> `UsrExchangeIntent(8)` for new states,
-  `TransactionTriggersComplete(5)` -> `UsrExchangeIntent(6)` for active
-  reblits, and `CandidatePrepared(3)` -> `UsrExchangeIntent(4)` for archived
-  activation. A preflight failure leaves the exact predecessor canonical. A
-  persistence failure may leave only that predecessor or `UsrExchangeIntent`,
-  returns no coordinator, proof, descriptor, database, or journal authority,
-  and requires reopening the canonical record before any continuation.
-  Successful intent publication retains the exact tree identity and metadata
-  proof but performs no rename, exchange, root-link publication, or client
-  callback; the candidate remains staged and the previous tree remains live.
-
-  The intent typestate remains proof-only, but a separate private and still
-  unwired effect now owns exchange-syscall authority. Client preflight takes
-  the active-state writer lease before inspecting the journal, retains the
-  installation namespace, merged-/usr root-ABI preflight, and exact
-  ActiveReblit snapshot when applicable, then consumes that authority during
-  tree-identity preparation. The coordinator-only preparation seal selects a
-  nonblocking journal acquisition. If a contender wins the small handoff gap,
-  preparation fails immediately and releases the writer lease instead of
-  waiting behind a journal owner which may itself need that lease. Legacy
-  identity preparation keeps its existing blocking order, and every legacy
-  exchange path still requires journal absence.
-
-  The effect consumes both `UsrExchangeIntent` and the client authority. It
-  repeats the complete journal, runtime epoch, public-name, marker, state-ID,
-  database, provenance, metadata, active-state, root-ABI, and ActiveReblit
-  evidence immediately before the syscall; makes exactly one
-  descriptor-relative `RENAME_EXCHANGE` attempt; and never retries, reverses,
-  cleans up, or publishes root links. Every raw syscall result is reconciled
-  as `NotApplied`, `Applied`, or `Ambiguous`. Only the exact applied layout is
-  synced through the staging parent and installation root, re-proved through
-  the retained post-exchange authorities, and conditionally advanced to
-  `UsrExchanged`: generation 9 for NewState, 7 for ActiveReblit, and 5 for
-  archived activation. Any uncertain persistence result returns no reusable
-  coordinator or authority and leaves only `UsrExchangeIntent` or its legal
-  `UsrExchanged` successor durable.
-
-  ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
-  While `CandidatePrepared` is canonical, a sealed coordinator-only effect
-  reserves the exact empty replacement wrapper and parks an authenticated
-  second previous-marker link through the journal-authorized namespace API.
-  The resulting retained reservation is mandatory before trigger authority and
-  is revalidated through triggers, exchange intent, and the post-exchange
-  direction flip. Positive first-installation coverage proves a synthesized
-  empty previous `/usr` exchanges once and remains staged without a `.stateID`.
-  The coordinator still has no live client callsite. Publishing its intent
-  remains forbidden because startup can now recover only the exact `/usr`
-  rollback suffix described below, not every corresponding durable forward,
-  rollback, and cleanup phase.
-
-  Archived activation dispatches to a separate read-only verifier because its
-  candidate already contains canonical metadata. The coordinator first loads
-  the immutable digest pair from the exact state database, then derives both
-  expected buffers from retained policy input without opening either canonical
-  output. Only after their labeled hashes match that independent database row
-  does the verifier descriptor-read and retain both exact output inodes. It
-  repeats the database provenance read after proof construction and around every
-  later proof boundary. Verification performs no chmod, synchronization,
-  replacement, or other mutation; a same-byte output replacement or provenance
-  deletion inside either sandwich is rejected with candidate files preserved.
-  Legacy archived states without provenance fail closed rather than hashing
-  their archived bytes into a new expectation.
-
-  The focused `make forge-transition-journal-coordinator-test` lane now runs 82
-  exact tests and freezes
-  those three phase/generation sequences, request-derived origins and options,
-  runtime evidence, fixed quarantine naming, non-reinterpretable three-way
-  candidate state authority, ActiveReblit state-ID publication failures, exact database correlation,
-  transaction-trigger ordering, predecessor-or-successor persistence faults,
-  substitution rejection, proof-bearing operation dispatch, exact
-  `os-info.json` policy input, pre-intent and post-effect metadata replacement,
-  fail-stop lock release, exact `/usr` exchange-intent and `UsrExchanged`
-  generations for all three operations, prepared-candidate resealing, complete
-  pre-intent and immediate pre-syscall evidence, predecessor-or-intent and
-  intent-or-completion persistence faults, provenance commit outcomes,
-  first/second output interruption, existing-state legacy/mismatch rejection,
-  archived provenance sandwiches, proof/provenance typestate retention,
-  one-shot raw-result reconciliation, applied durability faults, post-syscall
-  metadata and namespace substitution, a bounded writer/journal handoff,
-  synthesized-empty first installation, sealed ActiveReblit replacement and
-  previous-slot reservation faults, typed readiness retention, mandatory
-  isolation-ABI publication, tamper rejection, and reopenable crash prefixes,
-  plus the absence of root-link, reverse, retry, or cleanup effects. Its static
-  gates prove that metadata authority is mandatory rather than optional, the
-  runner accepts no proof parameter, archived activation cannot acquire trigger
-  authority, ActiveReblit cannot reach triggers without the reservation, and
-  neither trigger operation can reach them without retained isolation
-  readiness. No coordinator method has a callsite outside the contract module,
-  and the callback authority and failure type remain private. The
-  transition-identity gate additionally
-  rejects mutation primitives in the existing-metadata verifier and any client
-  bypass around coordinator-owned verification. No live
-  activation path creates or advances this coordinator. The legacy
-  ActiveReblit wrapper rotation still requires journal absence, while the
-  coordinator uses a separate sealed journal-authorized reservation boundary.
-  Startup classifies ActiveReblit `Preparing` as strictly state-ID-absent and
-  treats `CandidatePrepareStarted` as the only state-ID
-  publication-ambiguity boundary. There is still no general phase-advancing
-  recovery executor. The narrow production startup ladder can now normalize
-  forward exchange-parent durability, persist `RollbackDecided`, route a later
-  entry to its first unresolved rollback intent, restore `/usr` and persist
-  `UsrRestored`, then route a separate later entry to
-  `CandidatePreserveIntent`. Commits
-  `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
-  outcome, connected the one-phase reverse dispatcher to real mutable startup,
-  and proved its initial parent- and journal-restart convergence. Commit
-  `86c6c900` extended that interruption matrix through fresh-handle restart,
-  evidence races, and both coordinator-origin failure classes. Commits
-  `ecd58020` and `e8c952f9` add genuine `SIGKILL` coverage around reverse
-  execution and its journal update, respectively. Commit `c7c97d4c` adds the
-  final journal-only route in that prefix without executing candidate
-  preservation. The restrictive
-  replacement-mode normalizer still never changes the record, and the
-  diagnostic startup assessment remains non-mutating. Candidate preservation,
-  database invalidation, later rollback actions, roll-forward, and cleanup are
-  not executed, so this item remains open.
-- [ ] Reconcile startup using exact phase-specific namespace and database
-  evidence. Every pre-commit phase rolls back except a durably completed boot
-  synchronization; `CommitDecided` and later roll forward. Resume rollback in
-  its persisted order, never delete a fresh DB row before preserving its
-  candidate, never guess through a foreign occupant, and retain an
-  undeletable `BootRepairUnverified` record when boot side effects cannot be
-  proved repaired.
-  As of 2026-07-16, startup's diagnostic checkpoint remains deliberately
-  read-only and fail closed. Immediately before it, the mutable startup gate has
-  one sealed, bounded recovery ladder: the ActiveReblit restrictive
-  replacement-mode normalizer, descriptor-bound forward exchange-parent
-  durability normalization, rollback-decision persistence, journal-only
-  rollback-resume routing, and the exact `/usr` reverse dispatcher. The same
-  sealed route step now also moves exact `UsrRestored` to
-  `CandidatePreserveIntent` on a separate later entry. Each step captures its own
-  authority from the current canonical record and fresh database and namespace
-  evidence; none converts the diagnostic inventory into mutation authority.
-  Decision, routing, and reversal are separate persisted boundaries rather than
-  a same-process rollback loop.
-
-  The decision path applies to NewState, ActivateArchived, and ActiveReblit.
-  Exact `UsrExchangeIntent` + `PRE` records the `/usr` rollback action as already
-  satisfied, while exact `UsrExchanged` + `POST` records it as pending. Exact
-  `UsrExchangeIntent` + `POST` now yields a distinct consuming durability
-  authority rather than a decision or diagnostic deferral. Every other
-  phase/layout or incompatible evidence combination remains non-mutating. A
-  private startup seal admits independently captured evidence retaining exact
-  before/after/fresh descriptor-rooted namespace fingerprints and layout,
-  stable database ownership and immutable metadata provenance, the
-  cooperating-writer reservation, installation authority, and the complete
-  source record. An opaque per-open binding also prevents equal-looking or
-  byte-identical journals from another root from consuming that authority.
-
-  The durability normalizer checks that per-open binding before any filesystem
-  effect, then syncs the retained `.cast/root/staging` directory followed by the
-  retained installation root: the two exact parents of the atomic exchange.
-  It never reopens either parent by path and contains no rename, exchange,
-  reverse, database, trigger, cleanup, or root-link operation. After both
-  barriers it repeats the complete journal/namespace/database evidence
-  sandwich and converts through a private completion seal into ordinary
-  rollback-decision authority with `/usr` reversal pending. A sync error or
-  evidence race consumes the authority and leaves the exact
-  `UsrExchangeIntent` record for a fresh startup to retry the idempotent
-  durability suffix; it cannot retry the exchange in process.
-
-  After final database/namespace/database and journal revalidation, the executor
-  derives exactly one successor with `rollback_decision` and attempts exactly
-  one conditional `advance`. It performs no namespace or database mutation,
-  retries no uncertain write, and executes no rollback, roll-forward, cleanup,
-  or trigger effect. The old authority and lock-bearing store are dropped before
-  a descriptor-rooted reopen; the complete canonical record must reconcile to
-  the exact source or exact decision, including all error-after-application
-  outcomes, before startup reports the result.
-
-  Startup deliberately permits only one recovery journal mutation per entry.
-  An entry which persists `RollbackDecided` returns `RecoveryPending`; it does
-  not immediately route that new record. A later entry reloads the decision and
-  independently captures a sealed authority retaining the complete record,
-  exact per-open journal binding, stable database ownership and immutable
-  provenance, before/after/fresh descriptor-rooted namespace fingerprints, and
-  the cooperating-writer reservation. The decision must contain the exact
-  operation-specific rollback plan. A pending `/usr` action with exact `POST`
-  layout selects `ReverseExchangeIntent`; an already-satisfied action with exact
-  `PRE` layout selects `CandidatePreserveIntent`. Every other plan, phase,
-  layout, binding, database, provenance, or namespace combination remains
-  non-mutating.
-
-  Commit `c7c97d4c` reuses that same sealed authority for one additional exact
-  source: `UsrRestored` whose recorded forward rollback source is
-  `UsrExchangeIntent` or `UsrExchanged`, whose `/usr` evidence is `PRE`, and
-  whose `/usr` outcome is `Applied` or `AlreadySatisfied`. Previous archive and
-  boot actions must be `NotRequired`, and candidate preservation must still be
-  `Pending`. NewState requires fresh-row invalidation pending, quarantine, and
-  possible external effects; ActivateArchived requires no fresh-row action,
-  rearchive, and no external effects; ActiveReblit requires no fresh-row action,
-  quarantine, and possible external effects. Exact journal binding, stable
-  database ownership and provenance, and the descriptor-rooted namespace
-  sandwich remain mandatory. A transition-quarantine wrapper at `UsrRestored`
-  is rejected as a premature candidate-movement prefix rather than accepted as
-  evidence for the route.
-
-  After a complete database/namespace/database and journal revalidation, the
-  route executor calls `rollback_successor(None)` exactly once and attempts one
-  conditional journal advance. This yields `CandidatePreserveIntent` for an
-  admitted `UsrRestored` source. It contains no reverse exchange, rename,
-  non-journal filesystem write, database mutation, trigger, cleanup, candidate
-  movement, or root-link effect. Before descriptor-rooted reopen it drops both
-  the old authority and lock-bearing journal store. Success accepts only the
-  exact successor; an uncertain advance is reported only after reopen
-  reconciles the complete canonical record to the exact source or successor.
-  There is no same-process retry or continuation into the selected intent.
-
-  A later startup may admit only an exact `ReverseExchangeIntent` under a
-  private reverse seal. Exact `POST` evidence yields a consuming Apply
-  authority; exact `PRE` evidence yields a consuming Finish authority because
-  the namespace is already restored. Both authorities retain the installation,
-  journal binding, cooperating-writer reservation, complete source record,
-  stable database ownership and provenance, and descriptor-rooted namespace
-  proof. Apply makes exactly one retained descriptor-relative exchange attempt
-  and recaptures the layout rather than trusting the raw syscall report. An
-  applied layout continues even if the syscall reported an error; a semantic
-  non-application or ambiguous layout terminates that startup entry and returns
-  no reusable effect or journal authority. Finish makes no exchange attempt.
-
-  Both successful paths complete staging-parent and installation-root
-  durability in that order, revalidate all evidence, and derive the sole legal
-  `UsrRestored` successor. The persisted outcome is exact: an exchange applied
-  by this entry records `Applied`, while an already restored PRE layout records
-  `AlreadySatisfied`. Persistence performs one conditional journal advance,
-  then destroys the old effect authority and lock-bearing store before a
-  descriptor-rooted canonical reopen. A storage error remains an error even
-  when reopen proves whether the exact source or exact `UsrRestored` successor
-  is durable; it never authorizes an in-process retry or later rollback action.
-
-  The one-recovery-journal-mutation-per-entry rule therefore remains intact.
-  One entry may persist `RollbackDecided`, a later one may persist
-  `ReverseExchangeIntent`, and a later one may perform the admitted reverse and
-  persist `UsrRestored`. Because the journal-only route ran earlier in that
-  startup entry, the reverse entry stops there and returns `RecoveryPending`.
-  One fresh later entry may route exact `UsrRestored` to
-  `CandidatePreserveIntent`, again returns `RecoveryPending`, and performs no
-  preservation effect. Thus no startup entry advances more than one phase.
-
-  The assessment then classifies every validated persisted phase as begin
-  rollback, resume rollback, roll forward, finalize rollback, or manual
-  boot repair; correlates the exact candidate and previous database rows with
-  a before/after global transition audit; distinguishes allocation committed
-  behind an older journal generation; and rejects phase-incompatible cleared,
-  missing, foreign, or changing ownership. It also reads candidate metadata
-  provenance in both database inspections. Fresh states require absence through
-  `FreshStateAllocated`, admit either exact commit outcome only at
-  `CandidatePrepareStarted`, and require the immutable pair afterward until
-  exact database invalidation removes it; rollback derives the same rule from
-  its recorded forward source. Existing-state operations require provenance
-  from `Preparing`, so legacy absence is a typed blocker. A stable missing pair
-  and a pair deleted between inspection reads are distinguished. Runtime tree
-  witnesses are compared
-  only when two epoch captures match the journal's creation epoch. Every known
-  live, staging, state-slot, and quarantine name is reopened through a final
-  directory-and-marker identity sandwich, while an otherwise valid two-link
-  state-slot marker remains typed but unauthorized.
-
-  The snapshot now includes a complete diagnostic activation-namespace
-  inventory. Before and after the remaining startup evidence, it walks retained
-  descriptors for `/usr`, `.cast/root`, and `.cast/quarantine` under aggregate
-  entry, raw-name, operation, and deadline bounds, then reopens the public names
-  and journal. It rejects foreign root/isolation ABI entries, access/default
-  ACLs, noncanonical or changing wrappers, and orphan or multiply owned slot
-  links. State-ID absence, canonical bytes, and corruption remain typed rather
-  than collapsed. Every accepted link is bound to its exact tree inode, token,
-  state, wrapper location, and transition role. The phase policy covers forward
-  and rollback layouts, persisted action outcomes, archived rearchive versus
-  quarantine, synthesized-empty absence, trigger-dependent isolation ABI,
-  root-ABI completion, ambient archived states, and the phase-aware
-  ActiveReblit replacement reservation.
-
-  This diagnostic inventory is still not recovery authority, is not reused by
-  any recovery executor, and exposes no mutation API. Inspection retains the
-  installation, journal, and exact database
-  capabilities through its final revalidation, then releases the mutable
-  installation/global locks and exclusive journal before returning
-  `RecoveryPending`; keeping that journal after the startup coordinator was
-  released would permit a coordinator/journal ABBA deadlock. A retry must
-  independently acquire locks in canonical order and reload the journal. The
-  focused `make forge-startup-activation-namespace-test` lane proves 20 exact
-  namespace contracts: 9 original inventory and policy contracts, 1
-  isolation-ABI crash-prefix contract, and 10 partial-replacement contracts.
-  `make forge-startup-reconciliation-test` continues to prove 9 database,
-  provenance, epoch, substitution, retention, and lock-release contracts. The
-  sealed coordinator reservation now makes replacement evidence optional at
-  `CandidatePrepared` and mandatory from `TransactionTriggersStarted`; the
-  complete isolation ABI is likewise mandatory once trigger intent is durable.
-  Startup may normalize only the authenticated restrictive reservation prefix,
-  and it still rejects a generic quarantine fallback after trigger intent. The
-  focused `make forge-startup-usr-rollback-decision-test` lane passes 11/11
-  contracts across the three operations and both admitted layouts, including
-  all five journal-update fault points, mixed-root same-record rejection,
-  database/provenance/namespace races, historical runtime epochs, and retained
-  ActiveReblit reservation exclusion. The separate
-  `make forge-startup-usr-exchange-parent-durability-test` lane passes 11/11
-  contracts. Ten focused startup contracts cover exact ordering, retained
-  parent identity, sync failures, evidence races, retry idempotence, mixed-store
-  rejection, historical evidence, and ActiveReblit. Its eleventh contract runs
-  all three operations through the real one-shot coordinator exchange at each
-  of the three forward durability fault points, releases the failed authority,
-  enters real startup, and proves the exchange syscall count remains exactly
-  one while the exact pending-reverse decision is persisted without database or
-  non-journal namespace changes. The additional
-  `make forge-startup-usr-rollback-resume-route-test` lane passes 12/12 focused
-  routing contracts. Its added matrix crosses all three operations, both
-  admitted forward rollback sources, and both exact restored outcomes on PRE
-  evidence. The lane also retains both decision successors, journal binding and
-  mixed-root rejection, database/provenance/namespace and final-revalidation
-  races, premature transition-quarantine rejection, historical epochs,
-  ActiveReblit reservation retention, and all five journal-update fault
-  prefixes with exact source/successor reopen reconciliation.
-
-  The real reverse-dispatch lane added through commits `e69ad276`, `50cb98f8`,
-  `86c6c900`, `ecd58020`, and `e8c952f9` now passes twelve dispatcher contracts
-  plus two coordinator-origin contracts. Its in-process parent-durability
-  restart matrix crosses all three operations,
-  POST and PRE, and all three injected interruption points: staging-parent sync,
-  installation-root sync, and final PRE capture. POST also covers ordinary
-  success and error-after-application syscall reports; PRE correctly makes no
-  exchange attempt. After a physical reverse, an injected failure leaves
-  `ReverseExchangeIntent` canonical; a fresh startup observes PRE, completes
-  the durability suffix without a second exchange, and persists
-  `UsrRestored(AlreadySatisfied)`. A third startup performs the separate
-  journal-only route to `CandidatePreserveIntent`, with no reverse redispatch
-  or candidate effect.
-  Its journal restart matrix crosses all three operations, POST and PRE, and all
-  five conditional-update fault points. Canonical reopen finds only the exact
-  source or exact `UsrRestored` successor. If the source survived, fresh startup
-  finishes the already restored layout without exchanging again and stops; if
-  the successor survived, that startup routes it to `CandidatePreserveIntent`.
-  A later entry performs the same route for the source-survived case. Neither
-  restart path mutates the
-  database, root links, or non-journal namespace after the failed entry.
-
-  A separate contract drops the failed startup result, old `Installation`,
-  reservation, and database connection, then opens a fresh `Installation` and
-  fresh descriptor-anchored state-database handle. Across all three operations,
-  both a final-PRE-capture fault and a journal temporary-sync fault then converge
-  from PRE without a second exchange. This individual contract remains an
-  in-process handle-reopen simulation; the two process matrices below provide
-  the real process-death coverage.
-
-  Commit `ecd58020` re-executes the exact test binary as separate crash and
-  recovery processes and sends genuine `SIGKILL` at four reverse boundaries:
-  after the retained exchange but before semantic recapture, after the staging
-  parent barrier but before the installation-root barrier, before the final PRE
-  capture, and before final persistence revalidation. Crossing all three
-  operations gives 12 process-death cases. The parent drops its original
-  installation, database, journal, and reservation handles first; each child
-  opens fresh installation and database handles. Recovery must see physical
-  PRE, attempt no second exchange, persist exact
-  `UsrRestored(AlreadySatisfied)`, then route it on another startup to
-  `CandidatePreserveIntent` without a preservation effect. A
-  15-second deadline surrounds every child, and timeout cleanup kills and reaps
-  a hung process rather than blocking the lane indefinitely.
-
-  Commit `e8c952f9` applies the same crash/recovery process boundary to all three
-  operations, both POST and PRE starting layouts, and five successful
-  conditional journal-update durability points: temporary fully synced,
-  canonical exchanged, first directory sync, displaced file unlinked, and
-  final directory sync. This is a 3 x 2 x 5 matrix of 30 genuine `SIGKILL`
-  cases. At the first boundary the canonical record is still the exact
-  `ReverseExchangeIntent`, while the temporary contains the proposed
-  `UsrRestored` successor. Fresh open discards that temporary; since the
-  namespace has already reached PRE, restart derives
-  `UsrRestored(AlreadySatisfied)`. This intentionally differs from a killed
-  POST attempt's discarded temporary `UsrRestored(Applied)` record. At each of
-  the other four boundaries the canonical successor is already published, so
-  recovery preserves its exact original `Applied` or `AlreadySatisfied`
-  outcome, removes any displaced temporary residue, performs no second
-  exchange, and makes exactly the separate journal-only route to
-  `CandidatePreserveIntent`. Crash and recovery again use
-  fresh-process handles and strict child deadlines.
-
-  The same lane classifies all four raw exchange report/layout combinations,
-  rejects ambiguous post-attempt evidence, and freezes exact `Applied` versus
-  `AlreadySatisfied` outcomes. Its evidence-race cross-product injects database,
-  journal, and namespace changes during admission and immediately before the
-  effect for all three operations under both POST and PRE. The immediate
-  post-effect POST matrix covers journal and namespace races for all operations
-  plus the reconstructible NewState database race. Final durable revalidation
-  crosses that same evidence/operation set under both POST and PRE. Admission
-  and pre-effect races perform zero exchanges and zero journal advances.
-  Post-effect and final races may leave the physical PRE layout but never
-  advance through conflicting evidence. They preserve the injected change,
-  consume every mutation capability, and never retry the exchange in process.
-  Every safely reversible case repairs the exact evidence and then proves a
-  fresh, independently authenticated startup converges. Archived and
-  ActiveReblit database-provenance deletions remain fail-closed only because
-  their cleared ownership correctly makes the sole safe restoration API reject
-  reinsertion.
-
-  The two coordinator-origin contracts cross all three operations against,
-  respectively, all three forward exchange-durability fault points and all five
-  forward exchange-completion journal fault points. Separate startup entries
-  persist the rollback decision, route it to `ReverseExchangeIntent`, execute
-  exactly one reverse exchange, stop at the exact `UsrRestored` successor, then
-  route a later entry to `CandidatePreserveIntent`.
-  The forward and reverse syscall count is exactly two, the database is
-  unchanged, and the later route neither redispatches nor performs candidate
-  effects. The restored non-journal namespace comparison is semantic: it covers
-  names, identities, modes, link counts, lengths, and payloads while deliberately
-  excluding kernel rename timestamps, which a forward/reverse exchange cannot
-  preserve.
-
-  This is still only the authenticated `/usr` rollback prefix. No startup
-  executor yet handles the effects of `CandidatePreserveIntent`, candidate
-  preservation, fresh-row invalidation, the remaining rollback actions,
-  roll-forward, boot repair, or cleanup. The exact reverse prefix now has both deterministic
-  in-process contracts and genuine process-termination coverage. It still has
-  no reboot or power-loss proof: `SIGKILL` preserves the kernel-visible state at
-  termination and cannot establish which pre-fsync rename survives a power
-  cycle. The complete campaign required below therefore remains open, as do
-  this item and all six broad Phase 11 work items.
-- [x] Add database ownership probes that distinguish matching, cleared,
-  missing, and foreign transition rows, plus a bounded global orphan-token
-  audit. Journal absence with any non-null transition token is corruption, not
-  permission to start another transaction.
-- [ ] Add deterministic process-kill and fault-injection coverage at every
-  journal fsync, database mutation, rename/exchange, trigger boundary, archive,
-  quarantine, and boot boundary. Reopening after each injected interruption
-  must converge to exactly one authenticated live tree and one terminal
-  outcome without deleting or overwriting a foreign entry.
-  The reverse `/usr` prefix now covers 12 execution-boundary and 30
-  journal-update-boundary `SIGKILL` cases with fresh-process reopen. This item
-  remains unchecked because the other phases and true power-loss-equivalent
-  durability outcomes are not yet covered.
-
-**Exit gate:** after a kill or power-loss-equivalent interruption at every
-persisted boundary, reopening Cast either completes the committed transition,
-restores the exact previous `/usr` and preserves the candidate, or stops on a
-structured manual-recovery record. It never starts a second transition while
-the first is unresolved, never infers success from a pathname or an
-out-of-epoch runtime witness alone, and never weakens atomic updates, state
-separation, merged-/usr compliance, container trigger isolation, or fast
-rollback.
+The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
+remains authoritative in `PLAN.md`.
