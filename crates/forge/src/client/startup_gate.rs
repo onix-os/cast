@@ -114,6 +114,21 @@ impl UsrRollbackFreshDbInvalidationRouteSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting fresh-database invalidation authority
+/// capture to the writer-first startup gate. This checkpoint deliberately has
+/// no production constructor or dispatcher.
+#[allow(dead_code)] // invalidation remains intentionally unreachable from production
+pub(in crate::client) struct UsrRollbackFreshDbInvalidationSeal {
+    _private: (),
+}
+
+impl UsrRollbackFreshDbInvalidationSeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,

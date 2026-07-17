@@ -262,6 +262,31 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Require the exact preserved-candidate namespace while the journal is at
+/// `FreshDbInvalidationIntent`.
+///
+/// This is deliberately separate from the earlier routing proof: accepting a
+/// persisted invalidation intent must never make `CandidatePreserved`
+/// admission applicable again.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_new_state_fresh_db_invalidation_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::FreshDbInvalidationIntent {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongFreshDbInvalidationPhase);
+    }
+    if record.operation != Operation::NewState {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::NewStateRequired);
+    }
+    if candidate_preserve_topology_after_phase(record, snapshot)?
+        == UsrRollbackCandidatePreserveTopology::NewStatePreserved
+    {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+    }
+}
+
 fn candidate_preserve_topology_after_phase(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
@@ -526,6 +551,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongPhase,
     #[error("fresh-database invalidation routing requires CandidatePreserved")]
     WrongCandidatePreservedPhase,
+    #[error("fresh-database invalidation requires FreshDbInvalidationIntent")]
+    WrongFreshDbInvalidationPhase,
     #[error("fresh-database invalidation routing requires a NewState transition")]
     NewStateRequired,
     #[error("the candidate tree is absent from the accepted namespace inventory")]

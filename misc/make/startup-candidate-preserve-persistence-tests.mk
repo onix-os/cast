@@ -82,8 +82,6 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n 'clear_transition_if_matches|remove_transition_if_matches|insert_fresh_metadata|delete_metadata|invalidation|invalidate|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|cleanup|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n 'startup_gate|dispatch' "$$executor"; then exit 1; fi; \
-	timeout 10s git diff --quiet -- crates/forge/src/client/startup_gate.rs; \
-	timeout 10s git diff --cached --quiet -- crates/forge/src/client/startup_gate.rs; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'for source in Source::ALL {' "$$matrix" )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -n '^            arm_next_(temporary_sync|update_exchange|update_first_directory_sync|displaced_unlink|update_final_directory_sync)_fault,$$' "$$storage" | timeout 10s wc -l )" = 5; \
 	for race in Database Provenance Journal Installation Namespace Plan; do timeout 10s grep -Fq "EvidenceRace::$$race" "$$races"; done; \

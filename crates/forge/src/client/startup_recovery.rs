@@ -52,6 +52,23 @@ impl UsrRollbackCandidatePreserveDurabilitySeal {
     }
 }
 
+/// Unforgeable permission to consume exact `FreshDbInvalidationIntent`
+/// admission through the one-attempt database invalidation effect.
+///
+/// Production deliberately has no constructor until persistence and the full
+/// fresh-database invalidation dispatcher are ready as one recovery boundary.
+#[allow(dead_code)] // invalidation remains intentionally unreachable from production
+pub(in crate::client) struct UsrRollbackFreshDbInvalidationEffectSeal {
+    _private: (),
+}
+
+impl UsrRollbackFreshDbInvalidationEffectSeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
 /// this module and its phase-specific executor descendants.
