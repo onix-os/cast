@@ -88,6 +88,52 @@ impl UsrRollbackFinalizationNamespaceProof {
         installation.revalidate_mutable_namespace()?;
         Ok(())
     }
+
+    /// Consume the terminal namespace proof after the exact journal record
+    /// has been deleted.
+    ///
+    /// The record payload remains the policy input, but absence is now the
+    /// only accepted public journal state.  The same retained store must still
+    /// own both the public journal directory and its public lock name around a
+    /// fresh terminal namespace capture.  No journal directory, lock, record,
+    /// or namespace entry is created or repaired here.
+    pub(in crate::client::startup_reconciliation) fn revalidate_after_journal_delete(
+        self,
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        expected: &TransitionRecord,
+    ) -> Result<(), UsrRollbackFinalizationNamespaceError> {
+        installation.revalidate_mutable_namespace()?;
+        require_exact_public_journal_absence(installation, journal)?;
+        self.before.revalidate_retained()?;
+        self.after.revalidate_retained()?;
+        require_matching_fingerprints(&self.before, &self.after)?;
+        require_exact_new_state_rollback_complete_topology(expected, &self.before)?;
+        require_exact_new_state_rollback_complete_topology(expected, &self.after)?;
+
+        run_before_fresh_namespace_capture();
+        let fresh = capture_snapshot(installation, expected)?;
+        fresh.revalidate_retained()?;
+        require_matching_fingerprints(&self.before, &fresh)?;
+        require_exact_new_state_rollback_complete_topology(expected, &fresh)?;
+
+        require_exact_public_journal_absence(installation, journal)?;
+        self.before.revalidate_retained()?;
+        self.after.revalidate_retained()?;
+        installation.revalidate_mutable_namespace()?;
+        Ok(())
+    }
+}
+
+fn require_exact_public_journal_absence(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+) -> Result<(), UsrRollbackFinalizationNamespaceError> {
+    let cast = installation.retained_mutable_cast_directory()?;
+    match journal.load_revalidated_retained_cast(cast)? {
+        None => Ok(()),
+        Some(_) => Err(UsrRollbackFinalizationNamespaceError::JournalChanged),
+    }
 }
 
 fn require_matching_fingerprints(

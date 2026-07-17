@@ -152,6 +152,36 @@ impl<'reservation> UsrRollbackFinalizationAuthority<'reservation> {
         Ok(())
     }
 
+    /// Consume this one-shot authority after the terminal journal deletion
+    /// and prove that its independent database and namespace evidence still
+    /// describes the exact same rollback result.
+    ///
+    /// Unlike ordinary revalidation, this path requires the source-bound
+    /// journal store to be publicly named and canonically absent.  Consuming
+    /// `self` prevents terminal authority from being reused after absence has
+    /// been accepted.
+    pub(in crate::client) fn revalidate_after_journal_delete(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<(), UsrRollbackFinalizationAuthorityError> {
+        if !journal.has_binding(&self.journal_binding) {
+            return Err(UsrRollbackFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
+        }
+        self.installation.revalidate_mutable_namespace()?;
+        let database_before =
+            require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
+        run_between_database_captures();
+        self.namespace
+            .revalidate_after_journal_delete(&self.installation, journal, &self.record)?;
+        let database_after =
+            require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
+        if database_before != database_after || !rollback_finalization_plan_is_exact(&self.record) {
+            return Err(UsrRollbackFinalizationAuthorityErrorKind::FinalizationEvidenceMismatch.into());
+        }
+        self.installation.revalidate_mutable_namespace()?;
+        Ok(())
+    }
+
     pub(in crate::client) fn installation(&self) -> &Installation {
         &self.installation
     }

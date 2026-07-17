@@ -58,8 +58,9 @@ use codec::{
 };
 #[cfg(test)]
 use store::{
-    DurabilityCheckpoint, StorageFaultPoint, arm_storage_fault, assert_storage_fault_consumed,
-    take_durability_checkpoints,
+    DurabilityCheckpoint, PublicBindingRevalidationBoundary, StorageFaultPoint,
+    arm_public_binding_revalidation_callback, arm_storage_fault, assert_public_binding_revalidation_callback_consumed,
+    assert_storage_fault_consumed, take_durability_checkpoints,
 };
 
 /// Arm the first temporary-file sync in the next journal update. Exposed only
@@ -128,6 +129,29 @@ pub(crate) fn arm_next_update_final_directory_sync_fault() {
 pub(crate) fn assert_update_final_directory_sync_fault_consumed() {
     assert_storage_fault_consumed();
 }
+
+/// Arm canonical unlink during the next terminal journal deletion.
+#[cfg(test)]
+pub(crate) fn arm_next_delete_canonical_unlink_fault() {
+    arm_storage_fault(StorageFaultPoint::CanonicalUnlink);
+}
+
+#[cfg(test)]
+pub(crate) fn assert_delete_canonical_unlink_fault_consumed() {
+    assert_storage_fault_consumed();
+}
+
+/// Arm the journal-directory sync after the next terminal journal deletion
+/// has already unlinked the canonical record.
+#[cfg(test)]
+pub(crate) fn arm_next_delete_directory_sync_fault() {
+    arm_storage_fault(StorageFaultPoint::DeleteDirectorySync);
+}
+
+#[cfg(test)]
+pub(crate) fn assert_delete_directory_sync_fault_consumed() {
+    assert_storage_fault_consumed();
+}
 #[cfg(test)]
 use validation::{next_forward_phase, next_rollback_phase, rollback_allowed, validate_advance};
 
@@ -168,6 +192,25 @@ pub(crate) enum StorageError {
         path: PathBuf,
         #[source]
         source: io::Error,
+    },
+    #[error("revalidate the retained journal directory below the retained Cast directory")]
+    RevalidateJournalDirectory {
+        #[source]
+        source: io::Error,
+    },
+    #[error("the retained journal directory is no longer the exact public `journal` child")]
+    JournalDirectoryBindingChanged,
+    #[error("enumerate the bounded public transition-journal entry set")]
+    RevalidateJournalEntrySet {
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "public transition-journal entries do not match the exact bounded set (expected_canonical={expected_canonical:?}, entries={entries:?})"
+    )]
+    JournalEntrySetMismatch {
+        expected_canonical: Option<bool>,
+        entries: Vec<String>,
     },
     #[error("open canonical state-transition journal")]
     OpenCanonical {
@@ -210,6 +253,13 @@ pub(crate) enum StorageError {
         #[source]
         source: io::Error,
     },
+    #[error("revalidate the retained exclusive journal lock through its public name")]
+    RevalidateJournalLock {
+        #[source]
+        source: io::Error,
+    },
+    #[error("the retained exclusive journal lock is no longer the exact public `state-transition.lock`")]
+    JournalLockBindingChanged,
     #[error("acquire the internal exclusive transition-journal lock")]
     AcquireLock {
         #[source]

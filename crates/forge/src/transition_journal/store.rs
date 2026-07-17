@@ -7,11 +7,11 @@ use std::{
 };
 
 use super::{
-    CANONICAL_NAME, DirectoryPolicy, InodeIdentity, JOURNAL_FILE_MODE, MAX_STALE_TEMPORARIES, Phase, StorageError,
-    TransitionRecord, controlled_resolution, decode, directory_entries, encode, ensure_journal_directory,
-    inode_identity, open_and_lock, open_directory_path, open_existing_directory, openat2_file, read_bounded, renameat2,
-    require_safe_regular_file, require_safe_stale_temporary, require_same_inode, temporary_name, try_open_and_lock,
-    unlinkat, valid_temporary_name, validation::validate_advance,
+    CANONICAL_NAME, DirectoryPolicy, InodeIdentity, JOURNAL_DIRECTORY, JOURNAL_FILE_MODE, LOCK_NAME,
+    MAX_STALE_TEMPORARIES, Phase, StorageError, TransitionRecord, controlled_resolution, decode, directory_entries,
+    encode, ensure_journal_directory, inode_identity, open_and_lock, open_directory_path, open_existing_directory,
+    openat2_file, read_bounded, renameat2, require_safe_regular_file, require_safe_stale_temporary, require_same_inode,
+    temporary_name, try_open_and_lock, unlinkat, valid_temporary_name, validation::validate_advance,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +37,14 @@ pub(super) enum StorageFaultPoint {
     DeleteDirectorySync,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PublicBindingRevalidationBoundary {
+    BeforeLoadFinalBinding,
+    BeforeDeleteUnlinkBinding,
+    BeforeDeleteFalseFinalBinding,
+    BeforeDeleteFinalBinding,
+}
+
 /// A completed filesystem operation in the durable journal-update protocol.
 ///
 /// Test-only process-kill contracts arm one exact boundary. The production
@@ -57,6 +65,10 @@ std::thread_local! {
     static STORAGE_FAULT: std::cell::Cell<Option<StorageFaultPoint>> = const { std::cell::Cell::new(None) };
     static JOURNAL_UPDATE_DURABILITY_CALLBACK: std::cell::RefCell<Option<(
         JournalUpdateDurabilityBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+    static PUBLIC_BINDING_REVALIDATION_CALLBACK: std::cell::RefCell<Option<(
+        PublicBindingRevalidationBoundary,
         Box<dyn FnOnce()>,
     )>> = const { std::cell::RefCell::new(None) };
 }
@@ -119,6 +131,47 @@ pub(super) fn assert_storage_fault_consumed() {
     STORAGE_FAULT.with(|fault| assert!(fault.get().is_none(), "armed storage fault was not reached"));
 }
 
+#[cfg(test)]
+pub(super) fn arm_public_binding_revalidation_callback(
+    boundary: PublicBindingRevalidationBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "a public-binding revalidation callback is already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(super) fn assert_public_binding_revalidation_callback_consumed() {
+    PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow().is_none(),
+            "armed public-binding revalidation callback was not reached"
+        );
+    });
+}
+
+fn public_binding_revalidation_boundary(boundary: PublicBindingRevalidationBoundary) {
+    #[cfg(test)]
+    {
+        let callback = PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
+            let mut armed = armed.borrow_mut();
+            if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
+                armed.take().map(|(_, callback)| callback)
+            } else {
+                None
+            }
+        });
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+    let _ = boundary;
+}
+
 fn storage_fault(point: StorageFaultPoint) -> io::Result<()> {
     #[cfg(test)]
     {
@@ -153,6 +206,7 @@ pub(crate) struct TransitionJournalBinding(Arc<()>);
 #[derive(Debug)]
 struct LoadedRecord {
     record: TransitionRecord,
+    framed: Vec<u8>,
     _file: std::fs::File,
     identity: InodeIdentity,
 }
@@ -258,6 +312,26 @@ impl TransitionJournalStore {
         Ok(self.load_pinned()?.map(|loaded| loaded.record))
     }
 
+    /// Load the canonical record while holding one operation lock across
+    /// public directory and lock binding checks before and after the read.
+    pub(crate) fn load_revalidated_retained_cast(
+        &self,
+        cast_directory: &std::fs::File,
+    ) -> Result<Option<TransitionRecord>, StorageError> {
+        let _operation = self.lock_operation()?;
+        let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+        let canonical_present = self.inspect_exact_public_entry_set(&journal, None)?;
+        let loaded = self.load_pinned()?;
+        if canonical_present != loaded.is_some() {
+            return Err(StorageError::CanonicalChanged);
+        }
+        self.revalidate_exact_public_state(&journal, loaded.as_ref())?;
+        public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding);
+        let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+        self.revalidate_exact_public_state(&journal, loaded.as_ref())?;
+        Ok(loaded.map(|loaded| loaded.record))
+    }
+
     /// Capture an unforgeable token for this exact open store. A separately
     /// opened journal receives a different token even when its canonical
     /// record and display path are byte-for-byte equal.
@@ -269,6 +343,138 @@ impl TransitionJournalStore {
     /// substitute for the store captured by mutation authority.
     pub(crate) fn has_binding(&self, expected: &TransitionJournalBinding) -> bool {
         Arc::ptr_eq(&self.binding, &expected.0)
+    }
+
+    /// Revalidate that this retained store is still publicly bound below the
+    /// supplied retained `.cast` descriptor.
+    ///
+    /// This inspection only opens and authenticates existing names. It never
+    /// creates, normalizes, synchronizes, enumerates, or cleans journal state.
+    pub(crate) fn revalidate_retained_cast_binding(&self, cast_directory: &std::fs::File) -> Result<(), StorageError> {
+        let _operation = self.lock_operation()?;
+        self.revalidate_retained_cast_binding_locked(cast_directory)?;
+        Ok(())
+    }
+
+    fn revalidate_retained_cast_binding_locked(
+        &self,
+        cast_directory: &std::fs::File,
+    ) -> Result<std::fs::File, StorageError> {
+        // Capture twice around lock authentication so neither an exchanged
+        // public directory nor an exchanged public lock can be paired with a
+        // retained descriptor from a different namespace moment.
+        let journal = self.open_exact_public_journal(cast_directory)?;
+        self.revalidate_exact_public_lock(&journal)?;
+        let journal = self.open_exact_public_journal(cast_directory)?;
+        self.revalidate_exact_public_lock(&journal)?;
+        Ok(journal)
+    }
+
+    fn open_exact_public_journal(&self, cast_directory: &std::fs::File) -> Result<std::fs::File, StorageError> {
+        let journal = open_existing_directory(
+            cast_directory,
+            JOURNAL_DIRECTORY,
+            &self.path,
+            DirectoryPolicy::ExactPrivate,
+        )
+        .map_err(|source| StorageError::RevalidateJournalDirectory { source })?;
+        let retained =
+            inode_identity(&self.directory).map_err(|source| StorageError::RevalidateJournalDirectory { source })?;
+        let public = inode_identity(&journal).map_err(|source| StorageError::RevalidateJournalDirectory { source })?;
+        if retained != public {
+            return Err(StorageError::JournalDirectoryBindingChanged);
+        }
+        Ok(journal)
+    }
+
+    fn revalidate_exact_public_lock(&self, journal: &std::fs::File) -> Result<(), StorageError> {
+        let path = self.path.join("state-transition.lock");
+        require_safe_regular_file(&self._lock, &path)
+            .map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        let public = openat2_file(
+            journal.as_raw_fd(),
+            LOCK_NAME,
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        require_safe_regular_file(&public, &path).map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        let retained = inode_identity(&self._lock).map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        let public = inode_identity(&public).map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        if retained != public {
+            return Err(StorageError::JournalLockBindingChanged);
+        }
+        Ok(())
+    }
+
+    fn inspect_exact_public_entry_set(
+        &self,
+        journal: &std::fs::File,
+        expected_canonical: Option<bool>,
+    ) -> Result<bool, StorageError> {
+        // `fdopendir` consumes the shared directory offset of its descriptor.
+        // Open `.` as a fresh file description for every bounded scan so
+        // repeated PRE/POST checks never mistake an exhausted offset for an
+        // empty journal.
+        let scan = open_existing_directory(journal, c".", &self.path, DirectoryPolicy::ExactPrivate)
+            .map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
+        let names = directory_entries(&scan).map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
+        let lock_count = names
+            .iter()
+            .filter(|name| name.as_bytes() == LOCK_NAME.to_bytes())
+            .count();
+        let canonical_count = names
+            .iter()
+            .filter(|name| name.as_bytes() == CANONICAL_NAME.to_bytes())
+            .count();
+        let canonical_present = canonical_count == 1;
+        let exact = lock_count == 1
+            && canonical_count <= 1
+            && names.len() == 1 + usize::from(canonical_present)
+            && expected_canonical.is_none_or(|expected| expected == canonical_present);
+        if !exact {
+            let mut entries = names
+                .into_iter()
+                .map(|name| name.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            entries.sort();
+            return Err(StorageError::JournalEntrySetMismatch {
+                expected_canonical,
+                entries,
+            });
+        }
+        Ok(canonical_present)
+    }
+
+    fn revalidate_exact_public_state(
+        &self,
+        journal: &std::fs::File,
+        loaded: Option<&LoadedRecord>,
+    ) -> Result<(), StorageError> {
+        self.inspect_exact_public_entry_set(journal, Some(loaded.is_some()))?;
+        let Some(loaded) = loaded else {
+            return Ok(());
+        };
+        let mut public = openat2_file(
+            journal.as_raw_fd(),
+            CANONICAL_NAME,
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| StorageError::OpenCanonical { source })?;
+        require_safe_regular_file(&public, &self.path.join("state-transition"))
+            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        require_same_inode(
+            loaded.identity,
+            inode_identity(&public).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+        let framed = read_bounded(&mut public).map_err(|source| StorageError::ReadCanonical { source })?;
+        if framed != loaded.framed {
+            return Err(StorageError::CanonicalChanged);
+        }
+        Ok(())
     }
 
     /// Durably create the first `preparing` record for one transaction.
@@ -341,15 +547,59 @@ impl TransitionJournalStore {
     /// and payload. Returns false only when the canonical name is absent.
     pub(crate) fn delete(&self, expected: &TransitionRecord) -> Result<bool, StorageError> {
         let _operation = self.lock_operation()?;
+        self.delete_locked(None, expected)
+    }
+
+    /// Conditionally delete one exact terminal record while holding one
+    /// operation lock across public binding checks and the complete durable
+    /// unlink protocol.
+    pub(crate) fn delete_revalidated_retained_cast(
+        &self,
+        cast_directory: &std::fs::File,
+        expected: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
+        let _operation = self.lock_operation()?;
+        self.delete_locked(Some(cast_directory), expected)
+    }
+
+    fn delete_locked(
+        &self,
+        cast_directory: Option<&std::fs::File>,
+        expected: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
+        let initial_public = if let Some(cast_directory) = cast_directory {
+            let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+            let canonical_present = self.inspect_exact_public_entry_set(&journal, None)?;
+            Some((journal, canonical_present))
+        } else {
+            None
+        };
         expected.validate().map_err(StorageError::Decode)?;
         if !expected.phase.deletable() {
             return Err(StorageError::DeleteNonterminal);
         }
-        let Some(existing) = self.load_pinned()? else {
+        let existing = self.load_pinned()?;
+        if let Some((journal, canonical_present)) = initial_public.as_ref() {
+            if *canonical_present != existing.is_some() {
+                return Err(StorageError::CanonicalChanged);
+            }
+            self.revalidate_exact_public_state(journal, existing.as_ref())?;
+        }
+        let Some(existing) = existing else {
+            if let Some(cast_directory) = cast_directory {
+                public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteFalseFinalBinding);
+                let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+                self.revalidate_exact_public_state(&journal, None)?;
+            }
             return Ok(false);
         };
         if existing.record != *expected {
             return Err(StorageError::ExpectedRecordMismatch);
+        }
+        if let Some(cast_directory) = cast_directory {
+            public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteUnlinkBinding);
+            let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+            self.revalidate_exact_public_state(&journal, Some(&existing))?;
         }
         let named = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
         require_same_inode(
@@ -364,6 +614,11 @@ impl TransitionJournalStore {
             .and_then(|()| self.directory.sync_all())
             .map_err(|source| StorageError::SyncJournalDirectory { source })?;
         durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
+        if let Some(cast_directory) = cast_directory {
+            public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteFinalBinding);
+            let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+            self.revalidate_exact_public_state(&journal, None)?;
+        }
         Ok(true)
     }
 
@@ -384,6 +639,7 @@ impl TransitionJournalStore {
         let record = decode(&framed).map_err(StorageError::Decode)?;
         Ok(Some(LoadedRecord {
             record,
+            framed,
             _file: file,
             identity,
         }))

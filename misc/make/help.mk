@@ -31,6 +31,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-effect-test  Run sealed exact fresh-database invalidation effect contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-persistence-test  Run durable FreshDbInvalidated journal persistence contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-complete-route-test  Run journal-only FreshDbInvalidated-to-RollbackComplete route contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-finalization-test  Run sealed terminal rollback journal-finalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-new-state-dispatch-test  Run the real-startup NewState rollback-suffix contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-admission-test  Run sealed read-only reverse-admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-projection-test  Run normalized reverse-exchange projection contracts"

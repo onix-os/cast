@@ -1,4 +1,474 @@
 #[test]
+fn retained_cast_binding_revalidation_accepts_exact_directory_and_lock_without_mutation() {
+    let (temporary, store) = fixture();
+    let record = creation_record();
+    store.create(&record).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let journal_path = cast_path.join("journal");
+    let lock_path = journal_path.join("state-transition.lock");
+    let stale_path = stale_temporary_path(temporary.path(), 901);
+    fs::write(&lock_path, b"retained-lock-bytes").unwrap();
+    fs::write(&stale_path, b"retained-stale-bytes").unwrap();
+    fs::set_permissions(&stale_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let cast = fs::File::open(&cast_path).unwrap();
+    let canonical_before = fs::read(canonical(temporary.path())).unwrap();
+    let mut entries_before = fs::read_dir(&journal_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    entries_before.sort();
+
+    store.revalidate_retained_cast_binding(&cast).unwrap();
+
+    let mut entries_after = fs::read_dir(&journal_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    entries_after.sort();
+    assert_eq!(entries_after, entries_before);
+    assert_eq!(fs::read(canonical(temporary.path())).unwrap(), canonical_before);
+    assert_eq!(fs::read(lock_path).unwrap(), b"retained-lock-bytes");
+    assert_eq!(fs::read(stale_path).unwrap(), b"retained-stale-bytes");
+}
+
+#[test]
+fn retained_cast_binding_revalidation_rejects_safe_journal_replacement_without_touching_either_tree() {
+    let (temporary, store) = fixture();
+    store.create(&creation_record()).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let journal_path = cast_path.join("journal");
+    let displaced_path = cast_path.join("journal-displaced");
+    let canonical_before = fs::read(canonical(temporary.path())).unwrap();
+    fs::write(journal_path.join("state-transition.lock"), b"displaced-lock-bytes").unwrap();
+    fs::rename(&journal_path, &displaced_path).unwrap();
+    fs::create_dir(&journal_path).unwrap();
+    fs::set_permissions(&journal_path, fs::Permissions::from_mode(0o700)).unwrap();
+    let foreign = journal_path.join("foreign-sentinel");
+    fs::write(&foreign, b"foreign-journal-bytes").unwrap();
+
+    let error = store.revalidate_retained_cast_binding(&cast).unwrap_err();
+
+    assert!(matches!(error, StorageError::JournalDirectoryBindingChanged));
+    assert_eq!(
+        fs::read(displaced_path.join("state-transition")).unwrap(),
+        canonical_before
+    );
+    assert_eq!(
+        fs::read(displaced_path.join("state-transition.lock")).unwrap(),
+        b"displaced-lock-bytes"
+    );
+    assert_eq!(fs::read(foreign).unwrap(), b"foreign-journal-bytes");
+}
+
+#[test]
+fn retained_cast_binding_revalidation_rejects_missing_and_replaced_lock_without_touching_bytes() {
+    let (missing_temporary, missing_store) = fixture();
+    let missing_cast_path = missing_temporary.path().join(".cast");
+    let missing_cast = fs::File::open(&missing_cast_path).unwrap();
+    let missing_lock = missing_cast_path.join("journal/state-transition.lock");
+    let displaced_missing_lock = missing_cast_path.join("journal/displaced-missing-lock");
+    fs::write(&missing_lock, b"missing-displaced-bytes").unwrap();
+    fs::rename(&missing_lock, &displaced_missing_lock).unwrap();
+
+    let missing_error = missing_store
+        .revalidate_retained_cast_binding(&missing_cast)
+        .unwrap_err();
+
+    assert!(matches!(missing_error, StorageError::RevalidateJournalLock { .. }));
+    assert_eq!(fs::read(displaced_missing_lock).unwrap(), b"missing-displaced-bytes");
+
+    let (replaced_temporary, replaced_store) = fixture();
+    let replaced_cast_path = replaced_temporary.path().join(".cast");
+    let replaced_cast = fs::File::open(&replaced_cast_path).unwrap();
+    let replaced_lock = replaced_cast_path.join("journal/state-transition.lock");
+    let displaced_replaced_lock = replaced_cast_path.join("journal/displaced-replaced-lock");
+    fs::write(&replaced_lock, b"replaced-displaced-bytes").unwrap();
+    fs::rename(&replaced_lock, &displaced_replaced_lock).unwrap();
+    fs::write(&replaced_lock, b"foreign-replacement-bytes").unwrap();
+    fs::set_permissions(&replaced_lock, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let replaced_error = replaced_store
+        .revalidate_retained_cast_binding(&replaced_cast)
+        .unwrap_err();
+
+    assert!(matches!(replaced_error, StorageError::JournalLockBindingChanged));
+    assert_eq!(fs::read(displaced_replaced_lock).unwrap(), b"replaced-displaced-bytes");
+    assert_eq!(fs::read(replaced_lock).unwrap(), b"foreign-replacement-bytes");
+}
+
+#[test]
+fn retained_cast_revalidated_load_and_delete_succeed_only_for_exact_public_bindings() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    let cast = fs::File::open(temporary.path().join(".cast")).unwrap();
+
+    assert_eq!(
+        store.load_revalidated_retained_cast(&cast).unwrap(),
+        Some(terminal.clone())
+    );
+    assert!(store.delete_revalidated_retained_cast(&cast, &terminal).unwrap());
+    assert_eq!(store.load_revalidated_retained_cast(&cast).unwrap(), None);
+    assert!(!store.delete_revalidated_retained_cast(&cast, &terminal).unwrap());
+}
+
+#[test]
+fn retained_cast_revalidated_load_rejects_directory_replacement_after_read_without_touching_bytes() {
+    let (temporary, store) = fixture();
+    let record = creation_record();
+    store.create(&record).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let journal_path = cast_path.join("journal");
+    let displaced_path = cast_path.join("journal-load-displaced");
+    let canonical_before = fs::read(canonical(temporary.path())).unwrap();
+    fs::write(journal_path.join("state-transition.lock"), b"load-displaced-lock").unwrap();
+    let callback_journal = journal_path.clone();
+    let callback_displaced = displaced_path.clone();
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding, move || {
+        fs::rename(&callback_journal, &callback_displaced).unwrap();
+        fs::create_dir(&callback_journal).unwrap();
+        fs::set_permissions(&callback_journal, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(callback_journal.join("foreign-load-sentinel"), b"foreign-load-bytes").unwrap();
+    });
+
+    let error = store.load_revalidated_retained_cast(&cast).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(error, StorageError::JournalDirectoryBindingChanged));
+    assert_eq!(
+        fs::read(displaced_path.join("state-transition")).unwrap(),
+        canonical_before
+    );
+    assert_eq!(
+        fs::read(displaced_path.join("state-transition.lock")).unwrap(),
+        b"load-displaced-lock"
+    );
+    assert_eq!(
+        fs::read(journal_path.join("foreign-load-sentinel")).unwrap(),
+        b"foreign-load-bytes"
+    );
+}
+
+#[test]
+fn retained_cast_revalidated_delete_rejects_lock_replacement_before_unlink_without_touching_bytes() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let lock_path = cast_path.join("journal/state-transition.lock");
+    let displaced_lock = cast_path.join("journal/delete-displaced-lock");
+    fs::write(&lock_path, b"delete-displaced-lock-bytes").unwrap();
+    let callback_lock = lock_path.clone();
+    let callback_displaced = displaced_lock.clone();
+    arm_public_binding_revalidation_callback(
+        PublicBindingRevalidationBoundary::BeforeDeleteUnlinkBinding,
+        move || {
+            fs::rename(&callback_lock, &callback_displaced).unwrap();
+            fs::write(&callback_lock, b"foreign-delete-lock-bytes").unwrap();
+            fs::set_permissions(&callback_lock, fs::Permissions::from_mode(0o600)).unwrap();
+        },
+    );
+
+    let error = store.delete_revalidated_retained_cast(&cast, &terminal).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(error, StorageError::JournalLockBindingChanged));
+    assert_eq!(store.load().unwrap(), Some(terminal));
+    assert_eq!(fs::read(displaced_lock).unwrap(), b"delete-displaced-lock-bytes");
+    assert_eq!(fs::read(lock_path).unwrap(), b"foreign-delete-lock-bytes");
+}
+
+#[test]
+fn retained_cast_revalidated_delete_rejects_directory_replacement_after_sync_without_touching_bytes() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let journal_path = cast_path.join("journal");
+    let displaced_path = cast_path.join("journal-delete-displaced");
+    fs::write(
+        journal_path.join("state-transition.lock"),
+        b"post-delete-displaced-lock",
+    )
+    .unwrap();
+    let callback_journal = journal_path.clone();
+    let callback_displaced = displaced_path.clone();
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeDeleteFinalBinding, move || {
+        fs::rename(&callback_journal, &callback_displaced).unwrap();
+        fs::create_dir(&callback_journal).unwrap();
+        fs::set_permissions(&callback_journal, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(
+            callback_journal.join("foreign-delete-sentinel"),
+            b"foreign-post-delete-bytes",
+        )
+        .unwrap();
+    });
+
+    let error = store.delete_revalidated_retained_cast(&cast, &terminal).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(error, StorageError::JournalDirectoryBindingChanged));
+    assert!(!displaced_path.join("state-transition").exists());
+    assert_eq!(
+        fs::read(displaced_path.join("state-transition.lock")).unwrap(),
+        b"post-delete-displaced-lock"
+    );
+    assert_eq!(
+        fs::read(journal_path.join("foreign-delete-sentinel")).unwrap(),
+        b"foreign-post-delete-bytes"
+    );
+}
+
+#[test]
+fn retained_cast_revalidated_delete_rejects_byte_identical_canonical_recreation_before_unlink() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let canonical_path = canonical(temporary.path());
+    let displaced = cast_path.join("journal/hidden-original-canonical");
+    let bytes = fs::read(&canonical_path).unwrap();
+    let callback_canonical = canonical_path.clone();
+    let callback_displaced = displaced.clone();
+    let callback_bytes = bytes.clone();
+    arm_public_binding_revalidation_callback(
+        PublicBindingRevalidationBoundary::BeforeDeleteUnlinkBinding,
+        move || {
+            fs::rename(&callback_canonical, &callback_displaced).unwrap();
+            fs::write(&callback_canonical, callback_bytes).unwrap();
+            fs::set_permissions(&callback_canonical, fs::Permissions::from_mode(0o600)).unwrap();
+        },
+    );
+
+    let error = store.delete_revalidated_retained_cast(&cast, &terminal).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(
+        error,
+        StorageError::JournalEntrySetMismatch {
+            expected_canonical: Some(true),
+            ..
+        }
+    ));
+    assert_eq!(fs::read(displaced).unwrap(), bytes);
+    assert_eq!(fs::read(canonical_path).unwrap(), bytes);
+}
+
+#[test]
+fn retained_cast_revalidated_load_rejects_hidden_entry_after_read_without_touching_bytes() {
+    let (temporary, store) = fixture();
+    let record = creation_record();
+    store.create(&record).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let canonical_path = canonical(temporary.path());
+    let canonical_before = fs::read(&canonical_path).unwrap();
+    let hidden = cast_path.join("journal/hidden-after-load");
+    let callback_hidden = hidden.clone();
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding, move || {
+        fs::write(callback_hidden, b"hidden-after-load-bytes").unwrap();
+    });
+
+    let error = store.load_revalidated_retained_cast(&cast).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(
+        error,
+        StorageError::JournalEntrySetMismatch {
+            expected_canonical: Some(true),
+            ..
+        }
+    ));
+    assert_eq!(fs::read(canonical_path).unwrap(), canonical_before);
+    assert_eq!(fs::read(hidden).unwrap(), b"hidden-after-load-bytes");
+}
+
+#[test]
+fn retained_cast_revalidated_load_rejects_byte_identical_canonical_replacement_after_read() {
+    let (temporary, store) = fixture();
+    let record = creation_record();
+    store.create(&record).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let canonical_path = canonical(temporary.path());
+    let displaced = cast_path.join("load-displaced-canonical");
+    let bytes = fs::read(&canonical_path).unwrap();
+    let callback_canonical = canonical_path.clone();
+    let callback_displaced = displaced.clone();
+    let callback_bytes = bytes.clone();
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding, move || {
+        fs::rename(&callback_canonical, &callback_displaced).unwrap();
+        fs::write(&callback_canonical, callback_bytes).unwrap();
+        fs::set_permissions(&callback_canonical, fs::Permissions::from_mode(0o600)).unwrap();
+    });
+
+    let error = store.load_revalidated_retained_cast(&cast).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(error, StorageError::CanonicalChanged));
+    assert_eq!(fs::read(displaced).unwrap(), bytes);
+    assert_eq!(fs::read(canonical_path).unwrap(), bytes);
+}
+
+#[test]
+fn retained_cast_revalidated_load_rejects_same_inode_valid_payload_overwrite_after_read() {
+    let (temporary, store) = fixture();
+    let record = creation_record();
+    store.create(&record).unwrap();
+    let cast = fs::File::open(temporary.path().join(".cast")).unwrap();
+    let canonical_path = canonical(temporary.path());
+    let canonical_inode = fs::metadata(&canonical_path).unwrap().ino();
+    let original_bytes = fs::read(&canonical_path).unwrap();
+    let mut changed = record.clone();
+    changed.quarantine_name = QuarantineName::parse("failed-fedcba9876543210").unwrap();
+    changed.validate().unwrap();
+    let changed_bytes = encode(&changed).unwrap();
+    assert_eq!(changed_bytes.len(), original_bytes.len());
+    assert_ne!(changed_bytes, original_bytes);
+    let callback_canonical = canonical_path.clone();
+    let callback_bytes = changed_bytes.clone();
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding, move || {
+        fs::write(callback_canonical, callback_bytes).unwrap();
+    });
+
+    let error = store.load_revalidated_retained_cast(&cast).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(error, StorageError::CanonicalChanged));
+    assert_eq!(fs::metadata(&canonical_path).unwrap().ino(), canonical_inode);
+    assert_eq!(fs::read(&canonical_path).unwrap(), changed_bytes);
+    assert_eq!(store.load().unwrap(), Some(changed));
+}
+
+#[test]
+fn retained_cast_revalidated_delete_rejects_same_inode_valid_payload_overwrite_before_unlink() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    let cast = fs::File::open(temporary.path().join(".cast")).unwrap();
+    let canonical_path = canonical(temporary.path());
+    let canonical_inode = fs::metadata(&canonical_path).unwrap().ino();
+    let original_bytes = fs::read(&canonical_path).unwrap();
+    let mut changed = terminal.clone();
+    changed.quarantine_name = QuarantineName::parse("failed-fedcba9876543210").unwrap();
+    changed.validate().unwrap();
+    let changed_bytes = encode(&changed).unwrap();
+    assert_eq!(changed_bytes.len(), original_bytes.len());
+    assert_ne!(changed_bytes, original_bytes);
+    let callback_canonical = canonical_path.clone();
+    let callback_bytes = changed_bytes.clone();
+    take_durability_checkpoints();
+    arm_public_binding_revalidation_callback(
+        PublicBindingRevalidationBoundary::BeforeDeleteUnlinkBinding,
+        move || fs::write(callback_canonical, callback_bytes).unwrap(),
+    );
+
+    let error = store.delete_revalidated_retained_cast(&cast, &terminal).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(error, StorageError::CanonicalChanged));
+    assert!(take_durability_checkpoints().is_empty());
+    assert_eq!(fs::metadata(&canonical_path).unwrap().ino(), canonical_inode);
+    assert_eq!(fs::read(&canonical_path).unwrap(), changed_bytes);
+    assert_eq!(store.load().unwrap(), Some(changed));
+}
+
+#[test]
+fn retained_cast_revalidated_delete_rejects_hidden_entry_after_sync_without_touching_bytes() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let hidden = cast_path.join("journal/hidden-after-delete");
+    let callback_hidden = hidden.clone();
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeDeleteFinalBinding, move || {
+        fs::write(callback_hidden, b"hidden-after-delete-bytes").unwrap();
+    });
+
+    let error = store.delete_revalidated_retained_cast(&cast, &terminal).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(
+        error,
+        StorageError::JournalEntrySetMismatch {
+            expected_canonical: Some(false),
+            ..
+        }
+    ));
+    assert!(!canonical(temporary.path()).exists());
+    assert_eq!(fs::read(hidden).unwrap(), b"hidden-after-delete-bytes");
+}
+
+#[test]
+fn retained_cast_revalidated_false_delete_rejects_hidden_entry_without_touching_bytes() {
+    let (temporary, store) = fixture();
+    let mut initial = archived_record(Phase::Preparing);
+    initial.generation = 1;
+    store.create(&initial).unwrap();
+    let rollback = satisfied_preparing_rollback(&initial);
+    store.advance(&initial, &rollback).unwrap();
+    let terminal = advance_record(&rollback, Phase::RollbackComplete);
+    store.advance(&rollback, &terminal).unwrap();
+    assert!(store.delete(&terminal).unwrap());
+    let cast_path = temporary.path().join(".cast");
+    let cast = fs::File::open(&cast_path).unwrap();
+    let hidden = cast_path.join("journal/hidden-after-false-delete");
+    let callback_hidden = hidden.clone();
+    arm_public_binding_revalidation_callback(
+        PublicBindingRevalidationBoundary::BeforeDeleteFalseFinalBinding,
+        move || fs::write(callback_hidden, b"hidden-false-delete-bytes").unwrap(),
+    );
+
+    let error = store.delete_revalidated_retained_cast(&cast, &terminal).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(
+        error,
+        StorageError::JournalEntrySetMismatch {
+            expected_canonical: Some(false),
+            ..
+        }
+    ));
+    assert_eq!(fs::read(hidden).unwrap(), b"hidden-false-delete-bytes");
+}
+
+#[test]
 fn stale_pid_reuse_temporaries_over_old_retry_limit_are_cleaned_boundedly() {
     let (temporary, store) = fixture();
     create_stale_temporaries(temporary.path(), 160);
