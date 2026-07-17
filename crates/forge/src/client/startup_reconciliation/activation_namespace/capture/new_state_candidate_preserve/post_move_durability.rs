@@ -32,9 +32,9 @@ pub(in crate::client::startup_reconciliation::activation_namespace) struct Pendi
 #[must_use = "durable NewState candidate-preservation namespace evidence must remain sealed"]
 pub(in crate::client::startup_reconciliation::activation_namespace) struct DurableNewStateCandidatePreservePostMoveNamespace
 {
-    _parents: RetainedNewStateCandidatePreserveParents,
-    _final_post: NamespaceSnapshot,
-    _final_post_projection: ProjectedNewStateCandidatePreserveNamespace,
+    parents: RetainedNewStateCandidatePreserveParents,
+    final_post: NamespaceSnapshot,
+    final_post_projection: ProjectedNewStateCandidatePreserveNamespace,
 }
 
 impl PendingNewStateCandidatePreservePostMoveDurability {
@@ -206,10 +206,42 @@ impl PendingNewStateCandidatePreservePostMoveDurability {
         record_final_post_proven();
 
         Ok(DurableNewStateCandidatePreservePostMoveNamespace {
-            _parents: parents,
-            _final_post: final_post,
-            _final_post_projection: final_post_projection,
+            parents,
+            final_post,
+            final_post_projection,
         })
+    }
+}
+
+impl DurableNewStateCandidatePreservePostMoveNamespace {
+    /// Freshly revalidate the complete durable POST proof without repeating
+    /// any candidate or parent synchronization.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate(
+        &self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<(), NewStateCandidatePreservePostMoveDurabilityError> {
+        require_exact_post(
+            installation,
+            record,
+            &self.parents,
+            &self.final_post,
+            &self.final_post_projection,
+        )?;
+
+        run_before_durable_post_revalidation_capture();
+        let fresh_post = capture_snapshot(installation, record)?;
+        fresh_post.revalidate_retained()?;
+        if fresh_post.fingerprint() != self.final_post.fingerprint() {
+            return Err(NewStateCandidatePreservePostMoveDurabilityError::FinalNamespaceChanged);
+        }
+        let fresh_post_projection = ProjectedNewStateCandidatePreserveNamespace::capture(&fresh_post, record)?;
+        if fresh_post_projection.layout() != NewStateCandidatePreserveLayout::Preserved
+            || fresh_post_projection != self.final_post_projection
+        {
+            return Err(NewStateCandidatePreservePostMoveDurabilityError::FinalProjectionChanged);
+        }
+        require_exact_post(installation, record, &self.parents, &fresh_post, &fresh_post_projection)
     }
 }
 
@@ -373,6 +405,8 @@ std::thread_local! {
         std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     static BEFORE_POST_MOVE_FINAL_POST_CAPTURE:
         std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static BEFORE_DURABLE_POST_REVALIDATION_CAPTURE:
+        std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -445,6 +479,15 @@ pub(in crate::client) fn arm_before_new_state_candidate_preserve_post_move_final
 }
 
 #[cfg(test)]
+pub(in crate::client) fn arm_before_new_state_candidate_preserve_durable_post_revalidation_capture(
+    hook: impl FnOnce() + 'static,
+) {
+    BEFORE_DURABLE_POST_REVALIDATION_CAPTURE.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
 fn run_before_candidate_sync() {
     BEFORE_POST_MOVE_CANDIDATE_SYNC.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -503,6 +546,18 @@ fn run_before_final_post_capture() {
 
 #[cfg(not(test))]
 fn run_before_final_post_capture() {}
+
+#[cfg(test)]
+fn run_before_durable_post_revalidation_capture() {
+    BEFORE_DURABLE_POST_REVALIDATION_CAPTURE.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_before_durable_post_revalidation_capture() {}
 
 #[cfg(test)]
 fn record_candidate_synced(file: &File) {

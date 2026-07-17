@@ -41,6 +41,7 @@ pub(in crate::client) use candidate_preserve_proof::{
     NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
     arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_post_move_candidate_sync,
     arm_before_new_state_candidate_preserve_post_move_final_post_capture,
     arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,

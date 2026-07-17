@@ -37,6 +37,8 @@ use super::{
     database_ownership_evidence_compatible, inspect_database, metadata_provenance_evidence_compatible,
 };
 
+#[cfg(test)]
+pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use effect_reconciliation::{
     UsrRollbackCandidatePreserveFinishDurabilitySelection,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,

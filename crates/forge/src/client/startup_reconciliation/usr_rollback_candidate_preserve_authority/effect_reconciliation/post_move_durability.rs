@@ -9,6 +9,11 @@ use crate::{
     transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
 };
 
+mod persistence;
+
+#[cfg(test)]
+pub(in crate::client) use persistence::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
+
 use super::super::UsrRollbackCandidatePreserveAuthorityErrorKind;
 use super::{
     ReconciledNewStateCandidatePreserveEffect, UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
@@ -55,12 +60,12 @@ pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveDurableEffectAu
 }
 
 struct DurableNewStateCandidatePreserveEffect<'reservation> {
-    _installation: Installation,
-    _state_db: db::state::Database,
-    _record: TransitionRecord,
-    _database: DatabaseEvidence,
-    _namespace: UsrRollbackNewStateCandidatePreserveDurableNamespace,
-    _journal_binding: TransitionJournalBinding,
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: UsrRollbackNewStateCandidatePreserveDurableNamespace,
+    journal_binding: TransitionJournalBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -181,12 +186,12 @@ fn complete_applied_after_binding<'reservation>(
     trailing_evidence?;
 
     Ok(DurableNewStateCandidatePreserveEffect {
-        _installation: installation,
-        _state_db: state_db,
-        _record: record,
-        _database: database,
-        _namespace: namespace,
-        _journal_binding: journal_binding,
+        installation,
+        state_db,
+        record,
+        database,
+        namespace,
+        journal_binding,
         _active_state_reservation,
     })
 }
@@ -216,12 +221,12 @@ fn complete_already_satisfied_after_binding<'reservation>(
     trailing_evidence?;
 
     Ok(DurableNewStateCandidatePreserveEffect {
-        _installation: installation,
-        _state_db: state_db,
-        _record: record,
-        _database: database,
-        _namespace: namespace,
-        _journal_binding: journal_binding,
+        installation,
+        state_db,
+        record,
+        database,
+        namespace,
+        journal_binding,
         _active_state_reservation,
     })
 }

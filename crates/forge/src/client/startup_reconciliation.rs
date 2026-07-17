@@ -77,6 +77,8 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
 };
 
 #[cfg(test)]
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
+#[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_between_usr_rollback_candidate_preserve_database_captures;
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_resume_route_authority::arm_between_usr_rollback_resume_route_database_captures;
@@ -110,6 +112,7 @@ pub(in crate::client) use activation_namespace::{
     NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetCreateFault,
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
     arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture,
     arm_before_new_state_candidate_preserve_post_move_candidate_sync,
     arm_before_new_state_candidate_preserve_post_move_final_post_capture,

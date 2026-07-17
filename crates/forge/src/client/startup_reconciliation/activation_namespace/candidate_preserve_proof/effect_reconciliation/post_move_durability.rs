@@ -22,7 +22,7 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidat
 /// Common namespace proof after either origin completed every POST barrier.
 #[must_use = "durable NewState candidate-preservation namespace evidence must remain sealed"]
 pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreserveDurableNamespace {
-    _namespace: DurableNewStateCandidatePreservePostMoveNamespace,
+    namespace: DurableNewStateCandidatePreservePostMoveNamespace,
 }
 
 impl UsrRollbackCandidatePreserveNamespaceProof {
@@ -55,7 +55,7 @@ impl UsrRollbackNewStateCandidatePreserveAppliedNamespace {
     ) -> Result<UsrRollbackNewStateCandidatePreserveDurableNamespace, UsrRollbackCandidatePreserveNamespaceError> {
         let pending = self._reconciliation.into_post_move_durability();
         let namespace = pending.complete(installation, record)?;
-        Ok(UsrRollbackNewStateCandidatePreserveDurableNamespace { _namespace: namespace })
+        Ok(UsrRollbackNewStateCandidatePreserveDurableNamespace { namespace })
     }
 }
 
@@ -68,6 +68,19 @@ impl UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace {
         record: &TransitionRecord,
     ) -> Result<UsrRollbackNewStateCandidatePreserveDurableNamespace, UsrRollbackCandidatePreserveNamespaceError> {
         let namespace = self.pending.complete(installation, record)?;
-        Ok(UsrRollbackNewStateCandidatePreserveDurableNamespace { _namespace: namespace })
+        Ok(UsrRollbackNewStateCandidatePreserveDurableNamespace { namespace })
+    }
+}
+
+impl UsrRollbackNewStateCandidatePreserveDurableNamespace {
+    /// Revalidate the sealed final POST proof through one fresh read-only
+    /// namespace capture. No durability barrier is repeated here.
+    pub(in crate::client::startup_reconciliation) fn revalidate(
+        &self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+        self.namespace.revalidate(installation, record)?;
+        Ok(())
     }
 }
