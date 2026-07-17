@@ -32,6 +32,7 @@ const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const BOOTSTRAP_PROFILE: &str = "planner-contentful-bootstrap";
 include!("bootstrap/execution_topology.rs");
+include!("bootstrap/cmake_zlib.rs");
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct BootstrapClosure {
@@ -402,6 +403,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
         closure.repository.index.sha256
     );
     let indexed = indexed_packages(&index_bytes);
+    assert_cmake_zlib_bootstrap_contract(&closure, &indexed);
 
     assert!(!closure.packages.sha256.is_empty());
     assert!(closure.packages.sha256.len() <= MAX_BOOTSTRAP_PACKAGE_COUNT);

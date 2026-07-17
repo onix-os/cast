@@ -100,6 +100,11 @@ plugin with an explicit output relation, and native split-output builds. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
+The CMake case declares `cmake(zlib)` as a target build input, resolves the
+exact pinned `zlib-devel` provider, and performs a real `compress2`/`uncompress`
+round trip under CTest. Its bundle checks bind the manifest BuildDepends entry
+to that provider and require the installed ELF and emitted Stone metadata to
+carry `soname(libz.so.1(x86_64))`.
 The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no

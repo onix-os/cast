@@ -12,10 +12,11 @@ let base = b.mk_package (b.meta {
 
 {
     builder = cmake.default,
+    build_inputs = [b.dep.cmake "zlib"],
     sources = [
         b.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-cmake-fixture-1.0.0.tar",
-            hash = "21866c6d06768489544592db95f208b991baba41cd40866b2929c8c893a3fe21",
+            hash = "84cfe6d4d77f84dcd0b111c00b20ae840ec623443d7577a6659238c770fcb585",
             rename = b.optional.set "cast-cmake-fixture.tar",
             strip_dirs = b.optional.set 1,
             unpack = b.boolean.true,

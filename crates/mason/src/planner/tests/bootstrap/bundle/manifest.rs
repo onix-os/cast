@@ -17,6 +17,13 @@ fn assert_manifests(
         .iter()
         .map(|relation| relation.canonical_name())
         .collect::<BTreeSet<_>>();
+    if fixture == "cmake" {
+        assert_eq!(
+            expected_build_dependencies,
+            BTreeSet::from(["binary(ninja)".to_owned(), "cmake(zlib)".to_owned()]),
+            "cmake: exact manifest BuildDepends contract drifted"
+        );
+    }
 
     let binary_name = format!("manifest.{}.bin", planned.plan.package.architecture);
     let binary = &artefacts[&binary_name];

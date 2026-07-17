@@ -212,6 +212,7 @@ mod documented_sources;
 mod documented_variants;
 include!("tests/execution_archives.rs");
 include!("tests/execution_capability.rs");
+include!("tests/execution_cmake_zlib.rs");
 include!("tests/frozen_runtime.rs");
 include!("tests/package_examples.rs");
 include!("tests/planning_identity.rs");

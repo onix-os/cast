@@ -202,6 +202,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         let recipe_path = execution_fixture_package_directory(name).join("stone.glu");
         let recipe = crate::Recipe::load_authored(&recipe_path)
             .unwrap_or_else(|error| panic!("{name}: evaluate execution fixture: {error:#}"));
+        if name == "cmake" {
+            assert_cmake_zlib_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-cmake-fixture-1.0.0"),
+            );
+        }
         if name == "factory-override" {
             let factory = recipe
                 .fingerprint
@@ -754,6 +760,12 @@ install -Dm644 build/cast-plugin-output.so \
                 "hooks-patch: primary archive unexpectedly retained the removed packaging tree"
             );
             assert_eq!(fs::read(share.join(HOOKS_PATCH_MATERIALIZATION)).unwrap(), HOOKS_PATCH_BYTES);
+        }
+        if name == "cmake" {
+            assert_cmake_zlib_archive_matches_tracked_sources(
+                &source_trees.join("cast-cmake-fixture-1.0.0"),
+                &published,
+            );
         }
     }
 

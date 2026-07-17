@@ -21,7 +21,7 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
                 "autotools" => "cast autotools fixture",
                 "autotools-options" => "cast autotools options fixture: enabled",
                 "cargo" => "cast cargo fixture",
-                "cmake" => "cast cmake fixture",
+                "cmake" => "cast cmake fixture: zlib round-trip verified",
                 "custom" => "cast custom fixture: compiled and executed",
                 "factory-override" => "Stone-native factory override: stone-override",
                 "meson" => "cast meson fixture",
@@ -34,6 +34,12 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
     let bytes = regular_bytes(fixture, root, &executable);
     assert_eq!(root.layouts[&executable].mode & 0o777, 0o755);
     let executable_elf = assert_runtime_elf(fixture, &executable, bytes, RuntimeElfKind::Executable);
+    if fixture == "cmake" {
+        assert!(
+            executable_elf.dependencies.contains("soname(libz.so.1(x86_64))"),
+            "cmake: installed executable does not carry the locked libz ABI dependency"
+        );
+    }
     for message in messages {
         assert!(
             contains_bytes(bytes, message.as_bytes()),
@@ -42,6 +48,15 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
     }
     let mut root_dependencies = planned_output_dependencies(planned, root_plan);
     root_dependencies.extend(executable_elf.dependencies.iter().cloned());
+    if fixture == "cmake" {
+        assert!(
+            root.meta
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.to_name() == "soname(libz.so.1(x86_64))"),
+            "cmake: emitted Stone metadata omits the installed executable's libz ABI dependency"
+        );
+    }
     assert_exact_relations(
         fixture,
         root,

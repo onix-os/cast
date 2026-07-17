@@ -252,6 +252,75 @@ fn assert_generated_shell_relations(plan: &stone_recipe::derivation::DerivationP
     assert_eq!(reference.package_id, BASH_PACKAGE_ID);
 }
 
+fn assert_cmake_zlib_relations(plan: &stone_recipe::derivation::DerivationPlan) {
+    assert_eq!(
+        plan.manifest_build_inputs
+            .iter()
+            .map(|relation| relation.canonical_name())
+            .collect::<Vec<_>>(),
+        ["binary(ninja)", "cmake(zlib)"],
+        "cmake: manifest BuildDepends inputs drifted"
+    );
+
+    let requests = plan
+        .build_lock
+        .requests
+        .iter()
+        .filter(|request| request.request == "cmake(zlib)")
+        .collect::<Vec<_>>();
+    let [request] = requests.as_slice() else {
+        panic!("cmake: build lock must contain exactly one cmake(zlib) request");
+    };
+    assert_eq!(request.package_id, ZLIB_DEVEL_PACKAGE_ID);
+    assert_eq!(request.output, "out");
+    assert_eq!(
+        request.origins,
+        [stone_recipe::derivation::InputOrigin::Build {
+            selection: stone_recipe::derivation::PackageInputSelection::Package,
+            index: 0,
+        }],
+        "cmake: zlib provider origin drifted"
+    );
+
+    let zlib_devel = plan
+        .build_lock
+        .packages
+        .iter()
+        .find(|package| package.package_id == ZLIB_DEVEL_PACKAGE_ID)
+        .expect("cmake: zlib-devel provider package is absent");
+    assert_eq!(zlib_devel.name, "zlib-devel");
+    assert_eq!(zlib_devel.version, "2.3.3-23-1");
+    assert_eq!(zlib_devel.architecture, "x86_64");
+    assert_eq!(zlib_devel.repository, "bootstrap");
+    assert_eq!(
+        zlib_devel.outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(),
+        ["out"]
+    );
+    assert_eq!(
+        zlib_devel
+            .dependencies
+            .iter()
+            .map(|dependency| (dependency.package_id.as_str(), dependency.output.as_str()))
+            .collect::<Vec<_>>(),
+        [(ZLIB_RUNTIME_PACKAGE_ID, "out")],
+        "cmake: zlib-devel runtime edge drifted"
+    );
+    let zlib = plan
+        .build_lock
+        .packages
+        .iter()
+        .find(|package| package.package_id == ZLIB_RUNTIME_PACKAGE_ID)
+        .expect("cmake: zlib runtime package is absent");
+    assert_eq!(zlib.name, "zlib");
+    assert_eq!(zlib.version, "2.3.3-23-1");
+    assert_eq!(zlib.architecture, "x86_64");
+    assert_eq!(zlib.repository, "bootstrap");
+    assert_eq!(
+        zlib.outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(),
+        ["out"]
+    );
+}
+
 fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation::DerivationPlan) {
     assert_eq!(EXECUTION_FIXTURES, REQUIRED_EXECUTION_FIXTURES);
     assert_eq!(plan.execution.jobs, 1, "{name}: execution preflight jobs drifted");
@@ -480,6 +549,9 @@ fi
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
     if name == "userspace-profile" {
         assert_userspace_profile_relations(plan);
+    }
+    if name == "cmake" {
+        assert_cmake_zlib_relations(plan);
     }
     if name == "generated-shell" {
         assert_generated_shell_relations(plan);
