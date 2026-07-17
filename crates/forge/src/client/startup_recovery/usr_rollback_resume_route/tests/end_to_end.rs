@@ -40,6 +40,7 @@ fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persiste
             assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?} {source:?}");
             assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
             assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
+            let routed_bytes = fixture.canonical_bytes();
 
             drop(second);
             let third = fixture.enter();
@@ -67,8 +68,26 @@ fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persiste
             } else {
                 assert_eq!(pending(&third).phase(), expected.phase, "{kind:?} {source:?}");
                 assert_eq!(fixture.canonical_record(), expected, "{kind:?} {source:?}");
+                assert_eq!(fixture.canonical_bytes(), routed_bytes, "{kind:?} {source:?}");
                 assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?} {source:?}");
-                assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
+                if kind == OperationKind::NewState && expected.phase == Phase::CandidatePreserveIntent {
+                    // The next production suffix entry may prepare only the
+                    // quarantine target; it must not move the candidate or
+                    // persist the CandidatePreserved successor yet.
+                    let target = fixture
+                        .installation
+                        .root
+                        .join(".cast/quarantine")
+                        .join(expected.quarantine_name.as_str());
+                    assert!(target.is_dir(), "{kind:?} {source:?}");
+                    assert!(
+                        fixture.installation.root.join(".cast/root/staging/usr").is_dir(),
+                        "{kind:?} {source:?}"
+                    );
+                    assert_ne!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
+                } else {
+                    assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
+                }
                 assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
             }
         }
