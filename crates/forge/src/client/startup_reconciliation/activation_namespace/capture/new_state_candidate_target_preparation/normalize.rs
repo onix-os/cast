@@ -3,7 +3,10 @@
 //! The raw chmod report is diagnostic only. The consumed PRE namespace and
 //! its retained restrictive-residue descriptor remain sealed behind a pending
 //! value until fresh full namespace capture classifies the semantic result.
+//! A canonical result remains opaque until its child durability module syncs
+//! the exact target and quarantine parent and proves one final fresh capture.
 
+mod durability;
 mod reconciliation;
 
 use std::io;
@@ -12,6 +15,15 @@ use crate::linux_fs::chmod_path_descriptor_once;
 
 use super::{NamespaceSnapshot, ProjectedNewStateTargetNormalizeNamespace};
 
+pub(in crate::client::startup_reconciliation::activation_namespace) use durability::FreshCanonicalNewStateTargetNormalizeNamespace;
+#[cfg(test)]
+pub(in crate::client) use durability::{
+    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    arm_before_new_state_target_normalize_final_canonical_capture,
+    arm_before_new_state_target_normalize_quarantine_parent_sync, arm_before_new_state_target_normalize_target_sync,
+    arm_new_state_target_normalize_durability_fault, reset_new_state_target_normalize_durability_events,
+    take_new_state_target_normalize_durability_events,
+};
 pub(in crate::client::startup_reconciliation::activation_namespace) use reconciliation::NewStateTargetNormalizeReconciliation;
 #[cfg(test)]
 pub(in crate::client) use reconciliation::arm_before_new_state_target_normalize_reconciliation_capture;

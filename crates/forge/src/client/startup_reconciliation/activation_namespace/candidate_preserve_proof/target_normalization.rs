@@ -1,8 +1,11 @@
-//! Final restrictive-residue PRE proof and one-attempt reconciliation.
+//! Final restrictive-residue PRE proof, one-attempt reconciliation, and
+//! ordered durability completion.
 //!
 //! Namespace preparation ends before the descriptor-bound chmod so enclosing
-//! authority can later repeat its binding-first non-namespace checks. Every
-//! reconciled result is fieldless and forces a caller boundary.
+//! authority can later repeat its binding-first non-namespace checks. A fresh
+//! canonical semantic result stays private until both descriptor barriers and
+//! final canonical capture complete. Every namespace result is then fieldless
+//! and forces a caller boundary.
 
 use crate::{Installation, transition_journal::TransitionRecord};
 
@@ -71,7 +74,8 @@ impl UsrRollbackNewStateTargetNormalizeNamespaceEvidence {
 }
 
 impl UsrRollbackNewStateTargetNormalizePreparedNamespace {
-    /// Consume exact final PRE authority through one attempt and fresh capture.
+    /// Consume exact final PRE authority through one attempt, fresh semantic
+    /// capture, and ordered target-then-parent durability.
     pub(in crate::client::startup_reconciliation) fn reconcile_target_normalization(
         self,
         installation: &Installation,
@@ -82,8 +86,11 @@ impl UsrRollbackNewStateTargetNormalizePreparedNamespace {
             .attempt_new_state_target_normalize_once(projection)
             .reconcile(installation, record)
         {
-            NewStateTargetNormalizeReconciliation::RestartRequired => {
-                UsrRollbackNewStateTargetNormalizeNamespaceReconciliation::RestartRequired
+            NewStateTargetNormalizeReconciliation::Canonical(canonical) => {
+                match canonical.complete_durability(installation, record) {
+                    Ok(()) => UsrRollbackNewStateTargetNormalizeNamespaceReconciliation::RestartRequired,
+                    Err(_) => UsrRollbackNewStateTargetNormalizeNamespaceReconciliation::Ambiguous,
+                }
             }
             NewStateTargetNormalizeReconciliation::NotApplied => {
                 UsrRollbackNewStateTargetNormalizeNamespaceReconciliation::NotApplied

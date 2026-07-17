@@ -26,9 +26,13 @@ pub(in crate::client) use create::{
 pub(in crate::client::startup_reconciliation::activation_namespace) use normalize::NewStateTargetNormalizeReconciliation;
 #[cfg(test)]
 pub(in crate::client) use normalize::{
-    NewStateTargetNormalizeFault, arm_before_new_state_target_normalize_attempt,
-    arm_before_new_state_target_normalize_reconciliation_capture, arm_new_state_target_normalize_fault,
+    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
+    arm_before_new_state_target_normalize_attempt, arm_before_new_state_target_normalize_final_canonical_capture,
+    arm_before_new_state_target_normalize_quarantine_parent_sync,
+    arm_before_new_state_target_normalize_reconciliation_capture, arm_before_new_state_target_normalize_target_sync,
+    arm_new_state_target_normalize_durability_fault, arm_new_state_target_normalize_fault,
     new_state_target_normalize_attempt_count, reset_new_state_target_normalize_attempt_count,
+    reset_new_state_target_normalize_durability_events, take_new_state_target_normalize_durability_events,
 };
 
 /// Stable quarantine-parent identity across a future child creation.

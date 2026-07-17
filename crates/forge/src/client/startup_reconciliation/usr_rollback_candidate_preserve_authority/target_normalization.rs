@@ -1,9 +1,10 @@
 //! Sealed one-attempt consumption of a restrictive NewState target lease.
 //!
 //! Binding-first non-namespace evidence surrounds final namespace preparation
-//! and the attempt. Every semantic result is fieldless: even a safely
-//! normalized target forces a new startup entry and cannot fall through into
-//! durability or movement.
+//! and the attempt. Every authority result is fieldless: even a safely
+//! normalized target completes its sealed target and quarantine-parent
+//! durability suffix, then forces a new startup entry without falling through
+//! into movement.
 
 use crate::transition_journal::TransitionJournalStore;
 
@@ -19,9 +20,10 @@ use crate::client::{
 
 /// Semantic result of consuming exactly one target-normalization lease.
 ///
-/// No variant retains evidence, descriptors, a retry, durability, or move
-/// capability. `RestartRequired` describes the safe on-disk prefix, not the
-/// raw operation report and not proof that this invocation changed the mode.
+/// No variant retains evidence, descriptors, a retry, or move capability.
+/// `RestartRequired` is constructed only after the safe on-disk prefix has
+/// completed both durability barriers and a final exact canonical capture; it
+/// still does not attribute the mode change to this invocation.
 #[must_use = "a consumed NewState normalize-target lease must be handled"]
 pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation {
     RestartRequired,
@@ -30,9 +32,9 @@ pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveNormalizeTargetRe
 }
 
 impl<'reservation> UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'reservation> {
-    /// Consume the lease through one descriptor-bound attempt and fresh
-    /// semantic reconciliation. Possession of the result cannot continue
-    /// in-process.
+    /// Consume the lease through one descriptor-bound attempt, fresh semantic
+    /// reconciliation, and ordered target-then-parent durability. Possession
+    /// of the result cannot continue in-process.
     pub(in crate::client) fn reconcile(
         self,
         _effect_seal: &UsrRollbackCandidatePreserveEffectSeal,

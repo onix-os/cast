@@ -4,9 +4,10 @@
 //! namespace evidence. It remains read-only and classifies staged/crash-prefix
 //! evidence separately from already-preserved evidence. Only the exact
 //! NewState target prefixes can be consumed into disjoint test-sealed create,
-//! normalize, or move leases. All three effects remain test-sealed;
-//! production dispatch, completed durability, persistence, cleanup, and
-//! triggers remain absent.
+//! normalize, or move leases. Normalization completes its exact target and
+//! quarantine-parent durability internally before it can report a restart.
+//! All three effects remain test-sealed; production dispatch, persistence,
+//! cleanup, and triggers remain absent.
 
 mod effect_evidence;
 mod effect_reconciliation;

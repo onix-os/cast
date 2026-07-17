@@ -2,19 +2,19 @@
 
 use crate::{Installation, transition_journal::TransitionRecord};
 
-use super::PendingNewStateTargetNormalizeReconciliation;
+use super::{FreshCanonicalNewStateTargetNormalizeNamespace, PendingNewStateTargetNormalizeReconciliation};
 use crate::client::startup_reconciliation::activation_namespace::capture::{
     NewStateTargetNormalizeLayout, ProjectedNewStateTargetNormalizeNamespace, capture_snapshot,
 };
 
 /// Namespace-derived result of consuming exactly one normalization capability.
 ///
-/// Every variant is fieldless. Even an observed same-inode canonical target
-/// requires a new startup entry, and no result authorizes an in-process retry,
-/// durability claim, or candidate move.
+/// The canonical branch privately retains its fresh same-inode namespace until
+/// ordered target and quarantine-parent durability consumes it. The externally
+/// observable failure branches remain fieldless and authorize no retry or move.
 #[must_use = "a reconciled NewState target-normalization attempt must be handled"]
 pub(in crate::client::startup_reconciliation::activation_namespace) enum NewStateTargetNormalizeReconciliation {
-    RestartRequired,
+    Canonical(FreshCanonicalNewStateTargetNormalizeNamespace),
     NotApplied,
     Ambiguous,
 }
@@ -58,7 +58,10 @@ impl PendingNewStateTargetNormalizeReconciliation {
         {
             return NewStateTargetNormalizeReconciliation::Ambiguous;
         }
-        NewStateTargetNormalizeReconciliation::RestartRequired
+        NewStateTargetNormalizeReconciliation::Canonical(FreshCanonicalNewStateTargetNormalizeNamespace::new(
+            fresh,
+            fresh_projection,
+        ))
     }
 }
 

@@ -26,6 +26,14 @@ use super::{
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
 };
 
+#[cfg(test)]
+pub(in crate::client) use super::capture::{
+    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    arm_before_new_state_target_normalize_final_canonical_capture,
+    arm_before_new_state_target_normalize_quarantine_parent_sync, arm_before_new_state_target_normalize_target_sync,
+    arm_new_state_target_normalize_durability_fault, reset_new_state_target_normalize_durability_events,
+    take_new_state_target_normalize_durability_events,
+};
 pub(in crate::client::startup_reconciliation) use effect_reconciliation::{
     UsrRollbackNewStateCandidatePreserveAppliedNamespace,
     UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,

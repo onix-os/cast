@@ -60,9 +60,13 @@ pub(in crate::client::startup_reconciliation::activation_namespace) use new_stat
 };
 #[cfg(test)]
 pub(in crate::client) use new_state_candidate_target_preparation::{
-    NewStateTargetNormalizeFault, arm_before_new_state_target_normalize_attempt,
-    arm_before_new_state_target_normalize_reconciliation_capture, arm_new_state_target_normalize_fault,
+    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
+    arm_before_new_state_target_normalize_attempt, arm_before_new_state_target_normalize_final_canonical_capture,
+    arm_before_new_state_target_normalize_quarantine_parent_sync,
+    arm_before_new_state_target_normalize_reconciliation_capture, arm_before_new_state_target_normalize_target_sync,
+    arm_new_state_target_normalize_durability_fault, arm_new_state_target_normalize_fault,
     new_state_target_normalize_attempt_count, reset_new_state_target_normalize_attempt_count,
+    reset_new_state_target_normalize_durability_events, take_new_state_target_normalize_durability_events,
 };
 pub(in crate::client::startup_reconciliation) use new_state_candidate_target_preparation::{
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,

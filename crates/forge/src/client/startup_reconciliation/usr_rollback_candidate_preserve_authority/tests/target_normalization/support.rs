@@ -12,8 +12,9 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
             UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyEffectSelection,
-            new_state_candidate_preserve_move_attempt_count, new_state_target_normalize_attempt_count,
-            reset_new_state_candidate_preserve_move_attempt_count, reset_new_state_target_normalize_attempt_count,
+            new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
+            new_state_target_normalize_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+            reset_new_state_target_create_attempt_count, reset_new_state_target_normalize_attempt_count,
         },
         startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
@@ -64,11 +65,13 @@ pub(super) fn target_path(fixture: &CandidatePreserveFixture) -> PathBuf {
 
 pub(super) fn reset_effect_attempts() {
     reset_new_state_target_normalize_attempt_count();
+    reset_new_state_target_create_attempt_count();
     reset_new_state_candidate_preserve_move_attempt_count();
 }
 
 pub(super) fn assert_effect_attempts(fixture: &CandidatePreserveFixture, expected_normalize: usize) {
     assert_eq!(new_state_target_normalize_attempt_count(), expected_normalize);
+    assert_eq!(new_state_target_create_attempt_count(), 0);
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
     assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
 }

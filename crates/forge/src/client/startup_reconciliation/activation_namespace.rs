@@ -6,8 +6,10 @@
 //! one exchange attempt and the exact ordered parent-durability suffix. It
 //! exposes no general namespace-mutation API. Separate candidate-preservation
 //! children may consume exact NewState target prefixes through one creation,
-//! normalization, or movement attempt, but remain sealed from production
-//! dispatch, durability claims, persistence, cleanup, and triggers.
+//! normalization, or movement attempt. Normalization privately completes its
+//! exact target and quarantine-parent barriers before reporting a restart;
+//! every path remains sealed from production dispatch, persistence, cleanup,
+//! and triggers.
 
 #[allow(dead_code)] // checkpoint one remains sealed from production dispatch
 mod candidate_preserve_proof;
@@ -30,19 +32,24 @@ pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
 pub(super) use candidate_preserve_proof::UsrRollbackNewStateTargetNormalizeNamespaceReconciliation;
 #[cfg(test)]
 pub(in crate::client) use candidate_preserve_proof::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
+#[cfg(test)]
+pub(in crate::client) use candidate_preserve_proof::{
+    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_new_state_target_normalize_final_canonical_capture,
+    arm_before_new_state_target_normalize_quarantine_parent_sync, arm_before_new_state_target_normalize_target_sync,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
+    arm_before_usr_rollback_new_state_target_create_final_pre_capture,
+    arm_before_usr_rollback_new_state_target_normalize_final_pre_capture,
+    arm_new_state_target_normalize_durability_fault, reset_new_state_target_normalize_durability_events,
+    take_new_state_target_normalize_durability_events,
+};
 pub(super) use candidate_preserve_proof::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
     UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackNewStateCandidatePreserveAppliedNamespace,
     UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
     UsrRollbackNewStateTargetCreateNamespaceReconciliation,
-};
-#[cfg(test)]
-pub(in crate::client) use candidate_preserve_proof::{
-    arm_before_new_state_candidate_preserve_candidate_sync,
-    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
-    arm_before_usr_rollback_new_state_target_create_final_pre_capture,
-    arm_before_usr_rollback_new_state_target_normalize_final_pre_capture,
 };
 #[cfg(test)]
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
