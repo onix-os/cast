@@ -1,8 +1,9 @@
 //! Shared non-namespace evidence sandwich for candidate-preservation effects.
 //!
-//! Target creation and candidate movement have different namespace authority,
-//! but both require the same exact journal, database, plan, installation, and
-//! per-open binding checks immediately around that authority's consumption.
+//! Target creation, residue normalization, and candidate movement have
+//! different namespace authority, but all require the same exact journal,
+//! database, plan, installation, and per-open binding checks immediately
+//! around that authority's consumption.
 
 use crate::{
     Installation, db,

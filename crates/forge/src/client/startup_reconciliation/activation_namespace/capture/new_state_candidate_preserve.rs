@@ -562,6 +562,13 @@ pub(in crate::client::startup_reconciliation::activation_namespace) enum NewStat
     },
     #[error("the namespace is not exact restrictive-residue NewState preparation evidence")]
     NotResidueTargetPreparationLayout,
+    #[error("the namespace is not a safe NewState target-normalization layout")]
+    NotTargetNormalizeLayout,
+    #[error("NewState target normalization is not restrictive-residue-to-empty-private ({before:?} -> {after:?})")]
+    NotResidueToPrivateTarget {
+        before: super::NewStateTargetNormalizeLayout,
+        after: super::NewStateTargetNormalizeLayout,
+    },
     #[error("NewState candidate preservation is not exact staged-to-preserved ({before:?} -> {after:?})")]
     NotStagedToPreserved {
         before: NewStateCandidatePreserveLayout,

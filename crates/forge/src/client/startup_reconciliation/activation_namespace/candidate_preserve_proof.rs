@@ -3,10 +3,13 @@
 //! Candidate preservation has three operation-specific topologies.  This
 //! read-only proof admits only their exact staged, crash-prefix, or preserved
 //! shapes, retains both sides of the admission sandwich, and requires a fresh
-//! matching capture whenever an authority is revalidated.
+//! matching capture whenever an authority is revalidated. Exact NewState
+//! target prefixes can be consumed only by their separate one-attempt proof
+//! children.
 
 mod effect_reconciliation;
 mod target_creation;
+mod target_normalization;
 
 use crate::{
     Installation,
@@ -35,6 +38,9 @@ pub(in crate::client) use effect_reconciliation::{
 pub(in crate::client::startup_reconciliation) use target_creation::UsrRollbackNewStateTargetCreateNamespaceReconciliation;
 #[cfg(test)]
 pub(in crate::client) use target_creation::arm_before_usr_rollback_new_state_target_create_final_pre_capture;
+pub(in crate::client::startup_reconciliation) use target_normalization::UsrRollbackNewStateTargetNormalizeNamespaceReconciliation;
+#[cfg(test)]
+pub(in crate::client) use target_normalization::arm_before_usr_rollback_new_state_target_normalize_final_pre_capture;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveTopology {

@@ -4,8 +4,10 @@
 //! rollback-decision and rollback-routing proofs expose no effects. A private
 //! rollback-reverse child may consume already sealed effect evidence through
 //! one exchange attempt and the exact ordered parent-durability suffix. It
-//! exposes no descriptor, persistence, cleanup, trigger, or general
-//! namespace-mutation API.
+//! exposes no general namespace-mutation API. Separate candidate-preservation
+//! children may consume exact NewState target prefixes through one creation,
+//! normalization, or movement attempt, but remain sealed from production
+//! dispatch, durability claims, persistence, cleanup, and triggers.
 
 #[allow(dead_code)] // checkpoint one remains sealed from production dispatch
 mod candidate_preserve_proof;
@@ -25,6 +27,7 @@ use crate::{
 };
 
 pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
+pub(super) use candidate_preserve_proof::UsrRollbackNewStateTargetNormalizeNamespaceReconciliation;
 #[cfg(test)]
 pub(in crate::client) use candidate_preserve_proof::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
 pub(super) use candidate_preserve_proof::{
@@ -39,18 +42,21 @@ pub(in crate::client) use candidate_preserve_proof::{
     arm_before_new_state_candidate_preserve_candidate_sync,
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
     arm_before_usr_rollback_new_state_target_create_final_pre_capture,
+    arm_before_usr_rollback_new_state_target_normalize_final_pre_capture,
 };
 #[cfg(test)]
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 #[cfg(test)]
 pub(in crate::client) use capture::{
-    NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault,
+    NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault, NewStateTargetNormalizeFault,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture, arm_before_new_state_target_create_attempt,
-    arm_before_new_state_target_create_reconciliation_capture, arm_new_state_candidate_preserve_move_fault,
-    arm_new_state_target_create_fault, new_state_candidate_preserve_move_attempt_count,
-    new_state_target_create_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
-    reset_new_state_target_create_attempt_count,
+    arm_before_new_state_target_create_reconciliation_capture, arm_before_new_state_target_normalize_attempt,
+    arm_before_new_state_target_normalize_reconciliation_capture, arm_new_state_candidate_preserve_move_fault,
+    arm_new_state_target_create_fault, arm_new_state_target_normalize_fault,
+    new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
+    new_state_target_normalize_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_target_create_attempt_count, reset_new_state_target_normalize_attempt_count,
 };
 pub(super) use capture::{
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,

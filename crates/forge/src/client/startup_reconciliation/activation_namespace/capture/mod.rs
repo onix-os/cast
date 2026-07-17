@@ -54,7 +54,15 @@ pub(in crate::client) use new_state_candidate_target_preparation::{
     new_state_target_create_attempt_count, reset_new_state_target_create_attempt_count,
 };
 pub(in crate::client::startup_reconciliation::activation_namespace) use new_state_candidate_target_preparation::{
-    NewStateTargetCreateLayout, NewStateTargetCreateReconciliation, ProjectedNewStateTargetCreateNamespace,
+    NewStateTargetCreateLayout, NewStateTargetCreateReconciliation, NewStateTargetNormalizeLayout,
+    NewStateTargetNormalizeReconciliation, ProjectedNewStateTargetCreateNamespace,
+    ProjectedNewStateTargetNormalizeNamespace,
+};
+#[cfg(test)]
+pub(in crate::client) use new_state_candidate_target_preparation::{
+    NewStateTargetNormalizeFault, arm_before_new_state_target_normalize_attempt,
+    arm_before_new_state_target_normalize_reconciliation_capture, arm_new_state_target_normalize_fault,
+    new_state_target_normalize_attempt_count, reset_new_state_target_normalize_attempt_count,
 };
 pub(in crate::client::startup_reconciliation) use new_state_candidate_target_preparation::{
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
