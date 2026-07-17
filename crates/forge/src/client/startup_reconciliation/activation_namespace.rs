@@ -18,6 +18,8 @@
 mod candidate_preserve_proof;
 mod capture;
 mod decision_proof;
+#[allow(dead_code)] // fresh-database invalidation routing remains test-sealed
+mod fresh_db_invalidation_route_proof;
 mod parent_durability;
 mod policy;
 mod resume_route_proof;
@@ -91,6 +93,12 @@ pub(super) use capture::{
 pub(in crate::client) use decision_proof::arm_before_usr_rollback_decision_fresh_namespace_capture;
 pub(super) use decision_proof::{
     UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use fresh_db_invalidation_route_proof::arm_before_usr_rollback_fresh_db_invalidation_route_fresh_namespace_capture;
+pub(super) use fresh_db_invalidation_route_proof::{
+    UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
+    UsrRollbackFreshDbInvalidationRouteNamespaceProof,
 };
 pub(super) use policy::UsrExchangeLayout;
 use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};

@@ -233,6 +233,39 @@ fn candidate_preserve_topology(
     if record.phase != Phase::CandidatePreserveIntent {
         return Err(UsrRollbackCandidatePreserveNamespaceError::WrongPhase);
     }
+    candidate_preserve_topology_after_phase(record, snapshot)
+}
+
+/// Require the one exact NewState namespace which may route durable candidate
+/// preservation into fresh-database invalidation.
+///
+/// This helper is deliberately separate from `candidate_preserve_topology`:
+/// the existing candidate-preservation checkpoint remains restricted to
+/// `CandidatePreserveIntent`, while this read-only route accepts only its
+/// already-persisted `CandidatePreserved` successor.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_new_state_candidate_preserved_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::CandidatePreserved {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongCandidatePreservedPhase);
+    }
+    if record.operation != Operation::NewState {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::NewStateRequired);
+    }
+    if candidate_preserve_topology_after_phase(record, snapshot)?
+        == UsrRollbackCandidatePreserveTopology::NewStatePreserved
+    {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+    }
+}
+
+fn candidate_preserve_topology_after_phase(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<UsrRollbackCandidatePreserveTopology, UsrRollbackCandidatePreserveNamespaceError> {
     assess_snapshot_layout(record, snapshot)?;
     if record.operation != Operation::ActiveReblit
         && snapshot.wrappers().any(|wrapper| {
@@ -491,6 +524,10 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     JournalChanged,
     #[error("candidate-preservation proof requires CandidatePreserveIntent")]
     WrongPhase,
+    #[error("fresh-database invalidation routing requires CandidatePreserved")]
+    WrongCandidatePreservedPhase,
+    #[error("fresh-database invalidation routing requires a NewState transition")]
+    NewStateRequired,
     #[error("the candidate tree is absent from the accepted namespace inventory")]
     CandidateMissing,
     #[error("the candidate state ID required by archived preservation is absent")]

@@ -37,6 +37,7 @@ include misc/make/startup-candidate-preserve-target-tests.mk
 include misc/make/startup-candidate-preserve-effect-tests.mk
 include misc/make/startup-candidate-preserve-post-move-durability-tests.mk
 include misc/make/startup-candidate-preserve-persistence-tests.mk
+include misc/make/startup-fresh-db-invalidation-route-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk
 include misc/make/startup-rollback-reverse-projection-tests.mk
 include misc/make/startup-rollback-reverse-effect-adapter-tests.mk
@@ -894,6 +895,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-effect-test  Run sealed NewState candidate-preservation move contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-post-move-durability-test  Run shared NewState post-move durability contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-persistence-test  Run durable CandidatePreserved journal persistence contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-route-test  Run journal-only fresh-database invalidation routing contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-admission-test  Run sealed read-only reverse-admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-projection-test  Run normalized reverse-exchange projection contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-effect-adapter-test  Run the one-shot reverse-exchange syscall adapter contracts"

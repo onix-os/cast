@@ -10,6 +10,8 @@ mod usr_exchange_parent_durability;
 #[allow(dead_code)] // candidate persistence remains sealed from production dispatch
 mod usr_rollback_candidate_preserve_persistence;
 mod usr_rollback_decision;
+#[allow(dead_code)] // fresh-database invalidation routing remains sealed from production dispatch
+mod usr_rollback_fresh_db_invalidation_route;
 mod usr_rollback_resume_route;
 mod usr_rollback_reverse_dispatch;
 mod usr_rollback_reverse_durability;
@@ -114,8 +116,17 @@ pub(super) use usr_rollback_candidate_preserve_persistence::{
     UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_candidate_preserve_and_reopen,
 };
 
+#[allow(unused_imports)] // fresh-database invalidation routing remains sealed from production dispatch
+pub(super) use usr_rollback_fresh_db_invalidation_route::{
+    UsrRollbackFreshDbInvalidationRoutePersistenceError, UsrRollbackFreshDbInvalidationRouteReopenError,
+    persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_persistence::DurableUsrRollbackCandidatePreserveRecord;
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_fresh_db_invalidation_route::DurableUsrRollbackFreshDbInvalidationRouteRecord;
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_reverse_persistence::DurableUsrRollbackReverseRecord;
@@ -128,3 +139,6 @@ pub(crate) use usr_rollback_reverse_persistence::arm_before_usr_rollback_reverse
 
 #[cfg(test)]
 pub(crate) use usr_rollback_candidate_preserve_persistence::arm_before_usr_rollback_candidate_preserve_persistence_final_revalidation;
+
+#[cfg(test)]
+pub(crate) use usr_rollback_fresh_db_invalidation_route::arm_before_usr_rollback_fresh_db_invalidation_route_final_revalidation;
