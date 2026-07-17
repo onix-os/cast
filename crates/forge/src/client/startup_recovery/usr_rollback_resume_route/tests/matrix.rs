@@ -1,4 +1,4 @@
-use crate::transition_journal::{Phase, RecoveryDisposition};
+use crate::transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome};
 
 use super::{
     fixture::{OperationKind, SourceCase, pending},
@@ -50,6 +50,51 @@ fn startup_usr_rollback_resume_route_satisfied_matrix_skips_reverse_exchange() {
         );
         assert!(pending.blockers().is_empty(), "{kind:?}: {:?}", pending.blockers());
         fixture.assert_exact_route(&fixture.canonical_record());
+    }
+}
+
+#[test]
+fn startup_usr_rollback_resume_route_usr_restored_matrix_persists_candidate_preserve_intent() {
+    for kind in OperationKind::ALL {
+        for source in [SourceCase::IntentPost, SourceCase::ExchangedPost] {
+            for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                let fixture = RouteFixture::usr_restored(kind, source, outcome);
+                let namespace_before = fixture.fixture.namespace_snapshot();
+                let database_before = fixture.fixture.database_snapshot();
+
+                let error = fixture.enter();
+                let pending = pending(&error);
+
+                assert_eq!(
+                    pending.phase(),
+                    Phase::CandidatePreserveIntent,
+                    "{kind:?} {source:?} {outcome:?}"
+                );
+                assert_eq!(
+                    pending.disposition(),
+                    RecoveryDisposition::ResumeRollback {
+                        phase: Phase::CandidatePreserveIntent,
+                    },
+                    "{kind:?} {source:?} {outcome:?}"
+                );
+                assert!(
+                    pending.blockers().is_empty(),
+                    "{kind:?} {source:?} {outcome:?}: {:?}",
+                    pending.blockers()
+                );
+                fixture.assert_exact_route(&fixture.canonical_record());
+                assert_eq!(
+                    fixture.fixture.namespace_snapshot(),
+                    namespace_before,
+                    "{kind:?} {source:?} {outcome:?}"
+                );
+                assert_eq!(
+                    fixture.fixture.database_snapshot(),
+                    database_before,
+                    "{kind:?} {source:?} {outcome:?}"
+                );
+            }
+        }
     }
 }
 

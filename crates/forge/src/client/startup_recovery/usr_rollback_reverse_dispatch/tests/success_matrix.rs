@@ -4,8 +4,9 @@ use crate::{
 };
 
 use super::support::{
-    Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged, assert_root_links_absent,
-    assert_usr_restored_pending, enter, expected_usr_restored, namespace_snapshot, persist_usr_restored_fixture,
+    Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
+    assert_layout_unchanged, assert_root_links_absent, assert_usr_restored_pending, enter,
+    expected_candidate_preserve_intent, expected_usr_restored, namespace_snapshot, persist_usr_restored_fixture,
     usr_layout,
 };
 
@@ -61,11 +62,12 @@ fn startup_usr_rollback_reverse_dispatch_post_and_pre_matrix_reaches_exact_usr_r
 }
 
 #[test]
-fn startup_usr_rollback_reverse_dispatch_usr_restored_is_not_redispatched_or_chained() {
+fn startup_usr_rollback_reverse_dispatch_usr_restored_routes_without_reverse_redispatch() {
     for kind in OperationKind::ALL {
         for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
             let fixture = Fixture::for_effect(kind, ReverseLayout::Pre);
             let restored = persist_usr_restored_fixture(&fixture, outcome);
+            let preserve_intent = expected_candidate_preserve_intent(&restored);
             let database_before = fixture.fixture.database_snapshot();
             let namespace_before = namespace_snapshot(&fixture);
             let layout_before = usr_layout(&fixture);
@@ -73,9 +75,12 @@ fn startup_usr_rollback_reverse_dispatch_usr_restored_is_not_redispatched_or_cha
 
             let error = enter(&fixture);
 
-            assert_usr_restored_pending(&error);
-            assert_eq!(fixture.fixture.canonical_record(), restored, "{kind:?} {outcome:?}");
-            assert_eq!(fixture.fixture.canonical_record().phase, Phase::UsrRestored);
+            assert_candidate_preserve_intent_pending(&error);
+            assert_eq!(
+                fixture.fixture.canonical_record(),
+                preserve_intent,
+                "{kind:?} {outcome:?}"
+            );
             assert_eq!(
                 fixture.fixture.database_snapshot(),
                 database_before,

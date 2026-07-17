@@ -5,15 +5,16 @@ use crate::{
         startup_reconciliation::{UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority},
     },
     transition_journal::{
-        InitialRollbackAction, Phase, RollbackObservations, TransitionJournalStore, TransitionRecord,
+        InitialRollbackAction, Phase, RollbackActionOutcome, RollbackObservations, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
-use super::fixture::{Fixture, OperationKind, SourceCase};
+use super::fixture::{Fixture, OperationKind, SourceCase, exchange_usr_layout};
 
 pub(super) struct RouteFixture {
     pub(super) fixture: Fixture,
-    pub(super) decision: TransitionRecord,
+    pub(super) source: TransitionRecord,
 }
 
 impl RouteFixture {
@@ -52,7 +53,30 @@ impl RouteFixture {
         journal.advance(&fixture.source, &decision).unwrap();
         drop(journal);
         assert_eq!(fixture.canonical_record(), decision);
-        Self { fixture, decision }
+        Self {
+            fixture,
+            source: decision,
+        }
+    }
+
+    pub(super) fn usr_restored(kind: OperationKind, source: SourceCase, outcome: RollbackActionOutcome) -> Self {
+        assert!(
+            matches!(source, SourceCase::IntentPost | SourceCase::ExchangedPost),
+            "UsrRestored fixture requires a pending reverse-exchange route"
+        );
+        let mut fixture = Self::new(kind, source);
+        let reverse_intent = fixture.source.rollback_successor(None).unwrap();
+        assert_eq!(reverse_intent.phase, Phase::ReverseExchangeIntent);
+        exchange_usr_layout(&fixture.fixture.installation.root);
+        let restored = reverse_intent.rollback_successor(Some(outcome)).unwrap();
+        assert_eq!(restored.phase, Phase::UsrRestored);
+        let journal = fixture.open_journal();
+        journal.advance(&fixture.source, &reverse_intent).unwrap();
+        journal.advance(&reverse_intent, &restored).unwrap();
+        drop(journal);
+        fixture.source = restored;
+        assert_eq!(fixture.canonical_record(), fixture.source);
+        fixture
     }
 
     pub(super) fn enter(&self) -> startup_gate::Error {
@@ -72,7 +96,7 @@ impl RouteFixture {
     }
 
     pub(super) fn expected_route(&self) -> TransitionRecord {
-        self.decision.rollback_successor(None).unwrap()
+        self.source.rollback_successor(None).unwrap()
     }
 
     pub(super) fn expected_phase(&self) -> Phase {
@@ -82,8 +106,8 @@ impl RouteFixture {
     pub(super) fn assert_exact_route(&self, actual: &TransitionRecord) {
         let expected = self.expected_route();
         assert_eq!(actual, &expected);
-        assert_eq!(actual.generation, self.decision.generation + 1);
-        assert_eq!(actual.rollback, self.decision.rollback);
+        assert_eq!(actual.generation, self.source.generation + 1);
+        assert_eq!(actual.rollback, self.source.rollback);
     }
 
     pub(super) fn capture_ready<'reservation>(
@@ -99,7 +123,7 @@ impl RouteFixture {
             journal,
             &self.fixture.database,
             reservation,
-            &self.decision,
+            &self.source,
             in_flight,
         )
         .unwrap()

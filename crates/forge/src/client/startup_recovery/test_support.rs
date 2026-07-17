@@ -458,7 +458,7 @@ fn install_isolation_abi(root: &Path) {
     }
 }
 
-fn exchange_usr_layout(root: &Path) {
+pub(super) fn exchange_usr_layout(root: &Path) {
     let live = root.join("usr");
     let staging = root.join(".cast/root/staging/usr");
     let parked = root.join(".cast/root/.exchange-fixture-previous");

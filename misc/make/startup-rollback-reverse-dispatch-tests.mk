@@ -17,7 +17,7 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 		journal_update_process_kill::startup_usr_rollback_reverse_dispatch_journal_update_process_kills_restart_exactly \
 		process_kill_restart::startup_usr_rollback_reverse_dispatch_process_kills_restart_to_exact_already_satisfied \
 		success_matrix::startup_usr_rollback_reverse_dispatch_post_and_pre_matrix_reaches_exact_usr_restored \
-		success_matrix::startup_usr_rollback_reverse_dispatch_usr_restored_is_not_redispatched_or_chained \
+		success_matrix::startup_usr_rollback_reverse_dispatch_usr_restored_routes_without_reverse_redispatch \
 		syscall_results::startup_usr_rollback_reverse_dispatch_classifies_all_raw_syscall_reports_by_fresh_layout \
 		syscall_results::startup_usr_rollback_reverse_dispatch_ambiguous_post_attempt_evidence_consumes_retry_capability; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
@@ -95,7 +95,8 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s grep -Fqx '        for raw_error in [false, true] {' "$$syscalls"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackReverseDispatchError::NotApplied' "$$support" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackReverseDispatchError::Ambiguous' "$$support" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'assert_reverse_exchange_intent_recovers_to_usr_restored' "$$coordinator" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_reverse_exchange_intent_recovers_to_usr_restored' "$$coordinator" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_usr_restored_routes_to_candidate_preserve_intent' "$$coordinator" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'retained_exchange_syscall_count(), 2' "$$coordinator" )" = 4; \
 	timeout 10s grep -Fq 'assert_eq!(pending.phase(), Phase::UsrRestored);' "$$forward_support"; \
 	for file in "$$dispatcher" "$$gate" "$$root" "$$tests" "$$support" "$$durability" "$$races" "$$fresh" "$$journal" "$$journal_process_kill" "$$process_kill" "$$success" "$$syscalls" "$$coordinator" "$$forward_support" misc/make/startup-rollback-reverse-dispatch-tests.mk; do \

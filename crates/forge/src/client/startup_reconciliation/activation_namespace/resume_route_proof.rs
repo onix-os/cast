@@ -1,4 +1,4 @@
-//! Independent retained namespace proof for routing `RollbackDecided`.
+//! Independent retained namespace proof for journal-only rollback routing.
 //!
 //! The diagnostic inventory is never reused as persistence authority. This
 //! proof performs its own journal/namespace sandwich, retains both exact
@@ -7,11 +7,11 @@
 
 use crate::{
     Installation,
-    transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{Phase, StorageError, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
-    capture::{CaptureError, NamespaceSnapshot, capture_snapshot},
+    capture::{CaptureError, NamespaceSnapshot, TreeLocation, capture_snapshot},
     policy::{NamespacePolicyConflict, UsrExchangeLayout, assess_snapshot_layout},
 };
 
@@ -100,6 +100,13 @@ fn exchange_layout(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<UsrExchangeLayout, UsrRollbackResumeRouteNamespaceError> {
+    if record.phase == Phase::UsrRestored
+        && snapshot
+            .wrappers()
+            .any(|wrapper| wrapper.role == TreeLocation::TransitionQuarantine)
+    {
+        return Err(UsrRollbackResumeRouteNamespaceError::PrematureTransitionQuarantine);
+    }
     assess_snapshot_layout(record, snapshot)?
         .usr_exchange_layout()
         .ok_or(UsrRollbackResumeRouteNamespaceError::NotExchangeLayout)
@@ -154,6 +161,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackResumeRouteNamespa
     NotExchangeLayout,
     #[error("the exact pre/post `/usr` exchange layout changed during rollback-resume proof")]
     LayoutChanged,
+    #[error("the transition quarantine wrapper exists before CandidatePreserveIntent was persisted")]
+    PrematureTransitionQuarantine,
     #[error("revalidate the retained mutable installation namespace")]
     Installation(#[from] crate::installation::Error),
 }

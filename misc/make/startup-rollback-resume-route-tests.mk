@@ -5,10 +5,11 @@ forge-startup-usr-rollback-resume-route-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_recovery::usr_rollback_resume_route::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 11; \
+	timeout 10s test "$$count" = 12; \
 	for test in \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_pending_matrix_persists_reverse_exchange_intent \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_satisfied_matrix_skips_reverse_exchange \
+		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_usr_restored_matrix_persists_candidate_preserve_intent \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_routes_only_and_preserves_exact_plan \
 		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_usr_rollback_resume_route_rejects_a_different_open_journal_binding \
 		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_usr_rollback_resume_route_database_and_provenance_conflicts_never_advance \
@@ -83,9 +84,12 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s test "$$( timeout 10s rg -n 'journal\.has_binding\(&self\.journal_binding\)' "$$authority" | timeout 10s wc -l )" = 1; \
 	timeout 10s awk '$$0 ~ /^    pub\(in crate::client\) fn revalidate\(/ { active = 1; next } active && $$0 == "        if !journal.has_binding(&self.journal_binding) {" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /journal\.load/) { exit 1 } END { exit !found }' "$$authority"; \
 	timeout 10s grep -Fqx 'pub(crate) struct TransitionJournalBinding(Arc<()>);' "$$journal_store"; \
-	timeout 10s grep -Fq 'if record.phase != Phase::RollbackDecided || !is_usr_exchange_rollback_source(record)' "$$authority"; \
+	timeout 10s grep -Fq 'if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)' "$$authority"; \
 	timeout 10s grep -Fq '(RollbackAction::Pending, UsrExchangeLayout::Post)' "$$authority"; \
 	timeout 10s grep -Fq '(RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)' "$$authority"; \
+	timeout 10s grep -Fq 'RollbackAction::Applied | RollbackAction::AlreadySatisfied' "$$authority"; \
+	timeout 10s grep -Fq 'record.phase == Phase::UsrRestored' "$$proof"; \
+	timeout 10s grep -Fq 'wrapper.role == TreeLocation::TransitionQuarantine' "$$proof"; \
 	timeout 10s grep -Fq 'super::startup_recovery::persist_usr_rollback_resume_route_and_reopen(journal, authority)?' "$$startup_gate"; \
 	timeout 10s grep -Fq 'assert_usr_rollback_decision_routes_to_reverse_exchange_intent(' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'decision.rollback_successor(None).unwrap()' "$$coordinator_test"; \

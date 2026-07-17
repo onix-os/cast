@@ -17,8 +17,9 @@ use crate::{
 
 use super::super::UsrRollbackReverseDispatchError;
 use super::support::{
-    Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged, assert_root_links_absent,
-    assert_usr_restored_pending, enter, expected_usr_restored, usr_layout,
+    Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
+    assert_layout_unchanged, assert_root_links_absent, assert_usr_restored_pending, enter,
+    expected_candidate_preserve_intent, expected_usr_restored, usr_layout,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -136,11 +137,12 @@ fn startup_usr_rollback_reverse_dispatch_durability_faults_restart_as_pre_withou
                     assert_root_links_absent(&fixture);
                     drop(second);
 
+                    let preserve_intent = expected_candidate_preserve_intent(&restored);
                     let third = enter(&fixture);
-                    assert_usr_restored_pending(&third);
+                    assert_candidate_preserve_intent_pending(&third);
                     assert_eq!(
                         fixture.fixture.canonical_record(),
-                        restored,
+                        preserve_intent,
                         "{kind:?} {layout:?} {fault:?} raw_error={raw_error}"
                     );
                     assert_eq!(

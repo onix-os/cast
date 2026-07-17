@@ -1,4 +1,4 @@
-//! Persist the exact first rollback intent selected by `RollbackDecided`.
+//! Persist the exact next journal-only rollback intent.
 //!
 //! This executor is deliberately routing-only. It performs one conditional
 //! journal advance and no reverse exchange, candidate movement, database
@@ -35,8 +35,8 @@ pub(in crate::client) fn persist_usr_rollback_resume_route_and_reopen(
     let source_record = authority.record().clone();
 
     // This is the sole production routing decision. No outcome is supplied:
-    // RollbackDecided selects either the reverse-exchange intent or, when the
-    // exchange was already satisfied, the candidate-preservation intent.
+    // RollbackDecided selects its first unresolved intent, while UsrRestored
+    // selects candidate preservation. Neither source authorizes an effect.
     let successor = match source_record.rollback_successor(None) {
         Ok(successor)
             if matches!(

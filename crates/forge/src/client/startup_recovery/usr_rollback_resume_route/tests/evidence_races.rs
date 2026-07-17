@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::unix::fs::symlink,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -12,8 +13,9 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate,
+        startup_gate::{self, UsrRollbackResumeRouteSeal},
         startup_reconciliation::{
+            UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority,
             arm_before_usr_rollback_resume_route_fresh_namespace_capture,
             arm_between_usr_rollback_resume_route_database_captures,
         },
@@ -22,11 +24,11 @@ use crate::{
             persist_usr_rollback_resume_route_and_reopen,
         },
     },
-    transition_journal::Phase,
+    transition_journal::{ForwardPhase, Phase, RollbackActionOutcome, encode},
 };
 
 use super::{
-    fixture::{OperationKind, SourceCase, create_private_directory, pending},
+    fixture::{OperationKind, SourceCase, canonical_journal, create_private_directory, pending},
     support::RouteFixture,
 };
 
@@ -44,7 +46,7 @@ fn startup_usr_rollback_resume_route_rejects_a_different_open_journal_binding() 
 
     assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
     assert_eq!(fixture.fixture.canonical_bytes(), before);
-    assert_eq!(fixture.canonical_record(), fixture.decision);
+    assert_eq!(fixture.canonical_record(), fixture.source);
 }
 
 #[test]
@@ -59,7 +61,7 @@ fn startup_usr_rollback_resume_route_database_and_provenance_conflicts_never_adv
             fixture
                 .fixture
                 .database
-                .clear_transition_if_matches(fixture.fixture.candidate_state, &fixture.decision.transition_id)
+                .clear_transition_if_matches(fixture.fixture.candidate_state, &fixture.source.transition_id)
                 .unwrap();
         } else {
             fixture
@@ -74,7 +76,7 @@ fn startup_usr_rollback_resume_route_database_and_provenance_conflicts_never_adv
             "{kind:?}: {error:?}"
         );
         assert_eq!(fixture.fixture.canonical_bytes(), before, "{kind:?}");
-        assert_eq!(fixture.canonical_record(), fixture.decision, "{kind:?}");
+        assert_eq!(fixture.canonical_record(), fixture.source, "{kind:?}");
     }
 
     let fixture = RouteFixture::new(OperationKind::Archived, SourceCase::IntentPre);
@@ -89,6 +91,87 @@ fn startup_usr_rollback_resume_route_database_and_provenance_conflicts_never_adv
         .unwrap();
     let error = persist_usr_rollback_resume_route_and_reopen(journal, authority).unwrap_err();
     assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
+    assert_eq!(fixture.fixture.canonical_bytes(), before);
+    drop(reservation);
+
+    let fixture = RouteFixture::usr_restored(
+        OperationKind::NewState,
+        SourceCase::ExchangedPost,
+        RollbackActionOutcome::Applied,
+    );
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let authority = fixture.capture_ready(&journal, &reservation);
+    let before = fixture.fixture.canonical_bytes();
+    fixture
+        .fixture
+        .database
+        .clear_transition_if_matches(fixture.fixture.candidate_state, &fixture.source.transition_id)
+        .unwrap();
+    let error = persist_usr_rollback_resume_route_and_reopen(journal, authority).unwrap_err();
+    assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
+    assert_eq!(fixture.fixture.canonical_bytes(), before);
+    drop(reservation);
+
+    let fixture = RouteFixture::usr_restored(
+        OperationKind::Archived,
+        SourceCase::IntentPost,
+        RollbackActionOutcome::AlreadySatisfied,
+    );
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let authority = fixture.capture_ready(&journal, &reservation);
+    let before = fixture.fixture.canonical_bytes();
+    fixture
+        .fixture
+        .database
+        .delete_metadata_provenance_for_test(fixture.fixture.candidate_state)
+        .unwrap();
+    let error = persist_usr_rollback_resume_route_and_reopen(journal, authority).unwrap_err();
+    assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
+    assert_eq!(fixture.fixture.canonical_bytes(), before);
+}
+
+fn assert_non_usr_restored_source_is_not_applicable() {
+    let mut fixture = RouteFixture::usr_restored(
+        OperationKind::NewState,
+        SourceCase::ExchangedPost,
+        RollbackActionOutcome::Applied,
+    );
+    fixture.source.rollback.as_mut().unwrap().source = ForwardPhase::RootLinksComplete;
+    let encoded = encode(&fixture.source).expect("later rollback source must remain a valid journal record");
+    fs::write(canonical_journal(&fixture.fixture.installation.root), encoded).unwrap();
+    for (name, target) in [
+        ("bin", "usr/bin"),
+        ("sbin", "usr/sbin"),
+        ("lib", "usr/lib"),
+        ("lib32", "usr/lib32"),
+        ("lib64", "usr/lib"),
+    ] {
+        symlink(target, fixture.fixture.installation.root.join(name)).unwrap();
+    }
+
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let seal = UsrRollbackResumeRouteSeal::new_for_test();
+    let in_flight = fixture.fixture.database.audit_in_flight_transition().unwrap();
+    let admission = UsrRollbackResumeRouteAuthority::capture(
+        &seal,
+        &fixture.fixture.installation,
+        &journal,
+        &fixture.fixture.database,
+        &reservation,
+        &fixture.source,
+        in_flight,
+    )
+    .unwrap();
+    assert!(matches!(admission, UsrRollbackResumeRouteAdmission::NotApplicable));
+    drop(journal);
+    drop(reservation);
+
+    let before = fixture.fixture.canonical_bytes();
+    let error = fixture.enter();
+    assert_eq!(pending(&error).phase(), Phase::UsrRestored);
     assert_eq!(fixture.fixture.canonical_bytes(), before);
 }
 
@@ -120,6 +203,24 @@ fn startup_usr_rollback_resume_route_namespace_conflicts_never_advance() {
     let error = persist_usr_rollback_resume_route_and_reopen(journal, authority).unwrap_err();
     assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
     assert_eq!(fixture.fixture.canonical_bytes(), before);
+    drop(reservation);
+
+    let fixture = RouteFixture::usr_restored(
+        OperationKind::Archived,
+        SourceCase::ExchangedPost,
+        RollbackActionOutcome::Applied,
+    );
+    let before = fixture.fixture.canonical_bytes();
+    create_private_directory(
+        &fixture
+            .fixture
+            .installation
+            .state_quarantine_dir()
+            .join(fixture.source.quarantine_name.as_str()),
+    );
+    let deferred = fixture.enter();
+    assert_eq!(pending(&deferred).phase(), Phase::UsrRestored);
+    assert_eq!(fixture.fixture.canonical_bytes(), before);
 }
 
 #[test]
@@ -128,7 +229,7 @@ fn startup_usr_rollback_resume_route_capture_and_final_revalidation_races_fail_b
     let before = fixture.fixture.canonical_bytes();
     let database = fixture.fixture.database.clone();
     let candidate = fixture.fixture.candidate_state;
-    let transition = fixture.decision.transition_id.clone();
+    let transition = fixture.source.transition_id.clone();
     arm_between_usr_rollback_resume_route_database_captures(move || {
         database.clear_transition_if_matches(candidate, &transition).unwrap();
     });
@@ -158,13 +259,29 @@ fn startup_usr_rollback_resume_route_capture_and_final_revalidation_races_fail_b
     });
     assert_authority_failure(fixture.enter());
     assert_eq!(fixture.fixture.canonical_bytes(), before);
+
+    let fixture = RouteFixture::usr_restored(
+        OperationKind::ActiveReblit,
+        SourceCase::IntentPost,
+        RollbackActionOutcome::AlreadySatisfied,
+    );
+    let before = fixture.fixture.canonical_bytes();
+    let database = fixture.fixture.database.clone();
+    let candidate = fixture.fixture.candidate_state;
+    arm_before_usr_rollback_resume_route_final_revalidation(move || {
+        database.delete_metadata_provenance_for_test(candidate).unwrap();
+    });
+    assert_authority_failure(fixture.enter());
+    assert_eq!(fixture.fixture.canonical_bytes(), before);
 }
 
 #[test]
 fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remain_exact() {
+    assert_non_usr_restored_source_is_not_applicable();
+
     for kind in OperationKind::ALL {
         let fixture = RouteFixture::historical(kind, SourceCase::ExchangedPost);
-        let epoch = fixture.decision.creation_epoch.clone();
+        let epoch = fixture.source.creation_epoch.clone();
         let error = fixture.enter();
         assert_eq!(pending(&error).phase(), Phase::ReverseExchangeIntent, "{kind:?}");
         let actual = fixture.canonical_record();

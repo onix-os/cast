@@ -1,4 +1,4 @@
-//! Sealed evidence authority for routing `RollbackDecided` to its first intent.
+//! Sealed evidence authority for routing one journal-only rollback intent.
 
 use crate::{
     Installation, db,
@@ -22,7 +22,7 @@ pub(in crate::client) enum UsrRollbackResumeRouteAdmission<'reservation> {
     Ready(UsrRollbackResumeRouteAuthority<'reservation>),
 }
 
-/// Exact retained evidence for one `RollbackDecided` routing advance.
+/// Exact retained evidence for one rollback routing advance.
 ///
 /// The active-state reservation is writer exclusion only. It is never treated
 /// as live-tree identity or active-selection evidence.
@@ -46,7 +46,9 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         record: &TransitionRecord,
         initial_in_flight: Option<db::state::InFlightTransition>,
     ) -> Result<UsrRollbackResumeRouteAdmission<'reservation>, UsrRollbackResumeRouteAuthorityError> {
-        if record.phase != Phase::RollbackDecided || !is_usr_exchange_rollback_source(record) {
+        if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)
+            || !is_usr_exchange_rollback_source(record)
+        {
             return Ok(UsrRollbackResumeRouteAdmission::NotApplicable);
         }
 
@@ -134,8 +136,7 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
-    if record.phase != Phase::RollbackDecided
-        || rollback.previous_archive != RollbackAction::NotRequired
+    if rollback.previous_archive != RollbackAction::NotRequired
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot != BootRollback::NotRequired
     {
@@ -154,11 +155,21 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
     fresh_is_exact
         && candidate_disposition_is_exact
         && external_effects_are_exact
-        && matches!(
-            (rollback.usr_exchange, layout),
-            (RollbackAction::Pending, UsrExchangeLayout::Post)
-                | (RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)
-        )
+        && match record.phase {
+            Phase::RollbackDecided => matches!(
+                (rollback.usr_exchange, layout),
+                (RollbackAction::Pending, UsrExchangeLayout::Post)
+                    | (RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)
+            ),
+            Phase::UsrRestored => matches!(
+                (rollback.usr_exchange, layout),
+                (
+                    RollbackAction::Applied | RollbackAction::AlreadySatisfied,
+                    UsrExchangeLayout::Pre
+                )
+            ),
+            _ => false,
+        }
 }
 
 fn inspect_current_database(

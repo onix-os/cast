@@ -24,9 +24,9 @@ use crate::{
 };
 
 use super::support::{
-    Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged,
-    assert_usr_restored_pending, expected_usr_restored, open_state_database, persistent_state_database,
-    release_fixture_handles, usr_layout, usr_layout_at,
+    Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
+    assert_layout_unchanged, assert_usr_restored_pending, expected_candidate_preserve_intent, expected_usr_restored,
+    open_state_database, persistent_state_database, release_fixture_handles, usr_layout, usr_layout_at,
 };
 
 const TEST_NAME: &str = concat!(
@@ -270,6 +270,7 @@ fn run_parent_case(kind: OperationKind, kill_point: KillPoint) {
     let root = fs::canonicalize(&fixture.fixture.installation.root).unwrap();
     let source = fixture.record.clone();
     let restored = expected_usr_restored(&fixture, RollbackActionOutcome::AlreadySatisfied);
+    let preserve_intent = expected_candidate_preserve_intent(&restored);
     let post_layout = usr_layout(&fixture);
     let raw_post_layout = RawUsrLayout::capture(&root);
     let state_database = persistent_state_database(&fixture, kind);
@@ -313,7 +314,7 @@ fn run_parent_case(kind: OperationKind, kill_point: KillPoint) {
         "recovery child failed for {operation:?} {kill_point:?}: {recovery_status:?}"
     );
     assert_eq!(recovery_status.signal(), None);
-    assert_eq!(canonical_record(&root), restored, "{operation:?} {kill_point:?}");
+    assert_eq!(canonical_record(&root), preserve_intent, "{operation:?} {kill_point:?}");
     assert_layout_unchanged(pre_layout, usr_layout_at(&root));
     assert_eq!(RawUsrLayout::capture(&root), raw_post_layout.reversed());
     assert_root_links_absent_at(&root);
@@ -383,10 +384,11 @@ fn run_recovery_child(
     assert_root_links_absent_at(&case.root);
     drop(recovered);
 
+    let preserve_intent = expected_candidate_preserve_intent(&expected);
     let stable = enter_with_handles(installation, state_database);
 
-    assert_usr_restored_pending(&stable);
-    assert_eq!(canonical_record(&case.root), expected);
+    assert_candidate_preserve_intent_pending(&stable);
+    assert_eq!(canonical_record(&case.root), preserve_intent);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_layout_unchanged(pre_layout, usr_layout_at(&case.root));
     assert_eq!(RawUsrLayout::capture(&case.root), post_layout.reversed());

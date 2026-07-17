@@ -9,8 +9,8 @@ use crate::{
         },
     },
     transition_journal::{
-        Phase, TransitionJournalStore, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-        arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
+        Phase, RollbackActionOutcome, TransitionJournalStore, arm_next_displaced_unlink_fault,
+        arm_next_temporary_sync_fault, arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
         arm_next_update_first_directory_sync_fault, assert_displaced_unlink_fault_consumed,
         assert_temporary_sync_fault_consumed, assert_update_exchange_fault_consumed,
         assert_update_final_directory_sync_fault_consumed, assert_update_first_directory_sync_fault_consumed,
@@ -52,27 +52,37 @@ fn startup_usr_rollback_resume_route_storage_faults_reopen_to_exact_source_or_su
         ),
     ];
 
-    for (arm, assert_consumed, expected_durable) in cases {
-        let fixture = RouteFixture::new(OperationKind::NewState, SourceCase::ExchangedPost);
-        arm();
-        let error = fixture.enter();
-        assert_consumed();
-        assert!(matches!(
-            error,
-            crate::client::startup_gate::Error::UsrRollbackResumeRoutePersistence(
-                UsrRollbackResumeRoutePersistenceError::Advance { durable, .. }
-            ) if durable == expected_durable
-        ));
-        let actual = fixture.canonical_record();
-        match expected_durable {
-            DurableUsrRollbackResumeRouteRecord::Source => assert_eq!(actual, fixture.decision),
-            DurableUsrRollbackResumeRouteRecord::Successor => fixture.assert_exact_route(&actual),
+    for restored_source in [false, true] {
+        for &(arm, assert_consumed, expected_durable) in &cases {
+            let fixture = if restored_source {
+                RouteFixture::usr_restored(
+                    OperationKind::NewState,
+                    SourceCase::ExchangedPost,
+                    RollbackActionOutcome::Applied,
+                )
+            } else {
+                RouteFixture::new(OperationKind::NewState, SourceCase::ExchangedPost)
+            };
+            arm();
+            let error = fixture.enter();
+            assert_consumed();
+            assert!(matches!(
+                error,
+                crate::client::startup_gate::Error::UsrRollbackResumeRoutePersistence(
+                    UsrRollbackResumeRoutePersistenceError::Advance { durable, .. }
+                ) if durable == expected_durable
+            ));
+            let actual = fixture.canonical_record();
+            match expected_durable {
+                DurableUsrRollbackResumeRouteRecord::Source => assert_eq!(actual, fixture.source),
+                DurableUsrRollbackResumeRouteRecord::Successor => fixture.assert_exact_route(&actual),
+            }
+            let names = fs::read_dir(fixture.fixture.installation.root.join(".cast/journal"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
         }
-        let names = fs::read_dir(fixture.fixture.installation.root.join(".cast/journal"))
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<Vec<_>>();
-        assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
     }
 }
 
@@ -95,9 +105,9 @@ fn startup_usr_rollback_resume_route_rejects_cross_root_authority_and_reopens_su
     .unwrap();
     let error = persist_usr_rollback_resume_route_and_reopen(second_journal, authority).unwrap_err();
     assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
-    assert_eq!(first_journal.load().unwrap(), Some(first.decision.clone()));
-    assert_eq!(first.canonical_record(), first.decision);
-    assert_eq!(second.canonical_record(), first.decision);
+    assert_eq!(first_journal.load().unwrap(), Some(first.source.clone()));
+    assert_eq!(first.canonical_record(), first.source);
+    assert_eq!(second.canonical_record(), first.source);
 
     drop(first_journal);
     let journal = first.open_journal();

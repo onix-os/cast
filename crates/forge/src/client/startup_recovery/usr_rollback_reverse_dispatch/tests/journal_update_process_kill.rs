@@ -24,8 +24,8 @@ use crate::{
 };
 
 use super::support::{
-    Fixture, OperationKind, ReverseLayout, assert_usr_restored_pending, open_state_database, persistent_state_database,
-    release_fixture_handles,
+    Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_usr_restored_pending,
+    expected_candidate_preserve_intent, open_state_database, persistent_state_database, release_fixture_handles,
 };
 
 const TEST_NAME: &str = concat!(
@@ -394,12 +394,13 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
     );
     assert_eq!(recovery_status.signal(), None);
 
-    let final_successor = if boundary.canonical_is_source() {
+    let final_restored = if boundary.canonical_is_source() {
         &restart_successor
     } else {
         &published_successor
     };
-    assert_eq!(canonical_record(&root), *final_successor);
+    let final_successor = expected_candidate_preserve_intent(final_restored);
+    assert_eq!(canonical_record(&root), final_successor);
     assert_clean_journal_directory(&root);
     assert_eq!(RawUsrLayout::capture(&root), expected_pre_layout);
     assert_root_links_absent_at(&root);
@@ -466,21 +467,24 @@ fn run_recovery_child(
     arm_before_reverse_exchange_reconciliation_capture(|| {
         panic!("PRE journal-update recovery attempted a second retained /usr exchange")
     });
-    if !case.boundary.canonical_is_source() {
-        arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced, || {
-            panic!("published UsrRestored recovery attempted another journal update")
-        });
-    }
-
     let recovered = enter_with_handles(installation, state_database);
 
-    let expected = if case.boundary.canonical_is_source() {
+    let restored = if case.boundary.canonical_is_source() {
         restart_successor
     } else {
         published_successor
     };
-    assert_usr_restored_pending(&recovered);
-    assert_eq!(canonical_record(&case.root), expected);
+    let expected_after_recovery = if case.boundary.canonical_is_source() {
+        restored.clone()
+    } else {
+        expected_candidate_preserve_intent(&restored)
+    };
+    if case.boundary.canonical_is_source() {
+        assert_usr_restored_pending(&recovered);
+    } else {
+        assert_candidate_preserve_intent_pending(&recovered);
+    }
+    assert_eq!(canonical_record(&case.root), expected_after_recovery);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_eq!(
         RawUsrLayout::capture(&case.root),
@@ -492,15 +496,16 @@ fn run_recovery_child(
     assert_clean_journal_directory(&case.root);
     drop(recovered);
 
-    if case.boundary.canonical_is_source() {
+    if !case.boundary.canonical_is_source() {
         arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced, || {
-            panic!("stable UsrRestored recovery attempted another journal update")
+            panic!("stable CandidatePreserveIntent recovery attempted another journal update")
         });
     }
+    let preserve_intent = expected_candidate_preserve_intent(&restored);
     let stable = enter_with_handles(installation, state_database);
 
-    assert_usr_restored_pending(&stable);
-    assert_eq!(canonical_record(&case.root), expected);
+    assert_candidate_preserve_intent_pending(&stable);
+    assert_eq!(canonical_record(&case.root), preserve_intent);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_eq!(
         RawUsrLayout::capture(&case.root),

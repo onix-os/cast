@@ -18,8 +18,9 @@ use crate::{
 };
 
 use super::support::{
-    Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged, assert_root_links_absent,
-    assert_usr_restored_pending, enter, expected_usr_restored, namespace_snapshot, usr_layout,
+    Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
+    assert_layout_unchanged, assert_root_links_absent, assert_usr_restored_pending, enter,
+    expected_candidate_preserve_intent, expected_usr_restored, namespace_snapshot, usr_layout,
 };
 
 #[derive(Clone, Copy)]
@@ -123,10 +124,15 @@ fn startup_usr_rollback_reverse_dispatch_journal_faults_restart_to_exact_source_
                     DurableUsrRollbackReverseRecord::Source => {
                         expected_usr_restored(&fixture, RollbackActionOutcome::AlreadySatisfied)
                     }
-                    DurableUsrRollbackReverseRecord::UsrRestored => initial_successor,
+                    DurableUsrRollbackReverseRecord::UsrRestored => {
+                        expected_candidate_preserve_intent(&initial_successor)
+                    }
                 };
 
-                assert_usr_restored_pending(&restart);
+                match fault.durable {
+                    DurableUsrRollbackReverseRecord::Source => assert_usr_restored_pending(&restart),
+                    DurableUsrRollbackReverseRecord::UsrRestored => assert_candidate_preserve_intent_pending(&restart),
+                }
                 assert_eq!(
                     fixture.fixture.canonical_record(),
                     expected_after_restart,

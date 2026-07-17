@@ -81,6 +81,29 @@ pub(crate) fn assert_reverse_exchange_intent_recovers_to_usr_restored(
     );
 }
 
+/// Re-enter the real mutable startup gate at exact `UsrRestored` evidence and
+/// require its journal-only route to candidate preservation.
+pub(crate) fn assert_usr_restored_routes_to_candidate_preserve_intent(
+    installation: &Installation,
+    state_db: &db::state::Database,
+) {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let error = match CleanSystemStartup::enter(installation, state_db, &reservation) {
+        Ok(_) => panic!("startup unexpectedly admitted an unfinished candidate rollback"),
+        Err(error) => error,
+    };
+    let pending = match error {
+        startup_gate::Error::RecoveryPending(pending) => pending,
+        other => panic!("expected routed recovery-pending startup result, got {other:?}"),
+    };
+    assert_eq!(pending.phase(), Phase::CandidatePreserveIntent);
+    assert!(
+        pending.blockers().is_empty(),
+        "unexpected candidate-preservation startup blockers: {:?}",
+        pending.blockers()
+    );
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct StartupRecoveryNamespaceEntry {
     relative: PathBuf,

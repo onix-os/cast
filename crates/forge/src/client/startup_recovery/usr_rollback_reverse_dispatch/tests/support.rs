@@ -57,6 +57,22 @@ pub(super) fn assert_usr_restored_pending(error: &startup_gate::Error) {
     );
 }
 
+pub(super) fn assert_candidate_preserve_intent_pending(error: &startup_gate::Error) {
+    let pending = pending(error);
+    assert_eq!(pending.phase(), Phase::CandidatePreserveIntent);
+    assert_eq!(
+        pending.disposition(),
+        RecoveryDisposition::ResumeRollback {
+            phase: Phase::CandidatePreserveIntent,
+        }
+    );
+    assert!(
+        pending.blockers().is_empty(),
+        "unexpected blockers: {:?}",
+        pending.blockers()
+    );
+}
+
 pub(super) fn assert_not_applied(error: startup_gate::Error) {
     assert!(
         matches!(
@@ -82,6 +98,14 @@ pub(super) fn expected_usr_restored(fixture: &Fixture, outcome: RollbackActionOu
         .record
         .rollback_successor(Some(outcome))
         .expect("exact reverse intent must admit its fixed UsrRestored successor")
+}
+
+pub(super) fn expected_candidate_preserve_intent(restored: &TransitionRecord) -> TransitionRecord {
+    let successor = restored
+        .rollback_successor(None)
+        .expect("exact UsrRestored record must admit CandidatePreserveIntent");
+    assert_eq!(successor.phase, Phase::CandidatePreserveIntent);
+    successor
 }
 
 pub(super) fn persist_usr_restored_fixture(fixture: &Fixture, outcome: RollbackActionOutcome) -> TransitionRecord {

@@ -10,6 +10,7 @@ use crate::{
         JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight,
         assert_reverse_exchange_intent_recovers_to_usr_restored,
         assert_usr_exchange_intent_post_recovers_to_pending_reverse,
+        assert_usr_restored_routes_to_candidate_preserve_intent,
         assert_usr_rollback_decision_routes_to_reverse_exchange_intent, snapshot_startup_recovery_namespace,
     },
     db,

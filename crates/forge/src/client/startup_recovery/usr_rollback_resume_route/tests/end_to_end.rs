@@ -55,9 +55,15 @@ fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persiste
 
                 drop(third);
                 let fourth = fixture.enter();
-                assert_eq!(pending(&fourth).phase(), Phase::UsrRestored, "{kind:?} {source:?}");
-                assert_eq!(fixture.canonical_record(), restored, "{kind:?} {source:?}");
+                let preserve_intent = restored.rollback_successor(None).unwrap();
+                assert_eq!(
+                    pending(&fourth).phase(),
+                    Phase::CandidatePreserveIntent,
+                    "{kind:?} {source:?}"
+                );
+                assert_eq!(fixture.canonical_record(), preserve_intent, "{kind:?} {source:?}");
                 assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {source:?}");
+                assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
             } else {
                 assert_eq!(pending(&third).phase(), expected.phase, "{kind:?} {source:?}");
                 assert_eq!(fixture.canonical_record(), expected, "{kind:?} {source:?}");
