@@ -18,7 +18,7 @@ forge-startup-usr-rollback-resume-route-test:
 		client::startup_recovery::usr_rollback_resume_route::tests::storage_reopen::startup_usr_rollback_resume_route_storage_faults_reopen_to_exact_source_or_successor \
 		client::startup_recovery::usr_rollback_resume_route::tests::storage_reopen::startup_usr_rollback_resume_route_rejects_cross_root_authority_and_reopens_success \
 		client::startup_recovery::usr_rollback_resume_route::tests::end_to_end::startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persistence_boundary_per_entry \
-		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_resume_route.rs; \
@@ -98,5 +98,5 @@ forge-startup-usr-rollback-resume-route-test:
 		'client::startup_recovery::usr_rollback_resume_route::tests::' \
 		-- --test-threads=1; \
 	timeout 1200s $(CARGO) test -p forge --lib \
-		'transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry' \
+		'transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored' \
 		-- --exact --test-threads=1

@@ -6,21 +6,29 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s test -n "$$listed"; \
 	prefix='client::startup_recovery::usr_rollback_reverse_dispatch::tests::'; \
 	count="$$( timeout 10s grep -c "^$$prefix.*: test$$" <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 4; \
+	timeout 10s test "$$count" = 6; \
 	for name in \
+		durability_restart::startup_usr_rollback_reverse_dispatch_parent_durability_faults_restart_as_pre_without_second_exchange \
+		journal_restart::startup_usr_rollback_reverse_dispatch_journal_faults_restart_to_exact_source_or_usr_restored \
 		success_matrix::startup_usr_rollback_reverse_dispatch_post_and_pre_matrix_reaches_exact_usr_restored \
 		success_matrix::startup_usr_rollback_reverse_dispatch_usr_restored_is_not_redispatched_or_chained \
 		syscall_results::startup_usr_rollback_reverse_dispatch_classifies_all_raw_syscall_reports_by_fresh_layout \
 		syscall_results::startup_usr_rollback_reverse_dispatch_ambiguous_post_attempt_evidence_consumes_retry_capability; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
+	coordinator_contract='transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored'; \
+	timeout 10s grep -Fqx "$$coordinator_contract: test" <<<"$$listed"; \
 	dispatcher=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch.rs; \
 	gate=crates/forge/src/client/startup_gate.rs; \
 	root=crates/forge/src/client/startup_recovery.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/support.rs; \
+	durability=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/durability_restart.rs; \
+	journal=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/journal_restart.rs; \
 	success=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/success_matrix.rs; \
 	syscalls=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/syscall_results.rs; \
+	coordinator=crates/forge/src/transition_identity/journal_coordinator/tests/usr_exchange_effect.rs; \
+	forward_support=crates/forge/src/client/startup_recovery/forward_origin_test_support.rs; \
 	timeout 10s grep -Fqx 'mod usr_rollback_reverse_dispatch;' "$$root"; \
 	timeout 10s grep -Fqx '#[cfg(test)]' "$$dispatcher"; \
 	timeout 10s grep -Fqx 'mod tests;' "$$dispatcher"; \
@@ -42,12 +50,18 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$support" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$support" )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -F -n 'for kind in OperationKind::ALL {' "$$success" "$$syscalls" | timeout 10s wc -l )" = 4; \
+	timeout 10s grep -Fqx '    const ALL: [Self; 2] = [Self::StagingParentSync, Self::InstallationRootSync];' "$$durability"; \
+	timeout 10s grep -Fqx 'const JOURNAL_FAULTS: [JournalFault; 5] = [' "$$journal"; \
 	timeout 10s grep -Fqx '    const ALL: [Self; 4] = [' "$$syscalls"; \
 	timeout 10s test "$$( timeout 10s rg -n '^        Self::(SuccessAfterApply|ErrorAfterApply|ErrorWithoutApply|SuccessWithoutApply),$$' "$$syscalls" | timeout 10s wc -l )" = 4; \
 	timeout 10s grep -Fqx '        for raw_error in [false, true] {' "$$syscalls"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackReverseDispatchError::NotApplied' "$$support" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackReverseDispatchError::Ambiguous' "$$support" )" = 1; \
-	for file in "$$dispatcher" "$$gate" "$$root" "$$tests" "$$support" "$$success" "$$syscalls" misc/make/startup-rollback-reverse-dispatch-tests.mk; do \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_reverse_exchange_intent_recovers_to_usr_restored' "$$coordinator" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'retained_exchange_syscall_count(), 2' "$$coordinator" )" = 2; \
+	timeout 10s grep -Fq 'assert_eq!(pending.phase(), Phase::UsrRestored);' "$$forward_support"; \
+	for file in "$$dispatcher" "$$gate" "$$root" "$$tests" "$$support" "$$durability" "$$journal" "$$success" "$$syscalls" "$$coordinator" "$$forward_support" misc/make/startup-rollback-reverse-dispatch-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
-	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1
+	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1; \
+	timeout 1200s $(CARGO) test -p forge --lib "$$coordinator_contract" -- --exact --test-threads=1

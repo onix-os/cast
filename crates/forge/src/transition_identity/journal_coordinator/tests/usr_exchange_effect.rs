@@ -341,7 +341,7 @@ fn journal_coordinator_usr_exchange_effect_raw_result_matrix_never_retries() {
 }
 
 #[test]
-fn journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry() {
+fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored() {
     for candidate_kind in [
         CandidateKind::NewState,
         CandidateKind::Archived,
@@ -417,6 +417,32 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without
             assert_eq!(
                 usr_exchange_database_snapshot(&fixture, &intent_record),
                 database_before,
+                "{candidate_kind:?} {point:?}"
+            );
+
+            let reverse_intent = decision.rollback_successor(None).unwrap();
+            assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
+
+            let restored = reverse_intent
+                .rollback_successor(Some(RollbackActionOutcome::Applied))
+                .unwrap();
+            assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {point:?}");
+            assert_eq!(read_canonical(&fixture.installation.root), restored);
+            assert_exchange_layout(&fixture, false, candidate, previous);
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {point:?}"
+            );
+            assert_root_links_absent(&fixture);
+
+            let restored_namespace = snapshot_startup_recovery_namespace(&fixture.installation.root);
+            assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
+            assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {point:?}");
+            assert_eq!(read_canonical(&fixture.installation.root), restored);
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                restored_namespace,
                 "{candidate_kind:?} {point:?}"
             );
         }

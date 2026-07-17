@@ -73,8 +73,11 @@ use activation_namespace::{
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
+    UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
     arm_before_reverse_exchange_reconciliation_capture, arm_before_usr_rollback_reverse_durable_namespace_capture,
     arm_before_usr_rollback_reverse_effect_final_namespace_capture,
+    arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,
+    take_usr_rollback_reverse_namespace_durability_events,
 };
 #[cfg(test)]
 use database_evidence::{

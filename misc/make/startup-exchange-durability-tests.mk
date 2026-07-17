@@ -17,7 +17,7 @@ forge-startup-usr-exchange-parent-durability-test:
 		client::startup_recovery::usr_exchange_parent_durability::tests::durability_faults::startup_usr_exchange_parent_durability_retry_is_idempotent_and_never_reexchanges \
 		client::startup_recovery::usr_exchange_parent_durability::tests::evidence_races::startup_usr_exchange_parent_durability_binding_database_and_namespace_conflicts_never_advance \
 		client::startup_recovery::usr_exchange_parent_durability::tests::evidence_races::startup_usr_exchange_parent_durability_historical_epoch_and_active_reblit_evidence_are_exact \
-		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	normalizer=crates/forge/src/client/startup_recovery/usr_exchange_parent_durability.rs; \
@@ -62,5 +62,5 @@ forge-startup-usr-exchange-parent-durability-test:
 		'client::startup_recovery::usr_exchange_parent_durability::tests::' \
 		-- --test-threads=1; \
 	timeout 1200s $(CARGO) test -p forge --lib \
-		'transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_are_applied_without_reverse_or_retry' \
+		'transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored' \
 		-- --exact --test-threads=1

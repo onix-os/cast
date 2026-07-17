@@ -8,6 +8,7 @@ use crate::{
     Installation,
     client::{
         JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight,
+        assert_reverse_exchange_intent_recovers_to_usr_restored,
         assert_usr_exchange_intent_post_recovers_to_pending_reverse,
         assert_usr_rollback_decision_routes_to_reverse_exchange_intent, snapshot_startup_recovery_namespace,
     },
@@ -16,8 +17,8 @@ use crate::{
     test_support::private_installation_tempdir,
     transition_journal::{
         AbortDisposition, BootRollback, CandidateOrigin, CandidateRollback, ForwardPhase, Operation, Phase,
-        PreviousOrigin, RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalStore,
-        TransitionRecord, decode,
+        PreviousOrigin, RollbackAction, RollbackActionOutcome, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity,
+        TransitionJournalStore, TransitionRecord, decode,
     },
     tree_marker::TreeMarkerStore,
 };
