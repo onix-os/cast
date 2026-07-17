@@ -885,23 +885,25 @@ the repository Nix shell with only the four established warnings;
 lines; and independent review found no issue. Commit `9adc2760` keeps those
 inventory gates equivalent while avoiding the host argument-size limit.
 
-The checkpoint remains production-undispatched and is only the durable route
-to invalidation intent, not database invalidation. The next checkpoint must
-first define an exact, reconciled API and effect for removing the matching
-fresh row together with its provenance. The existing
-`remove_transition_if_matches` helper is not sufficient evidence for that
-contract and must not be treated as the completed effect. Phase 11 remains
-open.
+Commit `20b36768` completes Phase 11A's exact fresh-transition removal
+substrate. Its non-`Clone` `Present` and `JointlyAbsent` evidence remains bound
+to the source `Database`; one exclusive snapshot covers the global in-flight
+set and the complete `State`, selections, and metadata provenance. Consuming a
+`Present` preimage permits one exact transaction attempt, with no retry, that
+deletes provenance, selections, and then the state row with exact affected-row
+checks. A fresh exclusive snapshot reconciles every result conservatively:
+joint absence is success, only a proven non-start or rollback can be definitely
+not applied, and changed, partial, unobservable, commit-uncertain, or exactly
+restored ABA evidence is ambiguous.
 
-The remaining closure is to finish recovery-ordered mutable client
-construction, replace residual path-based lifecycle authority, complete the
-durable pre-journal baseline, connect every live state transition to the
-coordinator, execute candidate preservation and every later persisted recovery
-phase, extend deterministic interruption coverage beyond the authenticated
-`/usr` rollback prefix, and prove power-loss-equivalent convergence. Until
-then the diagnostic inventory remains non-mutating, candidate preservation,
-database invalidation, later rollback actions, roll-forward, boot repair, and
-cleanup remain unimplemented, and Phase 11 cannot be marked complete.
+The focused lane passes 13/13; the adjacent route, persistence, and durability
+lanes remain 11/11, 9/9, and 6/6. `make fmt` and `make check` pass in the Nix
+shell, `make source-loc` keeps all 1091 tracked text files at no more than 1000
+lines, and independent review returned CLEAN. This is database substrate only:
+it grants no startup authority and performs no journal, dispatch, namespace, or
+trigger effect. Next comes the sealed `FreshDbInvalidationIntent` effect
+authority. Recovery wiring, later rollback actions, roll-forward, boot repair,
+cleanup, and power-loss-equivalent convergence remain open.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

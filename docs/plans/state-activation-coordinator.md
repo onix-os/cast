@@ -313,6 +313,13 @@ closure remain authoritative in `PLAN.md`.
   final journal-only route in that prefix without executing candidate
   preservation. The restrictive
   replacement-mode normalizer still never changes the record, and the
-  diagnostic startup assessment remains non-mutating. Candidate preservation,
-  database invalidation, later rollback actions, roll-forward, and cleanup are
-  not executed, so this item remains open.
+  diagnostic startup assessment remains non-mutating. Commit `20b36768` adds a
+  source-database-bound, non-`Clone`, exact fresh-transition removal substrate:
+  one snapshot binds complete state, selections, provenance, and the global
+  in-flight invariant; one no-retry transaction removes provenance, selections,
+  then state; and fresh reconciliation treats exact ABA conservatively. It has
+  no startup authority, journal operation, production dispatch, namespace
+  mutation, or trigger action. The next recovery checkpoint must separately
+  seal the `FreshDbInvalidationIntent` effect authority. Candidate preservation,
+  production database invalidation, later rollback actions, roll-forward, and
+  cleanup are not executed, so this item remains open.

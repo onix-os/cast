@@ -443,12 +443,36 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   no issue. Commit `9adc2760` preserves the inventory-gate coverage while
   avoiding the host argument-size limit.
 
-  This is a durable route to invalidation intent, not database invalidation,
-  and it remains production-undispatched. The next checkpoint must design an
-  exact reconciled API and effect that removes the matching fresh row together
-  with its provenance. The existing `remove_transition_if_matches` helper is
-  not sufficient for that contract and must not be presented as the completed
-  effect. Phase 11 remains open.
+  Commit `20b36768` completes Phase 11A's exact fresh-transition removal
+  substrate without widening that route. One exclusive database snapshot
+  returns non-`Clone` `Present` or `JointlyAbsent` evidence bound to the source
+  `Database` capability. That same snapshot covers the bounded global
+  in-flight set and the complete `State`, selections, and metadata provenance;
+  cleared, foreign, multiple, asymmetric, malformed, or otherwise
+  unobservable evidence fails closed rather than becoming absence.
+
+  Consuming `Present` permits one exact transaction attempt and no retry. It
+  rechecks the complete preimage, then deletes provenance, selections, and the
+  state row in that order with exact affected-row counts. A fresh exclusive
+  snapshot reconciles every reported result: joint absence is success; an
+  unchanged complete preimage is definitely not applied only when the attempt
+  provably never started or rolled back; and changed, partial, unobservable,
+  commit-uncertain, post-success, or exactly restored ABA evidence is
+  `Ambiguous`.
+
+  The dedicated `make forge-exact-fresh-transition-removal-test` lane passes
+  13/13 contracts. The adjacent route, candidate-preservation persistence, and
+  post-move durability lanes remain 11/11, 9/9, and 6/6. `make fmt` and
+  `make check` pass in the repository Nix shell; `make source-loc` reports all
+  1091 tracked text files at no more than 1000 lines; and independent review
+  returned CLEAN.
+
+  This checkpoint is database substrate, not a startup recovery effect. It
+  grants no startup authority and performs no journal advance, production
+  dispatch, namespace mutation, or trigger action. The next checkpoint is a
+  separately sealed `FreshDbInvalidationIntent` effect authority which may
+  consume this substrate only after complete recovery evidence. Phase 11
+  remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -631,12 +655,14 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   complete the shared post-move durability suffix behind a separate test-only
   seal. Exact candidate-preservation evidence can also advance the journal once
   to `CandidatePreserved` behind its own test-only seal, without changing the
-  fresh database row or provenance. None has a production caller or dispatcher,
-  and no production startup
-  executor yet handles the effects of `CandidatePreserveIntent`, candidate
-  preservation or its now test-sealed route to fresh-row invalidation intent,
-  fresh-row invalidation itself, the remaining rollback actions,
-  roll-forward, boot repair, or cleanup. The exact reverse prefix now has both
+  fresh database row or provenance. Exact source-database-bound removal of the
+  fresh row, selections, and provenance is now a reconciled one-attempt
+  substrate, but it has no startup authority, journal operation, production
+  caller, or dispatcher. No production startup executor yet handles the effects
+  of `CandidatePreserveIntent`, candidate preservation, the sealed route to
+  fresh-row invalidation intent, its still-unsealed invalidation effect, the
+  remaining rollback actions, roll-forward, boot repair, or cleanup. The exact
+  reverse prefix now has both
   deterministic in-process contracts and
   genuine process-termination coverage. It still has no reboot or power-loss
   proof: `SIGKILL` preserves the kernel-visible state at termination and cannot
