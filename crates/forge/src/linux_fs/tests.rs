@@ -8,6 +8,7 @@ use std::{
 
 use super::*;
 
+mod chmod_once;
 mod xattrs;
 
 #[test]

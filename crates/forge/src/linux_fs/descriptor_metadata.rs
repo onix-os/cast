@@ -4,6 +4,33 @@ struct InodeIdentity {
     inode: u64,
 }
 
+/// Attempt one mode change on the exact inode retained by an `O_PATH`
+/// descriptor.
+///
+/// This is the deliberately unreconciled effect adapter for callers which
+/// must classify the result from fresh semantic evidence. The procfs fd table
+/// and descriptor alias are authenticated before the effect, but the
+/// `fchmodat(2)` result is returned directly: an interrupted call is not
+/// retried and success is not interpreted here.
+pub(crate) fn chmod_path_descriptor_once(file: &std::fs::File, mode: u32) -> io::Result<()> {
+    if mode & !0o7777 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("filesystem mode is outside the canonical 07777 mask: {mode:#o}"),
+        ));
+    }
+
+    let (descriptors, descriptor, _expected) = authenticated_descriptor_name(file)?;
+    // SAFETY: the directory is authenticated procfs, the component is the
+    // live target descriptor's canonical decimal number, and flags=0
+    // deliberately follows that procfs magic link to the pinned inode.
+    if unsafe { nix::libc::fchmodat(descriptors.as_raw_fd(), descriptor.as_ptr(), mode, 0) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Change the mode of the exact inode retained by an `O_PATH` descriptor.
 ///
 /// This intentionally uses only Linux 5.6-era interfaces.  `/proc`, the
