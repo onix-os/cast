@@ -37,10 +37,61 @@ pub(super) enum StorageFaultPoint {
     DeleteDirectorySync,
 }
 
+/// A completed filesystem operation in the durable journal-update protocol.
+///
+/// Test-only process-kill contracts arm one exact boundary. The production
+/// journal has no callback storage, dispatch, or additional control flow.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JournalUpdateDurabilityBoundary {
+    TemporaryFullySynced,
+    CanonicalExchanged,
+    UpdateFirstDirectorySynced,
+    DisplacedUnlinked,
+    UpdateFinalDirectorySynced,
+}
+
 #[cfg(test)]
 std::thread_local! {
     static DURABILITY_CHECKPOINTS: std::cell::RefCell<Vec<DurabilityCheckpoint>> = const { std::cell::RefCell::new(Vec::new()) };
     static STORAGE_FAULT: std::cell::Cell<Option<StorageFaultPoint>> = const { std::cell::Cell::new(None) };
+    static JOURNAL_UPDATE_DURABILITY_CALLBACK: std::cell::RefCell<Option<(
+        JournalUpdateDurabilityBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Arm one callback after one exact successful journal-update filesystem
+/// operation. A different boundary does not consume the callback.
+#[cfg(test)]
+pub(crate) fn arm_journal_update_durability_callback(
+    boundary: JournalUpdateDurabilityBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    JOURNAL_UPDATE_DURABILITY_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "a journal-update durability callback is already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn journal_update_durability_boundary(boundary: JournalUpdateDurabilityBoundary) {
+    // Take the one-shot callback while borrowed, but invoke it only after the
+    // RefCell borrow ends. This lets a callback arm the next process-kill seam
+    // without a nested-borrow panic.
+    let callback = JOURNAL_UPDATE_DURABILITY_CALLBACK.with(|armed| {
+        let mut armed = armed.borrow_mut();
+        if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
+            armed.take().map(|(_, callback)| callback)
+        } else {
+            None
+        }
+    });
+    if let Some(callback) = callback {
+        callback();
+    }
 }
 
 #[cfg(test)]
@@ -260,6 +311,10 @@ impl TransitionJournalStore {
             self.cleanup_temporary(&temporary)?;
             return Err(StorageError::SyncTemporary { source });
         }
+        #[cfg(test)]
+        if existing.is_some() {
+            journal_update_durability_boundary(JournalUpdateDurabilityBoundary::TemporaryFullySynced);
+        }
         durability_checkpoint(DurabilityCheckpoint::TemporaryFullySynced);
         if let Err(source) = require_safe_regular_file(
             &temporary.file,
@@ -450,6 +505,8 @@ impl TransitionJournalStore {
             self.cleanup_temporary(temporary)?;
             return Err(StorageError::PublishCanonical { source });
         }
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::CanonicalExchanged);
         durability_checkpoint(DurabilityCheckpoint::CanonicalExchanged);
 
         // After exchange, the canonical name must identify the fdatasynced
@@ -471,14 +528,20 @@ impl TransitionJournalStore {
         storage_fault(StorageFaultPoint::UpdateFirstDirectorySync)
             .and_then(|()| self.directory.sync_all())
             .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::UpdateFirstDirectorySynced);
         durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
         storage_fault(StorageFaultPoint::DisplacedUnlink)
             .and_then(|()| unlinkat(self.directory.as_raw_fd(), &temporary.name))
             .map_err(|source| StorageError::DeleteDisplaced { source })?;
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::DisplacedUnlinked);
         durability_checkpoint(DurabilityCheckpoint::DisplacedUnlinked);
         storage_fault(StorageFaultPoint::UpdateFinalDirectorySync)
             .and_then(|()| self.directory.sync_all())
             .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced);
         durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
         Ok(())
     }

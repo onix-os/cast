@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 #[test]
 fn journal_directory_and_canonical_file_have_exact_private_metadata() {
     let (temporary, store) = fixture();
@@ -59,6 +61,100 @@ fn atomic_initial_update_and_delete_round_trip() {
     assert!(store.delete(&complete).unwrap());
     assert!(!store.delete(&complete).unwrap());
     assert!(store.load().unwrap().is_none());
+}
+
+#[test]
+fn journal_update_durability_callbacks_follow_filesystem_operation_order() {
+    let (_temporary, store) = fixture();
+    let initial = creation_record();
+    store.create(&initial).unwrap();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let temporary_observed = Arc::clone(&observed);
+    arm_journal_update_durability_callback(
+        JournalUpdateDurabilityBoundary::TemporaryFullySynced,
+        move || {
+            temporary_observed
+                .lock()
+                .unwrap()
+                .push(JournalUpdateDurabilityBoundary::TemporaryFullySynced);
+            let exchange_observed = Arc::clone(&temporary_observed);
+            arm_journal_update_durability_callback(
+                JournalUpdateDurabilityBoundary::CanonicalExchanged,
+                move || {
+                    exchange_observed
+                        .lock()
+                        .unwrap()
+                        .push(JournalUpdateDurabilityBoundary::CanonicalExchanged);
+                    let first_sync_observed = Arc::clone(&exchange_observed);
+                    arm_journal_update_durability_callback(
+                        JournalUpdateDurabilityBoundary::UpdateFirstDirectorySynced,
+                        move || {
+                            first_sync_observed
+                                .lock()
+                                .unwrap()
+                                .push(JournalUpdateDurabilityBoundary::UpdateFirstDirectorySynced);
+                            let unlink_observed = Arc::clone(&first_sync_observed);
+                            arm_journal_update_durability_callback(
+                                JournalUpdateDurabilityBoundary::DisplacedUnlinked,
+                                move || {
+                                    unlink_observed
+                                        .lock()
+                                        .unwrap()
+                                        .push(JournalUpdateDurabilityBoundary::DisplacedUnlinked);
+                                    let final_sync_observed = Arc::clone(&unlink_observed);
+                                    arm_journal_update_durability_callback(
+                                        JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced,
+                                        move || {
+                                            final_sync_observed.lock().unwrap().push(
+                                                JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced,
+                                            );
+                                        },
+                                    );
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+
+    let next = advance_record(&initial, Phase::FreshStateAllocating);
+    store.advance(&initial, &next).unwrap();
+    assert_eq!(
+        *observed.lock().unwrap(),
+        [
+            JournalUpdateDurabilityBoundary::TemporaryFullySynced,
+            JournalUpdateDurabilityBoundary::CanonicalExchanged,
+            JournalUpdateDurabilityBoundary::UpdateFirstDirectorySynced,
+            JournalUpdateDurabilityBoundary::DisplacedUnlinked,
+            JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced,
+        ]
+    );
+}
+
+#[test]
+fn temporary_update_callback_survives_create_and_is_one_shot() {
+    let (_temporary, store) = fixture();
+    let observed = Arc::new(Mutex::new(0));
+    let callback_observed = Arc::clone(&observed);
+    arm_journal_update_durability_callback(
+        JournalUpdateDurabilityBoundary::TemporaryFullySynced,
+        move || *callback_observed.lock().unwrap() += 1,
+    );
+
+    let initial = creation_record();
+    store.create(&initial).unwrap();
+    assert_eq!(*observed.lock().unwrap(), 0, "create must not consume an update seam");
+
+    let allocating = advance_record(&initial, Phase::FreshStateAllocating);
+    store.advance(&initial, &allocating).unwrap();
+    assert_eq!(*observed.lock().unwrap(), 1);
+
+    let allocated = advance_record(&allocating, Phase::FreshStateAllocated);
+    store.advance(&allocating, &allocated).unwrap();
+    assert_eq!(*observed.lock().unwrap(), 1, "the callback must remain one-shot");
 }
 
 #[test]
