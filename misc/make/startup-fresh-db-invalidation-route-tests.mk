@@ -117,7 +117,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	if timeout 10s rg -n 'run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|cleanup|retry|dispatch' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]' <<<"$$production_code"; then exit 1; fi; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackFreshDbInvalidationRouteSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFreshDbInvalidationRouteSeal,' "$$startup_gate"; \
+	timeout 10s grep -Fq 'UsrRollbackFreshDbInvalidationRouteSeal' "$$startup_gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {' "$$production_dispatch"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { state = 2; next } state == 2 && $$0 == "}" { found = 1 } END { exit !found }' "$$production_dispatch"; \
 	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackFreshDbInvalidationRouteSeal {/,/^}/p' "$$production_dispatch" )"; \

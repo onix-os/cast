@@ -42,6 +42,7 @@ include misc/make/startup-fresh-db-invalidation-route-tests.mk
 include misc/make/startup-fresh-db-invalidation-effect-tests.mk
 include misc/make/startup-fresh-db-invalidation-persistence-tests.mk
 include misc/make/startup-rollback-complete-route-tests.mk
+include misc/make/startup-rollback-finalization-tests.mk
 include misc/make/startup-rollback-new-state-dispatch-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk
 include misc/make/startup-rollback-reverse-projection-tests.mk

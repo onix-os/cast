@@ -11,8 +11,8 @@ mod default_system_intent;
 mod usr_rollback_new_state;
 
 pub(in crate::client) use usr_rollback_new_state::{
-    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFreshDbInvalidationRouteSeal,
-    UsrRollbackFreshDbInvalidationSeal,
+    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal,
+    UsrRollbackFreshDbInvalidationRouteSeal, UsrRollbackFreshDbInvalidationSeal,
 };
 
 /// Exclusive proof that no interrupted system transition predates client

@@ -96,6 +96,21 @@ impl UsrRollbackCompleteRouteSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting terminal rollback-finalization
+/// authority capture to this exact writer-first NewState suffix orchestrator.
+/// Checkpoint A deliberately has no production constructor or dispatch arm.
+#[allow(dead_code)] // finalization remains intentionally unreachable from production
+pub(in crate::client) struct UsrRollbackFinalizationSeal {
+    _private: (),
+}
+
+impl UsrRollbackFinalizationSeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// Whether this entry handled one exact suffix checkpoint.
 pub(super) enum Dispatch {
     Unhandled {

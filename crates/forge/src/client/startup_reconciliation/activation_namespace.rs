@@ -24,6 +24,8 @@ mod parent_durability;
 mod policy;
 mod resume_route_proof;
 mod rollback_complete_route_proof;
+#[allow(dead_code)] // checkpoint A remains sealed from production dispatch
+mod rollback_finalization_proof;
 mod rollback_reverse_proof;
 
 #[cfg(test)]
@@ -120,6 +122,12 @@ pub(in crate::client) use rollback_complete_route_proof::arm_before_usr_rollback
 pub(super) use rollback_complete_route_proof::{
     UsrRollbackCompleteRouteNamespaceError, UsrRollbackCompleteRouteNamespaceInspection,
     UsrRollbackCompleteRouteNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use rollback_finalization_proof::arm_before_usr_rollback_finalization_fresh_namespace_capture;
+pub(super) use rollback_finalization_proof::{
+    UsrRollbackFinalizationNamespaceError, UsrRollbackFinalizationNamespaceInspection,
+    UsrRollbackFinalizationNamespaceProof,
 };
 pub(super) use rollback_reverse_proof::{
     UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,

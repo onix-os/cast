@@ -312,6 +312,31 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Require the exact preserved-candidate namespace at terminal rollback.
+///
+/// This helper is deliberately phase-specific. Finalization must recapture
+/// terminal `RollbackComplete` evidence rather than widening or reusing the
+/// authority which routed `FreshDbInvalidated` into that successor.
+#[allow(dead_code)] // consumed only by the separately sealed finalization checkpoint
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_new_state_rollback_complete_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::RollbackComplete {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongRollbackCompletePhase);
+    }
+    if record.operation != Operation::NewState {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::NewStateRequired);
+    }
+    if candidate_preserve_topology_after_phase(record, snapshot)?
+        == UsrRollbackCandidatePreserveTopology::NewStatePreserved
+    {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+    }
+}
+
 fn candidate_preserve_topology_after_phase(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
@@ -580,6 +605,9 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongFreshDbInvalidationPhase,
     #[error("rollback-completion routing requires FreshDbInvalidated")]
     WrongFreshDbInvalidatedPhase,
+    #[error("rollback finalization requires RollbackComplete")]
+    #[allow(dead_code)] // consumed only by the separately sealed finalization checkpoint
+    WrongRollbackCompletePhase,
     #[error("fresh-database invalidation routing requires a NewState transition")]
     NewStateRequired,
     #[error("the candidate tree is absent from the accepted namespace inventory")]

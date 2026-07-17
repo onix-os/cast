@@ -71,7 +71,7 @@ forge-startup-usr-rollback-complete-route-test:
 		timeout 10s grep -Fqx "$$variant" "$$authority"; \
 	done; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCompleteRouteSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFreshDbInvalidationRouteSeal,' "$$startup_gate"; \
+	timeout 10s grep -Fq 'UsrRollbackCompleteRouteSeal' "$$startup_gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCompleteRouteSeal {' "$$production_dispatch"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCompleteRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
 	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCompleteRouteSeal {/,/^}/p' "$$production_dispatch" )"; \
