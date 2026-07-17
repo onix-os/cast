@@ -3,6 +3,10 @@
 
 [default]
 
+[default.extend-identifiers]
+"3e1ba34" = "3e1ba34"
+"0f041afe" = "0f041afe"
+
 [default.extend-words]
 restat = "restat"
 
