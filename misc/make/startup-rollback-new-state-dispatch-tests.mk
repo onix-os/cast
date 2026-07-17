@@ -10,7 +10,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 33; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 34; \
 	for name in \
 		exclusions::startup_new_state_suffix_leaves_every_non_new_state_operation_zero_effect \
 		exclusions::startup_new_state_suffix_defers_inexact_rollback_complete_with_zero_suffix_effects \
@@ -44,7 +44,8 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		sequence::startup_new_state_suffix_reacquires_fresh_installation_database_journal_and_reservation_handles \
 		storage_faults::startup_new_state_suffix_all_five_journal_faults_reenter_each_of_four_persistence_boundaries_exactly \
 		storage_faults::startup_new_state_suffix_terminal_unlink_fault_restarts_from_exact_source_without_duplicate_effects \
-		storage_faults::startup_new_state_suffix_terminal_directory_sync_fault_restarts_from_exact_absence_without_duplicate_effects; do \
+		storage_faults::startup_new_state_suffix_terminal_directory_sync_fault_restarts_from_exact_absence_without_duplicate_effects \
+		terminal_delete_process_kill::startup_new_state_suffix_terminal_delete_process_kills_restart_cleanly; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	gate=crates/forge/src/client/startup_gate.rs; \
@@ -54,6 +55,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	fresh_leaf=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_dispatch.rs; \
 	finalization_leaf=crates/forge/src/client/startup_recovery/usr_rollback_finalization.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests; \
+	process_kill="$$tests/terminal_delete_process_kill.rs"; \
 	for seal in UsrRollbackCandidatePreserveSeal UsrRollbackFreshDbInvalidationRouteSeal UsrRollbackFreshDbInvalidationSeal UsrRollbackCompleteRouteSeal UsrRollbackFinalizationSeal; do \
 		timeout 10s test "$$( timeout 10s rg -l "^pub\\(in crate::client\\) struct $$seal \\{" crates/forge/src/client --glob '*.rs' )" = "$$orchestrator"; \
 		timeout 10s grep -Fq "$$seal," "$$gate"; \
@@ -87,6 +89,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fqx 'mod sequence;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod storage_faults;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod support;' "$$tests/mod.rs"; \
+	timeout 10s grep -Fqx 'mod terminal_delete_process_kill;' "$$tests/mod.rs"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(installation, database, &reservation)' "$$tests/support.rs" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$tests/support.rs" )" = 1; \
 	if timeout 10s rg -n 'new_for_test|usr_rollback_new_state::dispatch|dispatch_usr_rollback_.*_and_reopen|persist_usr_rollback_.*_and_reopen' "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
@@ -199,7 +202,36 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	for fault in arm_next_temporary_sync_fault arm_next_update_exchange_fault arm_next_update_first_directory_sync_fault arm_next_displaced_unlink_fault arm_next_update_final_directory_sync_fault; do timeout 10s grep -Fq "$$fault" "$$tests/storage_faults.rs"; done; \
 	for fault in arm_next_delete_canonical_unlink_fault arm_next_delete_directory_sync_fault; do timeout 10s grep -Fq "$$fault" "$$tests/storage_faults.rs"; done; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'exercise_' "$$tests/storage_faults.rs" )" -ge 8; \
-	for file in "$$gate" "$$orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
+	timeout 10s grep -Fq 'const ALL: [Self; 3] = [' "$$process_kill"; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for boundary in TerminalDeleteKillBoundary::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq '        cases, 12,' "$$process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$process_kill"; \
+	timeout 10s grep -Fq '.arg(TEST_NAME)' "$$process_kill"; \
+	timeout 10s grep -Fq '.arg("--exact")' "$$process_kill"; \
+	timeout 10s grep -Fq '.arg("--test-threads=1")' "$$process_kill"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$process_kill"; \
+	timeout 10s grep -Fq 'crash_status.signal()' "$$process_kill"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_finalization_final_revalidation(kill_self)' "$$process_kill"; \
+	timeout 10s grep -Fq 'JournalDeleteDurabilityBoundary::CanonicalUnlinked' "$$process_kill"; \
+	timeout 10s grep -Fq 'JournalDeleteDurabilityBoundary::DeleteDirectorySynced' "$$process_kill"; \
+	timeout 10s grep -Fq 'arm_journal_update_durability_callback' "$$process_kill"; \
+	timeout 10s grep -Fq 'snapshot_startup_recovery_namespace' "$$process_kill"; \
+	timeout 10s grep -Fq 'struct PublicJournalIdentity {' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_journal_inventory(root, canonical_present);' "$$process_kill"; \
+	timeout 10s grep -Fq 'public_before.assert_same_public_anchors(final_public);' "$$process_kill"; \
+	timeout 10s grep -Fq 'let terminal_bytes = fs::read(canonical_path(&root)).unwrap();' "$$process_kill"; \
+	timeout 10s grep -Fq 'struct DeadlineChild {' "$$process_kill"; \
+	timeout 10s grep -Fq 'external process-kill control does not match' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$process_kill" )" = 2; \
+	timeout 10s grep -Fq 'release_invalidation_fixture_handles(fixture)' "$$process_kill"; \
+	timeout 10s grep -Fq 'install_persistent_joint_absence_database(&mut fixture)' "$$process_kill"; \
+	timeout 10s grep -Fq 'StorageError::AcquireLock' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(reopened.load().unwrap(), None)' "$$process_kill"; \
+	timeout 10s grep -Fq 'not a reboot or' "$$process_kill"; \
+	if timeout 10s rg -n 'arm_next_|finalize_usr_rollback|FaultPoint|StorageFault' "$$process_kill"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	for file in "$$gate" "$$orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" "$$process_kill" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1

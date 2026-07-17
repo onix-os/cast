@@ -8,3 +8,4 @@ mod preparation_failures;
 mod sequence;
 mod storage_faults;
 mod support;
+mod terminal_delete_process_kill;

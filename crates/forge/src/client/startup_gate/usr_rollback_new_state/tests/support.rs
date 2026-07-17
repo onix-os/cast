@@ -369,6 +369,24 @@ pub(super) fn install_persistent_database(fixture: &mut CandidatePreserveFixture
     drop(old);
 }
 
+pub(super) fn install_persistent_joint_absence_database(fixture: &mut FreshDbInvalidationFixture) {
+    install_persistent_database(&mut fixture.fixture);
+    let database = &fixture.fixture.fixture.database;
+    let candidate = fixture.fixture.fixture.candidate_state;
+    let observation = database
+        .inspect_exact_fresh_transition(candidate, &fixture.record.transition_id)
+        .unwrap();
+    let db::state::ExactFreshTransitionObservation::Present(preimage) = observation else {
+        panic!("persistent terminal rollback fixture expected one complete fresh-state preimage");
+    };
+    database.remove_exact_fresh_transition(preimage).unwrap();
+    fixture.assert_exact_joint_absence();
+}
+
+pub(super) fn reopen_persistent_state_database(installation: &Installation) -> db::state::Database {
+    open_state_database(installation)
+}
+
 pub(super) fn enter_fresh_handles(root: &Path) -> startup_gate::Error {
     let installation = Installation::open(root, None).unwrap();
     let database = open_state_database(&installation);
@@ -383,6 +401,12 @@ pub(super) fn enter_fresh_clean_handles(root: &Path) {
 
 pub(super) fn release_candidate_handles(mut fixture: CandidatePreserveFixture) -> tempfile::TempDir {
     let retained = std::mem::replace(&mut fixture.fixture._temporary, private_installation_tempdir());
+    drop(fixture);
+    retained
+}
+
+pub(super) fn release_invalidation_fixture_handles(mut fixture: FreshDbInvalidationFixture) -> tempfile::TempDir {
+    let retained = std::mem::replace(&mut fixture.fixture.fixture._temporary, private_installation_tempdir());
     drop(fixture);
     retained
 }

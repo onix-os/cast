@@ -51,6 +51,8 @@ forge-startup-usr-rollback-finalization-test:
 	done; \
 	journal_delete_callback_contract='transition_journal::tests::journal_delete_durability_callbacks_follow_filesystem_operation_order'; \
 	timeout 10s grep -Fqx "$$journal_delete_callback_contract: test" "$$listed"; \
+	startup_process_kill_contract='client::startup_gate::usr_rollback_new_state::tests::terminal_delete_process_kill::startup_new_state_suffix_terminal_delete_process_kills_restart_cleanly'; \
+	timeout 10s grep -Fqx "$$startup_process_kill_contract: test" "$$listed"; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_finalization_authority.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_finalization_proof.rs; \
 	topology=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
@@ -64,6 +66,7 @@ forge-startup-usr-rollback-finalization-test:
 	orchestrator=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	startup_tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests/finalization.rs; \
+	startup_process_kill=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests/terminal_delete_process_kill.rs; \
 	executor_tests=crates/forge/src/client/startup_recovery/usr_rollback_finalization/tests/mod.rs; \
 	executor_support=crates/forge/src/client/startup_recovery/usr_rollback_finalization/tests/support.rs; \
 	executor_matrix=crates/forge/src/client/startup_recovery/usr_rollback_finalization/tests/matrix.rs; \
@@ -156,6 +159,25 @@ forge-startup-usr-rollback-finalization-test:
 	timeout 10s grep -Fq 'arm_journal_delete_durability_callback' "$$journal_root"; \
 	timeout 10s grep -Fq 'fn journal_delete_durability_callbacks_follow_filesystem_operation_order()' "$$journal_transactions"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'arm_journal_delete_durability_callback(' "$$journal_transactions" )" = 2; \
+	timeout 10s grep -Fq 'const ALL: [Self; 3] = [' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'for boundary in TerminalDeleteKillBoundary::ALL {' "$$startup_process_kill"; \
+	timeout 10s grep -Fq '        cases, 12,' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_finalization_final_revalidation(kill_self)' "$$startup_process_kill"; \
+	for boundary in CanonicalUnlinked DeleteDirectorySynced; do \
+		timeout 10s grep -Fq "JournalDeleteDurabilityBoundary::$$boundary" "$$startup_process_kill"; \
+	done; \
+	timeout 10s grep -Fq 'struct PublicJournalIdentity {' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'assert_journal_inventory(root, canonical_present);' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'StorageError::AcquireLock' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(reopened.load().unwrap(), None)' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'not a reboot or' "$$startup_process_kill"; \
+	timeout 10s grep -Fq 'power-loss oracle' "$$startup_process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$startup_process_kill" )" = 2; \
+	if timeout 10s rg -n 'arm_next_|finalize_usr_rollback|FaultPoint|StorageFault' "$$startup_process_kill"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s sed -E 's,//.*$$,,' "$$executor" > "$$executor_code"; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry|cleanup' "$$executor_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'diesel::|SqliteConnection|sql_query|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|clear_transition_if_matches|remove_transition_if_matches|remove_exact_(fresh|archived)|\.add[[:space:]]*\(|\.create[[:space:]]*\(|\.remove[[:space:]]*\(|\.batch_remove[[:space:]]*\(|\.execute[[:space:]]*\(|\.transaction[[:space:]]*\(' "$$executor_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
@@ -193,7 +215,7 @@ forge-startup-usr-rollback-finalization-test:
 	if timeout 10s rg -n 'ensure_|mkdir|chmod|cleanup|create_|renameat|write_all|set_permissions|remove_(dir|file)|directory_entries' "$$store_delete_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in \
 		"$$authority" "$$proof" "$$topology" "$$executor" "$$recovery_root" "$$reconciliation_root" \
-		"$$namespace_root" "$$journal_root" "$$journal_store" "$$journal_transactions" "$$orchestrator" "$$startup_gate" "$$startup_tests" \
+		"$$namespace_root" "$$journal_root" "$$journal_store" "$$journal_transactions" "$$orchestrator" "$$startup_gate" "$$startup_tests" "$$startup_process_kill" \
 		"$$executor_tests" "$$executor_support" "$$executor_matrix" "$$executor_delete_report" "$$executor_storage" \
 		"$$executor_races" "$$executor_post" "$$executor_binding" \
 		misc/make/startup-rollback-finalization-tests.mk misc/make/help.mk Makefile; do \
@@ -202,4 +224,5 @@ forge-startup-usr-rollback-finalization-test:
 	timeout 300s $(CARGO) test -p forge --lib "$$authority_prefix" -- --test-threads=1; \
 	timeout 300s $(CARGO) test -p forge --lib "$$executor_prefix" -- --test-threads=1; \
 	timeout 300s $(CARGO) test -p forge --lib "$$startup_prefix" -- --test-threads=1; \
-	timeout 300s $(CARGO) test -p forge --lib "$$journal_delete_callback_contract" -- --exact --test-threads=1
+	timeout 300s $(CARGO) test -p forge --lib "$$journal_delete_callback_contract" -- --exact --test-threads=1; \
+	timeout 1200s $(CARGO) test -p forge --lib "$$startup_process_kill_contract" -- --exact --test-threads=1
