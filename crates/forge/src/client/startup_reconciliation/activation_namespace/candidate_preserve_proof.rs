@@ -20,31 +20,42 @@ use crate::{
 use super::{
     capture::{
         CaptureError, NamespaceSnapshot, NewStateCandidatePreserveCaptureError,
-        NewStateCandidatePreserveTargetDurabilityError, ProjectedNewStateCandidatePreserveNamespace,
-        RetainedNewStateCandidatePreserveParents, TreeLocation, UsrRollbackNewStateTargetCreateNamespaceEvidence,
-        UsrRollbackNewStateTargetNormalizeNamespaceEvidence, WrapperFingerprint, capture_snapshot,
+        NewStateCandidatePreservePostMoveDurabilityError, NewStateCandidatePreserveTargetDurabilityError,
+        ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents, TreeLocation,
+        UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+        WrapperFingerprint, capture_snapshot,
     },
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
 };
 
 #[cfg(test)]
 pub(in crate::client) use super::capture::{
+    NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
     NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    arm_before_new_state_candidate_preserve_post_move_candidate_sync,
+    arm_before_new_state_candidate_preserve_post_move_final_post_capture,
+    arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_staging_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_target_parent_sync,
     arm_before_new_state_candidate_preserve_quarantine_parent_sync,
     arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
     arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
     arm_before_new_state_candidate_preserve_target_sync, arm_before_new_state_target_normalize_final_canonical_capture,
     arm_before_new_state_target_normalize_quarantine_parent_sync, arm_before_new_state_target_normalize_target_sync,
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
+    arm_new_state_candidate_preserve_post_move_durability_fault,
     arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_normalize_durability_fault,
+    reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_normalize_durability_events,
+    take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
 #[cfg(test)]
 pub(in crate::client) use effect_reconciliation::arm_before_new_state_candidate_preserve_candidate_sync;
 pub(in crate::client::startup_reconciliation) use effect_reconciliation::{
-    UsrRollbackNewStateCandidatePreserveAppliedNamespace,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackNewStateCandidatePreserveAppliedNamespace, UsrRollbackNewStateCandidatePreserveDurableNamespace,
     UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
 };
 pub(in crate::client::startup_reconciliation) use target_creation::UsrRollbackNewStateTargetCreateNamespaceReconciliation;
@@ -517,6 +528,12 @@ impl From<NewStateCandidatePreserveCaptureError> for UsrRollbackCandidatePreserv
 
 impl From<NewStateCandidatePreserveTargetDurabilityError> for UsrRollbackCandidatePreserveNamespaceError {
     fn from(source: NewStateCandidatePreserveTargetDurabilityError) -> Self {
+        Self::NewStateEffect(Box::new(source))
+    }
+}
+
+impl From<NewStateCandidatePreservePostMoveDurabilityError> for UsrRollbackCandidatePreserveNamespaceError {
+    fn from(source: NewStateCandidatePreservePostMoveDurabilityError) -> Self {
         Self::NewStateEffect(Box::new(source))
     }
 }

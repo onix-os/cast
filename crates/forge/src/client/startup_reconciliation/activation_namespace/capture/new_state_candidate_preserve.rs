@@ -8,6 +8,7 @@
 //! fresh reconciliation.
 
 mod effect;
+mod post_move_durability;
 mod target_durability;
 
 use std::{ffi::CString, fs::File, path::PathBuf};
@@ -27,6 +28,22 @@ use super::{
 pub(in crate::client) use effect::arm_before_new_state_candidate_preserve_move_reconciliation_capture;
 pub(in crate::client::startup_reconciliation::activation_namespace) use effect::{
     AppliedNewStateCandidatePreserveMoveReconciliation, NewStateCandidatePreserveMoveReconciliation,
+};
+pub(in crate::client::startup_reconciliation::activation_namespace) use post_move_durability::{
+    DurableNewStateCandidatePreservePostMoveNamespace, NewStateCandidatePreservePostMoveDurabilityError,
+    PendingNewStateCandidatePreservePostMoveDurability,
+};
+#[cfg(test)]
+pub(in crate::client) use post_move_durability::{
+    NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
+    arm_before_new_state_candidate_preserve_post_move_candidate_sync,
+    arm_before_new_state_candidate_preserve_post_move_final_post_capture,
+    arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_staging_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_target_parent_sync,
+    arm_new_state_candidate_preserve_post_move_durability_fault,
+    reset_new_state_candidate_preserve_post_move_durability_events,
+    take_new_state_candidate_preserve_post_move_durability_events,
 };
 #[cfg(test)]
 pub(in crate::client) use target_durability::{
@@ -366,8 +383,29 @@ impl RetainedNewStateCandidatePreserveParents {
         snapshot: &NamespaceSnapshot,
         record: &TransitionRecord,
     ) -> Result<Self, NewStateCandidatePreserveCaptureError> {
+        Self::capture_for_layout(
+            snapshot,
+            record,
+            NewStateCandidatePreserveLayout::StagedWithEmptyQuarantine,
+        )
+    }
+
+    /// Capture the same descriptor set from an exact already-preserved POST
+    /// layout without weakening the staged-only move admission above.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn capture_preserved(
+        snapshot: &NamespaceSnapshot,
+        record: &TransitionRecord,
+    ) -> Result<Self, NewStateCandidatePreserveCaptureError> {
+        Self::capture_for_layout(snapshot, record, NewStateCandidatePreserveLayout::Preserved)
+    }
+
+    fn capture_for_layout(
+        snapshot: &NamespaceSnapshot,
+        record: &TransitionRecord,
+        expected_layout: NewStateCandidatePreserveLayout,
+    ) -> Result<Self, NewStateCandidatePreserveCaptureError> {
         let projection = ProjectedNewStateCandidatePreserveNamespace::capture(snapshot, record)?;
-        if projection.layout() != NewStateCandidatePreserveLayout::StagedWithEmptyQuarantine {
+        if projection.layout() != expected_layout {
             return Err(NewStateCandidatePreserveCaptureError::NotMoveLayout);
         }
         let staging = exact_retained_wrapper(&snapshot.roots_entries, TreeLocation::Staging, "staging")?;

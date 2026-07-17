@@ -9,8 +9,10 @@
 //! normalization, or movement attempt. Normalization privately completes its
 //! exact target and quarantine-parent barriers before reporting a restart.
 //! Every movement lease separately completes its candidate, target, and
-//! quarantine-parent pre-move barriers before rename; every path remains
-//! sealed from production dispatch, persistence, cleanup, and triggers.
+//! quarantine-parent pre-move barriers before rename. Freshly applied and
+//! already-preserved NewState evidence then converge on the same ordered
+//! post-move candidate-and-parent durability suffix. Every path remains sealed
+//! from production dispatch, persistence, cleanup, and triggers.
 
 #[allow(dead_code)] // checkpoint one remains sealed from production dispatch
 mod candidate_preserve_proof;
@@ -35,9 +37,15 @@ pub(super) use candidate_preserve_proof::UsrRollbackNewStateTargetNormalizeNames
 pub(in crate::client) use candidate_preserve_proof::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
 #[cfg(test)]
 pub(in crate::client) use candidate_preserve_proof::{
+    NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
     NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
     arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_new_state_candidate_preserve_post_move_candidate_sync,
+    arm_before_new_state_candidate_preserve_post_move_final_post_capture,
+    arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_staging_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_target_parent_sync,
     arm_before_new_state_candidate_preserve_quarantine_parent_sync,
     arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
     arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
@@ -46,13 +54,17 @@ pub(in crate::client) use candidate_preserve_proof::{
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
     arm_before_usr_rollback_new_state_target_create_final_pre_capture,
     arm_before_usr_rollback_new_state_target_normalize_final_pre_capture,
+    arm_new_state_candidate_preserve_post_move_durability_fault,
     arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_normalize_durability_fault,
+    reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_normalize_durability_events,
+    take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
 pub(super) use candidate_preserve_proof::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
-    UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackNewStateCandidatePreserveAppliedNamespace,
+    UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackNewStateCandidatePreserveAppliedNamespace, UsrRollbackNewStateCandidatePreserveDurableNamespace,
     UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
     UsrRollbackNewStateTargetCreateNamespaceReconciliation,

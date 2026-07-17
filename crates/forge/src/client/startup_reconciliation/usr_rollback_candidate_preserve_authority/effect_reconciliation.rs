@@ -5,6 +5,8 @@
 //! journal, and plan checks. A non-applied, ambiguous, or rejected result
 //! returns no descriptor, lease, or retry authority.
 
+mod post_move_durability;
+
 use crate::{
     Installation, db,
     transition_journal::{TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
@@ -24,6 +26,12 @@ use crate::client::{
     startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
 };
 
+pub(in crate::client) use post_move_durability::{
+    UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
+};
+
 /// Semantic result of consuming one exact empty-prefix NewState move lease.
 ///
 /// Only `Applied` retains capability. The failure variants are fieldless so
@@ -39,20 +47,21 @@ pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveApplyReconciliati
 /// Opaque authority retained only after fresh namespace evidence proves that
 /// this invocation applied the exact staging-to-quarantine candidate move.
 ///
-/// This checkpoint intentionally supplies no post-move durability or
-/// persistence API.
+/// Only the distinct test-sealed durability child can consume this authority;
+/// no persistence API exists at this checkpoint.
 #[must_use = "an applied candidate-preservation move still requires post-move durability"]
 pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority<'reservation> {
-    _effect: ReconciledNewStateCandidatePreserveEffect<'reservation>,
+    _effect:
+        ReconciledNewStateCandidatePreserveEffect<'reservation, UsrRollbackNewStateCandidatePreserveAppliedNamespace>,
 }
 
-/// Complete authority retained for the later post-move durability checkpoint.
-struct ReconciledNewStateCandidatePreserveEffect<'reservation> {
+/// Complete authority retained for the post-move durability checkpoint.
+struct ReconciledNewStateCandidatePreserveEffect<'reservation, Namespace> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
     database: DatabaseEvidence,
-    namespace: UsrRollbackNewStateCandidatePreserveAppliedNamespace,
+    namespace: Namespace,
     journal_binding: TransitionJournalBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }

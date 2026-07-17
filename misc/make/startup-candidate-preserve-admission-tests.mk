@@ -4,8 +4,8 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
-	count="$$( timeout 10s grep -Ec '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::(admission|evidence|topology_refusal)::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 24; \
+	count="$$( timeout 10s grep -Ec '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::(admission|evidence|post_move_durability|topology_refusal)::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 30; \
 	for test in \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_splits_every_exact_staged_and_preserved_matrix_case \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_accepts_new_state_empty_quarantine_prefix \
@@ -17,6 +17,12 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::evidence::startup_candidate_preserve_namespace_changes_invalidate_authority \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::evidence::startup_candidate_preserve_capture_races_defer_without_authority \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::evidence::startup_candidate_preserve_fresh_namespace_race_fails_revalidation \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_orders_exact_events_for_applied_and_finish_matrices \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_faults_stop_at_exact_prefixes_and_fresh_admission_repeats \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_exact_post_races_at_every_barrier \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_evidence_races_and_fresh_admission_reruns \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_converges_applied_error_after_apply_and_finish_origins \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_non_new_state_finish_durability_is_fieldless_unsupported_without_events \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_an_occupied_new_state_target \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_every_controlled_non_private_new_state_target_mode \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_models_every_restrictive_new_state_target_residue_without_mutation \
@@ -99,7 +105,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	if timeout 10s rg -n 'renameat|rename\(|exchange_forward|exchange_reverse|sync_all|sync_data|\.sync\(|\.advance\(|forward_successor|rollback_successor|unlinkat|linkat|create_dir|remove_dir|remove_file|set_permissions|write_all|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'std::fs::File|fs::File|AsRawFd|RawFd|BorrowedFd|OwnedFd|root_directory\(|retained_staging_parent|PendingSystemTransition|ActivationNamespaceEvidence' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'renameat|rename\(|mkdirat|create_dir|set_permissions|chmod|remove_dir|remove_file|write_all|sync_all|sync_data|\.sync\(|\.advance\(|clear_transition_if_matches|remove_transition_if_matches|insert_fresh_metadata|delete_metadata' "$$capture" "$$model" "$$wrappers" "$$proof"; then exit 1; fi; \
-	for file in "$$authority" "$$proof" "$$capture" "$$model" "$$projection" "$$wrappers" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/topology_refusal.rs"; do \
+	for file in "$$authority" "$$proof" "$$capture" "$$model" "$$projection" "$$wrappers" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/post_move_durability.rs" "$$tests/topology_refusal.rs"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \

@@ -31,6 +31,23 @@ impl UsrRollbackCandidatePreserveEffectSeal {
     }
 }
 
+/// Unforgeable permission to consume exact NewState POST authority through
+/// the candidate-preservation durability suffix.
+///
+/// Production deliberately has no constructor until persistence and the full
+/// candidate-preservation dispatcher are ready as one recovery boundary.
+#[allow(dead_code)] // the checkpoint remains unreachable from production
+pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {
+    _private: (),
+}
+
+impl UsrRollbackCandidatePreserveDurabilitySeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
 /// this module and its phase-specific executor descendants.

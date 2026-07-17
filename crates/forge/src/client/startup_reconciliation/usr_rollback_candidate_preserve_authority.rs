@@ -7,8 +7,10 @@
 //! normalize, or move leases. Normalization completes its exact target and
 //! quarantine-parent durability internally before it can report a restart.
 //! Movement separately completes candidate, target, and quarantine-parent
-//! pre-move barriers before rename. All three effects remain test-sealed;
-//! production dispatch, persistence, cleanup, and triggers remain absent.
+//! pre-move barriers before rename. Applied and exact NewState Finish evidence
+//! can then consume the same post-move candidate-and-parent durability suffix.
+//! All effects remain test-sealed; production dispatch, persistence, cleanup,
+//! and triggers remain absent.
 
 mod effect_evidence;
 mod effect_reconciliation;
@@ -36,7 +38,11 @@ use super::{
 };
 
 pub(in crate::client) use effect_reconciliation::{
-    UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority, UsrRollbackNewStateCandidatePreserveApplyReconciliation,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackNewStateCandidatePreserveApplyReconciliation,
+    UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
 };
 pub(in crate::client) use target_creation::UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation;
 pub(in crate::client) use target_normalization::UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation;

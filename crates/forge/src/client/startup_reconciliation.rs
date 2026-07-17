@@ -8,7 +8,9 @@
 //! one-attempt semantic reconciliation. Normalization also completes its
 //! exact target and quarantine-parent durability suffix before returning a
 //! restart result. Every move independently completes candidate, target, and
-//! quarantine-parent pre-move barriers before rename. None has production
+//! quarantine-parent pre-move barriers before rename. Applied movement and
+//! exact already-preserved NewState evidence also share one test-sealed
+//! candidate-and-parent post-move durability suffix. None has production
 //! dispatch, persistence, cleanup, or triggers.
 
 use std::{fmt, path::PathBuf};
@@ -41,9 +43,12 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
+    UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
     UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation,
 };
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
@@ -100,11 +105,17 @@ use activation_namespace::{
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
-    NewStateCandidatePreserveMoveFault, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveMoveFault, NewStateCandidatePreservePostMoveDurabilityEvent,
+    NewStateCandidatePreservePostMoveDurabilityFaultPoint, NewStateCandidatePreserveTargetDurabilityEvent,
     NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetCreateFault,
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
     arm_before_new_state_candidate_preserve_candidate_sync,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_before_new_state_candidate_preserve_post_move_candidate_sync,
+    arm_before_new_state_candidate_preserve_post_move_final_post_capture,
+    arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_staging_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_target_parent_sync,
     arm_before_new_state_candidate_preserve_quarantine_parent_sync,
     arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
     arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
@@ -116,12 +127,15 @@ pub(in crate::client) use activation_namespace::{
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
     arm_before_usr_rollback_new_state_target_create_final_pre_capture,
     arm_before_usr_rollback_new_state_target_normalize_final_pre_capture, arm_new_state_candidate_preserve_move_fault,
+    arm_new_state_candidate_preserve_post_move_durability_fault,
     arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_create_fault,
     arm_new_state_target_normalize_durability_fault, arm_new_state_target_normalize_fault,
     new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
     new_state_target_normalize_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_create_attempt_count,
     reset_new_state_target_normalize_attempt_count, reset_new_state_target_normalize_durability_events,
+    take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
 #[cfg(test)]

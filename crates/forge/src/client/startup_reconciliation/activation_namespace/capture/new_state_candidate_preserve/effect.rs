@@ -8,7 +8,10 @@ mod reconciliation;
 
 use std::io;
 
-use super::{ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents};
+use super::{
+    PendingNewStateCandidatePreservePostMoveDurability, ProjectedNewStateCandidatePreserveNamespace,
+    RetainedNewStateCandidatePreserveParents,
+};
 use crate::client::startup_reconciliation::activation_namespace::capture::NamespaceSnapshot;
 
 #[cfg(test)]
@@ -39,5 +42,21 @@ impl PendingNewStateCandidatePreserveMoveReconciliation {
             authenticated_pre_projection,
             raw_report,
         }
+    }
+}
+
+impl AppliedNewStateCandidatePreserveMoveReconciliation {
+    /// Erase the raw syscall report and converge applied POST evidence into
+    /// the same durability input used by an independently admitted Finish.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn into_post_move_durability(
+        self,
+    ) -> PendingNewStateCandidatePreservePostMoveDurability {
+        let Self {
+            _parents: parents,
+            _fresh_post: fresh_post,
+            _fresh_post_projection: fresh_post_projection,
+            _raw_report,
+        } = self;
+        PendingNewStateCandidatePreservePostMoveDurability::new(parents, fresh_post, fresh_post_projection)
     }
 }

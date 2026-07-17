@@ -2,7 +2,10 @@
 //!
 //! Candidate `syncfs` plus retained-tree fsync runs before the exact target
 //! and quarantine-parent barriers. Only their final fresh PRE can reach the
-//! one-shot move. Post-move durability remains intentionally deferred.
+//! one-shot move. Applied POST evidence can then enter the same consuming
+//! durability suffix as an independently admitted preserved NewState proof.
+
+mod post_move_durability;
 
 use crate::{Installation, transition_journal::TransitionRecord};
 
@@ -16,9 +19,14 @@ use crate::client::startup_reconciliation::activation_namespace::capture::{
     TargetDurableNewStateCandidatePreservePre,
 };
 
+pub(in crate::client::startup_reconciliation) use post_move_durability::{
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace, UsrRollbackNewStateCandidatePreserveDurableNamespace,
+};
+
 /// Opaque POST namespace authority retained after fresh reconciliation.
 ///
-/// No post-move durability or persistence method exists at this checkpoint.
+/// Only the distinct durability child can consume this value; no persistence
+/// method exists at this checkpoint.
 #[must_use = "an applied candidate-preservation move still requires post-move durability"]
 pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreserveAppliedNamespace {
     _reconciliation: AppliedNewStateCandidatePreserveMoveReconciliation,

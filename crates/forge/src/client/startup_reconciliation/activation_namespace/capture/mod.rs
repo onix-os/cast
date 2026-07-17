@@ -36,25 +36,36 @@ use crate::{
 
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
+pub(in crate::client::startup_reconciliation::activation_namespace) use new_state_candidate_preserve::DurableNewStateCandidatePreservePostMoveNamespace;
 pub(super) use new_state_candidate_preserve::{
     AppliedNewStateCandidatePreserveMoveReconciliation, NewStateCandidatePreserveCaptureError,
     NewStateCandidatePreserveLayout, NewStateCandidatePreserveMoveReconciliation,
-    NewStateCandidatePreserveTargetDurabilityError, ProjectedNewStateCandidatePreserveNamespace,
+    NewStateCandidatePreservePostMoveDurabilityError, NewStateCandidatePreserveTargetDurabilityError,
+    PendingNewStateCandidatePreservePostMoveDurability, ProjectedNewStateCandidatePreserveNamespace,
     RetainedNewStateCandidatePreserveParents, TargetDurableNewStateCandidatePreservePre,
 };
 #[cfg(test)]
 pub(in crate::client) use new_state_candidate_preserve::{
-    NewStateCandidatePreserveMoveFault, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveMoveFault, NewStateCandidatePreservePostMoveDurabilityEvent,
+    NewStateCandidatePreservePostMoveDurabilityFaultPoint, NewStateCandidatePreserveTargetDurabilityEvent,
     NewStateCandidatePreserveTargetDurabilityFaultPoint,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_before_new_state_candidate_preserve_post_move_candidate_sync,
+    arm_before_new_state_candidate_preserve_post_move_final_post_capture,
+    arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_staging_parent_sync,
+    arm_before_new_state_candidate_preserve_post_move_target_parent_sync,
     arm_before_new_state_candidate_preserve_quarantine_parent_sync,
     arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
     arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
     arm_before_new_state_candidate_preserve_target_sync,
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
-    arm_new_state_candidate_preserve_move_fault, arm_new_state_candidate_preserve_target_durability_fault,
-    new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    arm_new_state_candidate_preserve_move_fault, arm_new_state_candidate_preserve_post_move_durability_fault,
+    arm_new_state_candidate_preserve_target_durability_fault, new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events,
+    take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events,
 };
 #[cfg(test)]

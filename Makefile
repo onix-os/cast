@@ -35,6 +35,7 @@ include misc/make/startup-rollback-resume-route-tests.mk
 include misc/make/startup-candidate-preserve-admission-tests.mk
 include misc/make/startup-candidate-preserve-target-tests.mk
 include misc/make/startup-candidate-preserve-effect-tests.mk
+include misc/make/startup-candidate-preserve-post-move-durability-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk
 include misc/make/startup-rollback-reverse-projection-tests.mk
 include misc/make/startup-rollback-reverse-effect-adapter-tests.mk
@@ -890,6 +891,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-admission-test  Run sealed read-only candidate-preservation admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-target-test  Run all candidate target preparation, creation, and normalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-effect-test  Run sealed NewState candidate-preservation move contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-post-move-durability-test  Run shared NewState post-move durability contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-admission-test  Run sealed read-only reverse-admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-projection-test  Run normalized reverse-exchange projection contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-effect-adapter-test  Run the one-shot reverse-exchange syscall adapter contracts"
