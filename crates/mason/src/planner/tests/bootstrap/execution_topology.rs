@@ -448,7 +448,12 @@ fi
             prepare("cast-hooks-fixture"),
             phase_with_pre(
                 "Setup",
-                vec![run("patch", "-p1")],
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/bash".to_owned(),
+                    declared_programs: vec!["/usr/bin/patch".to_owned()],
+                    script: r#"patch -d "${CAST_SOURCE_DIR}/cast-hooks-fixture" -p1 -i "${CAST_SOURCE_DIR}/pre-setup.patch""#
+                        .to_owned(),
+                }],
                 vec![run("cmake", "-G")],
             ),
             phase("Build", vec![run("cmake", "--build")]),

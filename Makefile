@@ -720,6 +720,16 @@ execution-fixtures: fixture-sources-check
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete -- \
 		--exact --nocapture
+	@echo "Checking fail-closed external patch-source admission..."
+	@set -eu; \
+	listed="$$( $(CARGO) test -p mason --lib \
+		planner::hermetic_tests::hooks_patch_external_source_contract_fails_closed -- \
+		--exact --list )"; \
+	printf '%s\n' "$$listed" | \
+		grep -Fqx 'planner::hermetic_tests::hooks_patch_external_source_contract_fails_closed: test'
+	@$(CARGO) test -p mason --lib \
+		planner::hermetic_tests::hooks_patch_external_source_contract_fails_closed -- \
+		--exact --nocapture
 	@echo "Checking the declarative pinned Stone bootstrap manifest and index..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \

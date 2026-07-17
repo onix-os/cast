@@ -97,7 +97,10 @@ intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
 generated daemon assets, Gluon factory/override composition, a runtime-loaded
 plugin with an explicit output relation, and native split-output builds. The
-other three are deliberately source-less.
+patch-hook case now binds two independent sources: a deterministic XZ USTAR
+archive and a raw HTTPS-identified patch. Only the archive is extracted; the
+declared pre-setup patch program consumes the separately materialized bytes.
+The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
 source lock, archive, network access, host shim, or mounted recipe input.
@@ -110,11 +113,13 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in archive matrix keeps ten fixtures as plain USTAR and exercises
-all three supported compressed paths with vendored Cargo as deterministic
-gzip, the patch-hook fixture as deterministic XZ, and the generated-daemon
-fixture as deterministic Zstandard. `make fixture-sources` rebuilds those
-exact bytes; the offline lane rejects any format, filename, or digest drift.
+The checked-in source matrix has thirteen deterministic tar streams: ten plain
+USTAR archives plus vendored Cargo as deterministic gzip, the patch-hook
+fixture as deterministic XZ, and the generated-daemon fixture as deterministic
+Zstandard. It also contains the patch hook's independently locked raw patch.
+`make fixture-sources` rebuilds all fourteen exact source artifacts; the
+offline lane rejects any format, filename, order, unpack policy, or digest
+drift.
 The default `flake.nix` development shell supplies the required gzip, XZ, and
 Zstandard command-line encoders.
 
@@ -128,7 +133,7 @@ make fixtures-ci
 ```
 
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
-source archives, validates the pinned Stone index and closure declaration, and
+source artifacts, validates the pinned Stone index and closure declaration, and
 proves that each recipe resolves to its own exact, sorted package-ID closure
 and that their union is the aggregate bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,

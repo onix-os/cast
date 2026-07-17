@@ -1,3 +1,150 @@
+const HOOKS_ARCHIVE_URL: &str = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0.tar.xz";
+const HOOKS_PATCH_URL: &str = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0-pre-setup.patch";
+const HOOKS_PATCH_ARTIFACT: &str = "cast-hooks-fixture-1.0.0-pre-setup.patch";
+const HOOKS_PATCH_MATERIALIZATION: &str = "pre-setup.patch";
+const HOOKS_PATCH_BYTES: &[u8] = br#"--- a/hello.c
++++ b/hello.c
+@@ -6,3 +6,3 @@
+ int main(void) {
+-    return puts("pre_setup hook missing") == EOF;
++    return puts("pre_setup hook applied") == EOF;
+ }
+"#;
+
+fn validate_hooks_patch_source_contract(sources: &[UpstreamSpec], lock: &SourceLock) -> Result<(), String> {
+    lock.validate_against(sources)
+        .map_err(|error| format!("source lock does not match the authored source order: {error}"))?;
+    let [
+        UpstreamSpec::Archive {
+            url: archive_url,
+            rename: archive_rename,
+            strip_dirs: archive_strip_dirs,
+            unpack: archive_unpack,
+            unpack_dir: archive_unpack_dir,
+            ..
+        },
+        UpstreamSpec::Archive {
+            url: patch_url,
+            rename: patch_rename,
+            strip_dirs: patch_strip_dirs,
+            unpack: patch_unpack,
+            unpack_dir: patch_unpack_dir,
+            ..
+        },
+    ] = sources
+    else {
+        return Err("hooks-patch must declare exactly two archive-kind locked sources".to_owned());
+    };
+    let [SourceResolution::Archive(archive_lock), SourceResolution::Archive(patch_lock)] = lock.sources.as_slice()
+    else {
+        return Err("hooks-patch lock must contain exactly two archive resolutions".to_owned());
+    };
+
+    if archive_url != HOOKS_ARCHIVE_URL
+        || archive_rename.as_deref() != Some("cast-hooks-fixture.tar.xz")
+        || *archive_strip_dirs != Some(1)
+        || !*archive_unpack
+        || archive_unpack_dir.as_deref() != Some("cast-hooks-fixture")
+    {
+        return Err("hooks-patch primary source must remain the sole extracted XZ USTAR archive".to_owned());
+    }
+    if patch_url != HOOKS_PATCH_URL
+        || patch_rename.as_deref() != Some(HOOKS_PATCH_MATERIALIZATION)
+        || patch_strip_dirs.is_some()
+        || *patch_unpack
+        || patch_unpack_dir.is_some()
+    {
+        return Err("hooks-patch patch source must remain a non-unpacked raw source".to_owned());
+    }
+    if archive_lock.order != 0
+        || archive_lock.url.as_str() != archive_url.as_str()
+        || patch_lock.order != 1
+        || patch_lock.url.as_str() != patch_url.as_str()
+    {
+        return Err("hooks-patch source lock order must bind the archive before the raw patch".to_owned());
+    }
+    Ok(())
+}
+
+fn execution_source_cache_path(cache: &Path, url: &str, sha256: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(url.as_bytes());
+    hasher.update(sha256.as_bytes());
+    let key = hex::encode(hasher.finalize());
+    cache.join("fetched").join(&key[..5]).join(&key[key.len() - 5..]).join(key)
+}
+
+#[test]
+fn hooks_patch_external_source_contract_fails_closed() {
+    let package = execution_fixture_package_directory("hooks-patch");
+    let recipe = crate::Recipe::load_authored(&package.join("stone.glu")).unwrap();
+    let lock_bytes = fs::read(package.join(SOURCE_LOCK_FILE_NAME)).unwrap();
+    let lock = decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes).unwrap();
+    validate_hooks_patch_source_contract(&recipe.declaration.sources, &lock).unwrap();
+
+    let mut missing = lock.clone();
+    missing.sources.pop();
+    assert!(
+        validate_hooks_patch_source_contract(&recipe.declaration.sources, &missing).is_err(),
+        "missing raw patch lock entry must fail closed"
+    );
+
+    let mut reordered = lock.clone();
+    reordered.sources.swap(0, 1);
+    assert!(
+        validate_hooks_patch_source_contract(&recipe.declaration.sources, &reordered).is_err(),
+        "reordered raw patch lock entry must fail closed"
+    );
+
+    let mut wrong_unpack = recipe.declaration.sources.clone();
+    let UpstreamSpec::Archive { unpack, .. } = &mut wrong_unpack[1] else {
+        panic!("hooks-patch second source stopped being archive-kind");
+    };
+    *unpack = true;
+    assert!(
+        validate_hooks_patch_source_contract(&wrong_unpack, &lock).is_err(),
+        "an unpacked raw patch declaration must fail closed"
+    );
+
+    let SourceResolution::Archive(patch) = &lock.sources[1] else {
+        panic!("hooks-patch raw patch lock stopped being archive-kind");
+    };
+    let materialization_name = recipe.declaration.sources[1].materialization_name().unwrap();
+    let locked_patch = stone_recipe::derivation::LockedSource::Archive {
+        order: patch.order,
+        url: patch.url.clone(),
+        sha256: patch.sha256.clone(),
+        filename: materialization_name,
+    };
+    let temporary = crate::private_tempdir();
+    let missing_cache = temporary.path().join("missing-cache");
+    assert!(
+        crate::upstream::import_locked_archive_fixture(
+            &locked_patch,
+            &missing_cache,
+            &temporary.path().join("missing.patch"),
+        )
+        .is_err(),
+        "missing raw patch bytes must fail closed"
+    );
+    assert!(
+        !execution_source_cache_path(&missing_cache, &patch.url, &patch.sha256).exists(),
+        "missing raw patch must not publish a cache entry"
+    );
+
+    let tampered = temporary.path().join("tampered.patch");
+    fs::write(&tampered, b"tampered patch bytes\n").unwrap();
+    let tampered_cache = temporary.path().join("tampered-cache");
+    assert!(
+        crate::upstream::import_locked_archive_fixture(&locked_patch, &tampered_cache, &tampered).is_err(),
+        "tampered raw patch bytes must fail closed"
+    );
+    assert!(
+        !execution_source_cache_path(&tampered_cache, &patch.url, &patch.sha256).exists(),
+        "tampered raw patch must not publish a cache entry"
+    );
+}
+
 #[test]
 fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     let temporary = crate::private_tempdir();
@@ -6,6 +153,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
     let packages = root.join("packages");
     let archives = root.join("archives");
+    let source_files = root.join("source-files");
     let source_trees = root.join("source-trees");
 
     let discovered = [&packages, &source_trees].map(|directory| {
@@ -37,9 +185,17 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-split-fixture-1.0.0",
         ]
     );
+    let source_file_names = fs::read_dir(&source_files)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_file())
+        .map(|entry| entry.file_name().into_string().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(source_file_names, BTreeSet::from([HOOKS_PATCH_ARTIFACT.to_owned()]));
 
-    let mut admitted_archives = BTreeSet::new();
+    let mut admitted_source_artifacts = BTreeSet::new();
     let mut archive_format_counts = [0_usize; 4];
+    let mut locked_source_count = 0_usize;
     let mut sourceful_fixtures = 0_usize;
     let mut source_less_fixtures = 0_usize;
     for name in EXECUTION_FIXTURES {
@@ -393,56 +549,164 @@ install -Dm644 build/cast-plugin-output.so \
             "{name}: checked-in source lock is not canonical"
         );
 
-        let [SourceResolution::Archive(source)] = lock.sources.as_slice() else {
-            panic!("{name}: execution fixture must have exactly one archive source");
-        };
-        let url = Url::parse(&source.url).unwrap();
+        let expected_sources = if name == "hooks-patch" { 2 } else { 1 };
         assert_eq!(
-            url.scheme(),
-            "https",
-            "{name}: production source policy must remain HTTPS"
+            lock.sources.len(),
+            expected_sources,
+            "{name}: locked-source cardinality drift"
         );
-        assert_eq!(url.host_str(), Some("fixtures.invalid"));
-        let filename = url.path_segments().unwrap().next_back().unwrap();
-        let archive_path = archives.join(filename);
-        let metadata = fs::symlink_metadata(&archive_path).unwrap();
-        assert!(metadata.file_type().is_file(), "{name}: archive must be a regular file");
-        let bytes = fs::read(&archive_path).unwrap();
-        assert_eq!(metadata.len(), u64::try_from(bytes.len()).unwrap());
-        assert!(
-            (1..=1024 * 1024).contains(&metadata.len()),
-            "{name}: encoded fixture archive must remain small and non-empty"
-        );
+        if name == "hooks-patch" {
+            validate_hooks_patch_source_contract(&recipe.declaration.sources, &lock)
+                .unwrap_or_else(|error| panic!("hooks-patch: invalid external patch contract: {error}"));
+        }
 
+        let mut locked_sources = Vec::with_capacity(lock.sources.len());
+        let mut source_artifacts = Vec::with_capacity(lock.sources.len());
+        for (index, (resolution, declaration)) in lock
+            .sources
+            .iter()
+            .zip(&recipe.declaration.sources)
+            .enumerate()
+        {
+            let SourceResolution::Archive(source) = resolution else {
+                panic!("{name}: execution source {index} must remain archive-kind");
+            };
+            let url = Url::parse(&source.url).unwrap();
+            assert_eq!(
+                url.scheme(),
+                "https",
+                "{name}: production source policy must remain HTTPS"
+            );
+            assert_eq!(url.host_str(), Some("fixtures.invalid"));
+            let filename = url.path_segments().unwrap().next_back().unwrap();
+            let artifact_path = archives.join(filename);
+            let metadata = fs::symlink_metadata(&artifact_path).unwrap();
+            assert!(
+                metadata.file_type().is_file(),
+                "{name}: source {index} must be a regular file"
+            );
+            let bytes = fs::read(&artifact_path).unwrap();
+            assert_eq!(metadata.len(), u64::try_from(bytes.len()).unwrap());
+            assert!(
+                (1..=1024 * 1024).contains(&metadata.len()),
+                "{name}: encoded source {index} must remain small and non-empty"
+            );
+            assert_eq!(hex::encode(Sha256::digest(&bytes)), source.sha256);
+            assert!(
+                admitted_source_artifacts.insert(filename.to_owned()),
+                "duplicate execution source artifact"
+            );
+
+            let materialization_name = declaration.materialization_name().unwrap();
+            let locked = stone_recipe::derivation::LockedSource::Archive {
+                order: u32::try_from(index).unwrap(),
+                url: source.url.clone(),
+                sha256: source.sha256.clone(),
+                filename: materialization_name,
+            };
+            crate::upstream::import_locked_archive_fixture(&locked, &cache, &artifact_path).unwrap_or_else(|error| {
+                panic!("{name}: import locked source {index} into source cache: {error:#}")
+            });
+            locked_sources.push(locked);
+            source_artifacts.push((artifact_path, bytes));
+        }
+        locked_source_count += locked_sources.len();
+
+        let share = shared.join(name);
+        crate::upstream::sync_locked(&locked_sources, &cache, &share, SOURCE_DATE_EPOCH).unwrap_or_else(|error| {
+            panic!("{name}: share imported fixtures through frozen source path: {error:#}")
+        });
+        for (index, (locked, (artifact_path, bytes))) in locked_sources.iter().zip(&source_artifacts).enumerate() {
+            let stone_recipe::derivation::LockedSource::Archive {
+                url,
+                sha256,
+                filename,
+                ..
+            } = locked
+            else {
+                panic!("{name}: locked source {index} stopped being archive-kind");
+            };
+            let cached = execution_source_cache_path(&cache, url, sha256);
+            let build_visible = share.join(filename);
+            assert_eq!(fs::read(&cached).unwrap(), *bytes);
+            assert_eq!(fs::read(&build_visible).unwrap(), *bytes);
+
+            let fixture_metadata = fs::metadata(artifact_path).unwrap();
+            let cached_metadata = fs::metadata(&cached).unwrap();
+            let shared_metadata = fs::metadata(&build_visible).unwrap();
+            let fixture_inode = (fixture_metadata.dev(), fixture_metadata.ino());
+            let cached_inode = (cached_metadata.dev(), cached_metadata.ino());
+            let shared_inode = (shared_metadata.dev(), shared_metadata.ino());
+            assert_ne!(
+                fixture_inode, cached_inode,
+                "{name}: source {index} cache entry must not alias the tracked fixture"
+            );
+            assert_ne!(
+                cached_inode, shared_inode,
+                "{name}: source {index} build-visible input must not alias the verified cache"
+            );
+            assert_ne!(
+                fixture_inode, shared_inode,
+                "{name}: source {index} build-visible input must not alias the tracked fixture"
+            );
+        }
+
+        if name == "hooks-patch" {
+            assert_eq!(source_artifacts[1].0.file_name().unwrap(), HOOKS_PATCH_ARTIFACT);
+            assert_eq!(source_artifacts[1].1, HOOKS_PATCH_BYTES);
+            assert_eq!(
+                fs::read(source_files.join(HOOKS_PATCH_ARTIFACT)).unwrap(),
+                HOOKS_PATCH_BYTES
+            );
+            assert!(
+                !source_trees
+                    .join("cast-hooks-fixture-1.0.0/packaging")
+                    .exists(),
+                "hooks-patch: removed packaging tree must not affect deterministic archive bytes"
+            );
+        }
+
+        let SourceResolution::Archive(primary_source) = &lock.sources[0] else {
+            panic!("{name}: primary source must remain archive-kind");
+        };
+        let primary_url = Url::parse(&primary_source.url).unwrap();
+        let primary_filename = primary_url.path_segments().unwrap().next_back().unwrap();
+        let primary_bytes = &source_artifacts[0].1;
         let mut decoder: Box<dyn Read + '_> = match name {
             "cargo-vendored" => {
-                assert_eq!(filename, "cast-cargo-vendored-fixture-1.0.0.tar.gz");
-                assert!(bytes.starts_with(&[0x1f, 0x8b, 0x08]), "{name}: missing gzip magic");
+                assert_eq!(primary_filename, "cast-cargo-vendored-fixture-1.0.0.tar.gz");
+                assert!(
+                    primary_bytes.starts_with(&[0x1f, 0x8b, 0x08]),
+                    "{name}: missing gzip magic"
+                );
                 archive_format_counts[1] += 1;
-                Box::new(flate2::read::GzDecoder::new(bytes.as_slice()))
+                Box::new(flate2::read::GzDecoder::new(primary_bytes.as_slice()))
             }
             "hooks-patch" => {
-                assert_eq!(filename, "cast-hooks-fixture-1.0.0.tar.xz");
+                assert_eq!(primary_filename, "cast-hooks-fixture-1.0.0.tar.xz");
                 assert!(
-                    bytes.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0]),
+                    primary_bytes.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0]),
                     "{name}: missing XZ magic"
                 );
                 archive_format_counts[2] += 1;
-                Box::new(xz2::read::XzDecoder::new(bytes.as_slice()))
+                Box::new(xz2::read::XzDecoder::new(primary_bytes.as_slice()))
             }
             "daemon-generated" => {
-                assert_eq!(filename, "cast-daemon-fixture-1.0.0.tar.zst");
+                assert_eq!(primary_filename, "cast-daemon-fixture-1.0.0.tar.zst");
                 assert!(
-                    bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]),
+                    primary_bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]),
                     "{name}: missing Zstandard magic"
                 );
                 archive_format_counts[3] += 1;
-                Box::new(zstd::stream::read::Decoder::new(bytes.as_slice()).unwrap())
+                Box::new(zstd::stream::read::Decoder::new(primary_bytes.as_slice()).unwrap())
             }
             _ => {
-                assert!(filename.ends_with(".tar"), "{name}: expected a plain .tar fixture");
+                assert!(
+                    primary_filename.ends_with(".tar"),
+                    "{name}: expected a plain .tar fixture"
+                );
                 archive_format_counts[0] += 1;
-                Box::new(std::io::Cursor::new(bytes.as_slice()))
+                Box::new(std::io::Cursor::new(primary_bytes.as_slice()))
             }
         };
         let mut tar_bytes = Vec::new();
@@ -460,44 +724,17 @@ install -Dm644 build/cast-plugin-output.so \
             b"ustar\0",
             "{name}: decoded fixture is not a USTAR archive"
         );
-        assert_eq!(hex::encode(Sha256::digest(&bytes)), source.sha256);
-        assert!(
-            admitted_archives.insert(filename.to_owned()),
-            "duplicate execution archive"
-        );
-
-        let materialization_name = recipe.declaration.sources[0].materialization_name().unwrap();
-        let locked = stone_recipe::derivation::LockedSource::Archive {
-            order: 0,
-            url: source.url.clone(),
-            sha256: source.sha256.clone(),
-            filename: materialization_name.clone(),
-        };
-        crate::upstream::import_locked_archive_fixture(&locked, &cache, &archive_path)
-            .unwrap_or_else(|error| panic!("{name}: import locked fixture into source cache: {error:#}"));
-        let share = shared.join(name);
-        crate::upstream::sync_locked(std::slice::from_ref(&locked), &cache, &share, SOURCE_DATE_EPOCH)
-            .unwrap_or_else(|error| panic!("{name}: share imported fixture through frozen source path: {error:#}"));
-        let shared_archive = share.join(&materialization_name);
-        assert_eq!(fs::read(&shared_archive).unwrap(), bytes);
-        let shared_metadata = fs::metadata(&shared_archive).unwrap();
-        let fixture_metadata = fs::metadata(&archive_path).unwrap();
-        assert_ne!(
-            (shared_metadata.dev(), shared_metadata.ino()),
-            (fixture_metadata.dev(), fixture_metadata.ino()),
-            "{name}: build-visible source must not alias the tracked fixture"
-        );
-
         // Exercise the same structural two-pass extractor and atomic
         // publication path used by a real build. In particular, the three
         // compressed fixtures must not be accepted on filename or magic alone.
         let build = temporary.path().join("extracted").join(name);
         fs::create_dir_all(&build).unwrap();
         let mut archive_session = crate::archive::ArchiveSessionBudget::production();
+        let primary_materialization = recipe.declaration.sources[0].materialization_name().unwrap();
         crate::archive::extract_locked_tar(
             &share,
-            &materialization_name,
-            &source.sha256,
+            &primary_materialization,
+            &primary_source.sha256,
             &build,
             "source",
             1,
@@ -511,18 +748,26 @@ install -Dm644 build/cast-plugin-output.so \
             fs::read_dir(&published).unwrap().next().is_some(),
             "{name}: extractor published an empty source tree"
         );
+        if name == "hooks-patch" {
+            assert!(
+                !published.join("packaging").exists(),
+                "hooks-patch: primary archive unexpectedly retained the removed packaging tree"
+            );
+            assert_eq!(fs::read(share.join(HOOKS_PATCH_MATERIALIZATION)).unwrap(), HOOKS_PATCH_BYTES);
+        }
     }
 
-    let present_archives = fs::read_dir(archives)
+    let present_source_artifacts = fs::read_dir(archives)
         .unwrap()
         .map(|entry| entry.unwrap())
         .filter(|entry| entry.file_type().unwrap().is_file())
         .map(|entry| entry.file_name().into_string().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(
-        present_archives, admitted_archives,
-        "orphaned execution fixture archive"
+        present_source_artifacts, admitted_source_artifacts,
+        "orphaned execution fixture source artifact"
     );
+    assert_eq!(locked_source_count, 14, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
         [10, 1, 1, 1],

@@ -638,21 +638,16 @@ cast.profiles [
         // on that authoritative path so a contentful test never falls through
         // to the deliberately unreachable HTTPS fixture URL.
         let storage_dir = planned.runtime.paths.upstreams().host;
-        if matches!(
-            planned.plan.package.name.as_str(),
-            "cast-generated-config-fixture" | "cast-generated-shell-fixture" | "cast-userspace-profile-fixture"
-        ) {
-            assert!(
-                planned.plan.sources.is_empty(),
-                "source-less fixture must enter execution without an upstream mapping"
-            );
-        } else {
-            assert_eq!(
-                planned.plan.sources.len(),
-                1,
-                "source-backed execution fixture archive cardinality drift"
-            );
-        }
+        let expected_sources = match planned.plan.package.name.as_str() {
+            "cast-generated-config-fixture" | "cast-generated-shell-fixture" | "cast-userspace-profile-fixture" => 0,
+            "cast-hooks-fixture" => 2,
+            _ => 1,
+        };
+        assert_eq!(
+            planned.plan.sources.len(),
+            expected_sources,
+            "execution fixture locked-source cardinality drift"
+        );
         for source in &planned.plan.sources {
             let stone_recipe::derivation::LockedSource::Archive { url, .. } = source else {
                 panic!("source-backed execution inputs must remain archive-only");

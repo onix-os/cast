@@ -25,7 +25,12 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0.tar.xz",
-            sha256 = "4483b33167bf58fcb5fdbaaae21bf7bfb3e496c54a3a726d4e09bb41db013b97",
+            sha256 = "238b6e91994ceecd1bc0d8365cc77f4166d5db22d1faa1f5eab80a0389c1210c",
+        },
+        Archive {
+            order = 1,
+            url = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0-pre-setup.patch",
+            sha256 = "1766d7a2e9ae6316169aa88a452b134eed19151f9dc15e81a57c93a2ff7dc986",
         },
     ],
 }

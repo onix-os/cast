@@ -13,6 +13,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 package_root="$fixture_root/packages"
 source_root="$fixture_root/source-trees"
+source_file_root="$fixture_root/source-files"
 archive_root="$fixture_root/archives"
 temporary=
 uncompressed=
@@ -122,6 +123,24 @@ test "$source_tree_count" -eq 13 || {
     exit 1
 }
 
+source_file_count=0
+for entry in "$source_file_root"/*; do
+    test -f "$entry" && test ! -L "$entry" || {
+        printf 'unexpected non-regular execution source-file entry: %s\n' "$entry" >&2
+        exit 1
+    }
+    case "$(basename "$entry")" in
+        cast-hooks-fixture-1.0.0-pre-setup.patch) ;;
+        *) printf 'unexpected execution source file: %s\n' "$entry" >&2; exit 1 ;;
+    esac
+    source_file_count=$((source_file_count + 1))
+done
+
+test "$source_file_count" -eq 1 || {
+    printf 'expected exactly one independent execution source file, found %s\n' "$source_file_count" >&2
+    exit 1
+}
+
 if [ "$mode" = check ]; then
     check_root=$(mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
 fi
@@ -221,6 +240,30 @@ do
     temporary=
 done
 
+raw_patch=cast-hooks-fixture-1.0.0-pre-setup.patch
+source="$source_file_root/$raw_patch"
+output="$archive_root/$raw_patch"
+if [ "$mode" = check ]; then
+    temporary="$check_root/$raw_patch"
+else
+    temporary="$archive_root/.$raw_patch.tmp"
+fi
+rm -f "$temporary"
+cat "$source" > "$temporary"
+chmod 0644 "$temporary"
+if [ "$mode" = check ]; then
+    test -f "$output"
+    test ! -L "$output"
+    if ! cmp -s "$temporary" "$output"; then
+        printf 'execution fixture raw source is stale: %s\n' "$output" >&2
+        exit 1
+    fi
+    rm -f "$temporary"
+else
+    mv -f "$temporary" "$output"
+fi
+temporary=
+
 count=0
 for entry in "$archive_root"/*; do
     test -e "$entry" || {
@@ -242,6 +285,7 @@ for entry in "$archive_root"/*; do
         cast-daemon-fixture-1.0.0.tar.zst|\
         cast-factory-override-fixture-1.0.0.tar|\
         cast-hooks-fixture-1.0.0.tar.xz|\
+        cast-hooks-fixture-1.0.0-pre-setup.patch|\
         cast-meson-fixture-1.0.0.tar|\
         cast-plugin-output-fixture-1.0.0.tar|\
         cast-split-fixture-1.0.0.tar) ;;
@@ -250,7 +294,7 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 13 || {
-    printf 'expected exactly thirteen source-backed execution fixture archives, found %s\n' "$count" >&2
+test "$count" -eq 14 || {
+    printf 'expected exactly fourteen source-backed execution fixture artifacts, found %s\n' "$count" >&2
     exit 1
 }
