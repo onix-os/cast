@@ -74,9 +74,11 @@ forge-startup-usr-rollback-decision-test:
 	capture_call_count="$$( timeout 10s rg -n 'UsrRollbackDecisionAuthority::capture\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
 	timeout 10s test "$$capture_call_count" = 1; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackDecisionSeal,' "$$authority"; \
-	bypass_count="$$( timeout 10s rg -n 'fn new_for_test\(' "$$startup_gate" "$$authority" | timeout 10s wc -l )"; \
-	timeout 10s test "$$bypass_count" = 3; \
-	timeout 10s awk '$$0 == "    #[cfg(test)]" { gated = 1; next } $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { if (!gated) exit 1; found += 1 } { gated = 0 } END { exit found != 3 }' "$$startup_gate"; \
+	decision_seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackDecisionSeal {/,/^}/p' "$$startup_gate" )"; \
+	timeout 10s test -n "$$decision_seal_impl"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$decision_seal_impl" )" = 1; \
+	timeout 10s awk '$$0 == "    #[cfg(test)]" { gated = 1; next } $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { if (!gated) exit 1; found += 1; gated = 0; next } gated { exit 1 } END { exit found != 1 }' <<<"$$decision_seal_impl"; \
+	if timeout 10s rg -n 'fn new_for_test\(' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx '    journal_binding: TransitionJournalBinding,' "$$authority"; \
 	binding_capture_count="$$( timeout 10s rg -n 'let journal_binding = journal\.binding\(\);' "$$authority" | timeout 10s wc -l )"; \
 	timeout 10s test "$$binding_capture_count" = 1; \

@@ -129,6 +129,21 @@ impl UsrRollbackFreshDbInvalidationSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting the journal-only route from
+/// `FreshDbInvalidated` to rollback completion. This checkpoint deliberately
+/// has no production constructor or dispatcher.
+#[allow(dead_code)] // rollback-completion routing remains intentionally unreachable from production
+pub(in crate::client) struct UsrRollbackCompleteRouteSeal {
+    _private: (),
+}
+
+impl UsrRollbackCompleteRouteSeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,

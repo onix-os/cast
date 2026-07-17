@@ -31,6 +31,8 @@ mod metadata_provenance;
 mod replacement_mutation_authority;
 #[allow(dead_code)] // candidate preservation remains sealed from production dispatch
 mod usr_rollback_candidate_preserve_authority;
+#[allow(dead_code)] // rollback-completion routing remains test-sealed
+mod usr_rollback_complete_route_authority;
 mod usr_rollback_decision_authority;
 #[allow(dead_code)] // fresh-database invalidation effect remains test-sealed
 mod usr_rollback_fresh_db_invalidation_authority;
@@ -54,6 +56,10 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
     UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
     UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation,
+};
+#[allow(unused_imports)] // rollback-completion route authority remains sealed from production dispatch
+pub(in crate::client) use usr_rollback_complete_route_authority::{
+    UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError,
 };
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
@@ -97,6 +103,8 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_before_
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_between_usr_rollback_candidate_preserve_database_captures;
 #[cfg(test)]
+pub(in crate::client) use usr_rollback_complete_route_authority::arm_between_usr_rollback_complete_route_database_captures;
+#[cfg(test)]
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_authority::{
     arm_between_usr_rollback_fresh_db_invalidation_database_captures, fresh_db_invalidation_removal_call_count,
 };
@@ -109,6 +117,8 @@ pub(in crate::client) use usr_rollback_reverse_authority::arm_between_usr_rollba
 
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_usr_rollback_complete_route_fresh_namespace_capture;
 #[cfg(test)]
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use activation_namespace::arm_before_usr_rollback_decision_fresh_namespace_capture;
@@ -124,15 +134,16 @@ use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
     UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackCandidatePreserveTopology,
-    UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
-    UsrRollbackFreshDbInvalidationNamespaceError, UsrRollbackFreshDbInvalidationNamespaceInspection,
-    UsrRollbackFreshDbInvalidationNamespaceProof, UsrRollbackFreshDbInvalidationRouteNamespaceError,
-    UsrRollbackFreshDbInvalidationRouteNamespaceInspection, UsrRollbackFreshDbInvalidationRouteNamespaceProof,
-    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, UsrRollbackNewStateTargetCreateNamespaceEvidence,
-    UsrRollbackNewStateTargetNormalizeNamespaceEvidence, UsrRollbackResumeRouteNamespaceError,
-    UsrRollbackResumeRouteNamespaceInspection, UsrRollbackResumeRouteNamespaceProof,
-    UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
-    UsrRollbackReverseNamespaceProof,
+    UsrRollbackCompleteRouteNamespaceError, UsrRollbackCompleteRouteNamespaceInspection,
+    UsrRollbackCompleteRouteNamespaceProof, UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection,
+    UsrRollbackDecisionNamespaceProof, UsrRollbackFreshDbInvalidationNamespaceError,
+    UsrRollbackFreshDbInvalidationNamespaceInspection, UsrRollbackFreshDbInvalidationNamespaceProof,
+    UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
+    UsrRollbackFreshDbInvalidationRouteNamespaceProof, UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
+    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+    UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
+    UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
+    UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{

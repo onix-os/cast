@@ -25,6 +25,8 @@ mod fresh_db_invalidation_route_proof;
 mod parent_durability;
 mod policy;
 mod resume_route_proof;
+#[allow(dead_code)] // rollback-completion routing remains test-sealed
+mod rollback_complete_route_proof;
 mod rollback_reverse_proof;
 
 #[cfg(test)]
@@ -115,6 +117,12 @@ pub(in crate::client) use resume_route_proof::arm_before_usr_rollback_resume_rou
 pub(super) use resume_route_proof::{
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use rollback_complete_route_proof::arm_before_usr_rollback_complete_route_fresh_namespace_capture;
+pub(super) use rollback_complete_route_proof::{
+    UsrRollbackCompleteRouteNamespaceError, UsrRollbackCompleteRouteNamespaceInspection,
+    UsrRollbackCompleteRouteNamespaceProof,
 };
 pub(super) use rollback_reverse_proof::{
     UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,

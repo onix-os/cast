@@ -9,6 +9,8 @@ mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 #[allow(dead_code)] // candidate persistence remains sealed from production dispatch
 mod usr_rollback_candidate_preserve_persistence;
+#[allow(dead_code)] // rollback-completion routing remains sealed from production dispatch
+mod usr_rollback_complete_route;
 mod usr_rollback_decision;
 #[allow(dead_code)] // fresh-database invalidation persistence remains sealed from production dispatch
 mod usr_rollback_fresh_db_invalidation_persistence;
@@ -135,6 +137,12 @@ pub(super) use usr_rollback_candidate_preserve_persistence::{
     UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_candidate_preserve_and_reopen,
 };
 
+#[allow(unused_imports)] // rollback-completion routing remains sealed from production dispatch
+pub(super) use usr_rollback_complete_route::{
+    UsrRollbackCompleteRoutePersistenceError, UsrRollbackCompleteRouteReopenError,
+    persist_usr_rollback_complete_route_and_reopen,
+};
+
 #[allow(unused_imports)] // invalidation persistence remains sealed from production dispatch
 pub(super) use usr_rollback_fresh_db_invalidation_persistence::{
     UsrRollbackFreshDbInvalidationPersistenceError, UsrRollbackFreshDbInvalidationReopenError,
@@ -149,6 +157,9 @@ pub(super) use usr_rollback_fresh_db_invalidation_route::{
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_persistence::DurableUsrRollbackCandidatePreserveRecord;
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_complete_route::DurableUsrRollbackCompleteRouteRecord;
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_persistence::DurableUsrRollbackFreshDbInvalidationRecord;
@@ -167,6 +178,9 @@ pub(crate) use usr_rollback_reverse_persistence::arm_before_usr_rollback_reverse
 
 #[cfg(test)]
 pub(crate) use usr_rollback_candidate_preserve_persistence::arm_before_usr_rollback_candidate_preserve_persistence_final_revalidation;
+
+#[cfg(test)]
+pub(crate) use usr_rollback_complete_route::arm_before_usr_rollback_complete_route_final_revalidation;
 
 #[cfg(test)]
 pub(crate) use usr_rollback_fresh_db_invalidation_persistence::arm_before_usr_rollback_fresh_db_invalidation_persistence_final_revalidation;

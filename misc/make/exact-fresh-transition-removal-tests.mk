@@ -31,6 +31,7 @@ forge-exact-fresh-transition-removal-test:
 	production=crates/forge/src/db/state/exact_fresh_transition_removal.rs; \
 	invalidation_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority.rs; \
 	invalidation_effect=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/effect_reconciliation.rs; \
+	rollback_complete_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_complete_route_authority.rs; \
 	provenance=crates/forge/src/db/state/metadata_provenance.rs; \
 	state_root=crates/forge/src/db/state/mod.rs; \
 	tests=crates/forge/src/db/state/exact_fresh_transition_removal/tests.rs; \
@@ -59,9 +60,10 @@ forge-exact-fresh-transition-removal-test:
 	timeout 10s test "$$( timeout 10s grep -Fc "$$production:" <<<"$$production_removal_references" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$invalidation_effect:" <<<"$$production_removal_references" )" = 1; \
 	production_inspection_references="$$( timeout 10s rg -n -w -F 'inspect_exact_fresh_transition' crates/forge/src --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' )"; \
-	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_inspection_references" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_inspection_references" )" = 6; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$production:" <<<"$$production_inspection_references" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$invalidation_authority:" <<<"$$production_inspection_references" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$rollback_complete_authority:" <<<"$$production_inspection_references" )" = 2; \
 	timeout 10s test "$$( timeout 10s rg -n -w -F 'remove_exact_fresh_transition_once' "$$production" | timeout 10s wc -l )" = 2; \
 	timeout 10s test "$$( timeout 10s rg -n -w -F 'inspect_exact_fresh_transition_impl' "$$production" | timeout 10s wc -l )" = 3; \
 	reset_line="$$( timeout 10s grep -nF '        reset_exact_fresh_transition_removal_transaction_attempts();' "$$production" | timeout 10s cut -d: -f1 )"; \
@@ -133,7 +135,7 @@ forge-exact-fresh-transition-removal-test:
 	timeout 10s grep -Fq 'UnexpectedInFlightTransition {' "$$observation"; \
 	timeout 10s grep -Fq 'MultipleInFlightTransitions { .. }' "$$observation"; \
 	timeout 10s grep -Fq 'Database::new(path.to_str().unwrap())' "$$reconciliation"; \
-	for file in "$$production" "$$provenance" "$$state_root" "$$tests" "$$observation" "$$mutation" "$$reconciliation" "$$support" misc/make/exact-fresh-transition-removal-tests.mk Makefile misc/make/help.mk; do \
+	for file in "$$production" "$$invalidation_authority" "$$rollback_complete_authority" "$$provenance" "$$state_root" "$$tests" "$$observation" "$$mutation" "$$reconciliation" "$$support" misc/make/exact-fresh-transition-removal-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1
