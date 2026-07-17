@@ -689,16 +689,16 @@ database ownership probes, an operation-typed durable coordinator prefix
 through `UsrExchanged`, and descriptor-rooted activation-namespace
 assessment.
 
-The production startup ladder deliberately handles one freshly observed
-checkpoint per entry rather than a general recovery loop. Separate entries
-normalize exchange durability, persist and route rollback, reverse `/usr`,
-persist `UsrRestored`, route `CandidatePreserveIntent`, prepare its target,
-preserve the candidate, route and perform exact fresh-row invalidation, and
-transition `FreshDbInvalidated` to retained `RollbackComplete`. Every entry
-recaptures fresh authority; admits at most one preparation/effect checkpoint
-and at most one journal advance; never redispatches its successor. Restart
-and `SIGKILL` matrices cover implemented boundaries; reboot and power-loss
-durability remain unproved.
+The production startup ladder handles one freshly observed checkpoint per
+entry rather than a recovery loop. Separate entries normalize exchange
+durability, persist and route rollback, reverse `/usr`, persist `UsrRestored`,
+prepare and preserve the candidate, invalidate the exact fresh row, reach
+`RollbackComplete`, then finalize that terminal record to authenticated journal
+absence. Each entry recaptures authority, admits at most one preparation,
+effect, advance, or deletion, and never redispatches its successor. Existing
+nonterminal boundaries have restart and `SIGKILL` matrices; terminal deletion
+has deterministic race and fault coverage but not process-death coverage.
+Reboot and power-loss durability remain unproved.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -893,7 +893,15 @@ effect, or persistence boundary, and cannot redispatch its resulting record or
 mint sibling authority in safe Rust. Its 25 real-startup tests cover every
 target/database matrix and all five faults at four persistence boundaries.
 All adjacent and prior reverse gates, checks, the 1132-file limit, and review
-are clean. Finalization, later operation families, reboot, and power-loss proof remain absent.
+are clean. At that historical point finalization was still absent.
+
+Commit `6fc94f32` production-wires exact NewState terminal finalization as its
+own bounded startup checkpoint. It retains the same locked store, authenticates
+public journal identity and contents, attempts one exact delete, rechecks all
+clean evidence and final absence, and returns no redispatchable record. Its 33
+startup, 5 authority, 13 executor, and 5 clean-handoff contracts pass alongside
+`make check` and the 1153-file limit. Other operation families, terminal
+process-death coverage, reboot, and power-loss proof remain absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

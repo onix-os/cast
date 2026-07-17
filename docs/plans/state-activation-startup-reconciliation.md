@@ -29,13 +29,15 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   later entries route exact `UsrRestored` to `CandidatePreserveIntent`, prepare
   its quarantine target, preserve the candidate, route
   `FreshDbInvalidationIntent`, invalidate the exact fresh database row, persist
-  `FreshDbInvalidated`, and advance it to retained `RollbackComplete`.
+  `FreshDbInvalidated`, advance it to `RollbackComplete`, and, on one later
+  entry, finalize that exact NewState terminal record to authenticated journal
+  absence.
   Each entry recaptures authority from the current canonical record and fresh
   database and namespace evidence, admits at most one preparation/effect
-  checkpoint and at most one journal advance, then returns without dispatching
-  its successor.
-  `RollbackComplete` remains diagnostic rather than silently finalizing the
-  transition, and no step converts diagnostic inventory into mutation authority.
+  checkpoint, at most one journal advance, or one terminal deletion, then
+  returns without dispatching its successor. Inexact NewState terminal evidence
+  and terminal records for unsupported operations remain diagnostic and fail
+  closed; diagnostic inventory is never converted into mutation authority.
 
   Commit `3e1ba34` introduced the journal-only rollback-decision boundary. The
   decision path applies to NewState, ActivateArchived, and ActiveReblit.
@@ -585,10 +587,36 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   effect, other-operation dispatcher, reboot proof, or power-loss proof exists,
   so Phase 11 remains open.
 
+  Commit `6fc94f32` adds exact NewState terminal rollback finalization as a
+  separate production startup checkpoint. Its non-`Clone`, phase-specific
+  authority recaptures the exact `RollbackComplete` plan, source-database joint
+  absence, preserved-candidate namespace, journal binding, and writer
+  reservation. The consuming executor retains the same continuously locked
+  store, verifies the public journal directory, lock, exact entry set,
+  canonical inode, and canonical contents without provisioning or cleanup,
+  then makes at most one conditional terminal deletion. Success requires exact
+  public absence plus post-delete database -> namespace -> database evidence.
+  False deletion reports, storage faults, substitutions, record recreation,
+  and ambiguous evidence return typed errors without reusable authority.
+
+  Production dispatch returns a record-free terminal result and transfers that
+  same locked store directly into shared clean admission; it cannot reopen or
+  redispatch the deleted record. Clean admission freshly rejects orphan rows,
+  audits archived-prune residue, and finishes with a public-aware absence read
+  through the retained store bracketed by mutable-namespace validation. A
+  valid record recreated during this bounded handoff is preserved and rejected,
+  not admitted as clean. The dedicated gates pass 5 authority, 13 executor,
+  5 clean-handoff, and 33 complete NewState-startup contracts. `make check` and
+  the 1153-file source limit pass with only the four established unrelated
+  warnings, and independent adversarial review found no blocker. No terminal
+  finalizer exists for ActivateArchived or ActiveReblit; terminal process-death,
+  reboot, and power-loss proof remain open.
+
 ## Diagnostic reconciliation and namespace inventory
 
-  The assessment then classifies every validated persisted phase as begin
-  rollback, resume rollback, roll forward, finalize rollback, or manual
+  When exact production finalization does not apply or defers, the assessment
+  classifies every validated persisted phase as begin rollback, resume rollback,
+  roll forward, finalize rollback, or manual
   boot repair; correlates the exact candidate and previous database rows with
   a before/after global transition audit; distinguishes allocation committed
   behind an older journal generation; and rejects phase-incompatible cleared,
@@ -759,21 +787,23 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 ## Remaining recovery campaign
 
   The production ladder now covers the authenticated `/usr` rollback prefix and
-  the exact NewState suffix from `CandidatePreserveIntent` through retained
-  `RollbackComplete`. Separate startup entries may create or normalize the
+  the exact NewState suffix from `CandidatePreserveIntent` through authenticated
+  terminal journal absence. Separate startup entries may create or normalize the
   quarantine target without advancing, move and durably preserve the candidate,
   route to invalidation intent, remove the exact fresh transition or accept
-  proved joint absence, persist that outcome, and route to completion. Every
-  entry handles at most its observed checkpoint and immediately returns; no
-  resulting record is redispatched in the same entry.
+  proved joint absence, persist that outcome, route to completion, and delete
+  the exact terminal record. Every entry handles at most its observed checkpoint
+  and immediately returns; no resulting record is redispatched in the same entry.
 
-  The ladder still has no rollback finalizer, roll-forward executor, boot
-  repair, cleanup, or candidate suffix for ActivateArchived or ActiveReblit.
+  The ladder still has no terminal finalizer or candidate suffix for
+  ActivateArchived or ActiveReblit, roll-forward executor, boot repair, or
+  cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
-  real-startup matrices and all five journal durability faults across each of
-  four persistence boundaries, but not a process-kill case at every suffix
-  effect. Neither prefix has reboot or power-loss proof: `SIGKILL` preserves the
+  real-startup matrices, all five journal durability faults across each of four
+  persistence boundaries, and deterministic terminal-delete faults, but not a
+  process-kill case at every suffix effect or terminal boundary. Neither prefix
+  has reboot or power-loss proof: `SIGKILL` preserves the
   kernel-visible state at termination and cannot establish which pre-fsync
   rename survives a power cycle. The complete campaign required below
   therefore remains open, as do this item and all six broad Phase 11 work items.
