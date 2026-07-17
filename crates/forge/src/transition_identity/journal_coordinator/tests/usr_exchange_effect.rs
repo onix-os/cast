@@ -118,10 +118,15 @@ fn assert_exact_pending_reverse_decision(source: &TransitionRecord, actual: &Tra
     assert_eq!(actual.previous, source.previous);
     assert_eq!(actual.options, source.options);
     assert_eq!(actual.quarantine_name, source.quarantine_name);
+    let forward_source = match source.phase {
+        Phase::UsrExchangeIntent => ForwardPhase::UsrExchangeIntent,
+        Phase::UsrExchanged => ForwardPhase::UsrExchanged,
+        other => panic!("unexpected forward /usr rollback source {other:?}"),
+    };
     assert_eq!(
         actual.rollback,
         Some(RollbackPlan {
-            source: ForwardPhase::UsrExchangeIntent,
+            source: forward_source,
             previous_archive: RollbackAction::NotRequired,
             usr_exchange: RollbackAction::Pending,
             candidate: CandidateRollback {
@@ -356,6 +361,7 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             let intent_record = intent.record().clone();
             let candidate = directory_identity(&fixture.candidate_path);
             let previous = directory_identity(&fixture.installation.root.join("usr"));
+            let namespace_before_exchange = snapshot_startup_recovery_namespace(&fixture.installation.root);
             reset_retained_exchange_syscall_count();
             arm_retained_exchange_fault(point);
 
@@ -373,7 +379,7 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             assert_eq!(read_canonical(&fixture.installation.root), intent_record);
             assert_root_links_absent(&fixture);
 
-            let namespace_before = snapshot_startup_recovery_namespace(&fixture.installation.root);
+            let post_exchange_namespace = snapshot_startup_recovery_namespace(&fixture.installation.root);
             let database_before = usr_exchange_database_snapshot(&fixture, &intent_record);
 
             assert_usr_exchange_intent_post_recovers_to_pending_reverse(
@@ -386,7 +392,7 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             assert_exact_pending_reverse_decision(&intent_record, &decision);
             assert_eq!(
                 snapshot_startup_recovery_namespace(&fixture.installation.root),
-                namespace_before,
+                post_exchange_namespace,
                 "{candidate_kind:?} {point:?}"
             );
             assert_eq!(
@@ -411,7 +417,7 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             );
             assert_eq!(
                 snapshot_startup_recovery_namespace(&fixture.installation.root),
-                namespace_before,
+                post_exchange_namespace,
                 "{candidate_kind:?} {point:?}"
             );
             assert_eq!(
@@ -430,19 +436,23 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             assert_eq!(read_canonical(&fixture.installation.root), restored);
             assert_exchange_layout(&fixture, false, candidate, previous);
             assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                namespace_before_exchange,
+                "{candidate_kind:?} {point:?}"
+            );
+            assert_eq!(
                 usr_exchange_database_snapshot(&fixture, &intent_record),
                 database_before,
                 "{candidate_kind:?} {point:?}"
             );
             assert_root_links_absent(&fixture);
 
-            let restored_namespace = snapshot_startup_recovery_namespace(&fixture.installation.root);
             assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
             assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {point:?}");
             assert_eq!(read_canonical(&fixture.installation.root), restored);
             assert_eq!(
                 snapshot_startup_recovery_namespace(&fixture.installation.root),
-                restored_namespace,
+                namespace_before_exchange,
                 "{candidate_kind:?} {point:?}"
             );
         }
@@ -661,25 +671,147 @@ fn journal_coordinator_usr_exchange_effect_post_apply_authority_failures_remain_
 }
 
 #[test]
-fn journal_coordinator_usr_exchange_effect_completion_faults_leave_intent_or_exchanged_after_one_call() {
-    for after_commit in [false, true] {
-        let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(CandidateKind::ActiveReblit);
-        if after_commit {
-            crate::transition_journal::arm_next_update_first_directory_sync_fault();
-        } else {
-            crate::transition_journal::arm_next_temporary_sync_fault();
+fn journal_coordinator_usr_exchange_completion_faults_recover_from_exact_source_to_usr_restored() {
+    let faults: [(fn(), fn(), Phase); 5] = [
+        (
+            crate::transition_journal::arm_next_temporary_sync_fault,
+            crate::transition_journal::assert_temporary_sync_fault_consumed,
+            Phase::UsrExchangeIntent,
+        ),
+        (
+            crate::transition_journal::arm_next_update_exchange_fault,
+            crate::transition_journal::assert_update_exchange_fault_consumed,
+            Phase::UsrExchangeIntent,
+        ),
+        (
+            crate::transition_journal::arm_next_update_first_directory_sync_fault,
+            crate::transition_journal::assert_update_first_directory_sync_fault_consumed,
+            Phase::UsrExchanged,
+        ),
+        (
+            crate::transition_journal::arm_next_displaced_unlink_fault,
+            crate::transition_journal::assert_displaced_unlink_fault_consumed,
+            Phase::UsrExchanged,
+        ),
+        (
+            crate::transition_journal::arm_next_update_final_directory_sync_fault,
+            crate::transition_journal::assert_update_final_directory_sync_fault_consumed,
+            Phase::UsrExchanged,
+        ),
+    ];
+
+    for candidate_kind in [
+        CandidateKind::NewState,
+        CandidateKind::Archived,
+        CandidateKind::ActiveReblit,
+    ] {
+        for (arm, assert_consumed, durable_phase) in faults {
+            let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(candidate_kind);
+            let intent_record = intent.record().clone();
+            let exchanged_record = intent_record.forward_successor(None).unwrap();
+            let candidate = directory_identity(&fixture.candidate_path);
+            let previous = directory_identity(&fixture.installation.root.join("usr"));
+            let namespace_before_exchange = snapshot_startup_recovery_namespace(&fixture.installation.root);
+            let database_before = usr_exchange_database_snapshot(&fixture, &intent_record);
+            reset_retained_exchange_syscall_count();
+            arm();
+
+            let failure = intent.execute_usr_exchange(authority).unwrap_err();
+
+            assert_consumed();
+            assert!(matches!(failure, UsrExchangeEffectFailure::CompletionPersistence { .. }));
+            assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {durable_phase:?}");
+            assert_exchange_layout(&fixture, true, candidate, previous);
+            let durable_source = match durable_phase {
+                Phase::UsrExchangeIntent => intent_record.clone(),
+                Phase::UsrExchanged => exchanged_record,
+                _ => unreachable!(),
+            };
+            assert_eq!(read_canonical(&fixture.installation.root), durable_source);
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_root_links_absent(&fixture);
+            let post_exchange_namespace = snapshot_startup_recovery_namespace(&fixture.installation.root);
+
+            assert_usr_exchange_intent_post_recovers_to_pending_reverse(
+                &fixture.installation,
+                &fixture.database,
+            );
+
+            assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {durable_phase:?}");
+            let decision = read_canonical(&fixture.installation.root);
+            assert_exact_pending_reverse_decision(&durable_source, &decision);
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                post_exchange_namespace,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_root_links_absent(&fixture);
+
+            assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
+                &fixture.installation,
+                &fixture.database,
+            );
+
+            assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {durable_phase:?}");
+            let reverse_intent = decision.rollback_successor(None).unwrap();
+            assert_eq!(read_canonical(&fixture.installation.root), reverse_intent);
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                post_exchange_namespace,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_root_links_absent(&fixture);
+
+            assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
+
+            let restored = reverse_intent
+                .rollback_successor(Some(RollbackActionOutcome::Applied))
+                .unwrap();
+            assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {durable_phase:?}");
+            assert_eq!(read_canonical(&fixture.installation.root), restored);
+            assert_exchange_layout(&fixture, false, candidate, previous);
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                namespace_before_exchange,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_root_links_absent(&fixture);
+
+            assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
+            assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {durable_phase:?}");
+            assert_eq!(read_canonical(&fixture.installation.root), restored);
+            assert_eq!(
+                snapshot_startup_recovery_namespace(&fixture.installation.root),
+                namespace_before_exchange,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_eq!(
+                usr_exchange_database_snapshot(&fixture, &intent_record),
+                database_before,
+                "{candidate_kind:?} {durable_phase:?}"
+            );
+            assert_exchange_layout(&fixture, false, candidate, previous);
+            assert_root_links_absent(&fixture);
         }
-        reset_retained_exchange_syscall_count();
-
-        let failure = intent.execute_usr_exchange(authority).unwrap_err();
-
-        assert!(matches!(failure, UsrExchangeEffectFailure::CompletionPersistence { .. }));
-        assert_eq!(retained_exchange_syscall_count(), 1);
-        assert_eq!(
-            read_canonical(&fixture.installation.root).phase,
-            if after_commit { Phase::UsrExchanged } else { Phase::UsrExchangeIntent }
-        );
-        assert_root_links_absent(&fixture);
     }
 }
 

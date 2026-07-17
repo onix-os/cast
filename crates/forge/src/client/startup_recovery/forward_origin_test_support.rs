@@ -90,10 +90,6 @@ pub(crate) struct StartupRecoveryNamespaceEntry {
     mode: u32,
     links: u64,
     length: u64,
-    modified_seconds: i64,
-    modified_nanoseconds: i64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
     payload: Vec<u8>,
 }
 
@@ -104,8 +100,12 @@ enum StartupRecoveryNamespaceEntryKind {
     Symlink,
 }
 
-/// Capture every visible installation entry except the journal subtree, whose
-/// exact change is asserted independently by the coordinator-origin test.
+/// Capture the semantic identity of every visible installation entry except
+/// the journal subtree, whose exact change is asserted independently by the
+/// coordinator-origin test. Rename-driven timestamps are deliberately omitted:
+/// a forward and reverse `RENAME_EXCHANGE` restores names, inodes, modes, link
+/// counts, lengths, and payloads, but the kernel necessarily advances ctime on
+/// the moved directories and timestamps on their parents.
 pub(crate) fn snapshot_startup_recovery_namespace(root: &Path) -> Vec<StartupRecoveryNamespaceEntry> {
     let mut entries = Vec::new();
     snapshot_directory(root, root, &mut entries);
@@ -150,10 +150,6 @@ fn snapshot_directory(root: &Path, directory: &Path, output: &mut Vec<StartupRec
             mode: metadata.mode(),
             links: metadata.nlink(),
             length: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            changed_seconds: metadata.ctime(),
-            changed_nanoseconds: metadata.ctime_nsec(),
             payload,
         });
         if file_type.is_dir() {

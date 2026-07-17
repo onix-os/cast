@@ -30,7 +30,7 @@ forge-startup-usr-exchange-parent-durability-test:
 	timeout 10s grep -Fq 'let failure = intent.execute_usr_exchange(authority).unwrap_err();' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'assert_usr_exchange_intent_post_recovers_to_pending_reverse(' "$$coordinator_test"; \
 	exchange_count_assertions="$$( timeout 10s rg -n 'assert_eq!\(retained_exchange_syscall_count\(\), 1,' "$$coordinator_test" | timeout 10s wc -l )"; \
-	timeout 10s test "$$exchange_count_assertions" = 2; \
+	timeout 10s test "$$exchange_count_assertions" = 5; \
 	if timeout 10s rg -n 'forward_fault_residue|ForwardFaultPrefix' "$$shared_support"; then exit 1; fi; \
 	sync_count="$$( timeout 10s rg -n '\.sync_all\(\)' "$$normalizer" "$$parent" | timeout 10s wc -l )"; \
 	timeout 10s test "$$sync_count" = 2; \

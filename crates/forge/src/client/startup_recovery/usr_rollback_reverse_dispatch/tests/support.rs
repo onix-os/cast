@@ -1,12 +1,17 @@
-use std::{fs, os::unix::fs::MetadataExt as _};
+use std::{fs, os::unix::fs::MetadataExt as _, path::Path};
 
 use crate::{
+    Installation,
     client::{
         active_state_snapshot::ActiveStateReservation,
         snapshot_startup_recovery_namespace,
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::PendingSystemTransition,
     },
+    db,
+    installation::DatabaseKind,
+    state::TransitionId,
+    test_support::private_installation_tempdir,
     transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome, TransitionRecord},
 };
 
@@ -88,7 +93,10 @@ pub(super) fn persist_usr_restored_fixture(fixture: &Fixture, outcome: RollbackA
 }
 
 pub(super) fn usr_layout(fixture: &Fixture) -> UsrLayout {
-    let root = &fixture.fixture.installation.root;
+    usr_layout_at(&fixture.fixture.installation.root)
+}
+
+pub(super) fn usr_layout_at(root: &Path) -> UsrLayout {
     UsrLayout {
         live: directory_identity(&root.join("usr")),
         staged: directory_identity(&root.join(".cast/root/staging/usr")),
@@ -117,7 +125,83 @@ pub(super) fn assert_root_links_absent(fixture: &Fixture) {
     }
 }
 
-fn directory_identity(path: &std::path::Path) -> (u64, u64) {
+pub(super) fn persistent_state_database(fixture: &Fixture, kind: OperationKind) -> db::state::Database {
+    let database = open_state_database(&fixture.fixture.installation);
+    let (previous, candidate) = seed_state_database(&database, kind, &fixture.record.transition_id);
+    assert_eq!(previous, fixture.fixture.previous_state);
+    assert_eq!(candidate, fixture.fixture.candidate_state);
+    database
+}
+
+pub(super) fn open_state_database(installation: &Installation) -> db::state::Database {
+    let location = installation.mutable_database_location(DatabaseKind::State).unwrap();
+    let (url, anchor) = location.parts();
+    let database = db::state::Database::new_anchored(url, anchor).unwrap();
+    location.revalidate().unwrap();
+    installation.revalidate_mutable_namespace().unwrap();
+    database
+}
+
+pub(super) fn release_fixture_handles(fixture: &mut Fixture) -> tempfile::TempDir {
+    let replacement_root = private_installation_tempdir();
+    let replacement_installation = Installation::open(replacement_root.path(), None).unwrap();
+    let replacement_database = db::state::Database::new(":memory:").unwrap();
+    let retained_installation = std::mem::replace(&mut fixture.fixture.installation, replacement_installation);
+    let retained_database = std::mem::replace(&mut fixture.fixture.database, replacement_database);
+    drop(retained_database);
+    drop(retained_installation);
+    replacement_root
+}
+
+fn seed_state_database(
+    database: &db::state::Database,
+    kind: OperationKind,
+    transition: &TransitionId,
+) -> (crate::state::Id, crate::state::Id) {
+    match kind {
+        OperationKind::NewState => {
+            let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
+            let candidate = add_state_with_provenance(database, transition, "rollback fresh candidate", false);
+            (previous, candidate)
+        }
+        OperationKind::Archived => {
+            let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
+            let candidate_transition = TransitionId::parse("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+            let candidate =
+                add_state_with_provenance(database, &candidate_transition, "rollback archived candidate", true);
+            (previous, candidate)
+        }
+        OperationKind::ActiveReblit => {
+            let candidate_transition = TransitionId::parse("dddddddddddddddddddddddddddddddd").unwrap();
+            let state = add_state_with_provenance(database, &candidate_transition, "rollback active reblit", true);
+            (state, state)
+        }
+    }
+}
+
+fn add_state_with_provenance(
+    database: &db::state::Database,
+    transition: &TransitionId,
+    summary: &str,
+    clear_transition: bool,
+) -> crate::state::Id {
+    let state = database
+        .add_with_transition(transition, &[], Some(summary), None)
+        .unwrap();
+    let provenance = db::state::MetadataProvenance::from_outputs(
+        b"NAME=Rollback Decision Test\nID=rollback-decision-test\n",
+        b"let system = { hostname = \"rollback-decision-test\" } in system\n",
+    );
+    database
+        .insert_fresh_metadata_provenance_if_transition_matches(state.id, transition, &provenance)
+        .unwrap();
+    if clear_transition {
+        database.clear_transition_if_matches(state.id, transition).unwrap();
+    }
+    state.id
+}
+
+fn directory_identity(path: &Path) -> (u64, u64) {
     let metadata = fs::symlink_metadata(path).unwrap();
     assert!(metadata.is_dir(), "{} is not a directory", path.display());
     (metadata.dev(), metadata.ino())
