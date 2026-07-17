@@ -900,12 +900,16 @@ substrate once; joint absence calls it zero times. Only proved `Applied` or
 not-applied and ambiguous exits are fieldless. The detailed evidence and
 ambient-namespace rules remain in the linked startup-reconciliation subplan.
 
-The effect, substrate, route, candidate-persistence, post-move durability, and
-database-adapter lanes pass 12/12, 15/15, 11/11, 9/9, 6/6, and 29/29. Formatting,
-checks, the 1100-file line limit, and independent review are clean. There is
-still no journal advance, production dispatch, namespace mutation, trigger,
-cleanup, or retry. Phase 11C next persists the authority-owned
-`FreshDbInvalidated` successor; later routing and convergence remain open.
+Commit `a15a7bc9` completes Phase 11C. Two revalidations bracket the
+authority-owned successor before one journal advance; after dropping both old
+capabilities, canonical reopen accepts only exact intent or `FreshDbInvalidated`.
+Source faults restart through zero-removal Finish; a durable successor skips it.
+
+The persistence, effect, substrate, route, candidate-persistence, durability,
+and database lanes pass 9/9, 12/12, 15/15, 11/11, 9/9, 6/6, and 29/29. Checks,
+the 1109-file limit, and independent review are clean. Production dispatch and
+later effects remain absent; next comes the separate exact route from
+`FreshDbInvalidated` toward rollback completion.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

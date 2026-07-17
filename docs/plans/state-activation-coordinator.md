@@ -322,8 +322,10 @@ closure remain authoritative in `PLAN.md`.
   Commit `ab1bfd5e` consumes that substrate only behind a separate test seal:
   exact NewState `FreshDbInvalidationIntent` evidence selects disjoint one-call
   Apply and zero-call Finish typestates, while only proved applied or already-
-  satisfied absence retains capability. It performs no journal operation,
-  production dispatch, namespace mutation, or trigger action. The next
-  recovery checkpoint must persist the authority-owned outcome as the exact
-  `FreshDbInvalidated` successor. Production dispatch, later rollback actions,
-  roll-forward, and cleanup are not executed, so this item remains open.
+  satisfied absence retains capability. Commit `a15a7bc9` then consumes that
+  capability through two revalidations, one authority-owned
+  `FreshDbInvalidated` successor, one conditional journal advance, and exact
+  canonical reopen. Source-side restart uses zero-removal Finish; successor-
+  side restart skips invalidation. Production dispatch, namespace mutation,
+  later rollback actions, roll-forward, triggers, and cleanup are not executed,
+  so this item remains open.

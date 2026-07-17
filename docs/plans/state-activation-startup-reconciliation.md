@@ -500,11 +500,40 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   only while retained in the complete stable namespace fingerprint; unsafe or
   conflicting lookalikes fail closed.
 
-  This checkpoint performs no journal advance, production dispatch, namespace
-  mutation, trigger action, cleanup, or retry. Phase 11C must next consume only
-  the successful effect authority, derive its private outcome exactly once,
-  advance to `FreshDbInvalidated`, and reopen the canonical journal. Routing
-  that durable successor to `RollbackComplete` remains a later independent
+  Commit `a15a7bc9` completes that separate Phase 11C persistence checkpoint
+  without adding another seal or admission type. The existing non-`Clone`
+  effect authority is the sole capability. Persistence-side revalidation starts
+  with its per-open journal binding, requires the retained jointly absent
+  database typestate, compares two fresh exact paired observations around the
+  preserved-candidate namespace proof, and rechecks the exact plan and
+  installation. It deliberately never substitutes the historical pre-effect
+  database context for the retained post-effect absence.
+
+  The executor performs two complete authority revalidations around one
+  authority-owned `rollback_successor(Some(origin))` projection, followed by
+  exactly one conditional journal advance. It then destroys the authority and old
+  lock-bearing store before descriptor-rooted canonical reopen. Successful
+  advance accepts only the exact `FreshDbInvalidated` successor. A reported
+  advance failure accepts only the exact source intent or exact successor as
+  its durable side; missing, different, or unreopenable records fail closed and
+  return no store or reusable capability.
+
+  If the source intent survives, fresh startup observes joint absence, enters
+  Finish, makes zero removal calls, and persists `AlreadySatisfied` as this
+  invocation's origin even when an earlier invocation applied the deletion. If
+  the successor survives, Phase 11B is not applicable and cannot issue a second
+  removal. The dedicated persistence lane passes 9/9 across current and
+  historical matrices, both origins, all journal fault boundaries, final
+  evidence races, and both restart sides. The effect, exact-removal, route,
+  candidate-preservation persistence, post-move durability, and database lanes
+  remain 12/12, 15/15, 11/11, 9/9, 6/6, and 29/29. `make fmt` and `make check`
+  pass with only the four established warnings; `make source-loc` reports all
+  1109 tracked text files at or below the 1000-line ceiling; independent review
+  returned CLEAN.
+
+  Phase 11C still adds no production dispatcher, database or namespace
+  mutation, trigger, cleanup, retry, or second rollback route. Routing durable
+  `FreshDbInvalidated` to `RollbackComplete` remains the next independent
   checkpoint, so Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
