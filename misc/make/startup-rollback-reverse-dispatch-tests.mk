@@ -6,7 +6,7 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s test -n "$$listed"; \
 	prefix='client::startup_recovery::usr_rollback_reverse_dispatch::tests::'; \
 	count="$$( timeout 10s grep -c "^$$prefix.*: test$$" <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 11; \
+	timeout 10s test "$$count" = 12; \
 	for name in \
 		durability_restart::startup_usr_rollback_reverse_dispatch_durability_faults_restart_as_pre_without_second_exchange \
 		evidence_races::startup_usr_rollback_reverse_dispatch_admission_races_are_zero_effect_zero_advance \
@@ -14,6 +14,7 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 		evidence_races::startup_usr_rollback_reverse_dispatch_final_durable_revalidation_races_leave_source_for_fresh_startup \
 		fresh_handle_restart::startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_second_exchange \
 		journal_restart::startup_usr_rollback_reverse_dispatch_journal_faults_restart_to_exact_source_or_usr_restored \
+		journal_update_process_kill::startup_usr_rollback_reverse_dispatch_journal_update_process_kills_restart_exactly \
 		process_kill_restart::startup_usr_rollback_reverse_dispatch_process_kills_restart_to_exact_already_satisfied \
 		success_matrix::startup_usr_rollback_reverse_dispatch_post_and_pre_matrix_reaches_exact_usr_restored \
 		success_matrix::startup_usr_rollback_reverse_dispatch_usr_restored_is_not_redispatched_or_chained \
@@ -34,6 +35,7 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	races=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/evidence_races.rs; \
 	fresh=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/fresh_handle_restart.rs; \
 	journal=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/journal_restart.rs; \
+	journal_process_kill=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/journal_update_process_kill.rs; \
 	process_kill=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/process_kill_restart.rs; \
 	success=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/success_matrix.rs; \
 	syscalls=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch/tests/syscall_results.rs; \
@@ -71,6 +73,15 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s grep -Fq 'let installation = Installation::open(&root, None).unwrap();' "$$fresh"; \
 	timeout 10s grep -Fq 'let state_database = open_state_database(&installation);' "$$fresh"; \
 	timeout 10s grep -Fqx 'const JOURNAL_FAULTS: [JournalFault; 5] = [' "$$journal"; \
+	timeout 10s grep -Fqx '    const ALL: [Self; 5] = [' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'for kind in OperationKind::ALL {' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'for layout in ProcessLayout::ALL {' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'arm_journal_update_durability_callback(case.boundary.durability_boundary(), kill_self);' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'nix::libc::SIGKILL' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'crash_status.signal()' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'power-loss oracle' "$$journal_process_kill"; \
+	if timeout 10s rg -n 'arm_next_.*fault|StorageFault' "$$journal_process_kill"; then exit 1; fi; \
 	timeout 10s grep -Fqx '    const ALL: [Self; 4] = [' "$$process_kill"; \
 	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$process_kill"; \
 	timeout 10s grep -Fq 'nix::libc::SIGKILL' "$$process_kill"; \
@@ -87,7 +98,7 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_reverse_exchange_intent_recovers_to_usr_restored' "$$coordinator" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'retained_exchange_syscall_count(), 2' "$$coordinator" )" = 4; \
 	timeout 10s grep -Fq 'assert_eq!(pending.phase(), Phase::UsrRestored);' "$$forward_support"; \
-	for file in "$$dispatcher" "$$gate" "$$root" "$$tests" "$$support" "$$durability" "$$races" "$$fresh" "$$journal" "$$process_kill" "$$success" "$$syscalls" "$$coordinator" "$$forward_support" misc/make/startup-rollback-reverse-dispatch-tests.mk; do \
+	for file in "$$dispatcher" "$$gate" "$$root" "$$tests" "$$support" "$$durability" "$$races" "$$fresh" "$$journal" "$$journal_process_kill" "$$process_kill" "$$success" "$$syscalls" "$$coordinator" "$$forward_support" misc/make/startup-rollback-reverse-dispatch-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1; \
