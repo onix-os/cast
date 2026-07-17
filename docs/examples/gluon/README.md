@@ -105,6 +105,14 @@ exact pinned `zlib-devel` provider, and performs a real `compress2`/`uncompress`
 round trip under CTest. Its bundle checks bind the manifest BuildDepends entry
 to that provider and require the installed ELF and emitted Stone metadata to
 carry `soname(libz.so.1(x86_64))`.
+The Meson case exercises the complementary dependency roles. It resolves the
+same pinned library through `pkgconfig(zlib)`, compiles and links a real zlib
+round trip, and admits `binary(file)` only as a check input. A non-installed
+native checker invokes that capability during `meson test` and verifies the
+built PIE executable; the packaged program retains libz but cannot acquire a
+runtime `file` relation. The exact build and check origins, provider IDs,
+transitive closure, manifest entries, installed ELF, and emitted Stone metadata
+are all frozen independently.
 The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no

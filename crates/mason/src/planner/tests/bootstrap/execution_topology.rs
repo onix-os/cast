@@ -321,6 +321,104 @@ fn assert_cmake_zlib_relations(plan: &stone_recipe::derivation::DerivationPlan) 
     );
 }
 
+fn assert_meson_dependency_role_relations(plan: &stone_recipe::derivation::DerivationPlan) {
+    assert_eq!(
+        plan.manifest_build_inputs
+            .iter()
+            .map(|relation| relation.canonical_name())
+            .collect::<Vec<_>>(),
+        [
+            "binary(cmake)",
+            "binary(ninja)",
+            "binary(pkgconf)",
+            "pkgconfig(zlib)",
+            "binary(file)",
+        ],
+        "meson: manifest BuildDepends inputs drifted"
+    );
+
+    let request = |name: &str| {
+        let matches = plan.build_lock.requests.iter().filter(|request| request.request == name).collect::<Vec<_>>();
+        let [request] = matches.as_slice() else {
+            panic!("meson: build lock must contain exactly one {name} request");
+        };
+        *request
+    };
+    let zlib_request = request("pkgconfig(zlib)");
+    assert_eq!(zlib_request.package_id, ZLIB_DEVEL_PACKAGE_ID);
+    assert_eq!(zlib_request.output, "out");
+    assert_eq!(
+        zlib_request.origins,
+        [stone_recipe::derivation::InputOrigin::Build {
+            selection: stone_recipe::derivation::PackageInputSelection::Package,
+            index: 0,
+        }],
+        "meson: zlib must retain only its target-build origin"
+    );
+
+    let file_request = request("binary(file)");
+    assert_eq!(file_request.package_id, FILE_PACKAGE_ID);
+    assert_eq!(file_request.output, "out");
+    assert_eq!(
+        file_request.origins,
+        [stone_recipe::derivation::InputOrigin::Check {
+            selection: stone_recipe::derivation::PackageInputSelection::Package,
+            index: 0,
+        }],
+        "meson: file must retain only its check-input origin"
+    );
+
+    let package = |id: &str| {
+        plan.build_lock
+            .packages
+            .iter()
+            .find(|package| package.package_id == id)
+            .unwrap_or_else(|| panic!("meson: locked package {id} is absent"))
+    };
+    let zlib_devel = package(ZLIB_DEVEL_PACKAGE_ID);
+    assert_eq!((zlib_devel.name.as_str(), zlib_devel.version.as_str()), ("zlib-devel", "2.3.3-23-1"));
+    assert_eq!(
+        zlib_devel
+            .dependencies
+            .iter()
+            .map(|dependency| (dependency.package_id.as_str(), dependency.output.as_str()))
+            .collect::<Vec<_>>(),
+        [(ZLIB_RUNTIME_PACKAGE_ID, "out")]
+    );
+
+    let file = package(FILE_PACKAGE_ID);
+    assert_eq!((file.name.as_str(), file.version.as_str()), ("file", "5.48-12-1"));
+    assert_eq!(file.architecture, "x86_64");
+    assert_eq!(file.repository, "bootstrap");
+    assert_eq!(file.outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(), ["out"]);
+    assert_eq!(
+        file.dependencies
+            .iter()
+            .map(|dependency| (dependency.package_id.as_str(), dependency.output.as_str()))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("3fec7dd3f1f8d01c674ae2182f427de44864dc205d5014ec6c8dc2e3e0327875", "out"),
+            ("72f68a72d866271aa2f3db09dd636aed30faedf8ddc92f1c73b6ba0a24f29da8", "out"),
+            ("77f24568486ea39af22b71ed668653debaa9ddff4188626c61a626abd8b663ed", "out"),
+            ("8db61cf368b0425c5eec49273dec58bf99894fd10b2987bfeda7214ef3cbb43e", "out"),
+            ("ae5d2ec54e5776dfdae0b5b1b54fd00308031b197644380926b7cb7422b13e9e", "out"),
+            ("e8b9d5cee1c7500c87de37c6389de695d879e27b37ea402e1cad1efd88bd3c63", "out"),
+        ]),
+        "meson: file runtime closure drifted"
+    );
+
+    let libseccomp = package(LIBSECCOMP_PACKAGE_ID);
+    assert_eq!((libseccomp.name.as_str(), libseccomp.version.as_str()), ("libseccomp", "2.6.1-7-1"));
+    assert_eq!(
+        libseccomp
+            .dependencies
+            .iter()
+            .map(|dependency| (dependency.package_id.as_str(), dependency.output.as_str()))
+            .collect::<Vec<_>>(),
+        [("ae5d2ec54e5776dfdae0b5b1b54fd00308031b197644380926b7cb7422b13e9e", "out")]
+    );
+}
+
 fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation::DerivationPlan) {
     assert_eq!(EXECUTION_FIXTURES, REQUIRED_EXECUTION_FIXTURES);
     assert_eq!(plan.execution.jobs, 1, "{name}: execution preflight jobs drifted");
@@ -552,6 +650,9 @@ fi
     }
     if name == "cmake" {
         assert_cmake_zlib_relations(plan);
+    }
+    if name == "meson" {
+        assert_meson_dependency_role_relations(plan);
     }
     if name == "generated-shell" {
         assert_generated_shell_relations(plan);

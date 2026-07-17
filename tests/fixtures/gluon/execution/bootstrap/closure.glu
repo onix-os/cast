@@ -698,6 +698,7 @@ let hooks_patch_packages = [
 ]
 
 let meson_packages = [
+    "035aaedec26b735d854d3d17ab82fec0ca88829346fbae764250e6eda07de7f5",
     "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
     "06f5cb2560f82bf23523d5f9d421d4d678f1e40d078bc7a4e8585b994a49aaaf",
     "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
@@ -705,6 +706,7 @@ let meson_packages = [
     "09d4173bbe9cc713cbcfdb4e448131a6d8475e52a0c7580806c6ec63feb1971b",
     "0b9be7e32a236a2dbcdf9496e7115550107fad6d8e8ab2316cbc6ea6947d142a",
     "0bfba9d7008bb0158e2edc02f2ea6c56fd3ccbe575ce1ffd1a4e4a8220929858",
+    "0d5c833db4a2874dd09368215ed24cd45e3f9850102720926dbd8f10e7ea9a15",
     "0d7472d04b9d1a2c4751eff182e223d161a08120c008d349b5d3bbe678e7fa64",
     "0ed02d66d735d66a284c785b735400ec494749c5314419edb6625630ac31f826",
     "0edf3cebfb1cfe16999ec5cfe3cb16e290b7b23ba8402c6ec7a75cc6f6f61f43",
@@ -760,6 +762,7 @@ let meson_packages = [
     "89d97f59a4f05abbd7d88a41aa09738ac9eba44dd450a89e6657bd3e40821270",
     "8b4f713d1f0572b06e4badacc94d53fb28ccf3547ce9865a8a83913f0ede8eff",
     "8cc1928ca44aabb58b896f323ea3eb874ad42f6b4a55b4f76efdbe2106cae8b9",
+    "8db61cf368b0425c5eec49273dec58bf99894fd10b2987bfeda7214ef3cbb43e",
     "9207c350ef2be3017f21e57da99974786ea4dbc988993af95fe133aa83a944dd",
     "96d3833bdc5c54030cad4be531714f23e6d04f87346964e293db75fe463235c4",
     "9f0592e37928cfc87257838d1dcbfc67bfd269beae3641d3f75d5f28f5b53b96",
@@ -817,8 +820,9 @@ let meson_packages = [
         { name = "userspace-profile", package_ids = userspace_profile_packages },
     ],
     packages = {
-        total_download_bytes = 315582595,
+        total_download_bytes = 316105987,
         sha256 = [
+            "035aaedec26b735d854d3d17ab82fec0ca88829346fbae764250e6eda07de7f5",
             "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
             "06f5cb2560f82bf23523d5f9d421d4d678f1e40d078bc7a4e8585b994a49aaaf",
             "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
@@ -887,6 +891,7 @@ let meson_packages = [
             "89d97f59a4f05abbd7d88a41aa09738ac9eba44dd450a89e6657bd3e40821270",
             "8b4f713d1f0572b06e4badacc94d53fb28ccf3547ce9865a8a83913f0ede8eff",
             "8cc1928ca44aabb58b896f323ea3eb874ad42f6b4a55b4f76efdbe2106cae8b9",
+            "8db61cf368b0425c5eec49273dec58bf99894fd10b2987bfeda7214ef3cbb43e",
             "9207c350ef2be3017f21e57da99974786ea4dbc988993af95fe133aa83a944dd",
             "96d3833bdc5c54030cad4be531714f23e6d04f87346964e293db75fe463235c4",
             "9a8d3961effd5bd65ed6a024f149cb6836acfbc5c5feab750a78e44cd4cf9356",

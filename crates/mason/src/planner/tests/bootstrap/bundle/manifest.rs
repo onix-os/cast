@@ -24,6 +24,19 @@ fn assert_manifests(
             "cmake: exact manifest BuildDepends contract drifted"
         );
     }
+    if fixture == "meson" {
+        assert_eq!(
+            expected_build_dependencies,
+            BTreeSet::from([
+                "binary(cmake)".to_owned(),
+                "binary(file)".to_owned(),
+                "binary(ninja)".to_owned(),
+                "binary(pkgconf)".to_owned(),
+                "pkgconfig(zlib)".to_owned(),
+            ]),
+            "meson: exact role-separated manifest BuildDepends contract drifted"
+        );
+    }
 
     let binary_name = format!("manifest.{}.bin", planned.plan.package.architecture);
     let binary = &artefacts[&binary_name];

@@ -24,7 +24,7 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
                 "cmake" => "cast cmake fixture: zlib round-trip verified",
                 "custom" => "cast custom fixture: compiled and executed",
                 "factory-override" => "Stone-native factory override: stone-override",
-                "meson" => "cast meson fixture",
+                "meson" => "cast meson fixture: pkgconfig zlib round-trip verified",
                 other => panic!("{other}: simple fixture needs an explicit payload golden"),
             }],
         ),
@@ -34,10 +34,10 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
     let bytes = regular_bytes(fixture, root, &executable);
     assert_eq!(root.layouts[&executable].mode & 0o777, 0o755);
     let executable_elf = assert_runtime_elf(fixture, &executable, bytes, RuntimeElfKind::Executable);
-    if fixture == "cmake" {
+    if matches!(fixture, "cmake" | "meson") {
         assert!(
             executable_elf.dependencies.contains("soname(libz.so.1(x86_64))"),
-            "cmake: installed executable does not carry the locked libz ABI dependency"
+            "{fixture}: installed executable does not carry the locked libz ABI dependency"
         );
     }
     for message in messages {
@@ -48,13 +48,19 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
     }
     let mut root_dependencies = planned_output_dependencies(planned, root_plan);
     root_dependencies.extend(executable_elf.dependencies.iter().cloned());
-    if fixture == "cmake" {
+    if matches!(fixture, "cmake" | "meson") {
         assert!(
             root.meta
                 .dependencies
                 .iter()
                 .any(|dependency| dependency.to_name() == "soname(libz.so.1(x86_64))"),
-            "cmake: emitted Stone metadata omits the installed executable's libz ABI dependency"
+            "{fixture}: emitted Stone metadata omits the installed executable's libz ABI dependency"
+        );
+    }
+    if fixture == "meson" {
+        assert!(
+            root.meta.dependencies.iter().all(|dependency| dependency.to_name() != "binary(file)"),
+            "meson: check-only file capability leaked into runtime metadata"
         );
     }
     assert_exact_relations(

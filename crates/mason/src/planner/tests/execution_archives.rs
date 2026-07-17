@@ -208,6 +208,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
                 &source_trees.join("cast-cmake-fixture-1.0.0"),
             );
         }
+        if name == "meson" {
+            assert_meson_dependency_role_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-meson-fixture-1.0.0"),
+            );
+        }
         if name == "factory-override" {
             let factory = recipe
                 .fingerprint
@@ -764,6 +770,12 @@ install -Dm644 build/cast-plugin-output.so \
         if name == "cmake" {
             assert_cmake_zlib_archive_matches_tracked_sources(
                 &source_trees.join("cast-cmake-fixture-1.0.0"),
+                &published,
+            );
+        }
+        if name == "meson" {
+            assert_meson_dependency_role_archive_matches_tracked_sources(
+                &source_trees.join("cast-meson-fixture-1.0.0"),
                 &published,
             );
         }
