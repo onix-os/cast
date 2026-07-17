@@ -864,11 +864,34 @@ post-move durability lane remains 6/6, and the combined authority run remains
 `make source-loc` reports all 1072 tracked text files at no more than 1000
 lines; and independent review found no issue.
 
-The new checkpoint remains test-sealed and undispatched, so candidate
-preservation is still absent from the production recovery ladder. Its next
-checkpoint is a separate route from `CandidatePreserved` to
-`FreshDbInvalidationIntent`; that route is not the fresh-row database
-invalidation itself. Phase 11 remains open.
+Commit `7bc33902` adds that separate routing checkpoint for exact NewState
+`CandidatePreserved` evidence. It admits only a matching fresh transition row
+with present matching provenance and the private preserved-candidate namespace.
+Each of its two complete revalidation passes checks the open-journal binding
+first, then observes the database, namespace, and database again in that exact
+order. The retained authority fixes the route internally: it derives
+`rollback_successor(None)` exactly once, advances the journal exactly once to
+`FreshDbInvalidationIntent`, and then requires a canonical reopen to classify
+only the exact source or exact successor record.
+
+Commit `0f041afe` places this routing authority behind its own test-only seal.
+A restart from the source repeats only the route, while the exact successor
+skips it. Neither outcome changes the fresh row, its provenance, or the
+activation namespace. The new route lane passes 11/11, while candidate-
+preservation persistence remains 9/9, post-move durability remains 6/6, and
+the combined authority run remains 56/56. `make fmt` and `make check` pass in
+the repository Nix shell with only the four established warnings;
+`make source-loc` reports all 1083 tracked text files at no more than 1000
+lines; and independent review found no issue. Commit `9adc2760` keeps those
+inventory gates equivalent while avoiding the host argument-size limit.
+
+The checkpoint remains production-undispatched and is only the durable route
+to invalidation intent, not database invalidation. The next checkpoint must
+first define an exact, reconciled API and effect for removing the matching
+fresh row together with its provenance. The existing
+`remove_transition_if_matches` helper is not sufficient evidence for that
+contract and must not be treated as the completed effect. Phase 11 remains
+open.
 
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the

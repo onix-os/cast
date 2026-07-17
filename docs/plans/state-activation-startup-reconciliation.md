@@ -422,10 +422,33 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   1072 tracked text files at no more than 1000 lines; and independent review
   found no issue.
 
-  This checkpoint remains test-sealed and undispatched. The next checkpoint is
-  a separate route from `CandidatePreserved` to
-  `FreshDbInvalidationIntent`; it is not the database invalidation itself.
-  Phase 11 remains open.
+  Commit `7bc33902` adds that separate route for exact NewState
+  `CandidatePreserved` evidence. Admission requires the matching fresh
+  transition row, present matching provenance, and the private preserved-
+  candidate namespace. Both complete revalidation passes begin with the open-
+  journal binding, then observe database, namespace, and database again in
+  that exact order. The retained authority derives `rollback_successor(None)`
+  exactly once, advances the journal exactly once to
+  `FreshDbInvalidationIntent`, and reopens the canonical journal to accept only
+  the exact source or exact successor record.
+
+  Commit `0f041afe` keeps the route behind a separate test-only seal. A restart
+  from the source retries only this route, while the exact successor skips it.
+  No path in this checkpoint removes or changes the fresh row, its provenance,
+  or the activation namespace. The dedicated route lane passes 11/11; the
+  persistence, post-move durability, and combined authority lanes remain 9/9,
+  6/6, and 56/56. `make fmt` and `make check` pass in the repository Nix shell
+  with only the four established warnings, `make source-loc` reports all 1083
+  tracked text files at no more than 1000 lines, and independent review found
+  no issue. Commit `9adc2760` preserves the inventory-gate coverage while
+  avoiding the host argument-size limit.
+
+  This is a durable route to invalidation intent, not database invalidation,
+  and it remains production-undispatched. The next checkpoint must design an
+  exact reconciled API and effect that removes the matching fresh row together
+  with its provenance. The existing `remove_transition_if_matches` helper is
+  not sufficient for that contract and must not be presented as the completed
+  effect. Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -611,7 +634,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   fresh database row or provenance. None has a production caller or dispatcher,
   and no production startup
   executor yet handles the effects of `CandidatePreserveIntent`, candidate
-  preservation, fresh-row invalidation, the remaining rollback actions,
+  preservation or its now test-sealed route to fresh-row invalidation intent,
+  fresh-row invalidation itself, the remaining rollback actions,
   roll-forward, boot repair, or cleanup. The exact reverse prefix now has both
   deterministic in-process contracts and
   genuine process-termination coverage. It still has no reboot or power-loss
