@@ -5,7 +5,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 20; \
+	timeout 10s test "$$count" = 24; \
 	for test in \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_splits_every_exact_staged_and_preserved_matrix_case \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_accepts_new_state_empty_quarantine_prefix \
@@ -19,6 +19,10 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::evidence::startup_candidate_preserve_fresh_namespace_race_fails_revalidation \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_an_occupied_new_state_target \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_every_controlled_non_private_new_state_target_mode \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_models_every_restrictive_new_state_target_residue_without_mutation \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_keeps_payload_residue_distinct_from_empty_move_ready_evidence \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_unsafe_modes_and_wrong_target_types_without_mutation \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_residue_revalidation_rejects_name_inode_mode_and_content_changes \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_missing_wrong_extra_and_transferred_archived_slots \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_missing_duplicate_and_wrong_active_reblit_reservations \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_generic_quarantine_for_active_reblit \
@@ -31,8 +35,10 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
+	capture=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/mod.rs; \
 	model=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/model.rs; \
 	projection=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/new_state_candidate_preserve.rs; \
+	wrappers=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/wrappers.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {' "$$startup_gate"; \
@@ -55,6 +61,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveAdmission::Apply' "$$authority"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveAdmission::Finish' "$$authority"; \
 	timeout 10s grep -Fq 'NewStateStagedWithEmptyQuarantine' "$$proof"; \
+	timeout 10s grep -Fq 'NewStateStagedWithTargetResidue' "$$proof"; \
 	timeout 10s grep -Fq 'ArchivedStagedWithCanonicalSlot' "$$proof"; \
 	timeout 10s grep -Fq 'ActiveReblitStaged { wrapper_index: usize }' "$$proof"; \
 	timeout 10s grep -Fq 'candidate.marker_links() != 2' "$$proof"; \
@@ -64,6 +71,16 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	timeout 10s grep -Fq 'wrapper.has_exact_private_permissions()' "$$proof"; \
 	timeout 10s grep -Fq 'if !target.has_exact_private_permissions() {' "$$projection"; \
 	timeout 10s grep -Fq 'TargetPermissions' "$$projection"; \
+	timeout 10s grep -Fq 'permissions != 0o700' "$$capture"; \
+	timeout 10s grep -Fq 'permissions & !0o700 == 0' "$$capture"; \
+	timeout 10s grep -Fq 'struct NewStateTargetResidueFingerprint {' "$$model"; \
+	timeout 10s grep -Fq 'struct RetainedNewStateTargetResidue {' "$$model"; \
+	timeout 10s grep -Fq 'new_state_target_residue: Option<NewStateTargetResidueFingerprint>' "$$model"; \
+	timeout 10s grep -Fq 'new_state_target_residue: Option<RetainedNewStateTargetResidue>' "$$model"; \
+	timeout 10s grep -Fqx '    pub(in crate::client::startup_reconciliation::activation_namespace) fn has_new_state_target_residue(&self) -> bool {' "$$model"; \
+	timeout 10s test "$$( timeout 10s rg -n 'pub\([^)]*\)[[:space:]]+fn[[:space:]]+.*target_residue' "$$model" | timeout 10s wc -l )" = 1; \
+	timeout 10s grep -Fq 'new_state_target_residue = Some(RetainedNewStateTargetResidue {' "$$wrappers"; \
+	timeout 10s awk '$$0 == "    if let Some(residue) = new_state_target_residue {" { blocks++; active = blocks == 2; next } active && /require_new_state_target_residue_witness\(/ { witness = 1 } active && /revalidate_named_entry\(/ { named = 1 } active && /require_witness\(/ { exact = 1 } active && $$0 == "    }" { found = witness && named && exact; exit !found } END { exit !found }' "$$model"; \
 	timeout 10s grep -Fqx 'pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveTopology {' "$$proof"; \
 	timeout 10s test "$$( timeout 10s rg -n 'pub\(in crate::client::startup_reconciliation\) fn topology\(' "$$authority" | timeout 10s wc -l )" = 2; \
 	timeout 10s awk '$$0 == "    #[cfg(test)]" { gated = 1; next } gated && $$0 == "    pub(in crate::client::startup_reconciliation) fn topology(&self) -> UsrRollbackCandidatePreserveTopology {" { count++; gated = 0; next } gated { gated = 0 } END { exit count != 2 }' "$$authority"; \
@@ -74,10 +91,15 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_empty_transition_wrapper_for_archived_and_active_reblit' "$$tests/topology_refusal.rs"; \
 	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_unmodeled_parking_for_new_and_archived_states' "$$tests/topology_refusal.rs"; \
 	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_every_controlled_non_private_new_state_target_mode' "$$tests/topology_refusal.rs"; \
+	timeout 10s grep -Fq 'startup_candidate_preserve_models_every_restrictive_new_state_target_residue_without_mutation' "$$tests/topology_refusal.rs"; \
+	timeout 10s grep -Fq 'startup_candidate_preserve_keeps_payload_residue_distinct_from_empty_move_ready_evidence' "$$tests/topology_refusal.rs"; \
+	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_unsafe_modes_and_wrong_target_types_without_mutation' "$$tests/topology_refusal.rs"; \
+	timeout 10s grep -Fq 'startup_candidate_preserve_residue_revalidation_rejects_name_inode_mode_and_content_changes' "$$tests/topology_refusal.rs"; \
 	if timeout 10s rg -n 'dispatcher|dispatch_' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'renameat|rename\(|exchange_forward|exchange_reverse|sync_all|sync_data|\.sync\(|\.advance\(|forward_successor|rollback_successor|unlinkat|linkat|create_dir|remove_dir|remove_file|set_permissions|write_all|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'std::fs::File|fs::File|AsRawFd|RawFd|BorrowedFd|OwnedFd|root_directory\(|retained_staging_parent|PendingSystemTransition|ActivationNamespaceEvidence' "$$authority" "$$proof"; then exit 1; fi; \
-	for file in "$$authority" "$$proof" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/topology_refusal.rs"; do \
+	if timeout 10s rg -n 'renameat|rename\(|mkdirat|create_dir|set_permissions|chmod|remove_dir|remove_file|write_all|sync_all|sync_data|\.sync\(|\.advance\(|clear_transition_if_matches|remove_transition_if_matches|insert_fresh_metadata|delete_metadata' "$$capture" "$$model" "$$wrappers" "$$proof"; then exit 1; fi; \
+	for file in "$$authority" "$$proof" "$$capture" "$$model" "$$projection" "$$wrappers" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/topology_refusal.rs"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \

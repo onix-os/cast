@@ -1,11 +1,24 @@
 //! Exact refusal contracts for lookalike or unauthorized preservation shapes.
 
-use std::{fs, os::unix::fs::PermissionsExt as _};
+use std::{
+    ffi::CString,
+    fs,
+    os::unix::{
+        ffi::OsStrExt as _,
+        fs::{MetadataExt as _, PermissionsExt as _, symlink},
+    },
+    path::{Path, PathBuf},
+};
 
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_reconciliation::{UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveTopology},
+        startup_reconciliation::{
+            UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyEffectSelection,
+            UsrRollbackCandidatePreserveTopology, new_state_candidate_preserve_move_attempt_count,
+            reset_new_state_candidate_preserve_move_attempt_count,
+        },
+        startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
     transition_journal::RollbackActionOutcome,
     tree_marker::TreeMarkerStore,
@@ -54,6 +67,158 @@ fn startup_candidate_preserve_refuses_every_controlled_non_private_new_state_tar
             require_deferred(&fixture);
         }
     }
+}
+
+#[test]
+fn startup_candidate_preserve_models_every_restrictive_new_state_target_residue_without_mutation() {
+    for mode in [0o000, 0o100, 0o200, 0o300, 0o400, 0o500, 0o600] {
+        let fixture = new_state_target_residue(mode);
+        let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+        let target_before = target_witness(&target);
+        let journal_before = fixture.fixture.canonical_bytes();
+        let database_before = fixture.fixture.database_snapshot();
+        let journal = fixture.open_journal();
+        let reservation = ActiveStateReservation::acquire().unwrap();
+
+        let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
+            panic!("restrictive target residue {mode:04o} did not admit Apply authority");
+        };
+        assert_eq!(
+            authority.topology(),
+            UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue
+        );
+        authority.revalidate(&journal).unwrap();
+
+        assert_eq!(target_witness(&target), target_before, "mode {mode:04o}");
+        assert_eq!(fixture.fixture.canonical_bytes(), journal_before, "mode {mode:04o}");
+        assert_eq!(fixture.fixture.database_snapshot(), database_before, "mode {mode:04o}");
+        assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
+    }
+}
+
+#[test]
+fn startup_candidate_preserve_keeps_payload_residue_distinct_from_empty_move_ready_evidence() {
+    let fixture = staged(OperationKind::NewState);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    create_private_directory(&target);
+    fs::write(target.join("foreign-payload"), b"retained residue payload").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o500)).unwrap();
+    let target_before = target_witness(&target);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+
+    let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
+        panic!("payload-bearing restrictive residue did not admit Apply authority");
+    };
+    assert_eq!(
+        authority.topology(),
+        UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue
+    );
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    reset_new_state_candidate_preserve_move_attempt_count();
+    assert!(matches!(
+        authority.into_effect_selection(&seal, &journal).unwrap(),
+        UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
+    ));
+
+    assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert_eq!(target_witness(&target), target_before);
+    assert_eq!(
+        fs::read(target.join("foreign-payload")).unwrap(),
+        b"retained residue payload"
+    );
+    fixture.assert_non_namespace_unchanged();
+}
+
+#[test]
+fn startup_candidate_preserve_refuses_unsafe_modes_and_wrong_target_types_without_mutation() {
+    for mode in [0o001, 0o070, 0o702, 0o720, 0o770, 0o1700] {
+        let fixture = staged(OperationKind::NewState);
+        let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+        create_private_directory(&target);
+        fs::set_permissions(&target, fs::Permissions::from_mode(mode)).unwrap();
+        require_deferred_preserving_target(&fixture, &target);
+    }
+
+    let fixture = staged(OperationKind::NewState);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    fs::write(&target, b"regular target occupant").unwrap();
+    require_deferred_preserving_target(&fixture, &target);
+
+    let fixture = staged(OperationKind::NewState);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    let external = fixture
+        .fixture
+        .installation
+        .root
+        .join("candidate-target-symlink-sentinel");
+    fs::write(&external, b"outside sentinel").unwrap();
+    symlink(&external, &target).unwrap();
+    require_deferred_preserving_target(&fixture, &target);
+    assert_eq!(fs::read(external).unwrap(), b"outside sentinel");
+
+    let fixture = staged(OperationKind::NewState);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    let encoded = CString::new(target.as_os_str().as_bytes()).unwrap();
+    // SAFETY: the encoded absolute fixture path remains live and names an
+    // absent entry under the private quarantine directory.
+    assert_eq!(unsafe { nix::libc::mkfifo(encoded.as_ptr(), 0o600) }, 0);
+    require_deferred_preserving_target(&fixture, &target);
+}
+
+#[test]
+fn startup_candidate_preserve_residue_revalidation_rejects_name_inode_mode_and_content_changes() {
+    let fixture = new_state_target_residue(0o500);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    let journal_before = fixture.fixture.canonical_bytes();
+    let database_before = fixture.fixture.database_snapshot();
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
+        panic!("restrictive target residue did not admit Apply authority");
+    };
+    let displaced = target.with_file_name("candidate-target-displaced-residue");
+    fs::rename(&target, &displaced).unwrap();
+    create_private_directory(&target);
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o500)).unwrap();
+    let displaced_after_race = target_witness(&displaced);
+    let replacement_after_race = target_witness(&target);
+
+    assert!(authority.revalidate(&journal).is_err());
+    assert_eq!(target_witness(&displaced), displaced_after_race);
+    assert_eq!(target_witness(&target), replacement_after_race);
+    assert_eq!(fixture.fixture.canonical_bytes(), journal_before);
+    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+    drop(reservation);
+    drop(journal);
+
+    let fixture = new_state_target_residue(0o500);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
+        panic!("restrictive target residue did not admit Apply authority");
+    };
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o400)).unwrap();
+    let changed = target_witness(&target);
+    assert!(authority.revalidate(&journal).is_err());
+    assert_eq!(target_witness(&target), changed);
+    drop(reservation);
+    drop(journal);
+
+    let fixture = new_state_target_residue(0o300);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
+        panic!("restrictive target residue did not admit Apply authority");
+    };
+    fs::write(target.join("raced-payload"), b"content race").unwrap();
+    let changed = target_witness(&target);
+    assert!(authority.revalidate(&journal).is_err());
+    assert_eq!(target_witness(&target), changed);
+    assert_eq!(fs::read(target.join("raced-payload")).unwrap(), b"content race");
+    fixture.assert_non_namespace_unchanged();
 }
 
 #[test]
@@ -280,6 +445,14 @@ fn staged(kind: OperationKind) -> CandidatePreserveFixture {
     )
 }
 
+fn new_state_target_residue(mode: u32) -> CandidatePreserveFixture {
+    let fixture = staged(OperationKind::NewState);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    create_private_directory(&target);
+    fs::set_permissions(target, fs::Permissions::from_mode(mode)).unwrap();
+    fixture
+}
+
 fn require_deferred(fixture: &CandidatePreserveFixture) {
     let before = fixture.evidence_snapshots();
     let journal = fixture.open_journal();
@@ -291,7 +464,51 @@ fn require_deferred(fixture: &CandidatePreserveFixture) {
     fixture.assert_evidence_unchanged(&before);
 }
 
-fn state_wrapper(fixture: &CandidatePreserveFixture, state: i32) -> std::path::PathBuf {
+fn require_deferred_preserving_target(fixture: &CandidatePreserveFixture, target: &Path) {
+    let target_before = target_witness(target);
+    let journal_before = fixture.fixture.canonical_bytes();
+    let database_before = fixture.fixture.database_snapshot();
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    assert!(matches!(
+        fixture.capture(&journal, &reservation),
+        UsrRollbackCandidatePreserveAdmission::Deferred
+    ));
+    assert_eq!(target_witness(target), target_before);
+    assert_eq!(fixture.fixture.canonical_bytes(), journal_before);
+    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct TargetWitness {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+    length: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+    link_target: Option<PathBuf>,
+    regular_payload: Option<Vec<u8>>,
+}
+
+fn target_witness(path: &Path) -> TargetWitness {
+    let metadata = fs::symlink_metadata(path).unwrap();
+    let file_type = metadata.file_type();
+    TargetWitness {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        links: metadata.nlink(),
+        length: metadata.len(),
+        modified: (metadata.mtime(), metadata.mtime_nsec()),
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+        link_target: file_type.is_symlink().then(|| fs::read_link(path).unwrap()),
+        regular_payload: file_type.is_file().then(|| fs::read(path).unwrap()),
+    }
+}
+
+fn state_wrapper(fixture: &CandidatePreserveFixture, state: i32) -> PathBuf {
     fixture
         .fixture
         .installation

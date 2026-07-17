@@ -34,6 +34,7 @@ pub(in crate::client) use effect_reconciliation::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveTopology {
     NewStateStaged,
+    NewStateStagedWithTargetResidue,
     NewStateStagedWithEmptyQuarantine,
     NewStatePreserved,
     ArchivedStagedWithCanonicalSlot,
@@ -189,11 +190,19 @@ fn candidate_preserve_topology(
     let staging = one_wrapper(snapshot, |wrapper| wrapper.role == TreeLocation::Staging)?
         .ok_or(UsrRollbackCandidatePreserveNamespaceError::StagingMissing)?;
     let transition = one_wrapper(snapshot, |wrapper| wrapper.role == TreeLocation::TransitionQuarantine)?;
+    let new_state_target_residue = snapshot.has_new_state_target_residue();
 
     match record.operation {
-        Operation::NewState => new_state_topology(candidate, staging, transition),
-        Operation::ActivateArchived => archived_topology(record, snapshot, candidate, staging, transition),
-        Operation::ActiveReblit => active_reblit_topology(record, snapshot, candidate, staging, transition),
+        Operation::NewState => new_state_topology(candidate, staging, transition, new_state_target_residue),
+        Operation::ActivateArchived if !new_state_target_residue => {
+            archived_topology(record, snapshot, candidate, staging, transition)
+        }
+        Operation::ActiveReblit if !new_state_target_residue => {
+            active_reblit_topology(record, snapshot, candidate, staging, transition)
+        }
+        Operation::ActivateArchived | Operation::ActiveReblit => {
+            Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+        }
     }
 }
 
@@ -219,6 +228,7 @@ fn new_state_topology(
     candidate: &super::capture::UsrFingerprint,
     staging: &WrapperFingerprint,
     transition: Option<&WrapperFingerprint>,
+    target_residue: bool,
 ) -> Result<UsrRollbackCandidatePreserveTopology, UsrRollbackCandidatePreserveNamespaceError> {
     if candidate.marker_links() != 1 {
         return Err(UsrRollbackCandidatePreserveNamespaceError::MarkerLinks {
@@ -230,16 +240,18 @@ fn new_state_topology(
         && wrapper_contains(staging, candidate)
         && staging.slot_identity().is_none()
     {
-        return match transition {
-            None => Ok(UsrRollbackCandidatePreserveTopology::NewStateStaged),
-            Some(wrapper) if wrapper_is_empty(wrapper) && wrapper.has_exact_private_permissions() => {
+        return match (transition, target_residue) {
+            (None, false) => Ok(UsrRollbackCandidatePreserveTopology::NewStateStaged),
+            (None, true) => Ok(UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue),
+            (Some(wrapper), false) if wrapper_is_empty(wrapper) && wrapper.has_exact_private_permissions() => {
                 Ok(UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine)
             }
-            Some(_) => Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch),
+            (Some(_), false) | (Some(_), true) => Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch),
         };
     }
     if candidate.location == TreeLocation::TransitionQuarantine
         && wrapper_is_empty(staging)
+        && !target_residue
         && transition.is_some_and(|wrapper| {
             wrapper_contains(wrapper, candidate)
                 && wrapper.slot_identity().is_none()

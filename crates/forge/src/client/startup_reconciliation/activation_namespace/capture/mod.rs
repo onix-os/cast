@@ -27,7 +27,7 @@ use crate::{
         require_no_default_acl, require_no_default_acl_until, require_no_xattrs_until,
     },
     transition_journal::{
-        AbortDisposition, Operation, QuarantineName, RuntimeEpoch, RuntimeEvidenceError, RuntimeTreeIdentity,
+        AbortDisposition, Operation, Phase, QuarantineName, RuntimeEpoch, RuntimeEvidenceError, RuntimeTreeIdentity,
         TransitionRecord, TreeToken,
     },
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
@@ -115,7 +115,10 @@ pub(super) fn capture_snapshot(
     let quarantine_path = installation.state_quarantine_dir();
     let quarantine = open_directory(&root, c".cast/quarantine", &quarantine_path, &mut budget)?;
     let quarantine_witness = controlled_directory_witness(&quarantine, &quarantine_path)?;
-    let mut quarantine_entries = inspect_quarantine(&quarantine, &quarantine_path, record, &mut budget)?;
+    let InspectedQuarantine {
+        entries: mut quarantine_entries,
+        new_state_target_residue,
+    } = inspect_quarantine(&quarantine, &quarantine_path, record, &mut budget)?;
 
     authenticate_slot_links(record, &live, &mut roots_entries, &mut quarantine_entries)?;
     reject_duplicate_tree_tokens(&live, &roots_entries, &quarantine_entries)?;
@@ -132,6 +135,9 @@ pub(super) fn capture_snapshot(
         .iter()
         .map(|entry| entry.fingerprint.clone())
         .collect();
+    let new_state_target_residue_fingerprint = new_state_target_residue
+        .as_ref()
+        .map(|residue| residue.fingerprint.clone());
     let fingerprint = NamespaceFingerprint {
         root: root_witness,
         roots: roots_witness,
@@ -142,6 +148,7 @@ pub(super) fn capture_snapshot(
         isolation_abi: isolation_abi.fingerprint.clone(),
         roots_entries: roots_fingerprint,
         quarantine_entries: quarantine_fingerprint,
+        new_state_target_residue: new_state_target_residue_fingerprint,
     };
     let snapshot = NamespaceSnapshot {
         root,
@@ -155,6 +162,7 @@ pub(super) fn capture_snapshot(
         isolation_abi,
         roots_entries,
         quarantine_entries,
+        new_state_target_residue,
         fingerprint,
     };
     // Close the walk with the same descriptor/public-name proof used after
@@ -615,6 +623,22 @@ fn os(bytes: &[u8]) -> &std::ffi::OsStr {
 fn effective_uid() -> u32 {
     // SAFETY: geteuid has no arguments and cannot fail.
     unsafe { nix::libc::geteuid() }
+}
+
+fn is_new_state_target_residue_witness(witness: InodeWitness) -> bool {
+    let permissions = witness.mode & 0o7777;
+    witness.kind() == nix::libc::S_IFDIR
+        && witness.owner == effective_uid()
+        && permissions != 0o700
+        && permissions & !0o700 == 0
+}
+
+fn require_new_state_target_residue_witness(witness: InodeWitness, path: &Path) -> Result<(), CaptureError> {
+    if is_new_state_target_residue_witness(witness) {
+        Ok(())
+    } else {
+        Err(CaptureError::UnsafeDirectory { path: path.to_owned() })
+    }
 }
 
 #[derive(Debug)]

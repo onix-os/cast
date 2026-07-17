@@ -86,6 +86,7 @@ fn fingerprint(layout: UsrExchangeLayout) -> NamespaceFingerprint {
         isolation_abi: RootAbiFingerprint { links: Vec::new() },
         roots_entries: vec![staging, wrapper(b"isolation", 31)],
         quarantine_entries: vec![wrapper(b"ambient", 41)],
+        new_state_target_residue: None,
     }
 }
 

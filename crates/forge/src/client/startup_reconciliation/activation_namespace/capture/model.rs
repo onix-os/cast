@@ -211,6 +211,25 @@ pub(super) struct RetainedWrapper {
     pub(super) slot: Option<RetainedSlotLink>,
 }
 
+/// Exact metadata for an unreadable NewState target left between mkdir and
+/// private-mode normalization. Contents and ACLs are deliberately unknown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NewStateTargetResidueFingerprint {
+    pub(super) name: Vec<u8>,
+    pub(super) witness: InodeWitness,
+}
+
+/// Retained `O_PATH` identity for one exact journal-derived target residue.
+///
+/// This is intentionally separate from `RetainedWrapper`: no empty-wrapper or
+/// inspected-content claim is made for this unreadable directory.
+#[derive(Debug)]
+pub(super) struct RetainedNewStateTargetResidue {
+    pub(super) directory: File,
+    pub(super) path: PathBuf,
+    pub(super) fingerprint: NewStateTargetResidueFingerprint,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RootAbiLinkFingerprint {
     pub(super) name: Vec<u8>,
@@ -254,6 +273,7 @@ pub(crate) struct NamespaceFingerprint {
     pub(super) isolation_abi: RootAbiFingerprint,
     pub(super) roots_entries: Vec<WrapperFingerprint>,
     pub(super) quarantine_entries: Vec<WrapperFingerprint>,
+    pub(super) new_state_target_residue: Option<NewStateTargetResidueFingerprint>,
 }
 
 #[derive(Debug)]
@@ -270,6 +290,7 @@ pub(crate) struct NamespaceSnapshot {
     pub(super) isolation_abi: RetainedRootAbi,
     pub(super) roots_entries: Vec<RetainedWrapper>,
     pub(super) quarantine_entries: Vec<RetainedWrapper>,
+    pub(super) new_state_target_residue: Option<RetainedNewStateTargetResidue>,
     pub(super) fingerprint: NamespaceFingerprint,
 }
 
@@ -305,6 +326,10 @@ impl NamespaceSnapshot {
                 .chain(&self.fingerprint.quarantine_entries)
                 .filter_map(|wrapper| wrapper.usr.as_ref()),
         )
+    }
+
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn has_new_state_target_residue(&self) -> bool {
+        self.new_state_target_residue.is_some()
     }
 
     /// Borrow the exact retained `.cast/root/staging` directory captured by
@@ -379,11 +404,12 @@ impl NamespaceSnapshot {
         )?;
         revalidate_usr(&self.live, &mut budget)?;
         revalidate_root_abi(&self.root_abi, &self.root, &self.root_path, &mut budget)?;
-        revalidate_wrapper_set(&self.roots, &self.roots_path, &self.roots_entries, &mut budget)?;
+        revalidate_wrapper_set(&self.roots, &self.roots_path, &self.roots_entries, None, &mut budget)?;
         revalidate_wrapper_set(
             &self.quarantine,
             &self.quarantine_path,
             &self.quarantine_entries,
+            self.new_state_target_residue.as_ref(),
             &mut budget,
         )?;
         let isolation = self
@@ -413,13 +439,18 @@ fn revalidate_wrapper_set(
     parent: &File,
     parent_path: &Path,
     wrappers: &[RetainedWrapper],
+    new_state_target_residue: Option<&RetainedNewStateTargetResidue>,
     budget: &mut Budget,
 ) -> Result<(), CaptureError> {
     let actual_names = directory_names(parent, parent_path, MAX_NAMESPACE_ENTRIES, budget)?;
-    let expected_names = wrappers
+    let mut expected_names = wrappers
         .iter()
         .map(|wrapper| wrapper.fingerprint.name.clone())
         .collect::<Vec<_>>();
+    if let Some(residue) = new_state_target_residue {
+        expected_names.push(residue.fingerprint.name.clone());
+        expected_names.sort_unstable();
+    }
     if actual_names != expected_names {
         return Err(CaptureError::DirectoryContentsChanged {
             path: parent_path.to_owned(),
@@ -474,6 +505,24 @@ fn revalidate_wrapper_set(
                 &slot.path,
             )?;
         }
+    }
+    if let Some(residue) = new_state_target_residue {
+        require_new_state_target_residue_witness(
+            InodeWitness::read(&residue.directory, &residue.path)?,
+            &residue.path,
+        )?;
+        revalidate_named_entry(
+            parent,
+            &residue.fingerprint.name,
+            residue.fingerprint.witness,
+            &residue.path,
+            budget,
+        )?;
+        require_witness(
+            InodeWitness::read(&residue.directory, &residue.path)?,
+            residue.fingerprint.witness,
+            &residue.path,
+        )?;
     }
     Ok(())
 }

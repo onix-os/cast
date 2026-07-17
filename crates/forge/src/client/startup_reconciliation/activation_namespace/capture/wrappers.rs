@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) struct InspectedQuarantine {
+    pub(super) entries: Vec<RetainedWrapper>,
+    pub(super) new_state_target_residue: Option<RetainedNewStateTargetResidue>,
+}
+
 pub(super) fn inspect_roots(
     roots: &File,
     path: &Path,
@@ -89,22 +94,49 @@ pub(super) fn inspect_quarantine(
     path: &Path,
     record: &TransitionRecord,
     budget: &mut Budget,
-) -> Result<Vec<RetainedWrapper>, CaptureError> {
+) -> Result<InspectedQuarantine, CaptureError> {
     let names = directory_names(quarantine, path, MAX_NAMESPACE_ENTRIES, budget)?;
-    names
-        .into_iter()
-        .map(|name| {
-            let role = classify_quarantine_name(&name, record)?;
-            let location = match role {
-                QuarantineEntryRole::Transition => TreeLocation::TransitionQuarantine,
-                QuarantineEntryRole::ActiveReblitWrapper { state, index } => {
-                    TreeLocation::ActiveReblitWrapper { state, index }
+    let mut entries = Vec::with_capacity(names.len());
+    let mut new_state_target_residue = None;
+    for name in names {
+        let role = classify_quarantine_name(&name, record)?;
+        if role == QuarantineEntryRole::Transition
+            && record.operation == Operation::NewState
+            && record.phase == Phase::CandidatePreserveIntent
+        {
+            let encoded = cstring(&name)?;
+            let target_path = path.join(os(&name));
+            let retained = open_optional_path(quarantine, &encoded, &target_path, budget)?.ok_or_else(|| {
+                CaptureError::InodeChanged {
+                    path: target_path.clone(),
                 }
-                QuarantineEntryRole::Ambient => TreeLocation::AmbientQuarantine(name.clone()),
-            };
-            inspect_wrapper(quarantine, path, name, location, record, budget)
-        })
-        .collect()
+            })?;
+            let witness = InodeWitness::read(&retained, &target_path)?;
+            if is_new_state_target_residue_witness(witness) {
+                if new_state_target_residue.is_some() {
+                    return Err(CaptureError::DirectoryContentsChanged { path: path.to_owned() });
+                }
+                new_state_target_residue = Some(RetainedNewStateTargetResidue {
+                    directory: retained,
+                    path: target_path,
+                    fingerprint: NewStateTargetResidueFingerprint { name, witness },
+                });
+                continue;
+            }
+        }
+        let location = match role {
+            QuarantineEntryRole::Transition => TreeLocation::TransitionQuarantine,
+            QuarantineEntryRole::ActiveReblitWrapper { state, index } => {
+                TreeLocation::ActiveReblitWrapper { state, index }
+            }
+            QuarantineEntryRole::Ambient => TreeLocation::AmbientQuarantine(name.clone()),
+        };
+        entries.push(inspect_wrapper(quarantine, path, name, location, record, budget)?);
+    }
+    Ok(InspectedQuarantine {
+        entries,
+        new_state_target_residue,
+    })
 }
 
 fn inspect_wrapper(
