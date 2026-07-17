@@ -900,16 +900,16 @@ substrate once; joint absence calls it zero times. Only proved `Applied` or
 not-applied and ambiguous exits are fieldless. The detailed evidence and
 ambient-namespace rules remain in the linked startup-reconciliation subplan.
 
-Commit `a15a7bc9` completes Phase 11C. Two revalidations bracket the
-authority-owned successor before one journal advance; after dropping both old
-capabilities, canonical reopen accepts only exact intent or `FreshDbInvalidated`.
-Source faults restart through zero-removal Finish; a durable successor skips it.
-
-The persistence, effect, substrate, route, candidate-persistence, durability,
-and database lanes pass 9/9, 12/12, 15/15, 11/11, 9/9, 6/6, and 29/29. Checks,
-the 1109-file limit, and independent review are clean. Production dispatch and
-later effects remain absent; next comes the separate exact route from
-`FreshDbInvalidated` toward rollback completion.
+Commit `51a4a348` completes Phase 11D. A dedicated non-`Clone` authority pairs
+generic missing-row context with source-database-bound exact joint absence
+inside binding-first database -> namespace -> database sandwiches.
+Two revalidations bracket one `rollback_successor(None)` and one journal
+advance; canonical reopen accepts only `FreshDbInvalidated` or
+`RollbackComplete`, so source faults retry only this route and successor faults skip it.
+The completion lane passes 11/11 while persistence, effect, substrate, route,
+candidate-persistence, durability, database, and startup-gate lanes remain
+9/9, 12/12, 15/15, 11/11, 9/9, 6/6, 29/29, and 21/21. Checks, the 1120-file
+limit, and review are clean; production dispatch and finalization remain absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

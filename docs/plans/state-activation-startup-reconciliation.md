@@ -531,10 +531,38 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   1109 tracked text files at or below the 1000-line ceiling; independent review
   returned CLEAN.
 
-  Phase 11C still adds no production dispatcher, database or namespace
-  mutation, trigger, cleanup, retry, or second rollback route. Routing durable
-  `FreshDbInvalidated` to `RollbackComplete` remains the next independent
-  checkpoint, so Phase 11 remains open.
+  Commit `51a4a348` completes the separate Phase 11D journal-only route from
+  `FreshDbInvalidated` to `RollbackComplete`. Its dedicated test-only seal and
+  authority are intentionally disjoint from the Phase 11C persistence
+  authority. Admission requires the exact NewState rollback plan with every
+  ordinary action resolved, boot repair not required, and the preserved
+  candidate topology. Generic missing-row and absent-provenance context is
+  paired with a non-`Clone`, source-database-bound exact joint-absence proof.
+  Each database inspection is itself exact-before -> generic -> exact-after;
+  capture and revalidation retain binding-first database -> namespace ->
+  database sandwiches.
+
+  The executor performs two complete authority revalidations around the sole
+  `rollback_successor(None)` projection, explicitly requires
+  `RollbackComplete`, and attempts exactly one conditional journal advance.
+  It drops the authority and old store before descriptor-rooted canonical
+  reopen, which accepts only the complete source or successor record. A
+  source-durable fault retries only Phase 11D on a later startup; a
+  successor-durable fault makes both Phase 11B and Phase 11D inapplicable. The
+  route never repeats fresh-row removal and performs no database, namespace,
+  trigger, cleanup, finalization, delete, retry, or dispatch effect.
+
+  The dedicated completion-route lane passes 11/11 contracts across current
+  and historical evidence, both invalidation origins, both forward sources,
+  both `/usr` outcomes, both candidate outcomes, all five journal durability
+  faults, capture and final evidence races, cross-root stores, three namespace
+  lookalikes, canonical reopen, and both restart sides. The Phase 11C, 11B,
+  11A, earlier route, candidate-persistence, durability, database-adapter, and
+  startup-gate lanes remain 9/9, 12/12, 15/15, 11/11, 9/9, 6/6, 29/29, and
+  21/21. `make fmt`, `make check`, and the 1120-file source limit pass; the
+  four established warnings remain, and independent review returned CLEAN.
+  Phase 11D still has no production constructor, dispatcher, journal
+  finalizer, or later rollback effect, so Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -717,14 +745,12 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   complete the shared post-move durability suffix behind a separate test-only
   seal. Exact candidate-preservation evidence can also advance the journal once
   to `CandidatePreserved` behind its own test-only seal, without changing the
-  fresh database row or provenance. Exact source-database-bound removal of the
-  fresh row, selections, and provenance is now a reconciled one-attempt
-  substrate, but it has no startup authority, journal operation, production
-  caller, or dispatcher. No production startup executor yet handles the effects
-  of `CandidatePreserveIntent`, candidate preservation, the sealed route to
-  fresh-row invalidation intent, its still-unsealed invalidation effect, the
-  remaining rollback actions, roll-forward, boot repair, or cleanup. The exact
-  reverse prefix now has both
+  fresh database row or provenance. Separate sealed checkpoints then route to
+  invalidation intent, reconcile one exact source-bound removal, persist its
+  outcome, and route the jointly absent database to `RollbackComplete`.
+  Production startup still dispatches none of that suffix, and no production
+  executor yet finalizes rollback or handles roll-forward, boot repair, or
+  cleanup. The exact reverse prefix now has both
   deterministic in-process contracts and
   genuine process-termination coverage. It still has no reboot or power-loss
   proof: `SIGKILL` preserves the kernel-visible state at termination and cannot
