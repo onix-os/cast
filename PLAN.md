@@ -845,10 +845,30 @@ files at no more than 1000 lines, and independent review found no issue. There
 is still no production caller or dispatcher, persistence, database mutation,
 trigger, cleanup, or power-loss claim.
 
-Journal persistence and fresh-row invalidation ordering are now under audit;
-neither is implemented, and this plan does not yet prescribe their order.
-Candidate preservation therefore remains absent from the production recovery
-ladder and Phase 11 remains open.
+Commit `269aae2c` adds the next test-sealed persistence checkpoint. The sealed
+candidate-preservation authority derives its fixed outcome from its internal
+origin, passes complete authority revalidation twice, and permits exactly one
+journal advance from `CandidatePreserveIntent` to `CandidatePreserved`.
+Reopening the canonical journal then has to classify the exact source or exact
+successor; no other record is accepted. The persistence-specific authority is
+functionally split from the established post-move durability boundary, so the
+older durability gate remains intact rather than being widened for journal
+persistence.
+
+This checkpoint leaves the fresh database row and its provenance untouched.
+After an interruption, reopening the source record reruns the idempotent
+durability suffix without a second candidate move, while reopening the exact
+successor skips preservation. The persistence lane passes 9/9, the established
+post-move durability lane remains 6/6, and the combined authority run remains
+56/56. `make fmt` and `make check` pass with only the four established warnings;
+`make source-loc` reports all 1072 tracked text files at no more than 1000
+lines; and independent review found no issue.
+
+The new checkpoint remains test-sealed and undispatched, so candidate
+preservation is still absent from the production recovery ladder. Its next
+checkpoint is a separate route from `CandidatePreserved` to
+`FreshDbInvalidationIntent`; that route is not the fresh-row database
+invalidation itself. Phase 11 remains open.
 
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the

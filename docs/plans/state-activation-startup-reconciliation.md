@@ -396,9 +396,36 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   The seal has no production constructor, caller, or dispatcher. This
   checkpoint performs no persistence, database mutation, trigger, cleanup, or
-  additional namespace mutation, and makes no power-loss claim. Journal
-  persistence and fresh-row invalidation ordering are now under audit; neither
-  is implemented, no ordering is asserted here, and Phase 11 remains open.
+  additional namespace mutation, and makes no power-loss claim.
+
+  Commit `269aae2c` adds the next test-sealed persistence checkpoint. The
+  sealed authority derives its fixed journal outcome from its internal
+  candidate-preservation origin; callers cannot supply or alter that outcome.
+  It performs complete authority revalidation twice, permits exactly one
+  journal advance from `CandidatePreserveIntent` to `CandidatePreserved`, and
+  then reopens the canonical journal. That reopen must classify the exact
+  source or exact successor record and rejects every other result.
+
+  Persistence-specific authority and projection are functionally split from
+  the established post-move durability boundary. The older 6/6 durability gate
+  therefore remains intact rather than being relaxed to admit persistence.
+  The fresh database row and its provenance are not mutated. A restart from
+  the source record reruns the complete idempotent durability suffix but never
+  issues a second candidate move; a restart from the exact successor skips
+  candidate preservation.
+
+  The dedicated
+  `make forge-startup-usr-rollback-candidate-preserve-persistence-test` lane
+  passes 9/9 contracts. The established post-move durability lane remains 6/6,
+  and the combined authority run remains 56/56. `make fmt` and `make check`
+  pass with only the four established warnings; `make source-loc` reports all
+  1072 tracked text files at no more than 1000 lines; and independent review
+  found no issue.
+
+  This checkpoint remains test-sealed and undispatched. The next checkpoint is
+  a separate route from `CandidatePreserved` to
+  `FreshDbInvalidationIntent`; it is not the database invalidation itself.
+  Phase 11 remains open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -579,8 +606,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   and move checkpoints are also test-sealed and undispatched. Normalization
   proves its target-preparation suffix, and exact NewState POST evidence can now
   complete the shared post-move durability suffix behind a separate test-only
-  seal. None has a production caller, dispatcher, persistence step, or database
-  mutation. No production startup
+  seal. Exact candidate-preservation evidence can also advance the journal once
+  to `CandidatePreserved` behind its own test-only seal, without changing the
+  fresh database row or provenance. None has a production caller or dispatcher,
+  and no production startup
   executor yet handles the effects of `CandidatePreserveIntent`, candidate
   preservation, fresh-row invalidation, the remaining rollback actions,
   roll-forward, boot repair, or cleanup. The exact reverse prefix now has both
