@@ -749,7 +749,9 @@ database and non-journal namespace evidence. `make check` and all three narrow
 startup recovery Make lanes pass at this checkpoint.
 
 Commits `62b15f29`, `e69ad276`, `50cb98f8`, and `86c6c900` extend that ladder
-past journal routing through one authenticated `/usr` reverse phase. The
+past journal routing through one authenticated `/usr` reverse phase. Commits
+`ecd58020` and `e8c952f9` then exercise that phase across real process-death
+boundaries without broadening its production authority. The
 rollback decision, resume route, and reverse execution deliberately occur in
 three separate startup entries, with at most one journal mutation in each. A
 reverse entry accepts only exact `ReverseExchangeIntent`: `POST` evidence makes
@@ -763,8 +765,9 @@ source or exact successor. Every successful entry still returns
 `RecoveryPending`; stable `UsrRestored` is neither redispatched nor chained into
 candidate preservation in the same process.
 
-The focused reverse-dispatch Make lane now freezes ten contracts across all
-three operations. Its durability matrix covers both starting layouts, both
+The focused reverse-dispatch Make lane now freezes twelve dispatcher contracts
+across all three operations, plus two coordinator-origin contracts. Its
+in-process durability matrix covers both starting layouts, both
 changed parent barriers, the final pre-persistence proof boundary, and ordinary
 or error-after-application exchange reports; a restart from an already restored
 layout completes without a second exchange. Its journal matrix crosses both
@@ -776,6 +779,28 @@ that stale authority cannot advance or retry. Its fresh-handle matrix discards
 all installation, database, journal, and reservation handles after an injected
 failure, reopens them independently, and still converges without another
 exchange.
+
+The first new process matrix sends genuine `SIGKILL` to a separately re-executed
+crash process at four reverse boundaries: immediately after the exchange,
+between the two parent barriers, before the final PRE capture, and before final
+persistence revalidation. All three operations therefore cover 12 process-death
+cases. An independent recovery process opens fresh installation and database
+handles, observes the physically restored PRE layout, performs no second
+exchange, and persists exact `UsrRestored(AlreadySatisfied)`. Every child is
+deadline-bounded and forcibly killed and reaped if it hangs.
+
+The second process matrix covers all three operations, both POST and PRE source
+layouts, and all five successful journal-update durability boundaries: 30
+additional `SIGKILL` cases. At the first boundary the canonical source remains
+authoritative and the fully synced temporary successor is discarded on reopen;
+because the namespace is already PRE, recovery records
+`UsrRestored(AlreadySatisfied)`, even when the discarded POST successor said
+`Applied`. At the other four boundaries the canonical successor is already
+published, so recovery preserves its exact original `Applied` or
+`AlreadySatisfied` outcome and performs no further journal update. These are
+real process-termination tests with fresh-process handles, but they are not
+reboot or power-loss evidence: kernel-visible state after `SIGKILL` does not
+prove which pre-fsync rename survives a power cycle.
 
 Two additional coordinator-origin contracts carry real failed forward
 exchanges through separate decision, route, and reverse startup entries. One
@@ -800,8 +825,9 @@ are still unimplemented. The remaining closure is to finish recovery-ordered
 mutable client construction, replace residual path-based lifecycle authority,
 establish the durable pre-journal baseline, route every state transition
 through one durable coordinator, execute the later persisted phases on startup,
-and prove convergence with deterministic process-kill and power-loss-equivalent
-interruption coverage at every boundary.
+extend deterministic process-kill coverage beyond the exact reverse phase, and
+prove power-loss-equivalent convergence at every boundary. Phase 11 therefore
+remains open.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

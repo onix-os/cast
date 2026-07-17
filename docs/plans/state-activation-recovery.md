@@ -649,7 +649,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   outcome, connected the one-phase reverse dispatcher to real mutable startup,
   and proved its initial parent- and journal-restart convergence. Commit
   `86c6c900` extended that interruption matrix through fresh-handle restart,
-  evidence races, and both coordinator-origin failure classes. The restrictive
+  evidence races, and both coordinator-origin failure classes. Commits
+  `ecd58020` and `e8c952f9` add genuine `SIGKILL` coverage around reverse
+  execution and its journal update, respectively. The restrictive
   replacement-mode normalizer still never changes the record, and the
   diagnostic startup assessment remains non-mutating. Candidate preservation,
   database invalidation, later rollback actions, roll-forward, and cleanup are
@@ -832,8 +834,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   source/successor reopen reconciliation.
 
   The real reverse-dispatch lane added through commits `e69ad276`, `50cb98f8`,
-  and `86c6c900` now passes ten dispatcher contracts plus two coordinator-origin
-  contracts. Its parent-durability restart matrix crosses all three operations,
+  `86c6c900`, `ecd58020`, and `e8c952f9` now passes twelve dispatcher contracts
+  plus two coordinator-origin contracts. Its in-process parent-durability
+  restart matrix crosses all three operations,
   POST and PRE, and all three injected interruption points: staging-parent sync,
   installation-root sync, and final PRE capture. POST also covers ordinary
   success and error-after-application syscall reports; PRE correctly makes no
@@ -852,8 +855,39 @@ and instant rollback mechanism; it hardens their failure semantics.
   reservation, and database connection, then opens a fresh `Installation` and
   fresh descriptor-anchored state-database handle. Across all three operations,
   both a final-PRE-capture fault and a journal temporary-sync fault then converge
-  from PRE without a second exchange. This is a stronger in-process
-  handle-reopen simulation, not a process-kill test.
+  from PRE without a second exchange. This individual contract remains an
+  in-process handle-reopen simulation; the two process matrices below provide
+  the real process-death coverage.
+
+  Commit `ecd58020` re-executes the exact test binary as separate crash and
+  recovery processes and sends genuine `SIGKILL` at four reverse boundaries:
+  after the retained exchange but before semantic recapture, after the staging
+  parent barrier but before the installation-root barrier, before the final PRE
+  capture, and before final persistence revalidation. Crossing all three
+  operations gives 12 process-death cases. The parent drops its original
+  installation, database, journal, and reservation handles first; each child
+  opens fresh installation and database handles. Recovery must see physical
+  PRE, attempt no second exchange, persist exact
+  `UsrRestored(AlreadySatisfied)`, and remain stable on another startup. A
+  15-second deadline surrounds every child, and timeout cleanup kills and reaps
+  a hung process rather than blocking the lane indefinitely.
+
+  Commit `e8c952f9` applies the same crash/recovery process boundary to all three
+  operations, both POST and PRE starting layouts, and five successful
+  conditional journal-update durability points: temporary fully synced,
+  canonical exchanged, first directory sync, displaced file unlinked, and
+  final directory sync. This is a 3 x 2 x 5 matrix of 30 genuine `SIGKILL`
+  cases. At the first boundary the canonical record is still the exact
+  `ReverseExchangeIntent`, while the temporary contains the proposed
+  `UsrRestored` successor. Fresh open discards that temporary; since the
+  namespace has already reached PRE, restart derives
+  `UsrRestored(AlreadySatisfied)`. This intentionally differs from a killed
+  POST attempt's discarded temporary `UsrRestored(Applied)` record. At each of
+  the other four boundaries the canonical successor is already published, so
+  recovery preserves its exact original `Applied` or `AlreadySatisfied`
+  outcome, removes any displaced temporary residue, and performs neither a
+  second exchange nor another journal update. Crash and recovery again use
+  fresh-process handles and strict child deadlines.
 
   The same lane classifies all four raw exchange report/layout combinations,
   rejects ambiguous post-attempt evidence, and freezes exact `Applied` versus
@@ -888,10 +922,12 @@ and instant rollback mechanism; it hardens their failure semantics.
   This is still only the authenticated `/usr` rollback prefix. No startup
   executor yet handles `CandidatePreserveIntent`, candidate preservation,
   fresh-row invalidation, the remaining rollback actions, roll-forward, boot
-  repair, or cleanup. These are deterministic in-process fault contracts and
-  fresh-handle reopen tests, not actual process termination, reboot, or
-  power-loss tests. The complete campaign required below therefore remains
-  open, as do this item and all six broad Phase 11 work items.
+  repair, or cleanup. The exact reverse prefix now has both deterministic
+  in-process contracts and genuine process-termination coverage. It still has
+  no reboot or power-loss proof: `SIGKILL` preserves the kernel-visible state at
+  termination and cannot establish which pre-fsync rename survives a power
+  cycle. The complete campaign required below therefore remains open, as do
+  this item and all six broad Phase 11 work items.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not
@@ -901,6 +937,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   quarantine, and boot boundary. Reopening after each injected interruption
   must converge to exactly one authenticated live tree and one terminal
   outcome without deleting or overwriting a foreign entry.
+  The reverse `/usr` prefix now covers 12 execution-boundary and 30
+  journal-update-boundary `SIGKILL` cases with fresh-process reopen. This item
+  remains unchecked because the other phases and true power-loss-equivalent
+  durability outcomes are not yet covered.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,
