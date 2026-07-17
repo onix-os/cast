@@ -20,6 +20,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority.rs; \
+	effect_evidence=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/effect_evidence.rs; \
 	authority_effect=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/effect_reconciliation.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
 	proof_effect=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof/effect_reconciliation.rs; \
@@ -49,7 +50,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine' "$$authority"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'self.require_journal_binding(journal)?;' "$$authority" )" -ge 2; \
 	timeout 10s grep -Fq '        require_effect_binding(&self.effect.journal_binding, journal)?;' "$$authority_effect"; \
-	timeout 10s grep -Fq '    if journal.has_binding(expected) {' "$$authority_effect"; \
+	timeout 10s grep -Fq '    if journal.has_binding(expected) {' "$$effect_evidence"; \
 	timeout 10s grep -Fq 'let trailing_evidence = require_post_effect_evidence' "$$authority_effect"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        require_pre_effect_evidence(' "$$authority_effect" )" = 2; \
 	prepared_line="$$( timeout 10s grep -nF '        let prepared_namespace = namespace.prepare_move(&installation, &record);' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
@@ -71,22 +72,22 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s test "$$pre_line" -lt "$$attempt_line"; \
 	if timeout 10s rg -n 'renameat2_noreplace\(' "$$namespace_effect"; then exit 1; fi; \
 	if timeout 10s rg -n 'syscall[[:space:]]*\(|unsafe[[:space:]]*\{' "$$namespace_effect"; then exit 1; fi; \
-	production_effect_code="$$( timeout 10s sed -E 's,//.*$$,,' "$$authority_effect" "$$proof_effect" "$$namespace_effect" "$$namespace_reconciliation" )"; \
+	production_effect_code="$$( timeout 10s sed -E 's,//.*$$,,' "$$effect_evidence" "$$authority_effect" "$$proof_effect" "$$namespace_effect" "$$namespace_reconciliation" )"; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]' <<<"$$production_effect_code"; then exit 1; fi; \
 	if timeout 10s rg -n 'raw_report\.(is_ok|is_err|unwrap|expect)|match[[:space:]]+raw_report|if[[:space:]]+let.*raw_report' "$$namespace_effect" "$$namespace_reconciliation"; then exit 1; fi; \
 	timeout 10s grep -Fq 'parents.sync_retained_candidate_for_move()?' "$$proof_effect"; \
 	timeout 10s grep -Fq 'self.candidate.sync_retained_tree()' "$$namespace"; \
 	timeout 10s grep -Fq 'self.witness.mode & 0o7777 == 0o700' "$$model"; \
 	timeout 10s grep -Fq 'if !target.has_exact_private_permissions() {' "$$namespace"; \
-	if timeout 10s rg -n 'sync_all|sync_data|complete_.*durability|RollbackActionOutcome|rollback_successor|forward_successor|\.advance[[:space:]]*\(|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' "$$authority_effect" "$$proof_effect" "$$namespace_effect" "$$namespace_reconciliation"; then exit 1; fi; \
-	if timeout 10s rg -n 'pub\([^)]*\)[[:space:]]+fn[[:space:]]+.*(descriptor|raw_fd|path|quarantine_name|topology|wrapper_index)|AsRawFd|IntoRawFd|FromRawFd|BorrowedFd|OwnedFd' "$$authority_effect" "$$namespace" "$$namespace_effect" "$$namespace_reconciliation"; then exit 1; fi; \
+	if timeout 10s rg -n 'sync_all|sync_data|complete_.*durability|RollbackActionOutcome|rollback_successor|forward_successor|\.advance[[:space:]]*\(|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' "$$effect_evidence" "$$authority_effect" "$$proof_effect" "$$namespace_effect" "$$namespace_reconciliation"; then exit 1; fi; \
+	if timeout 10s rg -n 'pub\([^)]*\)[[:space:]]+fn[[:space:]]+.*(descriptor|raw_fd|path|quarantine_name|topology|wrapper_index)|AsRawFd|IntoRawFd|FromRawFd|BorrowedFd|OwnedFd' "$$effect_evidence" "$$authority_effect" "$$namespace" "$$namespace_effect" "$$namespace_reconciliation"; then exit 1; fi; \
 	finish_body="$$( timeout 10s sed -n '/impl<'\''reservation> UsrRollbackCandidatePreserveFinishAuthority/,/^}/p' "$$authority" )"; \
 	if timeout 10s rg -n 'into_effect|reconcile|MoveNewState' <<<"$$finish_body"; then exit 1; fi; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorAfterApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorWithoutApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::SuccessWithoutApply' "$$tests"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests" )" = 26; \
-	for file in "$$authority" "$$authority_effect" "$$proof" "$$proof_effect" "$$namespace" "$$namespace_effect" "$$namespace_reconciliation" "$$tests" crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs misc/make/startup-candidate-preserve-effect-tests.mk Makefile; do \
+	for file in "$$authority" "$$effect_evidence" "$$authority_effect" "$$proof" "$$proof_effect" "$$namespace" "$$namespace_effect" "$$namespace_reconciliation" "$$tests" crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs misc/make/startup-candidate-preserve-effect-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \

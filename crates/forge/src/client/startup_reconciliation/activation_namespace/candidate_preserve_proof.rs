@@ -6,6 +6,7 @@
 //! matching capture whenever an authority is revalidated.
 
 mod effect_reconciliation;
+mod target_creation;
 
 use crate::{
     Installation,
@@ -31,6 +32,9 @@ pub(in crate::client) use effect_reconciliation::{
     arm_before_new_state_candidate_preserve_candidate_sync,
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
 };
+pub(in crate::client::startup_reconciliation) use target_creation::UsrRollbackNewStateTargetCreateNamespaceReconciliation;
+#[cfg(test)]
+pub(in crate::client) use target_creation::arm_before_usr_rollback_new_state_target_create_final_pre_capture;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveTopology {
@@ -172,7 +176,7 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
 
     /// Consume only the exact NewState staged-with-empty-quarantine prefix.
     /// Every other candidate-preservation topology remains unsupported by this
-    /// first mutation checkpoint and yields no effect evidence.
+    /// move checkpoint and yields no move-effect evidence.
     pub(in crate::client::startup_reconciliation) fn into_new_state_move_effect_evidence(
         self,
         record: &TransitionRecord,
@@ -448,8 +452,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     Capture(#[from] CaptureError),
     #[error("assess the exact candidate-preservation namespace against the journal phase")]
     Policy(#[from] NamespacePolicyConflict),
-    #[error("capture or reconcile the exact NewState candidate-preservation move namespace")]
-    NewStateMove(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("capture or reconcile an exact NewState candidate-preservation namespace effect")]
+    NewStateEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("read the retained canonical transition journal")]
     Journal(#[from] StorageError),
     #[error("the retained canonical transition journal changed during candidate-preservation proof")]
@@ -488,7 +492,7 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
 
 impl From<NewStateCandidatePreserveCaptureError> for UsrRollbackCandidatePreserveNamespaceError {
     fn from(source: NewStateCandidatePreserveCaptureError) -> Self {
-        Self::NewStateMove(Box::new(source))
+        Self::NewStateEffect(Box::new(source))
     }
 }
 

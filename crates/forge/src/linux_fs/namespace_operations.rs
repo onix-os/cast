@@ -145,7 +145,6 @@ pub(crate) fn link_retained_file_noreplace(
 /// parent and freshly reconcile the name after every return value; in
 /// particular, this function never retries an interrupted attempt or adopts
 /// an existing entry as success.
-#[allow(dead_code)] // consumed by the future sealed target-preparation path
 pub(crate) fn mkdirat_once(parent_directory: &std::fs::File, name: &CStr, mode: u32) -> io::Result<()> {
     let name_bytes = name.to_bytes();
     if name_bytes.is_empty() || name_bytes.contains(&b'/') || matches!(name_bytes, b"." | b"..") {

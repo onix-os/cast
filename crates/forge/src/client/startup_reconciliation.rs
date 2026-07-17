@@ -4,9 +4,10 @@
 //! Admission remains read-only. Consumed rollback-reverse typestates cross the
 //! production one-shot exchange and ordered parent-durability boundaries. A
 //! separate test-only checkpoint consumes exact NewState target prefixes into
-//! disjoint create, normalize, or move capabilities. Only the move capability
-//! has an effect implementation; none has production dispatch, a completed
-//! durability suffix, persistence, cleanup, or triggers.
+//! disjoint create, normalize, or move capabilities. Create and move have
+//! separate one-attempt semantic reconciliation; normalization remains
+//! evidence-only. None has production dispatch, a completed durability suffix,
+//! persistence, cleanup, or triggers.
 
 use std::{fmt, path::PathBuf};
 
@@ -40,6 +41,7 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
+    UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
 };
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
@@ -95,11 +97,15 @@ use activation_namespace::{
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
-    NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_candidate_sync,
-    arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault,
+    arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_new_state_candidate_preserve_move_reconciliation_capture, arm_before_new_state_target_create_attempt,
+    arm_before_new_state_target_create_reconciliation_capture,
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
-    arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
-    reset_new_state_candidate_preserve_move_attempt_count,
+    arm_before_usr_rollback_new_state_target_create_final_pre_capture, arm_new_state_candidate_preserve_move_fault,
+    arm_new_state_target_create_fault, new_state_candidate_preserve_move_attempt_count,
+    new_state_target_create_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_target_create_attempt_count,
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{

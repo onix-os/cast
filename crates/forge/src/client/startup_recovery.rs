@@ -14,7 +14,7 @@ mod usr_rollback_reverse_durability;
 mod usr_rollback_reverse_persistence;
 
 /// Unforgeable permission to consume read-only candidate-preservation
-/// admission into the test-only NewState move-effect checkpoint.
+/// admission into test-only NewState target-creation or move checkpoints.
 ///
 /// Production deliberately has no constructor until the complete effect,
 /// durability, persistence, and dispatcher boundaries are ready together.

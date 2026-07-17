@@ -1,16 +1,26 @@
-//! Normalized read-only evidence for NewState target preparation.
+//! Evidence and sealed one-shot preparation for NewState target prefixes.
 //!
 //! An absent target and an owned restrictive-mode residue are different crash
-//! prefixes.  Their projections deliberately mask only metadata that one
-//! future child creation or descriptor-bound mode normalization is allowed to
-//! change.  The evidence is opaque outside activation-namespace proof code and
-//! exposes no descriptor, path, name, selector, or mutation API.
+//! prefixes. Their projections deliberately mask only metadata that one child
+//! creation or future descriptor-bound mode normalization may change. Read-only
+//! evidence stays opaque outside activation-namespace proof code; the create
+//! submodule alone consumes the retained parent through a sealed attempt.
+
+mod create;
 
 use crate::transition_journal::{Operation, Phase, RuntimeEpoch, TransitionRecord};
 
 use super::{
     InodeWitness, NamespaceFingerprint, NamespaceSnapshot, NewStateCandidatePreserveCaptureError, RootAbiFingerprint,
     TreeLocation, UsrFingerprint, WrapperFingerprint,
+};
+
+pub(in crate::client::startup_reconciliation::activation_namespace) use create::NewStateTargetCreateReconciliation;
+#[cfg(test)]
+pub(in crate::client) use create::{
+    NewStateTargetCreateFault, arm_before_new_state_target_create_attempt,
+    arm_before_new_state_target_create_reconciliation_capture, arm_new_state_target_create_fault,
+    new_state_target_create_attempt_count, reset_new_state_target_create_attempt_count,
 };
 
 /// Stable quarantine-parent identity across a future child creation.
@@ -105,33 +115,88 @@ impl CommonNonTargetInvariant {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::client::startup_reconciliation::activation_namespace) enum NewStateTargetCreateLayout {
+    Absent,
+    RestrictiveResidue,
+    EmptyPrivate,
+}
+
+/// Projection spanning exactly the three safe target-creation outcomes.
+///
+/// A newly allocated target has no PRE inode identity to compare. The exact
+/// journal name and every non-target invariant remain fixed, while the target
+/// itself must classify as absent, an owned restrictive residue, or an empty
+/// private wrapper.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct AbsentTargetProjection {
+pub(in crate::client::startup_reconciliation::activation_namespace) struct ProjectedNewStateTargetCreateNamespace {
+    layout: NewStateTargetCreateLayout,
     target_name: Vec<u8>,
     quarantine: MutableQuarantineIdentity,
     invariant: CommonNonTargetInvariant,
 }
 
-impl AbsentTargetProjection {
-    fn capture(
+impl ProjectedNewStateTargetCreateNamespace {
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn capture(
         snapshot: &NamespaceSnapshot,
         record: &TransitionRecord,
     ) -> Result<Self, NewStateCandidatePreserveCaptureError> {
         require_new_state_candidate_preserve(record)?;
         let fingerprint = snapshot.fingerprint();
-        if fingerprint.new_state_target_residue.is_some()
-            || fingerprint
-                .quarantine_entries
-                .iter()
-                .any(|wrapper| wrapper.role == TreeLocation::TransitionQuarantine)
-        {
-            return Err(NewStateCandidatePreserveCaptureError::NotAbsentTargetPreparationLayout);
-        }
+        let targets = fingerprint
+            .quarantine_entries
+            .iter()
+            .filter(|wrapper| wrapper.role == TreeLocation::TransitionQuarantine)
+            .collect::<Vec<_>>();
+        let expected_name = record.quarantine_name.as_str().as_bytes();
+        let layout = match (fingerprint.new_state_target_residue.as_ref(), targets.as_slice()) {
+            (None, []) => NewStateTargetCreateLayout::Absent,
+            (Some(residue), []) if residue.name == expected_name => NewStateTargetCreateLayout::RestrictiveResidue,
+            (None, [target])
+                if target.name == expected_name
+                    && target.has_exact_private_permissions()
+                    && target.entries.is_empty()
+                    && target.usr.is_none()
+                    && target.slot.is_none() =>
+            {
+                NewStateTargetCreateLayout::EmptyPrivate
+            }
+            _ => return Err(NewStateCandidatePreserveCaptureError::NotTargetCreateLayout),
+        };
         Ok(Self {
-            target_name: record.quarantine_name.as_str().as_bytes().to_vec(),
+            layout,
+            target_name: expected_name.to_vec(),
             quarantine: fingerprint.quarantine.into(),
             invariant: CommonNonTargetInvariant::capture(fingerprint),
         })
+    }
+
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn layout(&self) -> NewStateTargetCreateLayout {
+        self.layout
+    }
+
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn require_absent_to_prepared(
+        &self,
+        after: &Self,
+    ) -> Result<(), NewStateCandidatePreserveCaptureError> {
+        if self.layout != NewStateTargetCreateLayout::Absent
+            || !matches!(
+                after.layout,
+                NewStateTargetCreateLayout::RestrictiveResidue | NewStateTargetCreateLayout::EmptyPrivate
+            )
+        {
+            return Err(NewStateCandidatePreserveCaptureError::NotAbsentToPreparedTarget {
+                before: self.layout,
+                after: after.layout,
+            });
+        }
+        if self.target_name != after.target_name
+            || self.quarantine != after.quarantine
+            || self.invariant != after.invariant
+        {
+            return Err(NewStateCandidatePreserveCaptureError::InvariantChanged);
+        }
+        Ok(())
     }
 }
 
@@ -185,11 +250,11 @@ fn require_new_state_candidate_preserve(
     Ok(())
 }
 
-/// Opaque exact absent-target PRE evidence for a future create operation.
-#[allow(dead_code)] // consumed by the next sealed target-creation checkpoint
+/// Opaque exact absent-target PRE evidence for sealed one-shot creation.
 pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateTargetCreateNamespaceEvidence {
-    baseline: NamespaceSnapshot,
-    projection: AbsentTargetProjection,
+    pub(in crate::client::startup_reconciliation::activation_namespace) baseline: NamespaceSnapshot,
+    pub(in crate::client::startup_reconciliation::activation_namespace) projection:
+        ProjectedNewStateTargetCreateNamespace,
 }
 
 impl UsrRollbackNewStateTargetCreateNamespaceEvidence {
@@ -197,7 +262,10 @@ impl UsrRollbackNewStateTargetCreateNamespaceEvidence {
         snapshot: NamespaceSnapshot,
         record: &TransitionRecord,
     ) -> Result<Self, NewStateCandidatePreserveCaptureError> {
-        let projection = AbsentTargetProjection::capture(&snapshot, record)?;
+        let projection = ProjectedNewStateTargetCreateNamespace::capture(&snapshot, record)?;
+        if projection.layout() != NewStateTargetCreateLayout::Absent {
+            return Err(NewStateCandidatePreserveCaptureError::NotAbsentTargetPreparationLayout);
+        }
         Ok(Self {
             baseline: snapshot,
             projection,

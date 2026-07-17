@@ -553,6 +553,13 @@ pub(in crate::client::startup_reconciliation::activation_namespace) enum NewStat
     NotMoveLayout,
     #[error("the namespace is not exact absent-target NewState preparation evidence")]
     NotAbsentTargetPreparationLayout,
+    #[error("the namespace is not a safe NewState target-creation layout")]
+    NotTargetCreateLayout,
+    #[error("NewState target creation is not absent-to-prepared ({before:?} -> {after:?})")]
+    NotAbsentToPreparedTarget {
+        before: super::NewStateTargetCreateLayout,
+        after: super::NewStateTargetCreateLayout,
+    },
     #[error("the namespace is not exact restrictive-residue NewState preparation evidence")]
     NotResidueTargetPreparationLayout,
     #[error("NewState candidate preservation is not exact staged-to-preserved ({before:?} -> {after:?})")]

@@ -4,10 +4,13 @@
 //! namespace evidence. It remains read-only and classifies staged/crash-prefix
 //! evidence separately from already-preserved evidence. Only the exact
 //! NewState target prefixes can be consumed into disjoint test-sealed create,
-//! normalize, or move leases. Production dispatch, mutation, durability,
-//! persistence, cleanup, and triggers remain absent.
+//! normalize, or move leases. Creation and movement remain test-sealed;
+//! production dispatch, normalization, completed durability, persistence,
+//! cleanup, and triggers remain absent.
 
+mod effect_evidence;
 mod effect_reconciliation;
+mod target_creation;
 
 use crate::{
     Installation, db,
@@ -32,6 +35,7 @@ use super::{
 pub(in crate::client) use effect_reconciliation::{
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority, UsrRollbackNewStateCandidatePreserveApplyReconciliation,
 };
+pub(in crate::client) use target_creation::UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation;
 
 /// Exact result of read-only candidate-preservation admission.
 pub(in crate::client) enum UsrRollbackCandidatePreserveAdmission<'reservation> {
@@ -75,7 +79,7 @@ pub(in crate::client) enum UsrRollbackCandidatePreserveApplyEffectSelection<'res
     Unsupported,
 }
 
-/// Exact authority retained for a future one-shot absent-target creation.
+/// Exact authority retained for one-shot absent-target creation.
 struct UsrRollbackNewStateCandidatePreserveCreateTargetEffect<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
@@ -86,8 +90,8 @@ struct UsrRollbackNewStateCandidatePreserveCreateTargetEffect<'reservation> {
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
-/// Opaque absent-target capability. It intentionally has no operational API.
-#[must_use = "a NewState create-target lease must be reconciled by a later checkpoint"]
+/// Opaque absent-target capability with only a consuming reconciliation API.
+#[must_use = "a NewState create-target lease must be reconciled"]
 pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveCreateTargetLease<'reservation> {
     effect: UsrRollbackNewStateCandidatePreserveCreateTargetEffect<'reservation>,
 }
