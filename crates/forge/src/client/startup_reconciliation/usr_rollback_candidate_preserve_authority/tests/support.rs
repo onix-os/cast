@@ -8,7 +8,7 @@ use crate::{
     },
     transition_journal::{
         InitialRollbackAction, Phase, RollbackActionOutcome, RollbackObservations, TransitionJournalStore,
-        TransitionRecord,
+        TransitionRecord, encode,
     },
 };
 
@@ -40,6 +40,7 @@ pub(super) enum CandidateLayout {
 pub(super) struct CandidatePreserveFixture {
     pub(super) fixture: Fixture,
     pub(super) candidate_intent: TransitionRecord,
+    initial_database: DatabaseSnapshot,
 }
 
 impl CandidatePreserveFixture {
@@ -114,17 +115,26 @@ impl CandidatePreserveFixture {
             synthesize_preserved_topology(&fixture, &candidate_intent);
         }
         assert_eq!(fixture.canonical_record(), candidate_intent);
+        let initial_database = fixture.database_snapshot();
         Self {
             fixture,
             candidate_intent,
+            initial_database,
         }
     }
 
     pub(super) fn with_new_state_empty_quarantine_prefix() -> Self {
+        Self::new_state_empty_quarantine_prefix(CandidateSource::Exchanged, RollbackActionOutcome::Applied)
+    }
+
+    pub(super) fn new_state_empty_quarantine_prefix(
+        source: CandidateSource,
+        usr_reverse_outcome: RollbackActionOutcome,
+    ) -> Self {
         let fixture = Self::new(
             OperationKind::NewState,
-            CandidateSource::Exchanged,
-            RollbackActionOutcome::Applied,
+            source,
+            usr_reverse_outcome,
             CandidateLayout::Staged,
         );
         create_quarantine_wrapper(&fixture.fixture, &fixture.candidate_intent);
@@ -174,6 +184,11 @@ impl CandidatePreserveFixture {
         assert_eq!(self.fixture.namespace_snapshot(), expected.2);
     }
 
+    pub(super) fn assert_non_namespace_unchanged(&self) {
+        assert_eq!(self.fixture.canonical_record(), self.candidate_intent);
+        assert_eq!(self.fixture.database_snapshot(), self.initial_database);
+    }
+
     pub(super) fn namespace_change_hook(&self, name: String) -> impl FnOnce() + 'static {
         let inserted = self.fixture.installation.state_quarantine_dir().join(name);
         move || super::test_fixture::create_private_directory(&inserted)
@@ -186,6 +201,16 @@ impl CandidatePreserveFixture {
         move || {
             database.clear_transition_if_matches(candidate, &transition).unwrap();
         }
+    }
+
+    pub(super) fn journal_change_hook(&self) -> impl FnOnce() + 'static {
+        let canonical = super::test_fixture::canonical_journal(&self.fixture.installation.root);
+        let changed = self
+            .candidate_intent
+            .rollback_successor(Some(RollbackActionOutcome::Applied))
+            .unwrap();
+        let bytes = encode(&changed).unwrap();
+        move || fs::write(canonical, bytes).unwrap()
     }
 }
 

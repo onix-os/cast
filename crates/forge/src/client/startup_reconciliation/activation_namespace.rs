@@ -29,11 +29,24 @@ pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
 pub(in crate::client) use candidate_preserve_proof::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
 pub(super) use candidate_preserve_proof::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
-    UsrRollbackCandidatePreserveNamespaceProof,
+    UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackNewStateCandidatePreserveAppliedNamespace,
+    UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
+    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
+};
+#[cfg(test)]
+pub(in crate::client) use candidate_preserve_proof::{
+    arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
 };
 #[cfg(test)]
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
+#[cfg(test)]
+pub(in crate::client) use capture::{
+    NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_move_attempt_count,
+};
 #[cfg(test)]
 pub(in crate::client) use decision_proof::arm_before_usr_rollback_decision_fresh_namespace_capture;
 pub(super) use decision_proof::{

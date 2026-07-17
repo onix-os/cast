@@ -1,10 +1,12 @@
 //! Classification and sealed semantic reconciliation of one durable startup
 //! transition.
 //!
-//! Admission remains read-only. Only consumed rollback-reverse typestates plus
-//! startup-recovery seals can cross the private one-shot exchange and ordered
-//! parent-durability boundaries. This module still performs no journal advance,
-//! database mutation, cleanup, trigger, or broader recovery dispatch.
+//! Admission remains read-only. Consumed rollback-reverse typestates cross the
+//! production one-shot exchange and ordered parent-durability boundaries. A
+//! separate test-only checkpoint can consume the exact NewState empty-prefix
+//! candidate-preservation typestate through one move attempt, but has no
+//! production constructor, completed durability suffix, persistence, or
+//! dispatch. This module performs no database mutation, cleanup, or trigger.
 
 use std::{fmt, path::PathBuf};
 
@@ -22,18 +24,22 @@ mod activation_namespace;
 mod database_evidence;
 mod metadata_provenance;
 mod replacement_mutation_authority;
-#[allow(dead_code)] // checkpoint one remains sealed from production dispatch
+#[allow(dead_code)] // candidate preservation remains sealed from production dispatch
 mod usr_rollback_candidate_preserve_authority;
 mod usr_rollback_decision_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
-#[allow(unused_imports)] // checkpoint-one authorities remain sealed from production dispatch
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveEffectLease;
+#[allow(unused_imports)] // candidate effect authorities remain sealed from production dispatch
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
-    UsrRollbackCandidatePreserveAuthority, UsrRollbackCandidatePreserveAuthorityError,
-    UsrRollbackCandidatePreserveFinishAuthority,
+    UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
+    UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
+    UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackNewStateCandidatePreserveApplyReconciliation,
 };
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
@@ -81,9 +87,18 @@ use activation_namespace::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
     UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackCandidatePreserveTopology,
     UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
-    UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
-    UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
-    UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
+    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, UsrRollbackResumeRouteNamespaceError,
+    UsrRollbackResumeRouteNamespaceInspection, UsrRollbackResumeRouteNamespaceProof,
+    UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
+    UsrRollbackReverseNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::{
+    NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
+    arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_move_attempt_count,
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{

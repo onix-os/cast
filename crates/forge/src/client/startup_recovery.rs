@@ -13,6 +13,23 @@ mod usr_rollback_reverse_dispatch;
 mod usr_rollback_reverse_durability;
 mod usr_rollback_reverse_persistence;
 
+/// Unforgeable permission to consume read-only candidate-preservation
+/// admission into the test-only NewState move-effect checkpoint.
+///
+/// Production deliberately has no constructor until the complete effect,
+/// durability, persistence, and dispatcher boundaries are ready together.
+#[allow(dead_code)] // the checkpoint remains unreachable from production
+pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {
+    _private: (),
+}
+
+impl UsrRollbackCandidatePreserveEffectSeal {
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// Unforgeable permission to consume read-only rollback-reverse admission
 /// into mutable effect typestate. The production constructor is private to
 /// this module and its phase-specific executor descendants.

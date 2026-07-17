@@ -5,14 +5,30 @@
 //! shapes, retains both sides of the admission sandwich, and requires a fresh
 //! matching capture whenever an authority is revalidated.
 
+mod effect_reconciliation;
+
 use crate::{
     Installation,
     transition_journal::{Operation, Phase, StorageError, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
-    capture::{CaptureError, NamespaceSnapshot, TreeLocation, WrapperFingerprint, capture_snapshot},
+    capture::{
+        CaptureError, NamespaceSnapshot, NewStateCandidatePreserveCaptureError,
+        ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents, TreeLocation,
+        WrapperFingerprint, capture_snapshot,
+    },
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
+};
+
+pub(in crate::client::startup_reconciliation) use effect_reconciliation::{
+    UsrRollbackNewStateCandidatePreserveAppliedNamespace,
+    UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
+};
+#[cfg(test)]
+pub(in crate::client) use effect_reconciliation::{
+    arm_before_new_state_candidate_preserve_candidate_sync,
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +62,17 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackCandidatePreserv
     before: NamespaceSnapshot,
     after: NamespaceSnapshot,
     topology: UsrRollbackCandidatePreserveTopology,
+}
+
+/// Opaque exact PRE1 namespace transferred into the consuming move lease.
+///
+/// The retained descriptors and normalized projection deliberately have no
+/// accessor. The private effect child can only consume them through the
+/// pre-move candidate sync, final PRE recapture, and one-shot move.
+pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
+    baseline: NamespaceSnapshot,
+    projection: ProjectedNewStateCandidatePreserveNamespace,
+    parents: RetainedNewStateCandidatePreserveParents,
 }
 
 impl UsrRollbackCandidatePreserveNamespaceInspection {
@@ -112,6 +139,26 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
         Ok(())
+    }
+
+    /// Consume only the exact NewState staged-with-empty-quarantine prefix.
+    /// Every other candidate-preservation topology remains unsupported by this
+    /// first mutation checkpoint and yields no effect evidence.
+    pub(in crate::client::startup_reconciliation) fn into_new_state_move_effect_evidence(
+        self,
+        record: &TransitionRecord,
+    ) -> Result<UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, UsrRollbackCandidatePreserveNamespaceError>
+    {
+        if self.topology != UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine {
+            return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+        }
+        let projection = ProjectedNewStateCandidatePreserveNamespace::capture(&self.after, record)?;
+        let parents = RetainedNewStateCandidatePreserveParents::capture(&self.after, record)?;
+        Ok(UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
+            baseline: self.after,
+            projection,
+            parents,
+        })
     }
 }
 
@@ -357,6 +404,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     Capture(#[from] CaptureError),
     #[error("assess the exact candidate-preservation namespace against the journal phase")]
     Policy(#[from] NamespacePolicyConflict),
+    #[error("capture or reconcile the exact NewState candidate-preservation move namespace")]
+    NewStateMove(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("read the retained canonical transition journal")]
     Journal(#[from] StorageError),
     #[error("the retained canonical transition journal changed during candidate-preservation proof")]
@@ -391,6 +440,12 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     TopologyChanged,
     #[error("revalidate the retained mutable installation namespace")]
     Installation(#[from] crate::installation::Error),
+}
+
+impl From<NewStateCandidatePreserveCaptureError> for UsrRollbackCandidatePreserveNamespaceError {
+    fn from(source: NewStateCandidatePreserveCaptureError) -> Self {
+        Self::NewStateMove(Box::new(source))
+    }
 }
 
 #[cfg(test)]

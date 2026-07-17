@@ -44,7 +44,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	timeout 10s grep -Fqx "    _active_state_reservation: &'reservation ActiveStateReservation," "$$authority"; \
 	timeout 10s test "$$( timeout 10s rg -n 'let journal_binding = journal\.binding\(\);' "$$authority" | timeout 10s wc -l )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -n 'journal\.has_binding\(&self\.journal_binding\)' "$$authority" | timeout 10s wc -l )" = 1; \
-	timeout 10s awk '$$0 == "    fn revalidate(" { active = 1; next } active && $$0 == "        if !journal.has_binding(&self.journal_binding) {" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /inspect_current_database/ || $$0 ~ /self\.namespace/) { exit 1 } END { exit !found }' "$$authority"; \
+	timeout 10s awk '$$0 == "    fn revalidate_kind(" { active = 1; next } active && $$0 == "        self.require_journal_binding(journal)?;" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /inspect_current_database/ || $$0 ~ /self\.namespace/) { exit 1 } END { exit !found }' "$$authority"; \
 	timeout 10s grep -Fq 'if record.phase != Phase::CandidatePreserveIntent {' "$$authority"; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$authority"; \
 	timeout 10s grep -Fq 'RollbackAction::Applied | RollbackAction::AlreadySatisfied' "$$authority"; \
@@ -66,7 +66,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_empty_and_foreign_current_state_wrappers' "$$tests/topology_refusal.rs"; \
 	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_empty_transition_wrapper_for_archived_and_active_reblit' "$$tests/topology_refusal.rs"; \
 	timeout 10s grep -Fq 'startup_candidate_preserve_refuses_unmodeled_parking_for_new_and_archived_states' "$$tests/topology_refusal.rs"; \
-	if timeout 10s rg -n 'into_effect|consume|effect_seal|dispatcher|dispatch_' "$$authority" "$$proof"; then exit 1; fi; \
+	if timeout 10s rg -n 'dispatcher|dispatch_' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'renameat|rename\(|exchange_forward|exchange_reverse|sync_all|sync_data|\.sync\(|\.advance\(|forward_successor|rollback_successor|unlinkat|linkat|create_dir|remove_dir|remove_file|set_permissions|write_all|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'std::fs::File|fs::File|AsRawFd|RawFd|BorrowedFd|OwnedFd|root_directory\(|retained_staging_parent|PendingSystemTransition|ActivationNamespaceEvidence' "$$authority" "$$proof"; then exit 1; fi; \
 	for file in "$$authority" "$$proof" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/topology_refusal.rs"; do \

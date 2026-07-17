@@ -1,4 +1,5 @@
 mod model;
+mod new_state_candidate_preserve;
 mod reverse_exchange;
 mod wrappers;
 
@@ -34,6 +35,17 @@ use crate::{
 
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
+pub(super) use new_state_candidate_preserve::{
+    AppliedNewStateCandidatePreserveMoveReconciliation, NewStateCandidatePreserveCaptureError,
+    NewStateCandidatePreserveLayout, NewStateCandidatePreserveMoveReconciliation,
+    ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents,
+};
+#[cfg(test)]
+pub(in crate::client) use new_state_candidate_preserve::{
+    NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_move_reconciliation_capture,
+    arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
+    reset_new_state_candidate_preserve_move_attempt_count,
+};
 #[cfg(test)]
 pub(super) use reverse_exchange::ReverseExchangeParentIdentity;
 pub(super) use reverse_exchange::{
