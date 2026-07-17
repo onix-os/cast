@@ -741,12 +741,32 @@ final PRE check. All fifteen otherwise-controlled non-`0700` modes are refused
 for both layouts, and a final-PRE change to `0755` prevents any move attempt.
 POSIX access or default ACLs on these wrappers fail closed through namespace
 capture; arbitrary wrapper xattrs are not inspected and are not claimed absent.
-The focused admission and effect gates now pass 20/20 and 10/10 contracts.
+Commit `4f9e79cd` adds a raw one-shot descriptor-relative directory-creation
+adapter with no retry, adoption, or reconciliation policy. It has no production
+caller. Commit `fe880cde` then models all three NewState target prefixes without
+mutating them: absent, an owned restrictive-mode residue left by interrupted
+preparation, and an exact empty private target ready for movement. Residues are
+retained as opaque identities with unknown contents and ACL state; they are
+never represented as inspected empty wrappers. Unsafe target types and modes
+remain deferred.
 
-These commits do not create a missing quarantine target and supply no post-move
-durability, persistence, database or journal mutation, production dispatch, or
-effect for ActivateArchived or ActiveReblit. Candidate preservation therefore
-remains absent from the production recovery ladder and Phase 11 remains open.
+Commit `c1418ad0` consumes those exact read-only prefixes into three disjoint,
+opaque, test-sealed capabilities: create an absent target, normalize a retained
+residue, or move into an already canonical target. The first two expose no
+operational API, while the third retains the previously sealed one-shot move.
+Binding-first full revalidation occurs before any capability is selected, and
+archived activation or ActiveReblit still receives only a fieldless unsupported
+result. The focused admission inventory passes 24/24, target-preparation passes
+3/3, the combined authority run passes 27/27, and move reconciliation remains
+10/10.
+
+These commits still do not create or normalize a quarantine target and supply
+no post-move durability, persistence, database or journal mutation, production
+dispatch, or effect for ActivateArchived or ActiveReblit. The next checkpoint
+is one-shot absent-target creation followed by fresh semantic reconciliation
+and a mandatory restart boundary; it must never fall through into candidate
+movement in the same startup entry. Candidate preservation therefore remains
+absent from the production recovery ladder and Phase 11 remains open.
 
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the

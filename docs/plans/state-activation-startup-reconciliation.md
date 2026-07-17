@@ -188,7 +188,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   The focused
   `make forge-startup-usr-rollback-candidate-preserve-admission-test` lane
-  passes 20/20 contracts. Besides the full operation/source/outcome/layout
+  retains a 24/24 admission inventory. Besides the full
+  operation/source/outcome/layout
   matrix, it accepts historical runtime evidence, rejects a different open
   journal binding, invalidates database, provenance, and namespace changes,
   and defers or fails closed across initial-capture and fresh-revalidation
@@ -198,16 +199,31 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   boundary. It therefore establishes no production constructor, mutation,
   persistence, dispatch, effect, or durability claim.
 
-### Test-only NewState move reconciliation
+### Test-only NewState target-prefix selection and move reconciliation
 
   Commit `d3bf0cd8` adds the first consuming preservation checkpoint without
-  connecting it to production startup. A second private seal can select an
-  effect only from an admitted NewState Apply authority whose fresh topology is
-  the exact staged candidate plus its already-created, empty journal quarantine
-  target. The checkpoint deliberately refuses the staged-without-target prefix:
-  it does not create or adopt a quarantine directory. Already-preserved Finish
-  authority remains non-mutating, and neither ActivateArchived nor ActiveReblit
-  has an effect path.
+  connecting it to production startup. Its initial effect path admits only the
+  exact staged candidate plus an already-created, empty journal quarantine
+  target. Already-preserved Finish authority remains non-mutating, and neither
+  ActivateArchived nor ActiveReblit has an effect path.
+
+  Commit `4f9e79cd` adds a policy-free, one-attempt directory-creation adapter,
+  but gives it no production caller. Commit `fe880cde` separately models an
+  absent NewState target, every owned restrictive-mode residue that can remain
+  after interrupted preparation, and the canonical empty private target.
+  Restrictive residues retain exact identity while their contents and ACL state
+  remain deliberately unknown; they are not promoted to inspected empty
+  wrappers. Unsafe modes, foreign ownership, and wrong target types still fail
+  closed.
+
+  Commit `c1418ad0` lets the private test seal select a different opaque lease
+  for each exact prefix: Create for absence, Normalize for restrictive residue,
+  and Move only for the canonical empty private target. Create and Normalize
+  have no operational methods at this checkpoint. All three selections begin
+  with the open-journal binding and repeat the full retained evidence sandwich.
+  A payload-bearing restrictive residue may select Normalize evidence without
+  claiming emptiness and without changing the payload. Archived activation and
+  ActiveReblit remain fieldless Unsupported results.
 
   Selection and consumption both begin by checking the opaque binding of the
   journal opened for this startup entry. The authority then repeats the exact
@@ -243,12 +259,22 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   combinations from both rollback origins, ambiguity, final-prefix races,
   binding-first ordering, trailing database and journal checks, database and
   journal races during candidate sync, candidate namespace races, and the final
-  target-mode race. The admission lane passes 20/20. Static gates keep the seal
-  test-only and forbid production selection calls, retry loops, a second move,
-  target creation, post-move synchronization, persistence, database or journal
-  mutation, triggers, cleanup, and descriptor escape. This checkpoint remains
-  undispatched and therefore claims neither production recovery, post-move
-  durability, nor completed candidate preservation.
+  target-mode race. The admission inventory is 24/24, the dedicated
+  target-preparation lane is 3/3, the combined authority run is 27/27, and move
+  reconciliation remains 10/10. Static gates cover the authority, proof, and
+  target-preparation projection; they keep the seal test-only and forbid
+  production selection calls, retry loops, a second move, target mutation,
+  post-move synchronization, persistence, database or journal mutation,
+  triggers, cleanup, and descriptor escape. This checkpoint remains
+  undispatched and therefore claims neither production recovery, target
+  preparation, post-move durability, nor completed candidate preservation.
+
+  The next effect checkpoint may consume only the absent-target Create lease,
+  attempt creation once, and classify the result from fresh semantic evidence.
+  Its outcome must force startup to restart; it cannot normalize or move the
+  candidate in the same entry. Residue normalization is a later, separate
+  descriptor-bound checkpoint followed by fresh named same-inode inspection of
+  permissions, emptiness, and security metadata before another restart.
 
 ## Diagnostic reconciliation and namespace inventory
 
