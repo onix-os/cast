@@ -8,7 +8,6 @@
 
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
-#[cfg(test)]
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
 mod usr_rollback_candidate_preserve_dispatch;
 mod usr_rollback_candidate_preserve_persistence;
@@ -83,20 +82,24 @@ pub(super) use usr_rollback_reverse_persistence::{
 };
 
 pub(super) use usr_rollback_candidate_preserve_dispatch::{
-    UsrRollbackCandidatePreserveDispatchError, UsrRollbackCandidatePreserveDurabilitySeal,
-    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,
-    dispatch_usr_rollback_candidate_preserve_and_reopen,
+    UsrRollbackActiveReblitCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveDispatchError,
+    UsrRollbackCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal,
+    UsrRollbackCandidatePreserveReady, dispatch_usr_rollback_candidate_preserve_and_reopen,
 };
 
 pub(super) use usr_rollback_candidate_preserve_persistence::{
     UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_candidate_preserve_and_reopen,
 };
 
+pub(super) use usr_rollback_active_reblit_candidate_preserve_persistence::{
+    UsrRollbackActiveReblitCandidatePreservePersistenceError,
+    persist_usr_rollback_active_reblit_candidate_preserve_and_reopen,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_candidate_preserve_persistence::{
-    DurableUsrRollbackActiveReblitCandidatePreserveRecord, UsrRollbackActiveReblitCandidatePreservePersistenceError,
+    DurableUsrRollbackActiveReblitCandidatePreserveRecord,
     arm_before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation,
-    persist_usr_rollback_active_reblit_candidate_preserve_and_reopen,
 };
 
 pub(super) use usr_rollback_complete_route::{

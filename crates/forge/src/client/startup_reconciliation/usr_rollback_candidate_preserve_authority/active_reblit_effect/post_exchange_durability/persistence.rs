@@ -2,7 +2,7 @@
 //!
 //! The durability constructor remains independent from journal advancement.
 //! This child exposes only complete retained-evidence revalidation and the
-//! authority-owned successor required by the test-only persistence boundary.
+//! authority-owned successor required by the persistence boundary.
 
 use crate::{
     Installation,
@@ -72,11 +72,13 @@ impl UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'_> {
     }
 }
 
+#[cfg(test)]
 std::thread_local! {
     static BEFORE_PERSISTENCE_DURABLE_TRAILING_EVIDENCE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
 pub(in crate::client) fn arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence(
     hook: impl FnOnce() + 'static,
 ) {
@@ -85,6 +87,7 @@ pub(in crate::client) fn arm_before_active_reblit_candidate_preserve_persistence
     });
 }
 
+#[cfg(test)]
 fn run_before_persistence_durable_trailing_evidence() {
     BEFORE_PERSISTENCE_DURABLE_TRAILING_EVIDENCE.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -92,3 +95,6 @@ fn run_before_persistence_durable_trailing_evidence() {
         }
     });
 }
+
+#[cfg(not(test))]
+fn run_before_persistence_durable_trailing_evidence() {}

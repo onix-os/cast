@@ -149,11 +149,13 @@ fn classify_fresh_namespace(
     }
 }
 
+#[cfg(test)]
 std::thread_local! {
     static BEFORE_RECONCILIATION_CAPTURE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
 pub(in crate::client) fn arm_before_active_reblit_candidate_preserve_reconciliation_capture(
     hook: impl FnOnce() + 'static,
 ) {
@@ -162,6 +164,7 @@ pub(in crate::client) fn arm_before_active_reblit_candidate_preserve_reconciliat
     });
 }
 
+#[cfg(test)]
 fn run_before_reconciliation_capture() {
     BEFORE_RECONCILIATION_CAPTURE.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -169,3 +172,6 @@ fn run_before_reconciliation_capture() {
         }
     });
 }
+
+#[cfg(not(test))]
+fn run_before_reconciliation_capture() {}

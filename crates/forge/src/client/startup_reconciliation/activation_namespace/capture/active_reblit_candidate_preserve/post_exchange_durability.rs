@@ -294,6 +294,7 @@ enum DurabilityBoundary {
     FinalPostCapture,
 }
 
+#[cfg(test)]
 fn require_boundary(
     boundary: DurabilityBoundary,
 ) -> Result<(), ActiveReblitCandidatePreservePostExchangeDurabilityError> {
@@ -309,6 +310,13 @@ fn require_boundary(
             Ok(())
         }
     })
+}
+
+#[cfg(not(test))]
+fn require_boundary(
+    _boundary: DurabilityBoundary,
+) -> Result<(), ActiveReblitCandidatePreservePostExchangeDurabilityError> {
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -356,12 +364,14 @@ pub(in crate::client::startup_reconciliation::activation_namespace) enum ActiveR
     FinalNamespaceChanged,
     #[error("the final fresh ActiveReblit POST projection changed")]
     FinalProjectionChanged,
+    #[cfg(test)]
     #[error("injected ActiveReblit post-exchange durability fault at {point:?}")]
     InjectedFault {
         point: ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint,
     },
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint {
     CandidateSync,
@@ -372,6 +382,7 @@ pub(in crate::client) enum ActiveReblitCandidatePreservePostExchangeDurabilityFa
     FinalPostCapture,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum ActiveReblitCandidatePreservePostExchangeDurabilityEvent {
     CandidateSynced { device: u64, inode: u64 },
@@ -382,6 +393,7 @@ pub(in crate::client) enum ActiveReblitCandidatePreservePostExchangeDurabilityEv
     FinalPostProven,
 }
 
+#[cfg(test)]
 fn fault_point(boundary: DurabilityBoundary) -> ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint {
     match boundary {
         DurabilityBoundary::CandidateSync => {
@@ -405,6 +417,7 @@ fn fault_point(boundary: DurabilityBoundary) -> ActiveReblitCandidatePreservePos
     }
 }
 
+#[cfg(test)]
 std::thread_local! {
     static POST_EXCHANGE_DURABILITY_FAULT:
         std::cell::Cell<Option<ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint>> = const { std::cell::Cell::new(None) };
@@ -419,6 +432,7 @@ std::thread_local! {
     static BEFORE_DURABLE_POST_REVALIDATION_CAPTURE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
 pub(in crate::client) fn arm_active_reblit_candidate_preserve_post_exchange_durability_fault(
     point: ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint,
 ) {
@@ -430,11 +444,13 @@ pub(in crate::client) fn arm_active_reblit_candidate_preserve_post_exchange_dura
     });
 }
 
+#[cfg(test)]
 pub(in crate::client) fn reset_active_reblit_candidate_preserve_post_exchange_durability_events() {
     POST_EXCHANGE_DURABILITY_EVENTS.with(|events| events.borrow_mut().clear());
     POST_EXCHANGE_DURABILITY_FAULT.with(|slot| slot.set(None));
 }
 
+#[cfg(test)]
 pub(in crate::client) fn take_active_reblit_candidate_preserve_post_exchange_durability_events()
 -> Vec<ActiveReblitCandidatePreservePostExchangeDurabilityEvent> {
     POST_EXCHANGE_DURABILITY_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()))
@@ -442,10 +458,12 @@ pub(in crate::client) fn take_active_reblit_candidate_preserve_post_exchange_dur
 
 macro_rules! define_hook {
     ($arm:ident, $run:ident, $slot:ident) => {
+        #[cfg(test)]
         pub(in crate::client) fn $arm(hook: impl FnOnce() + 'static) {
             $slot.with(|slot| assert!(slot.borrow_mut().replace(Box::new(hook)).is_none()));
         }
 
+        #[cfg(test)]
         fn $run() {
             $slot.with(|slot| {
                 if let Some(hook) = slot.borrow_mut().take() {
@@ -453,6 +471,9 @@ macro_rules! define_hook {
                 }
             });
         }
+
+        #[cfg(not(test))]
+        fn $run() {}
     };
 }
 
@@ -492,36 +513,57 @@ define_hook!(
     BEFORE_DURABLE_POST_REVALIDATION_CAPTURE
 );
 
+#[cfg(test)]
 fn record_candidate_synced(file: &File) {
     record_descriptor_event(file, |device, inode| {
         ActiveReblitCandidatePreservePostExchangeDurabilityEvent::CandidateSynced { device, inode }
     });
 }
 
+#[cfg(not(test))]
+fn record_candidate_synced(_file: &File) {}
+
+#[cfg(test)]
 fn record_candidate_wrapper_synced(file: &File) {
     record_descriptor_event(file, |device, inode| {
         ActiveReblitCandidatePreservePostExchangeDurabilityEvent::CandidateWrapperSynced { device, inode }
     });
 }
 
+#[cfg(not(test))]
+fn record_candidate_wrapper_synced(_file: &File) {}
+
+#[cfg(test)]
 fn record_reservation_wrapper_synced(file: &File) {
     record_descriptor_event(file, |device, inode| {
         ActiveReblitCandidatePreservePostExchangeDurabilityEvent::ReservationWrapperSynced { device, inode }
     });
 }
 
+#[cfg(not(test))]
+fn record_reservation_wrapper_synced(_file: &File) {}
+
+#[cfg(test)]
 fn record_roots_parent_synced(file: &File) {
     record_descriptor_event(file, |device, inode| {
         ActiveReblitCandidatePreservePostExchangeDurabilityEvent::RootsParentSynced { device, inode }
     });
 }
 
+#[cfg(not(test))]
+fn record_roots_parent_synced(_file: &File) {}
+
+#[cfg(test)]
 fn record_quarantine_parent_synced(file: &File) {
     record_descriptor_event(file, |device, inode| {
         ActiveReblitCandidatePreservePostExchangeDurabilityEvent::QuarantineParentSynced { device, inode }
     });
 }
 
+#[cfg(not(test))]
+fn record_quarantine_parent_synced(_file: &File) {}
+
+#[cfg(test)]
 fn record_descriptor_event(
     file: &File,
     event: impl FnOnce(u64, u64) -> ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
@@ -535,6 +577,7 @@ fn record_descriptor_event(
 }
 
 fn record_final_post_proven() {
+    #[cfg(test)]
     POST_EXCHANGE_DURABILITY_EVENTS.with(|events| {
         events
             .borrow_mut()

@@ -13,7 +13,9 @@ use crate::{
             UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyEffectSelection,
             UsrRollbackCandidatePreserveFinishDurabilitySelection,
         },
-        startup_recovery::{UsrRollbackCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal},
+        startup_recovery::{
+            UsrRollbackActiveReblitCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal,
+        },
     },
     transition_journal::{RollbackActionOutcome, TransitionJournalStore},
 };
@@ -22,7 +24,6 @@ use super::super::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
-    UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
     UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
     arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,
 };
@@ -68,9 +69,11 @@ fn reconcile_applied<'reservation>(
         panic!("exact staged ActiveReblit evidence did not admit Apply");
     };
     let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
-    let lease = authority
-        .into_active_reblit_effect_for_test(&effect_seal, journal)
-        .unwrap();
+    let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+        authority.into_effect_selection(&effect_seal, journal).unwrap()
+    else {
+        panic!("exact staged ActiveReblit evidence did not select exchange");
+    };
     if let Some(fault) = fault {
         arm_active_reblit_candidate_preserve_exchange_fault(fault);
     }
@@ -91,9 +94,13 @@ fn select_finish<'reservation>(
         panic!("exact preserved ActiveReblit evidence did not admit Finish");
     };
     let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
-    authority
-        .reconcile_active_reblit_finish_for_test(&effect_seal, journal)
+    let UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit(authority) = authority
+        .into_post_move_durability_selection(&effect_seal, journal)
         .unwrap()
+    else {
+        panic!("exact preserved ActiveReblit evidence did not select ActiveReblit durability");
+    };
+    authority
 }
 
 fn expected_events(
@@ -371,8 +378,8 @@ fn startup_active_reblit_post_exchange_durability_converges_success_error_after_
 }
 
 #[test]
-fn startup_active_reblit_post_exchange_durability_production_selection_remains_unsupported_without_events_or_attempts()
-{
+fn startup_active_reblit_post_exchange_durability_production_selection_yields_disjoint_active_authorities_without_effects()
+ {
     let staged_fixture = staged(CandidateSource::Exchanged, RollbackActionOutcome::Applied);
     let staged_before = staged_fixture.evidence_snapshots();
     let staged_journal = staged_fixture.open_journal();
@@ -384,10 +391,12 @@ fn startup_active_reblit_post_exchange_durability_production_selection_remains_u
     };
     let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     reset_observations();
-    assert!(matches!(
-        authority.into_effect_selection(&effect_seal, &staged_journal).unwrap(),
-        UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-    ));
+    let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+        authority.into_effect_selection(&effect_seal, &staged_journal).unwrap()
+    else {
+        panic!("exact staged ActiveReblit evidence did not select exchange");
+    };
+    drop(lease);
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     assert!(take_active_reblit_candidate_preserve_post_exchange_durability_events().is_empty());
     staged_fixture.assert_evidence_unchanged(&staged_before);
@@ -402,14 +411,15 @@ fn startup_active_reblit_post_exchange_durability_production_selection_remains_u
     else {
         panic!("exact preserved ActiveReblit evidence did not admit Finish");
     };
-    let durability_seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
+    let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     reset_observations();
-    assert!(matches!(
-        authority
-            .into_post_move_durability_selection(&durability_seal, &finish_journal)
-            .unwrap(),
-        UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported
-    ));
+    let UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit(authority) = authority
+        .into_post_move_durability_selection(&effect_seal, &finish_journal)
+        .unwrap()
+    else {
+        panic!("exact preserved ActiveReblit evidence did not select ActiveReblit durability");
+    };
+    drop(authority);
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     assert!(take_active_reblit_candidate_preserve_post_exchange_durability_events().is_empty());
     finish_fixture.assert_evidence_unchanged(&finish_before);

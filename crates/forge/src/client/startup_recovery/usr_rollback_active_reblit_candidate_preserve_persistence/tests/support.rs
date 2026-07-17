@@ -11,10 +11,12 @@ use crate::{
         startup_reconciliation::{
             ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
             UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
-            UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
             UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority, UsrRollbackCandidatePreserveAdmission,
+            UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveFinishDurabilitySelection,
         },
-        startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
+        startup_recovery::{
+            UsrRollbackActiveReblitCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal,
+        },
     },
     transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
 };
@@ -73,9 +75,11 @@ pub(super) fn durable_authority<'reservation>(
             let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(journal, reservation) else {
                 panic!("exact staged ActiveReblit evidence did not admit Apply authority");
             };
-            let lease = authority
-                .into_active_reblit_effect_for_test(&effect_seal, journal)
-                .unwrap();
+            let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+                authority.into_effect_selection(&effect_seal, journal).unwrap()
+            else {
+                panic!("exact staged ActiveReblit evidence did not select exchange");
+            };
             let UsrRollbackActiveReblitCandidatePreserveApplyReconciliation::Applied(authority) =
                 lease.reconcile(&effect_seal, journal).unwrap()
             else {
@@ -89,9 +93,13 @@ pub(super) fn durable_authority<'reservation>(
             let UsrRollbackCandidatePreserveAdmission::Finish(authority) = fixture.capture(journal, reservation) else {
                 panic!("exact preserved ActiveReblit POST did not admit Finish authority");
             };
-            authority
-                .reconcile_active_reblit_finish_for_test(&effect_seal, journal)
+            let UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit(authority) = authority
+                .into_post_move_durability_selection(&effect_seal, journal)
                 .unwrap()
+            else {
+                panic!("exact preserved ActiveReblit evidence did not select ActiveReblit durability");
+            };
+            authority
                 .complete_post_exchange_durability(&durability_seal, journal)
                 .unwrap()
         }

@@ -13,12 +13,13 @@ forge-startup-active-reblit-candidate-preserve-post-exchange-durability-test:
 		startup_active_reblit_post_exchange_durability_rejects_namespace_public_name_inode_and_mode_races_at_every_boundary \
 		startup_active_reblit_post_exchange_durability_rejects_database_and_journal_drift_with_authority_withheld \
 		startup_active_reblit_post_exchange_durability_converges_success_error_after_apply_and_finish_independent_of_raw_status \
-		startup_active_reblit_post_exchange_durability_production_selection_remains_unsupported_without_events_or_attempts; do \
+		startup_active_reblit_post_exchange_durability_production_selection_yields_disjoint_active_authorities_without_effects; do \
 		timeout 10s grep -Fqx "$${prefix}$${test}: test" <<<"$$listed"; \
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority.rs; \
 	authority_active=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/active_reblit_effect.rs; \
 	authority_post=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/active_reblit_effect/post_exchange_durability.rs; \
+	authority_finish=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/effect_reconciliation/post_move_durability.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof.rs; \
 	proof_active=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof/active_reblit_effect.rs; \
 	proof_post=crates/forge/src/client/startup_reconciliation/activation_namespace/candidate_preserve_proof/active_reblit_effect/post_exchange_durability.rs; \
@@ -26,17 +27,20 @@ forge-startup-active-reblit-candidate-preserve-post-exchange-durability-test:
 	namespace=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/active_reblit_candidate_preserve.rs; \
 	namespace_post=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/active_reblit_candidate_preserve/post_exchange_durability.rs; \
 	namespace_effect=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/active_reblit_candidate_preserve/effect.rs; \
+	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/active_reblit_post_exchange_durability.rs; \
 	timeout 10s grep -Fqx 'mod post_exchange_durability;' "$$authority_active"; \
 	timeout 10s grep -Fqx 'mod post_exchange_durability;' "$$proof_active"; \
 	timeout 10s grep -Fqx 'mod post_exchange_durability;' "$$namespace"; \
 	for pair in "$$authority:mod active_reblit_effect;" "$$proof:mod active_reblit_effect;" "$$capture:mod active_reblit_candidate_preserve;"; do \
 		file="$${pair%%:*}"; declaration="$${pair#*:}"; \
-		timeout 10s awk -v declaration="$$declaration" 'previous == "#[cfg(test)]" && $$0 == declaration { found = 1 } { previous = $$0 } END { exit !found }' "$$file"; \
+		timeout 10s grep -Fqx "$$declaration" "$$file"; \
+		if timeout 10s awk -v declaration="$$declaration" 'previous == "#[cfg(test)]" && $$0 == declaration { found = 1 } { previous = $$0 } END { exit !found }' "$$file"; then exit 1; fi; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackActiveReblitCandidatePreserveDurabilitySeal \{' crates/forge/src/client --glob '*.rs' )" = "$$authority_post"; \
-	timeout 10s grep -Fqx '    pub(in crate::client) fn new_for_test() -> Self {' "$$authority_post"; \
-	if timeout 10s grep -Fq '    fn new() -> Self {' "$$authority_post"; then exit 1; fi; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackActiveReblitCandidatePreserveDurabilitySeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
+	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackActiveReblitCandidatePreserveDurabilitySeal {/,/^}/p' "$$production_dispatch" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'parents.candidate.sync_retained_tree()' "$$namespace_post" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.sync_all()' "$$namespace_post" )" = 4; \
 	candidate="$$( timeout 10s grep -nF 'parents.candidate.sync_retained_tree()' "$$namespace_post" | timeout 10s cut -d: -f1 )"; \
@@ -65,12 +69,14 @@ forge-startup-active-reblit-candidate-preserve-post-exchange-durability-test:
 	if timeout 10s rg -n 'raw_report\.(is_ok|is_err|unwrap|expect)|match[[:space:]]+raw_report|if[[:space:]]+let.*raw_report' "$$namespace_post" "$$proof_post" "$$authority_post"; then exit 1; fi; \
 	if timeout 10s rg -n 'pub\([^)]*\)[[:space:]]+fn[[:space:]]+.*(descriptor|raw_fd|wrapper_index|target_name)|AsRawFd|RawFd' "$$namespace_post" "$$proof_post" "$$authority_post"; then exit 1; fi; \
 	production_calls="$$( timeout 10s rg -n -F '.complete_post_exchange_durability(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/active_reblit_effect.rs' --glob '!**/active_reblit_effect/**' || true )"; \
-	timeout 10s test -z "$$production_calls"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_calls" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" <<<"$$production_calls" )" = 2; \
 	timeout 10s grep -Fqx '    Unsupported,' "$$authority"; \
+	timeout 10s grep -Fqx '    ActiveReblit(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'\''reservation>),' "$$authority_finish"; \
 	timeout 10s grep -Fq 'ActiveReblitCandidatePreserveExchangeFault::ErrorAfterApply' "$$tests"; \
-	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported' "$$tests"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit' "$$tests"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '#[test]' "$$tests" )" = 6; \
-	for file in "$$authority" "$$authority_active" "$$authority_post" "$$proof" "$$proof_active" "$$proof_post" "$$capture" "$$namespace" "$$namespace_post" "$$namespace_effect" "$$tests" misc/make/startup-active-reblit-candidate-preserve-post-exchange-durability-tests.mk Makefile; do \
+	for file in "$$authority" "$$authority_active" "$$authority_post" "$$authority_finish" "$$proof" "$$proof_active" "$$proof_post" "$$capture" "$$namespace" "$$namespace_post" "$$namespace_effect" "$$production_dispatch" "$$tests" misc/make/startup-active-reblit-candidate-preserve-post-exchange-durability-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$${prefix}" -- --test-threads=1

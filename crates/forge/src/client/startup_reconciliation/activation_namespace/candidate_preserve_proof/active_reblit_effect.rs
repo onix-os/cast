@@ -1,8 +1,7 @@
-//! Test-sealed ActiveReblit whole-wrapper effect proof.
+//! Sealed ActiveReblit whole-wrapper effect proof.
 //!
-//! Production selection remains fieldless `Unsupported`. This child lets
-//! focused tests consume exact staged or preserved topology without exposing
-//! the retained wrapper index, fixed name, or any descriptor.
+//! Exact staged or preserved topology can be consumed without exposing the
+//! retained wrapper index, fixed name, or any descriptor.
 
 mod post_exchange_durability;
 

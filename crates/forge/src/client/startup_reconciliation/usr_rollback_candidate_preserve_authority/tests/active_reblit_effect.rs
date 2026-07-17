@@ -1,4 +1,4 @@
-//! Focused test-sealed ActiveReblit whole-wrapper effect contracts.
+//! Focused ActiveReblit whole-wrapper effect contracts.
 
 use std::{fs, os::unix::fs::PermissionsExt as _};
 
@@ -7,6 +7,7 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
             UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyEffectSelection,
+            UsrRollbackCandidatePreserveFinishDurabilitySelection,
         },
         startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
@@ -48,7 +49,12 @@ fn apply_lease<'reservation>(
         panic!("exact staged ActiveReblit evidence did not admit Apply")
     };
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
-    authority.into_active_reblit_effect_for_test(&seal, journal).unwrap()
+    let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+        authority.into_effect_selection(&seal, journal).unwrap()
+    else {
+        panic!("exact staged ActiveReblit evidence did not select exchange")
+    };
+    lease
 }
 
 fn reconcile<'reservation>(
@@ -296,15 +302,17 @@ fn startup_active_reblit_finish_reconciles_exact_post_without_an_exchange() {
     reset_active_reblit_candidate_preserve_exchange_attempt_count();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
-    let _authority = authority
-        .reconcile_active_reblit_finish_for_test(&seal, &journal)
-        .unwrap();
+    let UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit(_authority) =
+        authority.into_post_move_durability_selection(&seal, &journal).unwrap()
+    else {
+        panic!("exact preserved ActiveReblit evidence did not select ActiveReblit durability")
+    };
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     fixture.assert_evidence_unchanged(&before);
 }
 
 #[test]
-fn startup_active_reblit_production_selection_remains_fieldless_unsupported() {
+fn startup_active_reblit_production_selection_yields_one_opaque_exchange_lease() {
     let fixture = staged();
     let before = fixture.evidence_snapshots();
     let journal = fixture.open_journal();
@@ -315,10 +323,12 @@ fn startup_active_reblit_production_selection_remains_fieldless_unsupported() {
     reset_active_reblit_candidate_preserve_exchange_attempt_count();
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
-    assert!(matches!(
-        authority.into_effect_selection(&seal, &journal).unwrap(),
-        UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-    ));
+    let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+        authority.into_effect_selection(&seal, &journal).unwrap()
+    else {
+        panic!("exact staged ActiveReblit evidence did not select exchange")
+    };
+    drop(lease);
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     fixture.assert_evidence_unchanged(&before);
 }

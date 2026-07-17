@@ -1,4 +1,3 @@
-#[cfg(test)]
 mod active_reblit_candidate_preserve;
 mod model;
 mod new_state_candidate_preserve;
@@ -36,7 +35,6 @@ use crate::{
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
 };
 
-#[cfg(test)]
 pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_candidate_preserve::{
     ActiveReblitCandidatePreserveEffectError, ActiveReblitCandidatePreserveExchangeReconciliation,
     ActiveReblitCandidatePreserveLayout, ActiveReblitCandidatePreservePostExchangeDurabilityError,

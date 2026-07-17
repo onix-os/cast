@@ -8,6 +8,7 @@ use crate::linux_fs::renameat2_exchange_once;
 
 use super::PreparedActiveReblitCandidatePreserveExchange;
 
+#[cfg(test)]
 pub(in crate::client) use reconciliation::arm_before_active_reblit_candidate_preserve_reconciliation_capture;
 pub(in crate::client::startup_reconciliation::activation_namespace) use reconciliation::{
     ActiveReblitCandidatePreserveExchangeReconciliation, AppliedActiveReblitCandidatePreserveExchangeReconciliation,
@@ -59,6 +60,12 @@ impl PreparedActiveReblitCandidatePreserveExchange {
     }
 }
 
+#[cfg(not(test))]
+fn attempt_raw_exchange_once(parents: &super::RetainedActiveReblitCandidatePreserveParents) -> io::Result<()> {
+    renameat2_exchange_once(&parents.roots, c"staging", &parents.quarantine, &parents.target_name)
+}
+
+#[cfg(test)]
 fn attempt_raw_exchange_once(parents: &super::RetainedActiveReblitCandidatePreserveParents) -> io::Result<()> {
     let injected = begin_exchange_attempt();
     let apply = !matches!(
@@ -83,6 +90,7 @@ fn attempt_raw_exchange_once(parents: &super::RetainedActiveReblitCandidatePrese
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum ActiveReblitCandidatePreserveExchangeFault {
     ErrorWithoutApply,
@@ -90,12 +98,14 @@ pub(in crate::client) enum ActiveReblitCandidatePreserveExchangeFault {
     ErrorAfterApply,
 }
 
+#[cfg(test)]
 std::thread_local! {
     static EXCHANGE_FAULT: std::cell::Cell<Option<ActiveReblitCandidatePreserveExchangeFault>> =
         const { std::cell::Cell::new(None) };
     static EXCHANGE_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
 pub(in crate::client) fn arm_active_reblit_candidate_preserve_exchange_fault(
     fault: ActiveReblitCandidatePreserveExchangeFault,
 ) {
@@ -107,15 +117,18 @@ pub(in crate::client) fn arm_active_reblit_candidate_preserve_exchange_fault(
     });
 }
 
+#[cfg(test)]
 pub(in crate::client) fn reset_active_reblit_candidate_preserve_exchange_attempt_count() {
     EXCHANGE_ATTEMPTS.with(|count| count.set(0));
     EXCHANGE_FAULT.with(|slot| slot.set(None));
 }
 
+#[cfg(test)]
 pub(in crate::client) fn active_reblit_candidate_preserve_exchange_attempt_count() -> usize {
     EXCHANGE_ATTEMPTS.with(std::cell::Cell::get)
 }
 
+#[cfg(test)]
 fn begin_exchange_attempt() -> Option<ActiveReblitCandidatePreserveExchangeFault> {
     EXCHANGE_ATTEMPTS.with(|count| {
         count.set(

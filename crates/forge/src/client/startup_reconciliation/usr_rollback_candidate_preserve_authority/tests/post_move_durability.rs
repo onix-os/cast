@@ -67,13 +67,14 @@ fn select_finish<'reservation>(
     fixture: &CandidatePreserveFixture,
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
-    seal: &UsrRollbackCandidatePreserveDurabilitySeal,
 ) -> UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation> {
     let UsrRollbackCandidatePreserveAdmission::Finish(authority) = fixture.capture(journal, reservation) else {
         panic!("exact NewState POST did not admit Finish authority");
     };
-    let UsrRollbackCandidatePreserveFinishDurabilitySelection::NewState(authority) =
-        authority.into_post_move_durability_selection(seal, journal).unwrap()
+    let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    let UsrRollbackCandidatePreserveFinishDurabilitySelection::NewState(authority) = authority
+        .into_post_move_durability_selection(&effect_seal, journal)
+        .unwrap()
     else {
         panic!("exact NewState Finish authority did not select durability");
     };
@@ -125,7 +126,7 @@ fn assert_fresh_finish_completes(
     reservation: &ActiveStateReservation,
 ) {
     let seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
-    let authority = select_finish(fixture, journal, reservation, &seal);
+    let authority = select_finish(fixture, journal, reservation);
     let expected = expected_events(fixture);
     reset_new_state_candidate_preserve_post_move_durability_events();
     let durable = authority.complete_post_move_durability(&seal, journal).unwrap();
@@ -168,7 +169,7 @@ fn startup_new_state_post_move_durability_orders_exact_events_for_applied_and_fi
             let reservation = ActiveStateReservation::acquire().unwrap();
             reset_observations();
             let seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
-            let authority = select_finish(&fixture, &journal, &reservation, &seal);
+            let authority = select_finish(&fixture, &journal, &reservation);
             let expected = expected_events(&fixture);
 
             let durable = authority.complete_post_move_durability(&seal, &journal).unwrap();
@@ -218,7 +219,7 @@ fn startup_new_state_post_move_durability_faults_stop_at_exact_prefixes_and_fres
                 let journal = fixture.open_journal();
                 let reservation = ActiveStateReservation::acquire().unwrap();
                 let seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
-                let authority = select_finish(&fixture, &journal, &reservation, &seal);
+                let authority = select_finish(&fixture, &journal, &reservation);
                 let expected = expected_events(&fixture);
                 reset_observations();
                 arm_new_state_candidate_preserve_post_move_durability_fault(fault);
@@ -275,7 +276,7 @@ fn startup_new_state_post_move_durability_rejects_exact_post_races_at_every_barr
         let journal = fixture.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
         let seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
-        let authority = select_finish(&fixture, &journal, &reservation, &seal);
+        let authority = select_finish(&fixture, &journal, &reservation);
         let expected = expected_events(&fixture);
         let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
         let candidate = target.join("usr");
@@ -371,7 +372,7 @@ fn startup_new_state_post_move_durability_rejects_evidence_races_and_fresh_admis
         let journal = fixture.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
         let seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
-        let authority = select_finish(&fixture, &journal, &reservation, &seal);
+        let authority = select_finish(&fixture, &journal, &reservation);
         let expected = expected_events(&fixture);
         reset_observations();
         let removed_provenance = match race {
@@ -478,8 +479,8 @@ fn startup_new_state_post_move_durability_converges_applied_error_after_apply_an
 }
 
 #[test]
-fn startup_non_new_state_finish_durability_is_fieldless_unsupported_without_events() {
-    for kind in [OperationKind::Archived, OperationKind::ActiveReblit] {
+fn startup_archived_finish_durability_is_fieldless_unsupported_without_events() {
+    for kind in [OperationKind::Archived] {
         for source in CandidateSource::ALL {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 let fixture = CandidatePreserveFixture::new(kind, source, usr_outcome, CandidateLayout::Preserved);
@@ -490,7 +491,7 @@ fn startup_non_new_state_finish_durability_is_fieldless_unsupported_without_even
                 else {
                     panic!("exact {kind:?} POST did not admit Finish authority");
                 };
-                let seal = UsrRollbackCandidatePreserveDurabilitySeal::new_for_test();
+                let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
                 reset_observations();
 
                 assert!(matches!(

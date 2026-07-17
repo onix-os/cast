@@ -27,11 +27,11 @@ use crate::client::{
 };
 
 #[cfg(test)]
-pub(in crate::client) use post_move_durability::UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority;
-#[cfg(test)]
 pub(in crate::client) use post_move_durability::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use post_move_durability::{
-    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
 };
 
 /// Semantic result of consuming one exact empty-prefix NewState move lease.

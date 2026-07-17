@@ -1,15 +1,15 @@
-//! Test-only authority convergence for ActiveReblit POST durability.
-//!
-//! This child is reachable only through the already test-gated ActiveReblit
-//! effect module. It neither selects production work nor persists a journal.
+//! Authority convergence for ActiveReblit POST durability.
 
 mod persistence;
 
+#[cfg(test)]
 pub(in crate::client) use persistence::arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence;
 
+#[cfg(test)]
+use crate::transition_journal::RollbackActionOutcome;
 use crate::{
     Installation, db,
-    transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -25,19 +25,8 @@ use crate::client::{
         activation_namespace::UsrRollbackActiveReblitCandidatePreserveDurableNamespace,
         usr_rollback_candidate_preserve_authority::effect_evidence::require_effect_binding,
     },
+    startup_recovery::UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
 };
-
-/// Seal dedicated to the test-only ActiveReblit durability checkpoint.
-/// Production startup has no constructor, dispatch, or call site for it.
-pub(in crate::client) struct UsrRollbackActiveReblitCandidatePreserveDurabilitySeal {
-    _private: (),
-}
-
-impl UsrRollbackActiveReblitCandidatePreserveDurabilitySeal {
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
 
 /// Opaque authority retained only after every namespace and non-namespace
 /// POST check has completed.
@@ -149,6 +138,7 @@ fn complete_after_binding<'reservation, Namespace>(
     })
 }
 
+#[cfg(test)]
 impl UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'_> {
     pub(in crate::client) fn origin_for_test(&self) -> RollbackActionOutcome {
         match self.origin {
@@ -158,11 +148,13 @@ impl UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'_> {
     }
 }
 
+#[cfg(test)]
 std::thread_local! {
     static BEFORE_DURABLE_TRAILING_EVIDENCE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
 pub(in crate::client) fn arm_before_active_reblit_candidate_preserve_durable_trailing_evidence(
     hook: impl FnOnce() + 'static,
 ) {
@@ -171,6 +163,7 @@ pub(in crate::client) fn arm_before_active_reblit_candidate_preserve_durable_tra
     });
 }
 
+#[cfg(test)]
 fn run_before_durable_trailing_evidence() {
     BEFORE_DURABLE_TRAILING_EVIDENCE.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -178,3 +171,6 @@ fn run_before_durable_trailing_evidence() {
         }
     });
 }
+
+#[cfg(not(test))]
+fn run_before_durable_trailing_evidence() {}

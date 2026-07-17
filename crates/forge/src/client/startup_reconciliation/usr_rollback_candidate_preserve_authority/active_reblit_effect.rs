@@ -1,13 +1,10 @@
-//! Test-only sealed consumption of one exact ActiveReblit wrapper exchange.
-//!
-//! This module is absent from non-test builds. The production effect selector
-//! therefore continues to return fieldless `Unsupported` for ActiveReblit.
+//! Sealed consumption of one exact ActiveReblit wrapper exchange.
 
 mod post_exchange_durability;
 
+pub(in crate::client) use post_exchange_durability::UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority;
+#[cfg(test)]
 pub(in crate::client) use post_exchange_durability::{
-    UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
-    UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
     arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,
     arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
 };
@@ -18,11 +15,10 @@ use crate::{
 };
 
 use super::{
-    DatabaseEvidence, UsrRollbackCandidatePreserveApplyAuthority, UsrRollbackCandidatePreserveAuthority,
-    UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveAuthorityErrorKind,
-    UsrRollbackCandidatePreserveFinishAuthority, UsrRollbackCandidatePreserveTopology,
-    candidate_preserve_plan_is_exact, effect_evidence::require_effect_binding, inspect_current_database,
-    require_exact_database,
+    DatabaseEvidence, UsrRollbackCandidatePreserveAuthority, UsrRollbackCandidatePreserveAuthorityError,
+    UsrRollbackCandidatePreserveAuthorityErrorKind, UsrRollbackCandidatePreserveFinishAuthority,
+    UsrRollbackCandidatePreserveTopology, candidate_preserve_plan_is_exact, effect_evidence::require_effect_binding,
+    inspect_current_database, require_exact_database,
 };
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
@@ -79,7 +75,7 @@ pub(in crate::client) struct UsrRollbackActiveReblitCandidatePreserveAlreadySati
     >,
 }
 
-/// Semantic result of consuming the test-sealed one-shot effect.
+/// Semantic result of consuming the sealed one-shot effect.
 #[must_use = "a consumed ActiveReblit wrapper exchange must be handled"]
 pub(in crate::client) enum UsrRollbackActiveReblitCandidatePreserveApplyReconciliation<'reservation> {
     Applied(UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority<'reservation>),
@@ -87,24 +83,19 @@ pub(in crate::client) enum UsrRollbackActiveReblitCandidatePreserveApplyReconcil
     Ambiguous,
 }
 
-impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
-    /// Test-only bridge from generic admission into exact ActiveReblit effect
-    /// evidence. It is deliberately separate from production selection.
-    pub(in crate::client) fn into_active_reblit_effect_for_test(
+impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
+    /// Convert already revalidated generic admission into exact ActiveReblit
+    /// effect evidence without exposing the private wrapper index.
+    pub(super) fn into_active_reblit_effect_after_revalidation(
         self,
-        _effect_seal: &UsrRollbackCandidatePreserveEffectSeal,
-        journal: &TransitionJournalStore,
+        wrapper_index: usize,
     ) -> Result<
         UsrRollbackActiveReblitCandidatePreserveEffectLease<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        let evidence = self.evidence;
-        evidence.require_journal_binding(journal)?;
-        let topology = evidence.namespace.topology();
-        let UsrRollbackCandidatePreserveTopology::ActiveReblitStaged { wrapper_index } = topology else {
+        if self.namespace.topology() != (UsrRollbackCandidatePreserveTopology::ActiveReblitStaged { wrapper_index }) {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
-        };
-        evidence.revalidate_after_binding(journal, topology)?;
+        }
         let UsrRollbackCandidatePreserveAuthority {
             installation,
             state_db,
@@ -113,7 +104,7 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
             namespace,
             journal_binding,
             _active_state_reservation,
-        } = evidence;
+        } = self;
         let namespace = namespace.into_active_reblit_apply_effect_evidence(&record, wrapper_index)?;
         Ok(UsrRollbackActiveReblitCandidatePreserveEffectLease {
             effect: UsrRollbackActiveReblitCandidatePreserveEffect {
@@ -130,23 +121,22 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
 }
 
 impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
-    /// Test-only Finish path. Exact preserved evidence is freshly reconciled,
-    /// but no exchange attempt and no persistence operation exists here.
-    pub(in crate::client) fn reconcile_active_reblit_finish_for_test(
+    /// Convert already revalidated Finish admission into exact ActiveReblit
+    /// POST evidence without an exchange attempt.
+    pub(super) fn into_active_reblit_finish_after_revalidation(
         self,
-        _effect_seal: &UsrRollbackCandidatePreserveEffectSeal,
         journal: &TransitionJournalStore,
+        wrapper_index: usize,
     ) -> Result<
         UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
         let evidence = self.evidence;
-        evidence.require_journal_binding(journal)?;
-        let topology = evidence.namespace.topology();
-        let UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index } = topology else {
+        if evidence.namespace.topology()
+            != (UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index })
+        {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
-        };
-        evidence.revalidate_after_binding(journal, topology)?;
+        }
         let UsrRollbackCandidatePreserveAuthority {
             installation,
             state_db,

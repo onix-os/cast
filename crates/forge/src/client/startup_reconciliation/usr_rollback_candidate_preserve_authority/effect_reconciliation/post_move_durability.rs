@@ -22,7 +22,8 @@ use super::{
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_reconciliation::{
-        DatabaseEvidence, UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
+        DatabaseEvidence, UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
+        UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
         UsrRollbackCandidatePreserveTopology,
         activation_namespace::{
             UsrRollbackNewStateCandidatePreserveAlreadySatisfiedNamespace,
@@ -30,7 +31,7 @@ use crate::client::{
         },
         usr_rollback_candidate_preserve_authority::effect_evidence::require_effect_binding,
     },
-    startup_recovery::UsrRollbackCandidatePreserveDurabilitySeal,
+    startup_recovery::{UsrRollbackCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal},
 };
 
 /// Consuming Finish selection for the post-move durability checkpoint.
@@ -39,6 +40,7 @@ use crate::client::{
 #[must_use = "candidate-preservation Finish durability selection must be handled"]
 pub(in crate::client) enum UsrRollbackCandidatePreserveFinishDurabilitySelection<'reservation> {
     NewState(UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
+    ActiveReblit(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
     Unsupported,
 }
 
@@ -70,11 +72,11 @@ struct DurableNewStateCandidatePreserveEffect<'reservation> {
 }
 
 impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
-    /// Consume Finish admission into exact NewState durability authority or a
-    /// fieldless unsupported result for Archived and ActiveReblit evidence.
+    /// Consume Finish admission into one exact operation-specific durability
+    /// authority or a fieldless unsupported result for archived activation.
     pub(in crate::client) fn into_post_move_durability_selection(
         self,
-        _seal: &UsrRollbackCandidatePreserveDurabilitySeal,
+        _seal: &UsrRollbackCandidatePreserveEffectSeal,
         journal: &TransitionJournalStore,
     ) -> Result<
         UsrRollbackCandidatePreserveFinishDurabilitySelection<'reservation>,
@@ -108,8 +110,12 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
                     },
                 ))
             }
-            UsrRollbackCandidatePreserveTopology::ArchivedPreserved
-            | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
+            UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index } => {
+                Ok(UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit(
+                    self.into_active_reblit_finish_after_revalidation(journal, wrapper_index)?,
+                ))
+            }
+            UsrRollbackCandidatePreserveTopology::ArchivedPreserved => {
                 Ok(UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported)
             }
             UsrRollbackCandidatePreserveTopology::NewStateStaged

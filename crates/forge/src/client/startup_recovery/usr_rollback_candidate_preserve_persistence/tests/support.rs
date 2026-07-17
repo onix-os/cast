@@ -90,7 +90,7 @@ pub(super) fn durable_authority<'reservation>(
                 panic!("exact preserved NewState POST did not admit Finish authority");
             };
             let UsrRollbackCandidatePreserveFinishDurabilitySelection::NewState(authority) = authority
-                .into_post_move_durability_selection(&durability_seal, journal)
+                .into_post_move_durability_selection(&effect_seal, journal)
                 .unwrap()
             else {
                 panic!("exact preserved NewState POST did not select durability");

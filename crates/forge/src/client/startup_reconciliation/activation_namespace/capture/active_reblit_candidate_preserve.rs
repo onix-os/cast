@@ -1,9 +1,8 @@
 //! Exact projection and retained descriptors for whole-wrapper ActiveReblit preservation.
 //!
-//! This substrate is test-sealed while production dispatch remains explicitly
-//! unsupported. It models one descriptor-relative exchange between the fixed
-//! staging name and the journal-derived private replacement reservation. Raw
-//! syscall status is never interpreted as the semantic outcome.
+//! It models one descriptor-relative exchange between the fixed staging name
+//! and the journal-derived private replacement reservation. Raw syscall status
+//! is never interpreted as the semantic outcome.
 
 mod effect;
 mod post_exchange_durability;
@@ -18,6 +17,7 @@ use super::{
     TreeLocation, UsrFingerprint, WrapperFingerprint,
 };
 
+#[cfg(test)]
 pub(in crate::client) use effect::{
     ActiveReblitCandidatePreserveExchangeFault, active_reblit_candidate_preserve_exchange_attempt_count,
     arm_active_reblit_candidate_preserve_exchange_fault,
@@ -32,6 +32,7 @@ pub(in crate::client::startup_reconciliation::activation_namespace) use post_exc
     DurableActiveReblitCandidatePreservePostExchangeNamespace,
     PendingActiveReblitCandidatePreservePostExchangeDurability,
 };
+#[cfg(test)]
 pub(in crate::client) use post_exchange_durability::{
     ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
     ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint,

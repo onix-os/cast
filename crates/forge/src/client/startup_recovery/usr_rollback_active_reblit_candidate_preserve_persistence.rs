@@ -1,7 +1,6 @@
 //! Persist one fully durable ActiveReblit candidate outcome as `CandidatePreserved`.
 //!
-//! This complete checkpoint is compiled only for focused tests. The supplied
-//! authority owns exact preserved namespace, database, journal, plan, and
+//! The supplied authority owns exact preserved namespace, database, journal, plan, and
 //! installation evidence and fixes its Applied or AlreadySatisfied origin
 //! privately. This boundary revalidates that authority twice, derives its sole
 //! successor, performs exactly one conditional advance, and drops both the
@@ -20,12 +19,15 @@ use super::super::startup_reconciliation::{
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
+#[cfg(test)]
 #[allow(dead_code)] // shared candidate fixture contains wider reconciliation helpers
 #[path = "../startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs"]
 mod candidate_test_support;
+#[cfg(test)]
 #[allow(dead_code)] // shared fixture contains wider startup-recovery helpers
 #[path = "test_support.rs"]
 mod test_fixture;
+#[cfg(test)]
 mod tests;
 
 /// Which exact canonical record survived a failed conditional advance.
@@ -145,11 +147,13 @@ fn unexpected_record(
     }
 }
 
+#[cfg(test)]
 std::thread_local! {
     static BEFORE_FINAL_AUTHORITY_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
 pub(in crate::client) fn arm_before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation(
     hook: impl FnOnce() + 'static,
 ) {
@@ -158,6 +162,7 @@ pub(in crate::client) fn arm_before_usr_rollback_active_reblit_candidate_preserv
     });
 }
 
+#[cfg(test)]
 fn before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation() {
     BEFORE_FINAL_AUTHORITY_REVALIDATION.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
@@ -165,6 +170,9 @@ fn before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revali
         }
     });
 }
+
+#[cfg(not(test))]
+fn before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation() {}
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackActiveReblitCandidatePreservePersistenceError {

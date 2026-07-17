@@ -67,7 +67,6 @@ pub(in crate::client) use candidate_preserve_proof::{
     take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
-#[cfg(test)]
 pub(in crate::client::startup_reconciliation) use candidate_preserve_proof::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackActiveReblitCandidatePreserveAppliedNamespace, UsrRollbackActiveReblitCandidatePreserveDurableNamespace,

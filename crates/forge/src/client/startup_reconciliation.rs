@@ -3,16 +3,14 @@
 //!
 //! Admission remains read-only. Consumed rollback-reverse typestates cross the
 //! production one-shot exchange and ordered parent-durability boundaries. A
-//! separate production leaf consumes exact NewState target prefixes into
-//! disjoint create, normalize, or move capabilities. All three have separate
-//! one-attempt semantic reconciliation. Normalization also completes its
-//! exact target and quarantine-parent durability suffix before returning a
-//! restart result. Every move independently completes candidate, target, and
-//! quarantine-parent pre-move barriers before rename. Applied movement and
-//! exact already-preserved NewState evidence also share one sealed
-//! candidate-and-parent post-move durability suffix before one journal
-//! persistence boundary. The complete suffix remains phase-specific and has
-//! no cleanup or trigger authority.
+//! separate production leaf consumes exact NewState target prefixes and exact
+//! ActiveReblit exchange evidence into disjoint capabilities. NewState target
+//! preparation and movement retain their separate one-attempt reconciliation
+//! and durability boundaries. ActiveReblit retains a separate one-attempt
+//! wrapper exchange and post-exchange durability suffix. Applied and exact
+//! already-preserved evidence converge only within their operation family
+//! before separate journal-persistence boundaries. The complete suffix remains
+//! phase-specific and has no cleanup or trigger authority.
 
 use std::{fmt, path::PathBuf};
 
@@ -41,21 +39,22 @@ mod usr_rollback_reverse_authority;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 #[cfg(test)]
-pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority;
-#[cfg(test)]
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveEffectLease;
 #[cfg(test)]
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence;
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
+    UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
-    UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
     UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
-    arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
-    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
     UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
