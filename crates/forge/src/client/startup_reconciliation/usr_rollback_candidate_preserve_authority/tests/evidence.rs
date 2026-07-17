@@ -1,5 +1,7 @@
 //! Focused retained-evidence and race contracts.
 
+use std::{fs, os::unix::fs::PermissionsExt as _};
+
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
@@ -13,7 +15,7 @@ use crate::{
 
 use super::{
     fixture::{OperationKind, create_private_directory},
-    support::{CandidateLayout, CandidatePreserveFixture, CandidateSource},
+    support::{CandidateLayout, CandidatePreserveFixture, CandidateSource, reserved_active_reblit_wrapper_path},
 };
 
 #[test]
@@ -184,5 +186,33 @@ fn startup_candidate_preserve_fresh_namespace_race_fails_revalidation() {
             _ => panic!("exact {layout:?} evidence was not admitted"),
         }
         assert_eq!(fixture.fixture.canonical_bytes(), before);
+    }
+
+    for layout in [CandidateLayout::Staged, CandidateLayout::Preserved] {
+        let fixture = CandidatePreserveFixture::new(
+            OperationKind::ActiveReblit,
+            CandidateSource::Exchanged,
+            RollbackActionOutcome::Applied,
+            layout,
+        );
+        let reserved = reserved_active_reblit_wrapper_path(&fixture, layout);
+        let changed = reserved.clone();
+        let journal = fixture.open_journal();
+        let reservation = ActiveStateReservation::acquire().unwrap();
+        let admission = fixture.capture(&journal, &reservation);
+        arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture(move || {
+            fs::set_permissions(changed, fs::Permissions::from_mode(0o755)).unwrap();
+        });
+        match admission {
+            UsrRollbackCandidatePreserveAdmission::Apply(authority) => {
+                assert!(authority.revalidate(&journal).is_err());
+            }
+            UsrRollbackCandidatePreserveAdmission::Finish(authority) => {
+                assert!(authority.revalidate(&journal).is_err());
+            }
+            _ => panic!("exact {layout:?} ActiveReblit evidence was not admitted"),
+        }
+        assert_eq!(fs::metadata(reserved).unwrap().permissions().mode() & 0o7777, 0o755);
+        fixture.assert_non_namespace_unchanged();
     }
 }

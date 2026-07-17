@@ -322,6 +322,21 @@ pub(super) fn active_reblit_wrapper_path(fixture: &Fixture, record: &TransitionR
     ))
 }
 
+pub(super) fn reserved_active_reblit_wrapper_path(
+    fixture: &CandidatePreserveFixture,
+    layout: CandidateLayout,
+) -> PathBuf {
+    assert_eq!(fixture.fixture.kind, OperationKind::ActiveReblit);
+    match layout {
+        CandidateLayout::Staged => fixture
+            .fixture
+            .active_reblit_reservation
+            .clone()
+            .expect("active-reblit fixture reserves its replacement wrapper"),
+        CandidateLayout::Preserved => fixture.fixture.installation.staging_dir(),
+    }
+}
+
 pub(super) fn archived_slot_path(fixture: &Fixture, record: &TransitionRecord) -> PathBuf {
     archived_state_wrapper(fixture).join(slot_name(fixture, record))
 }

@@ -28,9 +28,13 @@ use super::{
     fixture::{OperationKind, create_private_directory},
     support::{
         CandidateLayout, CandidatePreserveFixture, CandidateSource, active_reblit_wrapper_path, archived_slot_path,
-        transition_quarantine_path,
+        reserved_active_reblit_wrapper_path, transition_quarantine_path,
     },
 };
+
+const CONTROLLED_NON_PRIVATE_MODES: [u32; 15] = [
+    0o701, 0o704, 0o705, 0o710, 0o711, 0o714, 0o715, 0o740, 0o741, 0o744, 0o745, 0o750, 0o751, 0o754, 0o755,
+];
 
 #[test]
 fn startup_candidate_preserve_refuses_an_occupied_new_state_target() {
@@ -43,10 +47,6 @@ fn startup_candidate_preserve_refuses_an_occupied_new_state_target() {
 
 #[test]
 fn startup_candidate_preserve_refuses_every_controlled_non_private_new_state_target_mode() {
-    const CONTROLLED_NON_PRIVATE_MODES: [u32; 15] = [
-        0o701, 0o704, 0o705, 0o710, 0o711, 0o714, 0o715, 0o740, 0o741, 0o744, 0o745, 0o750, 0o751, 0o754, 0o755,
-    ];
-
     for mode in CONTROLLED_NON_PRIVATE_MODES {
         for layout in [CandidateLayout::Staged, CandidateLayout::Preserved] {
             let fixture = match layout {
@@ -266,6 +266,22 @@ fn startup_candidate_preserve_refuses_missing_wrong_extra_and_transferred_archiv
 
 #[test]
 fn startup_candidate_preserve_refuses_missing_duplicate_and_wrong_active_reblit_reservations() {
+    for mode in CONTROLLED_NON_PRIVATE_MODES {
+        for layout in [CandidateLayout::Staged, CandidateLayout::Preserved] {
+            let fixture = CandidatePreserveFixture::new(
+                OperationKind::ActiveReblit,
+                CandidateSource::Exchanged,
+                RollbackActionOutcome::Applied,
+                layout,
+            );
+            let reserved = reserved_active_reblit_wrapper_path(&fixture, layout);
+            fs::set_permissions(&reserved, fs::Permissions::from_mode(mode)).unwrap();
+
+            require_deferred(&fixture);
+            assert_eq!(fs::metadata(reserved).unwrap().permissions().mode() & 0o7777, mode);
+        }
+    }
+
     let fixture = staged(OperationKind::ActiveReblit);
     fs::remove_dir(fixture.fixture.active_reblit_reservation.as_ref().unwrap()).unwrap();
     require_deferred(&fixture);

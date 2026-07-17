@@ -510,10 +510,13 @@ fn active_reblit_topology(
     };
     let wrapper_index = *wrapper_index;
 
+    // Whole-wrapper preservation moves the reserved empty replacement to the
+    // fixed staging name, so require its exact private mode at either prefix.
     if candidate.location == TreeLocation::Staging
         && wrapper_contains(staging, candidate)
         && staging.slot_identity().is_none()
         && wrapper_is_empty(replacement)
+        && replacement.has_exact_private_permissions()
     {
         return Ok(UsrRollbackCandidatePreserveTopology::ActiveReblitStaged { wrapper_index });
     }
@@ -523,6 +526,7 @@ fn active_reblit_topology(
             index: wrapper_index,
         })
         && wrapper_is_empty(staging)
+        && staging.has_exact_private_permissions()
         && wrapper_contains(replacement, candidate)
         && replacement.slot_identity().is_none()
     {
