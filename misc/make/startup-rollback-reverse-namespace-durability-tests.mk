@@ -3,7 +3,7 @@
 forge-startup-usr-rollback-reverse-namespace-durability-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	prefix='client::startup_reconciliation::activation_namespace::rollback_reverse_proof::effect_reconciliation::durability::tests::'; \
 	count="$$( timeout 10s grep -c "^$$prefix.*: test$$" <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 5; \

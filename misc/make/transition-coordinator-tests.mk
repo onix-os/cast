@@ -1,7 +1,7 @@
 forge-transition-journal-coordinator-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 82; \
 	for test in \

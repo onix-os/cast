@@ -1,7 +1,7 @@
 forge-client-startup-gate-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	for test in \
 		client::startup_gate_tests::active_reblit_replacement::compatible_database_and_active_selection_admit_restrictive_replacement_repair \
 		client::startup_gate_tests::active_reblit_replacement::foreign_in_flight_database_ownership_causes_zero_replacement_chmod \

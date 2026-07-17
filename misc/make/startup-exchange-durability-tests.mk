@@ -3,7 +3,7 @@
 forge-startup-usr-exchange-parent-durability-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_recovery::usr_exchange_parent_durability::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 10; \
 	for test in \

@@ -3,7 +3,7 @@
 forge-startup-usr-rollback-reverse-admission-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::usr_rollback_reverse_authority::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 12; \
 	for test in \

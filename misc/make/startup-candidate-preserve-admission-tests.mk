@@ -3,7 +3,7 @@
 forge-startup-usr-rollback-candidate-preserve-admission-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -Ec '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::(admission|evidence|post_move_durability|topology_refusal)::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 30; \
 	for test in \

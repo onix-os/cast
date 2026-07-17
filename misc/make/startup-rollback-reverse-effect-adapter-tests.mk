@@ -3,7 +3,7 @@
 forge-startup-usr-rollback-reverse-effect-adapter-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::activation_namespace::capture::reverse_exchange::effect::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 4; \
 	for test in \

@@ -3,7 +3,7 @@
 forge-startup-usr-rollback-reverse-dispatch-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s test -n "$$listed"; \
+	timeout 10s grep -q . <<<"$$listed"; \
 	prefix='client::startup_recovery::usr_rollback_reverse_dispatch::tests::'; \
 	count="$$( timeout 10s grep -c "^$$prefix.*: test$$" <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 12; \
