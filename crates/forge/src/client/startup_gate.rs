@@ -98,6 +98,22 @@ impl UsrRollbackCandidatePreserveSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting the post-preservation journal route
+/// to the writer-first startup gate. This checkpoint deliberately has no
+/// production constructor or dispatcher.
+#[allow(dead_code)] // routing remains intentionally unreachable from production
+pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteSeal {
+    _private: (),
+}
+
+impl UsrRollbackFreshDbInvalidationRouteSeal {
+    #[cfg(test)]
+    #[allow(dead_code)] // consumed only once the next sealed checkpoint is present
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self { _private: () }
+    }
+}
+
 impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,
