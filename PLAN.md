@@ -752,21 +752,48 @@ remain deferred.
 
 Commit `c1418ad0` consumes those exact read-only prefixes into three disjoint,
 opaque, test-sealed capabilities: create an absent target, normalize a retained
-residue, or move into an already canonical target. The first two expose no
-operational API, while the third retains the previously sealed one-shot move.
-Binding-first full revalidation occurs before any capability is selected, and
-archived activation or ActiveReblit still receives only a fieldless unsupported
-result. The focused admission inventory passes 24/24, target-preparation passes
-3/3, the combined authority run passes 27/27, and move reconciliation remains
-10/10.
+residue, or move into an already canonical target. At that checkpoint Create
+and Normalize exposed no operational API, while Move retained the previously
+sealed one-shot operation. Binding-first full revalidation occurs before any
+capability is selected, and archived activation or ActiveReblit still receives
+only a fieldless unsupported result.
 
-These commits still do not create or normalize a quarantine target and supply
-no post-move durability, persistence, database or journal mutation, production
-dispatch, or effect for ActivateArchived or ActiveReblit. The next checkpoint
-is one-shot absent-target creation followed by fresh semantic reconciliation
-and a mandatory restart boundary; it must never fall through into candidate
-movement in the same startup entry. Candidate preservation therefore remains
-absent from the production recovery ladder and Phase 11 remains open.
+Commit `5ce3c2c9` consumes only the absent-target Create lease through an
+undispatched, test-sealed, one-attempt reconciliation boundary. Consumption
+checks the open-journal binding first, repeats the retained installation,
+database, journal, and plan evidence around a final exact absent-target PRE,
+and then attempts one descriptor-relative creation under the retained
+quarantine parent with the exact journal name and requested mode `0700`. It
+does not sync or move the candidate, retry, adopt an entry, normalize a
+residue, or continue into another effect.
+
+The raw creation report is diagnostic only. A fresh full namespace capture
+classifies an unchanged exact fingerprint as `NotApplied`, a stable transition
+to the exact restrictive residue or canonical empty private target as
+`RestartRequired`, and every other result as `Ambiguous`. `RestartRequired`
+describes a safe observed crash prefix, not proof that this invocation created
+it. Every result is fieldless and consumes all retry, normalization, and move
+authority, so even the safe prefix requires a fresh startup entry. Canonical
+targets with access or default ACLs fail closed, restrictive residues retain
+opaque payload and ACL state, and arbitrary user xattrs remain uninspected and
+unclaimed. The admission inventory remains 24/24, target-prefix preparation
+passes 3/3, creation passes 11/11, the combined authority run passes 38/38,
+and move reconciliation remains 10/10.
+
+The checkpoint now creates but does not normalize a quarantine target. It
+still supplies no post-create or post-move durability, persistence, database
+or journal mutation, production dispatch, or effect for ActivateArchived or
+ActiveReblit. The next checkpoint is a separate descriptor-bound normalization
+of the retained restrictive residue, followed by a same-inode named reopen,
+fresh permissions, emptiness, and security-metadata inspection, ordered target
+and quarantine-parent durability barriers, and another mandatory restart. It
+must never fall through into candidate movement in the same startup entry.
+A later move preparation must still repeat idempotent target-inode then
+quarantine-parent synchronization and revalidation, even when normalization
+already completed those barriers; a canonical `0700` name alone is not durable
+move authority.
+Candidate preservation therefore remains absent from the production recovery
+ladder and Phase 11 remains open.
 
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the
