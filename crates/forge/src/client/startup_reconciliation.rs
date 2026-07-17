@@ -22,11 +22,19 @@ mod activation_namespace;
 mod database_evidence;
 mod metadata_provenance;
 mod replacement_mutation_authority;
+#[allow(dead_code)] // checkpoint one remains sealed from production dispatch
+mod usr_rollback_candidate_preserve_authority;
 mod usr_rollback_decision_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
+#[allow(unused_imports)] // checkpoint-one authorities remain sealed from production dispatch
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
+    UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
+    UsrRollbackCandidatePreserveAuthority, UsrRollbackCandidatePreserveAuthorityError,
+    UsrRollbackCandidatePreserveFinishAuthority,
+};
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
 #[cfg(test)]
@@ -53,10 +61,14 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
 };
 
 #[cfg(test)]
+pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_between_usr_rollback_candidate_preserve_database_captures;
+#[cfg(test)]
 pub(in crate::client) use usr_rollback_resume_route_authority::arm_between_usr_rollback_resume_route_database_captures;
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_reverse_authority::arm_between_usr_rollback_reverse_database_captures;
 
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
 #[cfg(test)]
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use activation_namespace::arm_before_usr_rollback_decision_fresh_namespace_capture;
@@ -66,6 +78,8 @@ pub(in crate::client) use activation_namespace::arm_before_usr_rollback_resume_r
 pub(in crate::client) use activation_namespace::arm_before_usr_rollback_reverse_fresh_namespace_capture;
 use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
+    UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
+    UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackCandidatePreserveTopology,
     UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,

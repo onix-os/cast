@@ -7,6 +7,8 @@
 //! exposes no descriptor, persistence, cleanup, trigger, or general
 //! namespace-mutation API.
 
+#[allow(dead_code)] // checkpoint one remains sealed from production dispatch
+mod candidate_preserve_proof;
 mod capture;
 mod decision_proof;
 mod parent_durability;
@@ -22,6 +24,13 @@ use crate::{
     transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
 };
 
+pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
+#[cfg(test)]
+pub(in crate::client) use candidate_preserve_proof::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
+pub(super) use candidate_preserve_proof::{
+    UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
+    UsrRollbackCandidatePreserveNamespaceProof,
+};
 #[cfg(test)]
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};

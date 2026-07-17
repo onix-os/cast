@@ -155,6 +155,11 @@ impl UsrFingerprint {
     pub(crate) fn state_id_observation(&self) -> StateIdObservation {
         self.state_id.observation()
     }
+
+    #[allow(dead_code)] // consumed by the sealed candidate-preservation checkpoint
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn marker_links(&self) -> u64 {
+        self.marker.links
+    }
 }
 
 #[derive(Debug)]
