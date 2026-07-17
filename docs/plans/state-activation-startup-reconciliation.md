@@ -190,6 +190,46 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   boundary. It therefore establishes no production constructor, mutation,
   persistence, dispatch, effect, or durability claim.
 
+### Test-only NewState move reconciliation
+
+  Commit `d3bf0cd8` adds the first consuming preservation checkpoint without
+  connecting it to production startup. A second private seal can select an
+  effect only from an admitted NewState Apply authority whose fresh topology is
+  the exact staged candidate plus its already-created, empty journal quarantine
+  target. The checkpoint deliberately refuses the staged-without-target prefix:
+  it does not create or adopt a quarantine directory. Already-preserved Finish
+  authority remains non-mutating, and neither ActivateArchived nor ActiveReblit
+  has an effect path.
+
+  Selection and consumption both begin by checking the opaque binding of the
+  journal opened for this startup entry. The authority then repeats the exact
+  installation, database, journal, plan, and retained-namespace sandwich. Before
+  the last PRE capture it syncs the retained staged candidate tree. This is a
+  candidate-data safety barrier before the move, not a claim that the move or
+  its changed parents are durable afterward. If candidate sync or final-prefix
+  revalidation observes a race, the one-shot move is not attempted.
+
+  Exact PRE authority permits one descriptor-relative `RENAME_NOREPLACE`
+  attempt from staged `usr` into the empty quarantine wrapper. There is no loop
+  and no in-process retry. The raw operation report is diagnostic only: a fresh
+  full namespace capture alone classifies the result as `Applied`,
+  `NotApplied`, or `Ambiguous`. Only `Applied` retains opaque authority for the
+  later durability checkpoint; the other results are fieldless and carry no
+  descriptor, lease, or retry capability. Database, journal, installation, and
+  plan evidence are checked again after namespace use, including error-after-
+  application and misleading-success outcomes.
+
+  The focused
+  `make forge-startup-usr-rollback-candidate-preserve-effect-test` lane passes
+  8/8 contracts. It covers effect selection, all raw-report/semantic-layout
+  combinations from both rollback origins, ambiguity, final-prefix races,
+  binding-first ordering, trailing database and journal checks, and candidate
+  pre-sync races. The admission lane remains 19/19. Static gates keep the seal
+  test-only and forbid production selection calls, retry loops, a second move,
+  target creation, post-move synchronization, persistence, database or journal
+  mutation, triggers, cleanup, and descriptor escape. This checkpoint therefore
+  claims neither post-move durability nor completed candidate preservation.
+
 ## Diagnostic reconciliation and namespace inventory
 
   The assessment then classifies every validated persisted phase as begin
@@ -363,16 +403,18 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  This is still only the authenticated `/usr` rollback prefix. The sealed
-  candidate-preservation admission above remains test-only and read-only; no
-  startup executor yet handles the effects of `CandidatePreserveIntent`,
-  candidate preservation, fresh-row invalidation, the remaining rollback
-  actions, roll-forward, boot repair, or cleanup. The exact reverse prefix now
-  has both deterministic in-process contracts and genuine process-termination
-  coverage. It still has no reboot or power-loss proof: `SIGKILL` preserves the
-  kernel-visible state at termination and cannot establish which pre-fsync
-  rename survives a power cycle. The complete campaign required below
-  therefore remains open, as do this item and all six broad Phase 11 work items.
+  The production ladder is still only the authenticated `/usr` rollback prefix.
+  Candidate-preservation admission remains sealed, test-only, and read-only;
+  the NewState move checkpoint above is also test-only and is neither dispatched
+  nor made durable. No production startup executor yet handles the effects of
+  `CandidatePreserveIntent`, candidate preservation, fresh-row invalidation,
+  the remaining rollback actions, roll-forward, boot repair, or cleanup. The
+  exact reverse prefix now has both deterministic in-process contracts and
+  genuine process-termination coverage. It still has no reboot or power-loss
+  proof: `SIGKILL` preserves the kernel-visible state at termination and cannot
+  establish which pre-fsync rename survives a power cycle. The complete
+  campaign required below therefore remains open, as do this item and all six
+  broad Phase 11 work items.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

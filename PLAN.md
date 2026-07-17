@@ -721,9 +721,18 @@ putting it on that production ladder. A sealed, read-only, test-only admission
 distinguishes exact staged evidence from an already-preserved crash prefix
 across all three operations, both rollback sources, both recorded `/usr`
 outcomes, and both layouts. Its focused gate passes 19/19 contracts covering
-historical evidence, evidence races, and exact-topology refusals. There is no
-production constructor, mutation, persistence, dispatch, effect, or durability
-claim; candidate preservation itself remains unimplemented.
+historical evidence, evidence races, and exact-topology refusals. Commit
+`d3bf0cd8` consumes only the admitted NewState staged-plus-empty-quarantine
+typestate through a second sealed, test-only checkpoint. It checks the open
+journal binding before retained evidence, pre-syncs the exact staged candidate,
+revalidates the complete prefix, issues one no-replace move into the already
+existing empty journal quarantine, ignores the raw syscall report, and uses a
+fresh namespace capture to classify `Applied`, `NotApplied`, or `Ambiguous`.
+Its focused effect gate passes 8/8 contracts while the admission gate remains
+19/19. The checkpoint cannot create a missing quarantine target and supplies
+no post-move durability, persistence, database or journal mutation, production
+dispatch, or effect for ActivateArchived or ActiveReblit. Candidate
+preservation therefore remains absent from the production recovery ladder.
 
 The remaining closure is to finish recovery-ordered mutable client
 construction, replace residual path-based lifecycle authority, complete the
