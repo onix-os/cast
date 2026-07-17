@@ -232,7 +232,7 @@ fn new_state_topology(
     {
         return match transition {
             None => Ok(UsrRollbackCandidatePreserveTopology::NewStateStaged),
-            Some(wrapper) if wrapper_is_empty(wrapper) => {
+            Some(wrapper) if wrapper_is_empty(wrapper) && wrapper.has_exact_private_permissions() => {
                 Ok(UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine)
             }
             Some(_) => Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch),
@@ -240,7 +240,11 @@ fn new_state_topology(
     }
     if candidate.location == TreeLocation::TransitionQuarantine
         && wrapper_is_empty(staging)
-        && transition.is_some_and(|wrapper| wrapper_contains(wrapper, candidate) && wrapper.slot_identity().is_none())
+        && transition.is_some_and(|wrapper| {
+            wrapper_contains(wrapper, candidate)
+                && wrapper.slot_identity().is_none()
+                && wrapper.has_exact_private_permissions()
+        })
     {
         return Ok(UsrRollbackCandidatePreserveTopology::NewStatePreserved);
     }

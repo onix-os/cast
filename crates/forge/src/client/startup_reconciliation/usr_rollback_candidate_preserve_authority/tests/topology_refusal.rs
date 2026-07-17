@@ -29,6 +29,34 @@ fn startup_candidate_preserve_refuses_an_occupied_new_state_target() {
 }
 
 #[test]
+fn startup_candidate_preserve_refuses_every_controlled_non_private_new_state_target_mode() {
+    const CONTROLLED_NON_PRIVATE_MODES: [u32; 15] = [
+        0o701, 0o704, 0o705, 0o710, 0o711, 0o714, 0o715, 0o740, 0o741, 0o744, 0o745, 0o750, 0o751, 0o754, 0o755,
+    ];
+
+    for mode in CONTROLLED_NON_PRIVATE_MODES {
+        for layout in [CandidateLayout::Staged, CandidateLayout::Preserved] {
+            let fixture = match layout {
+                CandidateLayout::Staged => CandidatePreserveFixture::new_state_empty_quarantine_prefix(
+                    CandidateSource::Exchanged,
+                    RollbackActionOutcome::Applied,
+                ),
+                CandidateLayout::Preserved => CandidatePreserveFixture::new(
+                    OperationKind::NewState,
+                    CandidateSource::Exchanged,
+                    RollbackActionOutcome::Applied,
+                    CandidateLayout::Preserved,
+                ),
+            };
+            let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+            fs::set_permissions(target, fs::Permissions::from_mode(mode)).unwrap();
+
+            require_deferred(&fixture);
+        }
+    }
+}
+
+#[test]
 fn startup_candidate_preserve_refuses_missing_wrong_extra_and_transferred_archived_slots() {
     let fixture = staged(OperationKind::Archived);
     fs::remove_file(archived_slot_path(&fixture.fixture, &fixture.candidate_intent)).unwrap();

@@ -169,6 +169,9 @@ impl ProjectedNewStateCandidatePreserveNamespace {
         if target.name != record.quarantine_name.as_str().as_bytes() {
             return Err(NewStateCandidatePreserveCaptureError::WrongTargetName);
         }
+        if !target.has_exact_private_permissions() {
+            return Err(NewStateCandidatePreserveCaptureError::TargetPermissions);
+        }
 
         let layout = if candidate.location == TreeLocation::Staging
             && wrapper_contains_only(staging, candidate)
@@ -544,6 +547,8 @@ pub(in crate::client::startup_reconciliation::activation_namespace) enum NewStat
     TargetCount(usize),
     #[error("the transition-quarantine wrapper does not have the journal-derived name")]
     WrongTargetName,
+    #[error("the transition-quarantine wrapper permissions are not exactly 0700")]
+    TargetPermissions,
     #[error("the namespace is not exact staged-with-empty-target or preserved NewState evidence")]
     NotMoveLayout,
     #[error("NewState candidate preservation is not exact staged-to-preserved ({before:?} -> {after:?})")]

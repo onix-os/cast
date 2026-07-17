@@ -1,6 +1,6 @@
 //! Focused contracts for the sealed first NewState preservation move.
 
-use std::fs;
+use std::{fs, os::unix::fs::PermissionsExt as _};
 
 use crate::{
     client::{
@@ -220,6 +220,31 @@ fn startup_new_state_candidate_preserve_move_final_prefix_race_prevents_the_atte
 
     assert!(lease.reconcile(&seal, &journal).is_err());
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    fixture.assert_non_namespace_unchanged();
+}
+
+#[test]
+fn startup_new_state_candidate_preserve_move_final_target_mode_race_prevents_the_attempt() {
+    let fixture = CandidatePreserveFixture::new_state_empty_quarantine_prefix(
+        CandidateSource::Exchanged,
+        RollbackActionOutcome::Applied,
+    );
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let lease = move_lease(&fixture, &journal, &reservation);
+    let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
+    let raced_target = target.clone();
+    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture(move || {
+        fs::set_permissions(raced_target, fs::Permissions::from_mode(0o755)).unwrap();
+    });
+    reset_new_state_candidate_preserve_move_attempt_count();
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+
+    assert!(lease.reconcile(&seal, &journal).is_err());
+    assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
+    assert!(!target.join("usr").exists());
+    assert_eq!(fs::metadata(target).unwrap().permissions().mode() & 0o7777, 0o755);
     fixture.assert_non_namespace_unchanged();
 }
 

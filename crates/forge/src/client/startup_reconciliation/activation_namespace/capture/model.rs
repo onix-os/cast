@@ -185,6 +185,12 @@ impl WrapperFingerprint {
     pub(in crate::client::startup_reconciliation::activation_namespace) fn slot_identity(&self) -> Option<(i32, &str)> {
         self.slot.as_ref().map(|slot| (slot.state, slot.token.as_str()))
     }
+
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn has_exact_private_permissions(
+        &self,
+    ) -> bool {
+        self.witness.mode & 0o7777 == 0o700
+    }
 }
 
 #[derive(Debug)]
