@@ -243,7 +243,9 @@ client_ready=
 client_acknowledgement=
 client_channels_ready=
 client_status_fifo=
+client_status_result=
 client_release_fifo=
+status_reader_pid=
 unit_cleanup_failed=0
 
 stop_owned_unit() {
@@ -257,7 +259,7 @@ wait_client_group_exit() {
         while :; do
             live_member=0
             for stat_file in /proc/[0-9]*/stat; do
-                IFS= read -r process_stat <"$stat_file" 2>/dev/null || continue
+                IFS= read -r process_stat 2>/dev/null <"$stat_file" || continue
                 process_tail=${process_stat##*) }
                 set -- $process_tail
                 process_state=${1-}
@@ -320,6 +322,13 @@ cleanup() {
     elif [ "$client_release_open" -eq 1 ]; then
         exec 8>&-
         client_release_open=0
+    fi
+    # The client owns the status writer, so stop and reap it before waiting
+    # for the reader to observe EOF. Waiting never signals a possibly exited
+    # reader PID and therefore cannot target a reused process identifier.
+    if [ -n "$status_reader_pid" ]; then
+        wait "$status_reader_pid" 2>/dev/null || :
+        status_reader_pid=
     fi
     if [ -n "$client_directory" ]; then
         rm -rf "$client_directory"
@@ -406,12 +415,23 @@ if [ -L "$client_directory" ] || [ ! -d "$client_directory" ] \
     exit 1
 fi
 client_status_fifo="$client_directory/status.fifo"
+client_status_result="$client_directory/status.result"
 client_ready="$client_directory/ready"
 client_acknowledgement="$client_directory/acknowledged"
 client_channels_ready="$client_directory/channels-ready"
 client_release_fifo="$client_directory/release.fifo"
 mkfifo -m 600 "$client_status_fifo"
 mkfifo -m 600 "$client_release_fifo"
+( umask 077; set -C; : >"$client_status_result" ) || {
+    printf 'could not pre-create the private delegated status result\n' >&2
+    exit 1
+}
+if [ -L "$client_status_result" ] || [ ! -f "$client_status_result" ] \
+    || [ "$(stat -c '%u:%a:%h:%s' "$client_status_result")" \
+        != "$(id -u):600:1:0" ]; then
+    printf 'delegated status result must begin as a caller-owned empty mode-600 file\n' >&2
+    exit 1
+fi
 # Temporary Linux FIFO anchors make the supervisor's one-way endpoint opens
 # nonblocking. They are closed immediately after channel readiness is proven.
 exec 5<>"$client_status_fifo"
@@ -440,6 +460,10 @@ if [ -n "$proof_path" ]; then
     set -- \
         "--setenv=CAST_FIXTURE_PROOF_PATH=$proof_path" \
         "--setenv=CAST_FIXTURE_GIT_COMMIT=$git_commit" \
+        "$@"
+else
+    set -- \
+        "--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT" \
         "$@"
 fi
 # Clear the parent EXIT trap before forking so the asynchronous Bash child
@@ -570,10 +594,14 @@ fi
 # acknowledged supervisor pins the PID/PGID until the explicit release.
 status_received=0
 status_read_status=0
-if status=$(
-    # Command substitution itself forks a shell before launching `timeout`.
-    # Close release there too: killing the parent must not leave this orphaned
-    # substitution holding the monitor's only liveness channel open.
+status_reader_launch_signal=
+trap '[ -n "$status_reader_launch_signal" ] || status_reader_launch_signal=129' HUP
+trap '[ -n "$status_reader_launch_signal" ] || status_reader_launch_signal=130' INT
+trap '[ -n "$status_reader_launch_signal" ] || status_reader_launch_signal=143' TERM
+(
+    trap - HUP INT TERM
+    # The reader must never inherit the release writer: parent cleanup closing
+    # fd8 is the monitor's liveness signal even while this read remains held.
     exec 8>&-
     timeout --foreground \
         --kill-after="${client_kill_after_seconds}s" \
@@ -582,19 +610,63 @@ if status=$(
             IFS= read -r status <&7 || exit 1
             printf "%s\n" "$status"
         ' delegated-status-reader 8>&-
-); then
-    status_received=1
-    case "$status" in
-        ''|*[!0-9]*) status=1 ;;
-        *) [ "$status" -le 255 ] || status=1 ;;
-    esac
+) >"$client_status_result" &
+status_reader_pid=$!
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ -n "$status_reader_launch_signal" ]; then
+    exit "$status_reader_launch_signal"
+fi
+
+# Shell wait is deliberately foreground and interruptible. A terminal signal
+# enters cleanup immediately instead of being deferred by command substitution.
+if wait "$status_reader_pid"; then
+    status_read_status=0
 else
     status_read_status=$?
-    status=1
-    if [ "$status_read_status" -eq 124 ] || [ "$status_read_status" -eq 137 ]; then
-        printf 'latched delegated status channel exceeded its %s-second bound\n' \
-            "$client_status_timeout_seconds" >&2
+fi
+status_reader_pid=
+
+status=1
+if [ "$status_read_status" -eq 0 ]; then
+    status_result_metadata=
+    if [ ! -L "$client_status_result" ] && [ -f "$client_status_result" ]; then
+        status_result_metadata=$(stat -c '%u:%a:%h:%s' "$client_status_result") \
+            || status_result_metadata=
     fi
+    status_result_size=${status_result_metadata##*:}
+    case "$status_result_metadata" in
+        "$(id -u):600:1:"*) ;;
+        *) status_result_size=invalid ;;
+    esac
+    case "$status_result_size" in
+        ''|*[!0-9]*) ;;
+        *)
+            if [ "$status_result_size" -le 4 ] \
+                && IFS= read -r status <"$client_status_result" \
+                && [ "$status_result_size" -eq "$(( ${#status} + 1 ))" ]; then
+                case "$status" in
+                    ''|*[!0-9]*) status=1 ;;
+                    *)
+                        if [ "$status" -le 255 ]; then
+                            status_received=1
+                        else
+                            status=1
+                        fi
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+    if [ "$status_received" -ne 1 ]; then
+        printf 'latched delegated status result is unsafe or malformed\n' >&2
+        status_read_status=1
+        status=1
+    fi
+elif [ "$status_read_status" -eq 124 ] || [ "$status_read_status" -eq 137 ]; then
+    printf 'latched delegated status channel exceeded its %s-second bound\n' \
+        "$client_status_timeout_seconds" >&2
 fi
 exec 7<&-
 launch_signal_status=

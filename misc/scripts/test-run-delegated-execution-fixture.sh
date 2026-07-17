@@ -6,10 +6,35 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-delegated-execution-fixture.sh"
 proof_generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/cast-delegated-runner-test.XXXXXXXXXXXX")
+tracked_runner_pid=
+tracked_invocation_pid=
+tracked_watchdog_pid=
 cleanup() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    set +e
+    if [ -n "$tracked_runner_pid" ]; then
+        kill -TERM "$tracked_runner_pid" 2>/dev/null || :
+        wait "$tracked_runner_pid" 2>/dev/null || :
+        tracked_runner_pid=
+    fi
+    if [ -n "$tracked_invocation_pid" ]; then
+        kill -TERM "$tracked_invocation_pid" 2>/dev/null || :
+        wait "$tracked_invocation_pid" 2>/dev/null || :
+        tracked_invocation_pid=
+    fi
+    if [ -n "$tracked_watchdog_pid" ]; then
+        kill -TERM "$tracked_watchdog_pid" 2>/dev/null || :
+        wait "$tracked_watchdog_pid" 2>/dev/null || :
+        tracked_watchdog_pid=
+    fi
     rm -rf "$work"
+    exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fakebin="$work/bin"
 state="$work/state"
@@ -144,6 +169,7 @@ unit=
 marker=
 proof=
 commit=
+unset_proof_count=0
 : >"$FAKE_STATE/systemd-run-args"
 for argument in "$@"; do
     printf '%s\n' "$argument" >>"$FAKE_STATE/systemd-run-args"
@@ -152,10 +178,20 @@ for argument in "$@"; do
         --setenv=CAST_DELEGATED_FIXTURE_TOKEN=*) marker=${argument#--setenv=} ;;
         --setenv=CAST_FIXTURE_PROOF_PATH=*) proof=${argument#--setenv=CAST_FIXTURE_PROOF_PATH=} ;;
         --setenv=CAST_FIXTURE_GIT_COMMIT=*) commit=${argument#--setenv=CAST_FIXTURE_GIT_COMMIT=} ;;
+        '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT')
+            unset_proof_count=$((unset_proof_count + 1))
+            ;;
     esac
 done
 test -n "$unit"
 test -n "$marker"
+if test -n "$proof"; then
+    test -n "$commit"
+    test "$unset_proof_count" -eq 0
+else
+    test -z "$commit"
+    test "$unset_proof_count" -eq 1
+fi
 printf '%s\n' "$unit" >"$FAKE_STATE/unit"
 
 case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
@@ -216,6 +252,13 @@ case "${FAKE_SYSTEMD_RUN_MODE:-success}" in
             >"$FAKE_STATE/supervisor-pid"
         kill -STOP "${CAST_LATCHED_SUPERVISOR_PID:?}"
         : >"$FAKE_STATE/frozen-supervisor-ready"
+        while :; do
+            sleep 1
+        done
+        ;;
+    hold-status-read)
+        printf '%s\n' "$marker" >"$FAKE_STATE/environment"
+        : >"$FAKE_STATE/held-status-ready"
         while :; do
             sleep 1
         done
@@ -292,6 +335,65 @@ process_is_live() {
     esac
 }
 
+assert_argument_count() {
+    argument_file=$1
+    expected_argument=$2
+    expected_count=$3
+    argument_count=$(grep -Fxc -- "$expected_argument" "$argument_file" || :)
+    test "$argument_count" -eq "$expected_count"
+}
+
+wait_for_path() {
+    awaited_path=$1
+    awaited_process=$2
+    awaited_label=$3
+    awaited_attempt=0
+    while [ ! -e "$awaited_path" ]; do
+        awaited_attempt=$((awaited_attempt + 1))
+        if [ "$awaited_attempt" -gt 500 ] \
+            || ! process_is_live "$awaited_process"; then
+            printf 'timed out waiting for %s\n' "$awaited_label" >&2
+            return 1
+        fi
+        sleep 0.01
+    done
+}
+
+find_descendant_with_marker() {
+    descendant_frontier=$1
+    descendant_marker=$2
+    found_descendant=
+    descendant_depth=0
+    while [ -n "$descendant_frontier" ] && [ "$descendant_depth" -lt 5 ]; do
+        descendant_depth=$((descendant_depth + 1))
+        next_descendant_frontier=
+        for descendant_parent in $descendant_frontier; do
+            descendant_children_path="/proc/$descendant_parent/task/$descendant_parent/children"
+            descendant_children=
+            IFS= read -r descendant_children 2>/dev/null \
+                <"$descendant_children_path" \
+                || [ -n "$descendant_children" ] \
+                || continue
+            for descendant_pid in $descendant_children; do
+                descendant_command=
+                if [ -r "/proc/$descendant_pid/cmdline" ]; then
+                    descendant_command=$(tr '\000' ' ' 2>/dev/null \
+                        <"/proc/$descendant_pid/cmdline" || :)
+                fi
+                case "$descendant_command" in
+                    *"$descendant_marker"*)
+                        found_descendant=$descendant_pid
+                        return 0
+                        ;;
+                esac
+                next_descendant_frontier="$next_descendant_frontier $descendant_pid"
+            done
+        done
+        descendant_frontier=$next_descendant_frontier
+    done
+    return 1
+}
+
 reset_state
 run_fixture custom 1 ready success
 args="$state/systemd-run-args"
@@ -317,6 +419,8 @@ do
 done
 grep -Fqx -- "--unit=$unit" "$args"
 grep -Fqx -- "$unit" "$state/stops"
+assert_argument_count "$args" \
+    '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
 
 reset_state
 run_preflight 1 ready success
@@ -344,6 +448,8 @@ for expected in \
 do
     grep -Fqx -- "$expected" "$args"
 done
+assert_argument_count "$args" \
+    '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
 if grep -Fq -- '--setenv=CAST_BOOTSTRAP_PACKAGE_STORE=' "$args" \
     || grep -Fq -- '--setenv=CAST_EXECUTION_FIXTURE=' "$args" \
     || grep -Fq -- '--setenv=CAST_FIXTURE_PROOF_PATH=' "$args" \
@@ -405,9 +511,21 @@ for fixture_directory in \
     reset_state
     run_fixture "$fixture" 1 ready success
     grep -Fqx -- "--setenv=CAST_EXECUTION_FIXTURE=$fixture" "$state/systemd-run-args"
+    assert_argument_count "$state/systemd-run-args" \
+        '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
 done
 test "$fixture_count" -eq 16
 test ! -e "$evidence/fixtures-ci-proof.json"
+
+reset_state
+run_fixture custom 0 ready success
+assert_argument_count "$state/systemd-run-args" \
+    '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
+if grep -Fq -- '--setenv=CAST_FIXTURE_PROOF_PATH=' "$state/systemd-run-args" \
+    || grep -Fq -- '--setenv=CAST_FIXTURE_GIT_COMMIT=' "$state/systemd-run-args"; then
+    printf 'optional non-proof unit received explicit proof state\n' >&2
+    exit 1
+fi
 
 rm -f "$evidence"/*
 reset_state
@@ -444,6 +562,8 @@ jq -e --arg commit "$fake_commit" '
 ' "$proof" >/dev/null
 grep -Fqx -- "--setenv=CAST_FIXTURE_PROOF_PATH=$proof" "$state/systemd-run-args"
 grep -Fqx -- "--setenv=CAST_FIXTURE_GIT_COMMIT=$fake_commit" "$state/systemd-run-args"
+assert_argument_count "$state/systemd-run-args" \
+    '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 0
 
 rm -f "$evidence"/*
 reset_state
@@ -560,6 +680,97 @@ set -e
 test "$status" -eq 143
 unit=$(cat "$state/unit")
 grep -Fqx -- "$unit" "$state/stops"
+
+rm -f "$evidence"/*
+reset_state
+set +e
+run_fixture all 1 ready hold-status-read \
+    >"$work/held-status-read.out" 2>"$work/held-status-read.err" &
+held_invocation_pid=$!
+tracked_invocation_pid=$held_invocation_pid
+set -e
+wait_for_path "$state/held-status-ready" "$held_invocation_pid" \
+    'held delegated status read readiness'
+
+held_runner_pid=
+held_runner_attempt=0
+while [ -z "$held_runner_pid" ]; do
+    held_runner_attempt=$((held_runner_attempt + 1))
+    if find_descendant_with_marker "$held_invocation_pid" \
+        '/misc/scripts/run-delegated-execution-fixture.sh'; then
+        held_runner_pid=$found_descendant
+        tracked_runner_pid=$held_runner_pid
+        break
+    fi
+    if [ "$held_runner_attempt" -gt 500 ] \
+        || ! process_is_live "$held_invocation_pid"; then
+        printf 'could not identify the held delegated runner\n' >&2
+        exit 1
+    fi
+    sleep 0.01
+done
+
+held_reader_pid=
+held_reader_attempt=0
+while [ -z "$held_reader_pid" ]; do
+    held_reader_attempt=$((held_reader_attempt + 1))
+    if find_descendant_with_marker "$held_runner_pid" delegated-status-reader; then
+        held_reader_pid=$found_descendant
+        break
+    fi
+    if [ "$held_reader_attempt" -gt 500 ] \
+        || ! process_is_live "$held_runner_pid"; then
+        printf 'could not identify the held delegated status reader\n' >&2
+        exit 1
+    fi
+    sleep 0.01
+done
+process_is_live "$held_reader_pid"
+
+held_result=
+for candidate_result in "$private_tmp"/cast-delegated-client.*/status.result; do
+    [ -f "$candidate_result" ] || continue
+    if [ -n "$held_result" ]; then
+        printf 'held delegated status read exposed multiple result files\n' >&2
+        exit 1
+    fi
+    held_result=$candidate_result
+done
+test -n "$held_result"
+test "$(stat -c '%u:%a:%h:%s' "$held_result")" = "$(id -u):600:1:0"
+
+held_watchdog_receipt="$state/held-status-watchdog-fired"
+held_test_pid=$$
+(
+    sleep 5
+    : >"$held_watchdog_receipt"
+    kill -TERM "$held_test_pid"
+) &
+tracked_watchdog_pid=$!
+kill -TERM "$held_runner_pid"
+set +e
+wait "$held_invocation_pid"
+held_status=$?
+set -e
+tracked_runner_pid=
+tracked_invocation_pid=
+kill -TERM "$tracked_watchdog_pid" 2>/dev/null || :
+wait "$tracked_watchdog_pid" 2>/dev/null || :
+tracked_watchdog_pid=
+
+test "$held_status" -eq 143
+test ! -e "$held_watchdog_receipt"
+held_unit=$(cat "$state/unit")
+grep -Fqx -- "$held_unit" "$state/stops"
+test ! -e "$evidence/fixtures-ci-proof.json"
+if process_is_live "$held_reader_pid"; then
+    printf 'held delegated status reader survived parent cleanup: %s\n' \
+        "$held_reader_pid" >&2
+    exit 1
+fi
+test ! -e "$held_result"
+assert_argument_count "$state/systemd-run-args" \
+    '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 0
 
 reset_state
 set +e
