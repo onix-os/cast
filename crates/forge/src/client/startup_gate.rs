@@ -11,6 +11,7 @@ mod default_system_intent;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
+pub(in crate::client) use usr_rollback_active_reblit::UsrRollbackActiveReblitCompleteRouteSeal;
 pub(in crate::client) use usr_rollback_new_state::{
     UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal, UsrRollbackFreshDbInvalidationRouteSeal,
     UsrRollbackFreshDbInvalidationSeal,

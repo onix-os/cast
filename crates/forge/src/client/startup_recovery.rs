@@ -9,6 +9,7 @@
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
+mod usr_rollback_active_reblit_complete_route;
 mod usr_rollback_candidate_preserve_dispatch;
 mod usr_rollback_candidate_preserve_persistence;
 mod usr_rollback_complete_route;
@@ -96,10 +97,20 @@ pub(super) use usr_rollback_active_reblit_candidate_preserve_persistence::{
     persist_usr_rollback_active_reblit_candidate_preserve_and_reopen,
 };
 
+pub(super) use usr_rollback_active_reblit_complete_route::{
+    UsrRollbackActiveReblitCompleteRoutePersistenceError, persist_usr_rollback_active_reblit_complete_route_and_reopen,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_candidate_preserve_persistence::{
     DurableUsrRollbackActiveReblitCandidatePreserveRecord,
     arm_before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
+    DurableUsrRollbackActiveReblitCompleteRouteRecord,
+    arm_before_usr_rollback_active_reblit_complete_route_final_revalidation,
 };
 
 pub(super) use usr_rollback_complete_route::{

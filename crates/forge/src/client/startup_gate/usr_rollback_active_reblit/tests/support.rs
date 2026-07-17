@@ -9,9 +9,16 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, CleanSystemStartup},
+        startup_reconciliation::{
+            active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_active_reblit_candidate_preserve_post_exchange_durability_events,
+            take_active_reblit_candidate_preserve_post_exchange_durability_events,
+        },
         startup_recovery::{
-            DurableUsrRollbackActiveReblitCandidatePreserveRecord,
-            UsrRollbackActiveReblitCandidatePreservePersistenceError, UsrRollbackCandidatePreserveDispatchError,
+            DurableUsrRollbackActiveReblitCandidatePreserveRecord, DurableUsrRollbackActiveReblitCompleteRouteRecord,
+            UsrRollbackActiveReblitCandidatePreservePersistenceError,
+            UsrRollbackActiveReblitCompleteRoutePersistenceError, UsrRollbackCandidatePreserveDispatchError,
         },
     },
     db,
@@ -55,6 +62,8 @@ pub(super) enum CandidateOrigin {
 }
 
 impl CandidateOrigin {
+    pub(super) const ALL: [Self; 2] = [Self::Applied, Self::AlreadySatisfied];
+
     pub(super) fn outcome(self) -> RollbackActionOutcome {
         match self {
             Self::Applied => RollbackActionOutcome::Applied,
@@ -115,6 +124,12 @@ pub(super) fn expected_candidate_preserved(
     successor
 }
 
+pub(super) fn expected_rollback_complete(candidate_preserved: &TransitionRecord) -> TransitionRecord {
+    let successor = candidate_preserved.rollback_successor(None).unwrap();
+    assert_eq!(successor.phase, Phase::RollbackComplete);
+    successor
+}
+
 pub(super) fn persist_candidate_preserved(
     fixture: &CandidatePreserveFixture,
     origin: CandidateOrigin,
@@ -124,6 +139,19 @@ pub(super) fn persist_candidate_preserved(
     journal.advance(&fixture.candidate_intent, &successor).unwrap();
     drop(journal);
     successor
+}
+
+pub(super) fn reset_candidate_effect_observers() {
+    reset_active_reblit_candidate_preserve_exchange_attempt_count();
+    reset_active_reblit_candidate_preserve_post_exchange_durability_events();
+}
+
+pub(super) fn assert_no_candidate_effects() {
+    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
+    assert!(
+        take_active_reblit_candidate_preserve_post_exchange_durability_events().is_empty(),
+        "completion routing must not repeat candidate-preservation durability"
+    );
 }
 
 pub(super) fn enter(installation: &Installation, database: &db::state::Database) -> startup_gate::Error {
@@ -202,6 +230,38 @@ pub(super) fn assert_persistence_advance(
             ) if *durable == expected
         ),
         "expected durable {expected:?} ActiveReblit advance failure, got {error:?}"
+    );
+}
+
+pub(super) fn assert_complete_persistence_advance(
+    error: &startup_gate::Error,
+    expected: DurableUsrRollbackActiveReblitCompleteRouteRecord,
+) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActiveReblitDispatch(
+                ActiveReblitDispatchError::CompleteRoutePersistence(
+                    UsrRollbackActiveReblitCompleteRoutePersistenceError::Advance {
+                        durable,
+                        ..
+                    }
+                )
+            ) if *durable == expected
+        ),
+        "expected durable {expected:?} ActiveReblit completion-route advance failure, got {error:?}"
+    );
+}
+
+pub(super) fn assert_complete_persistence_authority_error(error: &startup_gate::Error) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActiveReblitDispatch(ActiveReblitDispatchError::CompleteRoutePersistence(
+                UsrRollbackActiveReblitCompleteRoutePersistenceError::Authority(_)
+            ))
+        ),
+        "expected exact ActiveReblit completion-route persistence authority error, got {error:?}"
     );
 }
 

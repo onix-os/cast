@@ -21,7 +21,7 @@ use super::{
     super::candidate_test_support::CandidateSource,
     support::{
         CandidateOrigin, Epoch, assert_pending_phase, assert_persistence_advance, build_active, enter_candidate,
-        expected_candidate_preserved,
+        expected_candidate_preserved, expected_rollback_complete,
     },
 };
 
@@ -72,6 +72,7 @@ fn startup_active_reblit_candidate_dispatch_all_five_journal_faults_reopen_exact
         let source = fixture.candidate_intent.clone();
         let applied = expected_candidate_preserved(&fixture, CandidateOrigin::Applied);
         let already_satisfied = expected_candidate_preserved(&fixture, CandidateOrigin::AlreadySatisfied);
+        let complete = expected_rollback_complete(&applied);
         let database_before = fixture.fixture.database_snapshot();
         reset_active_reblit_candidate_preserve_exchange_attempt_count();
         (fault.arm)();
@@ -94,12 +95,18 @@ fn startup_active_reblit_candidate_dispatch_all_five_journal_faults_reopen_exact
 
         let second = enter_candidate(&fixture);
 
-        assert_pending_phase(&second, Phase::CandidatePreserved);
+        assert_pending_phase(
+            &second,
+            match fault.durable {
+                DurableUsrRollbackActiveReblitCandidatePreserveRecord::Source => Phase::CandidatePreserved,
+                DurableUsrRollbackActiveReblitCandidatePreserveRecord::CandidatePreserved => Phase::RollbackComplete,
+            },
+        );
         assert_eq!(
             fixture.fixture.canonical_record(),
             match fault.durable {
                 DurableUsrRollbackActiveReblitCandidatePreserveRecord::Source => already_satisfied,
-                DurableUsrRollbackActiveReblitCandidatePreserveRecord::CandidatePreserved => applied,
+                DurableUsrRollbackActiveReblitCandidatePreserveRecord::CandidatePreserved => complete,
             }
         );
         assert_eq!(fixture.fixture.database_snapshot(), database_before);

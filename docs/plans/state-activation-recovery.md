@@ -72,11 +72,13 @@ and instant rollback mechanism; it hardens their failure semantics.
   journal. The focused `make forge-client-startup-gate-test` lane lists 21
   contracts, including 5 which prove compatible repair and zero chmod for
   incompatible database, active-selection, record, or installation authority.
-  Apart from this chmod and the narrow rollback ladder through exact `/usr`
-  reversal, `UsrRestored` persistence, and the later journal-only route to
-  `CandidatePreserveIntent` documented in the
-  [startup-reconciliation plan](state-activation-startup-reconciliation.md),
-  general phase recovery execution is not implemented. The public
+  Beyond this chmod, the bounded rollback ladder documented in the
+  [startup-reconciliation plan](state-activation-startup-reconciliation.md)
+  now covers the shared `/usr` reversal prefix, the complete NewState suffix
+  through authenticated terminal journal absence, and the ActiveReblit suffix
+  through a retained `RollbackComplete` record. ActivateArchived candidate
+  recovery, ActiveReblit terminal finalization, roll-forward execution, boot
+  repair, and cleanup are not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -402,19 +404,21 @@ authority, trigger sequencing, and one-shot forward exchange contract.
 ### Startup reconciliation and interruption campaign
 
 The open startup-reconciliation and interruption work items, including the
-completed database-ownership probes and the exact source-bound NewState
-rollback suffix, continue in the
+completed database-ownership probes and the operation-specific NewState and
+ActiveReblit rollback suffixes, continue in the
 [startup-reconciliation plan](state-activation-startup-reconciliation.md).
-Production startup now handles exactly one entry checkpoint at a time from
-`CandidatePreserveIntent` through the transition to `RollbackComplete`.
-Preparation-only target creation or normalization retains its phase, while
-movement, routing, exact fresh-row invalidation, and completion persistence
-each stop after their own boundary; `RollbackComplete` itself remains a
-retained diagnostic record. Compiler-local seals prevent sibling authority
-construction, and 25 real-gate contracts cover the complete target/database
-matrices plus all five journal faults across all four persistence boundaries.
-The document owns the remaining finalizer, other operation families, later
-rollback actions, restart/process-death expansion, and the power-loss campaign.
+Production startup handles exactly one entry checkpoint at a time. NewState
+preparation-only target creation or normalization retains its phase; movement,
+routing, exact fresh-row invalidation, completion persistence, and terminal
+deletion each stop after their own boundary. ActiveReblit preserves its whole
+replacement wrapper and, on a later entry, uses a separate sealed authority to
+advance only the journal from `CandidatePreserved` to `RollbackComplete`; that
+terminal record remains diagnostic. Compiler-local seals prevent sibling
+authority construction, and operation-specific real-gate contracts cover the
+complete matrices, every five-position journal-update fault set, evidence
+races, and fresh-handle restart. The document owns the ActiveReblit finalizer,
+the missing ActivateArchived suffix, later rollback actions, process-death
+expansion, and the reboot and power-loss campaign.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

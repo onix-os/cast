@@ -242,9 +242,11 @@ closure remain authoritative in `PLAN.md`.
   direction flip. Positive first-installation coverage proves a synthesized
   empty previous `/usr` exchanges once and remains staged without a `.stateID`.
   The coordinator still has no live client callsite. Publishing its intent
-  remains forbidden because startup can now recover only the exact `/usr`
-  [rollback suffix](state-activation-startup-reconciliation.md#admitted-startup-recovery-ladder),
-  not every corresponding durable forward, rollback, and cleanup phase.
+  remains forbidden because the startup
+  [rollback ladder](state-activation-startup-reconciliation.md#admitted-startup-recovery-ladder)
+  covers the full NewState suffix and ActiveReblit only through a retained
+  `RollbackComplete` record, not every corresponding durable forward,
+  ActivateArchived, roll-forward, boot, and cleanup phase.
 
 ## Archived-state verification
 
@@ -298,11 +300,16 @@ closure remain authoritative in `PLAN.md`.
   Startup classifies ActiveReblit `Preparing` as strictly state-ID-absent and
   treats `CandidatePrepareStarted` as the only state-ID
   publication-ambiguity boundary. There is still no general phase-advancing
-  recovery executor. The narrow production startup ladder can now normalize
+  recovery executor. The bounded production startup ladder can now normalize
   forward exchange-parent durability, persist `RollbackDecided`, route a later
-  entry to its first unresolved rollback intent, restore `/usr` and persist
-  `UsrRestored`, then route a separate later entry to
-  `CandidatePreserveIntent`. Commits
+  entry to its first unresolved rollback intent, restore `/usr`, and persist
+  `UsrRestored`. Separate operation-specific entries then carry NewState through
+  candidate preservation, fresh-row invalidation, `RollbackComplete`, and
+  authenticated terminal journal absence. ActiveReblit carries its
+  whole-wrapper candidate preservation through a later journal-only
+  `CandidatePreserved` to `RollbackComplete` route, where it remains pending a
+  separate terminal finalizer. ActivateArchived still has no candidate suffix.
+  Commits
   `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
   outcome, connected the one-phase reverse dispatcher to real mutable startup,
   and proved its initial parent- and journal-restart convergence. Commit

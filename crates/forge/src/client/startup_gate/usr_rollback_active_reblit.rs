@@ -1,8 +1,8 @@
-//! One-entry production dispatch for ActiveReblit candidate preservation.
+//! One-entry production dispatch for the ActiveReblit rollback suffix.
 //!
-//! Only an exact ActiveReblit `CandidatePreserveIntent` observed at startup
-//! entry can enter the consuming leaf. A successful Apply or Finish returns
-//! immediately with `CandidatePreserved`; the successor is never redispatched
+//! Only the exact ActiveReblit checkpoint observed at startup entry can enter
+//! its consuming leaf. A successful candidate preservation or journal-only
+//! completion route returns immediately; the successor is never redispatched
 //! by this module in the same startup entry. Every other operation or phase is
 //! returned unchanged to the remaining startup gate.
 
@@ -16,9 +16,32 @@ use crate::{
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_gate::UsrRollbackCandidatePreserveSeal,
-    startup_reconciliation::{UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority},
-    startup_recovery::{UsrRollbackCandidatePreserveReady, dispatch_usr_rollback_candidate_preserve_and_reopen},
+    startup_reconciliation::{
+        UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
+        UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority,
+    },
+    startup_recovery::{
+        UsrRollbackCandidatePreserveReady, dispatch_usr_rollback_candidate_preserve_and_reopen,
+        persist_usr_rollback_active_reblit_complete_route_and_reopen,
+    },
 };
+
+/// Unforgeable safe-code token limiting the ActiveReblit completion route to
+/// this operation-specific writer-first startup child.
+pub(in crate::client) struct UsrRollbackActiveReblitCompleteRouteSeal {
+    _private: (),
+}
+
+impl UsrRollbackActiveReblitCompleteRouteSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
 
 /// Whether this startup entry handled the exact ActiveReblit checkpoint.
 pub(super) enum Dispatch {
@@ -32,7 +55,7 @@ pub(super) enum Dispatch {
     },
 }
 
-/// Dispatch only ActiveReblit candidate preservation present at startup entry.
+/// Dispatch at most the one ActiveReblit rollback checkpoint present at entry.
 pub(super) fn dispatch<'reservation>(
     installation: &Installation,
     state_db: &db::state::Database,
@@ -41,31 +64,55 @@ pub(super) fn dispatch<'reservation>(
     record: TransitionRecord,
     initial_in_flight: Option<db::state::InFlightTransition>,
 ) -> Result<Dispatch, Error> {
-    if record.operation != Operation::ActiveReblit || record.phase != Phase::CandidatePreserveIntent {
+    if record.operation != Operation::ActiveReblit {
         return Ok(Dispatch::Unhandled { journal, record });
     }
 
-    let seal = UsrRollbackCandidatePreserveSeal::new();
-    let admission = UsrRollbackCandidatePreserveAuthority::capture(
-        &seal,
-        installation,
-        &journal,
-        state_db,
-        active_state_reservation,
-        &record,
-        initial_in_flight,
-    )?;
-    let ready = match admission {
-        UsrRollbackCandidatePreserveAdmission::Apply(authority) => UsrRollbackCandidatePreserveReady::Apply(authority),
-        UsrRollbackCandidatePreserveAdmission::Finish(authority) => {
-            UsrRollbackCandidatePreserveReady::Finish(authority)
+    match record.phase {
+        Phase::CandidatePreserveIntent => {
+            let seal = UsrRollbackCandidatePreserveSeal::new();
+            let admission = UsrRollbackCandidatePreserveAuthority::capture(
+                &seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+                initial_in_flight,
+            )?;
+            let ready = match admission {
+                UsrRollbackCandidatePreserveAdmission::Apply(authority) => {
+                    UsrRollbackCandidatePreserveReady::Apply(authority)
+                }
+                UsrRollbackCandidatePreserveAdmission::Finish(authority) => {
+                    UsrRollbackCandidatePreserveReady::Finish(authority)
+                }
+                UsrRollbackCandidatePreserveAdmission::NotApplicable
+                | UsrRollbackCandidatePreserveAdmission::Deferred => {
+                    return Ok(Dispatch::Unhandled { journal, record });
+                }
+            };
+            let (journal, record) = dispatch_usr_rollback_candidate_preserve_and_reopen(journal, record, ready)?;
+            Ok(Dispatch::Handled { journal, record })
         }
-        UsrRollbackCandidatePreserveAdmission::NotApplicable | UsrRollbackCandidatePreserveAdmission::Deferred => {
-            return Ok(Dispatch::Unhandled { journal, record });
+        Phase::CandidatePreserved => {
+            let seal = UsrRollbackActiveReblitCompleteRouteSeal::new();
+            let admission = UsrRollbackActiveReblitCompleteRouteAuthority::capture(
+                &seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+            )?;
+            let UsrRollbackActiveReblitCompleteRouteAdmission::Ready(authority) = admission else {
+                return Ok(Dispatch::Unhandled { journal, record });
+            };
+            let (journal, record) = persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)?;
+            Ok(Dispatch::Handled { journal, record })
         }
-    };
-    let (journal, record) = dispatch_usr_rollback_candidate_preserve_and_reopen(journal, record, ready)?;
-    Ok(Dispatch::Handled { journal, record })
+        _ => Ok(Dispatch::Unhandled { journal, record }),
+    }
 }
 
 #[derive(Debug, Error)]
@@ -76,6 +123,14 @@ pub(in crate::client) enum Error {
     ),
     #[error("dispatch exact startup ActiveReblit candidate preservation")]
     CandidatePreserveDispatch(#[from] crate::client::startup_recovery::UsrRollbackCandidatePreserveDispatchError),
+    #[error("capture exact startup ActiveReblit rollback-completion route authority")]
+    CompleteRouteAuthority(
+        #[from] crate::client::startup_reconciliation::UsrRollbackActiveReblitCompleteRouteAuthorityError,
+    ),
+    #[error("persist exact startup ActiveReblit rollback-completion route")]
+    CompleteRoutePersistence(
+        #[from] crate::client::startup_recovery::UsrRollbackActiveReblitCompleteRoutePersistenceError,
+    ),
 }
 
 #[cfg(test)]

@@ -20,24 +20,28 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Admitted startup recovery ladder
 
-  As of 2026-07-17, startup's diagnostic checkpoint remains deliberately
+  As of 2026-07-18, startup's diagnostic checkpoint remains deliberately
   read-only and fail closed. Immediately before it, the mutable startup gate has
   one sealed, bounded recovery ladder: the ActiveReblit restrictive
   replacement-mode normalizer, descriptor-bound forward exchange-parent
   durability normalization, rollback-decision persistence, journal-only
   rollback-resume routing, and the exact `/usr` reverse dispatcher. Separate
-  later entries route exact `UsrRestored` to `CandidatePreserveIntent`, prepare
-  its quarantine target, preserve the candidate, route
-  `FreshDbInvalidationIntent`, invalidate the exact fresh database row, persist
-  `FreshDbInvalidated`, advance it to `RollbackComplete`, and, on one later
-  entry, finalize that exact NewState terminal record to authenticated journal
-  absence.
+  later entries route exact `UsrRestored` to `CandidatePreserveIntent`. NewState
+  entries prepare the quarantine target, preserve the candidate, invalidate the
+  exact fresh database row, advance through `FreshDbInvalidated` to
+  `RollbackComplete`, and finally authenticate terminal journal absence.
+  ActiveReblit instead preserves its whole replacement wrapper, then uses its
+  exact cleared existing-state row, retained provenance, and preserved-wrapper
+  proof to advance directly from `CandidatePreserved` to `RollbackComplete`.
+  That ActiveReblit terminal record remains present for diagnostic inspection;
+  its separate finalizer is not implemented.
   Each entry recaptures authority from the current canonical record and fresh
   database and namespace evidence, admits at most one preparation/effect
   checkpoint, at most one journal advance, or one terminal deletion, then
-  returns without dispatching its successor. Inexact NewState terminal evidence
-  and terminal records for unsupported operations remain diagnostic and fail
-  closed; diagnostic inventory is never converted into mutation authority.
+  returns without dispatching its successor. Inexact NewState terminal evidence,
+  every ActiveReblit terminal record, and terminal records for unsupported
+  operations remain diagnostic and fail closed; diagnostic inventory is never
+  converted into mutation authority.
 
   Commit `3e1ba34` introduced the journal-only rollback-decision boundary. The
   decision path applies to NewState, ActivateArchived, and ActiveReblit.
@@ -806,20 +810,33 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  The production ladder now covers the authenticated `/usr` rollback prefix and
+  The production ladder now covers the authenticated `/usr` rollback prefix,
   the exact NewState suffix from `CandidatePreserveIntent` through authenticated
-  terminal journal absence. Separate startup entries may create or normalize the
-  quarantine target without advancing, move and durably preserve the candidate,
-  route to invalidation intent, remove the exact fresh transition or accept
-  proved joint absence, persist that outcome, route to completion, and delete
-  the exact terminal record. Every entry handles at most its observed checkpoint
-  and immediately returns; no resulting record is redispatched in the same entry.
+  terminal journal absence, and the ActiveReblit suffix through a retained
+  `RollbackComplete` record. Separate NewState entries may create or normalize
+  the quarantine target without advancing, move and durably preserve the
+  candidate, invalidate the exact fresh transition or accept proved joint
+  absence, route to completion, and delete the exact terminal record. Separate
+  ActiveReblit entries preserve the whole replacement wrapper and then perform
+  only the direct journal route from `CandidatePreserved` to `RollbackComplete`.
+  Every entry handles at most its observed checkpoint and immediately returns;
+  no resulting record is redispatched in the same entry.
+
+  The focused ActiveReblit completion lane adds six real-startup contracts and
+  one direct authority-binding proof: a 16-case
+  epoch/source/`/usr`/candidate-outcome matrix, all five conditional
+  journal-update faults with second-entry convergence, both fresh-handle
+  durability sides, database/provenance/journal/namespace races, exact
+  operation/phase/plan/topology exclusions, and rejection of separately
+  reopened or cross-root journal bindings. The combined ActiveReblit startup
+  lane passes 17/17 contracts. Completion repeats no wrapper exchange or
+  candidate durability effect and changes neither the database nor the
+  non-journal namespace.
 
   The ladder still has no candidate suffix for ActivateArchived. ActiveReblit
-  now dispatches exactly one `CandidatePreserveIntent` checkpoint through the
-  production startup gate and stops at `CandidatePreserved`, but it still has
-  no completion route or terminal finalizer. The ladder also has no
-  roll-forward executor, boot repair, or cleanup.
+  has no terminal finalizer, process-death proof for this new completion route,
+  or authenticated clean handoff. The ladder also has no roll-forward executor,
+  boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four

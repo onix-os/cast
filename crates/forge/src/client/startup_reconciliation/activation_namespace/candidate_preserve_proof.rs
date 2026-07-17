@@ -270,6 +270,31 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Require the exact whole-wrapper ActiveReblit preservation topology while
+/// the journal is at its already-persisted `CandidatePreserved` checkpoint.
+///
+/// This helper is deliberately phase and operation specific. The completion
+/// route must not widen candidate-preservation admission or borrow the
+/// NewState fresh-database route. The exact derived wrapper index is returned
+/// so callers retain it rather than substituting a default index.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_active_reblit_candidate_preserved_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<usize, UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::CandidatePreserved {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitCompleteRoutePhase);
+    }
+    if record.operation != Operation::ActiveReblit {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitRequired);
+    }
+    let UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index } =
+        candidate_preserve_topology_after_phase(record, snapshot)?
+    else {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+    };
+    Ok(wrapper_index)
+}
+
 /// Require the exact preserved-candidate namespace while the journal is at
 /// `FreshDbInvalidationIntent`.
 ///
@@ -615,6 +640,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongPhase,
     #[error("fresh-database invalidation routing requires CandidatePreserved")]
     WrongCandidatePreservedPhase,
+    #[error("ActiveReblit rollback-completion routing requires CandidatePreserved")]
+    WrongActiveReblitCompleteRoutePhase,
     #[error("fresh-database invalidation requires FreshDbInvalidationIntent")]
     WrongFreshDbInvalidationPhase,
     #[error("rollback-completion routing requires FreshDbInvalidated")]
@@ -624,6 +651,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongRollbackCompletePhase,
     #[error("fresh-database invalidation routing requires a NewState transition")]
     NewStateRequired,
+    #[error("whole-wrapper rollback-completion routing requires an ActiveReblit transition")]
+    ActiveReblitRequired,
     #[error("the candidate tree is absent from the accepted namespace inventory")]
     CandidateMissing,
     #[error("the candidate state ID required by archived preservation is absent")]

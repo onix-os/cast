@@ -15,6 +15,7 @@
 //! consume only those phase-specific paths and their journal persistence
 //! boundaries; no path exposes general cleanup or trigger authority.
 
+mod active_reblit_complete_route_proof;
 mod candidate_preserve_proof;
 mod capture;
 mod decision_proof;
@@ -34,6 +35,13 @@ mod tests;
 use crate::{
     Installation,
     transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
+};
+
+#[cfg(test)]
+pub(in crate::client) use active_reblit_complete_route_proof::arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture;
+pub(super) use active_reblit_complete_route_proof::{
+    UsrRollbackActiveReblitCompleteRouteNamespaceError, UsrRollbackActiveReblitCompleteRouteNamespaceInspection,
+    UsrRollbackActiveReblitCompleteRouteNamespaceProof,
 };
 
 pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
