@@ -16,6 +16,7 @@ use crate::{
         },
         startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
+    db,
     transition_journal::{RollbackActionOutcome, TransitionJournalStore},
 };
 
@@ -294,6 +295,69 @@ fn startup_new_state_candidate_preserve_move_rechecks_database_and_journal_after
                 .join("usr")
                 .is_dir()
         );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PreCandidateSyncEvidenceChange {
+    Database,
+    Journal,
+}
+
+#[test]
+fn startup_new_state_candidate_preserve_move_pre_candidate_sync_evidence_races_prevent_the_attempt() {
+    for change in [
+        PreCandidateSyncEvidenceChange::Database,
+        PreCandidateSyncEvidenceChange::Journal,
+    ] {
+        let fixture = CandidatePreserveFixture::new_state_empty_quarantine_prefix(
+            CandidateSource::Exchanged,
+            RollbackActionOutcome::Applied,
+        );
+        let before = fixture.evidence_snapshots();
+        let journal = fixture.open_journal();
+        let reservation = ActiveStateReservation::acquire().unwrap();
+        let lease = move_lease(&fixture, &journal, &reservation);
+        let changed_journal = fixture
+            .candidate_intent
+            .rollback_successor(Some(RollbackActionOutcome::Applied))
+            .unwrap();
+        let hook: Box<dyn FnOnce()> = match change {
+            PreCandidateSyncEvidenceChange::Database => Box::new(fixture.candidate_transition_clear_hook()),
+            PreCandidateSyncEvidenceChange::Journal => Box::new(fixture.journal_change_hook()),
+        };
+        arm_before_new_state_candidate_preserve_candidate_sync(hook);
+        reset_new_state_candidate_preserve_move_attempt_count();
+        let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+
+        assert!(lease.reconcile(&seal, &journal).is_err(), "{change:?}");
+        assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0, "{change:?}");
+        assert!(fixture.fixture.installation.staging_dir().join("usr").is_dir());
+        assert!(
+            !transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent)
+                .join("usr")
+                .exists()
+        );
+        assert_eq!(fixture.fixture.namespace_snapshot(), before.2, "{change:?}");
+
+        match change {
+            PreCandidateSyncEvidenceChange::Database => {
+                assert_eq!(fixture.fixture.canonical_bytes(), before.0);
+                assert_eq!(
+                    fixture
+                        .fixture
+                        .database
+                        .transition_ownership(fixture.fixture.candidate_state, &fixture.candidate_intent.transition_id,)
+                        .unwrap(),
+                    db::state::TransitionOwnership::Cleared
+                );
+                assert_eq!(fixture.fixture.database.audit_in_flight_transition().unwrap(), None);
+            }
+            PreCandidateSyncEvidenceChange::Journal => {
+                assert_eq!(fixture.fixture.canonical_record(), changed_journal);
+                assert_eq!(fixture.fixture.database_snapshot(), before.1);
+            }
+        }
     }
 }
 

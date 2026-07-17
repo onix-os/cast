@@ -70,9 +70,7 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffectLease<'reservation>
         // The per-open binding is intentionally the first evidence
         // observation. A mixed store cannot trigger namespace revalidation or
         // the candidate move.
-        if !journal.has_binding(&self.effect.journal_binding) {
-            return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        require_effect_binding(&self.effect.journal_binding, journal)?;
         self.effect.reconcile_after_binding(journal)
     }
 }
@@ -96,7 +94,22 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
         } = self;
 
         require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
-        let namespace_result = namespace.reconcile_move(&installation, &record);
+        let prepared_namespace = namespace.prepare_move(&installation, &record);
+        if prepared_namespace.is_err() {
+            // Preserve the existing trailing evidence observation even when
+            // final namespace preparation fails before the move authority is
+            // produced. The namespace error remains the primary result.
+            let _ = require_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+        }
+        let prepared_namespace = prepared_namespace?;
+
+        // Namespace preparation runs candidate sync and a fresh PRE1 capture.
+        // Repeat the binding-first non-namespace sandwich afterward so a
+        // journal or database change during that work cannot reach rename.
+        require_effect_binding(&journal_binding, journal)?;
+        require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+
+        let namespace_result = prepared_namespace.reconcile_move(&installation, &record);
         let trailing_evidence = require_post_effect_evidence(&installation, &state_db, &record, &database, journal);
         let namespace_result = namespace_result?;
         trailing_evidence?;
@@ -124,6 +137,17 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
                 UsrRollbackNewStateCandidatePreserveApplyReconciliation::Ambiguous
             }
         })
+    }
+}
+
+fn require_effect_binding(
+    expected: &TransitionJournalBinding,
+    journal: &TransitionJournalStore,
+) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
+    if journal.has_binding(expected) {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalBindingMismatch.into())
     }
 }
 

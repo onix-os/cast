@@ -5,7 +5,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 8; \
+	timeout 10s test "$$count" = 9; \
 	for test in \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_candidate_preserve_effect_selects_only_new_state_empty_quarantine_prefix \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_reconciles_every_raw_result_for_every_origin \
@@ -14,6 +14,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_effect_selection_starts_with_the_open_binding \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_consumption_starts_with_the_open_binding \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_rechecks_database_and_journal_after_namespace_use \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_pre_candidate_sync_evidence_races_prevent_the_attempt \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_candidate_presync_race_prevents_the_attempt; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
@@ -45,8 +46,21 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s grep -Fqx '    Ambiguous,' "$$authority_effect"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine' "$$authority"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'self.require_journal_binding(journal)?;' "$$authority" )" -ge 2; \
-	timeout 10s grep -Fq 'if !journal.has_binding(&self.effect.journal_binding) {' "$$authority_effect"; \
+	timeout 10s grep -Fq '        require_effect_binding(&self.effect.journal_binding, journal)?;' "$$authority_effect"; \
+	timeout 10s grep -Fq '    if journal.has_binding(expected) {' "$$authority_effect"; \
 	timeout 10s grep -Fq 'let trailing_evidence = require_post_effect_evidence' "$$authority_effect"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        require_pre_effect_evidence(' "$$authority_effect" )" = 2; \
+	prepared_line="$$( timeout 10s grep -nF '        let prepared_namespace = namespace.prepare_move(&installation, &record);' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
+	second_binding_line="$$( timeout 10s grep -nF '        require_effect_binding(&journal_binding, journal)?;' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
+	second_evidence_line="$$( timeout 10s grep -nF '        require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;' "$$authority_effect" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	attempt_call_line="$$( timeout 10s grep -nF '        let namespace_result = prepared_namespace.reconcile_move(&installation, &record);' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test -n "$$prepared_line"; \
+	timeout 10s test -n "$$second_binding_line"; \
+	timeout 10s test -n "$$second_evidence_line"; \
+	timeout 10s test -n "$$attempt_call_line"; \
+	timeout 10s test "$$prepared_line" -lt "$$second_binding_line"; \
+	timeout 10s test "$$second_binding_line" -lt "$$second_evidence_line"; \
+	timeout 10s test "$$second_evidence_line" -lt "$$attempt_call_line"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'renameat2_noreplace_once(' "$$namespace_effect" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'parents.sync_retained_candidate_for_move()?' "$$proof_effect" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'parents.attempt_move_once()' "$$proof_effect" )" = 1; \
@@ -67,7 +81,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorAfterApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorWithoutApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::SuccessWithoutApply' "$$tests"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests" )" = 18; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests" )" = 20; \
 	for file in "$$authority" "$$authority_effect" "$$proof" "$$proof_effect" "$$namespace" "$$namespace_effect" "$$namespace_reconciliation" "$$tests" crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs misc/make/startup-candidate-preserve-effect-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

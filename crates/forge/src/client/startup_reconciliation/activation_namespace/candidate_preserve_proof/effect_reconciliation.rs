@@ -34,43 +34,38 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackNewStateCandidateP
     Ambiguous,
 }
 
-struct FinalNewStateCandidatePreservePre {
+/// Opaque namespace authority prepared by candidate sync plus a fresh PRE1
+/// capture, but not yet consumed into the one-shot move.
+///
+/// Keeping this value separate lets the enclosing authority repeat its exact
+/// journal, database, plan, and installation checks after namespace
+/// preparation and immediately before the rename attempt.
+#[must_use = "prepared NewState candidate-preservation namespace authority must be consumed"]
+pub(in crate::client::startup_reconciliation) struct UsrRollbackNewStateCandidatePreservePreparedNamespace {
     baseline: NamespaceSnapshot,
     projection: ProjectedNewStateCandidatePreserveNamespace,
     parents: RetainedNewStateCandidatePreserveParents,
 }
 
 impl UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
-    /// Sync the exact candidate, prove one final fresh PRE1 namespace, issue at
-    /// most one no-replace move, and classify only the fresh post-attempt view.
-    pub(in crate::client::startup_reconciliation) fn reconcile_move(
+    /// Sync the exact candidate and prove one final fresh PRE1 namespace.
+    ///
+    /// This deliberately stops before the one-shot move so the enclosing
+    /// authority can repeat every non-namespace evidence check.
+    pub(in crate::client::startup_reconciliation) fn prepare_move(
         self,
         installation: &Installation,
         record: &TransitionRecord,
-    ) -> Result<
-        UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
-        UsrRollbackCandidatePreserveNamespaceError,
-    > {
+    ) -> Result<UsrRollbackNewStateCandidatePreservePreparedNamespace, UsrRollbackCandidatePreserveNamespaceError> {
         let FinalNewStateCandidatePreservePre {
             baseline,
             projection,
             parents,
         } = self.final_exact_pre(installation, record)?;
-        let pending = parents.attempt_move_once();
-        Ok(match pending.reconcile(installation, record, baseline, projection) {
-            NewStateCandidatePreserveMoveReconciliation::Applied(reconciliation) => {
-                UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::Applied(
-                    UsrRollbackNewStateCandidatePreserveAppliedNamespace {
-                        _reconciliation: reconciliation,
-                    },
-                )
-            }
-            NewStateCandidatePreserveMoveReconciliation::NotApplied => {
-                UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::NotApplied
-            }
-            NewStateCandidatePreserveMoveReconciliation::Ambiguous => {
-                UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::Ambiguous
-            }
+        Ok(UsrRollbackNewStateCandidatePreservePreparedNamespace {
+            baseline,
+            projection,
+            parents,
         })
     }
 
@@ -118,6 +113,47 @@ impl UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence {
             baseline: fresh,
             projection,
             parents,
+        })
+    }
+}
+
+struct FinalNewStateCandidatePreservePre {
+    baseline: NamespaceSnapshot,
+    projection: ProjectedNewStateCandidatePreserveNamespace,
+    parents: RetainedNewStateCandidatePreserveParents,
+}
+
+impl UsrRollbackNewStateCandidatePreservePreparedNamespace {
+    /// Consume prepared PRE1 authority through at most one no-replace move and
+    /// classify only the fresh post-attempt namespace.
+    pub(in crate::client::startup_reconciliation) fn reconcile_move(
+        self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<
+        UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation,
+        UsrRollbackCandidatePreserveNamespaceError,
+    > {
+        let Self {
+            baseline,
+            projection,
+            parents,
+        } = self;
+        let pending = parents.attempt_move_once();
+        Ok(match pending.reconcile(installation, record, baseline, projection) {
+            NewStateCandidatePreserveMoveReconciliation::Applied(reconciliation) => {
+                UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::Applied(
+                    UsrRollbackNewStateCandidatePreserveAppliedNamespace {
+                        _reconciliation: reconciliation,
+                    },
+                )
+            }
+            NewStateCandidatePreserveMoveReconciliation::NotApplied => {
+                UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::NotApplied
+            }
+            NewStateCandidatePreserveMoveReconciliation::Ambiguous => {
+                UsrRollbackNewStateCandidatePreserveNamespaceApplyReconciliation::Ambiguous
+            }
         })
     }
 }
