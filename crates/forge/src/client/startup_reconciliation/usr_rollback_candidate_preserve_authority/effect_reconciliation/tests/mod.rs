@@ -10,10 +10,12 @@ use crate::{
         startup_reconciliation::{
             NewStateCandidatePreserveMoveFault, UsrRollbackCandidatePreserveAdmission,
             UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackNewStateCandidatePreserveApplyReconciliation,
-            UsrRollbackNewStateCandidatePreserveEffectLease, arm_before_new_state_candidate_preserve_candidate_sync,
+            UsrRollbackNewStateCandidatePreserveEffectLease, active_reblit_candidate_preserve_exchange_attempt_count,
+            arm_before_new_state_candidate_preserve_candidate_sync,
             arm_before_new_state_candidate_preserve_move_reconciliation_capture,
             arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
             arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
             reset_new_state_candidate_preserve_move_attempt_count,
             reset_new_state_candidate_preserve_target_durability_events,
             take_new_state_candidate_preserve_target_durability_events,
@@ -47,7 +49,7 @@ fn move_lease<'reservation>(
 }
 
 #[test]
-fn startup_candidate_preserve_effect_selects_disjoint_new_state_prefix_leases() {
+fn startup_candidate_preserve_effect_selects_disjoint_operation_and_new_state_prefix_leases() {
     let selected = CandidatePreserveFixture::new_state_empty_quarantine_prefix(
         CandidateSource::Exchanged,
         RollbackActionOutcome::Applied,
@@ -112,37 +114,64 @@ fn startup_candidate_preserve_effect_selects_disjoint_new_state_prefix_leases() 
     drop(reservation);
     drop(journal);
 
-    for fixture in [
-        CandidatePreserveFixture::new(
-            OperationKind::Archived,
-            CandidateSource::Exchanged,
-            RollbackActionOutcome::Applied,
-            CandidateLayout::Staged,
-        ),
-        CandidatePreserveFixture::new(
-            OperationKind::ActiveReblit,
-            CandidateSource::Exchanged,
-            RollbackActionOutcome::Applied,
-            CandidateLayout::Staged,
-        )
-        .with_active_reblit_wrapper_index(7),
-    ] {
-        let before = fixture.evidence_snapshots();
-        let journal = fixture.open_journal();
-        let reservation = ActiveStateReservation::acquire().unwrap();
-        let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(&journal, &reservation) else {
-            panic!("unsupported exact staged evidence did not admit Apply authority");
-        };
-        let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
-        reset_new_state_candidate_preserve_move_attempt_count();
+    let archived = CandidatePreserveFixture::new(
+        OperationKind::Archived,
+        CandidateSource::Exchanged,
+        RollbackActionOutcome::Applied,
+        CandidateLayout::Staged,
+    );
+    let archived_before = archived.evidence_snapshots();
+    let archived_journal = archived.open_journal();
+    let archived_reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(archived_authority) =
+        archived.capture(&archived_journal, &archived_reservation)
+    else {
+        panic!("exact archived staged evidence did not admit Apply authority");
+    };
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    reset_new_state_candidate_preserve_move_attempt_count();
+    reset_active_reblit_candidate_preserve_exchange_attempt_count();
 
-        assert!(matches!(
-            authority.into_effect_selection(&seal, &journal).unwrap(),
-            UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-        ));
-        assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
-        fixture.assert_evidence_unchanged(&before);
-    }
+    assert!(matches!(
+        archived_authority
+            .into_effect_selection(&seal, &archived_journal)
+            .unwrap(),
+        UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
+    ));
+    assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
+    archived.assert_evidence_unchanged(&archived_before);
+    drop(archived_reservation);
+    drop(archived_journal);
+
+    let active = CandidatePreserveFixture::new(
+        OperationKind::ActiveReblit,
+        CandidateSource::Exchanged,
+        RollbackActionOutcome::Applied,
+        CandidateLayout::Staged,
+    )
+    .with_active_reblit_wrapper_index(7);
+    let active_before = active.evidence_snapshots();
+    let active_journal = active.open_journal();
+    let active_reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(active_authority) =
+        active.capture(&active_journal, &active_reservation)
+    else {
+        panic!("exact ActiveReblit staged evidence did not admit Apply authority");
+    };
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    reset_new_state_candidate_preserve_move_attempt_count();
+    reset_active_reblit_candidate_preserve_exchange_attempt_count();
+
+    let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+        active_authority.into_effect_selection(&seal, &active_journal).unwrap()
+    else {
+        panic!("exact ActiveReblit staged evidence did not select its opaque exchange lease");
+    };
+    assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
+    active.assert_evidence_unchanged(&active_before);
+    drop(lease);
 }
 
 #[test]

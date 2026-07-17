@@ -68,7 +68,8 @@ forge-startup-usr-rollback-candidate-preserve-target-normalization-test:
 	if timeout 10s rg -n 'retry|move|rename|mkdir|persistence|dispatch' "$$namespace_durability"; then exit 1; fi; \
 	if timeout 10s rg -n 'RollbackActionOutcome|rollback_successor|forward_successor|\.advance[[:space:]]*\(|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|insert_fresh_metadata|delete_metadata|\.execute\(|\.transaction\(|\.delete\(' "$$effect_evidence" "$$authority_normalize" "$$proof_normalize" "$$namespace_normalize" "$$namespace_reconciliation" "$$namespace_durability"; then exit 1; fi; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveEffectSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveEffectSeal,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$production_dispatch" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveApplyEffectSelection::NormalizeNewStateTarget(lease) =>' "$$production_dispatch" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired =>' "$$production_dispatch" )" = 1; \

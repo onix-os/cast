@@ -22,7 +22,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_exact_post_races_at_every_barrier \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_evidence_races_and_fresh_admission_reruns \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_converges_applied_error_after_apply_and_finish_origins \
-		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_non_new_state_finish_durability_is_fieldless_unsupported_without_events \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_archived_finish_durability_is_fieldless_unsupported_without_events \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_an_occupied_new_state_target \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_refuses_every_controlled_non_private_new_state_target_mode \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::topology_refusal::startup_candidate_preserve_models_every_restrictive_new_state_target_residue_without_mutation \
@@ -46,23 +46,27 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	projection=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/new_state_candidate_preserve.rs; \
 	wrappers=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/wrappers.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
-	production_dispatch=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
+	new_state_dispatch=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
+	active_reblit_dispatch=crates/forge/src/client/startup_gate/usr_rollback_active_reblit.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests; \
-	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveSeal,' "$$startup_gate"; \
-	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {' "$$production_dispatch"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
-	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveSeal {/,/^}/p' "$$production_dispatch" )"; \
+	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$startup_gate"; \
+	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {' "$$startup_gate"; \
+	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$startup_gate"; \
+	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveSeal {/,/^}/p' "$$startup_gate" )"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveSeal::new();' "$$production_dispatch" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveAuthority::capture(' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveSeal::new();' "$$new_state_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveSeal::new();' "$$active_reblit_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveAuthority::capture(' "$$new_state_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveAuthority::capture(' "$$active_reblit_dispatch" )" = 1; \
 	production_seal_calls="$$( timeout 10s rg -n -F 'UsrRollbackCandidatePreserveSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
-	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_seal_calls" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_seal_calls" )" = "$$production_dispatch"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_seal_calls" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$new_state_dispatch:" <<<"$$production_seal_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$active_reblit_dispatch:" <<<"$$production_seal_calls" )" = 1; \
 	production_capture_calls="$$( timeout 10s rg -n -F 'UsrRollbackCandidatePreserveAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
-	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_capture_calls" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_capture_calls" )" = "$$production_dispatch"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_capture_calls" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$new_state_dispatch:" <<<"$$production_capture_calls" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$active_reblit_dispatch:" <<<"$$production_capture_calls" )" = 1; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackCandidatePreserveSeal,' "$$authority"; \
 	timeout 10s grep -Fqx '    journal_binding: TransitionJournalBinding,' "$$authority"; \
 	timeout 10s grep -Fqx "    _active_state_reservation: &'reservation ActiveStateReservation," "$$authority"; \
@@ -114,7 +118,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	if timeout 10s rg -n 'renameat|rename\(|exchange_forward|exchange_reverse|sync_all|sync_data|\.sync\(|\.advance\(|forward_successor|rollback_successor|unlinkat|linkat|create_dir|remove_dir|remove_file|set_permissions|write_all|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'std::fs::File|fs::File|AsRawFd|RawFd|BorrowedFd|OwnedFd|root_directory\(|retained_staging_parent|PendingSystemTransition|ActivationNamespaceEvidence' "$$authority" "$$proof"; then exit 1; fi; \
 	if timeout 10s rg -n 'renameat|rename\(|mkdirat|create_dir|set_permissions|chmod|remove_dir|remove_file|write_all|sync_all|sync_data|\.sync\(|\.advance\(|clear_transition_if_matches|remove_transition_if_matches|insert_fresh_metadata|delete_metadata' "$$capture" "$$model" "$$wrappers" "$$proof"; then exit 1; fi; \
-	for file in "$$authority" "$$proof" "$$capture" "$$model" "$$projection" "$$wrappers" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/post_move_durability.rs" "$$tests/topology_refusal.rs"; do \
+	for file in "$$authority" "$$proof" "$$capture" "$$model" "$$projection" "$$wrappers" "$$startup_gate" "$$new_state_dispatch" "$$active_reblit_dispatch" "$$tests.rs" "$$tests/support.rs" "$$tests/admission.rs" "$$tests/evidence.rs" "$$tests/post_move_durability.rs" "$$tests/topology_refusal.rs"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \

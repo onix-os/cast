@@ -8,7 +8,7 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	timeout 10s test "$$count" = 3; \
 	for test in \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_selects_every_new_state_prefix_for_every_origin \
-		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_keeps_archived_and_active_reblit_unsupported \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_keeps_archived_unsupported_and_selects_opaque_active_reblit_exchange \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_selection_is_binding_first_for_every_lease; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
@@ -21,7 +21,8 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	create_lease=UsrRollbackNewStateCandidatePreserveCreateTargetLease; \
 	normalize_lease=UsrRollbackNewStateCandidatePreserveNormalizeTargetLease; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveEffectSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveEffectSeal,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {' "$$production_dispatch"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
 	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveEffectSeal {/,/^}/p' "$$production_dispatch" )"; \
@@ -38,6 +39,7 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '    CreateNewStateTarget(UsrRollbackNewStateCandidatePreserveCreateTargetLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    NormalizeNewStateTarget(UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'\''reservation>),' "$$authority" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    Unsupported,' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "pub(in crate::client) struct $$create_lease<'reservation> {" "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "pub(in crate::client) struct $$normalize_lease<'reservation> {" "$$authority" )" = 1; \
@@ -55,7 +57,8 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	timeout 10s grep -Fqx 'const RESTRICTIVE_RESIDUE_MODES: [u32; 7] = [0o000, 0o100, 0o200, 0o300, 0o400, 0o500, 0o600];' "$$tests/target_preparation.rs"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'for source in CandidateSource::ALL {' "$$tests/target_preparation.rs" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {' "$$tests/target_preparation.rs" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests/target_preparation.rs" )" = 10; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests/target_preparation.rs" )" = 12; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'active_reblit_candidate_preserve_exchange_attempt_count()' "$$tests/target_preparation.rs" )" = 4; \
 	for file in "$$authority" "$$proof" "$$namespace" "$$tests.rs" "$$tests/support.rs" "$$tests/target_preparation.rs" misc/make/startup-candidate-preserve-target-preparation-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

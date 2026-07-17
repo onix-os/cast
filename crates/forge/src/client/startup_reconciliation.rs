@@ -156,11 +156,14 @@ use activation_namespace::{
 };
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::{
-    ActiveReblitCandidatePreservePostExchangeDurabilityEvent, NewStateCandidatePreserveMoveFault,
+    ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
+    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, NewStateCandidatePreserveMoveFault,
     NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
     NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
     NewStateTargetCreateFault, NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
     NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
+    arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_active_reblit_candidate_preserve_post_exchange_durability_fault,
     arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_candidate_sync,
     arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,

@@ -815,9 +815,11 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   the exact terminal record. Every entry handles at most its observed checkpoint
   and immediately returns; no resulting record is redispatched in the same entry.
 
-  The ladder still has no terminal finalizer or candidate suffix for
-  ActivateArchived or ActiveReblit, roll-forward executor, boot repair, or
-  cleanup.
+  The ladder still has no candidate suffix for ActivateArchived. ActiveReblit
+  now dispatches exactly one `CandidatePreserveIntent` checkpoint through the
+  production startup gate and stops at `CandidatePreserved`, but it still has
+  no completion route or terminal finalizer. The ladder also has no
+  roll-forward executor, boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four

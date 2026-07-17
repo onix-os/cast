@@ -403,7 +403,8 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
 
     /// Consume generic Apply admission into one exact target-prefix lease or a
     /// fieldless unsupported result. Possessing admission is insufficient:
-    /// only the consuming NewState leaf can construct the distinct effect seal.
+    /// only the operation-generic candidate-preservation leaf can construct
+    /// the distinct effect seal.
     pub(in crate::client) fn into_effect_selection(
         self,
         _effect_seal: &UsrRollbackCandidatePreserveEffectSeal,

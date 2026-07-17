@@ -14,26 +14,25 @@ use super::{
 };
 
 #[test]
-fn startup_new_state_suffix_leaves_every_non_new_state_operation_zero_effect() {
-    for kind in [OperationKind::Archived, OperationKind::ActiveReblit] {
-        let fixture = build_non_new_state(kind);
-        let journal_before = fixture.fixture.canonical_bytes();
-        let database_before = fixture.fixture.database_snapshot();
-        let namespace_before = fixture.fixture.namespace_snapshot();
-        reset_namespace_effect_counts();
-        let removal_before = effect_counts().fresh_removal;
+fn startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect() {
+    let kind = OperationKind::Archived;
+    let fixture = build_non_new_state(kind);
+    let journal_before = fixture.fixture.canonical_bytes();
+    let database_before = fixture.fixture.database_snapshot();
+    let namespace_before = fixture.fixture.namespace_snapshot();
+    reset_namespace_effect_counts();
+    let removal_before = effect_counts().fresh_removal;
 
-        let error = enter_candidate(&fixture);
+    let error = enter_candidate(&fixture);
 
-        assert_pending_phase(&error, Phase::CandidatePreserveIntent);
-        assert_eq!(fixture.fixture.canonical_bytes(), journal_before, "{kind:?}");
-        assert_eq!(fixture.fixture.database_snapshot(), database_before, "{kind:?}");
-        assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before, "{kind:?}");
-        assert_eq!(effect_counts().create, 0, "{kind:?}");
-        assert_eq!(effect_counts().normalize, 0, "{kind:?}");
-        assert_eq!(effect_counts().candidate_move, 0, "{kind:?}");
-        assert_eq!(effect_counts().fresh_removal, removal_before, "{kind:?}");
-    }
+    assert_pending_phase(&error, Phase::CandidatePreserveIntent);
+    assert_eq!(fixture.fixture.canonical_bytes(), journal_before);
+    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+    assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
+    assert_eq!(effect_counts().create, 0);
+    assert_eq!(effect_counts().normalize, 0);
+    assert_eq!(effect_counts().candidate_move, 0);
+    assert_eq!(effect_counts().fresh_removal, removal_before);
 }
 
 #[test]

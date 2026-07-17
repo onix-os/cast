@@ -15,6 +15,7 @@ use crate::{
 
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
+    startup_gate::UsrRollbackCandidatePreserveSeal,
     startup_reconciliation::{
         UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority,
         UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackFinalizationAdmission,
@@ -29,23 +30,6 @@ use crate::client::{
         persist_usr_rollback_fresh_db_invalidation_route_and_reopen,
     },
 };
-
-/// Unforgeable safe-code token limiting candidate-preservation authority
-/// capture to this exact writer-first NewState suffix orchestrator.
-pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {
-    _private: (),
-}
-
-impl UsrRollbackCandidatePreserveSeal {
-    fn new() -> Self {
-        Self { _private: () }
-    }
-
-    #[cfg(test)]
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self::new()
-    }
-}
 
 /// Unforgeable safe-code token limiting the post-preservation journal route
 /// to this exact writer-first NewState suffix orchestrator.

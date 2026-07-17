@@ -12,7 +12,7 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_exact_post_races_at_every_barrier \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_evidence_races_and_fresh_admission_reruns \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_converges_applied_error_after_apply_and_finish_origins \
-		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_non_new_state_finish_durability_is_fieldless_unsupported_without_events; do \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_archived_finish_durability_is_fieldless_unsupported_without_events; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority.rs; \
@@ -29,7 +29,8 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	timeout 10s grep -Fqx 'mod post_move_durability;' "$$proof_effect"; \
 	timeout 10s grep -Fqx 'mod post_move_durability;' "$$namespace"; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveDurabilitySeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveDispatchError, UsrRollbackCandidatePreserveDurabilitySeal,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveDispatchError,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveDurabilitySeal,' "$$startup_recovery"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {' "$$production_dispatch"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveDurabilitySeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
 	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveDurabilitySeal {/,/^}/p' "$$production_dispatch" )"; \
@@ -56,9 +57,10 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '.complete(installation, record)?;' "$$proof_post" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'\''reservation>' "$$authority_post" )" -ge 3; \
 	timeout 10s grep -Fqx '    NewState(UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority<'\''reservation>),' "$$authority_post"; \
+	timeout 10s grep -Fqx '    ActiveReblit(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'\''reservation>),' "$$authority_post"; \
 	timeout 10s grep -Fqx '    Unsupported,' "$$authority_post"; \
 	timeout 10s grep -Fq '            UsrRollbackCandidatePreserveTopology::NewStatePreserved => {' "$$authority_post"; \
-	timeout 10s awk '/UsrRollbackCandidatePreserveTopology::ArchivedPreserved/ { archived = NR } /UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved/ { active = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported\)/ { unsupported = NR } END { exit !(archived && active && unsupported && archived < active && active < unsupported) }' "$$authority_post"; \
+	timeout 10s awk '/UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved/ { active = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit\(/ { active_selection = NR } /UsrRollbackCandidatePreserveTopology::ArchivedPreserved/ { archived = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported\)/ { unsupported = NR } END { exit !(active && active_selection && archived && unsupported && active < active_selection && active_selection < archived && archived < unsupported) }' "$$authority_post"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: RollbackActionOutcome::Applied,' "$$authority_post" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: RollbackActionOutcome::AlreadySatisfied,' "$$authority_post" )" = 1; \
 	if timeout 10s rg -U -n 'fn[^\(]*\([^\)]*(origin|outcome)[^\)]*\)' "$$authority_post"; then exit 1; fi; \

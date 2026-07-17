@@ -11,7 +11,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::target_durability::startup_new_state_candidate_preserve_target_durability_faults_stop_at_exact_prefixes_before_move \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::target_durability::startup_new_state_candidate_preserve_target_durability_namespace_races_fail_at_exact_prefixes \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::target_durability::startup_new_state_candidate_preserve_fresh_move_lease_repeats_target_durability_after_failure \
-		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_candidate_preserve_effect_selects_disjoint_new_state_prefix_leases \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_candidate_preserve_effect_selects_disjoint_operation_and_new_state_prefix_leases \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_reconciles_every_raw_result_for_every_origin \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_ambiguity_consumes_all_retry_capability \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::effect_reconciliation::tests::startup_new_state_candidate_preserve_move_final_prefix_race_prevents_the_attempt \
@@ -44,7 +44,8 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s grep -Fqx 'mod effect;' "$$namespace"; \
 	timeout 10s grep -Fqx 'mod target_durability;' "$$namespace"; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveEffectSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq '    UsrRollbackCandidatePreserveEffectSeal, UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveEffectSeal,' "$$startup_recovery"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {' "$$production_dispatch"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveEffectSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
 	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCandidatePreserveEffectSeal {/,/^}/p' "$$production_dispatch" )"; \
@@ -59,11 +60,14 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_selection_calls" )" = 1; \
 	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_selection_calls" )" = "$$production_dispatch"; \
 	timeout 10s grep -Fqx '    MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'\''reservation>),' "$$authority"; \
+	timeout 10s grep -Fqx '    ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'\''reservation>),' "$$authority"; \
 	timeout 10s grep -Fqx '    Unsupported,' "$$authority"; \
 	timeout 10s grep -Fqx '    Applied(UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority<'\''reservation>),' "$$authority_effect"; \
 	timeout 10s grep -Fqx '    NotApplied,' "$$authority_effect"; \
 	timeout 10s grep -Fqx '    Ambiguous,' "$$authority_effect"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine' "$$authority"; \
+	timeout 10s grep -Fq '.with_active_reblit_wrapper_index(7)' "$$tests"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'active_reblit_candidate_preserve_exchange_attempt_count()' "$$tests" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'self.require_journal_binding(journal)?;' "$$authority" )" -ge 2; \
 	timeout 10s grep -Fq '        require_effect_binding(&self.effect.journal_binding, journal)?;' "$$authority_effect"; \
 	timeout 10s grep -Fq '    if journal.has_binding(expected) {' "$$effect_evidence"; \
@@ -113,7 +117,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorAfterApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorWithoutApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::SuccessWithoutApply' "$$tests"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests" )" = 26; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'new_state_candidate_preserve_move_attempt_count()' "$$tests" )" = 28; \
 	timeout 10s test "$$( timeout 10s grep -Fc '#[test]' "$$target_durability_tests" )" = 4; \
 	timeout 10s grep -Fq 'reset_new_state_candidate_preserve_target_durability_events' "$$target_durability_tests"; \
 	timeout 10s grep -Fq 'take_new_state_candidate_preserve_target_durability_events' "$$target_durability_tests"; \

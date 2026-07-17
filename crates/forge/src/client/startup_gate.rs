@@ -8,12 +8,30 @@ use super::{
 };
 
 mod default_system_intent;
+mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
 pub(in crate::client) use usr_rollback_new_state::{
-    UsrRollbackCandidatePreserveSeal, UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal,
-    UsrRollbackFreshDbInvalidationRouteSeal, UsrRollbackFreshDbInvalidationSeal,
+    UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal, UsrRollbackFreshDbInvalidationRouteSeal,
+    UsrRollbackFreshDbInvalidationSeal,
 };
+
+/// Unforgeable safe-code token limiting candidate-preservation authority
+/// capture to the writer-first startup gate and its phase-specific children.
+pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {
+    _private: (),
+}
+
+impl UsrRollbackCandidatePreserveSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
 
 /// Exclusive proof that no interrupted system transition predates client
 /// construction.
@@ -220,6 +238,29 @@ impl CleanSystemStartup {
                 return Err(Error::RecoveryPending(pending));
             }
 
+            let (journal, record) = match usr_rollback_active_reblit::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+                in_flight.clone(),
+            )? {
+                usr_rollback_active_reblit::Dispatch::Unhandled { journal, record } => (journal, record),
+                usr_rollback_active_reblit::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
+
             let (journal, record) = match usr_rollback_new_state::dispatch(
                 installation,
                 state_db,
@@ -406,6 +447,8 @@ pub(super) enum Error {
     UsrRollbackReverseAuthority(#[from] startup_reconciliation::UsrRollbackReverseAuthorityError),
     #[error("execute and persist one exact startup /usr rollback-reverse phase")]
     UsrRollbackReverseDispatch(#[from] super::startup_recovery::UsrRollbackReverseDispatchError),
+    #[error("dispatch the exact startup ActiveReblit candidate-preservation checkpoint")]
+    UsrRollbackActiveReblitDispatch(#[from] usr_rollback_active_reblit::Error),
     #[error("dispatch one exact phase of the startup NewState rollback suffix")]
     UsrRollbackNewStateDispatch(#[from] usr_rollback_new_state::Error),
     #[error("revalidate retained mutable installation namespace during startup")]

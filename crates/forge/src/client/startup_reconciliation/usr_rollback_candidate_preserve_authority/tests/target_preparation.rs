@@ -7,7 +7,9 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
             UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyEffectSelection,
-            new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+            active_reblit_candidate_preserve_exchange_attempt_count, new_state_candidate_preserve_move_attempt_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_new_state_candidate_preserve_move_attempt_count,
         },
         startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
@@ -88,25 +90,54 @@ fn startup_candidate_target_preparation_selects_every_new_state_prefix_for_every
 }
 
 #[test]
-fn startup_candidate_target_preparation_keeps_archived_and_active_reblit_unsupported() {
+fn startup_candidate_target_preparation_keeps_archived_unsupported_and_selects_opaque_active_reblit_exchange() {
     for source in CandidateSource::ALL {
         for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
-            for kind in [OperationKind::Archived, OperationKind::ActiveReblit] {
-                let fixture = CandidatePreserveFixture::new(kind, source, usr_outcome, CandidateLayout::Staged);
-                let before = fixture.evidence_snapshots();
-                let journal = fixture.open_journal();
-                let reservation = ActiveStateReservation::acquire().unwrap();
-                let authority = apply_authority(&fixture, &journal, &reservation);
-                let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
-                reset_new_state_candidate_preserve_move_attempt_count();
+            let archived =
+                CandidatePreserveFixture::new(OperationKind::Archived, source, usr_outcome, CandidateLayout::Staged);
+            let archived_before = archived.evidence_snapshots();
+            let archived_journal = archived.open_journal();
+            let archived_reservation = ActiveStateReservation::acquire().unwrap();
+            let archived_authority = apply_authority(&archived, &archived_journal, &archived_reservation);
+            let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+            reset_new_state_candidate_preserve_move_attempt_count();
+            reset_active_reblit_candidate_preserve_exchange_attempt_count();
 
-                assert!(matches!(
-                    authority.into_effect_selection(&seal, &journal).unwrap(),
-                    UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-                ));
-                assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
-                fixture.assert_evidence_unchanged(&before);
-            }
+            assert!(matches!(
+                archived_authority
+                    .into_effect_selection(&seal, &archived_journal)
+                    .unwrap(),
+                UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
+            ));
+            assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+            assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
+            archived.assert_evidence_unchanged(&archived_before);
+            drop(archived_reservation);
+            drop(archived_journal);
+
+            let active = CandidatePreserveFixture::new(
+                OperationKind::ActiveReblit,
+                source,
+                usr_outcome,
+                CandidateLayout::Staged,
+            );
+            let active_before = active.evidence_snapshots();
+            let active_journal = active.open_journal();
+            let active_reservation = ActiveStateReservation::acquire().unwrap();
+            let active_authority = apply_authority(&active, &active_journal, &active_reservation);
+            let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+            reset_new_state_candidate_preserve_move_attempt_count();
+            reset_active_reblit_candidate_preserve_exchange_attempt_count();
+
+            let UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) =
+                active_authority.into_effect_selection(&seal, &active_journal).unwrap()
+            else {
+                panic!("exact staged ActiveReblit evidence did not select its opaque exchange lease");
+            };
+            drop(lease);
+            assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+            assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
+            active.assert_evidence_unchanged(&active_before);
         }
     }
 }
