@@ -60,9 +60,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   journal. The focused `make forge-client-startup-gate-test` lane lists 21
   contracts, including 5 which prove compatible repair and zero chmod for
   incompatible database, active-selection, record, or installation authority.
-  Apart from this chmod and the journal-only rollback-decision and
-  rollback-resume routing slices documented below, general phase recovery
-  execution is not implemented. The public
+  Apart from this chmod and the narrow rollback ladder through exact `/usr`
+  reversal and `UsrRestored` persistence documented below, general phase
+  recovery execution is not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -589,8 +589,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   direction flip. Positive first-installation coverage proves a synthesized
   empty previous `/usr` exchanges once and remains staged without a `.stateID`.
   The coordinator still has no live client callsite. Publishing its intent
-  remains forbidden until the general startup executor can resume or reverse
-  every corresponding durable phase.
+  remains forbidden because startup can now recover only the exact `/usr`
+  rollback suffix described below, not every corresponding durable forward,
+  rollback, and cleanup phase.
 
   Archived activation dispatches to a separate read-only verifier because its
   candidate already contains canonical metadata. The coordinator first loads
@@ -640,15 +641,19 @@ and instant rollback mechanism; it hardens their failure semantics.
   Startup classifies ActiveReblit `Preparing` as strictly state-ID-absent and
   treats `CandidatePrepareStarted` as the only state-ID
   publication-ambiguity boundary. There is still no general phase-advancing
-  recovery executor. Commit `3e1ba34` can advance the two directly admitted
-  `/usr` exchange evidence cases documented below to `RollbackDecided`, and
-  commit `72511b3` first completes both exact parent-directory durability
-  barriers for authenticated `UsrExchangeIntent` + `POST` evidence before using
-  that same decision boundary. Commit `911dcbc` can route a separately reopened
-  exact `RollbackDecided` record to its exact first unresolved intent without
-  executing that intent. None executes a rollback action. The
-  restrictive replacement-mode normalizer never changes the record, and the
-  diagnostic startup assessment remains non-mutating. This item remains open.
+  recovery executor. The narrow production startup ladder can now normalize
+  forward exchange-parent durability, persist `RollbackDecided`, route a later
+  entry to its first unresolved rollback intent, and, for exact
+  `ReverseExchangeIntent`, restore `/usr` and persist `UsrRestored`. Commits
+  `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
+  outcome, connected the one-phase reverse dispatcher to real mutable startup,
+  and proved its initial parent- and journal-restart convergence. Commit
+  `86c6c900` extended that interruption matrix through fresh-handle restart,
+  evidence races, and both coordinator-origin failure classes. The restrictive
+  replacement-mode normalizer still never changes the record, and the
+  diagnostic startup assessment remains non-mutating. Candidate preservation,
+  database invalidation, later rollback actions, roll-forward, and cleanup are
+  not executed, so this item remains open.
 - [ ] Reconcile startup using exact phase-specific namespace and database
   evidence. Every pre-commit phase rolls back except a durably completed boot
   synchronization; `CommitDecided` and later roll forward. Resume rollback in
@@ -658,12 +663,14 @@ and instant rollback mechanism; it hardens their failure semantics.
   proved repaired.
   As of 2026-07-16, startup's diagnostic checkpoint remains deliberately
   read-only and fail closed. Immediately before it, the mutable startup gate has
-  only four sealed, narrow steps: the ActiveReblit restrictive
-  replacement-mode normalizer described above, the descriptor-bound exchange
-  parent-durability normalizer added by commit `72511b3`, and the journal-only
-  rollback-decision executor added by commit `3e1ba34`, followed on a separate
-  startup entry by the journal-only rollback-resume router added by commit
-  `911dcbc`. None converts the diagnostic inventory into mutation authority.
+  one sealed, bounded recovery ladder: the ActiveReblit restrictive
+  replacement-mode normalizer, descriptor-bound forward exchange-parent
+  durability normalization, rollback-decision persistence, rollback-resume
+  routing, and the exact `/usr` reverse dispatcher. Each step captures its own
+  authority from the current canonical record and fresh database and namespace
+  evidence; none converts the diagnostic inventory into mutation authority.
+  Decision, routing, and reversal are separate persisted boundaries rather than
+  a same-process rollback loop.
 
   The decision path applies to NewState, ActivateArchived, and ActiveReblit.
   Exact `UsrExchangeIntent` + `PRE` records the `/usr` rollback action as already
@@ -722,6 +729,36 @@ and instant rollback mechanism; it hardens their failure semantics.
   complete canonical record to the exact source or exact successor. There is
   no same-process retry or continuation into the selected intent.
 
+  A later startup may admit only an exact `ReverseExchangeIntent` under a
+  private reverse seal. Exact `POST` evidence yields a consuming Apply
+  authority; exact `PRE` evidence yields a consuming Finish authority because
+  the namespace is already restored. Both authorities retain the installation,
+  journal binding, cooperating-writer reservation, complete source record,
+  stable database ownership and provenance, and descriptor-rooted namespace
+  proof. Apply makes exactly one retained descriptor-relative exchange attempt
+  and recaptures the layout rather than trusting the raw syscall report. An
+  applied layout continues even if the syscall reported an error; a semantic
+  non-application or ambiguous layout terminates that startup entry and returns
+  no reusable effect or journal authority. Finish makes no exchange attempt.
+
+  Both successful paths complete staging-parent and installation-root
+  durability in that order, revalidate all evidence, and derive the sole legal
+  `UsrRestored` successor. The persisted outcome is exact: an exchange applied
+  by this entry records `Applied`, while an already restored PRE layout records
+  `AlreadySatisfied`. Persistence performs one conditional journal advance,
+  then destroys the old effect authority and lock-bearing store before a
+  descriptor-rooted canonical reopen. A storage error remains an error even
+  when reopen proves whether the exact source or exact `UsrRestored` successor
+  is durable; it never authorizes an in-process retry or later rollback action.
+
+  The one-recovery-journal-mutation-per-entry rule therefore remains intact.
+  One entry may persist `RollbackDecided`, a later one may persist
+  `ReverseExchangeIntent`, and a later one may perform the admitted reverse and
+  persist `UsrRestored`. Every successful boundary returns `RecoveryPending`.
+  An already canonical `UsrRestored` record is not redispatched and is not
+  chained directly into `CandidatePreserveIntent`; a fresh startup merely
+  reports that stable pending phase.
+
   The assessment then classifies every validated persisted phase as begin
   rollback, resume rollback, roll forward, finalize rollback, or manual
   boot repair; correlates the exact candidate and previous database rows with
@@ -756,7 +793,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   ActiveReblit replacement reservation.
 
   This diagnostic inventory is still not recovery authority, is not reused by
-  the journal-only executor, and exposes no mutation API. Inspection retains the
+  any recovery executor, and exposes no mutation API. Inspection retains the
   installation, journal, and exact database
   capabilities through its final revalidation, then releases the mutable
   installation/global locks and exclusive journal before returning
@@ -792,16 +829,69 @@ and instant rollback mechanism; it hardens their failure semantics.
   journal binding and mixed-root rejection, database/provenance/namespace and
   final-revalidation races, historical epochs, ActiveReblit reservation
   retention, and all five journal-update fault prefixes with exact
-  source/successor reopen reconciliation. The lane also reruns the real
-  coordinator-origin matrix across all three operations and all three forward
-  durability fault points. A first startup persists the pending-reverse
-  decision, a second routes it to `ReverseExchangeIntent`, and the exchange
-  syscall count remains exactly one while database and non-journal namespace
-  evidence remain unchanged. At commit `911dcbc`, `make check` and the focused
-  rollback-decision, parent-durability, and rollback-resume-route Make lanes all
-  pass. This remains only a journal-routing boundary: general phase-specific
-  rollback, roll-forward, cleanup, and effect execution remain unimplemented,
-  so this item and all six broad Phase 11 work items stay open.
+  source/successor reopen reconciliation.
+
+  The real reverse-dispatch lane added through commits `e69ad276`, `50cb98f8`,
+  and `86c6c900` now passes ten dispatcher contracts plus two coordinator-origin
+  contracts. Its parent-durability restart matrix crosses all three operations,
+  POST and PRE, and all three injected interruption points: staging-parent sync,
+  installation-root sync, and final PRE capture. POST also covers ordinary
+  success and error-after-application syscall reports; PRE correctly makes no
+  exchange attempt. After a physical reverse, an injected failure leaves
+  `ReverseExchangeIntent` canonical; a fresh startup observes PRE, completes
+  the durability suffix without a second exchange, and persists
+  `UsrRestored(AlreadySatisfied)`. A third startup proves that phase is stable.
+  Its journal restart matrix crosses all three operations, POST and PRE, and all
+  five conditional-update fault points. Canonical reopen finds only the exact
+  source or exact `UsrRestored` successor. If the source survived, fresh startup
+  finishes the already restored layout without exchanging again; if the
+  successor survived, it is left untouched. Neither restart path mutates the
+  database, root links, or non-journal namespace after the failed entry.
+
+  A separate contract drops the failed startup result, old `Installation`,
+  reservation, and database connection, then opens a fresh `Installation` and
+  fresh descriptor-anchored state-database handle. Across all three operations,
+  both a final-PRE-capture fault and a journal temporary-sync fault then converge
+  from PRE without a second exchange. This is a stronger in-process
+  handle-reopen simulation, not a process-kill test.
+
+  The same lane classifies all four raw exchange report/layout combinations,
+  rejects ambiguous post-attempt evidence, and freezes exact `Applied` versus
+  `AlreadySatisfied` outcomes. Its evidence-race cross-product injects database,
+  journal, and namespace changes during admission and immediately before the
+  effect for all three operations under both POST and PRE. The immediate
+  post-effect POST matrix covers journal and namespace races for all operations
+  plus the reconstructible NewState database race. Final durable revalidation
+  crosses that same evidence/operation set under both POST and PRE. Admission
+  and pre-effect races perform zero exchanges and zero journal advances.
+  Post-effect and final races may leave the physical PRE layout but never
+  advance through conflicting evidence. They preserve the injected change,
+  consume every mutation capability, and never retry the exchange in process.
+  Every safely reversible case repairs the exact evidence and then proves a
+  fresh, independently authenticated startup converges. Archived and
+  ActiveReblit database-provenance deletions remain fail-closed only because
+  their cleared ownership correctly makes the sole safe restoration API reject
+  reinsertion.
+
+  The two coordinator-origin contracts cross all three operations against,
+  respectively, all three forward exchange-durability fault points and all five
+  forward exchange-completion journal fault points. Separate startup entries
+  persist the rollback decision, route it to `ReverseExchangeIntent`, execute
+  exactly one reverse exchange, and stop at the exact `UsrRestored` successor.
+  The forward and reverse syscall count is exactly two, the database is
+  unchanged, and another startup does not redispatch or chain the restored
+  record. The restored non-journal namespace comparison is semantic: it covers
+  names, identities, modes, link counts, lengths, and payloads while deliberately
+  excluding kernel rename timestamps, which a forward/reverse exchange cannot
+  preserve.
+
+  This is still only the authenticated `/usr` rollback prefix. No startup
+  executor yet handles `CandidatePreserveIntent`, candidate preservation,
+  fresh-row invalidation, the remaining rollback actions, roll-forward, boot
+  repair, or cleanup. These are deterministic in-process fault contracts and
+  fresh-handle reopen tests, not actual process termination, reboot, or
+  power-loss tests. The complete campaign required below therefore remains
+  open, as do this item and all six broad Phase 11 work items.
 - [x] Add database ownership probes that distinguish matching, cleared,
   missing, and foreign transition rows, plus a bounded global orphan-token
   audit. Journal absence with any non-null transition token is corruption, not

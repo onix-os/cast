@@ -707,7 +707,7 @@ and an unwired one-shot coordinator effect which reaches durable
 `CandidatePrepared`, its ActiveReblit path seals the exact replacement-wrapper
 reservation and authenticated previous-marker parking. Both trigger-capable
 operations then publish and retain the exact transaction-isolation ABI required
-for trigger intent. Mutable startup has four deliberately narrow
+for trigger intent. Mutable startup now has five deliberately narrow
 pre-assessment recovery steps. Under exact journal, installation, database,
 provenance, and active-selection authority, the first may normalize only an
 authenticated restrictive ActiveReblit replacement wrapper to mode `0700`; it
@@ -747,17 +747,61 @@ durability fault points, enters startup once for the decision and again for the
 route, and proves the atomic-exchange syscall count remains one with unchanged
 database and non-journal namespace evidence. `make check` and all three narrow
 startup recovery Make lanes pass at this checkpoint.
+
+Commits `62b15f29`, `e69ad276`, `50cb98f8`, and `86c6c900` extend that ladder
+past journal routing through one authenticated `/usr` reverse phase. The
+rollback decision, resume route, and reverse execution deliberately occur in
+three separate startup entries, with at most one journal mutation in each. A
+reverse entry accepts only exact `ReverseExchangeIntent`: `POST` evidence makes
+one descriptor-relative exchange attempt and records `UsrRestored(Applied)`,
+while already restored `PRE` evidence performs no exchange and records
+`UsrRestored(AlreadySatisfied)`. Fresh semantic namespace evidence, rather than
+the raw syscall report, determines which case occurred. Successful persistence
+drops the consumed authority and old lock-bearing journal before a
+descriptor-rooted reopen, and an uncertain write reconciles only to the exact
+source or exact successor. Every successful entry still returns
+`RecoveryPending`; stable `UsrRestored` is neither redispatched nor chained into
+candidate preservation in the same process.
+
+The focused reverse-dispatch Make lane now freezes ten contracts across all
+three operations. Its durability matrix covers both starting layouts, both
+changed parent barriers, the final pre-persistence proof boundary, and ordinary
+or error-after-application exchange reports; a restart from an already restored
+layout completes without a second exchange. Its journal matrix crosses both
+layouts with all five conditional-update fault points and proves that canonical
+reopen exposes only the exact source or exact `UsrRestored` successor. Its race
+matrix changes database, journal, or namespace evidence during admission, at
+the immediate effect boundary, and during final durable revalidation, proving
+that stale authority cannot advance or retry. Its fresh-handle matrix discards
+all installation, database, journal, and reservation handles after an injected
+failure, reopens them independently, and still converges without another
+exchange.
+
+Two additional coordinator-origin contracts carry real failed forward
+exchanges through separate decision, route, and reverse startup entries. One
+crosses the three forward parent-durability fault points; the other crosses all
+five forward journal-completion fault points, including cases where canonical
+reopen retains either `UsrExchangeIntent` or `UsrExchanged`. Both cover all
+three operations, require exactly one forward and one reverse exchange, leave
+the database and unrelated namespace unchanged, and restore the pre-forward
+namespace semantically: names, identities, modes, link counts, lengths, and
+payloads match rather than merely looking correct by pathname. A later startup
+proves the exact `UsrRestored` outcome remains stable.
+
 The subsequent diagnostic-only startup assessment sandwiches a complete
 bounded, descriptor-rooted activation-namespace inventory around the remaining
 startup evidence. That inventory authenticates exact raw names, tree and slot roles,
 state IDs, root/isolation ABI, rollback action outcomes, and phase layouts
 without exposing a mutation API; it releases mutation authority before
-returning and cannot execute stale evidence. These slices are not general
-recovery. The remaining closure is to finish recovery-ordered mutable client
-construction, replace residual path-based lifecycle authority, establish the
-durable pre-journal baseline, route every state transition through one durable
-coordinator, execute every persisted phase on startup, and prove convergence
-with deterministic interruption coverage.
+returning and cannot execute stale evidence. This remains an authenticated
+`/usr` rollback prefix, not general recovery: candidate preservation, database
+invalidation, later rollback actions, roll-forward, boot repair, and cleanup
+are still unimplemented. The remaining closure is to finish recovery-ordered
+mutable client construction, replace residual path-based lifecycle authority,
+establish the durable pre-journal baseline, route every state transition
+through one durable coordinator, execute the later persisted phases on startup,
+and prove convergence with deterministic process-kill and power-loss-equivalent
+interruption coverage at every boundary.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,
