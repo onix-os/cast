@@ -696,9 +696,9 @@ prepare and preserve the candidate, invalidate the exact fresh row, reach
 `RollbackComplete`, then finalize that terminal record to authenticated journal
 absence. Each entry recaptures authority, admits at most one preparation,
 effect, advance, or deletion, and never redispatches its successor. Existing
-nonterminal boundaries have restart and `SIGKILL` matrices; terminal deletion
-has deterministic race and fault coverage but not process-death coverage.
-Reboot and power-loss durability remain unproved.
+nonterminal boundaries and terminal deletion have restart and `SIGKILL`
+matrices. Terminal coverage proves same-boot death before deletion, after
+unlink, and after directory fsync; reboot and power-loss remain unproved.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -900,8 +900,10 @@ own bounded startup checkpoint. It retains the same locked store, authenticates
 public journal identity and contents, attempts one exact delete, rechecks all
 clean evidence and final absence, and returns no redispatchable record. Its 33
 startup, 5 authority, 13 executor, and 5 clean-handoff contracts pass alongside
-`make check` and the 1153-file limit. Other operation families, terminal
-process-death coverage, reboot, and power-loss proof remain absent.
+`make check` and the 1153-file limit. Commits `932ab3bb` and `0e56aff3` add
+test-only delete-boundary seams and a 12-case current/historical, intent/exchanged
+real-`SIGKILL` restart matrix through production startup. Other operation
+families, reboot, and power-loss proof remain absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

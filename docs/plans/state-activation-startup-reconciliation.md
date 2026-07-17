@@ -609,8 +609,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   5 clean-handoff, and 33 complete NewState-startup contracts. `make check` and
   the 1153-file source limit pass with only the four established unrelated
   warnings, and independent adversarial review found no blocker. No terminal
-  finalizer exists for ActivateArchived or ActiveReblit; terminal process-death,
-  reboot, and power-loss proof remain open.
+  finalizer exists for ActivateArchived or ActiveReblit. At this checkpoint,
+  terminal process-death, reboot, and power-loss proof remained open.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -753,6 +753,26 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   `CandidatePreserveIntent`. Crash and recovery again use
   fresh-process handles and strict child deadlines.
 
+  Commits `932ab3bb` and `0e56aff3` extend that real-process method to NewState
+  terminal deletion. Test-only one-shot seams fire immediately after successful
+  canonical unlink and journal-directory fsync; the established final-PRE hook
+  supplies the exact source-survives boundary. Current and historical epochs,
+  both rollback sources, and all three boundaries form 12 genuine `SIGKILL`
+  crash/recovery cases through `CleanSystemStartup`. The parent seeds an
+  anchored persistent database with exact joint fresh-state absence, records
+  public journal identities and bytes, and releases every fixture handle before
+  either child opens fresh installation and database capabilities.
+
+  Final-PRE death preserves the exact terminal inode and bytes. Post-unlink and
+  post-fsync death expose lock-only public inventory, while `.cast`, journal,
+  and lock identities remain stable. Fresh recovery repeats no update,
+  candidate, or database effect; it admits clean startup, retains the journal
+  lock until clean authority drops, and finally reopens exact absence. Database
+  rows and semantic non-journal namespace remain unchanged throughout. Both
+  focused gates, `make check`, and the 1155-file source limit pass. This is
+  same-boot process-death evidence: `SIGKILL` does not prove which pre-fsync
+  state survives reboot or power loss.
+
   The same lane classifies all four raw exchange report/layout combinations,
   rejects ambiguous post-attempt evidence, and freezes exact `Applied` versus
   `AlreadySatisfied` outcomes. Its evidence-race cross-product injects database,
@@ -801,9 +821,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
-  persistence boundaries, and deterministic terminal-delete faults, but not a
-  process-kill case at every suffix effect or terminal boundary. Neither prefix
-  has reboot or power-loss proof: `SIGKILL` preserves the
+  persistence boundaries, deterministic terminal-delete faults, and 12 real
+  terminal process-death cases, but not process death at every earlier suffix
+  effect. Neither prefix has reboot or power-loss proof: `SIGKILL` preserves the
   kernel-visible state at termination and cannot establish which pre-fsync
   rename survives a power cycle. The complete campaign required below
   therefore remains open, as do this item and all six broad Phase 11 work items.
