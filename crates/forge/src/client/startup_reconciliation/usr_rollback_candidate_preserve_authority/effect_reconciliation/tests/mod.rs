@@ -43,7 +43,7 @@ fn move_lease<'reservation>(
 }
 
 #[test]
-fn startup_candidate_preserve_effect_selects_only_new_state_empty_quarantine_prefix() {
+fn startup_candidate_preserve_effect_selects_disjoint_new_state_prefix_leases() {
     let selected = CandidatePreserveFixture::new_state_empty_quarantine_prefix(
         CandidateSource::Exchanged,
         RollbackActionOutcome::Applied,
@@ -59,13 +59,56 @@ fn startup_candidate_preserve_effect_selects_only_new_state_empty_quarantine_pre
     drop(reservation);
     drop(journal);
 
+    let absent = CandidatePreserveFixture::new(
+        OperationKind::NewState,
+        CandidateSource::Exchanged,
+        RollbackActionOutcome::Applied,
+        CandidateLayout::Staged,
+    );
+    let absent_before = absent.evidence_snapshots();
+    let journal = absent.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(authority) = absent.capture(&journal, &reservation) else {
+        panic!("exact NewState absent-target evidence did not admit Apply authority");
+    };
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    reset_new_state_candidate_preserve_move_attempt_count();
+    let UsrRollbackCandidatePreserveApplyEffectSelection::CreateNewStateTarget(lease) =
+        authority.into_effect_selection(&seal, &journal).unwrap()
+    else {
+        panic!("exact NewState absent-target evidence did not select the create-target lease");
+    };
+    drop(lease);
+    assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    absent.assert_evidence_unchanged(&absent_before);
+    drop(reservation);
+    drop(journal);
+
+    let residue = CandidatePreserveFixture::new_state_target_residue(
+        CandidateSource::Exchanged,
+        RollbackActionOutcome::Applied,
+        0o500,
+    );
+    let residue_before = residue.evidence_snapshots();
+    let journal = residue.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let UsrRollbackCandidatePreserveAdmission::Apply(authority) = residue.capture(&journal, &reservation) else {
+        panic!("exact NewState target-residue evidence did not admit Apply authority");
+    };
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    reset_new_state_candidate_preserve_move_attempt_count();
+    let UsrRollbackCandidatePreserveApplyEffectSelection::NormalizeNewStateTarget(lease) =
+        authority.into_effect_selection(&seal, &journal).unwrap()
+    else {
+        panic!("exact NewState target-residue evidence did not select the normalize-target lease");
+    };
+    drop(lease);
+    assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    residue.assert_evidence_unchanged(&residue_before);
+    drop(reservation);
+    drop(journal);
+
     for fixture in [
-        CandidatePreserveFixture::new(
-            OperationKind::NewState,
-            CandidateSource::Exchanged,
-            RollbackActionOutcome::Applied,
-            CandidateLayout::Staged,
-        ),
         CandidatePreserveFixture::new(
             OperationKind::Archived,
             CandidateSource::Exchanged,

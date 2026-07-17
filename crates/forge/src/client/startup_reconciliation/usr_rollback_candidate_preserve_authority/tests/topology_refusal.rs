@@ -116,10 +116,12 @@ fn startup_candidate_preserve_keeps_payload_residue_distinct_from_empty_move_rea
     );
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     reset_new_state_candidate_preserve_move_attempt_count();
-    assert!(matches!(
-        authority.into_effect_selection(&seal, &journal).unwrap(),
-        UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-    ));
+    let UsrRollbackCandidatePreserveApplyEffectSelection::NormalizeNewStateTarget(lease) =
+        authority.into_effect_selection(&seal, &journal).unwrap()
+    else {
+        panic!("opaque payload-bearing residue did not select normalization-only evidence");
+    };
+    drop(lease);
 
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
     assert_eq!(target_witness(&target), target_before);

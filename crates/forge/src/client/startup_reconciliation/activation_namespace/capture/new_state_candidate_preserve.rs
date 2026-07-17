@@ -551,6 +551,10 @@ pub(in crate::client::startup_reconciliation::activation_namespace) enum NewStat
     TargetPermissions,
     #[error("the namespace is not exact staged-with-empty-target or preserved NewState evidence")]
     NotMoveLayout,
+    #[error("the namespace is not exact absent-target NewState preparation evidence")]
+    NotAbsentTargetPreparationLayout,
+    #[error("the namespace is not exact restrictive-residue NewState preparation evidence")]
+    NotResidueTargetPreparationLayout,
     #[error("NewState candidate preservation is not exact staged-to-preserved ({before:?} -> {after:?})")]
     NotStagedToPreserved {
         before: NewStateCandidatePreserveLayout,

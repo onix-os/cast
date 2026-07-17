@@ -4,7 +4,7 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s test -n "$$listed"; \
-	count="$$( timeout 10s grep -c '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::.*: test$$' <<<"$$listed" )"; \
+	count="$$( timeout 10s grep -Ec '^client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::(admission|evidence|topology_refusal)::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 24; \
 	for test in \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_splits_every_exact_staged_and_preserved_matrix_case \

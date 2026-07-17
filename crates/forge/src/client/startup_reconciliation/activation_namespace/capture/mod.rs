@@ -1,5 +1,6 @@
 mod model;
 mod new_state_candidate_preserve;
+mod new_state_candidate_target_preparation;
 mod reverse_exchange;
 mod wrappers;
 
@@ -45,6 +46,9 @@ pub(in crate::client) use new_state_candidate_preserve::{
     NewStateCandidatePreserveMoveFault, arm_before_new_state_candidate_preserve_move_reconciliation_capture,
     arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
     reset_new_state_candidate_preserve_move_attempt_count,
+};
+pub(in crate::client::startup_reconciliation) use new_state_candidate_target_preparation::{
+    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
 };
 #[cfg(test)]
 pub(super) use reverse_exchange::ReverseExchangeParentIdentity;

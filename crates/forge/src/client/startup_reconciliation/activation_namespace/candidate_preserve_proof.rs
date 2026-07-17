@@ -16,6 +16,7 @@ use super::{
     capture::{
         CaptureError, NamespaceSnapshot, NewStateCandidatePreserveCaptureError,
         ProjectedNewStateCandidatePreserveNamespace, RetainedNewStateCandidatePreserveParents, TreeLocation,
+        UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
         WrapperFingerprint, capture_snapshot,
     },
     policy::{NamespacePolicyConflict, assess_snapshot_layout},
@@ -140,6 +141,33 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
         Ok(())
+    }
+
+    /// Consume only exact NewState staged evidence whose target is absent.
+    pub(in crate::client::startup_reconciliation) fn into_new_state_target_create_evidence(
+        self,
+        record: &TransitionRecord,
+    ) -> Result<UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackCandidatePreserveNamespaceError> {
+        if self.topology != UsrRollbackCandidatePreserveTopology::NewStateStaged {
+            return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+        }
+        Ok(UsrRollbackNewStateTargetCreateNamespaceEvidence::capture(
+            self.after, record,
+        )?)
+    }
+
+    /// Consume only exact NewState staged evidence with one owned restrictive
+    /// target residue. It cannot be mistaken for either creation or movement.
+    pub(in crate::client::startup_reconciliation) fn into_new_state_target_normalize_evidence(
+        self,
+        record: &TransitionRecord,
+    ) -> Result<UsrRollbackNewStateTargetNormalizeNamespaceEvidence, UsrRollbackCandidatePreserveNamespaceError> {
+        if self.topology != UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue {
+            return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+        }
+        Ok(UsrRollbackNewStateTargetNormalizeNamespaceEvidence::capture(
+            self.after, record,
+        )?)
     }
 
     /// Consume only the exact NewState staged-with-empty-quarantine prefix.

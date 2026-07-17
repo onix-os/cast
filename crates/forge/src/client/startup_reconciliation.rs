@@ -3,10 +3,10 @@
 //!
 //! Admission remains read-only. Consumed rollback-reverse typestates cross the
 //! production one-shot exchange and ordered parent-durability boundaries. A
-//! separate test-only checkpoint can consume the exact NewState empty-prefix
-//! candidate-preservation typestate through one move attempt, but has no
-//! production constructor, completed durability suffix, persistence, or
-//! dispatch. This module performs no database mutation, cleanup, or trigger.
+//! separate test-only checkpoint consumes exact NewState target prefixes into
+//! disjoint create, normalize, or move capabilities. Only the move capability
+//! has an effect implementation; none has production dispatch, a completed
+//! durability suffix, persistence, cleanup, or triggers.
 
 use std::{fmt, path::PathBuf};
 
@@ -87,7 +87,8 @@ use activation_namespace::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
     UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackCandidatePreserveTopology,
     UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
-    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, UsrRollbackResumeRouteNamespaceError,
+    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, UsrRollbackNewStateTargetCreateNamespaceEvidence,
+    UsrRollbackNewStateTargetNormalizeNamespaceEvidence, UsrRollbackResumeRouteNamespaceError,
     UsrRollbackResumeRouteNamespaceInspection, UsrRollbackResumeRouteNamespaceProof,
     UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
     UsrRollbackReverseNamespaceProof,

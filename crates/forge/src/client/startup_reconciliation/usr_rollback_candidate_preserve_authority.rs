@@ -3,9 +3,9 @@
 //! Admission retains exact journal, database, provenance, and independent
 //! namespace evidence. It remains read-only and classifies staged/crash-prefix
 //! evidence separately from already-preserved evidence. Only the exact
-//! NewState empty-quarantine crash prefix can be consumed into a test-sealed
-//! move lease; production dispatch, durability, persistence, cleanup, and
-//! triggers remain absent.
+//! NewState target prefixes can be consumed into disjoint test-sealed create,
+//! normalize, or move leases. Production dispatch, mutation, durability,
+//! persistence, cleanup, and triggers remain absent.
 
 mod effect_reconciliation;
 
@@ -25,6 +25,7 @@ use super::{
     DatabaseEvidence, InspectionError, UsrRollbackCandidatePreserveNamespaceError,
     UsrRollbackCandidatePreserveNamespaceInspection, UsrRollbackCandidatePreserveNamespaceProof,
     UsrRollbackCandidatePreserveTopology, UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
+    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
     database_ownership_evidence_compatible, inspect_database, metadata_provenance_evidence_compatible,
 };
 
@@ -64,13 +65,48 @@ pub(in crate::client) struct UsrRollbackCandidatePreserveFinishAuthority<'reserv
 /// Consuming effect selection derived without exposing namespace selectors.
 ///
 /// `Unsupported` deliberately carries no retained authority. At this
-/// checkpoint it covers destination-absent NewState, archived activation, and
-/// ActiveReblit evidence without leaking a quarantine name, descriptor, or
-/// ActiveReblit wrapper index.
+/// checkpoint it covers archived activation and ActiveReblit evidence without
+/// leaking a quarantine name, descriptor, or ActiveReblit wrapper index.
 #[must_use = "a consumed candidate-preservation Apply authority must be handled"]
 pub(in crate::client) enum UsrRollbackCandidatePreserveApplyEffectSelection<'reservation> {
+    CreateNewStateTarget(UsrRollbackNewStateCandidatePreserveCreateTargetLease<'reservation>),
+    NormalizeNewStateTarget(UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'reservation>),
     MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'reservation>),
     Unsupported,
+}
+
+/// Exact authority retained for a future one-shot absent-target creation.
+struct UsrRollbackNewStateCandidatePreserveCreateTargetEffect<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: UsrRollbackNewStateTargetCreateNamespaceEvidence,
+    journal_binding: TransitionJournalBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+/// Opaque absent-target capability. It intentionally has no operational API.
+#[must_use = "a NewState create-target lease must be reconciled by a later checkpoint"]
+pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveCreateTargetLease<'reservation> {
+    effect: UsrRollbackNewStateCandidatePreserveCreateTargetEffect<'reservation>,
+}
+
+/// Exact authority retained for future descriptor-bound residue normalization.
+struct UsrRollbackNewStateCandidatePreserveNormalizeTargetEffect<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+    journal_binding: TransitionJournalBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+/// Opaque restrictive-residue capability. It has no operational API.
+#[must_use = "a NewState normalize-target lease must be reconciled by a later checkpoint"]
+pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'reservation> {
+    effect: UsrRollbackNewStateCandidatePreserveNormalizeTargetEffect<'reservation>,
 }
 
 /// Common journal, database, namespace, and reservation evidence retained by
@@ -229,23 +265,9 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         }
         self.revalidate_after_binding(journal, topology)?;
 
-        if topology != UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine {
-            return Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported);
-        }
-
-        let Self {
-            installation,
-            state_db,
-            record,
-            database,
-            namespace,
-            journal_binding,
-            _active_state_reservation,
-        } = self;
-        let namespace = namespace.into_new_state_move_effect_evidence(&record)?;
-        Ok(UsrRollbackCandidatePreserveApplyEffectSelection::MoveNewState(
-            UsrRollbackNewStateCandidatePreserveEffectLease {
-                effect: UsrRollbackNewStateCandidatePreserveEffect {
+        match topology {
+            UsrRollbackCandidatePreserveTopology::NewStateStaged => {
+                let Self {
                     installation,
                     state_db,
                     record,
@@ -253,9 +275,82 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                     namespace,
                     journal_binding,
                     _active_state_reservation,
-                },
-            },
-        ))
+                } = self;
+                let namespace = namespace.into_new_state_target_create_evidence(&record)?;
+                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::CreateNewStateTarget(
+                    UsrRollbackNewStateCandidatePreserveCreateTargetLease {
+                        effect: UsrRollbackNewStateCandidatePreserveCreateTargetEffect {
+                            installation,
+                            state_db,
+                            record,
+                            database,
+                            namespace,
+                            journal_binding,
+                            _active_state_reservation,
+                        },
+                    },
+                ))
+            }
+            UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue => {
+                let Self {
+                    installation,
+                    state_db,
+                    record,
+                    database,
+                    namespace,
+                    journal_binding,
+                    _active_state_reservation,
+                } = self;
+                let namespace = namespace.into_new_state_target_normalize_evidence(&record)?;
+                Ok(
+                    UsrRollbackCandidatePreserveApplyEffectSelection::NormalizeNewStateTarget(
+                        UsrRollbackNewStateCandidatePreserveNormalizeTargetLease {
+                            effect: UsrRollbackNewStateCandidatePreserveNormalizeTargetEffect {
+                                installation,
+                                state_db,
+                                record,
+                                database,
+                                namespace,
+                                journal_binding,
+                                _active_state_reservation,
+                            },
+                        },
+                    ),
+                )
+            }
+            UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine => {
+                let Self {
+                    installation,
+                    state_db,
+                    record,
+                    database,
+                    namespace,
+                    journal_binding,
+                    _active_state_reservation,
+                } = self;
+                let namespace = namespace.into_new_state_move_effect_evidence(&record)?;
+                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::MoveNewState(
+                    UsrRollbackNewStateCandidatePreserveEffectLease {
+                        effect: UsrRollbackNewStateCandidatePreserveEffect {
+                            installation,
+                            state_db,
+                            record,
+                            database,
+                            namespace,
+                            journal_binding,
+                            _active_state_reservation,
+                        },
+                    },
+                ))
+            }
+            UsrRollbackCandidatePreserveTopology::NewStatePreserved
+            | UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot
+            | UsrRollbackCandidatePreserveTopology::ArchivedPreserved
+            | UsrRollbackCandidatePreserveTopology::ActiveReblitStaged { .. }
+            | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
+                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)
+            }
+        }
     }
 }
 
@@ -273,8 +368,8 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
         self.evidence.revalidate_kind(journal, false)
     }
 
-    /// Consume generic Apply admission into the sole supported move lease or
-    /// a fieldless unsupported result. Possessing admission is insufficient:
+    /// Consume generic Apply admission into one exact target-prefix lease or a
+    /// fieldless unsupported result. Possessing admission is insufficient:
     /// production cannot construct the distinct effect seal at this checkpoint.
     pub(in crate::client) fn into_effect_selection(
         self,

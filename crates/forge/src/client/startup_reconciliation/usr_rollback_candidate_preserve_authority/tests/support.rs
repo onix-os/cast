@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, os::unix::fs::PermissionsExt as _, path::PathBuf};
 
 use crate::{
     client::{
@@ -138,6 +138,22 @@ impl CandidatePreserveFixture {
             CandidateLayout::Staged,
         );
         create_quarantine_wrapper(&fixture.fixture, &fixture.candidate_intent);
+        fixture
+    }
+
+    pub(super) fn new_state_target_residue(
+        source: CandidateSource,
+        usr_reverse_outcome: RollbackActionOutcome,
+        mode: u32,
+    ) -> Self {
+        let fixture = Self::new(
+            OperationKind::NewState,
+            source,
+            usr_reverse_outcome,
+            CandidateLayout::Staged,
+        );
+        let target = create_quarantine_wrapper(&fixture.fixture, &fixture.candidate_intent);
+        fs::set_permissions(target, fs::Permissions::from_mode(mode)).unwrap();
         fixture
     }
 

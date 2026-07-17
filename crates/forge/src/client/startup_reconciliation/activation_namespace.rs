@@ -47,6 +47,9 @@ pub(in crate::client) use capture::{
     arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
     reset_new_state_candidate_preserve_move_attempt_count,
 };
+pub(super) use capture::{
+    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+};
 #[cfg(test)]
 pub(in crate::client) use decision_proof::arm_before_usr_rollback_decision_fresh_namespace_capture;
 pub(super) use decision_proof::{
