@@ -3,6 +3,14 @@
 //! This module is absent from non-test builds. The production effect selector
 //! therefore continues to return fieldless `Unsupported` for ActiveReblit.
 
+mod post_exchange_durability;
+
+pub(in crate::client) use post_exchange_durability::{
+    UsrRollbackActiveReblitCandidatePreserveDurabilitySeal,
+    UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
+    arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,
+};
+
 use crate::{
     Installation, db,
     transition_journal::{Operation, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},

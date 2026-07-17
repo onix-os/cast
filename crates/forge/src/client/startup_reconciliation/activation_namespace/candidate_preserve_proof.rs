@@ -33,7 +33,7 @@ use super::{
 #[cfg(test)]
 pub(in crate::client::startup_reconciliation) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace,
-    UsrRollbackActiveReblitCandidatePreserveAppliedNamespace,
+    UsrRollbackActiveReblitCandidatePreserveAppliedNamespace, UsrRollbackActiveReblitCandidatePreserveDurableNamespace,
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };

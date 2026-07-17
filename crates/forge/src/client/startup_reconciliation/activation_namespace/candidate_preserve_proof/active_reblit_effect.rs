@@ -4,6 +4,8 @@
 //! focused tests consume exact staged or preserved topology without exposing
 //! the retained wrapper index, fixed name, or any descriptor.
 
+mod post_exchange_durability;
+
 use crate::{Installation, transition_journal::TransitionRecord};
 
 use super::{
@@ -13,9 +15,11 @@ use super::{
 use crate::client::startup_reconciliation::activation_namespace::capture::{
     ActiveReblitCandidatePreserveEffectError, ActiveReblitCandidatePreserveExchangeReconciliation,
     ActiveReblitCandidatePreserveLayout, AppliedActiveReblitCandidatePreserveExchangeReconciliation, NamespaceSnapshot,
-    PreparedActiveReblitCandidatePreserveExchange, ProjectedActiveReblitCandidatePreserveNamespace,
-    RetainedActiveReblitCandidatePreserveParents, capture_snapshot,
+    PendingActiveReblitCandidatePreservePostExchangeDurability, PreparedActiveReblitCandidatePreserveExchange,
+    ProjectedActiveReblitCandidatePreserveNamespace, RetainedActiveReblitCandidatePreserveParents, capture_snapshot,
 };
+
+pub(in crate::client::startup_reconciliation) use post_exchange_durability::UsrRollbackActiveReblitCandidatePreserveDurableNamespace;
 
 /// Opaque exact staged or preserved namespace evidence.
 pub(in crate::client::startup_reconciliation) struct UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence {
@@ -40,9 +44,7 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackActiveReblitCand
 /// Opaque exact preserved evidence produced without an exchange attempt.
 #[must_use = "already-preserved ActiveReblit evidence still requires post-exchange durability"]
 pub(in crate::client::startup_reconciliation) struct UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace {
-    _parents: RetainedActiveReblitCandidatePreserveParents,
-    _fresh_post: NamespaceSnapshot,
-    _fresh_projection: ProjectedActiveReblitCandidatePreserveNamespace,
+    pending: PendingActiveReblitCandidatePreservePostExchangeDurability,
 }
 
 /// Semantic outcome of consuming the one-shot namespace capability.
@@ -186,9 +188,7 @@ impl UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence {
             .map_err(active_effect_error)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace {
-            _parents: parents,
-            _fresh_post: fresh,
-            _fresh_projection: fresh_projection,
+            pending: PendingActiveReblitCandidatePreservePostExchangeDurability::new(parents, fresh, fresh_projection),
         })
     }
 }

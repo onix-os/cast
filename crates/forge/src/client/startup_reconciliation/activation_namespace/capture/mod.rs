@@ -39,16 +39,28 @@ use crate::{
 #[cfg(test)]
 pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_candidate_preserve::{
     ActiveReblitCandidatePreserveEffectError, ActiveReblitCandidatePreserveExchangeReconciliation,
-    ActiveReblitCandidatePreserveLayout, AppliedActiveReblitCandidatePreserveExchangeReconciliation,
-    PreparedActiveReblitCandidatePreserveExchange, ProjectedActiveReblitCandidatePreserveNamespace,
-    RetainedActiveReblitCandidatePreserveParents,
+    ActiveReblitCandidatePreserveLayout, ActiveReblitCandidatePreservePostExchangeDurabilityError,
+    AppliedActiveReblitCandidatePreserveExchangeReconciliation,
+    DurableActiveReblitCandidatePreservePostExchangeNamespace,
+    PendingActiveReblitCandidatePreservePostExchangeDurability, PreparedActiveReblitCandidatePreserveExchange,
+    ProjectedActiveReblitCandidatePreserveNamespace, RetainedActiveReblitCandidatePreserveParents,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_candidate_preserve::{
-    ActiveReblitCandidatePreserveExchangeFault, active_reblit_candidate_preserve_exchange_attempt_count,
-    arm_active_reblit_candidate_preserve_exchange_fault,
+    ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
+    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint,
+    active_reblit_candidate_preserve_exchange_attempt_count, arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_active_reblit_candidate_preserve_post_exchange_durability_fault,
+    arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_final_post_capture,
+    arm_before_active_reblit_candidate_preserve_post_exchange_quarantine_parent_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_reservation_wrapper_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_roots_parent_sync,
     arm_before_active_reblit_candidate_preserve_reconciliation_capture,
     reset_active_reblit_candidate_preserve_exchange_attempt_count,
+    reset_active_reblit_candidate_preserve_post_exchange_durability_events,
+    take_active_reblit_candidate_preserve_post_exchange_durability_events,
 };
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};

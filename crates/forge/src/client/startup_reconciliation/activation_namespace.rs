@@ -70,7 +70,7 @@ pub(in crate::client) use candidate_preserve_proof::{
 #[cfg(test)]
 pub(in crate::client::startup_reconciliation) use candidate_preserve_proof::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedNamespace,
-    UsrRollbackActiveReblitCandidatePreserveAppliedNamespace,
+    UsrRollbackActiveReblitCandidatePreserveAppliedNamespace, UsrRollbackActiveReblitCandidatePreserveDurableNamespace,
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
@@ -86,9 +86,17 @@ pub(super) use candidate_preserve_proof::{
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 #[cfg(test)]
 pub(in crate::client) use capture::{
-    ActiveReblitCandidatePreserveExchangeFault, NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault,
-    NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
+    ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
+    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, NewStateCandidatePreserveMoveFault,
+    NewStateTargetCreateFault, NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
     arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_active_reblit_candidate_preserve_post_exchange_durability_fault,
+    arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_final_post_capture,
+    arm_before_active_reblit_candidate_preserve_post_exchange_quarantine_parent_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_reservation_wrapper_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_roots_parent_sync,
     arm_before_active_reblit_candidate_preserve_reconciliation_capture,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture, arm_before_new_state_target_create_attempt,
     arm_before_new_state_target_create_reconciliation_capture, arm_before_new_state_target_normalize_attempt,
@@ -96,8 +104,10 @@ pub(in crate::client) use capture::{
     arm_new_state_target_create_fault, arm_new_state_target_normalize_fault,
     new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
     new_state_target_normalize_attempt_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
+    reset_active_reblit_candidate_preserve_post_exchange_durability_events,
     reset_new_state_candidate_preserve_move_attempt_count, reset_new_state_target_create_attempt_count,
     reset_new_state_target_normalize_attempt_count,
+    take_active_reblit_candidate_preserve_post_exchange_durability_events,
 };
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 pub(super) use capture::{

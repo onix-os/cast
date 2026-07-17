@@ -1,4 +1,5 @@
 mod active_reblit_effect;
+mod active_reblit_post_exchange_durability;
 mod admission;
 mod evidence;
 mod post_move_durability;

@@ -6,6 +6,7 @@
 //! syscall status is never interpreted as the semantic outcome.
 
 mod effect;
+mod post_exchange_durability;
 mod pre_exchange_durability;
 
 use std::fs::File;
@@ -25,6 +26,24 @@ pub(in crate::client) use effect::{
 };
 pub(in crate::client::startup_reconciliation::activation_namespace) use effect::{
     ActiveReblitCandidatePreserveExchangeReconciliation, AppliedActiveReblitCandidatePreserveExchangeReconciliation,
+};
+pub(in crate::client::startup_reconciliation::activation_namespace) use post_exchange_durability::{
+    ActiveReblitCandidatePreservePostExchangeDurabilityError,
+    DurableActiveReblitCandidatePreservePostExchangeNamespace,
+    PendingActiveReblitCandidatePreservePostExchangeDurability,
+};
+pub(in crate::client) use post_exchange_durability::{
+    ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
+    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint,
+    arm_active_reblit_candidate_preserve_post_exchange_durability_fault,
+    arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_final_post_capture,
+    arm_before_active_reblit_candidate_preserve_post_exchange_quarantine_parent_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_reservation_wrapper_sync,
+    arm_before_active_reblit_candidate_preserve_post_exchange_roots_parent_sync,
+    reset_active_reblit_candidate_preserve_post_exchange_durability_events,
+    take_active_reblit_candidate_preserve_post_exchange_durability_events,
 };
 use pre_exchange_durability::require_exact_pre;
 pub(in crate::client::startup_reconciliation::activation_namespace) use pre_exchange_durability::{

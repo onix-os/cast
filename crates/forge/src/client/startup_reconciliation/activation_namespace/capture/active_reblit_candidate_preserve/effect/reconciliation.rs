@@ -21,6 +21,26 @@ pub(in crate::client::startup_reconciliation::activation_namespace) struct Appli
     pub(super) _raw_report: std::io::Result<()>,
 }
 
+impl AppliedActiveReblitCandidatePreserveExchangeReconciliation {
+    /// Discard the uninterpreted syscall report and transfer only fresh,
+    /// semantically classified POST evidence into the common suffix.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn into_post_exchange_durability(
+        self,
+    ) -> super::super::PendingActiveReblitCandidatePreservePostExchangeDurability {
+        let Self {
+            _parents: parents,
+            _fresh_post: authenticated_post,
+            _fresh_post_projection: authenticated_post_projection,
+            _raw_report: _,
+        } = self;
+        super::super::PendingActiveReblitCandidatePreservePostExchangeDurability::new(
+            parents,
+            authenticated_post,
+            authenticated_post_projection,
+        )
+    }
+}
+
 /// Fresh-evidence result of one consumed wrapper exchange capability.
 #[must_use = "a reconciled ActiveReblit wrapper exchange must be handled"]
 pub(in crate::client::startup_reconciliation::activation_namespace) enum ActiveReblitCandidatePreserveExchangeReconciliation
