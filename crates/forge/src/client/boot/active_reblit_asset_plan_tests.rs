@@ -127,7 +127,6 @@ fn planning_error(
 fn complete_plan_is_state_scoped_deterministic_and_role_complete() {
     let mut layouts = complete_layouts("head");
     layouts.extend([
-        ("history", regular(11, "lib/os-info.json")),
         ("history", regular(12, "lib/kernel/6.6/vmlinuz")),
         ("history", regular(13, "lib/kernel/6.6/history.initrd")),
     ]);
@@ -136,7 +135,7 @@ fn complete_plan_is_state_scoped_deterministic_and_role_complete() {
     let plan = ready(projection.prepare_asset_plan().unwrap());
     assert_eq!(plan.state_ids(), [states[0].id, states[1].id]);
     assert_eq!(plan.kernel_count(), 2);
-    assert_eq!(plan.assets().len(), 12);
+    assert_eq!(plan.assets().len(), 8);
     assert_eq!(plan.systemd_boot().state_id(), states[0].id);
     assert_eq!(plan.systemd_boot().digest(), 1);
     assert_eq!(
@@ -145,20 +144,8 @@ fn complete_plan_is_state_scoped_deterministic_and_role_complete() {
             .map(|asset| asset.role().clone())
             .collect::<Vec<_>>(),
         [
-            BootAssetRole::KernelMetadata {
-                version: "6.12".to_owned(),
-                kind: KernelMetadataKind::SystemMap,
-            },
             BootAssetRole::Initrd {
                 version: "6.12".to_owned(),
-            },
-            BootAssetRole::KernelMetadata {
-                version: "6.12".to_owned(),
-                kind: KernelMetadataKind::BootJson,
-            },
-            BootAssetRole::KernelMetadata {
-                version: "6.12".to_owned(),
-                kind: KernelMetadataKind::Config,
             },
             BootAssetRole::KernelCmdline {
                 version: "6.12".to_owned(),
@@ -175,9 +162,35 @@ fn complete_plan_is_state_scoped_deterministic_and_role_complete() {
             BootAssetRole::Kernel {
                 version: "6.6".to_owned(),
             },
-            BootAssetRole::OsInfo,
         ]
     );
+    assert_eq!(
+        plan.schema_requirements(),
+        [
+            PlannedBootSchemaRequirement {
+                state_id: states[0].id,
+                source: BootSchemaSource::OsInfoAsset,
+                fallback: BootSchemaFallback::Required,
+            },
+            PlannedBootSchemaRequirement {
+                state_id: states[1].id,
+                source: BootSchemaSource::GeneratedOsRelease,
+                fallback: BootSchemaFallback::Global,
+            },
+        ]
+    );
+    for excluded in [
+        "/usr/lib/kernel/6.12/boot.json",
+        "/usr/lib/kernel/6.12/config",
+        "/usr/lib/kernel/6.12/System.map",
+    ] {
+        assert!(
+            plan.assets()
+                .iter()
+                .all(|asset| asset.logical_path() != Path::new(excluded)),
+            "os-info must win and unused metadata must stay outside the snapshot plan: {excluded}"
+        );
+    }
 }
 
 #[test]
@@ -197,13 +210,6 @@ fn canonical_empty_digest_is_rejected_for_every_critical_boot_role() {
                 version: "6.12".to_owned(),
             },
         ),
-        (
-            "lib/kernel/6.12/boot.json",
-            BootAssetRole::KernelMetadata {
-                version: "6.12".to_owned(),
-                kind: KernelMetadataKind::BootJson,
-            },
-        ),
     ];
 
     for (critical_path, expected_role) in cases {
@@ -214,7 +220,7 @@ fn canonical_empty_digest_is_rejected_for_every_critical_boot_role() {
                 nonempty
             }
         };
-        let layouts = [
+        let layouts = vec![
             (
                 "head",
                 regular(
@@ -230,10 +236,6 @@ fn canonical_empty_digest_is_rejected_for_every_critical_boot_role() {
             (
                 "head",
                 regular(digest("lib/kernel/6.12/boot.initrd", 4), "lib/kernel/6.12/boot.initrd"),
-            ),
-            (
-                "head",
-                regular(digest("lib/kernel/6.12/boot.json", 5), "lib/kernel/6.12/boot.json"),
             ),
         ];
         let (projection, states) = build_projection(&[&["head"]], &layouts);
@@ -260,6 +262,7 @@ fn optional_empty_assets_share_one_sorted_snapshot_digest() {
         ),
         ("head", regular(17, "lib/kernel/6.12/vmlinuz")),
         ("head", regular(EMPTY_FILE_DIGEST, "lib/kernel/6.12/kernel.cmdline")),
+        ("head", regular(EMPTY_FILE_DIGEST, "lib/kernel/6.12/boot.json")),
         ("head", regular(EMPTY_FILE_DIGEST, "lib/kernel/6.12/config")),
         ("head", regular(EMPTY_FILE_DIGEST, "lib/kernel/6.12/System.map")),
     ];
@@ -278,14 +281,6 @@ fn optional_empty_assets_share_one_sorted_snapshot_digest() {
             BootAssetRole::GlobalCmdline,
             BootAssetRole::KernelCmdline {
                 version: "6.12".to_owned(),
-            },
-            BootAssetRole::KernelMetadata {
-                version: "6.12".to_owned(),
-                kind: KernelMetadataKind::Config,
-            },
-            BootAssetRole::KernelMetadata {
-                version: "6.12".to_owned(),
-                kind: KernelMetadataKind::SystemMap,
             },
         ])
     );
@@ -370,6 +365,14 @@ fn kernel_less_history_does_not_contribute_unused_schema_or_cmdline_assets() {
     let plan = ready(projection.prepare_asset_plan().unwrap());
     assert_eq!(plan.state_ids(), [states[0].id, states[1].id]);
     assert!(plan.assets().iter().all(|asset| asset.state_id() != states[1].id));
+    assert_eq!(
+        plan.schema_requirements(),
+        [PlannedBootSchemaRequirement {
+            state_id: states[0].id,
+            source: BootSchemaSource::OsInfoAsset,
+            fallback: BootSchemaFallback::Required,
+        }]
+    );
 }
 
 #[test]

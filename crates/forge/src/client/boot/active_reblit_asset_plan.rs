@@ -1,4 +1,12 @@
 //! Pure Stone-layout planning for an ActiveReblit boot projection.
+//!
+//! The plan contains only inputs consumed by the pinned `blsforme` publisher:
+//! systemd-boot, optional package-owned `os-info.json`, command-line
+//! fragments, kernels, and initrds. Each relevant state also records whether
+//! its schema must instead come from Cast's generated `os-release`, and
+//! whether failure may fall back to the mandatory global head schema; that
+//! file is never misrepresented as a Stone asset. Kernel `boot.json`,
+//! `config`, and `System.map` files are intentionally not boot-repair inputs.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,6 +38,7 @@ const BOOT_PLAN_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct PreparedActiveReblitBootAssetPlan {
     state_ids: Vec<state::Id>,
     assets: Vec<PlannedBootAsset>,
+    schema_requirements: Vec<PlannedBootSchemaRequirement>,
     systemd_boot_index: usize,
     kernel_count: usize,
     snapshot_digests: Vec<u128>,
@@ -42,6 +51,10 @@ impl PreparedActiveReblitBootAssetPlan {
 
     pub(crate) fn assets(&self) -> &[PlannedBootAsset] {
         &self.assets
+    }
+
+    pub(crate) fn schema_requirements(&self) -> &[PlannedBootSchemaRequirement] {
+        &self.schema_requirements
     }
 
     pub(crate) fn systemd_boot(&self) -> &PlannedBootAsset {
@@ -81,14 +94,39 @@ pub(crate) enum BootAssetRole {
     Kernel { version: String },
     Initrd { version: String },
     KernelCmdline { version: String },
-    KernelMetadata { version: String, kind: KernelMetadataKind },
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum KernelMetadataKind {
-    BootJson,
-    Config,
-    SystemMap,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BootSchemaSource {
+    OsInfoAsset,
+    GeneratedOsRelease,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BootSchemaFallback {
+    Required,
+    Global,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlannedBootSchemaRequirement {
+    state_id: state::Id,
+    source: BootSchemaSource,
+    fallback: BootSchemaFallback,
+}
+
+impl PlannedBootSchemaRequirement {
+    pub(crate) fn state_id(self) -> state::Id {
+        self.state_id
+    }
+
+    pub(crate) fn source(self) -> BootSchemaSource {
+        self.source
+    }
+
+    pub(crate) fn fallback(self) -> BootSchemaFallback {
+        self.fallback
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -391,6 +429,7 @@ fn prepare_asset_plan(
 
     let state_ids = projection.states().iter().map(|state| state.id).collect::<Vec<_>>();
     let mut state_plans = Vec::with_capacity(projection.states().len());
+    let mut schema_requirements = Vec::with_capacity(projection.states().len());
     let mut kernel_count = 0usize;
     for (state_index, state) in projection.states().iter().enumerate() {
         budget.step()?;
@@ -411,12 +450,43 @@ fn prepare_asset_plan(
             });
         }
 
+        // `os_schema_for_root` prefers package-owned os-info whenever that
+        // logical path is present and consults Cast's generated os-release
+        // only when it is absent. Preserve that requirement without claiming
+        // the reserved generated file is a Stone/CAS asset. The head schema
+        // is mandatory; a missing or invalid historical local schema falls
+        // back to that already-authenticated global schema.
+        let schema_fallback = if state_index == 0 {
+            Some(BootSchemaFallback::Required)
+        } else if !kernel_versions.is_empty() {
+            Some(BootSchemaFallback::Global)
+        } else {
+            None
+        };
+        let schema_source = if schema_fallback.is_some() {
+            if index.entries.contains_key(Path::new("/usr/lib/os-info.json")) {
+                Some(BootSchemaSource::OsInfoAsset)
+            } else {
+                Some(BootSchemaSource::GeneratedOsRelease)
+            }
+        } else {
+            None
+        };
+        if let Some(source) = schema_source {
+            schema_requirements.push(PlannedBootSchemaRequirement {
+                state_id: state.id,
+                source,
+                fallback: schema_fallback.expect("a schema source is selected only when schema policy applies"),
+            });
+        }
+
         let mut candidates = Vec::new();
         for path in index.entries.keys() {
             budget.step()?;
             let role = if state_index == 0 && is_systemd_boot_candidate(path) {
                 Some(BootAssetRole::SystemdBoot)
-            } else if path == Path::new("/usr/lib/os-info.json") && (state_index == 0 || !kernel_versions.is_empty()) {
+            } else if path == Path::new("/usr/lib/os-info.json") && schema_source == Some(BootSchemaSource::OsInfoAsset)
+            {
                 Some(BootAssetRole::OsInfo)
             } else if !kernel_versions.is_empty() && is_global_cmdline(path) {
                 Some(BootAssetRole::GlobalCmdline)
@@ -483,6 +553,7 @@ fn prepare_asset_plan(
     Ok(BootAssetPlanOutcome::Ready(PreparedActiveReblitBootAssetPlan {
         state_ids,
         assets,
+        schema_requirements,
         systemd_boot_index: systemd_boot_index.expect("exactly one systemd-boot candidate classified"),
         kernel_count,
         snapshot_digests: snapshot_digests.into_iter().collect(),
@@ -542,18 +613,6 @@ fn kernel_candidate(path: &Path) -> Option<(String, &str)> {
 fn classify_kernel_asset(version: String, name: &str) -> Option<BootAssetRole> {
     match name {
         "vmlinuz" => Some(BootAssetRole::Kernel { version }),
-        "boot.json" => Some(BootAssetRole::KernelMetadata {
-            version,
-            kind: KernelMetadataKind::BootJson,
-        }),
-        "config" => Some(BootAssetRole::KernelMetadata {
-            version,
-            kind: KernelMetadataKind::Config,
-        }),
-        "System.map" => Some(BootAssetRole::KernelMetadata {
-            version,
-            kind: KernelMetadataKind::SystemMap,
-        }),
         _ if name.ends_with(".initrd") => Some(BootAssetRole::Initrd { version }),
         _ if name.ends_with(".cmdline") => Some(BootAssetRole::KernelCmdline { version }),
         _ => None,
@@ -567,10 +626,6 @@ fn role_requires_nonempty(role: &BootAssetRole) -> bool {
             | BootAssetRole::OsInfo
             | BootAssetRole::Kernel { .. }
             | BootAssetRole::Initrd { .. }
-            | BootAssetRole::KernelMetadata {
-                kind: KernelMetadataKind::BootJson,
-                ..
-            }
     )
 }
 

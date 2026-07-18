@@ -131,12 +131,6 @@ fn complete_role_entries() -> Vec<(String, Vec<u8>)> {
             "lib/kernel/6.12/kernel.cmdline".to_owned(),
             b"kernel cmdline role bytes".to_vec(),
         ),
-        ("lib/kernel/6.12/boot.json".to_owned(), b"boot json role bytes".to_vec()),
-        ("lib/kernel/6.12/config".to_owned(), b"config role bytes".to_vec()),
-        (
-            "lib/kernel/6.12/System.map".to_owned(),
-            b"system map role bytes".to_vec(),
-        ),
     ]
 }
 
@@ -148,18 +142,6 @@ fn set_role_limit(policy: &mut StoneBootInputPolicy, role: &BootAssetRole, limit
         BootAssetRole::Kernel { .. } => policy.max_kernel_bytes = limit,
         BootAssetRole::Initrd { .. } => policy.max_initrd_bytes = limit,
         BootAssetRole::KernelCmdline { .. } => policy.max_kernel_cmdline_bytes = limit,
-        BootAssetRole::KernelMetadata {
-            kind: KernelMetadataKind::BootJson,
-            ..
-        } => policy.max_boot_json_bytes = limit,
-        BootAssetRole::KernelMetadata {
-            kind: KernelMetadataKind::Config,
-            ..
-        } => policy.max_config_bytes = limit,
-        BootAssetRole::KernelMetadata {
-            kind: KernelMetadataKind::SystemMap,
-            ..
-        } => policy.max_system_map_bytes = limit,
     }
 }
 
@@ -265,7 +247,7 @@ fn optional_empty_digest_references_share_one_zero_length_binding() {
         .assets()
         .filter(|asset| asset.digest() == EMPTY_FILE_DIGEST)
         .collect::<Vec<_>>();
-    assert_eq!(empty.len(), 3);
+    assert_eq!(empty.len(), 2);
     assert!(empty.iter().all(|asset| asset.length() == 0));
     assert!(
         empty
@@ -304,7 +286,7 @@ fn every_role_byte_policy_admits_exact_n_and_rejects_n_plus_one() {
         .assets()
         .map(|asset| (asset.role().clone(), asset.length()))
         .collect::<Vec<_>>();
-    assert_eq!(roles.len(), 9);
+    assert_eq!(roles.len(), 6);
     drop(baseline);
 
     for (role, length) in roles {

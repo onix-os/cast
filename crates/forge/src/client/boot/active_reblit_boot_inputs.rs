@@ -1,4 +1,10 @@
 //! Coherent, immutable Stone inputs for one ActiveReblit boot repair attempt.
+//!
+//! Only package-owned bytes consumed by the pinned publisher are bound here.
+//! A `GeneratedOsRelease` schema requirement is an explicit handoff to the
+//! future retained state-root-authority layer and is never bound as Stone/CAS
+//! data here. Kernel `boot.json`, `config`, and `System.map` are not snapshotted
+//! because the pinned publisher does not consume them.
 
 use std::{
     os::fd::BorrowedFd,
@@ -11,8 +17,8 @@ use crate::{Installation, State, db, state};
 use super::{
     active_reblit_boot_projection::{
         ActiveReblitBootAssetPlanError, ActiveReblitBootProjectionError, BootAssetPlanNotApplicable,
-        BootAssetPlanOutcome, BootAssetRole, KernelMetadataKind, MAX_BOOT_PLAN_ASSETS, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS,
-        PlannedBootAsset, PreparedActiveReblitBootAssetPlan, PreparedActiveReblitBootProjection,
+        BootAssetPlanOutcome, BootAssetRole, MAX_BOOT_PLAN_ASSETS, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PlannedBootAsset,
+        PreparedActiveReblitBootAssetPlan, PreparedActiveReblitBootProjection,
     },
     boot_asset_snapshots::{BootAssetSnapshotError, PreparedBootAssetSnapshots, SealedBootAssetSnapshot},
 };
@@ -30,9 +36,6 @@ const STONE_BOOT_INPUT_POLICY: StoneBootInputPolicy = StoneBootInputPolicy {
     max_kernel_bytes: 512 * MIB,
     max_initrd_bytes: 512 * MIB,
     max_kernel_cmdline_bytes: 64 * KIB,
-    max_boot_json_bytes: MIB,
-    max_config_bytes: 16 * MIB,
-    max_system_map_bytes: 64 * MIB,
     max_control_input_bytes: 16 * MIB,
     max_referenced_input_bytes: 10 * GIB,
     max_work: MAX_BINDING_WORK,
@@ -186,9 +189,6 @@ struct StoneBootInputPolicy {
     max_kernel_bytes: u64,
     max_initrd_bytes: u64,
     max_kernel_cmdline_bytes: u64,
-    max_boot_json_bytes: u64,
-    max_config_bytes: u64,
-    max_system_map_bytes: u64,
     max_control_input_bytes: u64,
     max_referenced_input_bytes: u64,
     max_work: usize,
@@ -208,18 +208,6 @@ impl StoneBootInputPolicy {
             BootAssetRole::Kernel { .. } => self.max_kernel_bytes,
             BootAssetRole::Initrd { .. } => self.max_initrd_bytes,
             BootAssetRole::KernelCmdline { .. } => self.max_kernel_cmdline_bytes,
-            BootAssetRole::KernelMetadata {
-                kind: KernelMetadataKind::BootJson,
-                ..
-            } => self.max_boot_json_bytes,
-            BootAssetRole::KernelMetadata {
-                kind: KernelMetadataKind::Config,
-                ..
-            } => self.max_config_bytes,
-            BootAssetRole::KernelMetadata {
-                kind: KernelMetadataKind::SystemMap,
-                ..
-            } => self.max_system_map_bytes,
         }
     }
 }
@@ -395,13 +383,7 @@ fn bind_snapshots(
 fn role_is_control_input(role: &BootAssetRole) -> bool {
     matches!(
         role,
-        BootAssetRole::OsInfo
-            | BootAssetRole::GlobalCmdline
-            | BootAssetRole::KernelCmdline { .. }
-            | BootAssetRole::KernelMetadata {
-                kind: KernelMetadataKind::BootJson,
-                ..
-            }
+        BootAssetRole::OsInfo | BootAssetRole::GlobalCmdline | BootAssetRole::KernelCmdline { .. }
     )
 }
 
