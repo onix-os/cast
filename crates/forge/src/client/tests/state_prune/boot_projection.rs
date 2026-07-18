@@ -41,24 +41,26 @@ impl ContentfulPruneFixture {
         fs::write(&removed_asset, b"unreferenced CAS payload").unwrap();
 
         let boot_package = package::Id::from("contentful-boot-package");
-        for (digest, path) in [
-            (1, "lib/kernel/6.1.0/vmlinuz"),
-            (2, "lib/systemd/boot/efi/systemd-bootx64.efi"),
-        ] {
-            client
-                .layout_db
-                .add(
-                    &boot_package,
-                    &StonePayloadLayoutRecord {
-                        uid: 0,
-                        gid: 0,
-                        mode: nix::libc::S_IFREG | 0o644,
-                        tag: 0,
-                        file: StonePayloadLayoutFile::Regular(digest, path.into()),
-                    },
-                )
-                .unwrap();
-        }
+        let boot_layouts = [
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFREG | 0o644,
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(1, "lib/kernel/6.1.0/vmlinuz".into()),
+            },
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFREG | 0o644,
+                tag: 0,
+                file: StonePayloadLayoutFile::Regular(2, "lib/systemd/boot/efi/systemd-bootx64.efi".into()),
+            },
+        ];
+        client
+            .layout_db
+            .batch_add(boot_layouts.iter().map(|layout| (&boot_package, layout)))
+            .unwrap();
         let active = client
             .state_db
             .add(&[Selection::explicit(boot_package)], Some("active"), None)
@@ -117,7 +119,7 @@ impl ContentfulPruneFixture {
         let archived_id = self.archived.id;
         let active_id = self.active.id;
         boot::arm_boot_projection_sync(move |projected| {
-            assert!(projected.iter().all(|state| *state == active_id));
+            assert_eq!(projected, [active_id]);
             assert!(database.get(archived_id).is_ok());
             assert!(!wrapper.exists());
             assert!(!layout_database.query([&removed_package]).unwrap().is_empty());
@@ -238,7 +240,7 @@ fn active_state_failure_after_boot_restores_prior_projection_before_retiring_res
     let archived_id = fixture.archived.id;
     let active_id = fixture.active.id;
     boot::arm_boot_projection_sync(move |projected| {
-        assert!(projected.iter().all(|state| *state == active_id));
+        assert_eq!(projected, [active_id]);
         assert!(restored_wrapper.exists());
         assert!(restored_database.get(archived_id).is_ok());
         fs::write(prior_stale_entry, prior_stale_contents).unwrap();
@@ -277,7 +279,7 @@ fn ambiguous_post_projection_is_compensated_before_reservations_are_retired() {
     let archived_id = fixture.archived.id;
     let active_id = fixture.active.id;
     boot::arm_boot_projection_sync(move |projected| {
-        assert!(projected.iter().all(|state| *state == active_id));
+        assert_eq!(projected, [active_id]);
         assert!(restored_wrapper.exists());
         assert!(restored_database.get(archived_id).is_ok());
         fs::write(prior_stale_entry, prior_stale_contents).unwrap();
