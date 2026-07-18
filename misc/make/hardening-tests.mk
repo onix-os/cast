@@ -151,7 +151,7 @@ forge-linux-fs-test: forge-linux-mountinfo-parser-test
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^linux_fs::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 44; \
+	timeout 10s test "$$count" = 45; \
 	for test in \
 		linux_fs::tests::xattrs::no_xattr_probe_classifies_empty_positive_unsupported_and_indeterminate_results \
 		linux_fs::tests::xattrs::no_xattr_probe_bounds_interrupted_retries_and_obeys_its_deadline \
@@ -166,6 +166,7 @@ forge-linux-fs-test: forge-linux-mountinfo-parser-test
 		linux_fs::tests::expired_rename_deadline_preserves_both_namespaces \
 		linux_fs::tests::expired_sync_filesystem_deadline_fails_before_syncfs \
 		linux_fs::tests::procfs_authentication_rejects_an_ordinary_filesystem \
+		linux_fs::tests::sysfs_authentication_accepts_kernel_sysfs_and_rejects_other_filesystems \
 		linux_fs::tests::authenticated_procfs_descriptor_child_path_binds_the_retained_directory \
 		linux_fs::tests::proc_pid_parser_accepts_only_bounded_canonical_decimal \
 		linux_fs::tests::thread_self_parser_requires_exact_current_process_and_thread \

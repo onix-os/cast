@@ -101,6 +101,18 @@ fn expired_retry_deadline_fails_before_another_syscall() {
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     assert_eq!(attempts.get(), 0);
+
+    let mut reader = InterruptingBoundedReader::new(0, b"unread", false);
+    let error = read_to_end_bounded_until(&mut reader, 6, deadline).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(reader.calls, 0);
+
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = std::fs::File::open(temporary.path()).unwrap();
+    assert_eq!(
+        descriptor_mount_id_until(&directory, deadline).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
 }
 
 #[test]
@@ -220,6 +232,25 @@ fn procfs_authentication_rejects_an_ordinary_filesystem() {
 
     let error = require_procfs(&directory, temporary.path()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn sysfs_authentication_accepts_kernel_sysfs_and_rejects_other_filesystems() {
+    let temporary = tempfile::tempdir().unwrap();
+    let ordinary = std::fs::File::open(temporary.path()).unwrap();
+    assert_eq!(
+        require_sysfs(&ordinary, temporary.path()).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+
+    let sysfs = std::fs::File::open("/sys").unwrap();
+    require_sysfs(&sysfs, Path::new("/sys")).unwrap();
+    assert_eq!(
+        require_sysfs_until(&sysfs, Path::new("/sys"), Instant::now() - Duration::from_millis(1))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
 }
 
 #[test]

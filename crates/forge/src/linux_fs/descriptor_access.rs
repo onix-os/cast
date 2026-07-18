@@ -146,6 +146,47 @@ fn require_procfs_with_deadline(file: &std::fs::File, path: &Path, deadline: Opt
     Ok(())
 }
 
+/// Require that a retained capability belongs to a kernel sysfs instance.
+#[allow(dead_code)] // consumed by the descriptor-retained sysfs topology layer
+pub(crate) fn require_sysfs(file: &std::fs::File, path: &Path) -> io::Result<()> {
+    require_sysfs_with_deadline(file, path, None)
+}
+
+/// Deadline-aware sysfs authentication for bounded device-topology capture.
+#[allow(dead_code)] // consumed by the descriptor-retained sysfs topology layer
+pub(crate) fn require_sysfs_until(file: &std::fs::File, path: &Path, deadline: Instant) -> io::Result<()> {
+    require_sysfs_with_deadline(file, path, Some(deadline))
+}
+
+fn require_sysfs_with_deadline(
+    file: &std::fs::File,
+    path: &Path,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
+    // SAFETY: zeroed statfs storage is a valid output buffer and the file
+    // descriptor remains live throughout fstatfs.
+    let mut stat: nix::libc::statfs = unsafe { zeroed() };
+    retry_interrupted(deadline, || {
+        // SAFETY: `stat` is writable and `file` remains a live descriptor.
+        if unsafe { nix::libc::fstatfs(file.as_raw_fd(), &mut stat) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    })?;
+    if stat.f_type != SYSFS_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing unauthenticated sysfs capability {}: expected filesystem magic {SYSFS_MAGIC:#x}, found {:#x}",
+                path.display(),
+                stat.f_type
+            ),
+        ));
+    }
+    Ok(())
+}
+
 const MAX_PROC_FDINFO_BYTES: usize = 16 * 1024;
 
 /// Read the mount ID for one retained descriptor from this thread's
@@ -156,9 +197,20 @@ const MAX_PROC_FDINFO_BYTES: usize = 16 * 1024;
 /// authenticated `/proc/<pid>/task/<tid>/fd` aliases sandwich the read so a
 /// recycled or substituted descriptor can never be accepted.
 pub(crate) fn descriptor_mount_id(file: &std::fs::File) -> io::Result<u64> {
-    let (_descriptors, _descriptor, before) = authenticated_descriptor_name(file)?;
-    let thread = authenticated_current_thread_procfs()?;
-    let fdinfo_directory = openat2_file(
+    descriptor_mount_id_with_deadline(file, None)
+}
+
+/// Deadline-aware mount-ID lookup for one retained descriptor.
+#[allow(dead_code)] // consumed by the authenticated mount/sysfs topology layer
+pub(crate) fn descriptor_mount_id_until(file: &std::fs::File, deadline: Instant) -> io::Result<u64> {
+    descriptor_mount_id_with_deadline(file, Some(deadline))
+}
+
+fn descriptor_mount_id_with_deadline(file: &std::fs::File, deadline: Option<Instant>) -> io::Result<u64> {
+    retry_interrupted(deadline, || Ok(()))?;
+    let (_descriptors, _descriptor, before) = authenticated_descriptor_name_with_deadline(file, deadline)?;
+    let thread = authenticated_current_thread_procfs_with_deadline(deadline)?;
+    let fdinfo_directory = openat2_file_with_deadline(
         thread.as_raw_fd(),
         c"fdinfo",
         nix::libc::O_RDONLY
@@ -168,22 +220,32 @@ pub(crate) fn descriptor_mount_id(file: &std::fs::File) -> io::Result<u64> {
             | nix::libc::O_NONBLOCK,
         0,
         controlled_resolution(),
+        deadline,
     )?;
-    require_procfs(&fdinfo_directory, Path::new("/proc/<pid>/task/<tid>/fdinfo"))?;
+    require_procfs_with_deadline(
+        &fdinfo_directory,
+        Path::new("/proc/<pid>/task/<tid>/fdinfo"),
+        deadline,
+    )?;
 
     let descriptor = CString::new(file.as_raw_fd().to_string()).expect("numeric descriptor contains no NUL");
-    let mut fdinfo = openat2_file(
+    let mut fdinfo = openat2_file_with_deadline(
         fdinfo_directory.as_raw_fd(),
         &descriptor,
         nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
         0,
         controlled_resolution(),
+        deadline,
     )?;
-    require_procfs(&fdinfo, Path::new("/proc/<pid>/task/<tid>/fdinfo/<fd>"))?;
-    let bytes = read_to_end_bounded(&mut fdinfo, MAX_PROC_FDINFO_BYTES + 1)?;
+    require_procfs_with_deadline(
+        &fdinfo,
+        Path::new("/proc/<pid>/task/<tid>/fdinfo/<fd>"),
+        deadline,
+    )?;
+    let bytes = read_to_end_bounded_with_deadline(&mut fdinfo, MAX_PROC_FDINFO_BYTES + 1, deadline)?;
     let mount_id = parse_descriptor_mount_id(&bytes)?;
 
-    let (_descriptors, _descriptor, after) = authenticated_descriptor_name(file)?;
+    let (_descriptors, _descriptor, after) = authenticated_descriptor_name_with_deadline(file, deadline)?;
     require_same_inode(before, after)?;
     Ok(mount_id)
 }

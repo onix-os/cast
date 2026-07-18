@@ -17,6 +17,7 @@ use std::{
 };
 
 const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+const SYSFS_MAGIC: nix::libc::c_long = 0x6265_6572;
 const POSIX_ACCESS_ACL_XATTR: &CStr = c"system.posix_acl_access";
 const POSIX_DEFAULT_ACL_XATTR: &CStr = c"system.posix_acl_default";
 const MAX_DECIMAL_PID_BYTES: usize = 16;
@@ -60,15 +61,45 @@ fn retry_interrupted<T>(deadline: Option<Instant>, mut operation: impl FnMut() -
 /// call must contribute at least one byte. Interrupted calls share the same
 /// finite retry ceiling as the other retained-filesystem primitives.
 pub(crate) fn read_to_end_bounded(reader: &mut impl io::Read, max_bytes: usize) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(max_bytes.min(4 * 1024));
+    read_to_end_bounded_with_deadline(reader, max_bytes, None)
+}
+
+/// Deadline-aware bounded read for authenticated pseudo-filesystem inputs.
+///
+/// The deadline bounds userspace work and retry loops. As with every syscall
+/// deadline in this module, it cannot preempt one kernel call which is already
+/// blocked uninterruptibly.
+#[allow(dead_code)] // consumed by the descriptor-retained sysfs topology layer
+pub(crate) fn read_to_end_bounded_until(
+    reader: &mut impl io::Read,
+    max_bytes: usize,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    read_to_end_bounded_with_deadline(reader, max_bytes, Some(deadline))
+}
+
+fn read_to_end_bounded_with_deadline(
+    reader: &mut impl io::Read,
+    max_bytes: usize,
+    deadline: Option<Instant>,
+) -> io::Result<Vec<u8>> {
+    retry_interrupted(deadline, || Ok(()))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(max_bytes.min(4 * 1024))
+        .map_err(|source| io::Error::other(format!("bounded read allocation failed: {source}")))?;
     let mut buffer = [0_u8; 512];
     let mut interruptions = 0usize;
     while bytes.len() < max_bytes {
+        retry_interrupted(deadline, || Ok(()))?;
         let remaining = max_bytes - bytes.len();
         let chunk = remaining.min(buffer.len());
         match reader.read(&mut buffer[..chunk]) {
             Ok(0) => break,
-            Ok(read) => bytes.extend_from_slice(&buffer[..read]),
+            Ok(read) => {
+                retry_interrupted(deadline, || Ok(()))?;
+                bytes.extend_from_slice(&buffer[..read]);
+            }
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
                 if interruptions >= MAX_INTERRUPTED_SYSCALL_RETRIES {
                     return Err(io::Error::new(
