@@ -1,0 +1,4 @@
+let cast = import! cast.boot_topology.v1
+
+cast.boot_topology.aliases_esp
+    "11111111-2222-3333-4444-555555555555"

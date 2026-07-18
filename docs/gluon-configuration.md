@@ -23,6 +23,7 @@ constructed only during that conversion.
 | Cast repository | `repo.glu` or `repo.d/*.glu` | `cast.repository.v1` |
 | Packaged Cast trigger | `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` | `cast.trigger.v1` |
 | Cast system intent | `/etc/cast/system.glu` | `cast.system.v1` |
+| Machine-local boot topology | `/etc/cast/boot-topology.glu` | `cast.boot_topology.v1` |
 
 System and user fragment loading is deterministic. Vendor files under
 `/usr/share/cast` load before administrator files under `/etc/cast`;
@@ -38,7 +39,36 @@ Runnable examples live in [`docs/examples/gluon`](examples/gluon):
 - [`repositories.glu`](examples/gluon/repositories.glu) defines Cast
   repositories;
 - [`trigger.glu`](examples/gluon/trigger.glu) defines a packaged trigger;
-- [`system.glu`](examples/gluon/system.glu) defines desired system state.
+- [`system.glu`](examples/gluon/system.glu) defines desired system state;
+- [`boot-topology-aliases-esp.glu`](examples/gluon/boot-topology-aliases-esp.glu)
+  declares one ESP PARTUUID for both destinations; and
+- [`boot-topology-distinct-xbootldr.glu`](examples/gluon/boot-topology-distinct-xbootldr.glu)
+  declares separate ESP and XBOOTLDR PARTUUIDs.
+
+### Machine-local boot topology
+
+Boot partition identities are deliberately not fields of `SystemModel`.
+System intent is stateless OS configuration stored with a state under `/usr`;
+ESP and XBOOTLDR PARTUUIDs belong to one physical machine and must not be
+archived, exported, or rolled back with that state.
+
+The ActiveReblit UEFI boot-publication and repair path requires
+`/etc/cast/boot-topology.glu`, which imports exactly `cast.boot_topology.v1`.
+Its closed constructors describe either one canonical ESP PARTUUID used for
+both ESP and BOOT, or a canonical ESP PARTUUID and a different XBOOTLDR
+PARTUUID. Relative imports, additional embedded imports, explicit evaluator
+inputs, arbitrary paths, device names, and mount discovery are rejected. The
+resulting value is declarative intent only. Before boot files can be changed,
+separate authenticated evidence must prove the mounted major:minor devices,
+the on-disk partition roles, and—when XBOOTLDR is distinct—the same-disk
+relationship. Sysfs identity evidence alone does not prove the on-disk GPT
+type GUIDs or filesystem types.
+
+The source loader walks only the fixed `etc`, `cast`, and
+`boot-topology.glu` components beneath the retained installation descriptor.
+It uses `RESOLVE_NO_XDEV`, so a separately mounted `/etc` or `/etc/cast` is an
+explicitly unsupported configuration and fails closed. No pathname fallback
+or mount operation is attempted.
 
 The [package-authoring guide](package-authoring.md) documents factories,
 explicit dependency scopes, standard and custom builders, typed phases,

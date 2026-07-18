@@ -89,6 +89,9 @@ pub(crate) mod active_reblit_boot_projection;
 #[allow(dead_code)] // authenticated schemas prepared before descriptor-safe rendering
 #[path = "boot/active_reblit_boot_schema_inputs.rs"]
 mod active_reblit_boot_schema_inputs;
+#[allow(dead_code)] // authenticated machine-local partition intent; no physical topology authority
+#[path = "boot/active_reblit_boot_topology_intent.rs"]
+mod active_reblit_boot_topology_intent;
 #[allow(dead_code)] // authenticated pre-claim local policy; no mutation authority
 #[path = "boot/active_reblit_local_boot_policy.rs"]
 mod active_reblit_local_boot_policy;

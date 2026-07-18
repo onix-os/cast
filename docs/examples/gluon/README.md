@@ -1,6 +1,21 @@
 
 # Gluon package examples
 
+Machine-local boot partition identity has two standalone examples:
+
+| Example | What it demonstrates |
+|---|---|
+| [`boot-topology-aliases-esp.glu`](boot-topology-aliases-esp.glu) | One canonical ESP PARTUUID used for both ESP and BOOT. |
+| [`boot-topology-distinct-xbootldr.glu`](boot-topology-distinct-xbootldr.glu) | A canonical ESP PARTUUID plus a distinct XBOOTLDR PARTUUID. |
+
+The focused `make forge-active-reblit-boot-topology-intent-test` lane copies
+both exact files to the fixed `etc/cast/boot-topology.glu` location beneath a
+retained installation and evaluates them through the production restricted
+loader. They declare identity only: later authenticated evidence must still
+prove mounted devices, on-disk partition roles, and the ESP/XBOOTLDR same-disk
+relationship. Sysfs identity evidence alone cannot prove GPT type GUIDs or
+filesystem types.
+
 The recipes under [`packages`](packages) exercise the public
 `cast.package.v3` interface as ordinary, pure Gluon programs. They are
 deliberately small enough to study, but together cover the package shapes
