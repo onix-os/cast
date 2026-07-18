@@ -480,8 +480,8 @@ The historical epoch dimension is an out-of-current-epoch journal witness in
 the same boot, not a reboot simulation. Neither it nor the post-sync kill is a
 power-loss oracle, so reboot and power-loss durability remain unproved. Phase
 11 and the broad interruption campaign stay open. ActivateArchived completion
-dispatch is the next operation-specific gap, followed by terminal finalization,
-the later rollback, roll-forward, boot, cleanup, and durability work.
+dispatch is production-wired by `c8c5ea41` as its own bounded entry; terminal finalization is
+the next gap, followed by later rollback, roll-forward, boot, cleanup, and durability work.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

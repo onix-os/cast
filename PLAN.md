@@ -701,7 +701,7 @@ Separate entries normalize exchange durability, persist and route rollback, reve
 from `CandidatePreserved` to `RollbackComplete` using exact cleared-row and wrapper evidence. On a separate
 `RollbackComplete` entry it captures exact cleared existing-candidate/provenance plus preserved-wrapper authority, performs
 one same-store conditional journal delete, proves public absence, and enters shared clean admission without redispatch.
-Every entry is bounded. An exact 2 x 2 x 3 ActiveReblit matrix now sends genuine same-boot `SIGKILL` across current/historical record epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence, and post-directory-sync absence. A historical epoch is not a reboot simulation; no reboot or power-loss durability is claimed. ActivateArchived candidate preservation is production-wired; completion dispatch is the next operation gap.
+Every entry is bounded. An exact 2 x 2 x 3 ActiveReblit matrix now sends genuine same-boot `SIGKILL` across current/historical record epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence, and post-directory-sync absence. A historical epoch is not a reboot simulation; no reboot or power-loss durability is claimed. ActivateArchived candidate preservation and one-entry completion dispatch are production-wired; terminal finalization is the next operation gap.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -909,7 +909,7 @@ real-`SIGKILL` restart matrix through production startup. ActiveReblit candidate
 route and deterministic terminal finalizer are now in production; an exact 12-case real-process restart matrix covers that terminal finalizer.
 The matrix crosses both epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence,
 and post-directory-sync absence with fresh crash and recovery processes. Historical epoch is not a reboot simulation, and
-no reboot or power-loss durability is claimed. Commits `8c22ec67` and `cbe3679a` add reviewed ActivateArchived child-move and completion foundations, then production-wire bounded candidate preservation; completion dispatch and finalization remain absent.
+no reboot or power-loss durability is claimed. Commits `8c22ec67` and `cbe3679a` add reviewed ActivateArchived child-move and completion foundations; `c8c5ea41` production-wires bounded completion after candidate preservation, while terminal finalization remains absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

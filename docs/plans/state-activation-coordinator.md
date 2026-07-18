@@ -351,5 +351,5 @@ closure remain authoritative in `PLAN.md`.
   that a pre-sync state survives reboot. Historical epoch is only a mismatched
   runtime witness, not a reboot simulation, and no power-loss claim is made.
   Phase 11 and its broad interruption campaign therefore remain open.
-  ActivateArchived's candidate suffix is the next operation-specific gap,
-  followed by roll-forward, boot, cleanup, and power-loss work.
+  Commit `c8c5ea41` production-wires ActivateArchived's bounded completion suffix;
+  terminal finalization is next, followed by roll-forward, boot, cleanup, and power-loss work.

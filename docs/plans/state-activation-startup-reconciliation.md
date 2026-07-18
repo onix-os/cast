@@ -922,9 +922,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   checkpoint and no restart performs a second move or same-entry completion.
   ActiveReblit retains deterministic terminal finalization, authenticated clean
   handoff, and its exact 12-case same-boot terminal `SIGKILL` matrix.
-  ActivateArchived completion dispatch is therefore the next
-  operation-specific recovery gap. The ladder also has no roll-forward
-  executor, boot repair, or cleanup.
+  Commit `c8c5ea41` production-wires ActivateArchived completion as a separate
+  bounded entry. Terminal finalization is the next operation-specific gap; the
+  ladder also has no roll-forward executor, boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
