@@ -48,6 +48,7 @@ std::thread_local! {
         const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     static PROJECTION_SYNC_FAULT: std::cell::Cell<Option<ProjectionSyncFaultPoint>> =
         const { std::cell::Cell::new(None) };
+    static BOOT_SYNCHRONIZE_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -57,6 +58,21 @@ pub(crate) fn arm_boot_projection_sync(hook: impl FnOnce(&[StateId]) + 'static) 
         assert!(slot.len() < 4, "too many boot projection hooks armed");
         slot.push_back(Box::new(hook));
     });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_boot_synchronize_attempt_count() {
+    BOOT_SYNCHRONIZE_ATTEMPTS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn boot_synchronize_attempt_count() -> usize {
+    BOOT_SYNCHRONIZE_ATTEMPTS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn observe_boot_synchronize_attempt() {
+    BOOT_SYNCHRONIZE_ATTEMPTS.with(|count| count.set(count.get() + 1));
 }
 
 #[cfg(test)]
@@ -382,6 +398,8 @@ fn synchronize_excluding_databases(
     immediate_previous: Option<&State>,
     excluded: &BTreeSet<StateId>,
 ) -> Result<ProjectionSyncOutcome, Error> {
+    #[cfg(test)]
+    observe_boot_synchronize_attempt();
     if excluded.contains(&state.id) {
         return Err(Error::ExcludedHead(i32::from(state.id)));
     }

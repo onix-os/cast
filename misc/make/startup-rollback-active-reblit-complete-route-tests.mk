@@ -37,7 +37,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	timeout 10s grep -Fq 'authority.revalidate(&reopened_journal).unwrap_err();' "$$tests/complete_authority_binding.rs"; \
 	timeout 10s grep -Fq 'authority.revalidate(&other_journal).unwrap_err();' "$$tests/complete_authority_binding.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(authority.wrapper_index(), WRAPPER_INDEX);' "$$tests/complete_authority_binding.rs"; \
-	timeout 10s rg -U -q '^pub\(in crate::client\) use usr_rollback_active_reblit::\{\n    UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,\n\};' "$$gate"; \
+	timeout 10s rg -U -q '^pub\(in crate::client\) use usr_rollback_active_reblit::\{\n    UsrRollbackActiveReblitBootRepairRequiredSeal, UsrRollbackActiveReblitCompleteRouteSeal,\n    UsrRollbackActiveReblitFinalizationSeal,\n\};' "$$gate"; \
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "pub(in crate::client) use usr_rollback_active_reblit::{" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitCompleteRouteSeal {' "$$orchestrator"; \
 	timeout 10s grep -Fqx '        Phase::CandidatePreserved => {' "$$orchestrator"; \

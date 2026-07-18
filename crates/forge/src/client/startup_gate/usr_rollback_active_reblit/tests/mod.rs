@@ -1,5 +1,11 @@
 //! Real startup-entry contracts for the ActiveReblit rollback suffix.
 
+mod boot_repair_required_authority_binding;
+mod boot_repair_required_evidence_races;
+mod boot_repair_required_exclusions;
+mod boot_repair_required_matrix;
+mod boot_repair_required_prefix_boundaries;
+mod boot_repair_required_storage_faults;
 mod candidate_wrapper_exchange_kill_boundaries;
 mod candidate_wrapper_exchange_process_harness;
 mod candidate_wrapper_exchange_process_kill;

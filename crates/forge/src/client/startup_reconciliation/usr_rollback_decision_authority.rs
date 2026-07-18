@@ -92,7 +92,9 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         record: &TransitionRecord,
         initial_in_flight: Option<db::state::InFlightTransition>,
     ) -> Result<UsrRollbackDecisionAdmission<'reservation>, UsrRollbackDecisionAuthorityError> {
-        if !matches!(record.phase, Phase::UsrExchangeIntent | Phase::UsrExchanged) {
+        let active_reblit_boot_sync =
+            record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted;
+        if !rollback_decision_source_is_supported(record) {
             return Ok(UsrRollbackDecisionAdmission::NotApplicable);
         }
 
@@ -139,7 +141,15 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
-            _ => unreachable!("rollback-decision admission is restricted to /usr exchange phases"),
+            (Phase::BootSyncStarted, UsrExchangeLayout::Post) if active_reblit_boot_sync => {
+                Some(InitialRollbackAction::Pending)
+            }
+            (Phase::BootSyncStarted, UsrExchangeLayout::Pre) if active_reblit_boot_sync => {
+                return Ok(UsrRollbackDecisionAdmission::Deferred(
+                    UsrRollbackDecisionDeferral::IncompatibleEvidence,
+                ));
+            }
+            _ => unreachable!("rollback-decision admission is restricted to exact /usr or ActiveReblit boot sources"),
         };
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
@@ -184,6 +194,16 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
     pub(in crate::client) fn observations(&self) -> RollbackObservations {
         self.observations
     }
+}
+
+fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
+    matches!(record.phase, Phase::UsrExchangeIntent | Phase::UsrExchanged)
+        || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_decision_source_is_supported_for_test(record: &TransitionRecord) -> bool {
+    rollback_decision_source_is_supported(record)
 }
 
 impl UsrRollbackDecisionEvidence<'_> {

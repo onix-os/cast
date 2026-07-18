@@ -128,7 +128,7 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
         matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
-        )
+        ) || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
     })
 }
 
@@ -136,9 +136,15 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
+    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if rollback.previous_archive != RollbackAction::NotRequired
         || rollback.candidate.action != RollbackAction::Pending
-        || rollback.boot != BootRollback::NotRequired
+        || rollback.boot
+            != if boot_source {
+                BootRollback::PendingUnverifiable
+            } else {
+                BootRollback::NotRequired
+            }
     {
         return false;
     }
@@ -170,6 +176,16 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
             ),
             _ => false,
         }
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_resume_route_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    let layout = match record.phase {
+        Phase::RollbackDecided => UsrExchangeLayout::Post,
+        Phase::UsrRestored => UsrExchangeLayout::Pre,
+        _ => return false,
+    };
+    is_usr_exchange_rollback_source(record) && route_evidence_is_exact(record, layout)
 }
 
 fn inspect_current_database(

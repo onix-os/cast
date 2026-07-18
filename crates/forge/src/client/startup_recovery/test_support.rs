@@ -89,6 +89,22 @@ impl SourceCase {
     }
 }
 
+/// Physical `/usr` layout paired only with a genuine ActiveReblit
+/// `BootSyncStarted` forward record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // only the ActiveReblit boot-route test instantiation uses this source
+pub(super) enum BootSyncStartedLayout {
+    Pre,
+    Post,
+}
+
+impl BootSyncStartedLayout {
+    #[allow(dead_code)] // only the ActiveReblit boot-route test instantiation uses this source
+    fn post_exchange(self) -> bool {
+        self == Self::Post
+    }
+}
+
 pub(super) struct Fixture {
     pub(super) _temporary: tempfile::TempDir,
     pub(super) installation: Installation,
@@ -111,6 +127,32 @@ impl Fixture {
     }
 
     fn with_historical_epoch(kind: OperationKind, source: SourceCase, historical: bool) -> Self {
+        let fixture = Self::with_forward_source(kind, source.phase(), source.post_exchange(), historical);
+        assert_eq!(
+            fixture.source.generation,
+            kind.expected_source_generation(source.phase()),
+            "fixture generation drifted for {kind:?} at {:?}",
+            source.phase()
+        );
+        fixture
+    }
+
+    #[allow(dead_code)] // only the ActiveReblit boot-route test instantiation uses this source
+    pub(super) fn active_reblit_boot_sync_started(layout: BootSyncStartedLayout, historical: bool) -> Self {
+        let fixture = Self::boot_sync_started(OperationKind::ActiveReblit, layout, historical);
+        assert_eq!(fixture.source.operation, Operation::ActiveReblit);
+        assert_eq!(fixture.source.generation, 11);
+        fixture
+    }
+
+    #[allow(dead_code)] // focused boot-prefix exclusions also instantiate sibling operations
+    pub(super) fn boot_sync_started(kind: OperationKind, layout: BootSyncStartedLayout, historical: bool) -> Self {
+        let fixture = Self::with_forward_source(kind, Phase::BootSyncStarted, layout.post_exchange(), historical);
+        assert_eq!(fixture.source.phase, Phase::BootSyncStarted);
+        fixture
+    }
+
+    fn with_forward_source(kind: OperationKind, source_phase: Phase, post_exchange: bool, historical: bool) -> Self {
         let temporary = private_installation_tempdir();
         let root = temporary.path();
         let mut installation = Installation::open(root, None).unwrap();
@@ -135,14 +177,10 @@ impl Fixture {
             create_private_directory(&path);
             path
         });
-        if source.post_exchange() {
+        if post_exchange {
             exchange_usr_layout(root);
         }
-        installation.active_state = Some(if source.post_exchange() {
-            candidate_state
-        } else {
-            previous_state
-        });
+        installation.active_state = Some(if post_exchange { candidate_state } else { previous_state });
         let (creation_epoch, candidate_runtime, previous_runtime) = if historical {
             (
                 historical_epoch(),
@@ -182,13 +220,7 @@ impl Fixture {
             QuarantineName::parse("failed-startup-rollback-decision").unwrap(),
         )
         .unwrap();
-        let source_record = persist_source_record(&installation, preparing, source.phase(), candidate_state);
-        assert_eq!(
-            source_record.generation,
-            kind.expected_source_generation(source.phase()),
-            "fixture generation drifted for {kind:?} at {:?}",
-            source.phase()
-        );
+        let source_record = persist_source_record(&installation, preparing, source_phase, candidate_state);
 
         let system = MutableSystemCapabilities::from_test_parts(
             &MutableSystemCapabilitiesTestSeal::new(),

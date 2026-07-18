@@ -71,7 +71,7 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
 	timeout 10s awk '$$0 == "    #[cfg(test)]" { gated = 1; next } gated && $$0 == "    pub(in crate::client) fn new_for_test() -> Self {" { found++; gated = 0; next } gated { gated = 0 } END { exit found != 1 }' <<<"$$seal_impl"; \
 	timeout 10s grep -Fq '        Self::new()' <<<"$$seal_impl"; \
-	timeout 10s rg -U -q '^pub\(in crate::client\) use usr_rollback_active_reblit::\{\n    UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,\n\};' "$$startup_gate"; \
+	timeout 10s rg -U -q '^pub\(in crate::client\) use usr_rollback_active_reblit::\{\n    UsrRollbackActiveReblitBootRepairRequiredSeal, UsrRollbackActiveReblitCompleteRouteSeal,\n    UsrRollbackActiveReblitFinalizationSeal,\n\};' "$$startup_gate"; \
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "pub(in crate::client) use usr_rollback_active_reblit::{" { found = 1 } { previous = $$0 } END { exit !found }' "$$startup_gate"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx 'pub(in crate::client) enum UsrRollbackActiveReblitFinalizationAdmission<'\''reservation> {' "$$authority"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitFinalizationAuthority<'\''reservation> {' "$$authority"; \

@@ -17,7 +17,8 @@ pub(in crate::client) use usr_rollback_activate_archived::{
     UsrRollbackActivateArchivedCompleteRouteSeal, UsrRollbackActivateArchivedFinalizationSeal,
 };
 pub(in crate::client) use usr_rollback_active_reblit::{
-    UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
+    UsrRollbackActiveReblitBootRepairRequiredSeal, UsrRollbackActiveReblitCompleteRouteSeal,
+    UsrRollbackActiveReblitFinalizationSeal,
 };
 pub(in crate::client) use usr_rollback_new_state::{
     UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal, UsrRollbackFreshDbInvalidationRouteSeal,

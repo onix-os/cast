@@ -187,7 +187,8 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         if !matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
-        ) {
+        ) && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
+        {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
 
@@ -450,18 +451,24 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
+    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::CandidatePreserveIntent
-        || !matches!(
+        || (!matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
-        )
+        ) && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || !matches!(
             rollback.usr_exchange,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
         || rollback.candidate.action != RollbackAction::Pending
-        || rollback.boot != BootRollback::NotRequired
+        || rollback.boot
+            != if boot_source {
+                BootRollback::PendingUnverifiable
+            } else {
+                BootRollback::NotRequired
+            }
     {
         return false;
     }
@@ -476,6 +483,11 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     fresh_is_exact
         && disposition_is_exact
         && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_candidate_preserve_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    candidate_preserve_plan_is_exact(record)
 }
 
 fn inspect_current_database(

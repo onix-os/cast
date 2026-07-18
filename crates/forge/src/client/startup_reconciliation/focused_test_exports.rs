@@ -10,16 +10,20 @@ pub(in crate::client) use super::usr_rollback_candidate_preserve_authority::{
     arm_before_archived_candidate_preserve_persistence_durable_trailing_evidence,
     arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence,
     arm_between_usr_rollback_candidate_preserve_database_captures,
+    usr_rollback_candidate_preserve_plan_is_exact_for_test,
 };
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use super::usr_rollback_decision_authority::arm_between_usr_rollback_decision_database_captures;
+pub(in crate::client) use super::usr_rollback_decision_authority::usr_rollback_decision_source_is_supported_for_test;
+pub(in crate::client) use super::usr_rollback_resume_route_authority::usr_rollback_resume_route_plan_is_exact_for_test;
 pub(in crate::client) use super::usr_rollback_reverse_authority::{
     UsrRollbackReverseApplyEffectLease, UsrRollbackReverseFinishEffectLease,
-    arm_between_usr_rollback_reverse_database_captures,
+    arm_between_usr_rollback_reverse_database_captures, usr_rollback_reverse_plan_is_exact_for_test,
 };
 pub(in crate::client) use super::{
     usr_rollback_activate_archived_complete_route_authority::arm_between_usr_rollback_activate_archived_complete_route_database_captures,
     usr_rollback_activate_archived_finalization_authority::arm_between_usr_rollback_activate_archived_finalization_database_captures,
+    usr_rollback_active_reblit_boot_repair_required_authority::arm_between_usr_rollback_active_reblit_boot_repair_required_database_captures,
     usr_rollback_active_reblit_complete_route_authority::arm_between_usr_rollback_active_reblit_complete_route_database_captures,
     usr_rollback_active_reblit_finalization_authority::arm_between_usr_rollback_active_reblit_finalization_database_captures,
     usr_rollback_complete_route_authority::arm_between_usr_rollback_complete_route_database_captures,
@@ -87,6 +91,7 @@ pub(in crate::client) use super::activation_namespace::{
     arm_before_reverse_exchange_reconciliation_capture,
     arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture,
     arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture,
+    arm_before_usr_rollback_active_reblit_boot_repair_required_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture,
     arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture,

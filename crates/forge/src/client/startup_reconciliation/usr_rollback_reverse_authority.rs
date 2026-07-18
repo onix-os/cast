@@ -247,15 +247,21 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
+    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::ReverseExchangeIntent
-        || !matches!(
+        || (!matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
-        )
+        ) && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || rollback.usr_exchange != RollbackAction::Pending
         || rollback.candidate.action != RollbackAction::Pending
-        || rollback.boot != BootRollback::NotRequired
+        || rollback.boot
+            != if boot_source {
+                BootRollback::PendingUnverifiable
+            } else {
+                BootRollback::NotRequired
+            }
     {
         return false;
     }
@@ -270,6 +276,11 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     fresh_is_exact
         && candidate_disposition_is_exact
         && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_reverse_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    reverse_plan_is_exact(record)
 }
 
 fn inspect_current_database(
