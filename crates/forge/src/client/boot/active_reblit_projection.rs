@@ -265,6 +265,14 @@ pub(crate) enum ActiveReblitBootProjectionError {
     LayoutChanged,
 }
 
+#[path = "active_reblit_asset_plan.rs"]
+mod asset_plan;
+#[allow(unused_imports)] // consumed by the sealed-asset and systemd-plan slices
+pub(crate) use asset_plan::{
+    ActiveReblitBootAssetPlanError, BootAssetPlanNotApplicable, BootAssetPlanOutcome, BootAssetRole,
+    KernelMetadataKind, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PlannedBootAsset, PreparedActiveReblitBootAssetPlan,
+};
+
 #[cfg(test)]
 #[path = "active_reblit_projection_tests.rs"]
 mod tests;

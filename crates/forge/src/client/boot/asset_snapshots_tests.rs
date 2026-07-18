@@ -1,9 +1,8 @@
 use std::{
     cell::Cell,
-    io::{Read as _, Seek as _, SeekFrom},
     os::{
         fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},
-        unix::fs::{PermissionsExt as _, symlink},
+        unix::fs::{FileExt as _, PermissionsExt as _, symlink},
     },
     time::{Duration, Instant},
 };
@@ -78,10 +77,9 @@ fn snapshot_bytes(snapshot: &SealedBootAssetSnapshot) -> Vec<u8> {
     // SAFETY: F_DUPFD_CLOEXEC returned one new descriptor and transfers its
     // ownership exactly once into OwnedFd.
     let duplicate = unsafe { OwnedFd::from_raw_fd(duplicate) };
-    let mut file = std::fs::File::from(duplicate);
-    file.seek(SeekFrom::Start(0)).unwrap();
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).unwrap();
+    let file = std::fs::File::from(duplicate);
+    let mut bytes = vec![0; snapshot.length() as usize];
+    file.read_exact_at(&mut bytes, 0).unwrap();
     bytes
 }
 
@@ -89,7 +87,7 @@ fn snapshot_bytes(snapshot: &SealedBootAssetSnapshot) -> Vec<u8> {
 fn sealed_snapshot_has_exact_bytes_digest_length_metadata_and_seals() {
     let bytes = b"exact boot projection bytes";
     let fixture = snapshot_fixture(bytes);
-    let prepared = PreparedBootAssetSnapshots::prepare(&fixture.installation, [fixture.digest]).unwrap();
+    let prepared = prepare_digests(&fixture.installation, [fixture.digest]).unwrap();
 
     assert_eq!(prepared.len(), 1);
     assert!(!prepared.is_empty());
@@ -114,7 +112,7 @@ fn sealed_snapshot_has_exact_bytes_digest_length_metadata_and_seals() {
 fn sealed_snapshot_rejects_write_shrink_grow_and_additional_seals() {
     let bytes = b"immutable boot input";
     let fixture = snapshot_fixture(bytes);
-    let prepared = PreparedBootAssetSnapshots::prepare(&fixture.installation, [fixture.digest]).unwrap();
+    let prepared = prepare_digests(&fixture.installation, [fixture.digest]).unwrap();
     let snapshot = prepared.snapshots().next().unwrap();
     let descriptor = snapshot.descriptor();
 
@@ -139,7 +137,7 @@ fn wrong_digest_fails_without_publishing_a_snapshot() {
     )
     .unwrap();
 
-    let error = PreparedBootAssetSnapshots::prepare(&fixture.installation, [wrong_digest])
+    let error = prepare_digests(&fixture.installation, [wrong_digest])
         .err()
         .expect("digest mismatch must reject the complete snapshot set");
     assert!(matches!(
@@ -246,7 +244,7 @@ fn canonical_empty_asset_is_sealed_without_an_asset_pool() {
     let (_temporary, installation) = installation_fixture();
     assert!(!installation.assets_path("v2").exists());
 
-    let prepared = PreparedBootAssetSnapshots::prepare(&installation, [EMPTY_FILE_DIGEST]).unwrap();
+    let prepared = prepare_digests(&installation, [EMPTY_FILE_DIGEST]).unwrap();
     let snapshot = prepared.snapshots().next().unwrap();
     assert_eq!(snapshot.digest(), EMPTY_FILE_DIGEST);
     assert_eq!(snapshot.length(), 0);
@@ -275,7 +273,7 @@ fn fifo_and_symlink_sources_fail_closed_without_blocking() {
     mkfifo(&fixture.source_path, Mode::from_bits_truncate(0o600)).unwrap();
     let started = Instant::now();
     assert!(matches!(
-        PreparedBootAssetSnapshots::prepare(&fixture.installation, [fixture.digest]),
+        prepare_digests(&fixture.installation, [fixture.digest]),
         Err(BootAssetSnapshotError::OpenAssetSource { .. })
     ));
     assert!(started.elapsed() < Duration::from_secs(2));
@@ -283,7 +281,7 @@ fn fifo_and_symlink_sources_fail_closed_without_blocking() {
     fs::remove_file(&fixture.source_path).unwrap();
     symlink("missing", &fixture.source_path).unwrap();
     assert!(matches!(
-        PreparedBootAssetSnapshots::prepare(&fixture.installation, [fixture.digest]),
+        prepare_digests(&fixture.installation, [fixture.digest]),
         Err(BootAssetSnapshotError::OpenAssetSource { .. })
     ));
 }
@@ -384,6 +382,31 @@ fn duplicate_digest_is_canonicalized_without_a_duplicate_snapshot() {
     )
     .unwrap();
     assert_eq!(prepared.len(), 1);
+}
+
+#[test]
+fn digest_lookup_is_sorted_deduplicated_and_independent_of_descriptor_offsets() {
+    let (_temporary, installation) = installation_fixture();
+    let first_bytes = b"first lookup bytes";
+    let second_bytes = b"second lookup bytes";
+    let first = xxhash_rust::xxh3::xxh3_128(first_bytes);
+    let second = xxhash_rust::xxh3::xxh3_128(second_bytes);
+    write_asset(&installation, first, first_bytes);
+    write_asset(&installation, second, second_bytes);
+
+    let prepared = prepare_with_policy_until(
+        &installation,
+        [second, first, second],
+        test_policy(3, 64, 128, 32),
+        test_deadline(),
+    )
+    .unwrap();
+
+    assert_eq!(prepared.len(), 2);
+    assert_eq!(snapshot_bytes(prepared.snapshot_for(first).unwrap()), first_bytes);
+    assert_eq!(snapshot_bytes(prepared.snapshot_for(second).unwrap()), second_bytes);
+    assert!(prepared.snapshot_for(first ^ second).is_none());
+    assert_eq!(snapshot_bytes(prepared.snapshot_for(first).unwrap()), first_bytes);
 }
 
 #[test]

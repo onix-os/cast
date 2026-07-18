@@ -17,14 +17,15 @@ use nix::{
 };
 
 use super::{
-    AssetPool, EMPTY_FILE_DIGEST, Error as ClientError, OpenedAsset, copy_fd_exact, frozen_asset_path,
-    require_asset_unchanged_until,
+    AssetPool, EMPTY_FILE_DIGEST, Error as ClientError, OpenedAsset,
+    active_reblit_boot_projection::{MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PreparedActiveReblitBootAssetPlan},
+    copy_fd_exact, frozen_asset_path, require_asset_unchanged_until,
 };
 use crate::Installation;
 
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
-const MAX_BOOT_ASSET_DECLARATIONS: usize = 256;
+const MAX_BOOT_ASSET_DECLARATIONS: usize = MAX_BOOT_PLAN_SNAPSHOT_DIGESTS;
 const MAX_BOOT_ASSET_BYTES: u64 = 512 * MIB;
 const MAX_TOTAL_BOOT_ASSET_BYTES: u64 = 2 * GIB;
 // At most 256 unique non-empty inputs retain two authenticated source-chain
@@ -58,14 +59,16 @@ pub(in crate::client) struct PreparedBootAssetSnapshots {
 impl PreparedBootAssetSnapshots {
     pub(in crate::client) fn prepare(
         installation: &Installation,
-        digests: impl IntoIterator<Item = u128>,
+        plan: &PreparedActiveReblitBootAssetPlan,
     ) -> Result<Self, BootAssetSnapshotError> {
-        let deadline = Instant::now().checked_add(BOOT_ASSET_SNAPSHOT_POLICY.timeout).ok_or(
-            BootAssetSnapshotError::InvalidDeadline {
-                timeout: BOOT_ASSET_SNAPSHOT_POLICY.timeout,
-            },
-        )?;
-        prepare_with_policy_until(installation, digests, BOOT_ASSET_SNAPSHOT_POLICY, deadline)
+        prepare_digests(installation, plan.snapshot_digests().iter().copied())
+    }
+
+    pub(in crate::client) fn snapshot_for(&self, digest: u128) -> Option<&SealedBootAssetSnapshot> {
+        self.snapshots
+            .binary_search_by_key(&digest, SealedBootAssetSnapshot::digest)
+            .ok()
+            .map(|index| &self.snapshots[index])
     }
 
     pub(in crate::client) fn len(&self) -> usize {
@@ -79,6 +82,18 @@ impl PreparedBootAssetSnapshots {
     pub(in crate::client) fn snapshots(&self) -> impl ExactSizeIterator<Item = &SealedBootAssetSnapshot> {
         self.snapshots.iter()
     }
+}
+
+fn prepare_digests(
+    installation: &Installation,
+    digests: impl IntoIterator<Item = u128>,
+) -> Result<PreparedBootAssetSnapshots, BootAssetSnapshotError> {
+    let deadline = Instant::now().checked_add(BOOT_ASSET_SNAPSHOT_POLICY.timeout).ok_or(
+        BootAssetSnapshotError::InvalidDeadline {
+            timeout: BOOT_ASSET_SNAPSHOT_POLICY.timeout,
+        },
+    )?;
+    prepare_with_policy_until(installation, digests, BOOT_ASSET_SNAPSHOT_POLICY, deadline)
 }
 
 /// One sealed, anonymous, digest-authenticated boot input.

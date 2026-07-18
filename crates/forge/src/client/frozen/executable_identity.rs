@@ -331,6 +331,19 @@ fn account_frozen_executable_bytes(
 }
 
 fn resolve_frozen_symlink_target(link: &Path, target: &str) -> Option<PathBuf> {
+    normalize_frozen_symlink_target(link, target)
+        .filter(|resolved| resolved.to_str().is_some_and(is_normalized_frozen_path))
+}
+
+/// Lexically normalize one bounded symlink target without deciding which
+/// absolute namespace the caller is allowed to consume.
+///
+/// Frozen executable admission applies the `/usr` policy in
+/// [`resolve_frozen_symlink_target`]. Boot projection planning needs the
+/// namespace-neutral result first so it can distinguish a malformed target
+/// from a well-formed escape and report the latter through its dedicated
+/// fail-closed error.
+fn normalize_frozen_symlink_target(link: &Path, target: &str) -> Option<PathBuf> {
     if target.is_empty()
         || !frozen_executable_symlink_target_length_is_admitted(target.len())
         || target.as_bytes().contains(&0)
@@ -372,11 +385,7 @@ fn resolve_frozen_symlink_target(link: &Path, target: &str) -> Option<PathBuf> {
 
     let mut resolved = PathBuf::from("/");
     resolved.extend(components);
-    if resolved.to_str().is_some_and(is_normalized_frozen_path) {
-        Some(resolved)
-    } else {
-        None
-    }
+    Some(resolved)
 }
 
 fn frozen_executable_symlink_target_length_is_admitted(actual: usize) -> bool {
