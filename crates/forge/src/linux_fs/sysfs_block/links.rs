@@ -1,8 +1,7 @@
-use std::io;
+use std::{io, time::Instant};
 
-use super::{WorkBudget, copied_bytes, invalid_data, invalid_input};
+use super::{SYSFS_LINK_TARGET_MAX_BYTES, WorkBudget, copied_bytes, invalid_data, invalid_input};
 
-const MAX_LINK_TARGET_BYTES: usize = 4 * 1024;
 const MAX_LINK_COMPONENTS: usize = 128;
 const MAX_LINK_COMPONENT_BYTES: usize = 255;
 const MAX_LINK_WORK: usize = 64 * 1024;
@@ -16,7 +15,7 @@ pub(in super::super) struct LinkLimits {
 }
 
 const LINK_LIMITS: LinkLimits = LinkLimits {
-    max_bytes: MAX_LINK_TARGET_BYTES,
+    max_bytes: SYSFS_LINK_TARGET_MAX_BYTES,
     max_components: MAX_LINK_COMPONENTS,
     max_component_bytes: MAX_LINK_COMPONENT_BYTES,
     max_work: MAX_LINK_WORK,
@@ -56,16 +55,37 @@ impl SysfsSubsystemName {
 /// Normalize the raw target of `/sys/dev/block/<major>:<minor>` relative to
 /// the fixed `dev/block` base.
 pub(crate) fn normalize_sysfs_dev_block_target(target: &[u8]) -> io::Result<SysfsDeviceTarget> {
-    normalize_sysfs_dev_block_target_with_limits_and_work(target, LINK_LIMITS).map(|(target, _)| target)
+    normalize_sysfs_dev_block_target_with_limits_and_work_deadline(target, LINK_LIMITS, None).map(|(target, _)| target)
+}
+
+/// Normalize one `dev/block` link within the caller's operation deadline.
+pub(crate) fn normalize_sysfs_dev_block_target_until(
+    target: &[u8],
+    deadline: Instant,
+) -> io::Result<SysfsDeviceTarget> {
+    normalize_sysfs_dev_block_target_with_limits_and_work_deadline(target, LINK_LIMITS, Some(deadline))
+        .map(|(target, _)| target)
 }
 
 pub(in super::super) fn normalize_sysfs_dev_block_target_with_limits_and_work(
     target: &[u8],
     limits: LinkLimits,
 ) -> io::Result<(SysfsDeviceTarget, usize)> {
+    normalize_sysfs_dev_block_target_with_limits_and_work_deadline(target, limits, None)
+}
+
+fn normalize_sysfs_dev_block_target_with_limits_and_work_deadline(
+    target: &[u8],
+    limits: LinkLimits,
+    deadline: Option<Instant>,
+) -> io::Result<(SysfsDeviceTarget, usize)> {
+    super::require_deadline(deadline)?;
     validate_limits(limits)?;
-    validate_whole_target(target, limits, "sysfs dev/block link")?;
-    let mut budget = WorkBudget::new(limits.max_work);
+    let mut budget = match deadline {
+        Some(deadline) => WorkBudget::until(limits.max_work, deadline),
+        None => WorkBudget::new(limits.max_work),
+    };
+    validate_whole_target(target, limits, "sysfs dev/block link", &budget)?;
     budget.charge(target.len(), "scanning a sysfs dev/block link")?;
 
     let mut base_depth = 2_usize;
@@ -73,6 +93,7 @@ pub(in super::super) fn normalize_sysfs_dev_block_target_with_limits_and_work(
     let mut component_count = 0_usize;
     let mut components = Vec::<Vec<u8>>::new();
     for component in target.split(|byte| *byte == b'/') {
+        budget.checkpoint()?;
         component_count = component_count
             .checked_add(1)
             .ok_or_else(|| invalid_data("sysfs link component count overflowed"))?;
@@ -101,6 +122,7 @@ pub(in super::super) fn normalize_sysfs_dev_block_target_with_limits_and_work(
                     .try_reserve(1)
                     .map_err(|source| io::Error::other(format!("could not grow normalized sysfs path: {source}")))?;
                 components.push(copied_bytes(component, "normalized sysfs path component")?);
+                budget.checkpoint()?;
             }
         }
     }
@@ -120,6 +142,7 @@ pub(in super::super) fn normalize_sysfs_dev_block_target_with_limits_and_work(
             "sysfs dev/block link names the devices directory rather than a device",
         ));
     }
+    budget.checkpoint()?;
     let consumed = budget.consumed();
     Ok((SysfsDeviceTarget { components }, consumed))
 }
@@ -127,22 +150,41 @@ pub(in super::super) fn normalize_sysfs_dev_block_target_with_limits_and_work(
 /// Extract and validate the final kernel subsystem name from a raw relative
 /// `subsystem` symlink target.
 pub(crate) fn parse_sysfs_subsystem_target(target: &[u8]) -> io::Result<SysfsSubsystemName> {
-    parse_sysfs_subsystem_target_with_limits_and_work(target, LINK_LIMITS).map(|(name, _)| name)
+    parse_sysfs_subsystem_target_with_limits_and_work_deadline(target, LINK_LIMITS, None).map(|(name, _)| name)
+}
+
+/// Parse one `subsystem` link within the caller's operation deadline.
+pub(crate) fn parse_sysfs_subsystem_target_until(target: &[u8], deadline: Instant) -> io::Result<SysfsSubsystemName> {
+    parse_sysfs_subsystem_target_with_limits_and_work_deadline(target, LINK_LIMITS, Some(deadline))
+        .map(|(name, _)| name)
 }
 
 pub(in super::super) fn parse_sysfs_subsystem_target_with_limits_and_work(
     target: &[u8],
     limits: LinkLimits,
 ) -> io::Result<(SysfsSubsystemName, usize)> {
+    parse_sysfs_subsystem_target_with_limits_and_work_deadline(target, limits, None)
+}
+
+fn parse_sysfs_subsystem_target_with_limits_and_work_deadline(
+    target: &[u8],
+    limits: LinkLimits,
+    deadline: Option<Instant>,
+) -> io::Result<(SysfsSubsystemName, usize)> {
+    super::require_deadline(deadline)?;
     validate_limits(limits)?;
-    validate_whole_target(target, limits, "sysfs subsystem link")?;
-    let mut budget = WorkBudget::new(limits.max_work);
+    let mut budget = match deadline {
+        Some(deadline) => WorkBudget::until(limits.max_work, deadline),
+        None => WorkBudget::new(limits.max_work),
+    };
+    validate_whole_target(target, limits, "sysfs subsystem link", &budget)?;
     budget.charge(target.len(), "scanning a sysfs subsystem link")?;
 
     let mut saw_named_component = false;
     let mut basename = None;
     let mut component_count = 0_usize;
     for component in target.split(|byte| *byte == b'/') {
+        budget.checkpoint()?;
         component_count = component_count
             .checked_add(1)
             .ok_or_else(|| invalid_data("sysfs subsystem component count overflowed"))?;
@@ -165,13 +207,14 @@ pub(in super::super) fn parse_sysfs_subsystem_target_with_limits_and_work(
     }
 
     let basename = basename.ok_or_else(|| invalid_data("sysfs subsystem link has no subsystem basename"))?;
-    if !canonical_subsystem_name(basename) {
+    if !canonical_subsystem_name(basename, &budget)? {
         return Err(invalid_data(
             "sysfs subsystem basename is not a canonical kernel identifier",
         ));
     }
     budget.charge(basename.len(), "retaining a sysfs subsystem basename")?;
     let name = SysfsSubsystemName(copied_bytes(basename, "sysfs subsystem basename")?);
+    budget.checkpoint()?;
     let consumed = budget.consumed();
     Ok((name, consumed))
 }
@@ -188,7 +231,12 @@ fn validate_limits(limits: LinkLimits) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_whole_target(target: &[u8], limits: LinkLimits, field: &'static str) -> io::Result<()> {
+fn validate_whole_target(
+    target: &[u8],
+    limits: LinkLimits,
+    field: &'static str,
+    budget: &WorkBudget,
+) -> io::Result<()> {
     if target.is_empty() {
         return Err(invalid_data(format!("{field} target is empty")));
     }
@@ -201,9 +249,13 @@ fn validate_whole_target(target: &[u8], limits: LinkLimits, field: &'static str)
     if target[0] == b'/' {
         return Err(invalid_data(format!("{field} target is absolute")));
     }
-    if target.contains(&b'\0') {
-        return Err(invalid_data(format!("{field} target contains a NUL byte")));
+    for byte in target {
+        budget.checkpoint()?;
+        if *byte == b'\0' {
+            return Err(invalid_data(format!("{field} target contains a NUL byte")));
+        }
     }
+    budget.checkpoint()?;
     Ok(())
 }
 
@@ -226,9 +278,16 @@ fn require_component_bound(component: &[u8], count: usize, limits: LinkLimits) -
     Ok(())
 }
 
-fn canonical_subsystem_name(name: &[u8]) -> bool {
-    name.first().is_some_and(u8::is_ascii_alphanumeric)
-        && name
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-' | b'.'))
+fn canonical_subsystem_name(name: &[u8], budget: &WorkBudget) -> io::Result<bool> {
+    if !name.first().is_some_and(u8::is_ascii_alphanumeric) {
+        return Ok(false);
+    }
+    for byte in name {
+        budget.checkpoint()?;
+        if !(byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-' | b'.')) {
+            return Ok(false);
+        }
+    }
+    budget.checkpoint()?;
+    Ok(true)
 }

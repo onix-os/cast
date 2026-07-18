@@ -92,6 +92,34 @@ fn interrupted_retry_limit_accepts_n_and_rejects_n_plus_one() {
     let mut bytewise = InterruptingBoundedReader::new(0, b"oversized", true);
     assert_eq!(read_to_end_bounded(&mut bytewise, 4).unwrap(), b"over");
     assert_eq!(bytewise.calls, 4);
+
+    let reservation_calls = Cell::new(0usize);
+    let growth_reservations = Cell::new(0usize);
+    let growth_input = vec![b'g'; 4 * 1024 + 1];
+    let mut fallible_growth = InterruptingBoundedReader::new(0, &growth_input, false);
+    let error = read_to_end_bounded_with_deadline_and_reservation(
+        &mut fallible_growth,
+        growth_input.len(),
+        None,
+        |bytes, additional| {
+            reservation_calls.set(reservation_calls.get() + 1);
+            if bytes.len() + additional > bytes.capacity() {
+                let growth = growth_reservations.get();
+                growth_reservations.set(growth + 1);
+                if growth == 1 {
+                    return Err(io::Error::other("injected bounded-read growth allocation failure"));
+                }
+            }
+            bytes
+                .try_reserve(additional)
+                .map_err(|source| io::Error::other(format!("test allocation failed: {source}")))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Other);
+    assert_eq!(growth_reservations.get(), 2);
+    assert_eq!(reservation_calls.get(), 10);
+    assert_eq!(fallible_growth.calls, 9);
 }
 
 #[test]
@@ -110,6 +138,38 @@ fn expired_retry_deadline_fails_before_another_syscall() {
     let error = read_to_end_bounded_until(&mut reader, 6, deadline).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     assert_eq!(reader.calls, 0);
+
+    let checkpoints = Cell::new(0usize);
+    let reservations = Cell::new(0usize);
+    let mut final_copy = InterruptingBoundedReader::new(0, b"x", false);
+    let error = read_to_end_bounded_with_deadline_and_hooks(
+        &mut final_copy,
+        1,
+        None,
+        |bytes, additional| {
+            reservations.set(reservations.get() + 1);
+            bytes
+                .try_reserve(additional)
+                .map_err(|source| io::Error::other(format!("test allocation failed: {source}")))
+        },
+        |_| {
+            let checkpoint = checkpoints.get();
+            checkpoints.set(checkpoint + 1);
+            if checkpoint == 3 {
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "injected deadline expiry after the final bounded copy",
+                ))
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(checkpoints.get(), 4);
+    assert_eq!(reservations.get(), 2);
+    assert_eq!(final_copy.calls, 1);
 
     let temporary = tempfile::tempdir().unwrap();
     let directory = std::fs::File::open(temporary.path()).unwrap();

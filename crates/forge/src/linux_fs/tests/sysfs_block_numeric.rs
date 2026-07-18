@@ -1,6 +1,12 @@
-use std::io;
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
-use super::super::sysfs_block::{parse_sysfs_dev, parse_sysfs_partition_number};
+use super::super::sysfs_block::{
+    SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES, parse_sysfs_dev, parse_sysfs_dev_until,
+    parse_sysfs_partition_number, parse_sysfs_partition_number_until,
+};
 
 fn invalid_data<T: std::fmt::Debug>(result: io::Result<T>) {
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
@@ -87,4 +93,23 @@ fn partition_attribute_enforces_the_exact_maximum_length_boundary() {
     let beyond_limit = b"04294967295\n";
     assert_eq!(beyond_limit.len(), 12);
     invalid_data(parse_sysfs_partition_number(beyond_limit));
+}
+
+#[test]
+fn numeric_deadline_entrypoints_reject_expired_work_and_expose_exact_read_ceilings() {
+    assert_eq!(SYSFS_DEV_ATTRIBUTE_MAX_BYTES, 22);
+    assert_eq!(SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES, 11);
+    let live = Instant::now() + Duration::from_secs(1);
+    assert_eq!(parse_sysfs_dev_until(b"259:1\n", live).unwrap().minor(), 1);
+    assert_eq!(parse_sysfs_partition_number_until(b"1\n", live).unwrap().get(), 1);
+
+    let expired = Instant::now() - Duration::from_millis(1);
+    assert_eq!(
+        parse_sysfs_dev_until(b"259:1\n", expired).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        parse_sysfs_partition_number_until(b"1\n", expired).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
 }

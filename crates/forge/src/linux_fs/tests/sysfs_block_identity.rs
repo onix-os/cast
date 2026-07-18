@@ -1,7 +1,11 @@
-use std::io;
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 use super::super::sysfs_block::{
-    parse_sysfs_disk_identity, parse_sysfs_partition_identity, require_matching_disk_sequence,
+    parse_sysfs_disk_identity, parse_sysfs_disk_identity_until, parse_sysfs_partition_identity,
+    parse_sysfs_partition_identity_until, require_matching_disk_sequence, require_matching_disk_sequence_until,
 };
 
 const PARTUUID: &str = "5e85a94f-b115-41c5-9d72-9d23958b5edc";
@@ -131,4 +135,49 @@ fn optional_disk_sequence_must_be_absent_on_both_or_equal_on_both() {
     invalid_data(require_matching_disk_sequence(&partition_nine, &disk_ten));
     invalid_data(require_matching_disk_sequence(&partition_nine, &disk_without));
     invalid_data(require_matching_disk_sequence(&partition_without, &disk_nine));
+}
+
+#[test]
+fn identity_deadline_entrypoints_share_one_deadline_and_never_succeed_after_expiry() {
+    let live = Instant::now() + Duration::from_secs(1);
+    let partition = parse_sysfs_partition_identity_until(
+        b"259:1\n",
+        b"1\n",
+        &partition_event("259", "1", "1", PARTUUID, Some("9")),
+        live,
+    )
+    .unwrap();
+    let disk = parse_sysfs_disk_identity_until(b"259:0\n", &disk_event("259", "0", Some("9")), live).unwrap();
+    assert_eq!(
+        require_matching_disk_sequence_until(&partition, &disk, live)
+            .unwrap()
+            .unwrap()
+            .get(),
+        9
+    );
+
+    let expired = Instant::now() - Duration::from_millis(1);
+    assert_eq!(
+        parse_sysfs_partition_identity_until(
+            b"259:1\n",
+            b"1\n",
+            &partition_event("259", "1", "1", PARTUUID, Some("9")),
+            expired,
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        parse_sysfs_disk_identity_until(b"259:0\n", &disk_event("259", "0", Some("9")), expired)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        require_matching_disk_sequence_until(&partition, &disk, expired)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
 }

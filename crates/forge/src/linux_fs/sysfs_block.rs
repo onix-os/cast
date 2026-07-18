@@ -6,7 +6,19 @@
 //! partition roles. The descriptor-retaining topology layer must provide those
 //! stronger guarantees separately.
 
-use std::{io, num::NonZeroU32, num::NonZeroU64};
+use std::{
+    io,
+    num::{NonZeroU32, NonZeroU64},
+    time::Instant,
+};
+
+/// Exact accepted byte ceilings for descriptor-retained sysfs readers.
+///
+/// These are crate-internal parser contracts, not a public configuration API.
+pub(crate) const SYSFS_DEV_ATTRIBUTE_MAX_BYTES: usize = 22;
+pub(crate) const SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES: usize = 11;
+pub(crate) const SYSFS_UEVENT_MAX_BYTES: usize = 64 * 1024;
+pub(crate) const SYSFS_LINK_TARGET_MAX_BYTES: usize = 4 * 1024;
 
 mod identity;
 mod links;
@@ -17,15 +29,23 @@ mod uuid;
 #[allow(unused_imports)] // named surface for the later descriptor-retaining layer
 pub(crate) use identity::{SysfsDiskIdentity, SysfsPartitionIdentity};
 #[allow(unused_imports)] // named surface for the later descriptor-retaining layer
-pub(crate) use identity::{parse_sysfs_disk_identity, parse_sysfs_partition_identity, require_matching_disk_sequence};
+pub(crate) use identity::{
+    parse_sysfs_disk_identity, parse_sysfs_disk_identity_until, parse_sysfs_partition_identity,
+    parse_sysfs_partition_identity_until, require_matching_disk_sequence, require_matching_disk_sequence_until,
+};
 #[allow(unused_imports)] // named surface for the later descriptor-retaining layer
 pub(crate) use links::{SysfsDeviceTarget, SysfsSubsystemName};
 #[allow(unused_imports)] // named surface for the later descriptor-retaining layer
-pub(crate) use links::{normalize_sysfs_dev_block_target, parse_sysfs_subsystem_target};
-pub(crate) use numeric::{parse_sysfs_dev, parse_sysfs_partition_number};
+pub(crate) use links::{
+    normalize_sysfs_dev_block_target, normalize_sysfs_dev_block_target_until, parse_sysfs_subsystem_target,
+    parse_sysfs_subsystem_target_until,
+};
+pub(crate) use numeric::{
+    parse_sysfs_dev, parse_sysfs_dev_until, parse_sysfs_partition_number, parse_sysfs_partition_number_until,
+};
 #[allow(unused_imports)] // named surface for exact retained unknown fields
 pub(crate) use uevent::SysfsUeventField;
-pub(crate) use uevent::{SysfsUevent, parse_sysfs_uevent};
+pub(crate) use uevent::{SysfsUevent, parse_sysfs_uevent, parse_sysfs_uevent_until};
 
 #[cfg(test)]
 pub(super) use links::{
@@ -91,28 +111,54 @@ impl SysfsPartitionUuid {
 pub(super) struct WorkBudget {
     remaining: usize,
     initial: usize,
+    deadline: Option<Instant>,
 }
 
 impl WorkBudget {
     pub(super) const fn new(limit: usize) -> Self {
+        Self::with_deadline(limit, None)
+    }
+
+    pub(super) const fn until(limit: usize, deadline: Instant) -> Self {
+        Self::with_deadline(limit, Some(deadline))
+    }
+
+    const fn with_deadline(limit: usize, deadline: Option<Instant>) -> Self {
         Self {
             remaining: limit,
             initial: limit,
+            deadline,
         }
     }
 
     pub(super) fn charge(&mut self, amount: usize, action: &'static str) -> io::Result<()> {
+        self.checkpoint()?;
         self.remaining = self.remaining.checked_sub(amount).ok_or_else(|| {
             invalid_data(format!(
                 "sysfs parser exceeded its {} unit work limit while {action}",
                 self.initial
             ))
         })?;
-        Ok(())
+        self.checkpoint()
+    }
+
+    pub(super) fn checkpoint(&self) -> io::Result<()> {
+        require_deadline(self.deadline)
     }
 
     pub(super) const fn consumed(&self) -> usize {
         self.initial - self.remaining
+    }
+}
+
+pub(super) fn require_deadline(deadline: Option<Instant>) -> io::Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() > deadline) {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "sysfs parsing exceeded its deadline",
+        ))
+    } else {
+        Ok(())
     }
 }
 

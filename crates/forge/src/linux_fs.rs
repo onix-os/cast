@@ -83,24 +83,48 @@ fn read_to_end_bounded_with_deadline(
     max_bytes: usize,
     deadline: Option<Instant>,
 ) -> io::Result<Vec<u8>> {
-    retry_interrupted(deadline, || Ok(()))?;
+    read_to_end_bounded_with_deadline_and_reservation(reader, max_bytes, deadline, |bytes, additional| {
+        bytes
+            .try_reserve(additional)
+            .map_err(|source| io::Error::other(format!("bounded read allocation failed: {source}")))
+    })
+}
+
+fn read_to_end_bounded_with_deadline_and_reservation(
+    reader: &mut impl io::Read,
+    max_bytes: usize,
+    deadline: Option<Instant>,
+    reserve: impl FnMut(&mut Vec<u8>, usize) -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
+    read_to_end_bounded_with_deadline_and_hooks(reader, max_bytes, deadline, reserve, |deadline| {
+        retry_interrupted(deadline, || Ok(()))
+    })
+}
+
+fn read_to_end_bounded_with_deadline_and_hooks(
+    reader: &mut impl io::Read,
+    max_bytes: usize,
+    deadline: Option<Instant>,
+    mut reserve: impl FnMut(&mut Vec<u8>, usize) -> io::Result<()>,
+    mut checkpoint: impl FnMut(Option<Instant>) -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
+    checkpoint(deadline)?;
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(max_bytes.min(4 * 1024))
-        .map_err(|source| io::Error::other(format!("bounded read allocation failed: {source}")))?;
+    reserve(&mut bytes, max_bytes.min(4 * 1024))?;
     let mut buffer = [0_u8; 512];
     let mut interruptions = 0usize;
     while bytes.len() < max_bytes {
-        retry_interrupted(deadline, || Ok(()))?;
+        checkpoint(deadline)?;
         let remaining = max_bytes - bytes.len();
         let chunk = remaining.min(buffer.len());
         match reader.read(&mut buffer[..chunk]) {
             Ok(0) => {
-                retry_interrupted(deadline, || Ok(()))?;
+                checkpoint(deadline)?;
                 break;
             }
             Ok(read) => {
-                retry_interrupted(deadline, || Ok(()))?;
+                checkpoint(deadline)?;
+                reserve(&mut bytes, read)?;
                 bytes.extend_from_slice(&buffer[..read]);
             }
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
@@ -115,6 +139,7 @@ fn read_to_end_bounded_with_deadline(
             Err(source) => return Err(source),
         }
     }
+    checkpoint(deadline)?;
     Ok(bytes)
 }
 

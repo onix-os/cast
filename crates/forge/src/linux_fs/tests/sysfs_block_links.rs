@@ -1,8 +1,12 @@
-use std::io;
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 use super::super::sysfs_block::{
-    LinkLimits, normalize_sysfs_dev_block_target, normalize_sysfs_dev_block_target_with_limits_and_work,
-    parse_sysfs_subsystem_target, parse_sysfs_subsystem_target_with_limits_and_work,
+    LinkLimits, SYSFS_LINK_TARGET_MAX_BYTES, normalize_sysfs_dev_block_target, normalize_sysfs_dev_block_target_until,
+    normalize_sysfs_dev_block_target_with_limits_and_work, parse_sysfs_subsystem_target,
+    parse_sysfs_subsystem_target_until, parse_sysfs_subsystem_target_with_limits_and_work,
 };
 
 fn limits(max_bytes: usize) -> LinkLimits {
@@ -177,5 +181,37 @@ fn link_parsers_reject_zero_or_incoherent_limits() {
             .unwrap_err()
             .kind(),
         io::ErrorKind::InvalidInput
+    );
+}
+
+#[test]
+fn link_deadline_entrypoints_reject_expired_work_and_expose_the_read_ceiling() {
+    assert_eq!(SYSFS_LINK_TARGET_MAX_BYTES, 4 * 1024);
+    let live = Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        normalize_sysfs_dev_block_target_until(b"../../devices/block/sda/sda1", live)
+            .unwrap()
+            .basename(),
+        b"sda1"
+    );
+    assert_eq!(
+        parse_sysfs_subsystem_target_until(b"../../class/block", live)
+            .unwrap()
+            .as_bytes(),
+        b"block"
+    );
+
+    let expired = Instant::now() - Duration::from_millis(1);
+    assert_eq!(
+        normalize_sysfs_dev_block_target_until(b"../../devices/block/sda/sda1", expired)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        parse_sysfs_subsystem_target_until(b"../../class/block", expired)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
     );
 }

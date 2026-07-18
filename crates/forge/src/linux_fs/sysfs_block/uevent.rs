@@ -1,8 +1,7 @@
-use std::io;
+use std::{io, time::Instant};
 
-use super::{WorkBudget, copied_bytes, invalid_data, invalid_input, unexpected_eof};
+use super::{SYSFS_UEVENT_MAX_BYTES, WorkBudget, copied_bytes, invalid_data, invalid_input, unexpected_eof};
 
-const MAX_UEVENT_BYTES: usize = 64 * 1024;
 const MAX_UEVENT_LINES: usize = 256;
 const MAX_UEVENT_LINE_BYTES: usize = 4 * 1024;
 const MAX_UEVENT_KEY_BYTES: usize = 64;
@@ -18,7 +17,7 @@ pub(in super::super) struct UeventLimits {
 }
 
 const UEVENT_LIMITS: UeventLimits = UeventLimits {
-    max_bytes: MAX_UEVENT_BYTES,
+    max_bytes: SYSFS_UEVENT_MAX_BYTES,
     max_lines: MAX_UEVENT_LINES,
     max_line_bytes: MAX_UEVENT_LINE_BYTES,
     max_key_bytes: MAX_UEVENT_KEY_BYTES,
@@ -65,13 +64,27 @@ impl SysfsUevent {
 }
 
 pub(crate) fn parse_sysfs_uevent(bytes: &[u8]) -> io::Result<SysfsUevent> {
-    parse_sysfs_uevent_with_limits_and_work(bytes, UEVENT_LIMITS).map(|(event, _)| event)
+    parse_sysfs_uevent_with_limits_and_work_deadline(bytes, UEVENT_LIMITS, None).map(|(event, _)| event)
+}
+
+/// Parse one complete `uevent` snapshot within the caller's deadline.
+pub(crate) fn parse_sysfs_uevent_until(bytes: &[u8], deadline: Instant) -> io::Result<SysfsUevent> {
+    parse_sysfs_uevent_with_limits_and_work_deadline(bytes, UEVENT_LIMITS, Some(deadline)).map(|(event, _)| event)
 }
 
 pub(in super::super) fn parse_sysfs_uevent_with_limits_and_work(
     bytes: &[u8],
     limits: UeventLimits,
 ) -> io::Result<(SysfsUevent, usize)> {
+    parse_sysfs_uevent_with_limits_and_work_deadline(bytes, limits, None)
+}
+
+fn parse_sysfs_uevent_with_limits_and_work_deadline(
+    bytes: &[u8],
+    limits: UeventLimits,
+    deadline: Option<Instant>,
+) -> io::Result<(SysfsUevent, usize)> {
+    super::require_deadline(deadline)?;
     validate_limits(limits)?;
     if bytes.len() > limits.max_bytes {
         return Err(invalid_data(format!(
@@ -85,21 +98,31 @@ pub(in super::super) fn parse_sysfs_uevent_with_limits_and_work(
     if bytes.last() != Some(&b'\n') {
         return Err(unexpected_eof("sysfs uevent lacks its terminating newline"));
     }
-    if bytes.contains(&b'\0') {
-        return Err(invalid_data("sysfs uevent contains a NUL byte"));
-    }
-    if bytes.contains(&b'\r') {
-        return Err(invalid_data("sysfs uevent contains a carriage return"));
-    }
-
-    let mut budget = WorkBudget::new(limits.max_work);
+    let mut budget = match deadline {
+        Some(deadline) => WorkBudget::until(limits.max_work, deadline),
+        None => WorkBudget::new(limits.max_work),
+    };
     budget.charge(bytes.len(), "scanning uevent bytes")?;
+    for (index, byte) in bytes.iter().enumerate() {
+        if index % 4_096 == 0 {
+            budget.checkpoint()?;
+        }
+        if *byte == b'\0' {
+            return Err(invalid_data("sysfs uevent contains a NUL byte"));
+        }
+        if *byte == b'\r' {
+            return Err(invalid_data("sysfs uevent contains a carriage return"));
+        }
+    }
+    budget.checkpoint()?;
     let mut fields = Vec::<SysfsUeventField>::new();
     fields
         .try_reserve(limits.max_lines.min(16))
         .map_err(|source| io::Error::other(format!("could not allocate sysfs uevent fields: {source}")))?;
+    budget.checkpoint()?;
 
     for (line_index, line) in bytes[..bytes.len() - 1].split(|byte| *byte == b'\n').enumerate() {
+        budget.checkpoint()?;
         let line_number = line_index + 1;
         if line_number > limits.max_lines {
             return Err(invalid_data(format!(
@@ -126,7 +149,7 @@ pub(in super::super) fn parse_sysfs_uevent_with_limits_and_work(
         let key = &line[..separator];
         let value = &line[separator + 1..];
         budget.charge(key.len(), "validating uevent key syntax")?;
-        validate_key(key, line_number, limits.max_key_bytes)?;
+        validate_key(key, line_number, limits.max_key_bytes, &budget)?;
 
         for existing in &fields {
             budget.charge(
@@ -146,11 +169,13 @@ pub(in super::super) fn parse_sysfs_uevent_with_limits_and_work(
             key: copied_bytes(key, "sysfs uevent key")?,
             value: copied_bytes(value, "sysfs uevent value")?,
         });
+        budget.checkpoint()?;
     }
 
     if fields.is_empty() {
         return Err(invalid_data("sysfs uevent contains no fields"));
     }
+    budget.checkpoint()?;
     let consumed = budget.consumed();
     Ok((SysfsUevent { fields }, consumed))
 }
@@ -175,7 +200,7 @@ fn validate_limits(limits: UeventLimits) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_key(key: &[u8], line_number: usize, max_key_bytes: usize) -> io::Result<()> {
+fn validate_key(key: &[u8], line_number: usize, max_key_bytes: usize, budget: &WorkBudget) -> io::Result<()> {
     if key.is_empty() {
         return Err(invalid_data(format!(
             "sysfs uevent line {line_number} has an empty key"
@@ -186,14 +211,19 @@ fn validate_key(key: &[u8], line_number: usize, max_key_bytes: usize) -> io::Res
             "sysfs uevent line {line_number} key exceeds the {max_key_bytes} byte limit"
         )));
     }
-    if !key[0].is_ascii_uppercase()
-        || !key
-            .iter()
-            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_')
-    {
+    if !key[0].is_ascii_uppercase() {
         return Err(invalid_data(format!(
             "sysfs uevent line {line_number} key is not canonical kernel-environment syntax"
         )));
     }
+    for byte in key {
+        budget.checkpoint()?;
+        if !(byte.is_ascii_uppercase() || byte.is_ascii_digit() || *byte == b'_') {
+            return Err(invalid_data(format!(
+                "sysfs uevent line {line_number} key is not canonical kernel-environment syntax"
+            )));
+        }
+    }
+    budget.checkpoint()?;
     Ok(())
 }

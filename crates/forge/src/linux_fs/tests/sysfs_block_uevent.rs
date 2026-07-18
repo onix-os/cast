@@ -1,6 +1,12 @@
-use std::io;
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
-use super::super::sysfs_block::{UeventLimits, parse_sysfs_uevent, parse_sysfs_uevent_with_limits_and_work};
+use super::super::sysfs_block::{
+    SYSFS_UEVENT_MAX_BYTES, UeventLimits, parse_sysfs_uevent, parse_sysfs_uevent_until,
+    parse_sysfs_uevent_with_limits_and_work,
+};
 
 fn limits(max_bytes: usize) -> UeventLimits {
     UeventLimits {
@@ -120,5 +126,20 @@ fn uevent_rejects_zero_or_incoherent_configured_limits() {
             .unwrap_err()
             .kind(),
         io::ErrorKind::InvalidInput
+    );
+}
+
+#[test]
+fn uevent_deadline_entrypoint_rejects_expired_work_and_exposes_its_read_ceiling() {
+    assert_eq!(SYSFS_UEVENT_MAX_BYTES, 64 * 1024);
+    let input = b"MAJOR=259\nMINOR=1\nDEVTYPE=partition\n";
+    let live = parse_sysfs_uevent_until(input, Instant::now() + Duration::from_secs(1)).unwrap();
+    assert_eq!(live.value(b"DEVTYPE"), Some(b"partition".as_slice()));
+
+    assert_eq!(
+        parse_sysfs_uevent_until(input, Instant::now() - Duration::from_millis(1))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
     );
 }
