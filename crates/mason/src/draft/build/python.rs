@@ -3,20 +3,11 @@
 
 pub mod pep517 {
     use crate::draft::File;
-    use crate::draft::build::{Error, Phases, State};
+    use crate::draft::build::{Error, State};
 
-    pub fn phases() -> Phases {
-        Phases {
-            setup: None,
-            build: Some("%pyproject_build"),
-            install: Some("%pyproject_install"),
-            check: None,
-        }
-    }
-
-    pub fn process(state: &mut State<'_>, file: &File<'_>) -> Result<(), Error> {
+    pub fn process(state: &mut State<'_>, file: &File) -> Result<(), Error> {
         match file.file_name() {
-            "pyproject.toml" | "setup.cfg" => state.increment_confidence(100),
+            "pyproject.toml" | "setup.cfg" if file.depth() == 0 => state.increment_confidence(100),
             _ => {}
         }
 
@@ -26,19 +17,10 @@ pub mod pep517 {
 
 pub mod setup_tools {
     use crate::draft::File;
-    use crate::draft::build::{Error, Phases, State};
+    use crate::draft::build::{Error, State};
 
-    pub fn phases() -> Phases {
-        Phases {
-            setup: None,
-            build: Some("%python_setup"),
-            install: Some("%python_install"),
-            check: None,
-        }
-    }
-
-    pub fn process(state: &mut State<'_>, file: &File<'_>) -> Result<(), Error> {
-        if file.file_name() == "setup.py" {
+    pub fn process(state: &mut State<'_>, file: &File) -> Result<(), Error> {
+        if file.depth() == 0 && file.file_name() == "setup.py" {
             state.increment_confidence(100);
         }
 

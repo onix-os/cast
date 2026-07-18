@@ -82,6 +82,7 @@ help:
 	@echo "  mason-analysis-handler-test  Run all bounded analyzer input, sandbox, and process tests"
 	@echo "  mason-emit-test  Run the exact transactional Stone emission verification tests"
 	@echo "  mason-archive-test  Run all bounded authenticated archive extraction tests"
+	@echo "  mason-draft-hardening-test  Run deterministic bounded recipe-drafting and cache tests"
 	@echo "  mason-package-publication-test  Run all frozen package and bundle publication tests"
 	@echo "  mason-git-materialization-test  Run all descriptor-rooted Git materialization tests"
 	@echo "  mason-paths-test  Run all retained workspace path and execution-lock tests"

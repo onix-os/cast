@@ -12,15 +12,18 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::{CStr, CString},
+    ffi::{CStr, CString, OsString},
     fs::{File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     mem::{MaybeUninit, size_of},
     os::{
         fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
-        unix::fs::{MetadataExt, OpenOptionsExt},
+        unix::{
+            ffi::OsStringExt,
+            fs::{MetadataExt, OpenOptionsExt},
+        },
     },
-    path::Path,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
@@ -38,6 +41,8 @@ const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const XZ_CONCATENATED: u32 = 0x08;
+const MAX_ARCHIVE_EXTRACTIONS: u64 = 64;
+const MAX_AGGREGATE_COMPRESSED_BYTES: u64 = 8 * GIB;
 
 /// Stable production ceilings for one archive extraction.
 ///
@@ -97,8 +102,8 @@ pub(crate) struct ArchiveSessionBudget {
 impl ArchiveSessionBudget {
     pub(crate) fn production() -> Self {
         Self::new(ArchiveAggregateLimits {
-            extractions: 64,
-            compressed_bytes: 8 * GIB,
+            extractions: MAX_ARCHIVE_EXTRACTIONS,
+            compressed_bytes: MAX_AGGREGATE_COMPRESSED_BYTES,
             decoded_bytes: 80 * GIB,
             entries: 1_500_000,
             path_bytes: 128 * MIB,
@@ -126,7 +131,7 @@ impl ArchiveSessionBudget {
         }
     }
 
-    fn remaining_wall_time(&self) -> Result<Duration, Error> {
+    pub(crate) fn remaining_wall_time(&self) -> Result<Duration, Error> {
         self.limits
             .wall_time
             .checked_sub(self.started.elapsed())
@@ -136,62 +141,90 @@ impl ArchiveSessionBudget {
             })
     }
 
+    pub(crate) const fn maximum_extractions() -> usize {
+        MAX_ARCHIVE_EXTRACTIONS as usize
+    }
+
+    pub(crate) fn remaining_compressed_bytes(&self) -> Result<u64, Error> {
+        self.remaining_wall_time()?;
+        let remaining = self.limits.compressed_bytes.saturating_sub(self.compressed_bytes);
+        if remaining == 0 {
+            Err(Error::LimitExceeded {
+                resource: "derivation compressed archive bytes",
+                actual: self.limits.compressed_bytes.saturating_add(1),
+                limit: self.limits.compressed_bytes,
+            })
+        } else {
+            Ok(remaining)
+        }
+    }
+
     fn admit(&mut self, compressed_bytes: u64, usage: ScanUsage) -> Result<(), Error> {
-        aggregate_add(
+        self.remaining_wall_time()?;
+        let extractions = aggregate_total(
             "derivation archive extractions",
-            &mut self.extractions,
+            self.extractions,
             1,
             self.limits.extractions,
         )?;
-        aggregate_add(
+        let compressed_bytes = aggregate_total(
             "derivation compressed archive bytes",
-            &mut self.compressed_bytes,
+            self.compressed_bytes,
             compressed_bytes,
             self.limits.compressed_bytes,
         )?;
-        aggregate_add(
+        let decoded_bytes = aggregate_total(
             "derivation decoded archive bytes",
-            &mut self.decoded_bytes,
+            self.decoded_bytes,
             usage.decoded_bytes,
             self.limits.decoded_bytes,
         )?;
-        aggregate_add(
+        let entries = aggregate_total(
             "derivation archive entries",
-            &mut self.entries,
+            self.entries,
             usage.entries,
             self.limits.entries,
         )?;
-        aggregate_add(
+        let path_bytes = aggregate_total(
             "derivation archive path bytes",
-            &mut self.path_bytes,
+            self.path_bytes,
             usage.path_bytes,
             self.limits.path_bytes,
         )?;
-        aggregate_add(
+        let extension_bytes = aggregate_total(
             "derivation archive extension bytes",
-            &mut self.extension_bytes,
+            self.extension_bytes,
             usage.extension_bytes,
             self.limits.extension_bytes,
         )?;
-        aggregate_add(
+        let logical_bytes = aggregate_total(
             "derivation archive logical bytes",
-            &mut self.logical_bytes,
+            self.logical_bytes,
             usage.logical_bytes,
             self.limits.logical_bytes,
         )?;
-        aggregate_add(
+        let physical_bytes = aggregate_total(
             "derivation archive physical bytes",
-            &mut self.physical_bytes,
+            self.physical_bytes,
             usage.physical_bytes,
             self.limits.physical_bytes,
         )?;
-        aggregate_add(
+        let materialized_nodes = aggregate_total(
             "derivation materialized archive nodes",
-            &mut self.materialized_nodes,
+            self.materialized_nodes,
             usage.materialized_nodes,
             self.limits.materialized_nodes,
         )?;
-        self.remaining_wall_time().map(drop)
+        self.extractions = extractions;
+        self.compressed_bytes = compressed_bytes;
+        self.decoded_bytes = decoded_bytes;
+        self.entries = entries;
+        self.path_bytes = path_bytes;
+        self.extension_bytes = extension_bytes;
+        self.logical_bytes = logical_bytes;
+        self.physical_bytes = physical_bytes;
+        self.materialized_nodes = materialized_nodes;
+        Ok(())
     }
 }
 
@@ -245,6 +278,53 @@ pub(crate) fn extract_locked_tar(
         ArchiveLimits::production(),
         session,
     )
+    .map(drop)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DraftArchiveManifest {
+    files: Vec<PathBuf>,
+}
+
+impl DraftArchiveManifest {
+    pub(crate) fn into_files(self) -> Vec<PathBuf> {
+        self.files
+    }
+}
+
+/// Extract one newly downloaded authoring archive and return only the regular
+/// files admitted by the extractor's canonical manifest.
+pub(crate) fn extract_draft_tar(
+    source_dir: &Path,
+    source_name: &str,
+    expected_sha256: &str,
+    build_dir: &Path,
+    destination: &str,
+    session: &mut ArchiveSessionBudget,
+) -> Result<DraftArchiveManifest, Error> {
+    let admitted = extract_locked_tar_with_limits(
+        source_dir,
+        source_name,
+        expected_sha256,
+        build_dir,
+        destination,
+        0,
+        0,
+        ArchiveLimits::production(),
+        session,
+    )?;
+    let files = admitted
+        .manifest
+        .into_iter()
+        .filter(|entry| matches!(entry.kind, ManifestKind::Regular | ManifestKind::Hardlink))
+        .map(|entry| {
+            entry.path.into_iter().fold(PathBuf::new(), |mut path, component| {
+                path.push(OsString::from_vec(component));
+                path
+            })
+        })
+        .collect();
+    Ok(DraftArchiveManifest { files })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -258,7 +338,7 @@ fn extract_locked_tar_with_limits(
     source_date_epoch: i64,
     limits: ArchiveLimits,
     session: &mut ArchiveSessionBudget,
-) -> Result<(), Error> {
+) -> Result<ScanResult, Error> {
     if limits.sparse_extents != 0 {
         return Err(Error::UnsupportedSparseLimit {
             found: limits.sparse_extents,
@@ -305,7 +385,7 @@ fn extract_locked_tar_with_limits(
         normalize_destination_parents(&build_root, parent_components, source_date_epoch)
     })();
     match extraction {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(admitted),
         Err(failure) => match stage.discard() {
             Ok(()) => Err(failure),
             Err(cleanup) => Err(Error::CleanupAfterFailure {

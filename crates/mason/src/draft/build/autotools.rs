@@ -1,24 +1,14 @@
 use std::path::Path;
 
 use forge::{Dependency, dependency};
-use fs_err as fs;
 use regex::Regex;
 
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 // SPDX-License-Identifier: MPL-2.0
 use crate::draft::File;
-use crate::draft::build::{Error, Phases, State};
+use crate::draft::build::{Error, State};
 
-pub fn phases() -> Phases {
-    Phases {
-        setup: Some("%configure"),
-        build: Some("%make"),
-        install: Some("%make_install"),
-        check: None,
-    }
-}
-
-pub fn process(state: &mut State<'_>, file: &File<'_>) -> Result<(), Error> {
+pub fn process(state: &mut State<'_>, file: &File) -> Result<(), Error> {
     // Depth too great
     if file.depth() > 0 {
         return Ok(());
@@ -42,7 +32,7 @@ fn scan_autotools(state: &mut State<'_>, path: &Path) -> Result<(), Error> {
     let regex_pkgconfig =
         Regex::new(r"PKG_CHECK_MODULES\s?\(\s?\[([A-Za-z_]+)\s?\]\s?,\s?\[\s?(\s?[A-Za-z0-9\-_+]+)\s?]")?;
 
-    let contents = fs::read_to_string(path)?;
+    let contents = state.read_analysis_text(path)?;
 
     // Check all meson dependency() calls
     for captures in regex_pkgconfig.captures_iter(&contents) {
@@ -52,7 +42,7 @@ fn scan_autotools(state: &mut State<'_>, path: &Path) -> Result<(), Error> {
             state.add_dependency(Dependency {
                 kind: dependency::Kind::PkgConfig,
                 name,
-            });
+            })?;
         }
     }
 

@@ -310,11 +310,10 @@ fn require_limit(resource: &'static str, actual: u64, limit: u64) -> Result<(), 
         })
     }
 }
-fn aggregate_add(resource: &'static str, total: &mut u64, value: u64, limit: u64) -> Result<(), Error> {
+fn aggregate_total(resource: &'static str, total: u64, value: u64, limit: u64) -> Result<u64, Error> {
     let next = total.checked_add(value).ok_or(Error::ArithmeticOverflow)?;
     require_limit(resource, next, limit)?;
-    *total = next;
-    Ok(())
+    Ok(next)
 }
 
 fn require_usize_limit(resource: &'static str, actual: usize, limit: usize) -> Result<(), Error> {

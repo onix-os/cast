@@ -1,22 +1,23 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 use std::{
-    io,
+    io::{self, Write},
     num::{NonZeroU32, NonZeroU64},
+    os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use crate::{
     Env,
-    draft::{self, Drafter, upstream::fetched_upstream_cache_path},
+    draft::{self, Drafter},
     planner, profile, recipe,
     source_lock::{SOURCE_LOCK_FILE_NAME, WriteOutcome},
     upstream::ARCHIVE_DOWNLOAD_LIMITS,
 };
 use clap::{Args, Parser};
-use forge::{request, runtime, util};
+use forge::{request, runtime};
 use fs_err::{self as fs};
-use stone_recipe::{UpstreamSpec, upstream};
+use stone_recipe::{UpstreamSpec, spec::UpstreamValidationError, upstream};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
@@ -313,18 +314,65 @@ fn bump(recipe: PathBuf, release: Option<u64>) -> Result<(), Error> {
 fn new(env: Env, output: PathBuf, upstreams: Vec<Url>) -> Result<(), Error> {
     const RECIPE_FILE: &str = "stone.glu";
 
-    let drafter = Drafter::new(env, upstreams);
-    let draft = drafter.run()?;
-
-    if !output.is_dir() {
-        fs::create_dir_all(&output).map_err(Error::CreateDir)?;
-    }
-
-    fs::write(output.join(RECIPE_FILE), draft.stone).map_err(Error::Write)?;
-
+    generate_new_recipe(&output, RECIPE_FILE, || Drafter::new(env, upstreams).run())?;
     println!("Saved {RECIPE_FILE} to {output:?}");
-
     Ok(())
+}
+
+fn generate_new_recipe(
+    output: &Path,
+    recipe_file: &str,
+    draft: impl FnOnce() -> Result<draft::Draft, draft::Error>,
+) -> Result<(), Error> {
+    prepare_new_output(output, recipe_file)?;
+    let draft = draft()?;
+    ensure_new_output(output, recipe_file)?;
+    publish_new_recipe(output, recipe_file, draft.stone.as_bytes())
+}
+
+fn prepare_new_output(output: &Path, recipe_file: &str) -> Result<(), Error> {
+    match fs::symlink_metadata(output) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Err(Error::OutputNotDirectory(output.to_owned())),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(Error::CreateDir(source)),
+    }
+    let target = output.join(recipe_file);
+    match fs::symlink_metadata(&target) {
+        Ok(_) => Err(Error::RecipeAlreadyExists(target)),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(Error::Write(source)),
+    }
+}
+
+fn ensure_new_output(output: &Path, recipe_file: &str) -> Result<(), Error> {
+    if matches!(fs::symlink_metadata(output), Err(source) if source.kind() == io::ErrorKind::NotFound) {
+        fs::create_dir_all(output).map_err(Error::CreateDir)?;
+    }
+    prepare_new_output(output, recipe_file)
+}
+
+fn publish_new_recipe(output: &Path, recipe_file: &str, bytes: &[u8]) -> Result<(), Error> {
+    let target = output.join(recipe_file);
+    let mut staging = tempfile::Builder::new()
+        .prefix(".cast-recipe-")
+        .tempfile_in(output)
+        .map_err(Error::Write)?;
+    staging.write_all(bytes).map_err(Error::Write)?;
+    staging
+        .as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o644))
+        .map_err(Error::Write)?;
+    staging.as_file().sync_all().map_err(Error::Write)?;
+    staging
+        .persist_noclobber(&target)
+        .map_err(|error| Error::InstallRecipe {
+            target,
+            source: error.error,
+        })?;
+    fs::File::open(output)
+        .and_then(|directory| directory.sync_all())
+        .map_err(Error::Write)
 }
 
 fn update(
@@ -374,6 +422,7 @@ fn update(
         changes.push(SuggestedChange::new("meta.release", release, proposed_release));
     }
 
+    preflight_updated_sources(&recipe.declaration.sources, &sources)?;
     let mpb = MultiProgress::new();
     for (index, (original, update)) in recipe.declaration.sources.iter().zip(sources).enumerate() {
         match (original, update) {
@@ -384,7 +433,7 @@ fn update(
                 return Err(Error::UpstreamMismatch(index, "Git", "Plain"));
             }
             (UpstreamSpec::Archive { url, hash, .. }, UpdatedSource::Plain(new_uri)) => {
-                let new_hash = runtime::block_on(fetch_and_cache_upstream(&env, new_uri.clone(), &mpb))?;
+                let new_hash = runtime::block_on(fetch_and_cache_upstream(&env, new_uri.clone(), index, &mpb))?;
                 if url != new_uri.as_str() {
                     changes.push(SuggestedChange::new(
                         format!("sources[{index}].url"),
@@ -418,6 +467,33 @@ fn update(
     }
 
     require_manual_edit(&recipe.path, changes)
+}
+
+fn preflight_updated_sources(originals: &[UpstreamSpec], updates: &[UpdatedSource]) -> Result<(), Error> {
+    for (index, (original, update)) in originals.iter().zip(updates).enumerate() {
+        match (original, update) {
+            (UpstreamSpec::Archive { .. }, UpdatedSource::Git(_)) => {
+                return Err(Error::UpstreamMismatch(index, "Plain", "Git"));
+            }
+            (UpstreamSpec::Git { .. }, UpdatedSource::Plain(_)) => {
+                return Err(Error::UpstreamMismatch(index, "Git", "Plain"));
+            }
+            (UpstreamSpec::Archive { .. }, UpdatedSource::Plain(uri)) => {
+                UpstreamSpec::Archive {
+                    url: uri.to_string(),
+                    hash: "0".repeat(64),
+                    rename: None,
+                    strip_dirs: None,
+                    unpack: true,
+                    unpack_dir: None,
+                }
+                .validate()
+                .map_err(|source| Error::InvalidUpdatedUpstream { index, source })?;
+            }
+            (UpstreamSpec::Git { .. }, UpdatedSource::Git(_)) => {}
+        }
+    }
+    Ok(())
 }
 
 fn refresh_source_lock(env: &Env, recipe_path: &Path) -> Result<(), Error> {
@@ -487,9 +563,7 @@ fn require_manual_edit(path: &Path, changes: Vec<SuggestedChange>) -> Result<(),
 /// when this recipe is finally built.
 ///
 /// Returns the sha256 hash of the fetched upstream
-async fn fetch_and_cache_upstream(env: &Env, uri: Url, mpb: &MultiProgress) -> Result<String, Error> {
-    use fs_err::tokio::{self as fs};
-
+async fn fetch_and_cache_upstream(env: &Env, uri: Url, index: usize, mpb: &MultiProgress) -> Result<String, Error> {
     let pb = mpb.add(
         ProgressBar::new(u64::MAX)
             .with_message(format!("{} {}", "Fetching".blue(), uri.as_str().bold()))
@@ -515,21 +589,9 @@ async fn fetch_and_cache_upstream(env: &Env, uri: Url, mpb: &MultiProgress) -> R
     )
     .await?;
 
-    // Move fetched asset to cache dir so we don't need to refetch it
-    // when the user finally builds this new recipe
-    {
-        let cache_path = fetched_upstream_cache_path(env, &uri, &hash);
-
-        if let Some(parent) = cache_path.parent() {
-            fs::create_dir_all(parent).await.map_err(Error::CreateDir)?;
-        }
-
-        util::async_hardlink_or_copy(&temp_file_path, &cache_path)
-            .await
-            .map_err(Error::MoveTempFile)?;
-
-        drop(temp_file_path);
-    }
+    crate::upstream::admit_downloaded_archive(&env.cache_dir.join("upstreams"), uri, &hash, &temp_file_path, index)
+        .map_err(Error::CacheUpstream)?;
+    drop(temp_file_path);
 
     pb.finish();
     mpb.remove(&pb);
@@ -569,12 +631,28 @@ pub enum Error {
     UpstreamMismatch(usize, &'static str, &'static str),
     #[error("writing recipe")]
     Write(#[source] io::Error),
+    #[error("recipe output is not a directory: {0}")]
+    OutputNotDirectory(PathBuf),
+    #[error("refusing to replace existing recipe: {0}")]
+    RecipeAlreadyExists(PathBuf),
+    #[error("atomically install generated recipe at {target}")]
+    InstallRecipe {
+        target: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("creating output directory")]
     CreateDir(#[source] io::Error),
     #[error("create temp file")]
     CreateTempFile(#[source] io::Error),
-    #[error("move temp file")]
-    MoveTempFile(#[source] io::Error),
+    #[error("admit fetched upstream to cache")]
+    CacheUpstream(#[source] crate::upstream::Error),
+    #[error("updated source archive {index} is invalid: {source}")]
+    InvalidUpdatedUpstream {
+        index: usize,
+        #[source]
+        source: UpstreamValidationError,
+    },
     #[error("fetch upstream")]
     Fetch(#[from] request::Error),
     #[error("invalid utf-8 input")]
@@ -715,6 +793,108 @@ let base = cast.mk_package (cast.meta {
             matches!(error, Error::ManualEditRequired(ref error_path) if error_path == &path.canonicalize().unwrap())
         );
         assert_eq!(fs::read_to_string(path).unwrap(), AUTHORED_EXPRESSION);
+    }
+
+    #[test]
+    fn failed_draft_leaves_an_absent_output_directory_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("new-package");
+
+        let error = generate_new_recipe(&output, "stone.glu", || {
+            Err(draft::Error::Io(io::Error::other("draft failed")))
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, Error::Draft(_)));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn unsupported_detected_builder_publishes_no_recipe_or_output_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("new-package");
+
+        let error = generate_new_recipe(&output, "stone.glu", || {
+            Err(draft::Error::UnsupportedDraftSystem {
+                system: "python-pep517".to_owned(),
+            })
+        })
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::Draft(draft::Error::UnsupportedDraftSystem { .. })
+        ));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn undetected_builder_publishes_no_recipe_or_output_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("new-package");
+
+        let error = generate_new_recipe(&output, "stone.glu", || Err(draft::Error::UndetectedBuildSystem)).unwrap_err();
+
+        assert!(matches!(error, Error::Draft(draft::Error::UndetectedBuildSystem)));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn existing_recipe_is_untouched_and_drafting_never_starts() {
+        use std::cell::Cell;
+
+        let root = tempfile::tempdir().unwrap();
+        let recipe_path = root.path().join("stone.glu");
+        fs::write(&recipe_path, b"authored bytes").unwrap();
+        let drafted = Cell::new(false);
+
+        let error = generate_new_recipe(root.path(), "stone.glu", || {
+            drafted.set(true);
+            Ok(draft::Draft {
+                stone: "replacement".to_owned(),
+            })
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, Error::RecipeAlreadyExists(path) if path == recipe_path));
+        assert!(!drafted.get());
+        assert_eq!(fs::read(recipe_path).unwrap(), b"authored bytes");
+    }
+
+    #[test]
+    fn recipe_created_during_drafting_wins_and_is_never_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let recipe_path = root.path().join("stone.glu");
+
+        let error = generate_new_recipe(root.path(), "stone.glu", || {
+            fs::write(&recipe_path, b"raced bytes").unwrap();
+            Ok(draft::Draft {
+                stone: "generated replacement".to_owned(),
+            })
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, Error::RecipeAlreadyExists(path) if path == recipe_path));
+        assert_eq!(fs::read(recipe_path).unwrap(), b"raced bytes");
+    }
+
+    #[test]
+    fn successful_generated_recipe_is_published_with_exact_mode() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("new-package");
+
+        generate_new_recipe(&output, "stone.glu", || {
+            Ok(draft::Draft {
+                stone: "generated bytes".to_owned(),
+            })
+        })
+        .unwrap();
+
+        let recipe = output.join("stone.glu");
+        assert_eq!(fs::read(&recipe).unwrap(), b"generated bytes");
+        assert_eq!(fs::metadata(recipe).unwrap().mode() & 0o7777, 0o644);
     }
 
     #[test]

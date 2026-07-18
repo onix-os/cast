@@ -107,6 +107,40 @@ fn scan(bytes: &[u8], strip_components: usize, limits: ArchiveLimits) -> Result<
     scan_result(bytes, strip_components, limits).map(|result| result.manifest)
 }
 
+#[test]
+fn aggregate_compressed_n_plus_one_stops_before_the_next_fetch_boundary() {
+    let mut aggregate = ArchiveSessionBudget::production().limits;
+    aggregate.compressed_bytes = 4;
+    let mut session = ArchiveSessionBudget::new(aggregate);
+    let usage = ScanUsage {
+        decoded_bytes: 0,
+        entries: 0,
+        path_bytes: 0,
+        extension_bytes: 0,
+        logical_bytes: 0,
+        physical_bytes: 0,
+        materialized_nodes: 0,
+    };
+    let mut fetches = 0;
+    let mut prefetch = |session: &ArchiveSessionBudget| {
+        session.remaining_compressed_bytes()?;
+        fetches += 1;
+        Ok::<_, Error>(())
+    };
+
+    prefetch(&session).unwrap();
+    session.admit(4, usage).unwrap();
+    assert!(matches!(
+        prefetch(&session),
+        Err(Error::LimitExceeded {
+            resource: "derivation compressed archive bytes",
+            limit: 4,
+            ..
+        })
+    ));
+    assert_eq!(fetches, 1);
+}
+
 fn two_files() -> Vec<u8> {
     archive(|builder| {
         append(builder, "root/a", EntryType::Regular, None, b"a");

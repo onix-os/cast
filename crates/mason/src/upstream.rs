@@ -17,6 +17,7 @@ use stone_recipe::{
 };
 use thiserror::Error;
 use tui::{MultiProgress, ProgressBar, ProgressStyle, Styled};
+use url::Url as SourceUrl;
 
 use crate::upstream::{
     git::{Git, StoredGit},
@@ -30,6 +31,42 @@ mod share_root;
 
 pub(crate) use plain::ARCHIVE_DOWNLOAD_LIMITS;
 
+/// Admit bytes already fetched for one archive source through the same exact,
+/// no-clobber cache boundary used by frozen package builds.
+pub(crate) fn admit_downloaded_archive(
+    storage_dir: &Path,
+    url: SourceUrl,
+    hash: &str,
+    source: &Path,
+    original_index: usize,
+) -> Result<StoredPlain, Error> {
+    let spec = UpstreamSpec::Archive {
+        url: url.to_string(),
+        hash: hash.to_owned(),
+        rename: None,
+        strip_dirs: None,
+        unpack: true,
+        unpack_dir: None,
+    };
+    let validated_url = spec.validated_url().map_err(|source| Error::InvalidAuthoredSource {
+        index: original_index,
+        source,
+    })?;
+    let name = spec
+        .materialization_name()
+        .map_err(|source| Error::InvalidAuthoredSource {
+            index: original_index,
+            source,
+        })?;
+    Plain {
+        url: validated_url,
+        hash: hash.parse().map_err(plain::Error::from)?,
+        rename: Some(name),
+    }
+    .admit_downloaded(storage_dir, source)
+    .map_err(Error::from)
+}
+
 #[cfg(feature = "delegated-fixture-test-support")]
 const _: [(); 1] = [(); gitwrap::FIXTURE_TEST_SUPPORT_ENABLED as usize];
 
@@ -37,9 +74,10 @@ const _: [(); 1] = [(); gitwrap::FIXTURE_TEST_SUPPORT_ENABLED as usize];
 /// to get source code from.
 #[derive(Debug, Clone)]
 pub enum Upstream {
-    /// An archive containing source code, typically
-    /// a tarball. In order to be usable, it must compatible with
-    /// [bsdtar](https://man.freebsd.org/cgi/man.cgi?query=bsdtar&sektion=1&format=html).
+    /// A source tar archive accepted by Mason's bounded internal extractor.
+    /// Supported compression is limited to the formats admitted by that
+    /// extractor; unsafe paths, links, inode types, and resource excess fail
+    /// closed before publication.
     Plain(Plain),
     /// The source code is from a Git repository.
     Git(Git),

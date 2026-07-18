@@ -53,31 +53,35 @@ impl Plain {
     /// Stores the source archive into the storage directory.
     ///
     /// If the upstream was already stored and [Self::hash] matches,
-    /// no write operation takes place. If the source archive was
-    /// not stored or the hash does not match, it is overwritten.
+    /// no write operation takes place. A missing archive is downloaded into a
+    /// private file and admitted by exact copy. Any mismatched or unsafe
+    /// existing cache state fails closed and is never replaced.
     pub async fn store(&self, storage_dir: &Path, pb: &ProgressBar) -> Result<StoredPlain, Error> {
         use fs_err::tokio as fs;
 
         match self.stored(storage_dir) {
             Ok(stored) => return Ok(stored),
             Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(Error::HashMismatch { .. }) => {}
             Err(err) => return Err(err),
         }
 
         let path = self.stored_path(storage_dir);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(&parent).await?;
-        }
-
-        fetch(self.url.clone(), &path, &self.hash, self.name(), pb).await?;
-
-        Ok(StoredPlain {
-            name: self.name().to_owned(),
-            path,
-            hash: self.hash.clone(),
-            was_cached: false,
-        })
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "archive cache path has no parent"))?;
+        fs::create_dir_all(parent).await?;
+        let temporary = tempfile::Builder::new()
+            .prefix(".cast-download-input-")
+            .tempfile_in(parent)
+            .map_err(|source| Error::CreateStaging {
+                parent: parent.to_owned(),
+                source,
+            })?
+            .into_temp_path();
+        fetch(self.url.clone(), &temporary, &self.hash, self.name(), pb).await?;
+        let mut stored = self.admit_downloaded(storage_dir, &temporary)?;
+        stored.was_cached = false;
+        Ok(stored)
     }
 
     /// Returns an already-stored source archive.
@@ -131,6 +135,21 @@ impl Plain {
         fixture: &Path,
         max_bytes: u64,
     ) -> Result<StoredPlain, Error> {
+        self.admit_downloaded_with_max_bytes(storage_dir, fixture, max_bytes)
+    }
+
+    /// Copy one freshly downloaded archive into the content-addressed cache
+    /// without aliasing its inode or replacing any pre-existing cache entry.
+    pub(crate) fn admit_downloaded(&self, storage_dir: &Path, source: &Path) -> Result<StoredPlain, Error> {
+        self.admit_downloaded_with_max_bytes(storage_dir, source, ARCHIVE_DOWNLOAD_LIMITS.max_bytes)
+    }
+
+    fn admit_downloaded_with_max_bytes(
+        &self,
+        storage_dir: &Path,
+        source_path: &Path,
+        max_bytes: u64,
+    ) -> Result<StoredPlain, Error> {
         match self.stored_with_max_bytes(storage_dir, max_bytes) {
             Ok(stored) => return Ok(stored),
             Err(Error::Io(source)) if source.kind() == io::ErrorKind::NotFound => {}
@@ -144,7 +163,7 @@ impl Plain {
         fs::create_dir_all(parent)?;
         fs::set_permissions(parent, Permissions::from_mode(0o700))?;
 
-        let mut source = open_regular_archive(fixture, self.name())?;
+        let mut source = open_regular_archive(source_path, self.name())?;
         reject_file_size(&source, self.name(), max_bytes)?;
         let mut staging = tempfile::Builder::new()
             .prefix(".cast-fixture-import-")
@@ -164,10 +183,16 @@ impl Plain {
 
         staging.as_file().set_permissions(Permissions::from_mode(0o644))?;
         staging.as_file().sync_all()?;
-        staging.persist_noclobber(&target).map_err(|error| Error::Install {
-            target: target.clone(),
-            source: error.error,
-        })?;
+        if let Err(error) = staging.persist_noclobber(&target) {
+            if error.error.kind() == io::ErrorKind::AlreadyExists {
+                fs::File::open(parent)?.sync_all()?;
+                return self.stored_with_max_bytes(storage_dir, max_bytes);
+            }
+            return Err(Error::Install {
+                target,
+                source: error.error,
+            });
+        }
         fs::File::open(parent)?.sync_all()?;
 
         self.stored_with_max_bytes(storage_dir, max_bytes)
@@ -379,6 +404,64 @@ mod tests {
     }
 
     #[test]
+    fn downloaded_admission_copies_bytes_without_aliasing_the_download_inode() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("download.tar");
+        let storage = directory.path().join("storage");
+        fs::write(&source, b"downloaded bytes").unwrap();
+        let plain = Plain {
+            url: Url::parse("https://example.invalid/source.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"downloaded bytes"))),
+            rename: Some("source.tar".to_owned()),
+        };
+
+        let stored = plain.admit_downloaded(&storage, &source).unwrap();
+
+        assert_eq!(fs::read(&stored.path).unwrap(), b"downloaded bytes");
+        let source_metadata = fs::metadata(source).unwrap();
+        let cache_metadata = fs::metadata(stored.path).unwrap();
+        assert_ne!(
+            (source_metadata.dev(), source_metadata.ino()),
+            (cache_metadata.dev(), cache_metadata.ino())
+        );
+        assert_eq!(cache_metadata.nlink(), 1);
+        assert_eq!(cache_metadata.mode() & 0o7777, 0o644);
+    }
+
+    #[test]
+    fn concurrent_identical_downloads_adopt_one_exact_no_clobber_cache_entry() {
+        use std::sync::{Arc, Barrier};
+
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.tar");
+        let second = directory.path().join("second.tar");
+        let storage = directory.path().join("storage");
+        fs::write(&first, b"identical bytes").unwrap();
+        fs::write(&second, b"identical bytes").unwrap();
+        let plain = Plain {
+            url: Url::parse("https://example.invalid/source.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"identical bytes"))),
+            rename: Some("source.tar".to_owned()),
+        };
+        let barrier = Arc::new(Barrier::new(2));
+
+        let handles = [first, second].map(|source| {
+            let storage = storage.clone();
+            let plain = plain.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                plain.admit_downloaded(&storage, &source)
+            })
+        });
+        let stored = handles.map(|handle| handle.join().unwrap().unwrap());
+
+        assert_eq!(stored[0].path, stored[1].path);
+        assert_eq!(fs::read(&stored[0].path).unwrap(), b"identical bytes");
+        assert_eq!(fs::metadata(&stored[0].path).unwrap().nlink(), 1);
+    }
+
+    #[test]
     fn fixture_import_is_bounded_and_hash_checked_before_publication() {
         let directory = tempfile::tempdir().unwrap();
         let storage = directory.path().join("storage");
@@ -535,6 +618,28 @@ mod tests {
             oversized.stored_with_max_bytes(&storage, 4),
             Err(Error::TooLarge { limit: 4, .. })
         ));
+    }
+
+    #[test]
+    fn production_store_never_refetches_over_mismatched_cache_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = directory.path().join("cache");
+        let plain = Plain {
+            url: Url::parse("https://network-must-not-run.invalid/source.tar").unwrap(),
+            hash: Hash(hex::encode(Sha256::digest(b"expected bytes"))),
+            rename: Some("source.tar".to_owned()),
+        };
+        let target = plain.stored_path(&storage);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"foreign cache state").unwrap();
+
+        let error = match forge::runtime::block_on(plain.store(&storage, &ProgressBar::hidden())) {
+            Ok(_) => panic!("mismatched cache state must fail before fetching"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, Error::HashMismatch { .. }));
+        assert_eq!(fs::read(target).unwrap(), b"foreign cache state");
     }
 
     #[test]

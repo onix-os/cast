@@ -628,7 +628,7 @@ mason-archive-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^archive::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 24; \
+	timeout 10s test "$$count" = 25; \
 	timeout 900s $(CARGO) test -p mason --lib "archive::tests::" -- --test-threads=1
 
 mason-package-publication-test:

@@ -4,22 +4,11 @@
 use regex::Regex;
 use std::path::Path;
 
-use fs_err as fs;
-
 use crate::draft::File;
-use crate::draft::build::{Error, Phases, State};
+use crate::draft::build::{Error, State};
 use forge::{Dependency, dependency};
 
-pub fn phases() -> Phases {
-    Phases {
-        setup: Some("%cmake"),
-        build: Some("%cmake_build"),
-        install: Some("%cmake_install"),
-        check: None,
-    }
-}
-
-pub fn process(state: &mut State<'_>, file: &File<'_>) -> Result<(), Error> {
+pub fn process(state: &mut State<'_>, file: &File) -> Result<(), Error> {
     // Depth too great
     if file.depth() > 0 {
         return Ok(());
@@ -34,7 +23,7 @@ pub fn process(state: &mut State<'_>, file: &File<'_>) -> Result<(), Error> {
 }
 
 fn scan_cmake(state: &mut State<'_>, path: &Path) -> Result<(), Error> {
-    let contents = fs::read_to_string(path)?;
+    let contents = state.read_analysis_text(path)?;
 
     let regex_cmake = Regex::new(r"find_package\(([^ )]+)")?;
 
@@ -45,7 +34,7 @@ fn scan_cmake(state: &mut State<'_>, path: &Path) -> Result<(), Error> {
             state.add_dependency(Dependency {
                 kind: dependency::Kind::CMake,
                 name,
-            });
+            })?;
         }
     }
     Ok(())
