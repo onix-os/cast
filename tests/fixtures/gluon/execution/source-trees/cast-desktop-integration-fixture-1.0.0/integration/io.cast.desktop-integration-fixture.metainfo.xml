@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.cast.desktop-integration-fixture</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+  <developer id="io.cast">
+    <name>Cast Fixture Authors</name>
+  </developer>
+  <name>Cast Desktop Integration Fixture</name>
+  <summary>Exercise declarative desktop integration assets</summary>
+  <description>
+    <p>Installs a deterministic helper and validated desktop integration metadata for Cast tests.</p>
+  </description>
+  <launchable type="desktop-id">io.cast.desktop-integration-fixture.desktop</launchable>
+  <provides>
+    <mediatype>application/x-cast-desktop-integration-fixture</mediatype>
+  </provides>
+  <url type="homepage">https://fixtures.invalid/cast-desktop-integration-fixture</url>
+  <releases>
+    <release version="1.0.0" date="2026-01-01"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

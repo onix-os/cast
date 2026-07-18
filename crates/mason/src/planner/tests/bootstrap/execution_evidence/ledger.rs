@@ -170,6 +170,7 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         "split" => 5,
         "generated-config"
         | "generated-shell"
+        | "desktop-integration"
         | "gettext-localization"
         | "system-integration-assets"
         | "userspace-profile" => 1,

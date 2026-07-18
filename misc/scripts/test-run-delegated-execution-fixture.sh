@@ -514,7 +514,7 @@ for fixture_directory in \
     assert_argument_count "$state/systemd-run-args" \
         '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
 done
-test "$fixture_count" -eq 21
+test "$fixture_count" -eq 22
 test ! -e "$evidence/fixtures-ci-proof.json"
 
 reset_state
@@ -544,25 +544,26 @@ jq -e --arg commit "$fake_commit" '
     and .required_execution == true
     and .bundle_ledger_schema == "cast.fixtures-ci.bundle.v1"
     and .totals == {
-        fixture_count: 21,
-        execution_count: 42,
-        bundle_validation_count: 63,
-        stone_count: 126,
-        manifest_count: 42,
-        artifact_count: 168,
+        fixture_count: 22,
+        execution_count: 44,
+        bundle_validation_count: 66,
+        stone_count: 127,
+        manifest_count: 44,
+        artifact_count: 171,
         artifact_bytes: .totals.artifact_bytes
     }
-    and (.fixtures | length) == 21
+    and (.fixtures | length) == 22
     and .fixtures[0].name == "autotools"
-    and .fixtures[11].name == "gettext-localization"
-    and .fixtures[12].name == "header-only-library"
-    and .fixtures[15].name == "multiple-sources"
-    and .fixtures[17].name == "post-install-smoke-test"
-    and .fixtures[19].name == "system-integration-assets"
-    and .fixtures[20].name == "userspace-profile"
-    and ([.fixtures[].artifacts.stone_count] | add) == 126
-    and ([.fixtures[].artifacts.manifest_count] | add) == 42
-    and ([.fixtures[].artifacts.artifact_count] | add) == 168
+    and .fixtures[8].name == "desktop-integration"
+    and .fixtures[12].name == "gettext-localization"
+    and .fixtures[13].name == "header-only-library"
+    and .fixtures[16].name == "multiple-sources"
+    and .fixtures[18].name == "post-install-smoke-test"
+    and .fixtures[20].name == "system-integration-assets"
+    and .fixtures[21].name == "userspace-profile"
+    and ([.fixtures[].artifacts.stone_count] | add) == 127
+    and ([.fixtures[].artifacts.manifest_count] | add) == 44
+    and ([.fixtures[].artifacts.artifact_count] | add) == 171
     and .result == "passed"
 ' "$proof" >/dev/null
 grep -Fqx -- "--setenv=CAST_FIXTURE_PROOF_PATH=$proof" "$state/systemd-run-args"

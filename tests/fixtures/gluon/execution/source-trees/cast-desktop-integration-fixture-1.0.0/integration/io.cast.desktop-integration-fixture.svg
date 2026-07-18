@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Cast Desktop Integration Fixture</title>
+  <rect width="128" height="128" rx="24" fill="#1f2937"/>
+  <path d="M32 30h64v68H32z" fill="#f9fafb"/>
+  <path d="M44 46h40v8H44zm0 16h40v8H44zm0 16h28v8H44z" fill="#2563eb"/>
+</svg>

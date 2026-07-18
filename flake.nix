@@ -42,10 +42,14 @@
             pkgs.xz
             pkgs.zstd
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            pkgs.appstream
             pkgs.dash
+            pkgs.desktop-file-utils
             pkgs.gettext
+            pkgs.glib
             pkgs.glibcLocales
             pkgs.libxml2
+            pkgs.shared-mime-info
             pkgs.systemd
           ];
 

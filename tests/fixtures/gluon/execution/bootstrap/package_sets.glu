@@ -10,6 +10,7 @@ let tooling = import! "./tooling_package_sets.glu"
     cmake = build_systems.cmake,
     cmake_zlib = build_systems.cmake_zlib,
     custom = specialized.custom,
+    desktop_integration = specialized.desktop_integration,
     generated_config = specialized.generated_config,
     gettext_localization = specialized.gettext_localization,
     hooks_patch = tooling.hooks_patch,

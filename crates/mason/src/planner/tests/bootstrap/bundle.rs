@@ -418,5 +418,6 @@ include!("bundle/manifest.rs");
 include!("bundle/package_decode.rs");
 include!("bundle/package_metadata.rs");
 include!("bundle/tracked_sources.rs");
+include!("bundle/desktop_integration.rs");
 include!("bundle/gettext_localization.rs");
 include!("bundle/system_integration_assets.rs");

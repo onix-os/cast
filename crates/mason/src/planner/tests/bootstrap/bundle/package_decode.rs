@@ -27,6 +27,7 @@ pub(super) fn assert_fixture_bundle(
                 | "cmake"
                 | "custom"
                 | "daemon-generated"
+                | "desktop-integration"
                 | "factory-override"
                 | "generated-config"
                 | "generated-shell"
@@ -105,6 +106,7 @@ pub(super) fn assert_fixture_bundle(
         name,
         "generated-config"
             | "generated-shell"
+            | "desktop-integration"
             | "gettext-localization"
             | "system-integration-assets"
             | "userspace-profile"
@@ -158,6 +160,8 @@ pub(super) fn assert_fixture_bundle(
         assert_generated_shell_fixture(planned, &packages);
     } else if name == "gettext-localization" {
         assert_gettext_localization_fixture(planned, &packages);
+    } else if name == "desktop-integration" {
+        assert_desktop_integration_fixture(planned, &packages);
     } else if name == "system-integration-assets" {
         assert_system_integration_assets_fixture(planned, &packages);
     } else if name == "userspace-profile" {

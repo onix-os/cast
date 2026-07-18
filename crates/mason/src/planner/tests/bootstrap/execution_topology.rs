@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 21] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 22] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -7,6 +7,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 21] = [
     "cmake",
     "custom",
     "daemon-generated",
+    "desktop-integration",
     "factory-override",
     "generated-config",
     "generated-shell",
@@ -27,6 +28,12 @@ mod multiple_sources_topology {
     use super::*;
 
     include!("execution_topology/multiple_sources.rs");
+}
+
+mod desktop_integration_topology {
+    use super::*;
+
+    include!("execution_topology/desktop_integration.rs");
 }
 
 mod system_integration_assets_topology {
@@ -497,6 +504,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Check", vec![run("meson", "test")]),
         ],
         "multiple-sources" => multiple_sources_topology::expected(),
+        "desktop-integration" => desktop_integration_topology::expected(),
         "gettext-localization" => gettext_localization_topology::expected(&job.work_dir),
         "system-integration-assets" => system_integration_assets_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
@@ -732,6 +740,9 @@ fi
     }
     if name == "multiple-sources" {
         multiple_sources_topology::assert_contract(plan, job);
+    }
+    if name == "desktop-integration" {
+        desktop_integration_topology::assert_contract(plan, job);
     }
     if name == "gettext-localization" {
         gettext_localization_topology::assert_contract(plan, job);

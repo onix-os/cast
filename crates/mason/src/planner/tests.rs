@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 21] = [
+const EXECUTION_FIXTURES: [&str; 22] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -145,6 +145,7 @@ const EXECUTION_FIXTURES: [&str; 21] = [
     "cmake",
     "custom",
     "daemon-generated",
+    "desktop-integration",
     "factory-override",
     "generated-config",
     "generated-shell",
@@ -160,7 +161,7 @@ const EXECUTION_FIXTURES: [&str; 21] = [
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 20] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 21] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -169,6 +170,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 20] = [
     "cmake",
     "custom",
     "daemon-generated",
+    "desktop-integration",
     "factory-override",
     "generated-config",
     "generated-shell",
@@ -224,6 +226,8 @@ include!("tests/execution_archives.rs");
 include!("tests/execution_autotools_regeneration.rs");
 include!("tests/execution_capability.rs");
 include!("tests/execution_cmake_zlib.rs");
+include!("tests/execution_desktop_integration.rs");
+include!("tests/execution_external_patch.rs");
 include!("tests/execution_gettext_localization.rs");
 include!("tests/execution_header_only_library.rs");
 include!("tests/execution_meson_dependency_roles.rs");
