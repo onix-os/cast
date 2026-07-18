@@ -30,6 +30,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 		candidate_matrix::startup_activate_archived_candidate_dispatch_applied_matrix_moves_once_and_returns_pending \
 		candidate_matrix::startup_activate_archived_candidate_dispatch_finish_matrix_never_moves_and_returns_pending \
 		candidate_matrix::startup_activate_archived_candidate_dispatch_never_falls_through_to_completion_in_same_entry \
+		candidate_move_process_kill::startup_activate_archived_candidate_move_process_kill_recovers_without_second_move \
 		candidate_restart::startup_activate_archived_candidate_source_fault_fresh_entry_finishes_without_second_move \
 		candidate_restart::startup_activate_archived_candidate_successor_fault_fresh_entry_completes_without_second_move; do \
 		timeout 10s grep -Fqx "$$startup_prefix$$name: test" "$$listed"; \
@@ -45,6 +46,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	persistence=crates/forge/src/client/startup_recovery/usr_rollback_activate_archived_candidate_preserve_persistence.rs; \
 	persistence_tests=crates/forge/src/client/startup_recovery/usr_rollback_activate_archived_candidate_preserve_persistence/tests; \
 	startup_tests=crates/forge/src/client/startup_gate/usr_rollback_activate_archived/tests; \
+	process_kill="$$startup_tests/candidate_move_process_kill.rs"; \
 	timeout 10s grep -Fqx 'mod usr_rollback_activate_archived;' "$$gate"; \
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "mod usr_rollback_activate_archived;" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; fi; \
 	timeout 10s grep -Fq 'record.operation != Operation::ActivateArchived' "$$child"; \
@@ -79,6 +81,30 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|=[[:space:]]*(loop|while)[[:space:]]|retry' <<<"$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for race in Database Provenance Journal Installation Namespace Plan; do timeout 10s grep -Fq "EvidenceRace::$$race" "$$persistence_tests/evidence_races.rs" "$$startup_tests/candidate_evidence_races.rs"; done; \
 	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$persistence_tests/storage_reopen.rs"; done; \
+	timeout 10s grep -Fqx 'mod candidate_move_process_kill;' "$$startup_tests/mod.rs"; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'cases, 4,' "$$process_kill"; \
+	timeout 10s grep -Fq 'arm_before_archived_candidate_preserve_move_reconciliation_capture' "$$process_kill"; \
+	timeout 10s grep -Fq 'kill_after_real_candidate_move' "$$process_kill"; \
+	timeout 10s grep -Fq 'nix::libc::kill(nix::libc::getpid(), nix::libc::SIGKILL)' "$$process_kill"; \
+	timeout 10s grep -Fq 'crash_status.signal()' "$$process_kill"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$process_kill"; \
+	timeout 10s grep -Fq 'const CHILD_DEADLINE: Duration = Duration::from_secs(15);' "$$process_kill"; \
+	timeout 10s grep -Fq 'let _ = child.kill();' "$$process_kill"; \
+	timeout 10s grep -Fq 'let status = child.wait().unwrap();' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$process_kill" )" = 2; \
+	timeout 10s grep -Fq 'Installation::open(&case.root, None)' "$$process_kill"; \
+	timeout 10s grep -Fq 'open_state_database(&installation)' "$$process_kill"; \
+	timeout 10s grep -Fq 'snapshot_startup_recovery_namespace(&root)' "$$process_kill"; \
+	timeout 10s grep -Fq 'snapshot_startup_recovery_namespace(&case.root)' "$$process_kill"; \
+	timeout 10s grep -Fq 'RollbackActionOutcome::AlreadySatisfied' "$$process_kill"; \
+	timeout 10s grep -Fq 'archived_candidate_preserve_move_attempt_count(), 0' "$$process_kill"; \
+	timeout 10s grep -Fq 'same-boot process death only' "$$process_kill"; \
+	timeout 10s grep -Fq 'power-loss oracle' "$$process_kill"; \
+	timeout 10s grep -Fq 'historical record epoch is not a reboot' "$$process_kill"; \
+	if timeout 10s rg -n 'dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback|journal\.(advance|delete)|reconcile_move|arm_archived_candidate_preserve_move_fault|arm_next_|StorageFault' "$$process_kill"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in "$$gate" "$$child" "$$reconciliation" "$$authority" "$$archived_authority" "$$archived_persistence_authority" "$$production_leaf" "$$recovery" "$$persistence" "$$persistence_tests"/*.rs "$$startup_tests"/*.rs misc/make/startup-rollback-activate-archived-candidate-dispatch-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

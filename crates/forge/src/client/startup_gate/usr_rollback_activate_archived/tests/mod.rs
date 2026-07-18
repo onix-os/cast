@@ -4,6 +4,7 @@ mod authority_binding;
 mod candidate_admission;
 mod candidate_evidence_races;
 mod candidate_matrix;
+mod candidate_move_process_kill;
 mod candidate_restart;
 mod evidence_races;
 mod exclusions;
