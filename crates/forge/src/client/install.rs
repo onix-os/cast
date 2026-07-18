@@ -15,6 +15,7 @@ use tui::{
 use crate::{
     Package, Provider,
     client::{self, Client, FrozenMaterialization},
+    dependency,
     package::{self, Flags},
     registry::transaction,
     runtime,
@@ -274,7 +275,7 @@ fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<package::Id>, Err
 
 /// Resolve a package name to the first package
 fn find_packages(id: &str, client: &Client) -> Result<(String, Option<Package>), Error> {
-    let provider = Provider::from_name(id).unwrap();
+    let provider = Provider::from_name(id)?;
     client.with_registry_snapshot(|registry| -> Result<(String, Option<Package>), Error> {
         let result = registry
             .by_provider(&provider, Flags::new().with_available())?
@@ -315,6 +316,9 @@ pub enum Error {
 
     #[error("registry query")]
     Registry(#[from] crate::registry::Error),
+
+    #[error(transparent)]
+    Provider(#[from] dependency::ParseError),
 
     /// A database specific error occurred
     #[error("db")]
@@ -473,6 +477,21 @@ mod tests {
                 .dependencies
                 .contains(&Dependency::package_name("dependency"))
         );
+    }
+
+    #[test]
+    fn malformed_install_provider_is_rejected_without_state_or_cache_mutation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut client = stateful_client(temporary.path(), Vec::new());
+
+        let error = match install(&mut client, &["binary("], true, false) {
+            Ok(_) => panic!("malformed install provider unexpectedly succeeded"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, Error::Provider(_)));
+        assert!(client.state_db.all().unwrap().is_empty());
+        assert!(!client.installation.cache_path("downloads").exists());
     }
 
     #[test]

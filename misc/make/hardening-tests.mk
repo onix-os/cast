@@ -3,6 +3,7 @@
 	forge-transition-journal-coordinator-test forge-transition-recovery-classifier-test \
 	forge-startup-reconciliation-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
+	forge-package-request-hardening-test \
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
 	forge-transition-runtime-evidence-test forge-transition-journal-successor-test \
@@ -240,6 +241,21 @@ forge-client-direct-test:
 	count="$$( timeout 10s grep -Ec '^client::tests::[^:]+: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 213; \
 	timeout 1200s $(CARGO) test -p forge --lib "client::tests::" -- --test-threads=1
+
+forge-package-request-hardening-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	for test in \
+		cli::info::tests::malformed_info_requests_are_rejected_before_client_construction \
+		cli::info::tests::narrow_terminals_retain_a_nonzero_paragraph_width \
+		client::fetch::tests::fetch_metadata_is_fully_validated_before_download_execution \
+		client::fetch::tests::duplicate_fetch_filenames_are_rejected_before_output_creation \
+		client::install::tests::malformed_install_provider_is_rejected_without_state_or_cache_mutation \
+		client::remove::tests::inconsistent_removal_selection_fails_closed \
+		client::tests::package_request_hardening::malformed_package_requests_return_typed_errors_without_persistent_side_effects; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done
 
 forge-database-adapter-test:
 	@set -eu; \

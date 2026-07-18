@@ -7,14 +7,14 @@ use std::{
 
 use itertools::{Either, Itertools};
 use thiserror::Error;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument};
 use tui::{
     Styled,
     dialoguer::{Confirm, theme::ColorfulTheme},
     pretty::autoprint_columns,
 };
 
-use crate::{Client, Provider, client, db, package, registry::transaction, state::Selection};
+use crate::{Client, Provider, client, db, dependency, package, registry::transaction, state::Selection};
 
 /// Remove a set of packages.
 #[instrument(skip(client), fields(ephemeral = client.is_ephemeral()))]
@@ -22,14 +22,17 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
     let mut timing = Timing::default();
     let mut instant = Instant::now();
 
+    let requested = pkgs
+        .iter()
+        .map(|name| Provider::from_name(name))
+        .collect::<Result<Vec<_>, _>>()?;
+
     let installed = client
         .with_registry_snapshot(|registry| -> Result<Vec<crate::Package>, Error> { Ok(registry.list_installed()?) })?;
     let installed_ids = installed.iter().map(|p| p.id.clone()).collect::<BTreeSet<_>>();
 
     // Separate packages between installed / not installed (or invalid)
-    let (for_removal, not_installed): (Vec<_>, Vec<_>) = pkgs.iter().partition_map(|name| {
-        let provider = Provider::from_name(name).unwrap();
-
+    let (for_removal, not_installed): (Vec<_>, Vec<_>) = requested.into_iter().partition_map(|provider| {
         installed
             .iter()
             .find(|i| i.meta.providers.contains(&provider))
@@ -37,11 +40,10 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
             .unwrap_or(Either::Right(provider.clone()))
     });
 
-    // Bail if there's packages not installed
-    // TODO: Add error hookups
+    // Reject the complete missing set as structured data instead of printing a
+    // partial diagnostic and returning an uninformative unit error.
     if !not_installed.is_empty() {
-        println!("Missing packages in lookup: {not_installed:?}");
-        return Err(Error::NoSuchPackage);
+        return Err(Error::PackagesNotInstalled(not_installed));
     }
 
     // First resolve a transaction where all requested packages are removed from the install
@@ -79,6 +81,15 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
 
     // Resolve all removed packages, where removed is (installed - finalized)
     let removed = client.resolve_packages(installed_ids.difference(&finalized))?;
+
+    // Prove that every retained transaction member is backed by the exact
+    // active-state selection before presenting or simulating the operation.
+    // A registry/database mismatch must never print a false removal success.
+    let previous_selections = match client.active_state_for_planning()? {
+        Some(id) => client.state_db.get(id)?.selections,
+        None => vec![],
+    };
+    let new_state_pkgs = retain_previous_selections(finalized, &previous_selections)?;
 
     timing.resolve = instant.elapsed();
     info!(
@@ -126,39 +137,6 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
         println!("{} {}", "Removed".red(), package.meta.name.as_str().bold());
     }
 
-    // Map finalized state to a [`Selection`] by referencing
-    // it's value from the previous state
-    let new_state_pkgs = {
-        let previous_selections = match client.active_state_for_planning()? {
-            Some(id) => client.state_db.get(id)?.selections,
-            None => vec![],
-        };
-
-        finalized
-            .into_iter()
-            .map(|id| {
-                previous_selections
-                    .iter()
-                    .find(|s| s.package == id)
-                    .cloned()
-                    // Should be unreachable since new state from removal
-                    // is always a subset of the previous state
-                    .unwrap_or_else(|| {
-                        warn!(
-                            package_id = ?id,
-                            "Unreachable: previous selection not found during removal, marking as not explicit"
-                        );
-
-                        Selection {
-                            package: id,
-                            explicit: false,
-                            reason: None,
-                        }
-                    })
-            })
-            .collect::<Vec<_>>()
-    };
-
     // Apply state
     client.new_state(&new_state_pkgs, "Remove")?;
 
@@ -173,13 +151,29 @@ pub fn remove(client: &mut Client, pkgs: &[&str], yes: bool, simulate: bool) -> 
     Ok(timing)
 }
 
+fn retain_previous_selections(
+    finalized: impl IntoIterator<Item = package::Id>,
+    previous: &[Selection],
+) -> Result<Vec<Selection>, Error> {
+    finalized
+        .into_iter()
+        .map(|id| {
+            previous
+                .iter()
+                .find(|selection| selection.package == id)
+                .cloned()
+                .ok_or(Error::MissingPreviousSelection(id))
+        })
+        .collect()
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("cancelled")]
     Cancelled,
 
-    #[error("no such package")]
-    NoSuchPackage,
+    #[error("requested packages are not installed: {0:?}")]
+    PackagesNotInstalled(Vec<Provider>),
 
     #[error("client")]
     Client(#[from] client::Error),
@@ -190,6 +184,9 @@ pub enum Error {
     #[error("registry query")]
     Registry(#[from] crate::registry::Error),
 
+    #[error(transparent)]
+    Provider(#[from] dependency::ParseError),
+
     #[error("db")]
     DB(#[from] db::Error),
 
@@ -198,6 +195,9 @@ pub enum Error {
 
     #[error("string processing")]
     Dialog(#[from] tui::dialoguer::Error),
+
+    #[error("resolved removal retained package {0}, but the active state has no matching selection")]
+    MissingPreviousSelection(package::Id),
 }
 
 /// Simple timing information for Remove
@@ -205,4 +205,18 @@ pub enum Error {
 pub struct Timing {
     pub resolve: Duration,
     pub blit: Duration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inconsistent_removal_selection_fails_closed() {
+        let retained = package::Id::from("retained-package");
+
+        let error = retain_previous_selections([retained.clone()], &[]).unwrap_err();
+
+        assert!(matches!(error, Error::MissingPreviousSelection(found) if found == retained));
+    }
 }

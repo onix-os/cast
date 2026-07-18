@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
 
 use std::{
+    collections::BTreeMap,
     io,
     path::Path,
     time::{Duration, Instant},
@@ -13,10 +14,10 @@ use tui::{
     MultiProgress, ProgressBar, ProgressStyle, Styled,
     pretty::{ColumnDisplay, autoprint_columns},
 };
-use url::{ParseError, Url};
+use url::{ParseError as UrlParseError, Url};
 
 use crate::{
-    Client, Package, Provider, client, environment,
+    Client, Package, Provider, client, dependency, environment,
     package::{self, Flags, Meta},
     request, runtime, util,
 };
@@ -27,12 +28,14 @@ pub fn fetch(client: &mut Client, pkgs: &[&str], output_dir: &Path, verbose: boo
     let mut timing = Timing::default();
     let mut instant = Instant::now();
 
+    // Reject malformed user requests before creating or canonicalizing an
+    // output directory. Request parsing must not have filesystem side effects.
+    let input = resolve_input(pkgs, client)?;
+    let total_packages = input.len();
+
     util::ensure_dir_exists(output_dir)?;
 
     let output_dir = output_dir.canonicalize()?;
-
-    let input = resolve_input(pkgs, client)?;
-    let total_packages = input.len();
 
     timing.resolve = instant.elapsed();
     info!(
@@ -88,28 +91,12 @@ pub fn fetch(client: &mut Client, pkgs: &[&str], output_dir: &Path, verbose: boo
             );
             progress_bar.enable_steady_tick(Duration::from_millis(150));
 
-            let uri = Url::parse(
-                pkg.meta
-                    .uri
-                    .as_deref()
-                    .expect("registry packages must have uri defined"),
-            )?;
-            let expected_hash = pkg
-                .meta
-                .hash
-                .as_deref()
-                .ok_or_else(|| Error::MissingHash(pkg.meta.name.clone()))?;
-            let file_name = uri
-                .path_segments()
-                .and_then(|mut segments| segments.next_back())
-                .expect("uri path has at least one segment");
-
-            let dest_path = output_dir.join(file_name);
+            let dest_path = output_dir.join(&pkg.file_name);
 
             request::download_with_progress_and_expected_sha256_and_limits(
-                uri,
+                pkg.uri.clone(),
                 &dest_path,
-                expected_hash,
+                &pkg.expected_hash,
                 client::cache::package_download_limits(pkg.meta.download_size),
                 |progress| {
                     progress_bar.inc(progress.delta);
@@ -184,20 +171,33 @@ fn resolve_input(pkgs: &[&str], client: &Client) -> Result<Vec<ResolvedPackage>,
                 .next()
                 .ok_or(Error::NoPackage(id))?;
 
-            results.push(ResolvedPackage {
-                meta: resolved_pkg_meta.meta,
-            });
+            results.push(ResolvedPackage::from_meta(resolved_pkg_meta.meta)?);
         } else {
             return Err(Error::NoPackage(id));
         }
     }
 
+    require_unique_output_filenames(&results)?;
     Ok(results)
+}
+
+fn require_unique_output_filenames(packages: &[ResolvedPackage]) -> Result<(), Error> {
+    let mut owners = BTreeMap::<&str, &package::Name>::new();
+    for package in packages {
+        if let Some(first) = owners.insert(&package.file_name, &package.meta.name) {
+            return Err(Error::DuplicateOutputFilename {
+                filename: package.file_name.clone(),
+                first: (*first).clone(),
+                second: package.meta.name.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Resolve a package name to the first package
 fn find_packages(id: &str, client: &Client) -> Result<(String, Option<Package>), Error> {
-    let provider = Provider::from_name(id).unwrap();
+    let provider = Provider::from_name(id)?;
     let result = client
         .registry
         .by_provider(&provider, Flags::new().with_available())?
@@ -222,6 +222,9 @@ pub enum Error {
     #[error("registry query")]
     Registry(#[from] crate::registry::Error),
 
+    #[error(transparent)]
+    Provider(#[from] dependency::ParseError),
+
     /// The given package couldn't be found
     #[error("no package found: {0}")]
     NoPackage(String),
@@ -230,13 +233,26 @@ pub enum Error {
     Dialog(#[from] tui::dialoguer::Error),
 
     #[error("failed to parse package uri")]
-    ParseError(#[from] ParseError),
+    ParseError(#[from] UrlParseError),
 
     #[error("could not determine filename from uri: {0}")]
     NoFileNameInUri(String),
 
+    #[error("package {0} has no download uri")]
+    MissingUri(package::Name),
+
     #[error("package {0} has no locked download hash")]
     MissingHash(package::Name),
+
+    #[error("package {package} has a non-canonical SHA-256 download hash `{hash}`")]
+    InvalidHash { package: package::Name, hash: String },
+
+    #[error("packages {first} and {second} resolve to the same fetch filename `{filename}`")]
+    DuplicateOutputFilename {
+        filename: String,
+        first: package::Name,
+        second: package::Name,
+    },
 
     #[error("fetch package {1}")]
     FetchPackage(#[source] request::Error, package::Name),
@@ -252,6 +268,42 @@ pub struct Timing {
 #[derive(Clone)]
 struct ResolvedPackage {
     meta: Meta,
+    uri: Url,
+    file_name: String,
+    expected_hash: String,
+}
+
+impl ResolvedPackage {
+    fn from_meta(meta: Meta) -> Result<Self, Error> {
+        let raw_uri = meta
+            .uri
+            .as_deref()
+            .ok_or_else(|| Error::MissingUri(meta.name.clone()))?;
+        let uri = Url::parse(raw_uri)?;
+        let file_name = uri
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| Error::NoFileNameInUri(raw_uri.to_owned()))?;
+        let expected_hash = meta.hash.clone().ok_or_else(|| Error::MissingHash(meta.name.clone()))?;
+        if expected_hash.len() != 64
+            || !expected_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(Error::InvalidHash {
+                package: meta.name.clone(),
+                hash: expected_hash,
+            });
+        }
+        Ok(Self {
+            meta,
+            uri,
+            file_name,
+            expected_hash,
+        })
+    }
 }
 
 impl ColumnDisplay for ResolvedPackage {
@@ -265,11 +317,106 @@ impl ColumnDisplay for ResolvedPackage {
             "{}{:width$}  {}",
             self.meta.name.as_str().bold(),
             " ".repeat(width),
-            self.meta
-                .uri
-                .as_ref()
-                .expect("registry packages must have uri defined")
-                .as_str()
+            self.uri.as_str()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    fn metadata(uri: Option<&str>, hash: Option<&str>) -> Meta {
+        Meta {
+            name: package::Name::from("fetch-metadata-fixture".to_owned()),
+            version_identifier: "1".to_owned(),
+            source_release: 1,
+            build_release: 1,
+            architecture: "x86_64".to_owned(),
+            summary: String::new(),
+            description: String::new(),
+            source_id: "fetch-metadata-fixture".to_owned(),
+            homepage: String::new(),
+            licenses: Vec::new(),
+            dependencies: BTreeSet::new(),
+            providers: BTreeSet::new(),
+            conflicts: BTreeSet::new(),
+            uri: uri.map(str::to_owned),
+            hash: hash.map(str::to_owned),
+            download_size: Some(1),
+        }
+    }
+
+    fn named_metadata(name: &str, uri: &str) -> Meta {
+        let hash = "a".repeat(64);
+        let mut meta = metadata(Some(uri), Some(&hash));
+        meta.name = package::Name::from(name.to_owned());
+        meta
+    }
+
+    #[test]
+    fn fetch_metadata_is_fully_validated_before_download_execution() {
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(None, Some("hash"))),
+            Err(Error::MissingUri(_))
+        ));
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(Some("not a uri"), Some("hash"))),
+            Err(Error::ParseError(_))
+        ));
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(Some("https://packages.invalid/"), Some("hash"))),
+            Err(Error::NoFileNameInUri(_))
+        ));
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(Some("https://packages.invalid/package.stone"), None)),
+            Err(Error::MissingHash(_))
+        ));
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(Some("https://packages.invalid/package.stone"), Some("ABC"))),
+            Err(Error::InvalidHash { .. })
+        ));
+        let uppercase_hash = "A".repeat(64);
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(
+                Some("https://packages.invalid/package.stone"),
+                Some(&uppercase_hash)
+            )),
+            Err(Error::InvalidHash { .. })
+        ));
+        let non_hex_hash = format!("{}g", "a".repeat(63));
+        assert!(matches!(
+            ResolvedPackage::from_meta(metadata(
+                Some("https://packages.invalid/package.stone"),
+                Some(&non_hex_hash)
+            )),
+            Err(Error::InvalidHash { .. })
+        ));
+
+        let hash = "a".repeat(64);
+        let resolved =
+            ResolvedPackage::from_meta(metadata(Some("https://packages.invalid/package.stone"), Some(&hash))).unwrap();
+        assert_eq!(resolved.file_name, "package.stone");
+        assert_eq!(resolved.expected_hash, hash);
+    }
+
+    #[test]
+    fn duplicate_fetch_filenames_are_rejected_before_output_creation() {
+        let first =
+            ResolvedPackage::from_meta(named_metadata("first", "https://one.invalid/packages/shared.stone")).unwrap();
+        let second =
+            ResolvedPackage::from_meta(named_metadata("second", "https://two.invalid/releases/shared.stone")).unwrap();
+
+        let error = require_unique_output_filenames(&[first, second]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::DuplicateOutputFilename { filename, first, second }
+                if filename == "shared.stone"
+                    && first.as_str() == "first"
+                    && second.as_str() == "second"
+        ));
     }
 }

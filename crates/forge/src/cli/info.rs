@@ -1,7 +1,7 @@
 use crate::{
     Installation, Package, Provider,
     client::{self, Client},
-    environment, package,
+    dependency, environment, package,
 };
 use clap::{ArgMatches, Command, arg};
 use itertools::Itertools;
@@ -28,12 +28,12 @@ pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> R
         .flatten()
         .cloned()
         .collect::<Vec<_>>();
+    let pkgs = parse_requested_packages(pkgs)?;
     let show_files = args.get_flag("files");
 
     let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
-    for pkg in pkgs {
-        let lookup = Provider::from_name(&pkg).unwrap();
+    for (pkg, lookup) in pkgs {
         let resolved = client.lookup_packages_by_provider(&lookup, package::Flags::default())?;
 
         if resolved.is_empty() {
@@ -54,6 +54,13 @@ pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> R
     Ok(())
 }
 
+fn parse_requested_packages(packages: Vec<String>) -> Result<Vec<(String, Provider)>, dependency::ParseError> {
+    packages
+        .into_iter()
+        .map(|package| Provider::from_name(&package).map(|provider| (package, provider)))
+        .collect()
+}
+
 /// Print the title for each metadata section
 fn print_titled(title: &'static str) {
     let display_width = COLUMN_WIDTH - title.len();
@@ -63,7 +70,7 @@ fn print_titled(title: &'static str) {
 /// Print paragraph with breaks
 fn print_paragraph(p: &str) {
     let term_width = TermSize::default().width;
-    let available_width = term_width - COLUMN_WIDTH;
+    let available_width = available_paragraph_width(term_width);
 
     // Split into paragraphs by empty lines
     let paragraphs = p.lines().collect::<Vec<_>>();
@@ -112,6 +119,10 @@ fn print_paragraph(p: &str) {
 
         first_paragraph = false;
     }
+}
+
+fn available_paragraph_width(term_width: usize) -> usize {
+    term_width.saturating_sub(COLUMN_WIDTH).max(1)
 }
 
 fn print_list<T>(items: impl IntoIterator<Item = T>)
@@ -198,4 +209,24 @@ pub enum Error {
     NotFound(String),
     #[error("client")]
     Client(#[from] client::Error),
+    #[error(transparent)]
+    Provider(#[from] dependency::ParseError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_info_requests_are_rejected_before_client_construction() {
+        let error = parse_requested_packages(vec!["binary(".to_owned()]).unwrap_err();
+        assert!(matches!(error, dependency::ParseError::Malformed { .. }));
+    }
+
+    #[test]
+    fn narrow_terminals_retain_a_nonzero_paragraph_width() {
+        assert_eq!(available_paragraph_width(0), 1);
+        assert_eq!(available_paragraph_width(COLUMN_WIDTH), 1);
+        assert_eq!(available_paragraph_width(COLUMN_WIDTH + 17), 17);
+    }
 }

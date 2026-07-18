@@ -17,6 +17,7 @@ use crate::test_support::prepare_private_installation_root;
 mod ephemeral_candidate_metadata;
 mod external_materialization;
 mod fixed_staging_transition;
+mod package_request_hardening;
 mod root_abi_preflight;
 mod self_upgrade_hardening;
 mod state_prune;
