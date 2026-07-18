@@ -18,6 +18,7 @@ use crate::client::{
     startup_gate::UsrRollbackCandidatePreserveSeal,
     startup_reconciliation::{
         UsrRollbackActiveReblitBootRepairRequiredAdmission, UsrRollbackActiveReblitBootRepairRequiredAuthority,
+        UsrRollbackActiveReblitBootRepairUnverifiedAdmission, UsrRollbackActiveReblitBootRepairUnverifiedAuthority,
         UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
         UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
         UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority,
@@ -25,6 +26,7 @@ use crate::client::{
     startup_recovery::{
         UsrRollbackCandidatePreserveReady, dispatch_usr_rollback_candidate_preserve_and_reopen,
         finalize_usr_rollback_active_reblit, persist_usr_rollback_active_reblit_boot_repair_required_and_reopen,
+        persist_usr_rollback_active_reblit_boot_repair_unverified_and_reopen,
         persist_usr_rollback_active_reblit_complete_route_and_reopen,
     },
 };
@@ -43,6 +45,18 @@ impl UsrRollbackActiveReblitBootRepairRequiredSeal {
     #[cfg(test)]
     pub(in crate::client) fn new_for_test() -> Self {
         Self::new()
+    }
+}
+
+/// Unforgeable safe-code token limiting the conservative Started -> Unverified
+/// journal route to this operation-specific startup child.
+pub(in crate::client) struct UsrRollbackActiveReblitBootRepairUnverifiedSeal {
+    _private: (),
+}
+
+impl UsrRollbackActiveReblitBootRepairUnverifiedSeal {
+    fn new() -> Self {
+        Self { _private: () }
     }
 }
 
@@ -167,6 +181,23 @@ pub(super) fn dispatch<'reservation>(
             let (journal, record) = persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)?;
             Ok(Dispatch::Handled { journal, record })
         }
+        Phase::BootRepairStarted => {
+            let seal = UsrRollbackActiveReblitBootRepairUnverifiedSeal::new();
+            let admission = UsrRollbackActiveReblitBootRepairUnverifiedAuthority::capture(
+                &seal,
+                installation,
+                state_db,
+                &journal,
+                active_state_reservation,
+                &record,
+            )?;
+            let UsrRollbackActiveReblitBootRepairUnverifiedAdmission::Ready(authority) = admission else {
+                return Ok(Dispatch::Unhandled { journal, record });
+            };
+            let (journal, record) =
+                persist_usr_rollback_active_reblit_boot_repair_unverified_and_reopen(journal, authority)?;
+            Ok(Dispatch::Handled { journal, record })
+        }
         Phase::RollbackComplete => {
             let seal = UsrRollbackActiveReblitFinalizationSeal::new();
             let admission = UsrRollbackActiveReblitFinalizationAuthority::capture(
@@ -206,6 +237,14 @@ pub(in crate::client) enum Error {
     #[error("persist exact startup ActiveReblit boot-repair-required route")]
     BootRepairRequiredPersistence(
         #[from] crate::client::startup_recovery::UsrRollbackActiveReblitBootRepairRequiredPersistenceError,
+    ),
+    #[error("capture exact startup ActiveReblit BootRepairStarted retention authority")]
+    BootRepairUnverifiedAuthority(
+        #[from] crate::client::startup_reconciliation::UsrRollbackActiveReblitBootRepairUnverifiedAuthorityError,
+    ),
+    #[error("persist exact startup ActiveReblit BootRepairUnverified retention route")]
+    BootRepairUnverifiedPersistence(
+        #[from] crate::client::startup_recovery::UsrRollbackActiveReblitBootRepairUnverifiedPersistenceError,
     ),
     #[error("persist exact startup ActiveReblit rollback-completion route")]
     CompleteRoutePersistence(

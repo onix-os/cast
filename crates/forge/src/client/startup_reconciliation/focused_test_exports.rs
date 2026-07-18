@@ -36,7 +36,8 @@ pub(in crate::client) use super::{
 };
 
 pub(in crate::client) use super::activation_namespace::{
-    ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
+    ActiveReblitBootRepairStartedCaptureFault, ActiveReblitCandidatePreserveExchangeFault,
+    ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
     ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, ArchivedCandidatePreserveMoveFault,
     ArchivedCandidatePreservePostMoveDurabilityEvent, ArchivedCandidatePreservePostMoveDurabilityFaultPoint,
     ArchivedCandidatePreserveTargetDurabilityEvent, ArchivedCandidatePreserveTargetDurabilityFaultPoint,
@@ -46,7 +47,7 @@ pub(in crate::client) use super::activation_namespace::{
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
     UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
     active_reblit_candidate_preserve_exchange_attempt_count, archived_candidate_preserve_move_attempt_count,
-    arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_active_reblit_boot_repair_started_capture_fault, arm_active_reblit_candidate_preserve_exchange_fault,
     arm_active_reblit_candidate_preserve_post_exchange_durability_fault, arm_archived_candidate_preserve_move_fault,
     arm_archived_candidate_preserve_post_move_durability_fault,
     arm_archived_candidate_preserve_target_durability_fault,

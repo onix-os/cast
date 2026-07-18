@@ -375,6 +375,30 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     Ok(wrapper_index)
 }
 
+/// Require the exact whole-wrapper ActiveReblit preservation topology after
+/// the boot-attempt intent is durably `BootRepairStarted`.
+///
+/// Both same-invocation attempt evidence and a later startup's conservative
+/// `BootRepairUnverified` route recapture this phase independently. Neither is
+/// allowed to reuse the preceding Required-phase proof.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_active_reblit_boot_repair_started_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<usize, UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::BootRepairStarted {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairStartedPhase);
+    }
+    if record.operation != Operation::ActiveReblit {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitRequired);
+    }
+    let UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index } =
+        candidate_preserve_topology_after_phase(record, snapshot)?
+    else {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+    };
+    Ok(wrapper_index)
+}
+
 /// Require the exact whole-wrapper ActiveReblit preservation topology at
 /// terminal rollback.
 ///
@@ -750,6 +774,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongCandidatePreservedPhase,
     #[error("ActiveReblit rollback-completion routing requires CandidatePreserved")]
     WrongActiveReblitCompleteRoutePhase,
+    #[error("ActiveReblit boot-repair attempt evidence requires BootRepairStarted")]
+    WrongActiveReblitBootRepairStartedPhase,
     #[error("ActiveReblit rollback finalization requires RollbackComplete")]
     WrongActiveReblitFinalizationPhase,
     #[error("fresh-database invalidation requires FreshDbInvalidationIntent")]

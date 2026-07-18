@@ -30,7 +30,8 @@ use crate::{
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
     transition_journal::{
-        BootRollback, ForwardPhase, Operation, Phase, RollbackAction, RollbackActionOutcome, TransitionRecord, decode,
+        BootRollback, ForwardPhase, Operation, Phase, RollbackAction, RollbackActionOutcome, TransitionJournalStore,
+        TransitionRecord, decode,
     },
 };
 
@@ -191,6 +192,39 @@ pub(super) fn expected_boot_repair_required(candidate_preserved: &TransitionReco
     successor
 }
 
+pub(super) fn expected_boot_repair_started(boot_repair_required: &TransitionRecord) -> TransitionRecord {
+    let successor = boot_repair_required.rollback_successor(None).unwrap();
+    assert_eq!(successor.phase, Phase::BootRepairStarted);
+    successor
+}
+
+pub(super) fn expected_boot_repair_unverified(boot_repair_started: &TransitionRecord) -> TransitionRecord {
+    let successor = boot_repair_started.rollback_successor(None).unwrap();
+    assert_eq!(successor.phase, Phase::BootRepairUnverified);
+    assert_eq!(successor.rollback.as_ref().unwrap().boot, BootRollback::Unverified);
+    successor
+}
+
+/// Seed the durable post-attempt checkpoint without invoking a boot worker.
+/// The production Required -> Started edge remains deliberately disconnected
+/// until the descriptor-safe publisher consumes all hardened preclaims.
+pub(super) fn seed_boot_repair_started_for_test(
+    fixture: &BootRepairFixture,
+    boot_repair_required: &TransitionRecord,
+) -> TransitionRecord {
+    assert_eq!(fixture.fixture.canonical_record(), *boot_repair_required);
+    let started = expected_boot_repair_started(boot_repair_required);
+    let journal = TransitionJournalStore::open_retained(
+        fixture.fixture.installation.root_directory(),
+        &fixture.fixture.installation.root,
+    )
+    .unwrap();
+    journal.advance(boot_repair_required, &started).unwrap();
+    drop(journal);
+    assert_eq!(fixture.fixture.canonical_record(), started);
+    started
+}
+
 pub(super) fn persist_candidate_preserved(
     fixture: &CandidatePreserveFixture,
     origin: CandidateOrigin,
@@ -291,7 +325,7 @@ pub(super) fn persist_rollback_complete(
 
 pub(super) fn capture_finalization_ready<'reservation>(
     fixture: &CandidatePreserveFixture,
-    journal: &crate::transition_journal::TransitionJournalStore,
+    journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
     record: &TransitionRecord,
 ) -> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
