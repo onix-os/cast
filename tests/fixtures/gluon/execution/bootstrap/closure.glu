@@ -4,6 +4,8 @@
 // derived from the pinned immutable Stone index. Only content identities are
 // repeated here, so the index remains the single metadata authority.
 
+let arrays = import! std.array.prim
+
 type IndexPin = {
     sha256 : String,
     size : Int,
@@ -207,7 +209,7 @@ let cargo_packages = [
     "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
 ]
 
-let cmake_packages = [
+let cmake_package_prefix = [
     "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
     "06f5cb2560f82bf23523d5f9d421d4d678f1e40d078bc7a4e8585b994a49aaaf",
     "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
@@ -300,7 +302,15 @@ let cmake_packages = [
     "e6026319ca5d13dacfdb6e899b24eea110fdaaa95106f3d2fe097a60e3c537b0",
     "e8b9d5cee1c7500c87de37c6389de695d879e27b37ea402e1cad1efd88bd3c63",
     "ef73bd70e6b2a14bf69493fb9672ecd01639efda14ee6a704a66fe3e511c2cbb",
-    "f1b5b5bd6a3044e3d0f973e3ab341107be85f22296fc0afa46b4966d0b77b930",
+    "f1b5b5bd6a3044e3d0f973e3ab341107be85f22296fc0afa46b4966d0b77b930"
+]
+
+let cmake_packages = arrays.append cmake_package_prefix [
+    "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
+]
+
+let multiple_sources_packages = arrays.append cmake_package_prefix [
+    "f8f88707a968eff5fab57093bffef1f51dfbfa48e1a98a0b7ddb2c97a191cbaf",
     "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
 ]
 
@@ -816,6 +826,7 @@ let meson_packages = [
         { name = "header-only-library", package_ids = custom_packages },
         { name = "hooks-patch", package_ids = hooks_patch_packages },
         { name = "meson", package_ids = meson_packages },
+        { name = "multiple-sources", package_ids = multiple_sources_packages },
         { name = "plugin-output", package_ids = custom_packages },
         { name = "post-install-smoke-test", package_ids = cmake_packages },
         { name = "split", package_ids = cmake_packages },

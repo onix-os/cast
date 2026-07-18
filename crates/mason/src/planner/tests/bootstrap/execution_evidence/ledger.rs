@@ -163,6 +163,7 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         | "factory-override"
         | "hooks-patch"
         | "meson"
+        | "multiple-sources"
         | "post-install-smoke-test" => 9,
         "header-only-library" => 2,
         "daemon-generated" | "plugin-output" => 3,

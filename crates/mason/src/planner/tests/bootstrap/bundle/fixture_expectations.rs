@@ -38,6 +38,9 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
                 "custom" => "cast custom fixture: compiled and executed",
                 "factory-override" => "Stone-native factory override: stone-override",
                 "meson" => "cast meson fixture: pkgconfig zlib round-trip verified",
+                "multiple-sources" => {
+                    "cast multiple sources fixture: archive-main+git-protocol-v2+raw-schema-v3"
+                }
                 other => panic!("{other}: simple fixture needs an explicit payload golden"),
             }],
         ),

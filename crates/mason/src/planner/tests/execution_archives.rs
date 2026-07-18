@@ -153,6 +153,8 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/gluon/execution");
     let packages = root.join("packages");
     let archives = root.join("archives");
+    let git_bundles = root.join("git-bundles");
+    let git_source_trees = root.join("git-source-trees");
     let source_files = root.join("source-files");
     let source_trees = root.join("source-trees");
 
@@ -182,6 +184,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-header-only-library-fixture-1.0.0",
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
+            "cast-multiple-sources-fixture-1.0.0",
             "cast-plugin-output-fixture-1.0.0",
             "cast-post-install-smoke-test-fixture-1.0.0",
             "cast-split-fixture-1.0.0",
@@ -193,9 +196,26 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         .filter(|entry| entry.file_type().unwrap().is_file())
         .map(|entry| entry.file_name().into_string().unwrap())
         .collect::<BTreeSet<_>>();
-    assert_eq!(source_file_names, BTreeSet::from([HOOKS_PATCH_ARTIFACT.to_owned()]));
+    assert_eq!(
+        source_file_names,
+        BTreeSet::from([
+            HOOKS_PATCH_ARTIFACT.to_owned(),
+            MULTIPLE_SOURCES_RAW_ARTIFACT.to_owned(),
+        ])
+    );
+    let git_source_tree_names = fs::read_dir(&git_source_trees)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_dir())
+        .map(|entry| entry.file_name().into_string().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        git_source_tree_names,
+        BTreeSet::from(["cast-multiple-sources-protocol-1.0.0".to_owned()])
+    );
 
     let mut admitted_source_artifacts = BTreeSet::new();
+    let mut admitted_git_bundles = BTreeSet::<String>::new();
     let mut archive_format_counts = [0_usize; 4];
     let mut locked_source_count = 0_usize;
     let mut sourceful_fixtures = 0_usize;
@@ -227,6 +247,9 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
                 &recipe.declaration,
                 &source_trees.join("cast-meson-fixture-1.0.0"),
             );
+        }
+        if name == "multiple-sources" {
+            assert_multiple_sources_authored_trees(&root);
         }
         if name == "post-install-smoke-test" {
             assert_post_install_smoke_fixture_contract(
@@ -581,7 +604,11 @@ install -Dm644 build/cast-plugin-output.so \
             "{name}: checked-in source lock is not canonical"
         );
 
-        let expected_sources = if name == "hooks-patch" { 2 } else { 1 };
+        let expected_sources = match name {
+            "hooks-patch" => 2,
+            "multiple-sources" => 3,
+            _ => 1,
+        };
         assert_eq!(
             lock.sources.len(),
             expected_sources,
@@ -591,15 +618,51 @@ install -Dm644 build/cast-plugin-output.so \
             validate_hooks_patch_source_contract(&recipe.declaration.sources, &lock)
                 .unwrap_or_else(|error| panic!("hooks-patch: invalid external patch contract: {error}"));
         }
+        if name == "multiple-sources" {
+            validate_multiple_sources_contract(&recipe.declaration, &lock)
+                .unwrap_or_else(|error| panic!("multiple-sources: invalid source contract: {error}"));
+        }
 
         let mut locked_sources = Vec::with_capacity(lock.sources.len());
-        let mut source_artifacts = Vec::with_capacity(lock.sources.len());
+        let mut source_artifacts: Vec<Option<(PathBuf, Vec<u8>)>> = Vec::with_capacity(lock.sources.len());
         for (index, (resolution, declaration)) in lock
             .sources
             .iter()
             .zip(&recipe.declaration.sources)
             .enumerate()
         {
+            if let SourceResolution::Git(source) = resolution {
+                assert_eq!(name, "multiple-sources");
+                assert_eq!(index, 1);
+                let UpstreamSpec::Git { git_ref, .. } = declaration else {
+                    panic!("multiple-sources: Git lock no longer matches a Git declaration");
+                };
+                let bundle_path = git_bundles.join(MULTIPLE_SOURCES_GIT_BUNDLE);
+                let metadata = fs::symlink_metadata(&bundle_path).unwrap();
+                assert!(metadata.file_type().is_file() && metadata.nlink() == 1);
+                let bytes = fs::read(&bundle_path).unwrap();
+                assert_eq!(metadata.len(), u64::try_from(bytes.len()).unwrap());
+                assert_eq!(hex::encode(Sha256::digest(&bytes)), MULTIPLE_SOURCES_GIT_BUNDLE_SHA256);
+                assert!(admitted_git_bundles.insert(MULTIPLE_SOURCES_GIT_BUNDLE.to_owned()));
+                let locked = stone_recipe::derivation::LockedSource::Git {
+                    order: source.order,
+                    url: source.url.clone(),
+                    requested_ref: git_ref.clone(),
+                    commit: source.commit.clone(),
+                    materialization_sha256: source.materialization_sha256.clone(),
+                    directory: declaration.materialization_name().unwrap(),
+                };
+                crate::upstream::import_locked_git_fixture(
+                    &locked,
+                    &cache,
+                    &bundle_path,
+                    SOURCE_DATE_EPOCH,
+                )
+                .unwrap_or_else(|error| panic!("multiple-sources: import locked Git bundle: {error:?}"));
+                locked_sources.push(locked);
+                source_artifacts.push(None);
+                continue;
+            }
             let SourceResolution::Archive(source) = resolution else {
                 panic!("{name}: execution source {index} must remain archive-kind");
             };
@@ -640,15 +703,25 @@ install -Dm644 build/cast-plugin-output.so \
                 panic!("{name}: import locked source {index} into source cache: {error:#}")
             });
             locked_sources.push(locked);
-            source_artifacts.push((artifact_path, bytes));
+            source_artifacts.push(Some((artifact_path, bytes)));
         }
         locked_source_count += locked_sources.len();
 
         let share = shared.join(name);
         crate::upstream::sync_locked(&locked_sources, &cache, &share, SOURCE_DATE_EPOCH).unwrap_or_else(|error| {
-            panic!("{name}: share imported fixtures through frozen source path: {error:#}")
+            panic!("{name}: share imported fixtures through frozen source path: {error:?}")
         });
-        for (index, (locked, (artifact_path, bytes))) in locked_sources.iter().zip(&source_artifacts).enumerate() {
+        for (index, (locked, artifact)) in locked_sources.iter().zip(&source_artifacts).enumerate() {
+            if let stone_recipe::derivation::LockedSource::Git { directory, .. } = locked {
+                assert!(artifact.is_none());
+                assert_eq!(name, "multiple-sources");
+                assert_eq!(directory, "vendor-protocol");
+                assert!(share.join(directory).is_dir());
+                continue;
+            }
+            let (artifact_path, bytes) = artifact
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name}: archive source {index} has no admitted artifact"));
             let stone_recipe::derivation::LockedSource::Archive {
                 url,
                 sha256,
@@ -684,8 +757,9 @@ install -Dm644 build/cast-plugin-output.so \
         }
 
         if name == "hooks-patch" {
-            assert_eq!(source_artifacts[1].0.file_name().unwrap(), HOOKS_PATCH_ARTIFACT);
-            assert_eq!(source_artifacts[1].1, HOOKS_PATCH_BYTES);
+            let (patch_path, patch_bytes) = source_artifacts[1].as_ref().unwrap();
+            assert_eq!(patch_path.file_name().unwrap(), HOOKS_PATCH_ARTIFACT);
+            assert_eq!(patch_bytes, HOOKS_PATCH_BYTES);
             assert_eq!(
                 fs::read(source_files.join(HOOKS_PATCH_ARTIFACT)).unwrap(),
                 HOOKS_PATCH_BYTES
@@ -703,7 +777,7 @@ install -Dm644 build/cast-plugin-output.so \
         };
         let primary_url = Url::parse(&primary_source.url).unwrap();
         let primary_filename = primary_url.path_segments().unwrap().next_back().unwrap();
-        let primary_bytes = &source_artifacts[0].1;
+        let primary_bytes = &source_artifacts[0].as_ref().unwrap().1;
         let mut decoder: Box<dyn Read + '_> = match name {
             "cargo-vendored" => {
                 assert_eq!(primary_filename, "cast-cargo-vendored-fixture-1.0.0.tar.gz");
@@ -714,8 +788,13 @@ install -Dm644 build/cast-plugin-output.so \
                 archive_format_counts[1] += 1;
                 Box::new(flate2::read::GzDecoder::new(primary_bytes.as_slice()))
             }
-            "hooks-patch" => {
-                assert_eq!(primary_filename, "cast-hooks-fixture-1.0.0.tar.xz");
+            "hooks-patch" | "multiple-sources" => {
+                let expected = if name == "hooks-patch" {
+                    "cast-hooks-fixture-1.0.0.tar.xz"
+                } else {
+                    "cast-multiple-sources-fixture-1.0.0.tar.xz"
+                };
+                assert_eq!(primary_filename, expected);
                 assert!(
                     primary_bytes.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0]),
                     "{name}: missing XZ magic"
@@ -817,6 +896,9 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "multiple-sources" {
+            assert_multiple_sources_materializations(&root, &published, &share);
+        }
     }
 
     let present_source_artifacts = fs::read_dir(archives)
@@ -829,12 +911,19 @@ install -Dm644 build/cast-plugin-output.so \
         present_source_artifacts, admitted_source_artifacts,
         "orphaned execution fixture source artifact"
     );
-    assert_eq!(locked_source_count, 16, "locked execution source inventory drift");
+    let present_git_bundles = fs::read_dir(git_bundles)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.file_type().unwrap().is_file())
+        .map(|entry| entry.file_name().into_string().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(present_git_bundles, admitted_git_bundles, "orphaned execution Git bundle");
+    assert_eq!(locked_source_count, 19, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [12, 1, 1, 1],
-        "execution fixtures must cover twelve plain tar streams plus one each of gzip, XZ, and Zstandard"
+        [12, 1, 2, 1],
+        "execution fixtures must cover twelve plain tar streams, two XZ, one gzip, and one Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 15, "execution archive inventory drift");
+    assert_eq!(sourceful_fixtures, 16, "execution source inventory drift");
     assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

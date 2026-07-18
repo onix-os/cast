@@ -14,10 +14,13 @@ fixture_root="$root/tests/fixtures/gluon/execution"
 package_root="$fixture_root/packages"
 source_root="$fixture_root/source-trees"
 source_file_root="$fixture_root/source-files"
+git_source_root="$fixture_root/git-source-trees"
 archive_root="$fixture_root/archives"
+git_bundle_root="$fixture_root/git-bundles"
 temporary=
 uncompressed=
 check_root=
+git_work=
 
 cleanup() {
     if [ -n "$temporary" ]; then
@@ -29,11 +32,14 @@ cleanup() {
     if [ -n "$check_root" ]; then
         rm -rf "$check_root"
     fi
+    if [ -n "$git_work" ]; then
+        timeout 30s rm -rf "$git_work"
+    fi
 }
 
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$archive_root"
+timeout 30s mkdir -p "$archive_root" "$git_bundle_root"
 
 package_count=0
 source_less_count=0
@@ -44,7 +50,7 @@ for entry in "$package_root"/*; do
     }
     fixture=$(basename "$entry")
     case "$fixture" in
-        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|generated-shell|header-only-library|hooks-patch|meson|plugin-output|post-install-smoke-test|split) ;;
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|factory-override|generated-config|generated-shell|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|split) ;;
         *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
     esac
     test -f "$entry/stone.glu" && test ! -L "$entry/stone.glu" || {
@@ -66,8 +72,8 @@ for entry in "$package_root"/*; do
     package_count=$((package_count + 1))
 done
 
-test "$package_count" -eq 17 || {
-    printf 'expected exactly seventeen archive-matrix package directories, found %s\n' "$package_count" >&2
+test "$package_count" -eq 18 || {
+    printf 'expected exactly eighteen source-matrix package directories, found %s\n' "$package_count" >&2
     exit 1
 }
 test "$source_less_count" -eq 2 || {
@@ -112,6 +118,7 @@ for entry in "$source_root"/*; do
         cast-header-only-library-fixture-1.0.0|\
         cast-hooks-fixture-1.0.0|\
         cast-meson-fixture-1.0.0|\
+        cast-multiple-sources-fixture-1.0.0|\
         cast-plugin-output-fixture-1.0.0|\
         cast-post-install-smoke-test-fixture-1.0.0|\
         cast-split-fixture-1.0.0) ;;
@@ -120,8 +127,8 @@ for entry in "$source_root"/*; do
     source_tree_count=$((source_tree_count + 1))
 done
 
-test "$source_tree_count" -eq 15 || {
-    printf 'expected exactly fifteen source-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
+test "$source_tree_count" -eq 16 || {
+    printf 'expected exactly sixteen archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
     exit 1
 }
 
@@ -132,14 +139,33 @@ for entry in "$source_file_root"/*; do
         exit 1
     }
     case "$(basename "$entry")" in
-        cast-hooks-fixture-1.0.0-pre-setup.patch) ;;
+        cast-hooks-fixture-1.0.0-pre-setup.patch|\
+        cast-multiple-sources-schema-1.0.0.h) ;;
         *) printf 'unexpected execution source file: %s\n' "$entry" >&2; exit 1 ;;
     esac
     source_file_count=$((source_file_count + 1))
 done
 
-test "$source_file_count" -eq 1 || {
-    printf 'expected exactly one independent execution source file, found %s\n' "$source_file_count" >&2
+test "$source_file_count" -eq 2 || {
+    printf 'expected exactly two independent execution source files, found %s\n' "$source_file_count" >&2
+    exit 1
+}
+
+git_source_tree_count=0
+for entry in "$git_source_root"/*; do
+    test -d "$entry" && test ! -L "$entry" || {
+        printf 'unexpected non-directory execution Git source-tree entry: %s\n' "$entry" >&2
+        exit 1
+    }
+    case "$(basename "$entry")" in
+        cast-multiple-sources-protocol-1.0.0) ;;
+        *) printf 'unexpected execution Git source tree: %s\n' "$entry" >&2; exit 1 ;;
+    esac
+    git_source_tree_count=$((git_source_tree_count + 1))
+done
+
+test "$git_source_tree_count" -eq 1 || {
+    printf 'expected exactly one Git-backed execution fixture tree, found %s\n' "$git_source_tree_count" >&2
     exit 1
 }
 
@@ -160,6 +186,7 @@ for fixture in \
     cast-header-only-library-fixture-1.0.0 \
     cast-hooks-fixture-1.0.0 \
     cast-meson-fixture-1.0.0 \
+    cast-multiple-sources-fixture-1.0.0 \
     cast-plugin-output-fixture-1.0.0 \
     cast-post-install-smoke-test-fixture-1.0.0 \
     cast-split-fixture-1.0.0
@@ -170,7 +197,7 @@ do
             suffix=tar.gz
             compression=gzip
             ;;
-        cast-hooks-fixture-1.0.0)
+        cast-hooks-fixture-1.0.0|cast-multiple-sources-fixture-1.0.0)
             suffix=tar.xz
             compression=xz
             ;;
@@ -244,29 +271,157 @@ do
     temporary=
 done
 
-raw_patch=cast-hooks-fixture-1.0.0-pre-setup.patch
-source="$source_file_root/$raw_patch"
-output="$archive_root/$raw_patch"
-if [ "$mode" = check ]; then
-    temporary="$check_root/$raw_patch"
-else
-    temporary="$archive_root/.$raw_patch.tmp"
+for raw_source in \
+    cast-hooks-fixture-1.0.0-pre-setup.patch \
+    cast-multiple-sources-schema-1.0.0.h
+do
+    source="$source_file_root/$raw_source"
+    output="$archive_root/$raw_source"
+    if [ "$mode" = check ]; then
+        temporary="$check_root/$raw_source"
+    else
+        temporary="$archive_root/.$raw_source.tmp"
+    fi
+    timeout 30s rm -f "$temporary"
+    timeout 30s cat "$source" > "$temporary"
+    timeout 30s chmod 0644 "$temporary"
+    if [ "$mode" = check ]; then
+        test -f "$output"
+        test ! -L "$output"
+        if ! timeout 30s cmp -s "$temporary" "$output"; then
+            printf 'execution fixture raw source is stale: %s\n' "$output" >&2
+            exit 1
+        fi
+        timeout 30s rm -f "$temporary"
+    else
+        timeout 30s mv -f "$temporary" "$output"
+    fi
+    temporary=
+done
+
+git_fixture=cast-multiple-sources-protocol-1.0.0
+git_source="$git_source_root/$git_fixture"
+git_bundle=cast-multiple-sources-protocol-1.0.0.bundle
+git_output="$git_bundle_root/$git_bundle"
+git_work=$(timeout 30s mktemp -d "${TMPDIR:-/tmp}/cast-execution-git.XXXXXX")
+git_repository="$git_work/repository"
+git_home="$git_work/home"
+git_xdg="$git_work/xdg"
+git_validation="$git_work/validation"
+timeout 30s mkdir -p "$git_repository" "$git_home" "$git_xdg"
+
+if ! timeout 30s find "$git_source" -name .git -print -quit > "$git_validation"; then
+    printf 'could not validate execution Git fixture administration entries: %s\n' "$git_source" >&2
+    exit 1
 fi
-rm -f "$temporary"
-cat "$source" > "$temporary"
-chmod 0644 "$temporary"
+test ! -s "$git_validation" || {
+    printf 'execution Git fixture source tree contains a forbidden .git entry: %s\n' "$git_source" >&2
+    exit 1
+}
+if ! timeout 30s find "$git_source" -type l -print -quit > "$git_validation"; then
+    printf 'could not validate execution Git fixture symlinks: %s\n' "$git_source" >&2
+    exit 1
+fi
+test ! -s "$git_validation" || {
+    printf 'execution Git fixture source tree contains a forbidden symlink: %s\n' "$git_source" >&2
+    exit 1
+}
+if ! timeout 30s find "$git_source" ! -type d ! -type f ! -type l -print -quit > "$git_validation"; then
+    printf 'could not validate execution Git fixture inode kinds: %s\n' "$git_source" >&2
+    exit 1
+fi
+test ! -s "$git_validation" || {
+    printf 'execution Git fixture source tree contains a forbidden special file: %s\n' "$git_source" >&2
+    exit 1
+}
+if ! timeout 30s find "$git_source" -type f -links +1 -print -quit > "$git_validation"; then
+    printf 'could not validate execution Git fixture hardlinks: %s\n' "$git_source" >&2
+    exit 1
+fi
+test ! -s "$git_validation" || {
+    printf 'execution Git fixture source tree contains a forbidden multiply-linked file: %s\n' "$git_source" >&2
+    exit 1
+}
+
+timeout 30s cp -R "$git_source/." "$git_repository/"
+timeout 30s find "$git_repository" -type d -exec timeout 30s chmod 0755 {} +
+timeout 30s find "$git_repository" -type f -exec timeout 30s chmod 0644 {} +
+
+fixture_git() {
+    timeout 30s env -i \
+        PATH="$PATH" \
+        HOME="$git_home" \
+        XDG_CONFIG_HOME="$git_xdg" \
+        LC_ALL=C \
+        TZ=UTC \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_SYSTEM=/dev/null \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_DEFAULT_HASH=sha1 \
+        GIT_NO_REPLACE_OBJECTS=1 \
+        GIT_TERMINAL_PROMPT=0 \
+        GIT_AUTHOR_NAME="Cast Fixture" \
+        GIT_AUTHOR_EMAIL="cast-fixture@fixtures.invalid" \
+        GIT_AUTHOR_DATE="2023-11-14T22:13:20Z" \
+        GIT_COMMITTER_NAME="Cast Fixture" \
+        GIT_COMMITTER_EMAIL="cast-fixture@fixtures.invalid" \
+        GIT_COMMITTER_DATE="2023-11-14T22:13:20Z" \
+        git \
+            -c core.hooksPath=/dev/null \
+            -c commit.gpgSign=false \
+            -c tag.gpgSign=false \
+            "$@"
+}
+
+fixture_git -C "$git_repository" init \
+    --quiet \
+    --initial-branch=main \
+    --object-format=sha1
+fixture_git -C "$git_repository" config core.autocrlf false
+fixture_git -C "$git_repository" config core.fileMode true
+fixture_git -C "$git_repository" config core.ignoreCase false
+fixture_git -C "$git_repository" config core.precomposeUnicode false
+fixture_git -C "$git_repository" config core.symlinks true
+fixture_git -C "$git_repository" config user.name "Cast Fixture"
+fixture_git -C "$git_repository" config user.email "cast-fixture@fixtures.invalid"
+fixture_git -C "$git_repository" add --all --force
+fixture_git -C "$git_repository" commit \
+    --quiet \
+    --no-gpg-sign \
+    -m "cast multiple sources protocol fixture"
+git_commit=$(fixture_git -C "$git_repository" rev-parse HEAD)
+test "$git_commit" = 4f124a6f438b061a836e332d67e803a69a7bf2d3 || {
+    printf 'execution Git fixture commit drifted: %s\n' "$git_commit" >&2
+    exit 1
+}
 if [ "$mode" = check ]; then
-    test -f "$output"
-    test ! -L "$output"
-    if ! cmp -s "$temporary" "$output"; then
-        printf 'execution fixture raw source is stale: %s\n' "$output" >&2
+    temporary="$check_root/$git_bundle"
+else
+    temporary="$git_bundle_root/.$git_bundle.tmp"
+fi
+timeout 30s rm -f "$temporary"
+fixture_git -C "$git_repository" \
+    -c pack.threads=1 \
+    -c pack.window=0 \
+    -c pack.depth=0 \
+    -c core.compression=0 \
+    bundle create "$temporary" refs/heads/main
+fixture_git -C "$git_repository" bundle verify "$temporary" >/dev/null 2>&1
+timeout 30s chmod 0644 "$temporary"
+if [ "$mode" = check ]; then
+    test -f "$git_output"
+    test ! -L "$git_output"
+    if ! timeout 30s cmp -s "$temporary" "$git_output"; then
+        printf 'execution fixture Git bundle is stale: %s\n' "$git_output" >&2
         exit 1
     fi
-    rm -f "$temporary"
+    timeout 30s rm -f "$temporary"
 else
-    mv -f "$temporary" "$output"
+    timeout 30s mv -f "$temporary" "$git_output"
 fi
 temporary=
+timeout 30s rm -rf "$git_work"
+git_work=
 
 count=0
 for entry in "$archive_root"/*; do
@@ -292,6 +447,8 @@ for entry in "$archive_root"/*; do
         cast-hooks-fixture-1.0.0.tar.xz|\
         cast-hooks-fixture-1.0.0-pre-setup.patch|\
         cast-meson-fixture-1.0.0.tar|\
+        cast-multiple-sources-fixture-1.0.0.tar.xz|\
+        cast-multiple-sources-schema-1.0.0.h|\
         cast-plugin-output-fixture-1.0.0.tar|\
         cast-post-install-smoke-test-fixture-1.0.0.tar|\
         cast-split-fixture-1.0.0.tar) ;;
@@ -300,7 +457,25 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 16 || {
-    printf 'expected exactly sixteen source-backed execution fixture artifacts, found %s\n' "$count" >&2
+test "$count" -eq 18 || {
+    printf 'expected exactly eighteen archive/raw execution fixture artifacts, found %s\n' "$count" >&2
+    exit 1
+}
+
+git_bundle_count=0
+for entry in "$git_bundle_root"/*; do
+    test -f "$entry" && test ! -L "$entry" || {
+        printf 'unexpected non-regular execution Git bundle entry: %s\n' "$entry" >&2
+        exit 1
+    }
+    case "$(basename "$entry")" in
+        cast-multiple-sources-protocol-1.0.0.bundle) ;;
+        *) printf 'unexpected execution fixture Git bundle: %s\n' "$entry" >&2; exit 1 ;;
+    esac
+    git_bundle_count=$((git_bundle_count + 1))
+done
+
+test "$git_bundle_count" -eq 1 || {
+    printf 'expected exactly one execution fixture Git bundle, found %s\n' "$git_bundle_count" >&2
     exit 1
 }

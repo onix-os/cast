@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 18] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 19] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -13,12 +13,19 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 18] = [
     "header-only-library",
     "hooks-patch",
     "meson",
+    "multiple-sources",
     "plugin-output",
     "post-install-smoke-test",
     "split",
     "userspace-profile",
 ];
 const EXECUTION_FIXTURE_SELECTOR_ENV: &str = "CAST_EXECUTION_FIXTURE";
+
+mod multiple_sources_topology {
+    use super::*;
+
+    include!("execution_topology/multiple_sources.rs");
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExecutionFixtureSelection {
@@ -475,6 +482,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Install", vec![run("meson", "install")]),
             phase("Check", vec![run("meson", "test")]),
         ],
+        "multiple-sources" => multiple_sources_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
             prepare(match name {
                 "cargo" => "cast-cargo-fixture",
@@ -705,6 +713,9 @@ fi
     }
     if name == "meson" {
         assert_meson_dependency_role_relations(plan);
+    }
+    if name == "multiple-sources" {
+        multiple_sources_topology::assert_contract(plan, job);
     }
     if name == "generated-shell" {
         assert_generated_shell_relations(plan);

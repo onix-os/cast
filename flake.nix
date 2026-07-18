@@ -32,6 +32,7 @@
               mysqlSupport = false;
             })
             pkgs.git
+            pkgs.gcc
             pkgs.gzip
             pkgs.gnumake
             pkgs.jq

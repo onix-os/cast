@@ -33,6 +33,7 @@ pub(super) fn assert_fixture_bundle(
                 | "header-only-library"
                 | "hooks-patch"
                 | "meson"
+                | "multiple-sources"
                 | "plugin-output"
                 | "post-install-smoke-test"
                 | "split"

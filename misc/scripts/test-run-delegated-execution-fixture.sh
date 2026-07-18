@@ -514,7 +514,7 @@ for fixture_directory in \
     assert_argument_count "$state/systemd-run-args" \
         '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
 done
-test "$fixture_count" -eq 18
+test "$fixture_count" -eq 19
 test ! -e "$evidence/fixtures-ci-proof.json"
 
 reset_state
@@ -544,22 +544,23 @@ jq -e --arg commit "$fake_commit" '
     and .required_execution == true
     and .bundle_ledger_schema == "cast.fixtures-ci.bundle.v1"
     and .totals == {
-        fixture_count: 18,
-        execution_count: 36,
-        bundle_validation_count: 54,
-        stone_count: 115,
-        manifest_count: 36,
-        artifact_count: 151,
+        fixture_count: 19,
+        execution_count: 38,
+        bundle_validation_count: 57,
+        stone_count: 124,
+        manifest_count: 38,
+        artifact_count: 162,
         artifact_bytes: .totals.artifact_bytes
     }
-    and (.fixtures | length) == 18
+    and (.fixtures | length) == 19
     and .fixtures[0].name == "autotools"
     and .fixtures[11].name == "header-only-library"
-    and .fixtures[15].name == "post-install-smoke-test"
-    and .fixtures[17].name == "userspace-profile"
-    and ([.fixtures[].artifacts.stone_count] | add) == 115
-    and ([.fixtures[].artifacts.manifest_count] | add) == 36
-    and ([.fixtures[].artifacts.artifact_count] | add) == 151
+    and .fixtures[14].name == "multiple-sources"
+    and .fixtures[16].name == "post-install-smoke-test"
+    and .fixtures[18].name == "userspace-profile"
+    and ([.fixtures[].artifacts.stone_count] | add) == 124
+    and ([.fixtures[].artifacts.manifest_count] | add) == 38
+    and ([.fixtures[].artifacts.artifact_count] | add) == 162
     and .result == "passed"
 ' "$proof" >/dev/null
 grep -Fqx -- "--setenv=CAST_FIXTURE_PROOF_PATH=$proof" "$state/systemd-run-args"

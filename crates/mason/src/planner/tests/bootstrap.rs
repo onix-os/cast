@@ -1,14 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use forge::package::Meta;
 use fs_err as fs;
-use gluon_config::{Evaluator, Source};
+use gluon_config::{Evaluator, ImportPolicy, Source};
 use sha2::{Digest, Sha256};
 use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType};
 use url::Url;
@@ -231,7 +231,10 @@ fn load_bootstrap_closure() -> BootstrapClosure {
         "bootstrap closure exceeds its test boundary"
     );
     let source = std::fs::read_to_string(&path).unwrap();
+    let mut import_policy = ImportPolicy::new();
+    import_policy.enable_array_primitives();
     Evaluator::default()
+        .with_import_policy(import_policy)
         .evaluate::<BootstrapClosure>(&Source::new("bootstrap/closure.glu", &source))
         .unwrap()
         .value
@@ -638,7 +641,9 @@ cast.profiles [
     }
 
     fn import_sources(&self, planned: &Planned) {
-        let archives = bootstrap_root().parent().unwrap().join("archives");
+        let fixture_root = bootstrap_root().parent().unwrap().to_owned();
+        let archives = fixture_root.join("archives");
+        let git_bundles = fixture_root.join("git-bundles");
         // Frozen setup reads from the upstream mapping owned by this exact
         // runtime, not from the workspace root itself. Keep fixture admission
         // on that authoritative path so a contentful test never falls through
@@ -647,6 +652,7 @@ cast.profiles [
         let expected_sources = match planned.plan.package.name.as_str() {
             "cast-generated-config-fixture" | "cast-generated-shell-fixture" | "cast-userspace-profile-fixture" => 0,
             "cast-hooks-fixture" => 2,
+            "cast-multiple-sources-fixture" => 3,
             _ => 1,
         };
         assert_eq!(
@@ -655,17 +661,33 @@ cast.profiles [
             "execution fixture locked-source cardinality drift"
         );
         for source in &planned.plan.sources {
-            let stone_recipe::derivation::LockedSource::Archive { url, .. } = source else {
-                panic!("source-backed execution inputs must remain archive-only");
-            };
-            let source_url = Url::parse(url).unwrap();
-            let filename = source_url
-                .path_segments()
-                .and_then(Iterator::last)
-                .expect("locked execution archive URL has a basename")
-                .to_owned();
-            crate::upstream::import_locked_archive_fixture(source, &storage_dir, &archives.join(&filename))
-                .unwrap_or_else(|error| panic!("import offline execution source {filename}: {error:#}"));
+            match source {
+                stone_recipe::derivation::LockedSource::Archive { url, .. } => {
+                    let source_url = Url::parse(url).unwrap();
+                    let filename = source_url
+                        .path_segments()
+                        .and_then(Iterator::last)
+                        .expect("locked execution archive URL has a basename")
+                        .to_owned();
+                    crate::upstream::import_locked_archive_fixture(source, &storage_dir, &archives.join(&filename))
+                        .unwrap_or_else(|error| panic!("import offline execution source {filename}: {error:#}"));
+                }
+                stone_recipe::derivation::LockedSource::Git { url, commit, .. } => {
+                    assert_eq!(planned.plan.package.name, "cast-multiple-sources-fixture");
+                    assert_eq!(url, super::MULTIPLE_SOURCES_GIT_URL);
+                    assert_eq!(commit, super::MULTIPLE_SOURCES_GIT_COMMIT);
+                    let bundle = git_bundles.join(super::MULTIPLE_SOURCES_GIT_BUNDLE);
+                    let metadata = fs::symlink_metadata(&bundle).unwrap();
+                    assert!(metadata.file_type().is_file() && metadata.nlink() == 1);
+                    assert_eq!(
+                        hex::encode(Sha256::digest(fs::read(&bundle).unwrap())),
+                        super::MULTIPLE_SOURCES_GIT_BUNDLE_SHA256,
+                        "delegated Git transport bundle drifted before offline admission"
+                    );
+                    crate::upstream::import_locked_git_fixture(source, &storage_dir, &bundle, SOURCE_DATE_EPOCH)
+                        .unwrap_or_else(|error| panic!("import offline execution Git bundle: {error:?}"));
+                }
+            }
         }
         assert!(
             !self.cache_dir.join("fetched").exists(),

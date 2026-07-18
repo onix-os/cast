@@ -59,6 +59,7 @@ def expected_stone_count($fixture):
     "factory-override",
     "hooks-patch",
     "meson",
+    "multiple-sources",
     "post-install-smoke-test"
   ] | index($fixture) then 9
   elif $fixture == "header-only-library" then 2
@@ -162,6 +163,7 @@ def fixture_names:
     "header-only-library",
     "hooks-patch",
     "meson",
+    "multiple-sources",
     "plugin-output",
     "post-install-smoke-test",
     "split",
@@ -199,12 +201,12 @@ and (
       "artifact_count",
       "artifact_bytes"
     ]))
-  and $proof.totals.fixture_count == 18
-  and $proof.totals.execution_count == 36
-  and $proof.totals.bundle_validation_count == 54
-  and $proof.totals.stone_count == 115
-  and $proof.totals.manifest_count == 36
-  and $proof.totals.artifact_count == 151
+  and $proof.totals.fixture_count == 19
+  and $proof.totals.execution_count == 38
+  and $proof.totals.bundle_validation_count == 57
+  and $proof.totals.stone_count == 124
+  and $proof.totals.manifest_count == 38
+  and $proof.totals.artifact_count == 162
   and ($proof.totals.artifact_bytes | bounded_positive_integer(4294967296))
   and ($proof.fixtures | type == "array")
   and ($proof.fixtures | map(.name)) == $fixture_names
