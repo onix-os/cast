@@ -91,14 +91,15 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Nineteen separate fixtures cover representative package shapes. Sixteen contain
+Twenty separate fixtures cover representative package shapes. Seventeen contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
 generated daemon assets, Gluon factory/override composition, a runtime-loaded
 plugin with an explicit output relation, a staged post-install smoke test, and
 an independently compiled staged header-only interface, native split-output
-builds, and one mixed archive, exact-commit Git, and raw-file build. The
+builds, one mixed archive, exact-commit Git, and raw-file build, and declarative
+system-integration assets. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
@@ -132,6 +133,21 @@ built PIE executable; the packaged program retains libz but cannot acquire a
 runtime `file` relation. The exact build and check origins, provider IDs,
 transitive closure, manifest entries, installed ELF, and emitted Stone metadata
 are all frozen independently.
+The `system-integration-assets` fixture turns the declarative integration
+example into an install-only package with real bytes. Its one explicit `out`
+routes exactly eight files: a staged helper, a systemd unit, sysusers and
+tmpfiles declarations, a udev rule, a conservative polkit rule, its matching
+action XML, and a license. The frozen closure binds every declared build,
+check, and runtime capability to exact dash, install, systemd, udev, polkit,
+and xmllint providers. The offline contract pins source/archive identity,
+install and check scripts, and the polkit rule bytes. A supplemental lane
+copies the authored files into a disposable staged root, self-tests the helper,
+and runs the declared systemd, sysusers, tmpfiles, udev, and XML checks there;
+it does not install into host paths. The delegated bundle golden requires all
+eight exact bytes and modes if a supported execution host emits the Stone.
+These checks do not enable or start a service, create a host account, apply
+tmpfiles to host state, trigger a device event, load polkitd, authorize an
+action, boot, reboot, or prove a transaction or rollback.
 The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
@@ -145,11 +161,12 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has sixteen deterministic tar streams: twelve plain
-USTAR archives, vendored Cargo as deterministic gzip, two deterministic XZ
-archives, and the generated-daemon fixture as deterministic Zstandard. It also
-contains two independently locked raw files and one deterministic Git bundle.
-`make fixture-sources` rebuilds all eighteen archive/raw artifacts plus that one
+The checked-in source matrix has seventeen deterministic tar streams: thirteen
+plain USTAR archives, vendored Cargo as deterministic gzip, two deterministic
+XZ archives, and the generated-daemon fixture as deterministic Zstandard. It
+also contains two independently locked raw files and one deterministic Git
+bundle.
+`make fixture-sources` rebuilds all nineteen archive/raw artifacts plus that one
 bundle; the offline lane rejects any format, filename, order, unpack policy,
 commit, normalized Git tree, or digest drift. The source generator fixes Git's
 identity, timestamps, refs, and configuration before producing the bundle.
@@ -162,6 +179,7 @@ make delegated-execution-preflight
 make bootstrap-fixtures
 make bootstrap-fixtures FIXTURE=cmake
 make bootstrap-fixtures FIXTURE=multiple-sources
+make bootstrap-fixtures FIXTURE=system-integration-assets
 make delegated-execution-fixtures FIXTURE=cmake
 make fixtures-ci
 ```
@@ -177,7 +195,8 @@ one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `factory-override`,
 `generated-config`, `generated-shell`, `header-only-library`, `hooks-patch`,
 `meson`, `multiple-sources`, `plugin-output`,
-`post-install-smoke-test`, `split`, or `userspace-profile`;
+`post-install-smoke-test`, `split`, `system-integration-assets`, or
+`userspace-profile`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
 works with `make bootstrap-fixtures-offline` when the package store has already
@@ -185,7 +204,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all nineteen, and always requires execution.
+selection, runs all twenty, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -219,7 +238,7 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all nineteen fixtures complete both executions. It records the exact matrix
+all twenty fixtures complete both executions. It records the exact matrix
 totals, repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

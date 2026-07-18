@@ -574,19 +574,19 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-By 2026-07-18, the matrix contains nineteen fixtures, including a mixed archive/Git/raw build,
-two generated payloads, an empty userspace profile, a runtime-loaded plugin, a staged post-install proof, and a staged-header consumer.
-The plugin host validates the exact identity returned through `dlopen`/`dlsym`;
-its complete compiler commands are frozen, and bundle goldens require PIE,
-RELRO, immediate binding, non-executable stack, separated writable/executable
-loads, no runtime search path or text relocations, and the exact loader imports.
-Both GCC and Clang compile and run the plugin and mixed-source goldens as supplemental host proofs.
-`make test`, `make examples`, and `make execution-fixtures` pass for the complete
-offline corpus and exact bootstrap closures. Required live runs for the new
-fixtures materialized their offline roots and then failed closed at the host's
-supplementary-group `EPERM` boundary before package execution. No Stone archive
-was emitted, decoded, or reproduced, so the three live-evidence items below
-remain open.
+By 2026-07-18, the matrix contains twenty fixtures: a mixed archive/Git/raw
+build, two generated payloads, an empty userspace profile, a runtime-loaded
+plugin, staged post-install and header-consumer proofs, and the declarative
+system-integration-assets package. That install-only case freezes one deterministic USTAR source, an exact provider closure, and an eight-file `out` bundle.
+Offline contract and disposable staged-root checks validate exact bytes, modes,
+helper behavior, and declared system asset checks without activating host state.
+Only a supported delegated run can emit, decode, and reproduce its Stone; none of this proves boot, transactions, or rollback.
+The plugin host validates identity returned through `dlopen`/`dlsym`; frozen commands and bundle goldens require PIE, RELRO, immediate binding,
+non-executable stack, separated writable/executable loads, no runtime search path or text relocations, and exact loader imports.
+GCC and Clang compile and run the plugin and mixed-source goldens as supplemental host proofs.
+`make test`, `make examples`, and `make execution-fixtures` pass for the offline corpus and exact bootstrap closures.
+This host's required runs fail closed at supplementary-group `EPERM` before package execution;
+no Stone was emitted, decoded, or reproduced, so the three live-evidence items remain open.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
@@ -607,7 +607,7 @@ remain open.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
   multi-binary Cargo, vendored Cargo, CMake, custom-step, header-only,
-  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, and split-output builds.
+  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, and declarative system-integration builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
 - [x] Add source-less generated-configuration and generated-shell fixtures whose
@@ -634,7 +634,7 @@ remain open.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the nineteen exact closure declarations and their aggregate bootstrap
+  each of the twenty exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's
