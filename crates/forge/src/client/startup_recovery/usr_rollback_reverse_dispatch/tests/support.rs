@@ -193,8 +193,16 @@ pub(super) fn release_fixture_handles(fixture: &mut Fixture) -> tempfile::TempDi
     let replacement_root = private_installation_tempdir();
     let replacement_installation = Installation::open(replacement_root.path(), None).unwrap();
     let replacement_database = db::state::Database::new(":memory:").unwrap();
+    let replacement_layout_database = db::layout::Database::new(":memory:").unwrap();
+    let replacement_system = test_system_capabilities(
+        &replacement_installation,
+        &replacement_database,
+        &replacement_layout_database,
+    );
+    let retained_system = std::mem::replace(&mut fixture.fixture.system, replacement_system);
     let retained_installation = std::mem::replace(&mut fixture.fixture.installation, replacement_installation);
     let retained_database = std::mem::replace(&mut fixture.fixture.database, replacement_database);
+    drop(retained_system);
     drop(retained_database);
     drop(retained_installation);
     replacement_root
