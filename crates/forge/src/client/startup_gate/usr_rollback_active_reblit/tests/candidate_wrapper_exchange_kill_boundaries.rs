@@ -76,12 +76,8 @@ impl CandidateWrapperExchangeKillBoundary {
 
     pub(super) fn arm(self, kill: fn()) {
         match self {
-            Self::PostExchangePreRecapture => {
-                arm_before_active_reblit_candidate_preserve_reconciliation_capture(kill)
-            }
-            Self::BeforeCandidateSync => {
-                arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync(kill)
-            }
+            Self::PostExchangePreRecapture => arm_before_active_reblit_candidate_preserve_reconciliation_capture(kill),
+            Self::BeforeCandidateSync => arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync(kill),
             Self::BeforeCandidateWrapperSync => {
                 arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync(kill)
             }

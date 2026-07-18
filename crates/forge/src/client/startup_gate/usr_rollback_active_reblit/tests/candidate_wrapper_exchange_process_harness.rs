@@ -359,10 +359,7 @@ impl WrapperExchangeEvidence {
             root_names: directory_names(&roots),
             quarantine_names: directory_names(&quarantine),
             other_roots: child_trees_except(&roots, OsStr::new("staging")),
-            other_quarantine: child_trees_except(
-                &quarantine,
-                reservation_wrapper_path.file_name().unwrap(),
-            ),
+            other_quarantine: child_trees_except(&quarantine, reservation_wrapper_path.file_name().unwrap()),
             root_abi: capture_root_abi(root),
             candidate_state: fs::read_to_string(candidate.join(".stateID")).unwrap(),
             live_state: fs::read_to_string(live.join(".stateID")).unwrap(),
@@ -396,7 +393,10 @@ impl WrapperExchangeEvidence {
             self.other_quarantine
         );
         assert_eq!(capture_root_abi(root), self.root_abi);
-        assert_eq!(fs::read_to_string(candidate.join(".stateID")).unwrap(), self.candidate_state);
+        assert_eq!(
+            fs::read_to_string(candidate.join(".stateID")).unwrap(),
+            self.candidate_state
+        );
         assert_eq!(fs::read_to_string(live.join(".stateID")).unwrap(), self.live_state);
     }
 }
@@ -631,10 +631,7 @@ pub(super) fn assert_journal_reopenable(root: &Path, expected: &TransitionRecord
     assert_journal_reopenable_from_installation(&installation, expected);
 }
 
-pub(super) fn assert_journal_reopenable_from_installation(
-    installation: &Installation,
-    expected: &TransitionRecord,
-) {
+pub(super) fn assert_journal_reopenable_from_installation(installation: &Installation, expected: &TransitionRecord) {
     let cast = installation.retained_mutable_cast_directory().unwrap();
     let journal = TransitionJournalStore::try_open_in_retained_cast(cast, &installation.root).unwrap();
     assert_eq!(journal.load().unwrap(), Some(expected.clone()));
@@ -702,7 +699,10 @@ pub(super) fn assert_journal_inventory(root: &Path) {
     names.sort();
     let mut expected = vec![OsString::from(LOCK_NAME), OsString::from(CANONICAL_NAME)];
     expected.sort();
-    assert_eq!(names, expected, "unexpected ActiveReblit wrapper-exchange journal inventory");
+    assert_eq!(
+        names, expected,
+        "unexpected ActiveReblit wrapper-exchange journal inventory"
+    );
 }
 
 pub(super) fn canonical_path(root: &Path) -> PathBuf {

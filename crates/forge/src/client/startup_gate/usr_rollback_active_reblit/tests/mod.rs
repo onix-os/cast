@@ -1,14 +1,14 @@
 //! Real startup-entry contracts for the ActiveReblit rollback suffix.
 
+mod candidate_wrapper_exchange_kill_boundaries;
+mod candidate_wrapper_exchange_process_harness;
+mod candidate_wrapper_exchange_process_kill;
 mod complete_authority_binding;
 mod complete_evidence_races;
 mod complete_exclusions;
 mod complete_matrix;
 mod complete_restart;
 mod complete_storage_faults;
-mod candidate_wrapper_exchange_kill_boundaries;
-mod candidate_wrapper_exchange_process_harness;
-mod candidate_wrapper_exchange_process_kill;
 mod durability_failures;
 mod effect_failures;
 mod evidence_races;

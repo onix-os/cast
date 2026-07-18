@@ -5,7 +5,8 @@ use std::{env, fs, os::unix::process::ExitStatusExt as _};
 use crate::{
     Installation,
     client::{
-        active_state_snapshot::ActiveStateReservation, snapshot_startup_recovery_namespace,
+        active_state_snapshot::ActiveStateReservation,
+        snapshot_startup_recovery_namespace,
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::{
             active_reblit_candidate_preserve_exchange_attempt_count,
@@ -23,12 +24,11 @@ use super::{
     candidate_wrapper_exchange_kill_boundaries::CandidateWrapperExchangeKillBoundary,
     candidate_wrapper_exchange_process_harness::{
         CHILD_DEADLINE, ChildCase, DeadlineChild, ExistingCandidateDatabase, MatrixDimensions, ProcessEpoch,
-        ProcessRole, ProcessSource, PublicJournalIdentity, ROLE_ENV, WrapperExchangeEvidence,
-        assert_candidate_source, assert_journal_inventory, assert_journal_reopenable,
-        assert_journal_reopenable_from_installation, assert_parent_environment_clean, assert_preserved_topology,
-        assert_separate_control_path, assert_staged_topology, canonical_path, capture_database_at_root,
-        expected_candidate_preserved, expected_post_events, kill_after_real_wrapper_exchange, spawn_child,
-        write_control_case,
+        ProcessRole, ProcessSource, PublicJournalIdentity, ROLE_ENV, WrapperExchangeEvidence, assert_candidate_source,
+        assert_journal_inventory, assert_journal_reopenable, assert_journal_reopenable_from_installation,
+        assert_parent_environment_clean, assert_preserved_topology, assert_separate_control_path,
+        assert_staged_topology, canonical_path, capture_database_at_root, expected_candidate_preserved,
+        expected_post_events, kill_after_real_wrapper_exchange, spawn_child, write_control_case,
     },
     support::{
         CandidateOrigin, Epoch, build_active_at_wrapper_index, install_persistent_database, open_state_database,
@@ -211,14 +211,21 @@ fn run_recovery_child(
     assert_eq!(pending.transition_id(), &expected.transition_id);
     assert_eq!(pending.phase(), Phase::CandidatePreserved);
     assert_eq!(pending.disposition(), expected.recovery_disposition());
-    assert!(pending.blockers().is_empty(), "unexpected startup blockers: {:?}", pending.blockers());
+    assert!(
+        pending.blockers().is_empty(),
+        "unexpected startup blockers: {:?}",
+        pending.blockers()
+    );
     assert!(pending.retains_database(database));
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     assert_eq!(
         take_active_reblit_candidate_preserve_post_exchange_durability_events(),
         expected_events
     );
-    assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), expected);
+    assert_eq!(
+        decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(),
+        expected
+    );
     assert_eq!(ExistingCandidateDatabase::capture(database, &expected), database_before);
     assert_eq!(snapshot_startup_recovery_namespace(&case.root), namespace_before);
     assert_preserved_topology(&case.root, &expected, case.dimensions().wrapper_index);
