@@ -238,7 +238,10 @@ fn temp_store_error(raw: &RawConnection, status: c_int) -> ReadOnlyError {
 pub(super) fn expected_migrations(kind: DatabaseKind) -> (&'static str, &'static [&'static str]) {
     match kind {
         DatabaseKind::Install => ("install", &["20240303165811", "20260714000000"]),
-        DatabaseKind::State => ("state", &["20240304201550", "20260714000000", "20260716000000"]),
+        DatabaseKind::State => (
+            "state",
+            &["20240304201550", "20260714000000", "20260716000000", "20260718000000"],
+        ),
         DatabaseKind::Layout => ("layout", &["20240304192634", "20260714120000"]),
     }
 }

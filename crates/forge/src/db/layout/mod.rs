@@ -298,6 +298,7 @@ fn canonical_bounded_packages(packages: &[package::Id]) -> Result<CanonicalPacka
             unique.push(package);
         }
     }
+    unique.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
     Ok(CanonicalPackages::Complete(unique))
 }
 

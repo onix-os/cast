@@ -41,6 +41,7 @@ fn migration_leaves_preexisting_state_without_provenance() {
     let database = Database::new(":memory:").unwrap();
     database.conn.exec(|connection| {
         connection.revert_last_migration(super::super::MIGRATIONS).unwrap();
+        connection.revert_last_migration(super::super::MIGRATIONS).unwrap();
         diesel::sql_query("INSERT INTO state (\"type\", summary) VALUES ('transaction', 'pre-provenance state')")
             .execute(connection)
             .unwrap();

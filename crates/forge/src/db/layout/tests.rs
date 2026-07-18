@@ -204,6 +204,71 @@ fn both_selected_package_query_plans_use_package_index() {
 }
 
 #[test]
+fn bounded_query_orders_packages_then_row_ids_across_request_order_and_reinsertion() {
+    let database = Database::new(":memory:").unwrap();
+    let alpha = package::Id::from("alpha-ordering");
+    let zeta = package::Id::from("zeta-ordering");
+    let zeta_layouts = [regular("share/zeta/first"), regular("share/zeta/second")];
+    let alpha_layouts = [regular("share/alpha/first"), regular("share/alpha/second")];
+
+    // Give zeta the lower global row IDs. Canonical output must still use the
+    // package ID as its primary key and the row ID only within each package.
+    database
+        .batch_add(zeta_layouts.iter().map(|layout| (&zeta, layout)))
+        .unwrap();
+    database
+        .batch_add(alpha_layouts.iter().map(|layout| (&alpha, layout)))
+        .unwrap();
+
+    let query = |requested: &[package::Id]| {
+        let BoundedQueryOutcome::Complete(rows) = database
+            .query_bounded(
+                requested,
+                QueryBounds {
+                    max_rows: 8,
+                    max_string_bytes: usize::MAX,
+                },
+                || true,
+            )
+            .unwrap()
+        else {
+            panic!("canonical bounded layout query did not complete")
+        };
+        rows.into_iter()
+            .map(|(package, layout)| {
+                let StonePayloadLayoutFile::Regular(_, path) = layout.file else {
+                    panic!("ordering fixture emitted a non-regular layout")
+                };
+                (package.as_str().to_owned(), path.as_str().to_owned())
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let expected = vec![
+        (alpha.as_str().to_owned(), "share/alpha/first".to_owned()),
+        (alpha.as_str().to_owned(), "share/alpha/second".to_owned()),
+        (zeta.as_str().to_owned(), "share/zeta/first".to_owned()),
+        (zeta.as_str().to_owned(), "share/zeta/second".to_owned()),
+    ];
+    assert_eq!(query(&[zeta.clone(), alpha.clone()]), expected);
+    assert_eq!(query(&[alpha.clone(), zeta.clone()]), expected);
+
+    database.remove(&alpha).unwrap();
+    let reinserted = [regular("share/alpha/new-second"), regular("share/alpha/new-first")];
+    database
+        .batch_add(reinserted.iter().map(|layout| (&alpha, layout)))
+        .unwrap();
+    let expected_after_reinsertion = vec![
+        (alpha.as_str().to_owned(), "share/alpha/new-second".to_owned()),
+        (alpha.as_str().to_owned(), "share/alpha/new-first".to_owned()),
+        (zeta.as_str().to_owned(), "share/zeta/first".to_owned()),
+        (zeta.as_str().to_owned(), "share/zeta/second".to_owned()),
+    ];
+    assert_eq!(query(&[zeta.clone(), alpha.clone()]), expected_after_reinsertion);
+    assert_eq!(query(&[alpha, zeta]), expected_after_reinsertion);
+}
+
+#[test]
 fn bounded_query_package_inputs_accept_n_reject_n_plus_one_and_deduplicate() {
     let database = Database::new(":memory:").unwrap();
     let selected = package::Id::from("selected-once");

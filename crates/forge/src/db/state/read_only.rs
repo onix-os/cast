@@ -11,10 +11,9 @@ use crate::{
     state::{self, Id, Selection, TransitionId},
 };
 
+use super::{MAX_SELECTION_TEXT_BYTES, MAX_SELECTIONS_PER_STATE, MAX_STATE_DATABASE_TEXT_FIELD_BYTES};
+
 const MAX_STATES: usize = 4_096;
-const MAX_SELECTIONS_PER_STATE: usize = 32_768;
-const MAX_TEXT_BYTES: usize = 64 * 1024;
-const MAX_SELECTION_TEXT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReadOnlyDatabase {
@@ -69,10 +68,10 @@ impl ReadOnlyDatabase {
                     });
                 }
                 let created = timestamp(state.i64(1)?)?;
-                let summary = state.nullable_text(2, MAX_TEXT_BYTES)?;
-                let description = state.nullable_text(3, MAX_TEXT_BYTES)?;
+                let summary = state.nullable_text(2, MAX_STATE_DATABASE_TEXT_FIELD_BYTES)?;
+                let description = state.nullable_text(3, MAX_STATE_DATABASE_TEXT_FIELD_BYTES)?;
                 let kind = state
-                    .text(4, MAX_TEXT_BYTES)?
+                    .text(4, MAX_STATE_DATABASE_TEXT_FIELD_BYTES)?
                     .parse::<state::Kind>()
                     .map_err(|_| ReadOnlyError::Policy {
                         context: "state row has an unsupported type",
@@ -97,8 +96,8 @@ impl ReadOnlyDatabase {
                             limit: MAX_SELECTIONS_PER_STATE,
                         });
                     }
-                    let package = selected.text(0, MAX_TEXT_BYTES)?;
-                    let reason = selected.nullable_text(2, MAX_TEXT_BYTES)?;
+                    let package = selected.text(0, MAX_STATE_DATABASE_TEXT_FIELD_BYTES)?;
+                    let reason = selected.nullable_text(2, MAX_STATE_DATABASE_TEXT_FIELD_BYTES)?;
                     text_bytes = text_bytes
                         .checked_add(package.len())
                         .and_then(|bytes| bytes.checked_add(reason.as_ref().map_or(0, String::len)))

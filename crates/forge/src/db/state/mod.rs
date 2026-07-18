@@ -10,10 +10,15 @@ use crate::State;
 use crate::state::{self, Id, Selection, TransitionId};
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("src/db/state/migrations");
+const MAX_SELECTIONS_PER_STATE: usize = 32_768;
+const MAX_SELECTION_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_STATE_DATABASE_TEXT_FIELD_BYTES: usize = 64 * 1024;
 
 mod exact_archived_removal;
 #[allow(dead_code)] // exact fresh removal remains sealed from startup dispatch
 mod exact_fresh_transition_removal;
+#[allow(dead_code)] // consumed by the ActiveReblit frozen-boot wiring slice
+mod frozen_boot_input;
 mod metadata_provenance;
 #[allow(dead_code)] // completed substrate; consumed by the next read-only-client slice
 mod read_only;
@@ -34,6 +39,8 @@ pub(crate) use exact_fresh_transition_removal::{
     arm_exact_fresh_transition_removal_fault, assert_exact_fresh_transition_removal_fault_consumed,
     exact_fresh_transition_removal_transaction_attempts,
 };
+#[allow(unused_imports)] // consumed by the ActiveReblit frozen-boot wiring slice
+pub(crate) use frozen_boot_input::{FrozenBootInput, FrozenBootInputError};
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[cfg(test)]
 pub(crate) use metadata_provenance::{

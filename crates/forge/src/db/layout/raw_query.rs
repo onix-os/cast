@@ -237,7 +237,7 @@ fn selected_layout_sql(package_count: usize, pass: SelectedPass) -> String {
     let placeholders = std::iter::repeat_n("?", package_count).collect::<Vec<_>>().join(",");
     format!(
         "SELECT {columns} FROM layout INDEXED BY {PACKAGE_ID_INDEX} \
-         WHERE package_id IN ({placeholders}) LIMIT ?"
+         WHERE package_id IN ({placeholders}) ORDER BY package_id, id LIMIT ?"
     )
 }
 
