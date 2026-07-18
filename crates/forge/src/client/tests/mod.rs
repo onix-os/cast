@@ -18,6 +18,7 @@ mod ephemeral_candidate_metadata;
 mod external_materialization;
 mod fixed_staging_transition;
 mod root_abi_preflight;
+mod self_upgrade_hardening;
 mod state_prune;
 mod stateful_candidate_metadata;
 

@@ -14,22 +14,20 @@ use crate::{
     state::{self, Selection},
 };
 
-// TODO: Flesh this out before v0 -> v1 upgrade is in place
-#[allow(unused, clippy::diverging_sub_expression)]
 #[instrument(skip(client))]
 pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
     client.preflight_active_state_snapshot()?;
     client.require_non_frozen()?;
     // Ensure client is stateful
     if client.is_ephemeral() {
-        return todo!("error can't self upgrade with epehemeral client");
+        return Err(Error::EphemeralClient);
     }
 
     // Get the previously installed Cast package.
     let installed = client
         .with_registry_snapshot(|registry| -> Result<Vec<crate::Package>, Error> { Ok(registry.list_installed()?) })?;
     let Some(previous_cast) = installed.into_iter().find(|p| p.meta.name.as_str() == "cast") else {
-        return todo!("error can't self upgrade without cast installed in current state");
+        return Err(Error::CastNotInstalled);
     };
 
     // Get the list of repos that are unsupported by this version of Cast.
@@ -121,22 +119,11 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
     }
 
     let Some(new_cast) = cast_priority_map.values().next_back() else {
-        if !missing_cast.is_empty() {
-            for repo in missing_cast {
-                eprintln!("`cast` doesn't exist in repository {repo}");
-            }
-        }
-        if !missing_upgrade_via.is_empty() {
-            for repo in missing_upgrade_via {
-                eprintln!("Repository {repo} is missing an `upgrade_via` format attribute");
-            }
-        }
-
-        return todo!("error for no unsupported repo with upgrade_via cast available");
+        return Err(Error::NoUpgradeCandidate {
+            missing_cast,
+            missing_upgrade_via,
+        });
     };
-
-    // Cache new Cast package.
-    runtime::block_on(client.cache_packages(slice::from_ref(new_cast)).in_current_span())?;
 
     // Calculate the new state of packages (previous state - previous Cast + new Cast).
     let new_state_pkgs = {
@@ -164,7 +151,9 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
                 ..old_selection
             }
         } else {
-            return todo!("internal error, installed cast not listed as state selection");
+            return Err(Error::CastSelectionMissing {
+                package: previous_cast.id,
+            });
         };
 
         // Add it
@@ -174,6 +163,17 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
             .collect::<Vec<_>>()
     };
 
+    // A simulation performs repository and state resolution, but must not
+    // populate the package cache or begin a state transition.
+    if simulate {
+        return Ok(());
+    }
+
+    // Cache the selected Cast package only after every local invariant has
+    // been validated. An inconsistent state therefore leaves no cache side
+    // effect behind.
+    runtime::block_on(client.cache_packages(slice::from_ref(new_cast)).in_current_span())?;
+
     // Perfect, apply state.
     client.new_state(&new_state_pkgs, "Self upgrade")?;
 
@@ -182,6 +182,23 @@ pub fn self_upgrade(client: &mut Client, simulate: bool) -> Result<(), Error> {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("self-upgrade is not available for an ephemeral client")]
+    EphemeralClient,
+
+    #[error("the active state does not contain an installed cast package")]
+    CastNotInstalled,
+
+    #[error(
+        "no unsupported repository provides a usable cast upgrade candidate (missing cast: {missing_cast:?}; missing upgrade_via: {missing_upgrade_via:?})"
+    )]
+    NoUpgradeCandidate {
+        missing_cast: Vec<repository::Id>,
+        missing_upgrade_via: Vec<repository::Id>,
+    },
+
+    #[error("installed cast package {package} is absent from the active-state selections")]
+    CastSelectionMissing { package: package::Id },
+
     #[error("client")]
     Client(#[from] client::Error),
 
