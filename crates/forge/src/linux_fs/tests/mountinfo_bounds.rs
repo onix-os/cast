@@ -1,14 +1,34 @@
-use std::io::{self, Cursor, Read};
+use std::{
+    cell::Cell,
+    io::{self, Cursor, Read},
+    time::{Duration, Instant},
+};
 
 use super::super::{
     MAX_INTERRUPTED_SYSCALL_RETRIES,
     mountinfo::{
         MOUNTINFO_LIMITS, MountInfoLimits, parse_mountinfo_with_limits, parse_mountinfo_with_limits_and_work,
-        read_mountinfo_bounded, read_mountinfo_with_limits,
+        parse_mountinfo_with_limits_and_work_until, read_mountinfo_bounded, read_mountinfo_snapshot_bounded_until,
+        read_mountinfo_with_limits,
     },
 };
 
 const RECORD: &[u8] = b"1 1 0:1 / / rw - rootfs rootfs rw\n";
+
+struct CountingReader<'a> {
+    bytes: &'a [u8],
+    calls: &'a Cell<usize>,
+}
+
+impl Read for CountingReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.calls.set(self.calls.get() + 1);
+        let count = self.bytes.len().min(output.len());
+        output[..count].copy_from_slice(&self.bytes[..count]);
+        self.bytes = &self.bytes[count..];
+        Ok(count)
+    }
+}
 
 fn limits() -> MountInfoLimits {
     MountInfoLimits {
@@ -192,6 +212,44 @@ fn bounded_reader_uses_one_truncation_sentinel_byte() {
         io::ErrorKind::InvalidData
     );
     assert_eq!(reader.calls, 1);
+}
+
+#[test]
+fn deadline_snapshot_retains_exact_bytes_and_the_complete_parse() {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let (bytes, parsed) = read_mountinfo_snapshot_bounded_until(&mut Cursor::new(RECORD), deadline).unwrap();
+
+    assert_eq!(bytes, RECORD);
+    assert_eq!(parsed, parse_mountinfo_with_limits(RECORD, MOUNTINFO_LIMITS).unwrap());
+}
+
+#[test]
+fn expired_snapshot_deadline_reads_zero_bytes() {
+    let calls = Cell::new(0);
+    let mut reader = CountingReader {
+        bytes: RECORD,
+        calls: &calls,
+    };
+
+    assert_eq!(
+        read_mountinfo_snapshot_bounded_until(&mut reader, Instant::now() - Duration::from_millis(1),)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn expired_parser_deadline_fails_before_parsing_complete_bytes() {
+    let bytes = RECORD;
+    assert_eq!(bytes, RECORD);
+    assert_eq!(
+        parse_mountinfo_with_limits_and_work_until(bytes, MOUNTINFO_LIMITS, Instant::now() - Duration::from_millis(1),)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
 }
 
 #[test]

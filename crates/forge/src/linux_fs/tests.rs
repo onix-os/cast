@@ -12,6 +12,10 @@ mod chmod_once;
 mod mountinfo_bounds;
 mod mountinfo_compatibility;
 mod mountinfo_grammar;
+mod sysfs_block_identity;
+mod sysfs_block_links;
+mod sysfs_block_numeric;
+mod sysfs_block_uevent;
 mod xattrs;
 
 struct InterruptingBoundedReader<'a> {

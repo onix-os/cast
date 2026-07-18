@@ -13,7 +13,7 @@ forge-linux-mountinfo-parser-test:
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNTINFO_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mountinfo_'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 19; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 22; \
 	for name in \
 		grammar::complete_records_preserve_order_fields_and_exact_decoded_path_bytes \
 		grammar::all_four_kernel_path_escapes_decode_without_interpreting_utf8 \
@@ -32,6 +32,9 @@ forge-linux-mountinfo-parser-test:
 		bounds::work_ceiling_admits_full_parse_n_and_rejects_n_minus_one \
 		bounds::bounded_reader_never_retries_eintr_without_limit \
 		bounds::bounded_reader_uses_one_truncation_sentinel_byte \
+		bounds::deadline_snapshot_retains_exact_bytes_and_the_complete_parse \
+		bounds::expired_snapshot_deadline_reads_zero_bytes \
+		bounds::expired_parser_deadline_fails_before_parsing_complete_bytes \
 		bounds::production_limits_are_finite_and_internally_consistent \
 		compatibility::live_thread_self_snapshot_is_parser_compatible_without_granting_authority; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
@@ -39,6 +42,7 @@ forge-linux-mountinfo-parser-test:
 	module="$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/mountinfo.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn parse_mountinfo_bytes(bytes: &[u8]) -> io::Result<MountInfo>' "$$module"; \
 	timeout 10s grep -Fq 'pub(crate) fn read_mountinfo_bounded(reader: &mut impl io::Read) -> io::Result<MountInfo>' "$$module"; \
+	timeout 10s grep -Fq 'pub(crate) fn read_mountinfo_snapshot_bounded_until(' "$$module"; \
 	timeout 10s grep -Fq 'MAX_MOUNTINFO_WORK' "$$module"; \
 	if timeout 10s rg -n 'from_utf8|to_string_lossy|PathBuf|read_to_end[[:space:]]*\(' "$$module"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in \

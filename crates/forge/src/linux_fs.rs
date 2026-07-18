@@ -95,7 +95,10 @@ fn read_to_end_bounded_with_deadline(
         let remaining = max_bytes - bytes.len();
         let chunk = remaining.min(buffer.len());
         match reader.read(&mut buffer[..chunk]) {
-            Ok(0) => break,
+            Ok(0) => {
+                retry_interrupted(deadline, || Ok(()))?;
+                break;
+            }
             Ok(read) => {
                 retry_interrupted(deadline, || Ok(()))?;
                 bytes.extend_from_slice(&buffer[..read]);
@@ -125,6 +128,9 @@ include!("linux_fs/descriptor_access.rs");
 
 #[allow(dead_code)] // parser foundation consumed by the authenticated topology layer
 pub(crate) mod mountinfo;
+
+#[allow(dead_code)] // pure parser foundation consumed by retained sysfs identity
+pub(crate) mod sysfs_block;
 
 #[cfg(test)]
 mod tests;

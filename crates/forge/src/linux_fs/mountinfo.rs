@@ -5,9 +5,9 @@
 // mutation authority. Callers must authenticate and retain the procfs file
 // separately before using `read_mountinfo_bounded`.
 
-use std::{collections::HashSet, io};
+use std::{collections::HashSet, io, time::Instant};
 
-use super::read_to_end_bounded;
+use super::{read_to_end_bounded, read_to_end_bounded_until};
 
 const MAX_MOUNTINFO_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MOUNTINFO_LINES: usize = 16 * 1024;
@@ -133,6 +133,32 @@ pub(crate) fn read_mountinfo_bounded(reader: &mut impl io::Read) -> io::Result<M
     read_mountinfo_with_limits(reader, MOUNTINFO_LIMITS)
 }
 
+/// Read one exact mountinfo byte snapshot and parse it under the production
+/// byte, grammar, work, retry, and deadline bounds.
+///
+/// Retaining the bytes gives a descriptor-backed authority exact snapshot
+/// provenance and bounded diagnostics. A later topology must compare its
+/// selected parsed entries and their uniqueness predicates, not require whole
+/// snapshot equality: unrelated mount-table activity is not a topology change.
+pub(crate) fn read_mountinfo_snapshot_bounded_until(
+    reader: &mut impl io::Read,
+    deadline: Instant,
+) -> io::Result<(Vec<u8>, MountInfo)> {
+    let read_limit = MOUNTINFO_LIMITS
+        .max_bytes
+        .checked_add(1)
+        .ok_or_else(|| invalid_input("mountinfo byte limit cannot reserve a truncation sentinel"))?;
+    let bytes = read_to_end_bounded_until(reader, read_limit, deadline)?;
+    if bytes.len() > MOUNTINFO_LIMITS.max_bytes {
+        return Err(invalid_data(format!(
+            "mountinfo exceeds the {} byte limit",
+            MOUNTINFO_LIMITS.max_bytes
+        )));
+    }
+    let parsed = parse_mountinfo_with_limits_and_work_until(&bytes, MOUNTINFO_LIMITS, deadline)?.0;
+    Ok((bytes, parsed))
+}
+
 /// Parse one complete mountinfo snapshot under fixed resource bounds.
 pub(crate) fn parse_mountinfo_bytes(bytes: &[u8]) -> io::Result<MountInfo> {
     parse_mountinfo_with_limits(bytes, MOUNTINFO_LIMITS)
@@ -162,6 +188,23 @@ pub(super) fn parse_mountinfo_with_limits_and_work(
     bytes: &[u8],
     limits: MountInfoLimits,
 ) -> io::Result<(MountInfo, usize)> {
+    parse_mountinfo_with_limits_and_work_deadline(bytes, limits, None)
+}
+
+pub(super) fn parse_mountinfo_with_limits_and_work_until(
+    bytes: &[u8],
+    limits: MountInfoLimits,
+    deadline: Instant,
+) -> io::Result<(MountInfo, usize)> {
+    parse_mountinfo_with_limits_and_work_deadline(bytes, limits, Some(deadline))
+}
+
+fn parse_mountinfo_with_limits_and_work_deadline(
+    bytes: &[u8],
+    limits: MountInfoLimits,
+    deadline: Option<Instant>,
+) -> io::Result<(MountInfo, usize)> {
+    require_parse_deadline(deadline)?;
     validate_limits(limits)?;
     if bytes.len() > limits.max_bytes {
         return Err(invalid_data(format!(
@@ -178,14 +221,16 @@ pub(super) fn parse_mountinfo_with_limits_and_work(
     if bytes.contains(&b'\0') {
         return Err(invalid_data("mountinfo contains a NUL byte"));
     }
+    require_parse_deadline(deadline)?;
 
-    let mut budget = WorkBudget::new(limits.max_work);
+    let mut budget = WorkBudget::new(limits.max_work, deadline);
     budget.charge(bytes.len(), "scanning mountinfo bytes")?;
 
     let mut entries = Vec::new();
     let mut mount_ids = HashSet::new();
     let mut total_fields = 0usize;
     for (line_index, line) in bytes[..bytes.len() - 1].split(|byte| *byte == b'\n').enumerate() {
+        budget.checkpoint()?;
         let line_number = line_index + 1;
         if line_number > limits.max_lines {
             return Err(invalid_data(format!(
@@ -243,11 +288,13 @@ pub(super) fn parse_mountinfo_with_limits_and_work(
             .try_reserve(1)
             .map_err(|source| allocation_error("mountinfo entries", source))?;
         entries.push(entry);
+        budget.checkpoint()?;
     }
 
     if entries.is_empty() {
         return Err(unexpected_eof("mountinfo contains no records"));
     }
+    budget.checkpoint()?;
     let consumed_work = budget.consumed();
     Ok((MountInfo { entries }, consumed_work))
 }
@@ -481,6 +528,9 @@ fn decode_mountinfo_escaped_field(
         .map_err(|source| allocation_error("decoded mountinfo path", source))?;
     let mut offset = 0usize;
     while offset < field.len() {
+        if offset % 4_096 == 0 {
+            budget.checkpoint()?;
+        }
         let byte = field[offset];
         if byte != b'\\' {
             decoded.push(byte);
@@ -585,25 +635,47 @@ fn validate_limits(limits: MountInfoLimits) -> io::Result<()> {
 struct WorkBudget {
     limit: usize,
     consumed: usize,
+    deadline: Option<Instant>,
 }
 
 impl WorkBudget {
-    fn new(limit: usize) -> Self {
-        Self { limit, consumed: 0 }
+    fn new(limit: usize, deadline: Option<Instant>) -> Self {
+        Self {
+            limit,
+            consumed: 0,
+            deadline,
+        }
     }
 
     fn charge(&mut self, amount: usize, operation: &str) -> io::Result<()> {
+        self.checkpoint()?;
         let consumed = self
             .consumed
             .checked_add(amount)
             .filter(|consumed| *consumed <= self.limit)
             .ok_or_else(|| invalid_data(format!("mountinfo exceeded its work limit while {operation}")))?;
         self.consumed = consumed;
+        self.checkpoint()?;
         Ok(())
+    }
+
+    fn checkpoint(&self) -> io::Result<()> {
+        require_parse_deadline(self.deadline)
     }
 
     fn consumed(&self) -> usize {
         self.consumed
+    }
+}
+
+fn require_parse_deadline(deadline: Option<Instant>) -> io::Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() > deadline) {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "mountinfo parsing exceeded its deadline",
+        ))
+    } else {
+        Ok(())
     }
 }
 
