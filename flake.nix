@@ -43,12 +43,15 @@
             pkgs.zstd
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             pkgs.dash
+            pkgs.gettext
+            pkgs.glibcLocales
             pkgs.libxml2
             pkgs.systemd
           ];
 
           CC = "${pkgs.clang}/bin/clang";
           CXX = "${pkgs.clang}/bin/clang++";
+          LOCALE_ARCHIVE = pkgs.lib.optionalString pkgs.stdenv.isLinux "${pkgs.glibcLocales}/lib/locale/locale-archive";
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
         };
       }

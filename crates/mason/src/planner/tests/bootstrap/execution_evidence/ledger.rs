@@ -168,7 +168,11 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         "header-only-library" => 2,
         "daemon-generated" | "plugin-output" => 3,
         "split" => 5,
-        "generated-config" | "generated-shell" | "system-integration-assets" | "userspace-profile" => 1,
+        "generated-config"
+        | "generated-shell"
+        | "gettext-localization"
+        | "system-integration-assets"
+        | "userspace-profile" => 1,
         _ => panic!("unknown execution fixture in proof inventory: {fixture:?}"),
     }
 }

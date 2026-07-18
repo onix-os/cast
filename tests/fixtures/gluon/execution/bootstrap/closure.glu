@@ -445,6 +445,17 @@ let generated_config_packages = [
     "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
 ]
 
+let gettext_localization_packages =
+    arrays.append (arrays.slice generated_config_packages 0 19)
+        (arrays.append ["2fd48ed7722fb7ec4da4fcc6ec9e8709915a6b5b17f5c58499a32d3303e76891"]
+        (arrays.append (arrays.slice generated_config_packages 19 22)
+        (arrays.append ["39d4b0efb3531a2c5e7f7cda8567782ee2691534a4f2b129bba24e7d2307e203"]
+        (arrays.append (arrays.slice generated_config_packages 22 43)
+        (arrays.append ["96d3833bdc5c54030cad4be531714f23e6d04f87346964e293db75fe463235c4"]
+        (arrays.append (arrays.slice generated_config_packages 43 55)
+        (arrays.append ["e36b8b814e6eb8483a39f49b83795b420ebbb99832d9a41c5b487cf9b871a17e"]
+            (arrays.slice generated_config_packages 55 59))))))))
+
 let userspace_profile_packages = [
     "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
     "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
@@ -725,19 +736,21 @@ let bootstrap_closure = \all_bootstrap_packages ->
             (merge (package_slice 7 8)
             (merge (package_slice 9 11)
             (merge (package_slice 12 15)
-            (merge (package_slice 16 48)
-            (merge (package_slice 49 51)
-            (merge (package_slice 52 59)
-            (merge (package_slice 60 63)
-            (merge (package_slice 64 74)
-            (merge (package_slice 75 88)
-            (merge (package_slice 89 91)
-            (merge (package_slice 92 95)
-            (merge (package_slice 96 102)
-            (merge (package_slice 103 122)
-            (merge (package_slice 123 126)
-            (merge (package_slice 127 136)
-                (package_slice 137 138))))))))))))))))
+            (merge (package_slice 16 38)
+            (merge (package_slice 39 45)
+            (merge (package_slice 46 50)
+            (merge (package_slice 51 53)
+            (merge (package_slice 54 61)
+            (merge (package_slice 62 65)
+            (merge (package_slice 66 76)
+            (merge (package_slice 77 90)
+            (merge (package_slice 91 93)
+            (merge (package_slice 94 97)
+            (merge (package_slice 98 104)
+            (merge (package_slice 105 124)
+            (merge (package_slice 125 128)
+            (merge (package_slice 130 139)
+                (package_slice 140 141))))))))))))))))))
     {
     schema_version = 2,
     repository,
@@ -753,6 +766,7 @@ let bootstrap_closure = \all_bootstrap_packages ->
         { name = "factory-override", package_ids = cmake_packages },
         { name = "generated-config", package_ids = generated_config_packages },
         { name = "generated-shell", package_ids = generated_config_packages },
+        { name = "gettext-localization", package_ids = gettext_localization_packages },
         { name = "header-only-library", package_ids = custom_packages },
         { name = "hooks-patch", package_ids = hooks_patch_packages },
         { name = "meson", package_ids = meson_packages },
@@ -764,7 +778,7 @@ let bootstrap_closure = \all_bootstrap_packages ->
         { name = "userspace-profile", package_ids = userspace_profile_packages },
     ],
     packages = {
-        total_download_bytes = 336453177,
+        total_download_bytes = 339586336,
         sha256 = all_bootstrap_packages,
     },
 }
@@ -808,12 +822,14 @@ let all_bootstrap_packages = [
             "2c0c1e707645ccdf22b25d1bc0555a1a3dc842842ad767602475f6703489f4ce",
             "2c384da32858f9cc5aecd07209389b5f2b1701db019e6497fd8d9104c1dad717",
             "2f73d299e0217eba7163d82567b1d2aa7412efa1b03b9df4dc8cad6661a54c84",
+            "2fd48ed7722fb7ec4da4fcc6ec9e8709915a6b5b17f5c58499a32d3303e76891",
             "2fdd5d46e74afc2a32cb7395cfa75bfff3ac7a9a1f64d432d363c2ceff1efdf2",
             "32b8cbaa1529def2c59eee291f973d7a9bc6eddf6ddf96ea140a81e254aec228",
             "335681b6b33fd8d7abe36384eda495621d71c9b43176ce56cfeee286cb8196c4",
             "3422ccbe5a97f4344081793d15e1f0b36870ea2d61c07aac7f29816ce2d01776",
             "34e433b4ff945d95494d064763b4bf80c5636023623916dc6b9fbc65d1986831",
             "39c04f6ed86499b3ce376270cbeb37b71faac5b2540fc5e74c104f5a1bd939c8",
+            "39d4b0efb3531a2c5e7f7cda8567782ee2691534a4f2b129bba24e7d2307e203",
             "3ae0bae767b00f46001ba404919dc841399847abb58a87950eb9044e3d856012",
             "3da6213eeed79d0f848af142e42bfe2e03fd1716554281783d4ea1f2174a6238",
             "3fec7dd3f1f8d01c674ae2182f427de44864dc205d5014ec6c8dc2e3e0327875",
@@ -897,6 +913,7 @@ let all_bootstrap_packages = [
             "df588f75c1303f3188fee56364edbb82f33ce13b5ee7689e7bb5600d7b6f740c",
             "df8163f5b928118ebff7a0bae0d7c14eee72d0dee5bf47f54d98639d0290aab9",
             "e03b9cd0075c224792edd38a06855e8d84666d4d95c421bda495cb6ed25d023c",
+            "e36b8b814e6eb8483a39f49b83795b420ebbb99832d9a41c5b487cf9b871a17e",
             "e6026319ca5d13dacfdb6e899b24eea110fdaaa95106f3d2fe097a60e3c537b0",
             "e6b6575d77114bc5d95c845fa2926abcf17a79a52d1c9e42f546bc13f2d2db72",
             "e78df6571c8fe1c16a8321e46f07d8ae49a0ce957f19139889ec2315f43447b3",

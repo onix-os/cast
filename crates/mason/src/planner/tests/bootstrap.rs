@@ -34,6 +34,7 @@ const BOOTSTRAP_PROFILE: &str = "planner-contentful-bootstrap";
 include!("bootstrap/execution_topology.rs");
 include!("bootstrap/autotools_regeneration.rs");
 include!("bootstrap/cmake_zlib.rs");
+include!("bootstrap/gettext_localization.rs");
 include!("bootstrap/meson_dependency_roles.rs");
 include!("bootstrap/system_integration_assets.rs");
 
@@ -411,6 +412,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     let indexed = indexed_packages(&index_bytes);
     assert_autotools_regeneration_bootstrap_contract(&closure, &indexed);
     assert_cmake_zlib_bootstrap_contract(&closure, &indexed);
+    assert_gettext_localization_bootstrap_contract(&closure, &indexed);
     assert_meson_dependency_role_bootstrap_contract(&closure, &indexed);
     assert_system_integration_assets_bootstrap_contract(&closure, &indexed);
 

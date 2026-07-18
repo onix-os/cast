@@ -4,7 +4,7 @@
 )]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     error::Error as StdError,
     io::Read,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 20] = [
+const EXECUTION_FIXTURES: [&str; 21] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -148,6 +148,7 @@ const EXECUTION_FIXTURES: [&str; 20] = [
     "factory-override",
     "generated-config",
     "generated-shell",
+    "gettext-localization",
     "header-only-library",
     "hooks-patch",
     "meson",
@@ -159,7 +160,7 @@ const EXECUTION_FIXTURES: [&str; 20] = [
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 19] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 20] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -171,6 +172,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 19] = [
     "factory-override",
     "generated-config",
     "generated-shell",
+    "gettext-localization",
     "header-only-library",
     "hooks-patch",
     "meson",
@@ -222,6 +224,7 @@ include!("tests/execution_archives.rs");
 include!("tests/execution_autotools_regeneration.rs");
 include!("tests/execution_capability.rs");
 include!("tests/execution_cmake_zlib.rs");
+include!("tests/execution_gettext_localization.rs");
 include!("tests/execution_header_only_library.rs");
 include!("tests/execution_meson_dependency_roles.rs");
 include!("tests/execution_multiple_sources.rs");

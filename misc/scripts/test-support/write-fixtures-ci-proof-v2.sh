@@ -72,6 +72,7 @@ set -- \
     factory-override \
     generated-config \
     generated-shell \
+    gettext-localization \
     header-only-library \
     hooks-patch \
     meson \
@@ -90,7 +91,7 @@ stone_count_for_fixture() {
         header-only-library) stone_count=2 ;;
         daemon-generated|plugin-output) stone_count=3 ;;
         split) stone_count=5 ;;
-        generated-config|generated-shell|system-integration-assets|userspace-profile) stone_count=1 ;;
+        generated-config|generated-shell|gettext-localization|system-integration-assets|userspace-profile) stone_count=1 ;;
         *) printf 'unknown test fixture proof fixture: %s\n' "$1" >&2; exit 1 ;;
     esac
 }
@@ -132,12 +133,12 @@ cat >>"$output" <<EOF_HEADER
   "required_execution": true,
   "bundle_ledger_schema": "cast.fixtures-ci.bundle.v1",
   "totals": {
-    "fixture_count": 20,
-    "execution_count": 40,
-    "bundle_validation_count": 60,
-    "stone_count": 125,
-    "manifest_count": 40,
-    "artifact_count": 165,
+    "fixture_count": 21,
+    "execution_count": 42,
+    "bundle_validation_count": 63,
+    "stone_count": 126,
+    "manifest_count": 42,
+    "artifact_count": 168,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [
@@ -223,7 +224,7 @@ EOF_FIXTURE
       ]
     }
 EOF_ENTRIES
-    if [ "$fixture_number" -lt 20 ]; then
+    if [ "$fixture_number" -lt 21 ]; then
         printf '    ,\n' >>"$output"
     fi
     fixture_number=$((fixture_number + 1))

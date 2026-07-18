@@ -30,6 +30,7 @@ pub(super) fn assert_fixture_bundle(
                 | "factory-override"
                 | "generated-config"
                 | "generated-shell"
+                | "gettext-localization"
                 | "header-only-library"
                 | "hooks-patch"
                 | "meson"
@@ -102,7 +103,11 @@ pub(super) fn assert_fixture_bundle(
         .collect::<BTreeSet<_>>();
     if matches!(
         name,
-        "generated-config" | "generated-shell" | "system-integration-assets" | "userspace-profile"
+        "generated-config"
+            | "generated-shell"
+            | "gettext-localization"
+            | "system-integration-assets"
+            | "userspace-profile"
     ) {
         assert_eq!(output_names, BTreeSet::from(["out"]));
     } else if name == "header-only-library" {
@@ -151,6 +156,8 @@ pub(super) fn assert_fixture_bundle(
         assert_generated_config_fixture(planned, &packages);
     } else if name == "generated-shell" {
         assert_generated_shell_fixture(planned, &packages);
+    } else if name == "gettext-localization" {
+        assert_gettext_localization_fixture(planned, &packages);
     } else if name == "system-integration-assets" {
         assert_system_integration_assets_fixture(planned, &packages);
     } else if name == "userspace-profile" {

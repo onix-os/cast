@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 20] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 21] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -10,6 +10,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 20] = [
     "factory-override",
     "generated-config",
     "generated-shell",
+    "gettext-localization",
     "header-only-library",
     "hooks-patch",
     "meson",
@@ -32,6 +33,12 @@ mod system_integration_assets_topology {
     use super::*;
 
     include!("execution_topology/system_integration_assets.rs");
+}
+
+mod gettext_localization_topology {
+    use super::*;
+
+    include!("execution_topology/gettext_localization.rs");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -490,6 +497,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Check", vec![run("meson", "test")]),
         ],
         "multiple-sources" => multiple_sources_topology::expected(),
+        "gettext-localization" => gettext_localization_topology::expected(&job.work_dir),
         "system-integration-assets" => system_integration_assets_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
             prepare(match name {
@@ -724,6 +732,9 @@ fi
     }
     if name == "multiple-sources" {
         multiple_sources_topology::assert_contract(plan, job);
+    }
+    if name == "gettext-localization" {
+        gettext_localization_topology::assert_contract(plan, job);
     }
     if name == "system-integration-assets" {
         system_integration_assets_topology::assert_contract(plan, job);

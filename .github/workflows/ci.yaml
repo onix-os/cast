@@ -72,9 +72,10 @@ jobs:
       - name: Install and verify fixture host tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes jq libxml2-utils uidmap util-linux
+          sudo apt-get install --yes gettext jq libxml2-utils locales uidmap util-linux
+          sudo locale-gen fr_FR.UTF-8 de_DE.UTF-8
           for tool in \
-            dash git id jq make mkfifo mktemp newgidmap setsid stat \
+            dash git id jq make mkfifo mktemp msgfmt newgidmap setsid stat \
             systemctl systemd-analyze systemd-run systemd-sysusers \
             systemd-tmpfiles tail tee timeout udevadm unshare xmllint; do
             tool_path="/usr/bin/$tool"

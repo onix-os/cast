@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 const SYSTEM_INTEGRATION_ARCHIVE_URL: &str =
     "https://fixtures.invalid/sources/cast-system-integration-assets-fixture-1.0.0.tar";
 const SYSTEM_INTEGRATION_ARCHIVE_SHA256: &str =
