@@ -4,9 +4,8 @@ use std::{
     ffi::{CStr, CString, OsStr},
     fmt,
     io::{self, Read as _, Seek as _, SeekFrom, Write as _},
-    mem::{size_of, zeroed},
     os::{
-        fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+        fd::{AsRawFd, RawFd},
         unix::{
             ffi::OsStrExt as _,
             fs::{FileExt as _, MetadataExt as _, PermissionsExt as _},
@@ -14,6 +13,7 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use log::{trace, warn};
@@ -22,7 +22,10 @@ use thiserror::Error;
 use tui::Styled;
 
 use crate::{
-    linux_fs::{chmod_path_descriptor, open_path_descriptor_readonly, require_no_default_acl},
+    linux_fs::{
+        chmod_path_descriptor, open_path_descriptor_readonly, openat2_file_until, require_no_default_acl,
+        require_no_default_acl_until,
+    },
     state,
     system_model::{self, LoadedSystemModel},
 };
@@ -322,6 +325,21 @@ impl Installation {
     /// mutation whose result is intended to be reachable through `root`.
     pub(crate) fn revalidate_root_directory(&self) -> Result<(), Error> {
         require_named_installation_root(&self.root, &self.root_directory).map_err(|source| {
+            Error::ValidateRootDirectory {
+                path: self.root.clone(),
+                source,
+            }
+        })
+    }
+
+    /// Deadline-aware root-name revalidation for finite pre-effect capture.
+    ///
+    /// The retained root policy and public-name identity checks are identical
+    /// to [`Self::revalidate_root_directory`]. Only the filesystem substrate
+    /// differs: every open and ACL probe observes `deadline` and inherits the
+    /// shared finite interrupted-syscall retry ceiling.
+    pub(crate) fn revalidate_root_directory_until(&self, deadline: Instant) -> Result<(), Error> {
+        require_named_installation_root_until(&self.root, &self.root_directory, deadline).map_err(|source| {
             Error::ValidateRootDirectory {
                 path: self.root.clone(),
                 source,

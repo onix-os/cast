@@ -252,6 +252,19 @@ fn open_directory_path(path: &Path) -> io::Result<std::fs::File> {
     )
 }
 
+fn open_directory_path_until(path: &Path, deadline: Instant) -> io::Result<std::fs::File> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "directory path contains NUL"))?;
+    openat2_file_until(
+        nix::libc::AT_FDCWD,
+        &path,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
+        0,
+        (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        deadline,
+    )
+}
+
 fn open_controlled_directory_path(path: &Path) -> io::Result<std::fs::File> {
     let pinned = open_directory_path(path)?;
     require_controlled_directory(&pinned, path)?;
@@ -328,10 +341,45 @@ fn open_installation_root_path(path: &Path) -> io::Result<std::fs::File> {
     Ok(directory)
 }
 
+fn open_installation_root_path_until(path: &Path, deadline: Instant) -> io::Result<std::fs::File> {
+    let pinned = open_directory_path_until(path, deadline)?;
+    require_installation_root(&pinned, path)?;
+
+    let encoded = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "directory path contains NUL"))?;
+    let directory = openat2_file_until(
+        nix::libc::AT_FDCWD,
+        &encoded,
+        nix::libc::O_RDONLY
+            | nix::libc::O_DIRECTORY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK,
+        0,
+        (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64,
+        deadline,
+    )?;
+    require_installation_root(&directory, path)?;
+    require_no_default_acl_until(&directory, path, deadline)?;
+    require_same_directory(&pinned, &directory, path)?;
+    Ok(directory)
+}
+
 fn require_named_installation_root(path: &Path, retained: &std::fs::File) -> io::Result<()> {
     require_installation_root(retained, path)?;
     require_no_default_acl(retained, path)?;
     let named = open_installation_root_path(path)?;
+    require_same_directory(retained, &named, path)
+}
+
+fn require_named_installation_root_until(
+    path: &Path,
+    retained: &std::fs::File,
+    deadline: Instant,
+) -> io::Result<()> {
+    require_installation_root(retained, path)?;
+    require_no_default_acl_until(retained, path, deadline)?;
+    let named = open_installation_root_path_until(path, deadline)?;
     require_same_directory(retained, &named, path)
 }
 
@@ -383,36 +431,7 @@ fn classify_installation_root_access(owner: u32, mode: u32, effective_owner: u32
 }
 
 fn openat2_file(dirfd: RawFd, path: &CStr, flags: i32, mode: u32, resolve: u64) -> io::Result<std::fs::File> {
-    // SAFETY: zero is valid for every public `open_how` field.
-    let mut how: nix::libc::open_how = unsafe { zeroed() };
-    how.flags = u64::from(flags as u32);
-    how.mode = u64::from(mode);
-    how.resolve = resolve;
-    // SAFETY: the descriptor, C string, and open_how remain live. Success
-    // returns one fresh descriptor owned below.
-    let descriptor = loop {
-        let descriptor = unsafe {
-            nix::libc::syscall(
-                nix::libc::SYS_openat2,
-                dirfd,
-                path.as_ptr(),
-                &how,
-                size_of::<nix::libc::open_how>(),
-            )
-        };
-        if descriptor != -1 {
-            break descriptor;
-        }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted {
-            return Err(source);
-        }
-    };
-    let descriptor = i32::try_from(descriptor)
-        .map_err(|_| io::Error::other(format!("openat2 returned invalid descriptor {descriptor}")))?;
-    // SAFETY: successful openat2 returned one fresh owned descriptor.
-    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-    Ok(std::fs::File::from(descriptor))
+    crate::linux_fs::openat2_file(dirfd, path, flags, mode, resolve)
 }
 
 fn controlled_resolution() -> u64 {

@@ -191,19 +191,39 @@ fn existing_capability_default_acl_is_rejected_without_creating_children() {
 }
 
 #[test]
-fn named_installation_root_revalidation_detects_substitution() {
+fn named_installation_root_revalidation_obeys_deadline_and_detects_substitution() {
     let temporary = private_installation_tempdir();
     let root = temporary.path().join("root");
     let detached = temporary.path().join("detached-root");
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE)).unwrap();
-    let retained = open_installation_root_path(&root).unwrap();
+    let installation = Installation::open(&root, None).unwrap();
+
+    installation
+        .revalidate_root_directory_until(Instant::now() + std::time::Duration::from_secs(30))
+        .unwrap();
+    let error = installation
+        .revalidate_root_directory_until(Instant::now() - std::time::Duration::from_millis(1))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::ValidateRootDirectory { path, source }
+            if path == root && source.kind() == io::ErrorKind::TimedOut
+    ));
 
     std::fs::rename(&root, &detached).unwrap();
     std::fs::create_dir(&root).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE)).unwrap();
 
-    assert!(require_named_installation_root(&root, &retained).is_err());
+    let error = installation
+        .revalidate_root_directory_until(Instant::now() + std::time::Duration::from_secs(30))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::ValidateRootDirectory { path, source }
+            if path == root && source.kind() != io::ErrorKind::TimedOut
+    ));
+    assert!(installation.revalidate_root_directory().is_err());
     assert_ne!(
         std::fs::metadata(&root).unwrap().ino(),
         std::fs::metadata(&detached).unwrap().ino()
