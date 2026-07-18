@@ -41,6 +41,8 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-candidate-dispatch-test  Run one-entry real-startup ActiveReblit candidate-preservation contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-complete-route-test  Run real-startup ActiveReblit rollback-completion routing contracts"
 	@timeout 10s echo "  forge-startup-active-reblit-boot-repair-required-test  Run exact ActiveReblit boot-rollback routing contracts"
+	@timeout 10s echo "  forge-clean-boot-synchronization-test  Run standalone boot synchronization authority contracts"
+	@timeout 10s echo "  forge-legacy-boot-repair-test  Run clean-authority legacy boot-repair contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-activate-archived-complete-route-test  Run production one-entry ActivateArchived rollback-completion contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-activate-archived-finalization-test  Run terminal ActivateArchived rollback-finalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-finalization-test  Run terminal ActiveReblit rollback-finalization contracts"

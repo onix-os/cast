@@ -33,6 +33,7 @@ include misc/make/transition-coordinator-tests.mk
 include misc/make/activation-namespace-tests.mk
 include misc/make/startup-gate-tests.mk
 include misc/make/mutable-system-capabilities-tests.mk
+include misc/make/boot-synchronization-authority-tests.mk
 include misc/make/startup-recovery-tests.mk
 include misc/make/startup-exchange-durability-tests.mk
 include misc/make/startup-rollback-resume-route-tests.mk

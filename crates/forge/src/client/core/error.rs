@@ -778,6 +778,16 @@ pub enum Error {
     PostBlit(#[from] postblit::Error),
     #[error("boot")]
     Boot(#[from] boot::Error),
+    #[error("authorize standalone boot synchronization against clean transition evidence")]
+    BootSynchronizationAuthority {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("authorize legacy compensating boot repair against exact clean transition evidence")]
+    LegacyBootRepairAuthority {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("establish clean system-client startup baseline")]
     SystemStartupGate {
         #[source]

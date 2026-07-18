@@ -95,11 +95,13 @@ mod archived_repair_tests;
 mod boot;
 mod cache;
 mod candidate_metadata;
+mod clean_boot_synchronization;
 mod external_materialization;
 mod fetch;
 mod fixed_staging;
 mod install;
 mod journal_usr_exchange_authority;
+mod legacy_boot_repair;
 #[cfg(test)]
 mod mutable_startup_namespace_tests;
 mod mutable_system_capabilities;

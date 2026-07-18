@@ -133,12 +133,18 @@ impl Client {
                         });
                     };
 
-                    match boot::synchronize(self, previous, None) {
+                    let authority = tree_identity
+                        .authorize_legacy_boot_repair(&self.installation, &self.state_db)
+                        .map_err(legacy_boot_repair_authority_error)?;
+                    match legacy_boot_repair::synchronize(self, previous, authority) {
                         Ok(()) => Err(Error::StatefulBootRepairUnverified {
                             candidate,
                             previous: Some(previous.id),
                         }),
-                        Err(error) => Err(Error::Boot(error)),
+                        Err(legacy_boot_repair::Error::Boot(error)) => Err(Error::Boot(error)),
+                        Err(legacy_boot_repair::Error::Authority(source)) => {
+                            Err(legacy_boot_repair_authority_error(source))
+                        }
                     }
                 });
             if let Err(error) = repair {
@@ -393,5 +399,13 @@ impl Client {
             candidate_usr,
             candidate_state,
         )
+    }
+}
+
+fn legacy_boot_repair_authority_error(
+    source: crate::transition_identity::LegacyBootRepairAuthorityError,
+) -> Error {
+    Error::LegacyBootRepairAuthority {
+        source: Box::new(source),
     }
 }

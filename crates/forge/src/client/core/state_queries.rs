@@ -42,10 +42,30 @@ impl Client {
             return Err(Error::NoActiveState);
         };
 
+        // The active-state lease establishes coordinator-before-journal lock
+        // ordering. Retain the exact clean journal across both the database
+        // read and the boot backend so an older Client cannot synchronize
+        // while a journal-owned transition remains unresolved.
+        let authority = clean_boot_synchronization::CleanBootSynchronizationAuthority::capture(
+            &self.installation,
+            &self.state_db,
+            &active_state,
+        )
+        .map_err(boot_synchronization_authority_error)?;
         let state = self.state_db.get(state_id)?;
-        active_state.revalidate(&self.installation)?;
+        authority
+            .revalidate()
+            .map_err(boot_synchronization_authority_error)?;
 
-        boot::synchronize(self, &state, None).map_err(Error::Boot)
+        let synchronization = boot::synchronize(self, &state, None);
+        authority.before_post_revalidation();
+        let post_authority = authority.revalidate();
+
+        // Authority failure supersedes a simultaneous backend error: once
+        // journal, database, namespace, or active-state evidence changed, the
+        // backend result cannot be attributed to the admitted clean system.
+        post_authority.map_err(boot_synchronization_authority_error)?;
+        synchronization.map_err(Error::Boot)
     }
 
     /// List all states for this Cast [`Installation`]
@@ -103,5 +123,13 @@ impl Client {
             layout_db,
             scope: Scope::Stateful,
         })
+    }
+}
+
+fn boot_synchronization_authority_error(
+    source: clean_boot_synchronization::CleanBootSynchronizationAuthorityError,
+) -> Error {
+    Error::BootSynchronizationAuthority {
+        source: Box::new(source),
     }
 }
