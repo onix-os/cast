@@ -26,6 +26,7 @@ pub(super) const VERSION_END: usize = MAGIC_END + size_of::<u16>();
 pub(super) const LENGTH_END: usize = VERSION_END + size_of::<u32>();
 pub(super) const CHECKSUM_END: usize = LENGTH_END + CHECKSUM_LENGTH;
 pub(crate) const FRAME_LENGTH: usize = CHECKSUM_END + TOKEN_LENGTH;
+const MAX_INTERRUPTED_READ_ATTEMPTS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct InodeIdentity {
@@ -234,6 +235,7 @@ pub(super) fn same_marker_inode(left: MarkerWitness, right: MarkerWitness) -> bo
 pub(super) fn read_exact_frame(file: &File, path: &Path) -> Result<[u8; FRAME_LENGTH], TreeMarkerError> {
     let mut frame = [0_u8; FRAME_LENGTH];
     let mut offset = 0;
+    let mut interrupted = 0usize;
     while offset < frame.len() {
         match file.read_at(&mut frame[offset..], offset as u64) {
             Ok(0) => {
@@ -244,7 +246,9 @@ pub(super) fn read_exact_frame(file: &File, path: &Path) -> Result<[u8; FRAME_LE
                 ));
             }
             Ok(read) => offset += read,
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                charge_interrupted_read(&mut interrupted, path)?;
+            }
             Err(source) => return Err(io_error("read tree marker frame", path, source)),
         }
     }
@@ -259,9 +263,27 @@ pub(super) fn read_exact_frame(file: &File, path: &Path) -> Result<[u8; FRAME_LE
                     io::Error::new(io::ErrorKind::InvalidData, "tree marker contains trailing bytes"),
                 ));
             }
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => {}
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                charge_interrupted_read(&mut interrupted, path)?;
+            }
             Err(source) => return Err(io_error("read tree marker frame bound", path, source)),
         }
+    }
+}
+
+fn charge_interrupted_read(interrupted: &mut usize, path: &Path) -> Result<(), TreeMarkerError> {
+    *interrupted = interrupted.saturating_add(1);
+    if *interrupted > MAX_INTERRUPTED_READ_ATTEMPTS {
+        Err(io_error(
+            "read tree marker within interrupted retry bound",
+            path,
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "tree marker read exceeded interrupted retry bound",
+            ),
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -328,3 +350,7 @@ pub(super) fn effective_user_id() -> u32 {
     // SAFETY: geteuid has no arguments and cannot fail.
     unsafe { nix::libc::geteuid() }
 }
+
+#[cfg(test)]
+#[path = "integrity_tests.rs"]
+mod tests;
