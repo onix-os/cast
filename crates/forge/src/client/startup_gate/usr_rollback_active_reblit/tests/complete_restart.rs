@@ -11,10 +11,11 @@ use crate::{
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
-        CandidateOrigin, Epoch, active_wrapper_path, assert_complete_persistence_advance, assert_no_candidate_effects,
-        assert_pending_phase, build_active, canonical_record, enter_candidate, enter_fresh_handles,
-        expected_rollback_complete, install_persistent_database, persist_candidate_preserved,
-        release_candidate_handles, reset_candidate_effect_observers,
+        CandidateOrigin, Epoch, active_wrapper_path, assert_canonical_absent, assert_complete_persistence_advance,
+        assert_fresh_existing_candidate_database, assert_no_candidate_effects, assert_pending_phase, build_active,
+        canonical_record, enter_candidate, enter_clean_fresh_handles, enter_fresh_handles, expected_rollback_complete,
+        install_persistent_database, persist_candidate_preserved, release_candidate_handles,
+        reset_candidate_effect_observers,
     },
 };
 
@@ -57,7 +58,7 @@ fn startup_active_reblit_complete_route_source_durable_failure_converges_with_fr
 }
 
 #[test]
-fn startup_active_reblit_complete_route_successor_durable_failure_remains_terminal_with_fresh_handles() {
+fn startup_active_reblit_complete_route_successor_durable_failure_finalizes_with_fresh_handles() {
     let mut fixture = build_active(
         Epoch::Historical,
         CandidateSource::Intent,
@@ -70,6 +71,12 @@ fn startup_active_reblit_complete_route_successor_durable_failure_remains_termin
     let database_before = fixture.fixture.database_snapshot();
     let namespace_before = fixture.fixture.namespace_snapshot();
     let wrapper = active_wrapper_path(&fixture);
+    let provenance = fixture
+        .fixture
+        .database
+        .metadata_provenance(fixture.fixture.candidate_state)
+        .unwrap()
+        .unwrap();
     reset_candidate_effect_observers();
     arm_next_update_first_directory_sync_fault();
 
@@ -86,10 +93,12 @@ fn startup_active_reblit_complete_route_successor_durable_failure_remains_termin
     assert_no_candidate_effects();
 
     let retained = release_candidate_handles(fixture);
-    let second = enter_fresh_handles(retained.path());
+    assert_fresh_existing_candidate_database(retained.path(), &expected, &provenance);
+    let clean = enter_clean_fresh_handles(retained.path());
 
-    assert_pending_phase(&second, Phase::RollbackComplete);
-    assert_eq!(canonical_record(retained.path()), expected);
+    assert_canonical_absent(retained.path());
     assert!(wrapper.join("usr").is_dir());
     assert_no_candidate_effects();
+    drop(clean);
+    assert_fresh_existing_candidate_database(retained.path(), &expected, &provenance);
 }

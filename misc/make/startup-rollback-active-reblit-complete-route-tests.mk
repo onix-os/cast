@@ -15,7 +15,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 		complete_exclusions::startup_active_reblit_complete_route_preserves_operation_and_phase_ordering \
 		complete_matrix::startup_active_reblit_complete_route_covers_all_sixteen_exact_candidate_preserved_cases \
 		complete_restart::startup_active_reblit_complete_route_source_durable_failure_converges_with_fresh_handles \
-		complete_restart::startup_active_reblit_complete_route_successor_durable_failure_remains_terminal_with_fresh_handles \
+		complete_restart::startup_active_reblit_complete_route_successor_durable_failure_finalizes_with_fresh_handles \
 		complete_storage_faults::startup_active_reblit_complete_route_all_five_journal_faults_converge_on_second_entry; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -29,7 +29,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
 	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests"/complete_*.rs | timeout 10s wc -l )" = 7; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(installation, database, &reservation)' "$$tests/support.rs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$tests/support.rs" )" = 3; \
 	if timeout 10s rg -n 'new_for_test|UsrRollbackActiveReblitCompleteRouteAuthority::capture|usr_rollback_active_reblit::dispatch|persist_usr_rollback_active_reblit_complete_route_and_reopen' "$$tests"/complete_{evidence_races,exclusions,matrix,restart,storage_faults}.rs; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'UsrRollbackActiveReblitCompleteRouteSeal::new_for_test();' "$$tests/complete_authority_binding.rs"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackActiveReblitCompleteRouteAuthority::capture(' "$$tests/complete_authority_binding.rs" )" = 1; \
@@ -37,16 +37,19 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	timeout 10s grep -Fq 'authority.revalidate(&reopened_journal).unwrap_err();' "$$tests/complete_authority_binding.rs"; \
 	timeout 10s grep -Fq 'authority.revalidate(&other_journal).unwrap_err();' "$$tests/complete_authority_binding.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(authority.wrapper_index(), WRAPPER_INDEX);' "$$tests/complete_authority_binding.rs"; \
-	timeout 10s grep -Fqx 'pub(in crate::client) use usr_rollback_active_reblit::UsrRollbackActiveReblitCompleteRouteSeal;' "$$gate"; \
-	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "pub(in crate::client) use usr_rollback_active_reblit::UsrRollbackActiveReblitCompleteRouteSeal;" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; fi; \
+	timeout 10s rg -U -q '^pub\(in crate::client\) use usr_rollback_active_reblit::\{\n    UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,\n\};' "$$gate"; \
+	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "pub(in crate::client) use usr_rollback_active_reblit::{" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitCompleteRouteSeal {' "$$orchestrator"; \
 	timeout 10s grep -Fqx '        Phase::CandidatePreserved => {' "$$orchestrator"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackActiveReblitCompleteRouteAuthority::capture(' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)?' "$$orchestrator" )" = 1; \
 	candidate_line="$$( timeout 10s grep -nF 'Phase::CandidatePreserveIntent => {' "$$orchestrator" | timeout 10s cut -d: -f1 )"; \
 	complete_line="$$( timeout 10s grep -nF 'Phase::CandidatePreserved => {' "$$orchestrator" | timeout 10s cut -d: -f1 )"; \
+	finalize_line="$$( timeout 10s grep -nF 'Phase::RollbackComplete => {' "$$orchestrator" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$candidate_line" -lt "$$complete_line"; \
-	if timeout 10s rg -n 'Phase::(FreshDbInvalidationIntent|FreshDbInvalidated|RollbackComplete)|finalize_usr_rollback|run_(transaction|system)_triggers' "$$orchestrator"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$complete_line" -lt "$$finalize_line"; \
+	complete_arm="$$( timeout 10s sed -n '/Phase::CandidatePreserved => {/,/Phase::RollbackComplete => {/p' "$$orchestrator" | timeout 10s sed '$$d' )"; \
+	if timeout 10s rg -n 'Phase::(FreshDbInvalidationIntent|FreshDbInvalidated|RollbackComplete)|finalize_usr_rollback|run_(transaction|system)_triggers' <<<"$$complete_arm"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'record.operation != Operation::ActiveReblit || record.phase != Phase::CandidatePreserved' "$$authority"; \
 	timeout 10s grep -Fq 'let journal_binding = journal.binding();' "$$authority"; \
 	timeout 10s grep -Fq 'if !journal.has_binding(&journal_binding)' "$$authority"; \
@@ -109,7 +112,9 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	timeout 10s grep -Fq 'pub(super) const WRAPPER_INDEX: usize = 13;' "$$tests/support.rs"; \
 	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$tests/complete_storage_faults.rs"; done; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'release_candidate_handles(fixture)' "$$tests/complete_restart.rs" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'enter_fresh_handles(retained.path())' "$$tests/complete_restart.rs" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'enter_fresh_handles(retained.path())' "$$tests/complete_restart.rs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'enter_clean_fresh_handles(retained.path())' "$$tests/complete_restart.rs" )" = 1; \
+	timeout 10s grep -Fq 'assert_canonical_absent(retained.path());' "$$tests/complete_restart.rs"; \
 	for blocker in DatabaseConflict MetadataProvenanceConflict; do timeout 10s grep -Fq "RecoveryBlocker::$$blocker" "$$tests/complete_evidence_races.rs"; done; \
 	for hook in arm_between_usr_rollback_active_reblit_complete_route_database_captures arm_before_usr_rollback_active_reblit_complete_route_final_revalidation arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture; do timeout 10s grep -Fq "$$hook" "$$tests/complete_evidence_races.rs"; done; \
 	for operation in Archived NewState; do timeout 10s grep -Fq "OperationKind::$$operation" "$$tests/complete_exclusions.rs"; done; \

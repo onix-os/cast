@@ -189,9 +189,14 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s test "$$suffix_line" -lt "$$diagnostic_line"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'usr_rollback_new_state::dispatch(' "$$gate" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'usr_rollback_new_state::Dispatch::Finalized { journal } => {' "$$gate" )" = 1; \
+	new_state_finalized_arm="$$( timeout 10s sed -n '/usr_rollback_new_state::Dispatch::Finalized { journal } => {/,/^                }/p' "$$gate" )"; \
+	timeout 10s grep -Fq 'return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);' <<<"$$new_state_finalized_arm"; \
+	terminal_handoff="$$( timeout 10s sed -n '/^    fn admit_clean_after_terminal_finalization(/,/^    }/p' "$$gate" )"; \
+	timeout 10s grep -Fq 'after_usr_rollback_finalization_before_clean_audit();' <<<"$$terminal_handoff"; \
+	timeout 10s grep -Fq 'return Self::admit_clean(installation, state_db, journal, in_flight);' <<<"$$terminal_handoff"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'return Self::admit_clean(installation, state_db, journal, in_flight);' "$$gate" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'Self::admit_clean(installation, state_db, journal, in_flight)' "$$gate" )" = 2; \
-	timeout 10s grep -Fq 'after_usr_rollback_finalization_before_clean_audit();' "$$gate"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);' "$$gate" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'authority.journal().load_revalidated_retained_cast(cast)' "$$gate" )" = 1; \
 	timeout 10s grep -Fq 'CanonicalTransitionAppearedDuringCleanAdmission {' "$$gate"; \
 	timeout 10s grep -Fq 'arm_after_usr_rollback_finalization_before_clean_audit' "$$tests/finalization.rs"; \

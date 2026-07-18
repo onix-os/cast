@@ -30,6 +30,9 @@ forge-startup-usr-rollback-resume-route-test:
 	journal_store=crates/forge/src/transition_journal/store.rs; \
 	coordinator_test=crates/forge/src/transition_identity/journal_coordinator/tests/usr_exchange_effect.rs; \
 	forward_support=crates/forge/src/client/startup_recovery/forward_origin_test_support.rs; \
+	end_to_end=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/end_to_end.rs; \
+	timeout 10s grep -Fqx '            if kind == OperationKind::ActiveReblit && expected.phase == Phase::CandidatePreserveIntent {' "$$end_to_end"; \
+	timeout 10s grep -Fq 'This resume-route end-to-end test stops before crossing into' "$$end_to_end"; \
 	successor_count="$$( timeout 10s rg -n '\.rollback_successor\(' "$$executor" "$$authority" "$$proof" | timeout 10s wc -l )"; \
 	timeout 10s test "$$successor_count" = 1; \
 	timeout 10s grep -Fqx '    let successor = match source_record.rollback_successor(None) {' "$$executor"; \

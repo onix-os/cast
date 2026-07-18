@@ -496,15 +496,25 @@ fn run_recovery_child(
     assert_clean_journal_directory(&case.root);
     drop(recovered);
 
-    if !case.boundary.canonical_is_source() {
-        arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced, || {
-            panic!("stable CandidatePreserveIntent recovery attempted another journal update")
-        });
-    }
     let preserve_intent = expected_candidate_preserve_intent(&restored);
-    let stable = enter_with_handles(installation, state_database);
+    // A source-durable restart still needs one later entry to route
+    // UsrRestored. An already-routed archived activation is also stable because
+    // that operation has no candidate suffix yet. NewState and ActiveReblit
+    // instead own CandidatePreserveIntent in later operation-specific
+    // dispatchers, so this reverse-only recovery child stops before crossing
+    // into those independent checkpoints.
+    let enter_candidate_checkpoint =
+        case.boundary.canonical_is_source() || case.operation == ProcessOperation::Archived;
+    if enter_candidate_checkpoint {
+        if !case.boundary.canonical_is_source() {
+            arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced, || {
+                panic!("stable archived CandidatePreserveIntent recovery attempted another journal update")
+            });
+        }
+        let stable = enter_with_handles(installation, state_database);
+        assert_candidate_preserve_intent_pending(&stable);
+    }
 
-    assert_candidate_preserve_intent_pending(&stable);
     assert_eq!(canonical_record(&case.root), preserve_intent);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_eq!(

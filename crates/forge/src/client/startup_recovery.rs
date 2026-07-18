@@ -10,6 +10,7 @@ mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
 mod usr_rollback_active_reblit_complete_route;
+mod usr_rollback_active_reblit_finalization;
 mod usr_rollback_candidate_preserve_dispatch;
 mod usr_rollback_candidate_preserve_persistence;
 mod usr_rollback_complete_route;
@@ -101,6 +102,10 @@ pub(super) use usr_rollback_active_reblit_complete_route::{
     UsrRollbackActiveReblitCompleteRoutePersistenceError, persist_usr_rollback_active_reblit_complete_route_and_reopen,
 };
 
+pub(super) use usr_rollback_active_reblit_finalization::{
+    UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_candidate_preserve_persistence::{
     DurableUsrRollbackActiveReblitCandidatePreserveRecord,
@@ -111,6 +116,11 @@ pub(in crate::client) use usr_rollback_active_reblit_candidate_preserve_persiste
 pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
     DurableUsrRollbackActiveReblitCompleteRouteRecord,
     arm_before_usr_rollback_active_reblit_complete_route_final_revalidation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_active_reblit_finalization::{
+    DurableUsrRollbackActiveReblitFinalizationRecord, UsrRollbackActiveReblitFinalizationVerificationError,
 };
 
 pub(super) use usr_rollback_complete_route::{
@@ -163,6 +173,13 @@ pub(crate) use usr_rollback_candidate_preserve_persistence::arm_before_usr_rollb
 
 #[cfg(test)]
 pub(crate) use usr_rollback_complete_route::arm_before_usr_rollback_complete_route_final_revalidation;
+
+#[cfg(test)]
+pub(crate) use usr_rollback_active_reblit_finalization::{
+    arm_after_usr_rollback_active_reblit_finalization_delete,
+    arm_before_usr_rollback_active_reblit_finalization_final_durable_inspection,
+    arm_before_usr_rollback_active_reblit_finalization_final_revalidation,
+};
 
 #[cfg(test)]
 pub(crate) use usr_rollback_finalization::{

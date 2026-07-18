@@ -37,6 +37,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-finalization-test  Run sealed terminal rollback journal-finalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-candidate-dispatch-test  Run one-entry real-startup ActiveReblit candidate-preservation contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-complete-route-test  Run real-startup ActiveReblit rollback-completion routing contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-finalization-test  Run terminal ActiveReblit rollback-finalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-new-state-dispatch-test  Run the real-startup NewState rollback-suffix contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-admission-test  Run sealed read-only reverse-admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-projection-test  Run normalized reverse-exchange projection contracts"

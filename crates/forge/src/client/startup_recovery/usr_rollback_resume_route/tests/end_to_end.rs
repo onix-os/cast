@@ -43,6 +43,18 @@ fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persiste
             let routed_bytes = fixture.canonical_bytes();
 
             drop(second);
+            // This resume-route end-to-end test stops before crossing into
+            // the independent ActiveReblit candidate suffix. Its dedicated
+            // production-dispatch gate owns that later checkpoint.
+            if kind == OperationKind::ActiveReblit && expected.phase == Phase::CandidatePreserveIntent {
+                assert_eq!(fixture.canonical_record(), expected, "{kind:?} {source:?}");
+                assert_eq!(fixture.canonical_bytes(), routed_bytes, "{kind:?} {source:?}");
+                assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?} {source:?}");
+                assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
+                assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
+                continue;
+            }
+
             let third = fixture.enter();
             if expected.phase == Phase::ReverseExchangeIntent {
                 let restored = expected
@@ -53,6 +65,7 @@ fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persiste
                 assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {source:?}");
                 assert_ne!(fixture.namespace_snapshot(), namespace_before, "{kind:?} {source:?}");
                 assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
+                let restored_namespace = fixture.namespace_snapshot();
 
                 drop(third);
                 let fourth = fixture.enter();
@@ -64,6 +77,7 @@ fn startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persiste
                 );
                 assert_eq!(fixture.canonical_record(), preserve_intent, "{kind:?} {source:?}");
                 assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {source:?}");
+                assert_eq!(fixture.namespace_snapshot(), restored_namespace, "{kind:?} {source:?}");
                 assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} {source:?}");
             } else {
                 assert_eq!(pending(&third).phase(), expected.phase, "{kind:?} {source:?}");

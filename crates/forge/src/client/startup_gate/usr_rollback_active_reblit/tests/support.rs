@@ -8,8 +8,9 @@ use crate::{
     Installation,
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate::{self, CleanSystemStartup},
+        startup_gate::{self, CleanSystemStartup, UsrRollbackActiveReblitFinalizationSeal},
         startup_reconciliation::{
+            UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
             active_reblit_candidate_preserve_exchange_attempt_count,
             reset_active_reblit_candidate_preserve_exchange_attempt_count,
             reset_active_reblit_candidate_preserve_post_exchange_durability_events,
@@ -44,6 +45,7 @@ const ROOT_ABI: [(&str, &str); 5] = [
 ];
 
 pub(super) const WRAPPER_INDEX: usize = 13;
+pub(super) const WRAPPER_INDICES: [usize; 2] = [0, WRAPPER_INDEX];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Epoch {
@@ -85,6 +87,16 @@ pub(super) fn build_active(
     usr_outcome: RollbackActionOutcome,
     origin: CandidateOrigin,
 ) -> CandidatePreserveFixture {
+    build_active_at_wrapper_index(epoch, source, usr_outcome, origin, WRAPPER_INDEX)
+}
+
+pub(super) fn build_active_at_wrapper_index(
+    epoch: Epoch,
+    source: CandidateSource,
+    usr_outcome: RollbackActionOutcome,
+    origin: CandidateOrigin,
+    wrapper_index: usize,
+) -> CandidatePreserveFixture {
     let fixture = match epoch {
         Epoch::Current => {
             CandidatePreserveFixture::new(OperationKind::ActiveReblit, source, usr_outcome, origin.layout())
@@ -96,7 +108,7 @@ pub(super) fn build_active(
     if source == CandidateSource::Exchanged {
         install_live_root_abi(&fixture.fixture.installation);
     }
-    fixture.with_active_reblit_wrapper_index(WRAPPER_INDEX)
+    fixture.with_active_reblit_wrapper_index(wrapper_index)
 }
 
 pub(super) fn build_other(
@@ -141,6 +153,40 @@ pub(super) fn persist_candidate_preserved(
     successor
 }
 
+pub(super) fn persist_rollback_complete(
+    fixture: &CandidatePreserveFixture,
+    origin: CandidateOrigin,
+) -> TransitionRecord {
+    let preserved = persist_candidate_preserved(fixture, origin);
+    let complete = expected_rollback_complete(&preserved);
+    let journal = fixture.open_journal();
+    journal.advance(&preserved, &complete).unwrap();
+    drop(journal);
+    complete
+}
+
+pub(super) fn capture_finalization_ready<'reservation>(
+    fixture: &CandidatePreserveFixture,
+    journal: &crate::transition_journal::TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
+    let seal = UsrRollbackActiveReblitFinalizationSeal::new_for_test();
+    let admission = UsrRollbackActiveReblitFinalizationAuthority::capture(
+        &seal,
+        &fixture.fixture.installation,
+        journal,
+        &fixture.fixture.database,
+        reservation,
+        record,
+    )
+    .unwrap();
+    let UsrRollbackActiveReblitFinalizationAdmission::Ready(authority) = admission else {
+        panic!("exact terminal ActiveReblit evidence did not admit finalization");
+    };
+    authority
+}
+
 pub(super) fn reset_candidate_effect_observers() {
     reset_active_reblit_candidate_preserve_exchange_attempt_count();
     reset_active_reblit_candidate_preserve_post_exchange_durability_events();
@@ -164,6 +210,24 @@ pub(super) fn enter(installation: &Installation, database: &db::state::Database)
 
 pub(super) fn enter_candidate(fixture: &CandidatePreserveFixture) -> startup_gate::Error {
     enter(&fixture.fixture.installation, &fixture.fixture.database)
+}
+
+pub(super) fn enter_clean_candidate(fixture: &CandidatePreserveFixture) -> CleanSystemStartup {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(&fixture.fixture.installation, &fixture.fixture.database, &reservation)
+        .expect("exact terminal ActiveReblit evidence did not admit clean startup")
+}
+
+pub(super) fn enter_clean_fresh_handles(root: &Path) -> CleanSystemStartup {
+    let installation = Installation::open(root, None).unwrap();
+    let database = open_state_database(&installation);
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(&installation, &database, &reservation)
+        .expect("fresh handles did not finalize exact terminal ActiveReblit evidence")
+}
+
+pub(super) fn assert_canonical_absent(root: &Path) {
+    assert!(!root.join(".cast/journal/state-transition").exists());
 }
 
 pub(super) fn assert_pending_phase(error: &startup_gate::Error, phase: Phase) {
@@ -273,6 +337,10 @@ pub(super) fn active_wrapper_path(fixture: &CandidatePreserveFixture) -> PathBuf
     active_reblit_wrapper_path(&fixture.fixture, &fixture.candidate_intent, WRAPPER_INDEX)
 }
 
+pub(super) fn active_wrapper_path_at(fixture: &CandidatePreserveFixture, wrapper_index: usize) -> PathBuf {
+    active_reblit_wrapper_path(&fixture.fixture, &fixture.candidate_intent, wrapper_index)
+}
+
 pub(super) fn install_persistent_database(fixture: &mut CandidatePreserveFixture) {
     let database = open_state_database(&fixture.fixture.installation);
     let transition = &fixture.candidate_intent.transition_id;
@@ -301,6 +369,28 @@ pub(super) fn enter_fresh_handles(root: &Path) -> startup_gate::Error {
     let installation = Installation::open(root, None).unwrap();
     let database = open_state_database(&installation);
     enter(&installation, &database)
+}
+
+pub(super) fn assert_fresh_existing_candidate_database(
+    root: &Path,
+    record: &TransitionRecord,
+    expected_provenance: &db::state::MetadataProvenance,
+) {
+    let installation = Installation::open(root, None).unwrap();
+    let database = open_state_database(&installation);
+    let candidate = crate::state::Id::from(record.candidate.id.unwrap());
+    assert_eq!(record.candidate.id, record.previous.id);
+    assert_eq!(database.get(candidate).unwrap().id, candidate);
+    assert_eq!(database.all().unwrap().len(), 1);
+    assert_eq!(database.audit_in_flight_transition().unwrap(), None);
+    assert_eq!(
+        database.transition_ownership(candidate, &record.transition_id).unwrap(),
+        db::state::TransitionOwnership::Cleared
+    );
+    assert_eq!(
+        database.metadata_provenance(candidate).unwrap().as_ref(),
+        Some(expected_provenance)
+    );
 }
 
 fn open_state_database(installation: &Installation) -> db::state::Database {

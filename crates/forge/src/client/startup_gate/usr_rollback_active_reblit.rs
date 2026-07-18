@@ -18,11 +18,12 @@ use crate::client::{
     startup_gate::UsrRollbackCandidatePreserveSeal,
     startup_reconciliation::{
         UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
+        UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
         UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveAuthority,
     },
     startup_recovery::{
         UsrRollbackCandidatePreserveReady, dispatch_usr_rollback_candidate_preserve_and_reopen,
-        persist_usr_rollback_active_reblit_complete_route_and_reopen,
+        finalize_usr_rollback_active_reblit, persist_usr_rollback_active_reblit_complete_route_and_reopen,
     },
 };
 
@@ -43,6 +44,23 @@ impl UsrRollbackActiveReblitCompleteRouteSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting ActiveReblit terminal journal
+/// finalization to this operation-specific writer-first startup child.
+pub(in crate::client) struct UsrRollbackActiveReblitFinalizationSeal {
+    _private: (),
+}
+
+impl UsrRollbackActiveReblitFinalizationSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
 /// Whether this startup entry handled the exact ActiveReblit checkpoint.
 pub(super) enum Dispatch {
     Unhandled {
@@ -53,6 +71,10 @@ pub(super) enum Dispatch {
         journal: TransitionJournalStore,
         record: TransitionRecord,
     },
+    /// The exact terminal record was deleted and the same lock-bearing store
+    /// proved public canonical absence. No record remains which could be
+    /// redispatched by this startup entry.
+    Finalized { journal: TransitionJournalStore },
 }
 
 /// Dispatch at most the one ActiveReblit rollback checkpoint present at entry.
@@ -111,6 +133,22 @@ pub(super) fn dispatch<'reservation>(
             let (journal, record) = persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)?;
             Ok(Dispatch::Handled { journal, record })
         }
+        Phase::RollbackComplete => {
+            let seal = UsrRollbackActiveReblitFinalizationSeal::new();
+            let admission = UsrRollbackActiveReblitFinalizationAuthority::capture(
+                &seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+            )?;
+            let UsrRollbackActiveReblitFinalizationAdmission::Ready(authority) = admission else {
+                return Ok(Dispatch::Unhandled { journal, record });
+            };
+            let journal = finalize_usr_rollback_active_reblit(journal, authority)?;
+            Ok(Dispatch::Finalized { journal })
+        }
         _ => Ok(Dispatch::Unhandled { journal, record }),
     }
 }
@@ -131,6 +169,12 @@ pub(in crate::client) enum Error {
     CompleteRoutePersistence(
         #[from] crate::client::startup_recovery::UsrRollbackActiveReblitCompleteRoutePersistenceError,
     ),
+    #[error("capture exact startup ActiveReblit terminal rollback-finalization authority")]
+    RollbackFinalizationAuthority(
+        #[from] crate::client::startup_reconciliation::UsrRollbackActiveReblitFinalizationAuthorityError,
+    ),
+    #[error("finalize exact startup ActiveReblit terminal rollback journal")]
+    RollbackFinalization(#[from] crate::client::startup_recovery::UsrRollbackActiveReblitFinalizationError),
 }
 
 #[cfg(test)]

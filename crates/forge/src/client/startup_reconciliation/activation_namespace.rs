@@ -16,6 +16,7 @@
 //! boundaries; no path exposes general cleanup or trigger authority.
 
 mod active_reblit_complete_route_proof;
+mod active_reblit_finalization_proof;
 mod candidate_preserve_proof;
 mod capture;
 mod decision_proof;
@@ -42,6 +43,12 @@ pub(in crate::client) use active_reblit_complete_route_proof::arm_before_usr_rol
 pub(super) use active_reblit_complete_route_proof::{
     UsrRollbackActiveReblitCompleteRouteNamespaceError, UsrRollbackActiveReblitCompleteRouteNamespaceInspection,
     UsrRollbackActiveReblitCompleteRouteNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_finalization_proof::arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture;
+pub(super) use active_reblit_finalization_proof::{
+    UsrRollbackActiveReblitFinalizationNamespaceError, UsrRollbackActiveReblitFinalizationNamespaceInspection,
+    UsrRollbackActiveReblitFinalizationNamespaceProof,
 };
 
 pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;

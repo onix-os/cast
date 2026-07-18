@@ -33,15 +33,16 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   ActiveReblit instead preserves its whole replacement wrapper, then uses its
   exact cleared existing-state row, retained provenance, and preserved-wrapper
   proof to advance directly from `CandidatePreserved` to `RollbackComplete`.
-  That ActiveReblit terminal record remains present for diagnostic inspection;
-  its separate finalizer is not implemented.
+  A separate later entry may finalize that exact terminal record and pass the
+  same continuously locked journal store into shared clean admission; the
+  completion-route entry never redispatches its successor.
   Each entry recaptures authority from the current canonical record and fresh
   database and namespace evidence, admits at most one preparation/effect
   checkpoint, at most one journal advance, or one terminal deletion, then
-  returns without dispatching its successor. Inexact NewState terminal evidence,
-  every ActiveReblit terminal record, and terminal records for unsupported
-  operations remain diagnostic and fail closed; diagnostic inventory is never
-  converted into mutation authority.
+  returns without dispatching its successor. Inexact NewState or ActiveReblit
+  terminal evidence and terminal records for unsupported operations remain
+  diagnostic and fail closed; diagnostic inventory is never converted into
+  mutation authority.
 
   Commit `3e1ba34` introduced the journal-only rollback-decision boundary. The
   decision path applies to NewState, ActivateArchived, and ActiveReblit.
@@ -612,9 +613,43 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   not admitted as clean. The dedicated gates pass 5 authority, 13 executor,
   5 clean-handoff, and 33 complete NewState-startup contracts. `make check` and
   the 1153-file source limit pass with only the four established unrelated
-  warnings, and independent adversarial review found no blocker. No terminal
-  finalizer exists for ActivateArchived or ActiveReblit. At this checkpoint,
-  terminal process-death, reboot, and power-loss proof remained open.
+  warnings, and independent adversarial review found no blocker. At that
+  checkpoint, no terminal finalizer existed for ActivateArchived or
+  ActiveReblit, and terminal process-death, reboot, and power-loss proof
+  remained open.
+
+  ActiveReblit terminal finalization is now a separate deterministic
+  production checkpoint rather than an extension of the NewState finalizer.
+  Admission requires an exact ActiveReblit `RollbackComplete` plan with
+  `candidate == previous`, an `ExistingCandidate` database observation for
+  that state under `Cleared` transition ownership, present matching immutable
+  provenance, `previous: None`, and no global in-flight transition.
+  Binding-first database -> namespace -> database capture and revalidation
+  retain the source database, active-state reservation, journal binding, and
+  exact preserved whole-wrapper topology. The replacement-wrapper index is
+  part of that topology and must remain identical across the retained before
+  and after snapshots and every fresh capture.
+
+  The consuming finalizer keeps the original public journal directory and
+  lock-bearing store continuously retained. It authenticates the exact public
+  source, repeats final authority and public-name validation, and makes exactly
+  one conditional terminal delete. It neither reopens nor retries. Deletion is
+  reconciled only as the exact source record or authenticated public absence;
+  success requires the latter to remain stable across the consuming
+  post-delete database -> namespace -> database proof and a second public
+  observation. The same still-locked store then enters the operation-neutral
+  clean-startup handoff, where mutable namespace and database audits precede
+  the shared orphan-transition, prune-residue, and final public-absence gate.
+  No database row, provenance, wrapper, non-journal namespace, trigger,
+  cleanup, or other finalization effect is reachable from this checkpoint.
+
+  Deterministic terminal-delete faults and fresh-handle restart cover both
+  observed source-or-absence sides without treating absence as deletion
+  causality. They are not
+  real process-death, reboot, or power-loss evidence. A genuine `SIGKILL`
+  matrix at the ActiveReblit terminal-delete boundaries is the next separate
+  checkpoint. Reboot and power-loss behavior remains unproved even after that
+  same-boot process matrix is added.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -812,13 +847,15 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   The production ladder now covers the authenticated `/usr` rollback prefix,
   the exact NewState suffix from `CandidatePreserveIntent` through authenticated
-  terminal journal absence, and the ActiveReblit suffix through a retained
-  `RollbackComplete` record. Separate NewState entries may create or normalize
+  terminal journal absence, and the ActiveReblit suffix through authenticated
+  terminal journal absence and shared clean admission. Separate NewState
+  entries may create or normalize
   the quarantine target without advancing, move and durably preserve the
   candidate, invalidate the exact fresh transition or accept proved joint
   absence, route to completion, and delete the exact terminal record. Separate
   ActiveReblit entries preserve the whole replacement wrapper and then perform
-  only the direct journal route from `CandidatePreserved` to `RollbackComplete`.
+  the direct journal route from `CandidatePreserved` to `RollbackComplete`;
+  only a further entry may authenticate and delete that terminal record.
   Every entry handles at most its observed checkpoint and immediately returns;
   no resulting record is redispatched in the same entry.
 
@@ -834,15 +871,17 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   non-journal namespace.
 
   The ladder still has no candidate suffix for ActivateArchived. ActiveReblit
-  has no terminal finalizer, process-death proof for this new completion route,
-  or authenticated clean handoff. The ladder also has no roll-forward executor,
-  boot repair, or cleanup.
+  now has deterministic terminal finalization and authenticated clean handoff,
+  but its real `SIGKILL` terminal-delete matrix is the next separate checkpoint.
+  The ladder also has no roll-forward executor, boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
   persistence boundaries, deterministic terminal-delete faults, and 12 real
   terminal process-death cases, but not process death at every earlier suffix
-  effect. Neither prefix has reboot or power-loss proof: `SIGKILL` preserves the
+  effect. ActiveReblit terminal-delete fault injection and fresh-handle restart
+  are deterministic evidence only, not process-death or power-loss evidence.
+  Neither prefix has reboot or power-loss proof: `SIGKILL` preserves the
   kernel-visible state at termination and cannot establish which pre-fsync
   rename survives a power cycle. The complete campaign required below
   therefore remains open, as do this item and all six broad Phase 11 work items.

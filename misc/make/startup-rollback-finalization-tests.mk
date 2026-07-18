@@ -120,6 +120,11 @@ forge-startup-usr-rollback-finalization-test:
 	timeout 10s grep -Fq 'let journal = finalize_usr_rollback(journal, authority)?;' "$$orchestrator"; \
 	timeout 10s grep -Fq 'Ok(Dispatch::Finalized { journal })' "$$orchestrator"; \
 	timeout 10s grep -Fq 'usr_rollback_new_state::Dispatch::Finalized { journal } => {' "$$startup_gate"; \
+	new_state_finalized_arm="$$( timeout 10s sed -n '/usr_rollback_new_state::Dispatch::Finalized { journal } => {/,/^                }/p' "$$startup_gate" )"; \
+	timeout 10s grep -Fq 'return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);' <<<"$$new_state_finalized_arm"; \
+	terminal_handoff="$$( timeout 10s sed -n '/^    fn admit_clean_after_terminal_finalization(/,/^    }/p' "$$startup_gate" )"; \
+	timeout 10s grep -Fq 'after_usr_rollback_finalization_before_clean_audit();' <<<"$$terminal_handoff"; \
+	timeout 10s grep -Fq 'return Self::admit_clean(installation, state_db, journal, in_flight);' <<<"$$terminal_handoff"; \
 	timeout 10s grep -Fq 'return Self::admit_clean(installation, state_db, journal, in_flight);' "$$startup_gate"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'authority.journal().load_revalidated_retained_cast(cast)' "$$startup_gate" )" = 1; \
 	timeout 10s grep -Fq 'CanonicalTransitionAppearedDuringCleanAdmission {' "$$startup_gate"; \

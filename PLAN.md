@@ -697,12 +697,11 @@ assessment.
 The production startup ladder handles one freshly observed checkpoint per entry, not a recovery loop.
 Separate entries normalize exchange durability, persist and route rollback, reverse `/usr`, and persist
 `UsrRestored`. NewState then preserves the candidate, invalidates the exact fresh row, reaches
-`RollbackComplete`, and finalizes to authenticated journal absence. ActiveReblit instead preserves its
-whole replacement wrapper and advances directly from `CandidatePreserved` to a retained `RollbackComplete`
-using exact cleared-row and wrapper evidence. Every entry recaptures authority, performs at most one
-preparation, effect, advance, or deletion, and never redispatches its successor. The reverse and NewState
-paths have process-death matrices; the ActiveReblit completion route has storage-fault and fresh-handle
-restart coverage but no finalizer or process-death proof. Reboot and power-loss remain unproved.
+`RollbackComplete`, and finalizes to authenticated journal absence. ActiveReblit preserves its whole wrapper and advances
+from `CandidatePreserved` to `RollbackComplete` using exact cleared-row and wrapper evidence. On a separate
+`RollbackComplete` entry it captures exact cleared existing-candidate/provenance plus preserved-wrapper authority, performs
+one same-store conditional journal delete, proves public absence, and enters shared clean admission without redispatch.
+Every entry is bounded; real ActiveReblit terminal `SIGKILL`/process-death proof is the next gap. Reboot and power-loss remain unproved.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -906,10 +905,11 @@ clean evidence and final absence, and returns no redispatchable record. Its 33
 startup, 5 authority, 13 executor, and 5 clean-handoff contracts pass alongside
 `make check` and the 1153-file limit. Commits `932ab3bb` and `0e56aff3` add
 test-only delete-boundary seams and a 12-case current/historical, intent/exchanged
-real-`SIGKILL` restart matrix through production startup. ActiveReblit candidate
-preservation and its journal-only completion route are now also in production,
-but its finalizer and process-death coverage remain absent. ActivateArchived has
-no candidate suffix, and reboot and power-loss proof remain absent everywhere.
+real-`SIGKILL` restart matrix through production startup. ActiveReblit candidate preservation, its journal-only completion
+route, and its deterministic terminal finalizer are now in production. A separate `RollbackComplete` entry captures exact
+cleared existing-candidate/provenance plus preserved-wrapper authority, performs one same-store conditional journal delete,
+proves public absence, and enters shared clean admission without redispatch. Real ActiveReblit terminal `SIGKILL`/process-death
+coverage is the next gap. ActivateArchived has no candidate suffix; reboot and power-loss proof remain absent everywhere.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

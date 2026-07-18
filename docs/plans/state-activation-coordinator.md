@@ -244,9 +244,9 @@ closure remain authoritative in `PLAN.md`.
   The coordinator still has no live client callsite. Publishing its intent
   remains forbidden because the startup
   [rollback ladder](state-activation-startup-reconciliation.md#admitted-startup-recovery-ladder)
-  covers the full NewState suffix and ActiveReblit only through a retained
-  `RollbackComplete` record, not every corresponding durable forward,
-  ActivateArchived, roll-forward, boot, and cleanup phase.
+  covers the full NewState and ActiveReblit rollback suffixes through
+  authenticated terminal absence, but not every corresponding durable
+  forward, ActivateArchived, roll-forward, boot, and cleanup phase.
 
 ## Archived-state verification
 
@@ -307,8 +307,15 @@ closure remain authoritative in `PLAN.md`.
   candidate preservation, fresh-row invalidation, `RollbackComplete`, and
   authenticated terminal journal absence. ActiveReblit carries its
   whole-wrapper candidate preservation through a later journal-only
-  `CandidatePreserved` to `RollbackComplete` route, where it remains pending a
-  separate terminal finalizer. ActivateArchived still has no candidate suffix.
+  `CandidatePreserved` to `RollbackComplete` route. A separate later entry now
+  admits terminal deletion only for exact `ExistingCandidate`/`Cleared`
+  database evidence with present provenance, `previous: None`,
+  `candidate == previous`, and the unchanged preserved-wrapper topology and
+  index. It retains the same continuously locked journal store for one
+  conditional delete, authenticates public absence, and transfers that store
+  to shared clean admission without a database, non-journal namespace,
+  trigger, wrapper, or cleanup effect. ActivateArchived still has no candidate
+  suffix.
   Commits
   `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
   outcome, connected the one-phase reverse dispatcher to real mutable startup,
@@ -335,4 +342,7 @@ closure remain authoritative in `PLAN.md`.
   canonical reopen. Source-side restart uses zero-removal Finish; successor-
   side restart skips invalidation. Production dispatch, namespace mutation,
   later rollback actions, roll-forward, triggers, and cleanup are not executed,
-  so this item remains open.
+  so this item remains open. ActiveReblit's deterministic terminal-delete
+  faults and fresh-handle restarts do not prove process death, reboot, or power
+  loss. Its genuine `SIGKILL` terminal-delete matrix is the next separate
+  checkpoint, while reboot and power-loss proof remains open afterward.

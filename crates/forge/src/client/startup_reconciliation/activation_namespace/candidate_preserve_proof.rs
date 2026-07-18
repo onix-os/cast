@@ -295,6 +295,32 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     Ok(wrapper_index)
 }
 
+/// Require the exact whole-wrapper ActiveReblit preservation topology at
+/// terminal rollback.
+///
+/// This helper is deliberately phase and operation specific. Terminal
+/// finalization must recapture `RollbackComplete` evidence rather than widen
+/// or reuse the authority which routed `CandidatePreserved` into that
+/// successor. The exact derived wrapper index is retained by the caller;
+/// index zero is valid evidence and is never treated as an absent sentinel.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_active_reblit_rollback_complete_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<usize, UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::RollbackComplete {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitFinalizationPhase);
+    }
+    if record.operation != Operation::ActiveReblit {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitRequired);
+    }
+    let UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index } =
+        candidate_preserve_topology_after_phase(record, snapshot)?
+    else {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+    };
+    Ok(wrapper_index)
+}
+
 /// Require the exact preserved-candidate namespace while the journal is at
 /// `FreshDbInvalidationIntent`.
 ///
@@ -642,6 +668,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongCandidatePreservedPhase,
     #[error("ActiveReblit rollback-completion routing requires CandidatePreserved")]
     WrongActiveReblitCompleteRoutePhase,
+    #[error("ActiveReblit rollback finalization requires RollbackComplete")]
+    WrongActiveReblitFinalizationPhase,
     #[error("fresh-database invalidation requires FreshDbInvalidationIntent")]
     WrongFreshDbInvalidationPhase,
     #[error("rollback-completion routing requires FreshDbInvalidated")]

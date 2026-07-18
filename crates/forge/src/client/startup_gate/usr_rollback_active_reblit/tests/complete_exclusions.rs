@@ -13,8 +13,9 @@ use super::{
         test_fixture::{OperationKind, canonical_journal},
     },
     support::{
-        CandidateOrigin, Epoch, WRAPPER_INDEX, active_wrapper_path, assert_no_candidate_effects, assert_pending_phase,
-        build_active, build_other, enter_candidate, expected_rollback_complete, persist_candidate_preserved,
+        CandidateOrigin, Epoch, WRAPPER_INDEX, active_wrapper_path, assert_canonical_absent,
+        assert_no_candidate_effects, assert_pending_phase, build_active, build_other, enter_candidate,
+        enter_clean_candidate, expected_rollback_complete, persist_candidate_preserved,
         reset_candidate_effect_observers,
     },
 };
@@ -73,13 +74,13 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
     let active_namespace = active.fixture.namespace_snapshot();
     reset_candidate_effect_observers();
 
-    let active_error = enter_candidate(&active);
+    let active_clean = enter_clean_candidate(&active);
 
-    assert_pending_phase(&active_error, Phase::RollbackComplete);
-    assert_eq!(active.fixture.canonical_record(), active_complete);
+    assert_canonical_absent(&active.fixture.installation.root);
     assert_eq!(active.fixture.database_snapshot(), active_database);
     assert_eq!(active.fixture.namespace_snapshot(), active_namespace);
     assert_no_candidate_effects();
+    drop(active_clean);
 
     let wrong_plan = build_active(
         Epoch::Current,

@@ -14,9 +14,9 @@ use crate::{
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
-        CandidateOrigin, Epoch, active_wrapper_path, assert_complete_persistence_advance, assert_no_candidate_effects,
-        assert_pending_phase, build_active, enter_candidate, expected_rollback_complete, persist_candidate_preserved,
-        reset_candidate_effect_observers,
+        CandidateOrigin, Epoch, active_wrapper_path, assert_canonical_absent, assert_complete_persistence_advance,
+        assert_no_candidate_effects, assert_pending_phase, build_active, enter_candidate, enter_clean_candidate,
+        expected_rollback_complete, persist_candidate_preserved, reset_candidate_effect_observers,
     },
 };
 
@@ -87,10 +87,18 @@ fn startup_active_reblit_complete_route_all_five_journal_faults_converge_on_seco
         assert!(active_wrapper_path(&fixture).join("usr").is_dir());
         assert_no_candidate_effects();
 
-        let second = enter_candidate(&fixture);
-
-        assert_pending_phase(&second, Phase::RollbackComplete);
-        assert_eq!(fixture.fixture.canonical_record(), expected);
+        match fault.durable {
+            DurableUsrRollbackActiveReblitCompleteRouteRecord::CandidatePreserved => {
+                let second = enter_candidate(&fixture);
+                assert_pending_phase(&second, Phase::RollbackComplete);
+                assert_eq!(fixture.fixture.canonical_record(), expected);
+            }
+            DurableUsrRollbackActiveReblitCompleteRouteRecord::RollbackComplete => {
+                let clean = enter_clean_candidate(&fixture);
+                assert_canonical_absent(&fixture.fixture.installation.root);
+                drop(clean);
+            }
+        }
         assert_eq!(fixture.fixture.database_snapshot(), database_before);
         assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
         assert!(active_wrapper_path(&fixture).join("usr").is_dir());

@@ -75,10 +75,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix, the complete NewState suffix
-  through authenticated terminal journal absence, and the ActiveReblit suffix
-  through a retained `RollbackComplete` record. ActivateArchived candidate
-  recovery, ActiveReblit terminal finalization, roll-forward execution, boot
-  repair, and cleanup are not implemented. The public
+  through authenticated terminal journal absence, and the complete
+  ActiveReblit rollback suffix through the same clean-startup handoff.
+  ActivateArchived candidate recovery, roll-forward execution, boot repair,
+  and cleanup are not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
@@ -413,12 +413,22 @@ routing, exact fresh-row invalidation, completion persistence, and terminal
 deletion each stop after their own boundary. ActiveReblit preserves its whole
 replacement wrapper and, on a later entry, uses a separate sealed authority to
 advance only the journal from `CandidatePreserved` to `RollbackComplete`; that
-terminal record remains diagnostic. Compiler-local seals prevent sibling
-authority construction, and operation-specific real-gate contracts cover the
-complete matrices, every five-position journal-update fault set, evidence
-races, and fresh-handle restart. The document owns the ActiveReblit finalizer,
-the missing ActivateArchived suffix, later rollback actions, process-death
-expansion, and the reboot and power-loss campaign.
+successor is never finalized in the same entry. A further entry admits the
+terminal ActiveReblit record only with the exact `ExistingCandidate` row under
+`Cleared` ownership, present immutable provenance, `previous: None`,
+`candidate == previous`, and the unchanged preserved-wrapper topology and
+wrapper index. Its operation-specific finalizer retains the same continuously
+locked journal store, performs one conditional deletion, authenticates public
+absence, and transfers that store directly into the shared clean-startup
+audit. It performs no database, non-journal namespace, trigger, cleanup, or
+wrapper effect. Compiler-local seals prevent sibling authority construction,
+and operation-specific real-gate contracts cover the complete deterministic
+matrices, journal-update and terminal-delete faults, evidence races, and
+fresh-handle restart. Those deterministic restarts are not process-death,
+reboot, or power-loss proof. A genuine `SIGKILL` terminal-delete matrix is the
+next separate ActiveReblit checkpoint; the document also owns the missing
+ActivateArchived suffix, later rollback actions, and the reboot and power-loss
+campaign.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

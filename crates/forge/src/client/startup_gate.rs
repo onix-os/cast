@@ -11,7 +11,9 @@ mod default_system_intent;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
-pub(in crate::client) use usr_rollback_active_reblit::UsrRollbackActiveReblitCompleteRouteSeal;
+pub(in crate::client) use usr_rollback_active_reblit::{
+    UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
+};
 pub(in crate::client) use usr_rollback_new_state::{
     UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal, UsrRollbackFreshDbInvalidationRouteSeal,
     UsrRollbackFreshDbInvalidationSeal,
@@ -260,6 +262,9 @@ impl CleanSystemStartup {
                     .map_err(map_reconciliation_error)?;
                     return Err(Error::RecoveryPending(pending));
                 }
+                usr_rollback_active_reblit::Dispatch::Finalized { journal } => {
+                    return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);
+                }
             };
 
             let (journal, record) = match usr_rollback_new_state::dispatch(
@@ -284,13 +289,7 @@ impl CleanSystemStartup {
                     return Err(Error::RecoveryPending(pending));
                 }
                 usr_rollback_new_state::Dispatch::Finalized { journal } => {
-                    after_usr_rollback_finalization_before_clean_audit();
-                    installation.revalidate_mutable_namespace()?;
-                    let in_flight = state_db.audit_in_flight_transition();
-                    let namespace = installation.revalidate_mutable_namespace();
-                    namespace?;
-                    let in_flight = in_flight?;
-                    return Self::admit_clean(installation, state_db, journal, in_flight);
+                    return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);
                 }
             };
             let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -304,6 +303,24 @@ impl CleanSystemStartup {
             return Err(Error::RecoveryPending(pending));
         }
         Self::admit_clean(installation, state_db, journal, in_flight)
+    }
+
+    /// Re-establish clean-startup evidence after any operation-specific
+    /// terminal finalizer consumed its record. The finalizer's same locked
+    /// journal store is retained through both mutable-namespace captures and
+    /// the database audit, then handed to the shared clean residue gate.
+    fn admit_clean_after_terminal_finalization(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        journal: transition_journal::TransitionJournalStore,
+    ) -> Result<Self, Error> {
+        after_usr_rollback_finalization_before_clean_audit();
+        installation.revalidate_mutable_namespace()?;
+        let in_flight = state_db.audit_in_flight_transition();
+        let namespace = installation.revalidate_mutable_namespace();
+        namespace?;
+        let in_flight = in_flight?;
+        return Self::admit_clean(installation, state_db, journal, in_flight);
     }
 
     /// Enter the shared clean-startup residue audit with the caller's exact
